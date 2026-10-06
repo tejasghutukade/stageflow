@@ -1,0 +1,42 @@
+id: route-demo-reject-ref-io
+schemas:
+  produced:
+    type: object
+    required: [title]
+    properties:
+      title:
+        type: string
+  consumed:
+    type: object
+    required: [title, extra]
+    properties:
+      title:
+        type: string
+      extra:
+        type: string
+  empty:
+    type: object
+stages:
+  - id: draft
+    entry: true
+    route:
+      - to: review
+    system_prompt: Draft.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/produced"
+  - id: review
+    system_prompt: Review.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/consumed"
+      output:
+        schema:
+          $ref: "#/schemas/empty"

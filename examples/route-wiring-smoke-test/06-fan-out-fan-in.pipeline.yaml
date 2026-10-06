@@ -1,0 +1,82 @@
+id: route-demo-fan-out-fan-in
+# Unconditional parallel fan-out: kickoff's route lists three targets, so
+# all three always run, feeding one join that waits for all of them.
+# Multiple forward `to:` entries always fan out this way.
+stages:
+  - id: kickoff
+    entry: true
+    route:
+      - to: research
+      - to: analysis
+      - to: review-notes
+    system_prompt: |
+      Kick off three independent workstreams in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  - id: research
+    route:
+      - to: synthesize
+    system_prompt: |
+      Workstream 1 (research). Produce one short finding.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  - id: analysis
+    route:
+      - to: synthesize
+    system_prompt: |
+      Workstream 2 (analysis). Produce one short finding.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  - id: review-notes
+    route:
+      - to: synthesize
+    system_prompt: |
+      Workstream 3 (review notes). Produce one short finding.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  # Fan-in: waits for research, analysis, and review-notes — all three,
+  # every time, since none of them are skipped.
+  - id: synthesize
+    system_prompt: |
+      Combine all three workstreams' findings into one summary sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

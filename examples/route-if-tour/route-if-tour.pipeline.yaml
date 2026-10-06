@@ -1,0 +1,950 @@
+id: route-if-tour
+model: cursor/auto
+schemas:
+  empty:
+    type: object
+  go-flag:
+    type: object
+    required: [go]
+    properties:
+      go:
+        type: boolean
+  flag:
+    type: object
+    required: [ok]
+    properties:
+      ok:
+        type: boolean
+  customer:
+    type: object
+    required: [tier]
+    properties:
+      tier:
+        type: string
+stages:
+  - id: kickoff
+    entry: true
+    route:
+      - to: classify
+    system_prompt: |
+      Start the route-if tour in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: classify
+    route:
+      - to: ran-eq-string
+        if:
+          field: kind
+          op: eq
+          value: ok
+      - to: ran-eq-int
+        if:
+          field: count
+          op: eq
+          value: 3
+      - to: ran-eq-num
+        if:
+          field: ratio
+          op: eq
+          value: 1.5
+      - to: ran-eq-bool
+        if:
+          field: flag
+          op: eq
+          value: true
+      - to: ran-ne
+        if:
+          field: kind
+          op: ne
+          value: fail
+      - to: ran-in
+        if:
+          field: tag
+          op: in
+          value: [gold, silver]
+      - to: ran-not-in
+        if:
+          field: tag
+          op: not_in
+          value: [bronze]
+      - to: ran-gt-num
+        if:
+          field: ratio
+          op: gt
+          value: 1.0
+      - to: score
+    system_prompt: |
+      Classify the record in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"kind":"ok","count":3,"ratio":1.5,"flag":true,"tag":"gold"}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [kind, count, ratio, flag, tag]
+          properties:
+            kind:
+              type: string
+            count:
+              type: integer
+            ratio:
+              type: number
+            flag:
+              type: boolean
+            tag:
+              type: string
+
+  - id: ran-eq-string
+    system_prompt: |
+      Note that the string eq gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-eq-int
+    system_prompt: |
+      Note that the integer eq gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-eq-num
+    system_prompt: |
+      Note that the number eq gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-eq-bool
+    system_prompt: |
+      Note that the boolean eq gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-ne
+    system_prompt: |
+      Note that the ne gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-in
+    system_prompt: |
+      Note that the in gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-not-in
+    system_prompt: |
+      Note that the not_in gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-gt-num
+    system_prompt: |
+      Note that the number gt gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: score
+    route:
+      - to: ran-gt
+        if:
+          field: score
+          op: gt
+          value: 5
+      - to: ran-gte
+        if:
+          field: score
+          op: gte
+          value: 10
+      - to: ran-lt
+        if:
+          field: score
+          op: lt
+          value: 20
+      - to: ran-lte
+        if:
+          field: score
+          op: lte
+          value: 10
+      - to: account
+    system_prompt: |
+      Score the record in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"score":10}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [score]
+          properties:
+            score:
+              type: integer
+
+  - id: ran-gt
+    system_prompt: |
+      Note that the integer gt gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-gte
+    system_prompt: |
+      Note that the gte gate fired (score equals the bound), in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-lt
+    system_prompt: |
+      Note that the lt gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-lte
+    system_prompt: |
+      Note that the lte gate fired (score equals the bound), in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: account
+    route:
+      - to: ran-nested
+        if:
+          field: customer.tier
+          op: eq
+          value: gold
+      - to: verdict
+    system_prompt: |
+      Read the customer record in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"customer":{"tier":"gold"}}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [customer]
+          properties:
+            customer:
+              $ref: "#/schemas/customer"
+
+  - id: ran-nested
+    system_prompt: |
+      Note that the nested customer.tier gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          type: object
+          required: [customer]
+          properties:
+            customer:
+              $ref: "#/schemas/customer"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: verdict
+    route:
+      - to: ran-ref
+        if:
+          field: ok
+          op: eq
+          value: true
+      - to: compose
+    system_prompt: |
+      Record the verdict in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"ok":true}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/flag"
+
+  - id: ran-ref
+    system_prompt: |
+      Note that the $ref output-schema gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/flag"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: compose
+    route:
+      - to: ran-all
+        if:
+          all:
+            - field: severity
+              op: eq
+              value: high
+            - field: customer.tier
+              op: in
+              value: [gold, silver]
+      - to: ran-any
+        if:
+          any:
+            - field: channel
+              op: eq
+              value: web
+            - field: severity
+              op: eq
+              value: low
+      - to: ran-not
+        if:
+          not:
+            field: severity
+            op: eq
+            value: low
+      - to: ran-nested-compose
+        if:
+          not:
+            all:
+              - field: severity
+                op: eq
+                value: low
+              - field: channel
+                op: eq
+                value: phone
+      - to: ran-any-of-alls
+        if:
+          any:
+            - all:
+                - field: severity
+                  op: eq
+                  value: high
+                - field: channel
+                  op: eq
+                  value: web
+            - all:
+                - field: severity
+                  op: eq
+                  value: low
+                - field: channel
+                  op: eq
+                  value: phone
+      - to: triage
+    system_prompt: |
+      Compose the record in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"severity":"high","channel":"web","customer":{"tier":"gold"}}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [severity, channel, customer]
+          properties:
+            severity:
+              type: string
+            channel:
+              type: string
+            customer:
+              $ref: "#/schemas/customer"
+
+  - id: ran-all
+    system_prompt: |
+      Note that the all (AND) gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          type: object
+          required: [severity, channel, customer]
+          properties:
+            severity:
+              type: string
+            channel:
+              type: string
+            customer:
+              $ref: "#/schemas/customer"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-any
+    system_prompt: |
+      Note that the any (OR) gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-not
+    system_prompt: |
+      Note that the not gate fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-nested-compose
+    system_prompt: |
+      Note that not(all(...)) fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-any-of-alls
+    system_prompt: |
+      Note that any(all(...), all(...)) fired, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: triage
+    route:
+      - to: skipped-page
+        if:
+          field: severity
+          op: eq
+          value: high
+      - to: ran-notify
+    system_prompt: |
+      Triage the record in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"severity":"low"}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [severity]
+          properties:
+            severity:
+              type: string
+
+  - id: skipped-page
+    route:
+      - to: skipped-page-child
+    system_prompt: |
+      Page on-call in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: skipped-page-child
+    system_prompt: |
+      This descendant should stay skipped with skipped-page.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: ran-notify
+    route:
+      - to: gated-only
+    system_prompt: |
+      Notify the team in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: gated-only
+    route:
+      - to: ran-all-gated
+        if:
+          field: go
+          op: eq
+          value: true
+    system_prompt: |
+      Decide the all-gated fire lane in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"go":true}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/go-flag"
+
+  - id: ran-all-gated
+    route:
+      - to: quiet
+      - to: write
+    system_prompt: |
+      Note that the only forward if matched, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/go-flag"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: quiet
+    route:
+      - to: skipped-quiet
+        if:
+          field: go
+          op: eq
+          value: true
+    system_prompt: |
+      Decide the quiet miss lane in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"go":false}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/go-flag"
+
+  - id: skipped-quiet
+    system_prompt: |
+      This stage should stay skipped.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: write
+    route:
+      - to: assemble-ok
+        if:
+          field: ready
+          op: eq
+          value: true
+      - to: draw
+    system_prompt: |
+      Write the first half in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"ready":true}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [ready]
+          properties:
+            ready:
+              type: boolean
+
+  - id: draw
+    route:
+      - to: assemble-ok
+        if:
+          field: complete
+          op: eq
+          value: true
+      - to: write-miss
+    system_prompt: |
+      Draw the second half in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"complete":true}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [complete]
+          properties:
+            complete:
+              type: boolean
+
+  - id: assemble-ok
+    system_prompt: |
+      Combine both matching parents into one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: write-miss
+    route:
+      - to: assemble-miss
+        if:
+          field: ready
+          op: eq
+          value: true
+      - to: draw-miss
+    system_prompt: |
+      Write the miss-join half in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"ready":true}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [ready]
+          properties:
+            ready:
+              type: boolean
+
+  - id: draw-miss
+    route:
+      - to: assemble-miss
+        if:
+          field: complete
+          op: eq
+          value: true
+      - to: mix-open
+    system_prompt: |
+      Draw the miss-join half in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"complete":false}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [complete]
+          properties:
+            complete:
+              type: boolean
+
+  - id: assemble-miss
+    system_prompt: |
+      This join should stay skipped.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: mix-open
+    route:
+      - to: assemble-mix-ok
+      - to: mix-gated
+    system_prompt: |
+      Open the mixed-join fire half in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: mix-gated
+    route:
+      - to: assemble-mix-ok
+        if:
+          field: ready
+          op: eq
+          value: true
+      - to: mix-open-miss
+    system_prompt: |
+      Gate the mixed-join fire half in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"ready":true}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [ready]
+          properties:
+            ready:
+              type: boolean
+
+  - id: assemble-mix-ok
+    system_prompt: |
+      Combine the ungated parent and the matching gated parent in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: mix-open-miss
+    route:
+      - to: assemble-mix-miss
+      - to: mix-gated-miss
+    system_prompt: |
+      Open the mixed-join miss half in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: mix-gated-miss
+    route:
+      - to: assemble-mix-miss
+        if:
+          field: ready
+          op: eq
+          value: true
+      - to: strict-num
+    system_prompt: |
+      Gate the mixed-join miss half in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"ready":false}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [ready]
+          properties:
+            ready:
+              type: boolean
+
+  - id: assemble-mix-miss
+    system_prompt: |
+      This mixed join should stay skipped.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: strict-num
+    route:
+      - to: ran-int-one
+        if:
+          field: n
+          op: eq
+          value: 1
+      - to: skipped-coerced
+        if:
+          field: n
+          op: eq
+          value: "1"
+      - to: loop-draft
+    system_prompt: |
+      Emit the integer one in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"n":1}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [n]
+          properties:
+            n:
+              type: integer
+
+  - id: ran-int-one
+    system_prompt: |
+      Note that integer 1 matched eq 1, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: skipped-coerced
+    system_prompt: |
+      This stage should stay skipped because 1 is not "1".
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: loop-draft
+    route:
+      - to: loop-check
+    system_prompt: |
+      Draft a one-sentence change for the loop lane.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: loop-check
+    route:
+      - to: loop-done
+        if:
+          field: pass
+          op: eq
+          value: true
+      - type: loop
+        to: loop-draft
+        max_replays: 1
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: |
+      Check the draft in one sentence.
+      Always emit payload: {"pass":true}.
+      On success you MUST include feedback_loop in your envelope:
+      {"action":"continue"} or {"action":"send_back","target":"loop-draft"}.
+      On your FIRST attempt, send_back to loop-draft.
+      On your SECOND attempt (after the replay), continue.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], payload: {"pass":true}, and the matching feedback_loop action.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          type: object
+          required: [pass]
+          properties:
+            pass:
+              type: boolean
+
+  - id: loop-done
+    replay_safe: false
+    system_prompt: |
+      Finish the loop lane in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"

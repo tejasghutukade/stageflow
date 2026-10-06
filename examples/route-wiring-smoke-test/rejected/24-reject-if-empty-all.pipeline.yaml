@@ -1,0 +1,31 @@
+id: route-demo-reject-if-empty-all
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          all: []
+    system_prompt: Triage.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [severity]
+          properties:
+            severity:
+              type: string
+  - id: page
+    system_prompt: Page.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

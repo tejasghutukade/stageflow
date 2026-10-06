@@ -6,9 +6,9 @@ import {
   listProviders,
   loginWithApiKey,
   logoutProvider,
-  ProviderAuthError,
   type ProviderAuthContext,
 } from "../agent/providerAuth.js";
+import { mapProviderAuthError } from "../agent/providerInspect.js";
 import {
   answerLoginSession,
   cancelLoginSession,
@@ -22,19 +22,6 @@ export type ProviderRoutesCtx = {
   json: (res: ServerResponse, status: number, body: unknown) => void;
   providerAuthContext?: ProviderAuthContext;
 };
-
-export function providerAuthErrorBody(err: unknown): {
-  status: number;
-  body: { error: string };
-} {
-  if (err instanceof ProviderAuthError) {
-    return { status: err.status, body: { error: err.message } };
-  }
-  return {
-    status: 500,
-    body: { error: "Provider auth operation failed" },
-  };
-}
 
 export async function handleProviderRoutes(
   req: IncomingMessage,
@@ -51,7 +38,7 @@ export async function handleProviderRoutes(
     try {
       json(res, 200, detectPiHome(cwd));
     } catch (err) {
-      const mapped = providerAuthErrorBody(err);
+      const mapped = mapProviderAuthError(err);
       json(res, mapped.status, mapped.body);
     }
     return true;
@@ -61,7 +48,7 @@ export async function handleProviderRoutes(
     try {
       json(res, 200, await listProviders(cwd, authCtx));
     } catch (err) {
-      const mapped = providerAuthErrorBody(err);
+      const mapped = mapProviderAuthError(err);
       json(res, mapped.status, mapped.body);
     }
     return true;
@@ -75,7 +62,7 @@ export async function handleProviderRoutes(
         provider: await getAuthStatus(cwd, providerId, authCtx),
       });
     } catch (err) {
-      const mapped = providerAuthErrorBody(err);
+      const mapped = mapProviderAuthError(err);
       json(res, mapped.status, mapped.body);
     }
     return true;
@@ -103,7 +90,7 @@ export async function handleProviderRoutes(
         const session = await startOAuthLoginSession(cwd, providerId, authCtx);
         json(res, 200, { ok: true, session });
       } catch (err) {
-        const mapped = providerAuthErrorBody(err);
+        const mapped = mapProviderAuthError(err);
         json(res, mapped.status, mapped.body);
       }
       return true;
@@ -121,7 +108,7 @@ export async function handleProviderRoutes(
       const provider = await loginWithApiKey(cwd, providerId, apiKey, authCtx);
       json(res, 200, { ok: true, provider });
     } catch (err) {
-      const mapped = providerAuthErrorBody(err);
+      const mapped = mapProviderAuthError(err);
       json(res, mapped.status, mapped.body);
     }
     return true;
@@ -171,7 +158,7 @@ export async function handleProviderRoutes(
         const session = answerLoginSession(sessionId, value);
         json(res, 200, { ok: true, session });
       } catch (err) {
-        const mapped = providerAuthErrorBody(err);
+        const mapped = mapProviderAuthError(err);
         json(res, mapped.status, mapped.body);
       }
       return true;
@@ -192,7 +179,7 @@ export async function handleProviderRoutes(
         const session = cancelLoginSession(sessionId);
         json(res, 200, { ok: true, session });
       } catch (err) {
-        const mapped = providerAuthErrorBody(err);
+        const mapped = mapProviderAuthError(err);
         json(res, mapped.status, mapped.body);
       }
       return true;
@@ -213,7 +200,7 @@ export async function handleProviderRoutes(
       const provider = await logoutProvider(cwd, providerId, authCtx);
       json(res, 200, { ok: true, provider });
     } catch (err) {
-      const mapped = providerAuthErrorBody(err);
+      const mapped = mapProviderAuthError(err);
       json(res, mapped.status, mapped.body);
     }
     return true;

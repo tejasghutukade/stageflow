@@ -1,0 +1,12 @@
+id: fork-demo
+stages:
+  - id: decide
+    uses: ./decide.yaml
+    entry: true
+    route:
+      - to: branch-a
+      - to: branch-b
+  - id: branch-a
+    uses: ./branch-a.yaml
+  - id: branch-b
+    uses: ./branch-b.yaml

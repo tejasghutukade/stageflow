@@ -1,7 +1,19 @@
-import type { AgentPort, StageHandle, StageRunResult } from "../agent/port.js";
+import type {
+  AgentPort,
+  FeedbackLoopContext,
+  StageHandle,
+  StageRunResult,
+  StageSessionMode,
+} from "../agent/port.js";
 import type { StageLogLine } from "../agent/activity.js";
+import {
+  hostGateContextFor,
+  stampGateRequest,
+  type HostGateContext,
+} from "../browser/gateHandoff.js";
+import type { BrowserRunner, StageBrowserSupport } from "../browser/browserHost.js";
 import type { StageEnvelope } from "../types/envelope.js";
-import type { StageConfig } from "../types/stage.js";
+import type { LoadedStageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageLogEvent } from "../runstore/port.js";
@@ -22,6 +34,10 @@ import {
   openStageAttempt,
   type OperatorCatalog,
 } from "./stageAttemptBootstrap.js";
+import { createVerifiedStageExecution } from "./verifiedStageExecution.js";
+import { BROWSER_STAGE_PATTERNS, redact } from "../logging/redact.js";
+import { getNamedSecrets } from "../logging/namedSecrets.js";
+import { isStageTimeoutReason } from "../agent/stageTimeout.js";
 
 export type RunStageOutcome = StageRunResult | { waiting: true };
 
@@ -37,7 +53,7 @@ export type RunStageOptions = {
   agent: AgentPort;
   store: RunStore;
   runId: string;
-  stage: StageConfig;
+  stage: LoadedStageConfig;
   task: TaskFile;
   dag?: ResolvedPipelineDag;
   priorEnvelope?: StageEnvelope | null;
@@ -59,6 +75,14 @@ export type RunStageOptions = {
   factoryCwd?: string;
   operatorCatalog?: OperatorCatalog;
   completedEnvelopes?: Map<string, StageEnvelope>;
+  skipGates?: boolean;
+  stageId?: string;
+  sessionMode?: StageSessionMode;
+  feedbackLoopContext?: FeedbackLoopContext;
+  resumeToken?: string;
+  stageEnv?: Record<string, string>;
+  /** Test seam for the Host login check run by a `browser_login` verify item. */
+  browser?: Pick<StageBrowserSupport, "runner" | "loginCheck">;
 };
 
 const LIFECYCLE_EVENTS = new Set([
@@ -116,13 +140,25 @@ async function finalizeStageResult(options: {
   result: StageRunResult;
   activityChain: Promise<void>;
   attemptCtx?: StageAttemptContext;
+  browser?: boolean;
 }): Promise<StageRunResult> {
-  const { store, runId, stageId, result, activityChain, attemptCtx } = options;
+  const { store, runId, stageId, result, activityChain, attemptCtx, browser } =
+    options;
   const attemptOpt = attemptCtx?.eventOptions();
   await activityChain;
 
   if (result.envelope) {
-    await store.writeEnvelope(runId, stageId, result.envelope, attemptOpt);
+    await store.writeEnvelope(
+      runId,
+      stageId,
+      browser
+        ? (redact(result.envelope as unknown as Record<string, unknown>, {
+            patterns: BROWSER_STAGE_PATTERNS,
+            namedSecrets: getNamedSecrets(),
+          }) as unknown as StageEnvelope)
+        : result.envelope,
+      attemptOpt,
+    );
   }
 
   if (!result.ok) {
@@ -130,7 +166,7 @@ async function finalizeStageResult(options: {
       store,
       runId,
       stageId,
-      event: { event: "failed", reason: result.reason },
+      event: { event: "failed", reason: result.reason, usage: result.usage },
       attemptCtx,
     });
     console.error(`Stage ${stageId} failed: ${result.reason}`);
@@ -141,7 +177,7 @@ async function finalizeStageResult(options: {
     store,
     runId,
     stageId,
-    event: { event: "succeeded" },
+    event: { event: "succeeded", usage: result.usage },
     attemptCtx,
   });
   console.error(`Stage ${stageId} succeeded.`);
@@ -159,12 +195,21 @@ export async function runStageYieldLoop(options: {
   workerMode?: boolean;
   store?: RunStore;
   attemptCtx?: StageAttemptContext;
+  skipGates?: boolean;
+  gateContext?: HostGateContext;
 }): Promise<RunStageYieldLoopResult> {
-  const { handle, runId, stageId, hitl, workerMode, store, attemptCtx } = options;
+  const { handle, runId, stageId, hitl, workerMode, store, attemptCtx, skipGates, gateContext } = options;
 
   while (true) {
     const event = await handle.next();
     if (event.status === "waiting_for_input") {
+      const request = stampGateRequest(event.request, gateContext);
+      if (skipGates) {
+        return {
+          ok: false,
+          reason: "skip-gates: stage requested wait",
+        };
+      }
       if (workerMode) {
         if (!store) {
           return {
@@ -176,7 +221,7 @@ export async function runStageYieldLoop(options: {
           store,
           runId,
           stageId,
-          request: event.request,
+          request,
           attemptCtx,
           qaHooks: createDefaultHitlQaHooks(store),
         });
@@ -188,7 +233,7 @@ export async function runStageYieldLoop(options: {
           reason: "stage requested wait but no HITL controller is configured",
         };
       }
-      await hitl.enterWait(runId, stageId, handle, event.request, attemptCtx);
+      await hitl.enterWait(runId, stageId, handle, request, attemptCtx);
       continue;
     }
     return event.result;
@@ -216,13 +261,20 @@ export async function runStage(
     factoryCwd,
     operatorCatalog,
     completedEnvelopes,
+    skipGates,
+    sessionMode,
+    feedbackLoopContext,
+    resumeToken,
+    stageEnv,
+    browser: browserSeams,
   } = options;
+  const stageId = options.stageId ?? stage.id;
   const attemptOpt = attemptCtx?.eventOptions();
   const baseRoots =
     rootsOverride ??
     buildStageRoots(
       workspaceDir ?? store.getWorkspaceDir(runId),
-      stage.id,
+      stageId,
       checkoutRoot,
       attemptCtx,
     );
@@ -231,23 +283,47 @@ export async function runStage(
       ? withResolvedAuthPath(baseRoots, factoryCwd)
       : baseRoots;
   const attempt = attemptCtx?.attempt ?? 1;
-  await ensureStageExecutionForAttempt(store, runId, stage.id, attempt);
-  await store.ensureAttemptWorkspace(runId, stage.id, attempt);
+  await ensureStageExecutionForAttempt(store, runId, stageId, attempt);
+  await store.ensureAttemptWorkspace(runId, stageId, attempt);
   if (!skipStarted) {
     await appendLifecycleEventAndPatchExecution({
       store,
       runId,
-      stageId: stage.id,
+      stageId,
       event: { event: "started" },
       attemptCtx,
     });
   }
-  console.error(`Running stage ${stage.id} (${stage.model})...`);
+  const verifiedExecution = createVerifiedStageExecution({
+    store,
+    runId,
+    stageId,
+    attempt,
+    stage,
+    dag,
+    roots,
+    commandEnv: stageEnv ?? process.env,
+    ...(stage.browser?.check !== undefined
+      ? {
+          browserLogin: {
+            check: stage.browser.check,
+            ...(browserSeams?.runner !== undefined
+              ? { runner: browserSeams.runner }
+              : {}),
+            ...(browserSeams?.loginCheck !== undefined
+              ? { options: browserSeams.loginCheck }
+              : {}),
+          },
+        }
+      : {}),
+  });
+  await verifiedExecution.prepare();
+  console.error(`Running stage ${stageId} (${stage.model})...`);
 
   let activityChain = Promise.resolve();
   const enqueueActivity = (event: StageLogLine) => {
     activityChain = activityChain.then(() =>
-      store.appendStageEvent(runId, stage.id, event, attemptOpt),
+      store.appendStageEvent(runId, stageId, event, attemptOpt),
     );
   };
 
@@ -260,12 +336,13 @@ export async function runStage(
       store,
       runId,
       stage,
+      stageId,
       task,
       dag: dag ?? {
         nodes: [
-          { id: stage.id, needs: null, ancestors: [], stageIndex: 0 },
+          { id: stageId, needs: null, needsEdges: [], ancestors: [], stageIndex: 0 },
         ],
-        roots: [stage.id],
+        roots: [stageId],
         childrenOf: {},
       },
       checkoutRoot,
@@ -275,6 +352,10 @@ export async function runStage(
       operatorCatalog,
       roots,
       completedEnvelopes,
+      ...(sessionMode !== undefined ? { sessionMode } : {}),
+      ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
+      ...(resumeToken !== undefined ? { resumeToken } : {}),
+      ...(stageEnv !== undefined ? { stageEnv } : {}),
       onActivity: (event) => {
         enqueueActivity(event);
       },
@@ -283,11 +364,11 @@ export async function runStage(
       await appendLifecycleEventAndPatchExecution({
         store,
         runId,
-        stageId: stage.id,
+        stageId,
         event: { event: "failed", reason: opened.reason },
         attemptCtx,
       });
-      console.error(`Stage ${stage.id} failed: ${opened.reason}`);
+      console.error(`Stage ${stageId} failed: ${opened.reason}`);
       return { ok: false, reason: opened.reason };
     }
     handle = opened.handle;
@@ -298,25 +379,29 @@ export async function runStage(
     outcome = await runStageYieldLoop({
       handle,
       runId,
-      stageId: stage.id,
+      stageId,
       hitl,
       workerMode,
       store: workerMode ? store : undefined,
       attemptCtx,
+      skipGates,
+      gateContext: hostGateContextFor(stage.browser),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     await activityChain;
-    hitl?.clearLiveWait(runId, stage.id);
+    hitl?.clearLiveWait(runId, stageId);
     await appendLifecycleEventAndPatchExecution({
       store,
       runId,
-      stageId: stage.id,
+      stageId,
       event: { event: "failed", reason },
       attemptCtx,
     });
-    console.error(`Stage ${stage.id} failed: ${reason}`);
-    await handle.close().catch(() => undefined);
+    console.error(`Stage ${stageId} failed: ${reason}`);
+    await handle
+      .close(isStageTimeoutReason(reason) ? { park: true } : undefined)
+      .catch(() => undefined);
     return { ok: false, reason };
   }
 
@@ -327,15 +412,30 @@ export async function runStage(
   }
 
   try {
+    let result: StageRunResult = outcome;
+    if (outcome.ok) {
+      try {
+        result = await verifiedExecution.verify(outcome);
+      } catch (error) {
+        result = {
+          ok: false,
+          reason: `Completion verification errored: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
     return await finalizeStageResult({
       store,
       runId,
-      stageId: stage.id,
-      result: outcome,
+      stageId,
+      result,
       activityChain,
       attemptCtx,
+      browser: stage.browser !== undefined,
     });
   } finally {
-    await handle.close().catch(() => undefined);
+    const timedOut = isStageTimeoutReason(
+      outcome.ok ? undefined : outcome.reason,
+    );
+    await handle.close(timedOut ? { park: true } : undefined).catch(() => undefined);
   }
 }

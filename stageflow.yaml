@@ -1,0 +1,61 @@
+version: 1
+model: cursor/auto
+catalog:
+  pipelines:
+    - examples/hello-email
+    - workshop
+    - examples/generic-fan-in
+    - examples/stage-mcp
+    - examples/playwright-mcp
+    - examples/browser-session
+    - examples/context7-mcp
+    - examples/conditional-fork
+    - examples/hello-world
+    - examples/plan-review
+    - examples/github-release
+    - examples/ci-validate
+    - examples/archify-on-pr
+    - examples/feedback-loop
+    - examples/oss-issue-contribution
+    - examples/oss-quick-fix
+    - examples/route-wiring-smoke-test
+    - examples/route-if-tour
+    - examples/verify-tour
+    - examples/retry-tour
+    - examples/mcp-hitl-tour
+    - examples/feature-loop
+    - examples/ship-feature
+  tasks:
+    - examples/hello-email
+    - workshop
+    - examples/generic-fan-in
+    - examples/stage-mcp
+    - examples/playwright-mcp
+    - examples/browser-session
+    - examples/context7-mcp
+    - examples/conditional-fork
+    - examples/hello-world
+    - examples/plan-review
+    - examples/github-release
+    - examples/ci-validate
+    - examples/archify-on-pr
+    - examples/feedback-loop
+    - examples/oss-issue-contribution
+    - examples/oss-quick-fix
+    - examples/route-wiring-smoke-test
+    - examples/route-if-tour
+    - examples/verify-tour
+    - examples/retry-tour
+    - examples/mcp-hitl-tour
+    - examples/feature-loop
+    - examples/ship-feature
+  triggers: []
+  patterns:
+    pipeline: "*.pipeline.yaml"
+    task: "*.task.yaml"
+    trigger: "*.trigger.yaml"
+  exclude:
+    - tests/fixtures
+    - examples/route-wiring-smoke-test/rejected
+    - examples/stage-mcp/stage-mcp-dead.pipeline.yaml
+    - examples/stage-mcp/stage-mcp-dead.task.yaml

@@ -12,6 +12,16 @@ describe("readinessDetail", () => {
     ).toBe("Blocked on improve-b");
   });
 
+  it("lists every unresolved parent in blocked copy", () => {
+    expect(
+      readinessDetail({
+        readiness: "blocked",
+        blocked_by: ["research", "validation"],
+        status: "pending",
+      }),
+    ).toBe("Blocked on research, validation");
+  });
+
   it("returns Skipped for skipped readiness", () => {
     expect(
       readinessDetail({
@@ -35,6 +45,15 @@ describe("readinessDetail", () => {
       readinessDetail({
         readiness: "waiting",
         status: "waiting_for_input",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("omits duplicate interrupted copy when status is interrupted", () => {
+    expect(
+      readinessDetail({
+        readiness: "interrupted",
+        status: "interrupted",
       }),
     ).toBeUndefined();
   });

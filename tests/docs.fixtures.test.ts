@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, taskPath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -46,15 +47,12 @@ async function materializeLiveStyleCatalog(tmpRoot: string): Promise<void> {
   await mkdir(path.join(tmpRoot, "stages"), { recursive: true });
 
   await writeFile(
-    path.join(tmpRoot, "pipelines", "plan-review-proving.yaml"),
-    await readFile(
-      path.join(fixtures, "pipelines", "plan-review-proving.yaml"),
-      "utf8",
-    ),
+    path.join(tmpRoot, "pipelines", "plan-review-proving.pipeline.yaml"),
+    await readFile(pipelinePath("plan-review-proving"), "utf8"),
   );
   await writeFile(
-    path.join(tmpRoot, "tasks", "prove-plan-review.yaml"),
-    await readFile(path.join(fixtures, "tasks", "prove-plan-review.yaml"), "utf8"),
+    path.join(tmpRoot, "tasks", "prove-plan-review.task.yaml"),
+    await readFile(taskPath("prove-plan-review"), "utf8"),
   );
   await materializeLiveStyleStages(tmpRoot, provingStageIds);
 }
@@ -67,31 +65,22 @@ async function materializeFourKindsLiveStyleCatalog(
   await mkdir(path.join(tmpRoot, "stages"), { recursive: true });
 
   await writeFile(
-    path.join(tmpRoot, "pipelines", "hitl-four-kinds-proving.yaml"),
-    await readFile(
-      path.join(fixtures, "pipelines", "hitl-four-kinds-proving.yaml"),
-      "utf8",
-    ),
+    path.join(tmpRoot, "pipelines", "hitl-four-kinds-proving.pipeline.yaml"),
+    await readFile(pipelinePath("hitl-four-kinds-proving"), "utf8"),
   );
   await writeFile(
-    path.join(tmpRoot, "tasks", "prove-hitl-four-kinds.yaml"),
-    await readFile(
-      path.join(fixtures, "tasks", "prove-hitl-four-kinds.yaml"),
-      "utf8",
-    ),
+    path.join(tmpRoot, "tasks", "prove-hitl-four-kinds.task.yaml"),
+    await readFile(taskPath("prove-hitl-four-kinds"), "utf8"),
   );
   await materializeLiveStyleStages(tmpRoot, fourKindsStageIds);
 }
 
 describe("docs-only proving fixtures", () => {
   it("loads fixture stages/pipelines/tasks without error", async () => {
-    const task = await loadTask(path.join(fixtures, "tasks", "sample.yaml"));
+    const task = await loadTask(SAMPLE_TASK);
     expect(task.id).toBe("sample");
 
-    const loaded = await loadPipeline("docs-only", {
-      cwd: fixtures,
-      stagesDir: path.join(fixtures, "stages"),
-    });
+    const loaded = await loadPipeline(pipelinePath("docs-only"));
     expect(loaded.stages.map((s) => s.id)).toEqual([
       "clarify",
       "design-doc",
@@ -103,15 +92,9 @@ describe("docs-only proving fixtures", () => {
 
 describe("plan-review-proving catalog", () => {
   it("loads fixture pipeline with plan-review then plan-review-followup", async () => {
-    const task = await loadTask(
-      path.join(fixtures, "tasks", "prove-plan-review.yaml"),
-    );
-    expect(task.id).toBe("prove-plan-review");
+    const task = await loadTask(taskPath("prove-plan-review"));
 
-    const loaded = await loadPipeline("plan-review-proving", {
-      cwd: fixtures,
-      stagesDir: path.join(fixtures, "stages"),
-    });
+    const loaded = await loadPipeline(pipelinePath("plan-review-proving"));
     expect(loaded.pipeline.stages).toEqual([
       "plan-review",
       "plan-review-followup",
@@ -124,14 +107,11 @@ describe("plan-review-proving catalog", () => {
     try {
       await materializeLiveStyleCatalog(tmpRoot);
 
-      const task = await loadTask(
-        path.join(tmpRoot, "tasks", "prove-plan-review.yaml"),
-      );
-      expect(task.id).toBe("prove-plan-review");
+      const task = await loadTask(path.join(tmpRoot, "tasks", "prove-plan-review.task.yaml"));
 
-      const loaded = await loadPipeline("plan-review-proving", {
-        cwd: tmpRoot,
-      });
+      const loaded = await loadPipeline(
+        path.join(tmpRoot, "pipelines", "plan-review-proving.pipeline.yaml"),
+      );
       expect(loaded.pipeline.stages).toEqual([
         "plan-review",
         "plan-review-followup",
@@ -147,13 +127,10 @@ describe("plan-review-proving catalog", () => {
     try {
       await materializeLiveStyleCatalog(tmpRoot);
 
-      const fixturePipeline = await loadPipeline("plan-review-proving", {
-        cwd: fixtures,
-        stagesDir: path.join(fixtures, "stages"),
-      });
-      const livePipeline = await loadPipeline("plan-review-proving", {
-        cwd: tmpRoot,
-      });
+      const fixturePipeline = await loadPipeline(pipelinePath("plan-review-proving"));
+      const livePipeline = await loadPipeline(
+        path.join(tmpRoot, "pipelines", "plan-review-proving.pipeline.yaml"),
+      );
 
       expect(fixturePipeline.pipeline.id).toBe(livePipeline.pipeline.id);
       expect(fixturePipeline.pipeline.stages).toEqual(livePipeline.pipeline.stages);
@@ -196,15 +173,13 @@ describe("plan-review-proving catalog", () => {
     const livePipelinePath = path.join(
       repoRoot,
       "pipelines",
-      "plan-review-proving.yaml",
+      "plan-review-proving.pipeline.yaml",
     );
     if (!(await pathExists(livePipelinePath))) {
       return;
     }
 
-    const loaded = await loadPipeline("plan-review-proving", {
-      cwd: repoRoot,
-    });
+    const loaded = await loadPipeline(livePipelinePath);
     expect(loaded.pipeline.stages).toEqual([
       "plan-review",
       "plan-review-followup",
@@ -224,15 +199,9 @@ describe("plan-review-proving catalog", () => {
 
 describe("hitl-four-kinds-proving catalog", () => {
   it("loads fixture pipeline with hitl-four-kinds", async () => {
-    const task = await loadTask(
-      path.join(fixtures, "tasks", "prove-hitl-four-kinds.yaml"),
-    );
-    expect(task.id).toBe("prove-hitl-four-kinds");
+    const task = await loadTask(taskPath("prove-hitl-four-kinds"));
 
-    const loaded = await loadPipeline("hitl-four-kinds-proving", {
-      cwd: fixtures,
-      stagesDir: path.join(fixtures, "stages"),
-    });
+    const loaded = await loadPipeline(pipelinePath("hitl-four-kinds-proving"));
     expect(loaded.pipeline.stages).toEqual(["hitl-four-kinds"]);
     expect(loaded.stages.map((s) => s.id)).toEqual(loaded.pipeline.stages);
   });
@@ -243,13 +212,12 @@ describe("hitl-four-kinds-proving catalog", () => {
       await materializeFourKindsLiveStyleCatalog(tmpRoot);
 
       const task = await loadTask(
-        path.join(tmpRoot, "tasks", "prove-hitl-four-kinds.yaml"),
+        path.join(tmpRoot, "tasks", "prove-hitl-four-kinds.task.yaml"),
       );
-      expect(task.id).toBe("prove-hitl-four-kinds");
 
-      const loaded = await loadPipeline("hitl-four-kinds-proving", {
-        cwd: tmpRoot,
-      });
+      const loaded = await loadPipeline(
+        path.join(tmpRoot, "pipelines", "hitl-four-kinds-proving.pipeline.yaml"),
+      );
       expect(loaded.pipeline.stages).toEqual(["hitl-four-kinds"]);
       expect(loaded.stages.map((s) => s.id)).toEqual(loaded.pipeline.stages);
     } finally {
@@ -262,13 +230,10 @@ describe("hitl-four-kinds-proving catalog", () => {
     try {
       await materializeFourKindsLiveStyleCatalog(tmpRoot);
 
-      const fixturePipeline = await loadPipeline("hitl-four-kinds-proving", {
-        cwd: fixtures,
-        stagesDir: path.join(fixtures, "stages"),
-      });
-      const livePipeline = await loadPipeline("hitl-four-kinds-proving", {
-        cwd: tmpRoot,
-      });
+      const fixturePipeline = await loadPipeline(pipelinePath("hitl-four-kinds-proving"));
+      const livePipeline = await loadPipeline(
+        path.join(tmpRoot, "pipelines", "hitl-four-kinds-proving.pipeline.yaml"),
+      );
 
       expect(fixturePipeline.pipeline.id).toBe(livePipeline.pipeline.id);
       expect(fixturePipeline.pipeline.stages).toEqual(livePipeline.pipeline.stages);
@@ -319,15 +284,13 @@ describe("hitl-four-kinds-proving catalog", () => {
     const livePipelinePath = path.join(
       repoRoot,
       "pipelines",
-      "hitl-four-kinds-proving.yaml",
+      "hitl-four-kinds-proving.pipeline.yaml",
     );
     if (!(await pathExists(livePipelinePath))) {
       return;
     }
 
-    const loaded = await loadPipeline("hitl-four-kinds-proving", {
-      cwd: repoRoot,
-    });
+    const loaded = await loadPipeline(livePipelinePath);
     expect(loaded.pipeline.stages).toEqual(["hitl-four-kinds"]);
 
     for (const stageId of fourKindsStageIds) {

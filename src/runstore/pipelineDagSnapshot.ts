@@ -1,22 +1,36 @@
 import type { LoadedPipeline, ResolvedPipelineStageNode } from "../types/pipeline.js";
 import type { StageGateKind } from "../types/stage.js";
+import { hydrateResolvedNeeds } from "../config/pipelineNeeds.js";
 import type { RunPipelineDagSnapshot } from "./port.js";
+import { mintCloneInstanceIds } from "./stageInstanceId.js";
 
 export function buildPipelineDagSnapshotFromLoaded(
   loaded: LoadedPipeline,
 ): RunPipelineDagSnapshot {
+  // Snapshot JSON keeps IR keys (`completion`, `recovery`, `clone_input_schema`).
+  // Do not rewrite these from target YAML names. Resume hydrates this shape.
   const gate_kinds: Record<string, StageGateKind[]> = {};
+  const clone_input_schema: Record<string, unknown> = {};
   for (const stage of loaded.stages) {
-    if (stage.gate_kinds?.length) {
+    if (stage.gate_kinds !== undefined) {
       gate_kinds[stage.id] = stage.gate_kinds;
+    }
+    if (stage.clone_input_schema !== undefined) {
+      clone_input_schema[stage.id] = stage.clone_input_schema;
     }
   }
   return {
     stage_ids: [...loaded.pipeline.stages],
-    nodes: loaded.dag.nodes,
+    nodes: loaded.dag.nodes.map((node) => ({
+      ...node,
+      definition_id: node.id,
+    })),
     roots: loaded.dag.roots,
     childrenOf: loaded.dag.childrenOf,
     ...(Object.keys(gate_kinds).length > 0 ? { gate_kinds } : {}),
+    ...(Object.keys(clone_input_schema).length > 0
+      ? { clone_input_schema }
+      : {}),
   };
 }
 
@@ -24,8 +38,11 @@ export function linearCompatDagSnapshot(stageIds: string[]): RunPipelineDagSnaps
   const nodes: ResolvedPipelineStageNode[] = stageIds.map((id, index) => ({
     id,
     needs: index === 0 ? null : stageIds[index - 1]!,
+    needsEdges:
+      index === 0 ? [] : [{ id: stageIds[index - 1]!, on: ["succeeded"] }],
     ancestors: index === 0 ? [] : stageIds.slice(0, index),
     stageIndex: index,
+    definition_id: id,
   }));
   const childrenOf: Record<string, string[]> = {};
   for (let i = 1; i < stageIds.length; i++) {
@@ -45,5 +62,147 @@ export function parsePipelineDagSnapshot(raw: unknown): RunPipelineDagSnapshot |
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
   if (!Array.isArray(value.stage_ids) || !Array.isArray(value.nodes)) return null;
-  return raw as RunPipelineDagSnapshot;
+  const nodes = value.nodes.map((node) => {
+    if (!node || typeof node !== "object") return node;
+    const record = node as ResolvedPipelineStageNode;
+    const hydrated = hydrateResolvedNeeds(record);
+    return { ...record, ...hydrated };
+  });
+  return { ...(raw as RunPipelineDagSnapshot), nodes };
+}
+
+export function instancesOfDefinition(
+  snapshot: RunPipelineDagSnapshot,
+  catalogId: string,
+): string[] {
+  const nodeById = new Map(snapshot.nodes.map((n) => [n.id, n]));
+  return snapshot.stage_ids.filter((id) => {
+    const node = nodeById.get(id);
+    return (node?.definition_id ?? node?.id) === catalogId;
+  });
+}
+
+export function appendCloneInstances(
+  snapshot: RunPipelineDagSnapshot,
+  input: { catalogId: string; predecessorId: string; count: number; startAt?: number },
+): { snapshot: RunPipelineDagSnapshot; instanceIds: string[] } {
+  const { catalogId, predecessorId, count, startAt } = input;
+  // A catalog id that's already been fanned out once is no longer present as
+  // its own stage_ids entry — it was replaced by its instances. Minting
+  // *more* instances for it (a retried fanout requesting a larger clone
+  // count) is still valid as long as those instances exist.
+  const existingInstanceIdxs = snapshot.stage_ids
+    .map((id, i) => [id, i] as const)
+    .filter(([id]) => id !== catalogId && id.startsWith(`${catalogId}~`))
+    .map(([, i]) => i);
+  const catalogIdx = snapshot.stage_ids.indexOf(catalogId);
+  if (catalogIdx === -1 && existingInstanceIdxs.length === 0) {
+    throw new Error(
+      `catalog stage "${catalogId}" is not in the run DAG snapshot`,
+    );
+  }
+  const predNode = snapshot.nodes.find((n) => n.id === predecessorId);
+  if (!predNode) {
+    throw new Error(
+      `predecessor "${predecessorId}" is not in the run DAG snapshot`,
+    );
+  }
+  const instanceIds = mintCloneInstanceIds(catalogId, count, startAt);
+  for (const id of instanceIds) {
+    if (
+      snapshot.stage_ids.includes(id) ||
+      snapshot.nodes.some((n) => n.id === id)
+    ) {
+      throw new Error(
+        `instance id "${id}" already exists in the run DAG snapshot`,
+      );
+    }
+  }
+  const catalogNode = snapshot.nodes.find((n) => n.id === catalogId);
+  const templateNode =
+    catalogNode ?? snapshot.nodes.find((n) => n.definition_id === catalogId);
+  if (!templateNode) {
+    throw new Error(
+      `catalog stage "${catalogId}" is not in the run DAG snapshot`,
+    );
+  }
+
+  const insertAt = catalogIdx !== -1 ? catalogIdx : Math.max(...existingInstanceIdxs) + 1;
+  const removeAt = catalogIdx !== -1 ? catalogIdx + 1 : insertAt;
+  const stage_ids = [
+    ...snapshot.stage_ids.slice(0, insertAt),
+    ...instanceIds,
+    ...snapshot.stage_ids.slice(removeAt),
+  ];
+
+  const instanceNodes: ResolvedPipelineStageNode[] = instanceIds.map((id) => ({
+    id,
+    definition_id: catalogId,
+    needs: predecessorId,
+    needsEdges: [{ id: predecessorId, on: ["succeeded"] }],
+    ancestors: [...predNode.ancestors, predecessorId],
+    stageIndex: 0,
+    ...(templateNode.fork !== undefined ? { fork: templateNode.fork } : {}),
+    ...(templateNode.completion !== undefined
+      ? { completion: templateNode.completion }
+      : {}),
+    ...(templateNode.recovery !== undefined
+      ? { recovery: templateNode.recovery }
+      : {}),
+    ...(templateNode.feedback_loop !== undefined
+      ? { feedback_loop: templateNode.feedback_loop }
+      : {}),
+    ...(templateNode.replay_safe !== undefined
+      ? { replay_safe: templateNode.replay_safe }
+      : {}),
+  }));
+
+  const remaining = new Map(
+    snapshot.nodes
+      .filter((n) => n.id !== catalogId)
+      .map((n) => [n.id, n] as const),
+  );
+  const minted = new Map(instanceNodes.map((n) => [n.id, n] as const));
+  const nodes = stage_ids.map((id, index) => {
+    const node = minted.get(id) ?? remaining.get(id);
+    if (!node) {
+      throw new Error(`missing node for "${id}" after clone fan-out`);
+    }
+    return { ...node, stageIndex: index };
+  });
+
+  const childrenOf: Record<string, string[]> = {};
+  for (const [key, children] of Object.entries(snapshot.childrenOf)) {
+    childrenOf[key] = [...children];
+  }
+
+  const predChildren = childrenOf[predecessorId] ?? [];
+  const predIdx = predChildren.indexOf(catalogId);
+  childrenOf[predecessorId] =
+    predIdx === -1
+      ? [...predChildren, ...instanceIds]
+      : [
+          ...predChildren.slice(0, predIdx),
+          ...instanceIds,
+          ...predChildren.slice(predIdx + 1),
+        ];
+
+  const definitionParent = catalogNode?.needs;
+  if (definitionParent && definitionParent !== predecessorId) {
+    const parentChildren = childrenOf[definitionParent] ?? [];
+    childrenOf[definitionParent] = parentChildren.filter((id) => id !== catalogId);
+    if (childrenOf[definitionParent].length === 0) {
+      delete childrenOf[definitionParent];
+    }
+  }
+
+  return {
+    snapshot: {
+      ...snapshot,
+      stage_ids,
+      nodes,
+      childrenOf,
+    },
+    instanceIds,
+  };
 }

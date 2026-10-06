@@ -32,12 +32,15 @@ export async function buildStageSnapshotFromStore(
   let status: StageSnapshot["status"];
   let envelope: StageEnvelope | null;
   let attempt_count: number;
+  let cost_usd: number | undefined;
 
   if (latest !== null) {
     events = await store.listStageEvents(runId, stageId, latest.attempt);
     status = stageStatusFromEvents(events);
     envelope = await tryReadEnvelope(store, runId, stageId, latest);
     attempt_count = await store.countStageAttempts(runId, stageId);
+    const executions = await store.listStageExecutions(runId, stageId);
+    cost_usd = sumStageExecutionCost(executions);
   } else {
     events = await store.listStageEvents(runId, stageId);
     status = stageStatusFromEvents(events);
@@ -61,5 +64,13 @@ export async function buildStageSnapshotFromStore(
     last_at,
     attempt_count,
     ...(pending ? { pending_prompt: pending } : {}),
+    ...(cost_usd !== undefined ? { cost_usd } : {}),
   };
+}
+
+/** Sum cost across every attempt — retries are real spend too, so a stage's total isn't just its latest attempt. */
+function sumStageExecutionCost(executions: StageExecution[]): number | undefined {
+  const costs = executions.map((e) => e.cost_usd).filter((c): c is number => c !== undefined);
+  if (costs.length === 0) return undefined;
+  return costs.reduce((sum, c) => sum + c, 0);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -11,11 +11,15 @@ import {
   attemptLogPath,
   attemptSessionPath,
   attemptWorkspaceDir,
+  classifyRealPathContainment,
+  durableRootFileToolDenial,
   envelopePath,
   isInsideDir,
   listArtifactNames,
   resolveArtifactTarget,
+  STAGEFLOW_PATH_DENIED,
   stageArtifactsDir,
+  stageDir,
   stageLogPath,
 } from "../src/runstore/workspaceLayout.js";
 
@@ -79,6 +83,20 @@ describe("RunWorkspaceLayout", () => {
     const ws = "/tmp/run-1";
     expect(() => attemptLogPath(ws, "../x", 1)).toThrow(/stageId/);
     expect(() => attemptWorkspaceDir(ws, "a/b", 2)).toThrow(/stageId/);
+    expect(() => stageDir(ws, "a/b")).toThrow(/stageId/);
+  });
+
+  it("clone instance ids get distinct attempt workspaces", () => {
+    const ws = "/tmp/run-1";
+    expect(attemptWorkspaceDir(ws, "author-diagrams~1", 1)).toBe(
+      path.join(ws, "stages", "author-diagrams~1", "attempts", "1"),
+    );
+    expect(attemptWorkspaceDir(ws, "author-diagrams~2", 1)).toBe(
+      path.join(ws, "stages", "author-diagrams~2", "attempts", "1"),
+    );
+    expect(attemptWorkspaceDir(ws, "author-diagrams~1", 1)).not.toBe(
+      attemptWorkspaceDir(ws, "author-diagrams~2", 1),
+    );
   });
 
   it("resolveArtifactTarget rejects escapes and accepts nested paths", () => {
@@ -101,6 +119,50 @@ describe("RunWorkspaceLayout", () => {
     expect(isInsideDir("/a/b/c", "/a/b")).toBe(true);
     expect(isInsideDir("/a/b", "/a/b")).toBe(true);
     expect(isInsideDir("/a/other", "/a/b")).toBe(false);
+  });
+
+  it("classifyRealPathContainment follows symlinks for outside detection", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-layout-contain-"));
+    const workspace = path.join(root, "runs", "r1");
+    const secret = path.join(root, "state.db");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(secret, "db");
+    const link = path.join(workspace, "link-db");
+    await symlink(secret, link);
+
+    await expect(classifyRealPathContainment(link, workspace)).resolves.toEqual({
+      status: "outside",
+      realPath: await realpath(secret),
+    });
+    await expect(
+      durableRootFileToolDenial(link, workspace, root),
+    ).resolves.toBe(STAGEFLOW_PATH_DENIED);
+  });
+
+  it("durableRootFileToolDenial allows paths inside allowlisted checkoutRoot", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-layout-allow-"));
+    const workspace = path.join(root, "runs", "r1");
+    const checkout = path.join(root, "worktrees", "r1");
+    await mkdir(workspace, { recursive: true });
+    await mkdir(checkout, { recursive: true });
+    const file = path.join(checkout, "src.ts");
+    await writeFile(file, "ok");
+    await writeFile(path.join(root, "state.db"), "db");
+
+    await expect(
+      durableRootFileToolDenial(file, workspace, root, [checkout]),
+    ).resolves.toBeUndefined();
+    await expect(
+      durableRootFileToolDenial(
+        path.join(root, "state.db"),
+        workspace,
+        root,
+        [checkout],
+      ),
+    ).resolves.toBe(STAGEFLOW_PATH_DENIED);
+    await expect(
+      durableRootFileToolDenial(file, workspace, root),
+    ).resolves.toBe(STAGEFLOW_PATH_DENIED);
   });
 
   it("listArtifactNames walks nested files", async () => {

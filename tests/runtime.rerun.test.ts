@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { pipelinePath, catalogLocators, taskPath, SAMPLE_TASK, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,17 +19,32 @@ function successEnvelope(summary: string) {
       status: "success" as const,
       summary,
       artifacts: [],
+      payload: {},
     },
   };
 }
 
 describe("run manager re-run", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("re-run creates a new run id with the same task snapshot and pipeline", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-rerun-"));
     const store = createRunStore({ rootDir: root });
     const sourceTask = "id: snap\ngoal: from copy\n";
     const source = await store.createRun({
-      pipelineId: "docs-only",
+      ...catalogLocators("docs-only"),
       taskYaml: sourceTask,
       taskId: "snap",
     });
@@ -79,6 +95,7 @@ describe("run manager re-run", () => {
                 status: "success" as const,
                 summary: "ok",
                 artifacts: [],
+                payload: {},
               },
             };
           },
@@ -92,6 +109,7 @@ describe("run manager re-run", () => {
             status: "success" as const,
             summary: "ok",
             artifacts: [],
+            payload: {},
           },
         };
       },
@@ -105,14 +123,14 @@ describe("run manager re-run", () => {
     });
 
     const first = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "docs-only",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("docs-only"),
     });
     expect(first.ok).toBe(true);
 
     const second = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "docs-only",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("docs-only"),
     });
     expect(second.ok).toBe(false);
     if (!second.ok) {
@@ -150,6 +168,7 @@ describe("run manager re-run", () => {
                 status: "success" as const,
                 summary: "ok",
                 artifacts: [],
+                payload: {},
               },
             };
           },
@@ -163,6 +182,7 @@ describe("run manager re-run", () => {
             status: "success" as const,
             summary: "ok",
             artifacts: [],
+            payload: {},
           },
         };
       },
@@ -171,8 +191,8 @@ describe("run manager re-run", () => {
     const started = await startPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "docs-only",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("docs-only"),
       cwd: fixtures,
     });
     expect(started.runId).toBeTruthy();
@@ -186,7 +206,7 @@ describe("run manager re-run", () => {
     const store = createRunStore({ rootDir: root });
 
     function envelope(summary: string, status: "success" | "failure") {
-      return { status, summary, artifacts: [] as string[] };
+      return { status, summary, artifacts: [] as string[], payload: {} };
     }
 
     const agent = scriptedFakeAgent([
@@ -198,8 +218,8 @@ describe("run manager re-run", () => {
 
     const manager = new RunManager({ agent, cwd: fixtures, store });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -225,6 +245,57 @@ describe("run manager re-run", () => {
     expect(rerun.ok).toBe(true);
     if (!rerun.ok) return;
     expect(rerun.runId).not.toBe(started.runId);
+
+    while (manager.getActiveCount() > 0) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  });
+
+  it("rerun replays CI identity from the source run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-rerun-ci-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = scriptedFakeAgent([
+      successEnvelope("1"),
+      successEnvelope("2"),
+      successEnvelope("3"),
+      successEnvelope("1b"),
+      successEnvelope("2b"),
+      successEnvelope("3b"),
+    ]);
+    const manager = new RunManager({ agent, cwd: fixtures, store });
+
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("docs-only"),
+      gitSha: "deadbeef",
+      ciPrUrl: "https://github.com/acme/repo/pull/42",
+      ciJobUrl: "https://github.com/acme/repo/actions/runs/99",
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    while (manager.getActiveCount() > 0) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const source = await store.readRunMeta(started.runId);
+    expect(source.git_sha).toBe("deadbeef");
+    expect(source.ci_pr_url).toBe("https://github.com/acme/repo/pull/42");
+    expect(source.ci_job_url).toBe(
+      "https://github.com/acme/repo/actions/runs/99",
+    );
+
+    const result = await manager.rerun(started.runId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.runId).not.toBe(started.runId);
+
+    const copy = await store.readRunMeta(result.runId);
+    expect(copy.git_sha).toBe("deadbeef");
+    expect(copy.ci_pr_url).toBe("https://github.com/acme/repo/pull/42");
+    expect(copy.ci_job_url).toBe(
+      "https://github.com/acme/repo/actions/runs/99",
+    );
 
     while (manager.getActiveCount() > 0) {
       await new Promise((r) => setTimeout(r, 20));

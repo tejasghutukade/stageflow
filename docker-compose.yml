@@ -1,0 +1,41 @@
+# Local try Host — see docs/docker.md.
+#
+# Required: STAGEFLOW_CONTROL_TOKEN (≥32 chars) via `.env` or the shell.
+# Shell environment overrides values from `.env`. Empty exported GITHUB_TOKEN /
+# GH_TOKEN blanks the container token — prefer:
+#   env -u GITHUB_TOKEN -u GH_TOKEN docker compose up --build -d
+#
+# GITHUB_TOKEN feeds Host askpass (clone/fetch). GH_TOKEN falls back to
+# GITHUB_TOKEN when unset so either name works for Host + stage grants.
+#
+# command is `sf ui` intentionally (console + MCP on the same Host).
+# Image CMD remains `sf mcp`; override only for a UI-less Host.
+
+services:
+  stageflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/tejasghutukade/stageflow:local
+    command: ["sf", "ui"]
+    ports:
+      - "3847:3847"
+    environment:
+      STAGEFLOW_HOME: /data
+      TMPDIR: /data/tmp
+      STAGEFLOW_CONTROL_TOKEN: ${STAGEFLOW_CONTROL_TOKEN:?set STAGEFLOW_CONTROL_TOKEN to a 32+ character secret}
+      STAGEFLOW_MIN_FREE_DISK_BYTES: "1073741824"
+      STAGEFLOW_PROVIDER_OPENROUTER_API_KEY: ${STAGEFLOW_PROVIDER_OPENROUTER_API_KEY:-}
+      STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY: ${STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
+    volumes:
+      - stageflow-data:/data
+      # Optional: mount a consumer catalog, then register/ensure that absolute
+      # path with the Host (POST /api/projects or local sf run). Examples are
+      # already baked at /opt/stageflow/examples.
+      # - /abs/path/to/your-catalog:/catalog:ro
+    restart: unless-stopped
+
+volumes:
+  stageflow-data:

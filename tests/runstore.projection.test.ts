@@ -6,8 +6,16 @@ import { fileURLToPath } from "node:url";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunDetail, RunMeta, RunSummary, StageSnapshot } from "../src/runstore/port.js";
+import { deriveStatusFromStages } from "../src/runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
-import { projectRunDetail, projectRunSummary } from "../src/runstore/runProjection.js";
+import {
+  overlayPlannedStages,
+  projectRunDetail,
+  projectRunSummary,
+} from "../src/runstore/runProjection.js";
+import { syncRunStatusFromStages } from "../src/runtime/stageRecovery.js";
+import { pipelinePath } from "./helpers/fixturePaths.js";
+import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -54,6 +62,51 @@ function triage(run: RunSummary | RunDetail) {
 }
 
 describe("run projection", () => {
+  it("overlay stamps definition_id from DAG nodes onto synthetics", () => {
+    const dag = {
+      stage_ids: ["detect", "author-diagrams", "collect"],
+      roots: ["detect"],
+      childrenOf: { detect: ["author-diagrams"], "author-diagrams": ["collect"] },
+      nodes: [
+        {
+          id: "detect",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          definition_id: "detect",
+        },
+        {
+          id: "author-diagrams",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 1,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "collect",
+          needs: "author-diagrams",
+          ancestors: ["detect", "author-diagrams"],
+          stageIndex: 2,
+          definition_id: "collect",
+        },
+      ],
+    };
+    const overlay = overlayPlannedStages(dag.stage_ids, [], dag);
+    expect(overlay.map((s) => [s.stage_id, s.definition_id])).toEqual([
+      ["detect", "detect"],
+      ["author-diagrams", "author-diagrams"],
+      ["collect", "collect"],
+    ]);
+    const existing = overlayPlannedStages(
+      dag.stage_ids,
+      [snap("detect", "succeeded")],
+      dag,
+    );
+    expect(existing[0]?.definition_id).toBe("detect");
+    expect(existing[1]?.status).toBe("pending");
+    expect(existing[1]?.definition_id).toBe("author-diagrams");
+  });
+
   it("projects waiting_stage_ids for multiple simultaneous waiters", () => {
     const stages = [
       snap("clarify", "succeeded"),
@@ -235,39 +288,25 @@ describe("run projection", () => {
   });
 
   it("projects pipeline_track as linear chain during beta running", async () => {
-    const loaded = await loadPipeline("docs-only", {
-      cwd: fixtures,
-      stagesDir: path.join(fixtures, "stages"),
-    });
+    const owned = path.join(fixtures, "pipeline-owned");
+    const loaded = await loadPipeline(
+      path.join(owned, "include-merge/main.pipeline.yaml"),
+    );
     const dag = buildPipelineDagSnapshotFromLoaded(loaded);
     const stages = [
-      snap("clarify", "succeeded"),
-      snap("design-doc", "running"),
-      snap("implementation-plan", "pending"),
+      snap("gate", "succeeded"),
+      snap("finish", "running"),
     ];
     const detail = projectRunDetail(meta(), stages, "id: t\n", dag);
-    expect(detail.stages.map((s) => s.stage_id)).toEqual([
-      "clarify",
-      "design-doc",
-      "implementation-plan",
-    ]);
+    expect(detail.stages.map((s) => s.stage_id)).toEqual(["gate", "finish"]);
     expect(detail.pipeline_track.nodes.map((n) => n.stage_id)).toEqual([
-      "clarify",
-      "design-doc",
-      "implementation-plan",
+      "gate",
+      "finish",
     ]);
-    expect(detail.pipeline_track.edges).toEqual([
-      { from: "clarify", to: "design-doc" },
-      { from: "design-doc", to: "implementation-plan" },
-    ]);
+    expect(detail.pipeline_track.edges).toEqual([{ from: "gate", to: "finish" }]);
     expect(
-      detail.pipeline_track.nodes.find((n) => n.stage_id === "design-doc")
-        ?.readiness,
+      detail.pipeline_track.nodes.find((n) => n.stage_id === "finish")?.readiness,
     ).toBe("running");
-    expect(
-      detail.pipeline_track.nodes.find((n) => n.stage_id === "implementation-plan")
-        ?.readiness,
-    ).toBe("blocked");
   });
 
   it("preserves per-stage pending_prompt for multi-wait detail", () => {
@@ -297,6 +336,190 @@ describe("run projection", () => {
       "Question for branch B?",
     );
     expect(detail.pipeline_track.nodes).toHaveLength(3);
+  });
+
+  it("returns succeeded when meta is succeeded and pending stages are fork-skipped with no active stage", () => {
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("design-doc", "succeeded"),
+      snap("implementation-plan", "pending"),
+      snap("join-doc", "pending"),
+    ];
+    const summary = projectRunSummary(meta({ status: "succeeded" }), stages);
+    expect(summary.status).toBe("succeeded");
+  });
+
+  it("does not apply fork-skipped guard when an active stage is present", () => {
+    const stages = [
+      snap("clarify", "running"),
+      snap("design-doc", "pending"),
+      snap("implementation-plan", "pending"),
+    ];
+    const summary = projectRunSummary(meta({ status: "succeeded" }), stages);
+    expect(summary.status).toBe("running");
+  });
+
+  it("projects locator paths from meta", () => {
+    const pipeline_path = "/abs/pipeline.yaml";
+    const task_path = "/abs/task.yaml";
+    const project_root = "/abs/project";
+    const summary = projectRunSummary(
+      meta({ pipeline_path, task_path, project_root }),
+      [],
+    );
+    expect(summary.pipeline_path).toBe(pipeline_path);
+    expect(summary.task_path).toBe(task_path);
+    expect(summary.project_root).toBe(project_root);
+  });
+
+  it("projects unbound / checkout / repository binding shapes", () => {
+    const unboundSummary = projectRunSummary(meta(), []);
+    expect(unboundSummary.binding).toEqual({ kind: "unbound" });
+    expect(unboundSummary.binding).not.toHaveProperty("checkout_root");
+    expect(unboundSummary.binding).not.toHaveProperty("run_branch");
+
+    const checkoutMeta = meta({
+      checkout_root: "/Users/me/work/acme",
+      resolved_sha: "abc123",
+    });
+    const checkoutSummary = projectRunSummary(checkoutMeta, []);
+    expect(checkoutSummary.binding).toEqual({
+      kind: "checkout",
+      resolved_sha: "abc123",
+    });
+    expect(checkoutSummary.binding).not.toHaveProperty("checkout_root");
+    expect(checkoutSummary.binding).not.toHaveProperty("run_branch");
+    const checkoutDetail = projectRunDetail(checkoutMeta, [], "id: t\n");
+    expect(checkoutDetail.binding).toEqual({
+      kind: "checkout",
+      resolved_sha: "abc123",
+      checkout_root: "/Users/me/work/acme",
+    });
+
+    const repoMeta = meta({
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: "a".repeat(40),
+      run_branch: "stageflow/run-1",
+      checkout_root: "/data/worktrees/run-1",
+    });
+    const repoSummary = projectRunSummary(repoMeta, []);
+    expect(repoSummary.binding).toEqual({
+      kind: "repository",
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: "a".repeat(40),
+    });
+    expect(repoSummary.binding).not.toHaveProperty("checkout_root");
+    expect(repoSummary.binding).not.toHaveProperty("run_branch");
+    const repoDetail = projectRunDetail(repoMeta, [], "id: t\n");
+    expect(repoDetail.binding).toEqual({
+      kind: "repository",
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: "a".repeat(40),
+      run_branch: "stageflow/run-1",
+      checkout_root: "/data/worktrees/run-1",
+    });
+  });
+
+  it("prefers repository kind over checkout_root when both are set", () => {
+    const summary = projectRunSummary(
+      meta({
+        repository: "acme/api",
+        ref: "main",
+        checkout_root: "/data/worktrees/run-1",
+      }),
+      [],
+    );
+    expect(summary.binding.kind).toBe("repository");
+  });
+
+  it("diamond projectRunDetail pipeline_track has both inbound synthesize edges", async () => {
+    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
+      cwd: fixtures,
+    });
+    const dag = buildPipelineDagSnapshotFromLoaded(loaded);
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("research", "succeeded"),
+      snap("validation", "pending"),
+      snap("synthesize", "pending"),
+    ];
+    const detail = projectRunDetail(meta({ status: "running" }), stages, "id: t\n", dag);
+    expect(detail.pipeline_track.edges.filter((e) => e.to === "synthesize")).toEqual([
+      { from: "research", to: "synthesize" },
+      { from: "validation", to: "synthesize" },
+    ]);
+  });
+
+  it("accepted failed parent does not fail a resolved diamond run", async () => {
+    const loaded = await loadPipeline(pipelinePath("diamond-fan-in-accepted"), {
+      cwd: fixtures,
+    });
+    const dag = buildPipelineDagSnapshotFromLoaded(loaded);
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("research", "failed", {
+        events: [{ event: "failed", reason: "research boom" }],
+      }),
+      snap("validation", "succeeded"),
+      snap("synthesize", "succeeded"),
+    ];
+    expect(deriveStatusFromStages(stages, dag)).toBe("succeeded");
+    const runMeta = meta({ status: "succeeded", pipeline_dag: dag });
+    const summary = projectRunSummary(runMeta, stages);
+    const detail = projectRunDetail(runMeta, stages, "id: t\n", dag);
+    expect(summary.status).toBe("succeeded");
+    expect(detail.status).toBe("succeeded");
+    expect(summary.failed_stage_id).toBeUndefined();
+    expect(detail.failed_stage_id).toBeUndefined();
+  });
+
+  it("unhandled parent failure still projects a failed diamond run", async () => {
+    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
+      cwd: fixtures,
+    });
+    const dag = buildPipelineDagSnapshotFromLoaded(loaded);
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("research", "failed", {
+        events: [{ event: "failed", reason: "research boom" }],
+      }),
+      snap("validation", "succeeded"),
+      snap("synthesize", "skipped"),
+    ];
+    expect(deriveStatusFromStages(stages, dag)).toBe("failed");
+    const runMeta = meta({ status: "failed", pipeline_dag: dag });
+    const summary = projectRunSummary(runMeta, stages);
+    const detail = projectRunDetail(runMeta, stages, "id: t\n", dag);
+    expect(summary.status).toBe("failed");
+    expect(detail.status).toBe("failed");
+    expect(summary.failed_stage_id).toBe("research");
+    expect(summary.failed_reason).toBe("research boom");
+  });
+
+  it("listRuns and readRun agree on accepted-failure succeeded status", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-proj-accepted-"));
+    const store = createRunStore({ rootDir: root });
+    const { runId } = await seedDiamondRun(
+      store,
+      "diamond-fan-in-accepted",
+      {
+        clarify: "succeeded",
+        research: "failed",
+        validation: "succeeded",
+        synthesize: "succeeded",
+      },
+      "succeeded",
+    );
+    const summary = (await store.listRuns()).find((r) => r.run_id === runId);
+    const detail = await store.readRun(runId);
+    expect(summary?.status).toBe("succeeded");
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "research")?.status).toBe(
+      "failed",
+    );
   });
 
   it("listRuns and readRun agree on triage fields for the same events", async () => {
@@ -329,5 +552,21 @@ describe("run projection", () => {
     expect(summary?.stages).toEqual([
       { id: "clarify", status: "waiting_for_input", attempt_count: 1 },
     ]);
+  });
+});
+
+describe("syncRunStatusFromStages", () => {
+  it("does not downgrade a succeeded run when fork-skipped stages have no store events", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-recovery-fork-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: test\n",
+      taskId: "t",
+    });
+    await store.updateRunStatus(run.runId, "succeeded");
+    await syncRunStatusFromStages(store, run.runId);
+    const runMeta = await store.readRunMeta(run.runId);
+    expect(runMeta.status).toBe("succeeded");
   });
 });

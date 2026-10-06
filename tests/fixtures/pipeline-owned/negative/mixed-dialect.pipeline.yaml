@@ -1,0 +1,11 @@
+id: mixed-dialect
+model: anthropic/claude-sonnet-4-5
+stages:
+  - id: mixed
+    system_prompt: Mixed-dialect negative fixture. Must not load.
+    payload_schema:
+      type: object
+    io:
+      output:
+        schema:
+          type: object

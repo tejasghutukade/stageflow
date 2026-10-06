@@ -16,6 +16,8 @@ import type {
   AskOperatorAnswer,
   AskOperatorPrompt,
 } from "../tools/askOperator.js";
+import type { PreEmitCheck } from "../types/preEmitCheck.js";
+import type { StageGateKind } from "../types/stage.js";
 
 export type {
   OperatorAnswerActivityEvent,
@@ -126,6 +128,71 @@ export function listQaExchanges(events: readonly StageLogEvent[]): QaExchange[] 
   const exchanges = collectQaExchanges(events);
   assertAtMostOnePending(exchanges);
   return exchanges;
+}
+
+const DECISION_GATE_KINDS = new Set<StageGateKind>([
+  "confirm",
+  "artifact_backed",
+]);
+
+/**
+ * Builds a reader over the live, attempt-scoped QA trail: `listStageEvents`
+ * for this run/stage/attempt, collapsed via `listQaExchanges`. Read at
+ * `emit_stage_envelope` execute time (not at stage-open/factory time) so it
+ * reflects exchanges recorded during this attempt, including ones recorded
+ * after the reader was constructed.
+ */
+export function createAttemptQaTrailReader(
+  store: Pick<RunStore, "listStageEvents">,
+  runId: string,
+  stageId: string,
+  attempt: number,
+): () => Promise<QaExchange[]> {
+  return async () => {
+    const events = await store.listStageEvents(runId, stageId, attempt);
+    return listQaExchanges(events);
+  };
+}
+
+function lastDecisionIsAccept(answer: AskOperatorAnswer): boolean {
+  return (
+    (answer.kind === "confirm" || answer.kind === "artifact_backed") &&
+    answer.decision === "accept"
+  );
+}
+
+/**
+ * Pre-emit `gate`-type check predicate: is the *most recent* exchange of the
+ * check's declared kind, within this attempt's ordered trail, satisfied?
+ * `confirm`/`artifact_backed` require the last such exchange's decision to be
+ * "accept"; `free_text`/`multi_question` are satisfied by any completed
+ * (answered) exchange of that kind. Returns an issue string on failure,
+ * `undefined` on success. Deliberately independent of
+ * `completionCheckRunner.ts`'s `runGateCheck` (see design doc Q2): that
+ * function asks the looser, retrospective "was this kind ever accepted over
+ * the run so far" question via order-erased `GateDecision[]`; this asks the
+ * stricter, attempt-scoped "is the last answer of this kind an accept"
+ * question, which requires the raw, ordered `QaExchange[]`.
+ */
+export function preEmitGateIssue(
+  exchanges: readonly QaExchange[],
+  check: Extract<PreEmitCheck, { type: "gate" }>,
+): string | undefined {
+  const ofKind = exchanges.filter((ex) => ex.prompt.kind === check.kind);
+  if (DECISION_GATE_KINDS.has(check.kind)) {
+    const last = ofKind.at(-1);
+    if (last === undefined || last.answer === null) {
+      return `declared gate kind "${check.kind}" has not completed this attempt`;
+    }
+    if (!lastDecisionIsAccept(last.answer)) {
+      return `declared gate kind "${check.kind}" last decision must be "accept"`;
+    }
+    return undefined;
+  }
+  if (!ofKind.some((ex) => ex.answer !== null)) {
+    return `declared gate kind "${check.kind}" has not completed this attempt`;
+  }
+  return undefined;
 }
 
 export function derivePendingPrompt(

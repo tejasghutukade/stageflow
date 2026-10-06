@@ -1,0 +1,22 @@
+id: target-dialect-demo
+model: anthropic/claude-sonnet-4-5
+schemas:
+  topic-brief:
+    type: object
+    required: [topic]
+    properties:
+      topic:
+        type: string
+    additionalProperties: false
+stages:
+  - id: intake
+    entry: true
+    route:
+      - to: draft
+    uses: ./intake.yaml
+  - id: draft
+    uses: ./draft.yaml
+    on_verify_fail:
+      mode: repair
+      max_attempts: 2
+      retry_safety: idempotent

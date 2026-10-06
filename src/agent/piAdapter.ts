@@ -26,15 +26,17 @@
  * fails closed with `StageSessionReconstructError` (KTD7). Epic proving
  * vehicle: pipeline `plan-review-proving` (Pi live wait + console answers).
  *
- * `ask_operator` is always registered on sealed stage sessions (allowlist +
- * customTools).
+ * `ask_operator` is registered on sealed stage sessions only when the stage
+ * declares a non-empty `gate_kinds` list.
  */
 import { existsSync } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { BROWSER_SKILL_NAME } from "../config/builtinSkills.js";
 import {
   type AgentSession,
-  createAgentSession,
+  type ExtensionFactory,
+  type InlineExtension,
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
@@ -42,7 +44,17 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { StageMcpError } from "../config/resolveStageMcpServers.js";
+import {
+  attachIsolatedMcp,
+  STAGEFLOW_PI_MCP_EXTENSION_NAME,
+} from "./piIsolatedMcp.js";
+import {
+  createPiAgentSession,
+  createSealedResourceLoader,
+} from "./piSessionFactory.js";
 import { isAdvancingEnvelope } from "../envelope/check.js";
+import { formatFeedbackLoopContext } from "../prompt/feedbackLoopContext.js";
 import { formatPriorEnvelope } from "../prompt/priorEnvelope.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import {
@@ -64,8 +76,11 @@ import { createReplyEmailTool } from "../tools/replyEmail.js";
 import { createGetEmailTool, createSearchEmailTool, createDownloadEmailAttachmentTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
 import { findProviderSupport } from "./providerSupport.js";
-import { mapSessionEventToActivity, type StageActivityEvent } from "./activity.js";
-import { createStageActivityObserver } from "./activityObserver.js";
+import { mapSessionEventToActivity, readActivityVerbose, type StageActivityEvent } from "./activity.js";
+import {
+  createStageActivityObserver,
+  type StageActivityObserver,
+} from "./activityObserver.js";
 import type {
   AgentPort,
   OpaqueAnswer,
@@ -74,18 +89,75 @@ import type {
   StageHandleEvent,
   StageRunInput,
   StageRunResult,
+  StageSessionMode,
 } from "./port.js";
-import { DEFAULT_STAGE_TIMEOUT_MS, runStageViaOpen } from "./port.js";
+import { DEFAULT_STAGE_TIMEOUT_MS, runtimeStageId, runStageViaOpen } from "./port.js";
+import type { StageGateKind } from "../types/stage.js";
+import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
+import {
+  TIMEOUT_ABORT_TOOL_RESULT,
+  composeTimeoutResumePrompt,
+  stageTimeoutReason,
+} from "./stageTimeout.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  durableRootFileToolDenial,
+  STAGEFLOW_PATH_DENIED,
+} from "../runstore/workspaceLayout.js";
 
+export { STAGEFLOW_PATH_DENIED };
+export { createSealedResourceLoader } from "./piSessionFactory.js";
+
+export const STAGEFLOW_PATH_DENY_EXTENSION_NAME = "stageflow-path-deny";
+
+const PATH_DENY_FILE_TOOLS = new Set(["read", "write", "edit"]);
+
+export function createDurableRootPathDenyExtension(options: {
+  runWorkspaceDir: string;
+  durableRoot: string;
+  checkoutRoot?: string;
+}): ExtensionFactory {
+  const { runWorkspaceDir, durableRoot, checkoutRoot } = options;
+  const allowlistedRoots =
+    checkoutRoot !== undefined && checkoutRoot !== ""
+      ? [checkoutRoot]
+      : undefined;
+  return (pi) => {
+    pi.on("tool_call", async (event, ctx) => {
+      if (!PATH_DENY_FILE_TOOLS.has(event.toolName)) {
+        return undefined;
+      }
+      const rawPath = (event.input as { path?: unknown }).path;
+      if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
+        return undefined;
+      }
+      const candidate = path.isAbsolute(rawPath)
+        ? rawPath
+        : path.resolve(ctx.cwd, rawPath);
+      const reason = await durableRootFileToolDenial(
+        candidate,
+        runWorkspaceDir,
+        durableRoot,
+        allowlistedRoots,
+      );
+      if (reason !== undefined) {
+        return { block: true, reason };
+      }
+      return undefined;
+    });
+  };
+}
 /**
  * Stage tool allowlist for sealed Pi sessions.
- * Always includes `ask_operator` (R7); `write_stage_artifact` when registered
- * (always, for bound and unbound — bound/unbound only gates cwd / env bind).
+ * Includes `ask_operator` only when `gateKinds` is a non-empty list.
+ * `write_stage_artifact` when registered (always, for bound and unbound —
+ * bound/unbound only gates cwd / env bind).
  */
 export function resolveStageToolNames(
   emitToolName: string,
   artifactToolName?: string,
   askOperatorToolName = "ask_operator",
+  gateKinds?: StageGateKind[],
 ): string[] {
   const tools = [
     "read",
@@ -93,8 +165,10 @@ export function resolveStageToolNames(
     "write",
     "edit",
     emitToolName,
-    askOperatorToolName,
   ];
+  if (Array.isArray(gateKinds) && gateKinds.length > 0) {
+    tools.push(askOperatorToolName);
+  }
   if (artifactToolName) {
     tools.push(artifactToolName);
   }
@@ -343,43 +417,152 @@ export function createConnectedAskWaitStageHandle(
 }
 
 /**
+ * Extract display text from a Pi tool_execution_update partialResult.
+ * Prefers content[].text blocks; otherwise JSON-stringifies.
+ */
+export function extractPartialResultText(partialResult: unknown): string {
+  if (partialResult === undefined || partialResult === null) {
+    return "";
+  }
+  if (typeof partialResult === "string") {
+    return partialResult;
+  }
+  if (typeof partialResult === "object") {
+    const content = (partialResult as { content?: unknown }).content;
+    if (Array.isArray(content)) {
+      const parts: string[] = [];
+      for (const block of content) {
+        if (!block || typeof block !== "object") continue;
+        const b = block as { type?: string; text?: string };
+        if (b.type === "text" && typeof b.text === "string") {
+          parts.push(b.text);
+        }
+      }
+      if (parts.length > 0) {
+        return parts.join("");
+      }
+    }
+    try {
+      return JSON.stringify(partialResult);
+    } catch {
+      return String(partialResult);
+    }
+  }
+  return String(partialResult);
+}
+
+export type RouteSessionEventToProgressOptions = {
+  observer: StageActivityObserver;
+  verbose: boolean;
+  usage?: StageUsage;
+};
+
+type PiAssistantUsage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+};
+
+/** Merge one assistant message's usage/cost (as reported by pi-ai) into the stage-level accumulator. */
+function mergePiAssistantUsage(usage: StageUsage, message: unknown): void {
+  if (!message || typeof message !== "object") return;
+  const msg = message as { role?: unknown; model?: unknown; usage?: unknown };
+  if (msg.role !== "assistant" || typeof msg.model !== "string" || !msg.usage) return;
+  const u = msg.usage as PiAssistantUsage;
+  addModelUsage(usage, msg.model, {
+    inputTokens: u.input,
+    outputTokens: u.output,
+    cacheReadInputTokens: u.cacheRead,
+    cacheCreationInputTokens: u.cacheWrite,
+    costUsd: u.cost?.total ?? 0,
+  });
+}
+
+/**
+ * Adapter-edge routing: stream deltas to the observer, map milestones to
+ * StageActivityEvent. Verbose thinking / live tool partials go to observer
+ * hooks (stderr streams + coalesced/throttled persist via onActivity).
+ */
+export function routeSessionEventToProgress(
+  event: Record<string, unknown>,
+  options: RouteSessionEventToProgressOptions,
+): void {
+  const { observer, verbose, usage } = options;
+
+  if (event.type === "message_update") {
+    const ame = event.assistantMessageEvent;
+    if (ame && typeof ame === "object") {
+      const update = ame as { type?: string; delta?: string };
+      if (update.type === "text_delta") {
+        observer.onAssistantTextDelta(update.delta ?? "");
+        return;
+      }
+      if (verbose && update.type === "thinking_delta") {
+        observer.onThinkingDelta(update.delta ?? "");
+        return;
+      }
+    }
+    return;
+  }
+
+  if (
+    verbose &&
+    event.type === "tool_execution_update"
+  ) {
+    const text = extractPartialResultText(event.partialResult);
+    if (text) {
+      observer.onToolPartialResult(text);
+    }
+    return;
+  }
+
+  if (event.type === "message_end" || event.type === "agent_end") {
+    observer.onStreamBoundary();
+    if (usage && event.type === "message_end") {
+      mergePiAssistantUsage(usage, event.message);
+    }
+  }
+
+  if (
+    event.type === "agent_start" ||
+    event.type === "turn_start" ||
+    event.type === "tool_execution_start"
+  ) {
+    observer.onStreamBoundary();
+  }
+
+  const activity = mapSessionEventToActivity(event);
+  if (!activity) {
+    return;
+  }
+  observer.onActivity(activity);
+}
+
+/**
  * Map Pi session events to StageActivityEvent at the adapter edge, then
  * forward to the activity observer (stderr + onActivity).
  */
 function attachStageProgress(
   session: AgentSession,
   onActivity?: (event: StageActivityEvent) => void,
+  usage?: StageUsage,
+  onAssistantTextDelta?: (delta: string) => void,
 ): () => void {
-  const observer = createStageActivityObserver({ onActivity, writeStderr: true });
+  const observer = createStageActivityObserver({
+    onActivity,
+    onAssistantTextDelta,
+    writeStderr: true,
+  });
+  const verbose = readActivityVerbose();
 
   const unsubscribe = session.subscribe((event) => {
-    if (
-      event.type === "message_update" &&
-      event.assistantMessageEvent.type === "text_delta"
-    ) {
-      observer.onAssistantTextDelta(event.assistantMessageEvent.delta ?? "");
-      return;
-    }
-
-    if (event.type === "message_end" || event.type === "agent_end") {
-      observer.onStreamBoundary();
-    }
-
-    if (
-      event.type === "agent_start" ||
-      event.type === "turn_start" ||
-      event.type === "tool_execution_start"
-    ) {
-      observer.onStreamBoundary();
-    }
-
-    const activity = mapSessionEventToActivity(
-      event as unknown as Record<string, unknown>,
-    );
-    if (!activity) {
-      return;
-    }
-    observer.onActivity(activity);
+    routeSessionEventToProgress(event as unknown as Record<string, unknown>, {
+      observer,
+      verbose,
+      usage,
+    });
   });
 
   return () => {
@@ -402,12 +585,41 @@ function buildUserPrompt(
     emitHint += `\nOn status=success, payload is required and must match this JSON Schema:\n${JSON.stringify(input.stage.payload_schema, null, 2)}`;
   }
 
+  const checklistChecks = input.completionContract?.checks.filter(
+    (check) => check.type === "checklist",
+  ) ?? [];
+  if (checklistChecks.length > 0) {
+    emitHint += `\nBefore emitting success, self-review every required checklist item. Include checklist_attestations in the envelope with each check_id and its complete item list exactly as declared:\n${JSON.stringify(checklistChecks, null, 2)}`;
+  }
+
+  if (input.repairContext !== undefined) {
+    emitHint += `\nThis is recovery attempt ${input.roots.attempt ?? input.repairContext.prior_attempt + 1}. The previous candidate did not pass Stageflow verification. Address the failed checks before emitting success.`;
+    if (input.repairContext.operator_guidance) {
+      emitHint += `\nThe operator approved this retry with these instructions:\n${input.repairContext.operator_guidance}`;
+    }
+    if (input.repairContext.failed_checks?.length) {
+      emitHint += `\nFailed-check evidence from attempt ${input.repairContext.prior_attempt}:\n${JSON.stringify(input.repairContext.failed_checks, null, 2)}`;
+    }
+  }
+
+  if (input.feedbackLoopEmitContext !== undefined) {
+    emitHint += `\nFeedback-loop decision: this stage is a feedback-loop source. On status=success, feedback_loop is required. Emit either {"action":"continue"} to proceed downstream or {"action":"send_back","target":"…"} to request another pass.`;
+    emitHint += `\nAllowed send_back target: ${input.feedbackLoopEmitContext.target}.`;
+    emitHint += `\nA send_back decision cannot be combined with fork_choice.`;
+  }
+
   const attempt = input.roots.attempt ?? 1;
-  const attemptArtifactsPath = `stages/${input.stage.id}/attempts/${attempt}/artifacts/`;
-  const skillBaseDir =
+  const attemptArtifactsPath = `stages/${runtimeStageId(input)}/attempts/${attempt}/artifacts/`;
+  const skillBaseDirs = [
     input.stage.skill !== undefined && input.skillFilePath !== undefined
       ? path.dirname(input.skillFilePath)
-      : undefined;
+      : undefined,
+    input.browserSkillFilePath !== undefined
+      ? path.dirname(input.browserSkillFilePath)
+      : undefined,
+  ].filter((dir): dir is string => dir !== undefined);
+  const skillBaseDir = skillBaseDirs.length > 0 ? skillBaseDirs.join(", ") : undefined;
+  const browserGuidance = formatBrowserGuidance(input);
   const artifactGuidance =
     input.roots.mode === "bound" && artifactToolName !== undefined
       ? [
@@ -434,17 +646,52 @@ function buildUserPrompt(
       `Stageflow email permissions: ${JSON.stringify(input.stage.email)}. Use only declared accounts and operations. Use a stable operationKey for each intended message. Provider acceptance does not prove delivery. Never resend an unknown submission automatically.`,
     ] : []),
     `Task id: ${input.task.id}`,
-    `Stage id: ${input.stage.id}`,
+    `Stage id: ${runtimeStageId(input)}`,
     `Goal: ${input.task.goal}`,
     input.task.context ? `Context: ${input.task.context}` : "",
     input.task.constraints ? `Constraints: ${input.task.constraints}` : "",
-    formatPriorEnvelope(input.priorEnvelope),
+    input.task.input !== undefined
+      ? `Input: ${JSON.stringify(input.task.input, null, 2)}`
+      : "",
+    formatPriorEnvelope(
+      input.priorEnvelope,
+      input.priorEnvelopes,
+      input.priorEnvelopesByStage,
+    ),
+    input.feedbackLoopContext !== undefined
+      ? formatFeedbackLoopContext(input.feedbackLoopContext, input.sessionMode)
+      : "",
     "",
     artifactGuidance,
+    browserGuidance,
     emitHint,
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function formatBrowserGuidance(input: StageRunInput): string {
+  const browser = input.stage.browser;
+  if (browser === undefined) return "";
+  const lines = [
+    "This stage has a browser. Run only agent-browser commands in bash. The session is already set in the environment.",
+  ];
+  if (browser.allow_domains !== undefined && browser.allow_domains.length > 0) {
+    lines.push(
+      `Allowed domains: ${browser.allow_domains.join(", ")}. Open no other domain.`,
+    );
+  }
+  if (
+    input.browserSkillFilePath !== undefined &&
+    input.stage.skill !== BROWSER_SKILL_NAME
+  ) {
+    lines.push(
+      input.stage.skill !== undefined
+        ? `Before you use the browser, read the browser skill at ${input.browserSkillFilePath}.`
+        : "Follow the browser skill.",
+    );
+  }
+  return lines.join("\n");
 }
 
 export function composeStageUserPrompt(
@@ -462,43 +709,34 @@ export function composeStageUserPrompt(
   if (input.stage.skill !== undefined) {
     return `/skill:${input.stage.skill} ${body}`;
   }
+  if (input.browserSkillFilePath !== undefined && input.stage.browser !== undefined) {
+    return `/skill:${BROWSER_SKILL_NAME} ${body}`;
+  }
   return body;
 }
 
-/**
- * DefaultResourceLoader with host/global discovery turned off.
- *
- * Without these flags the loader walks up from the run folder and would pick
- * up the consumer project's AGENTS.md, `.agents/skills/`, `.pi/extensions`,
- * and APPEND_SYSTEM.md. Stages must not inherit that context.
- *
- * `additionalExtensionPaths` is the only way extensions enter a sealed stage
- * (used by StageProviderSupport implementations). With `noExtensions: true`,
- * discovered global/project packages stay out; only allowlisted paths load.
- * `additionalSkillPaths` is the matching allowlist for one named skill.
- */
-export function createSealedResourceLoader(options: {
-  cwd: string;
-  agentDir: string;
-  settingsManager: SettingsManager;
-  systemPrompt: string;
-  additionalExtensionPaths?: string[];
-  additionalSkillPaths?: string[];
-}): DefaultResourceLoader {
-  return new DefaultResourceLoader({
-    cwd: options.cwd,
-    agentDir: options.agentDir,
-    settingsManager: options.settingsManager,
-    systemPromptOverride: () => options.systemPrompt,
-    appendSystemPromptOverride: () => [],
-    additionalExtensionPaths: options.additionalExtensionPaths,
-    additionalSkillPaths: options.additionalSkillPaths,
-    noContextFiles: true,
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-  });
+export function composeFeedbackResumePrompt(input: StageRunInput): string {
+  if (input.feedbackLoopContext === undefined) {
+    throw new Error("feedback_resume requires feedbackLoopContext");
+  }
+  return [
+    "Continue this stage after feedback-loop send-back.",
+    "Incorporate the operator/source feedback below, then complete the stage (emit an envelope when done).",
+    formatFeedbackLoopContext(
+      input.feedbackLoopContext,
+      input.sessionMode ?? "feedback_resume",
+    ),
+  ].join("\n\n");
+}
+
+function collectMcpExtensionToolNames(loader: DefaultResourceLoader): string[] {
+  const inlinePath = `<inline:${STAGEFLOW_PI_MCP_EXTENSION_NAME}>`;
+  const names: string[] = [];
+  for (const ext of loader.getExtensions().extensions) {
+    if (ext.path !== inlinePath) continue;
+    names.push(...ext.tools.keys());
+  }
+  return names;
 }
 
 async function shutdownSession(session: AgentSession | undefined): Promise<void> {
@@ -559,6 +797,13 @@ export function stageSessionFilePath(
   return ctx.sessionPath(roots.runWorkspaceDir, stageId);
 }
 
+export function resolveStageSessionFile(input: StageRunInput): string {
+  return (
+    input.resumeToken ??
+    stageSessionFilePath(input.roots, runtimeStageId(input))
+  );
+}
+
 export class StageSessionReconstructError extends Error {
   readonly stageId: string;
   readonly sessionFile: string;
@@ -581,8 +826,8 @@ export class StageSessionReconstructError extends Error {
 export async function createStageSessionManager(
   roots: StageRoots,
   stageId: string,
+  sessionFile = stageSessionFilePath(roots, stageId),
 ): Promise<SessionManager> {
-  const sessionFile = stageSessionFilePath(roots, stageId);
   await mkdir(path.dirname(sessionFile), { recursive: true });
   if (!(await fileExists(sessionFile))) {
     await writeFile(sessionFile, "");
@@ -821,12 +1066,15 @@ type StageSessionWiring = {
   tools: string[];
   customTools: ReturnType<typeof defineTool>[];
   emitDefName: string;
-  askOperatorDefName: string;
+  askOperatorDefName?: string;
   artifactDefName?: string;
   providerEmitHint?: string;
   restoreProvider?: () => void;
   capture: EmitCapture;
+  usage: StageUsage;
   askWaitChannel: AskOperatorWaitChannel;
+  connecting?: Promise<void>;
+  cancelConnecting?: () => void;
 };
 
 async function prepareStageSessionWiring(
@@ -837,22 +1085,35 @@ async function prepareStageSessionWiring(
   const { roots } = input;
   const provider = findProviderSupport(input.stage.model);
   const capture: EmitCapture = {};
+  const usage: StageUsage = emptyStageUsage();
   const askWaitChannel = existingAskWaitChannel ?? new AskOperatorWaitChannel();
 
   const emitDef = createEmitStageEnvelopeTool(
     capture,
     input.stage.payload_schema,
+    input.forkEmitContext,
+    input.cloneEmitContext,
+    {
+      checks: input.stage.pre_emit_checks,
+      readQaTrail: input.readQaTrail,
+    },
+    input.feedbackLoopEmitContext,
   );
   const emitTool = defineTool(emitDef);
 
-  const askDef = createAskOperatorTool({
-    requestWait: (prompt) => askWaitChannel.requestWait(prompt),
-  });
-  const askTool = defineTool(askDef);
+  const gateKinds = input.stage.gate_kinds;
+  const includeAsk = Array.isArray(gateKinds) && gateKinds.length > 0;
+  const askDef = includeAsk
+    ? createAskOperatorTool({
+        requestWait: (prompt) => askWaitChannel.requestWait(prompt),
+        allowedKinds: gateKinds,
+      })
+    : undefined;
+  const askTool = askDef ? defineTool(askDef) : undefined;
 
   const artifactDef = createWriteStageArtifactTool({
     runWorkspaceDir: roots.runWorkspaceDir,
-    stageId: input.stage.id,
+    stageId: runtimeStageId(input),
     attempt: roots.attempt ?? 1,
   });
   const artifactTool = defineTool(artifactDef);
@@ -863,6 +1124,11 @@ async function prepareStageSessionWiring(
       reason: `Skill "${input.stage.skill}" is not installed`,
     };
   }
+
+  const additionalSkillPaths = [
+    input.skillFilePath,
+    input.stage.browser !== undefined ? input.browserSkillFilePath : undefined,
+  ].filter((p, i, all): p is string => p !== undefined && all.indexOf(p) === i);
 
   const additionalExtensionPaths: string[] = [];
   let restoreProvider: (() => void) | undefined;
@@ -875,88 +1141,132 @@ async function prepareStageSessionWiring(
     restoreProvider = prepared.restore;
   }
 
+  let attached: Awaited<ReturnType<typeof attachIsolatedMcp>> | undefined;
   try {
     const modelRuntime = await ModelRuntime.create(
-      roots.authPath ? { authPath: roots.authPath } : undefined,
+      roots.authPath
+        ? {
+            authPath: roots.authPath,
+            // ModelRuntime otherwise resolves models.json from getAgentDir(),
+            // which bindPiAgentDirEnv seals to an empty per-attempt sandbox
+            // dir. Point it at the same durable agent dir as authPath so
+            // custom providers (e.g. a self-hosted OpenAI-compatible
+            // gateway) defined there stay usable in sealed stage sessions.
+            modelsPath: path.join(path.dirname(roots.authPath), "models.json"),
+          }
+        : undefined,
     );
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
     });
+    attached = await attachIsolatedMcp(input.resolvedMcpServers);
+    const failAfterAttach = (reason: string): StageRunResult => {
+      attached?.cancel?.();
+      restoreProvider?.();
+      return { ok: false, reason };
+    };
+    const extensionFactories: InlineExtension[] = [
+      {
+        name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
+        factory: createDurableRootPathDenyExtension({
+          runWorkspaceDir: roots.runWorkspaceDir,
+          durableRoot: globalStageflowHome(),
+          ...(roots.checkoutRoot !== undefined
+            ? { checkoutRoot: roots.checkoutRoot }
+            : {}),
+        }),
+      },
+      ...(attached.extensionFactories ?? []),
+    ];
     const loader = createSealedResourceLoader({
       cwd: roots.cwd,
       agentDir: roots.agentDir,
       settingsManager,
       systemPrompt: input.stage.system_prompt,
       additionalExtensionPaths,
-      ...(input.skillFilePath !== undefined
-        ? { additionalSkillPaths: [input.skillFilePath] }
-        : {}),
+      ...(additionalSkillPaths.length > 0 ? { additionalSkillPaths } : {}),
+      extensionFactories,
+      ...(attached.eventBus !== undefined ? { eventBus: attached.eventBus } : {}),
     });
     await loader.reload();
 
     const extensionErrors = loader.getExtensions().errors;
     if (extensionErrors.length > 0) {
-      restoreProvider?.();
-      return {
-        ok: false,
-        reason: `Failed to load Pi extension(s): ${extensionErrors
+      return failAfterAttach(
+        `Failed to load Pi extension(s): ${extensionErrors
           .map((e) => `${e.path}: ${e.error}`)
           .join("; ")}`,
-      };
+      );
     }
 
     const skillDiagnostics = loader
       .getSkills()
       .diagnostics.filter((d) => d.type === "error" || d.type === "collision");
     if (skillDiagnostics.length > 0) {
-      restoreProvider?.();
-      return {
-        ok: false,
-        reason: `Failed to load skill(s): ${skillDiagnostics
+      return failAfterAttach(
+        `Failed to load skill(s): ${skillDiagnostics
           .map((d) => (d.path !== undefined ? `${d.path}: ${d.message}` : d.message))
           .join("; ")}`,
-      };
+      );
     }
     if (
       input.stage.skill !== undefined &&
       !loader.getSkills().skills.some((skill) => skill.name === input.stage.skill)
     ) {
-      restoreProvider?.();
-      return {
-        ok: false,
-        reason: `Skill "${input.stage.skill}" is not installed`,
-      };
+      return failAfterAttach(`Skill "${input.stage.skill}" is not installed`);
     }
 
-    const customTools: StageSessionWiring["customTools"] = [emitTool, askTool, artifactTool];
-    const emailAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("send"));
-    if (emailAllowed) customTools.push(defineTool(createSendEmailTool(input.email!)));
-    const emailReplyAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("reply"));
-    if (emailReplyAllowed) customTools.push(defineTool(createReplyEmailTool(input.email!)));
-    const emailSearchAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("search"));
-    const emailGetAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("getMessage"));
-    if (emailSearchAllowed) customTools.push(defineTool(createSearchEmailTool(input.email!)));
-    if (emailGetAllowed) customTools.push(defineTool(createGetEmailTool(input.email!)));
-    const emailDownloadAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("downloadAttachment"));
-    if (emailDownloadAllowed) customTools.push(defineTool(createDownloadEmailAttachmentTool(input.email!)));
+    const customTools: StageSessionWiring["customTools"] = askTool
+      ? [emitTool, askTool, artifactTool]
+      : [emitTool, artifactTool];
+    const tools = resolveStageToolNames(
+      emitDef.name,
+      artifactDef.name,
+      askDef?.name ?? "ask_operator",
+      gateKinds,
+    );
+    if (attached.extensionFactories !== undefined) {
+      tools.push(...collectMcpExtensionToolNames(loader));
+    }
+    if (input.email) {
+      const permitted = new Set(input.stage.email?.flatMap(permission => permission.operations));
+      const definitions = [
+        permitted.has("send") ? createSendEmailTool(input.email) : undefined,
+        permitted.has("reply") ? createReplyEmailTool(input.email) : undefined,
+        permitted.has("search") ? createSearchEmailTool(input.email) : undefined,
+        permitted.has("getMessage") ? createGetEmailTool(input.email) : undefined,
+        permitted.has("downloadAttachment") ? createDownloadEmailAttachmentTool(input.email) : undefined,
+      ];
+      for (const definition of definitions) if (definition) {
+        customTools.push(defineTool(definition));
+        tools.push(definition.name);
+      }
+    }
 
     return {
       sessionManager,
       modelRuntime,
       settingsManager,
       loader,
-      tools: [...resolveStageToolNames(emitDef.name, artifactDef.name, askDef.name), ...(emailAllowed ? ["send_email"] : []), ...(emailReplyAllowed ? ["reply_email"] : []), ...(emailSearchAllowed ? ["search_email"] : []), ...(emailGetAllowed ? ["get_email_message"] : []), ...(emailDownloadAllowed ? ["download_email_attachment"] : [])],
+      tools,
       customTools,
       emitDefName: emitDef.name,
-      askOperatorDefName: askDef.name,
+      ...(askDef ? { askOperatorDefName: askDef.name } : {}),
       artifactDefName: artifactDef.name,
       providerEmitHint: provider?.emitToolHint?.(emitDef.name),
       restoreProvider,
       capture,
+      usage,
       askWaitChannel,
+      connecting: attached.connecting,
+      cancelConnecting: attached.cancel,
     };
   } catch (err) {
+    attached?.cancel?.();
     restoreProvider?.();
+    if (err instanceof StageMcpError) {
+      return { ok: false, reason: err.message };
+    }
     throw err;
   }
 }
@@ -978,9 +1288,9 @@ export async function reconstructStageSessionForAnswer(
 ): Promise<ReconstructedStageSession> {
   const sessionManager = await openStageSessionManager(
     input.roots,
-    input.stage.id,
+    runtimeStageId(input),
   );
-  const sessionFile = ensureStageSessionFlushed(sessionManager, input.stage.id);
+  const sessionFile = ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
 
   let injection: InjectOpaqueAnswerResult;
   try {
@@ -988,7 +1298,7 @@ export async function reconstructStageSessionForAnswer(
   } catch (err) {
     throw new StageSessionReconstructError(
       `failed to inject answer into stage session: ${sessionFile}`,
-      { stageId: input.stage.id, sessionFile, cause: err },
+      { stageId: runtimeStageId(input), sessionFile, cause: err },
     );
   }
 
@@ -996,13 +1306,13 @@ export async function reconstructStageSessionForAnswer(
   if (isStageRunResult(wiring)) {
     throw new StageSessionReconstructError(
       wiring.ok === false ? wiring.reason : "stage session reconstruct failed",
-      { stageId: input.stage.id, sessionFile },
+      { stageId: runtimeStageId(input), sessionFile },
     );
   }
 
   let session: AgentSession | undefined;
   try {
-    const created = await createAgentSession({
+    const created = await createPiAgentSession({
       cwd: input.roots.cwd,
       agentDir: input.roots.agentDir,
       modelRuntime: wiring.modelRuntime,
@@ -1014,6 +1324,9 @@ export async function reconstructStageSessionForAnswer(
     });
     session = created.session;
     await session.bindExtensions({});
+    if (wiring.connecting !== undefined) {
+      await wiring.connecting;
+    }
 
     const resolved = resolveCliModel({
       cliModel: input.stage.model,
@@ -1022,13 +1335,20 @@ export async function reconstructStageSessionForAnswer(
     if (resolved.error || !resolved.model) {
       throw new StageSessionReconstructError(
         resolved.error ?? `Model not found: ${input.stage.model}`,
-        { stageId: input.stage.id, sessionFile },
+        { stageId: runtimeStageId(input), sessionFile },
       );
     }
     await session.setModel(resolved.model);
     if (resolved.thinkingLevel) {
       session.setThinkingLevel(resolved.thinkingLevel);
     }
+    await input.onResolvedModel?.({
+      stageId: runtimeStageId(input),
+      model: resolved.model.id,
+      ...(resolved.thinkingLevel !== undefined
+        ? { thinkingLevel: resolved.thinkingLevel }
+        : {}),
+    });
 
     const liveSession = session;
     return {
@@ -1045,6 +1365,7 @@ export async function reconstructStageSessionForAnswer(
       },
     };
   } catch (err) {
+    wiring.cancelConnecting?.();
     await shutdownSession(session);
     wiring.restoreProvider?.();
     if (err instanceof StageSessionReconstructError) throw err;
@@ -1052,7 +1373,7 @@ export async function reconstructStageSessionForAnswer(
       `failed to reconstruct stage session: ${
         err instanceof Error ? err.message : String(err)
       }`,
-      { stageId: input.stage.id, sessionFile, cause: err },
+      { stageId: runtimeStageId(input), sessionFile, cause: err },
     );
   }
 }
@@ -1063,7 +1384,7 @@ async function bindStageSession(
   wiring: StageSessionWiring,
 ): Promise<AgentSession | StageRunResult> {
   const { roots } = input;
-  const created = await createAgentSession({
+  const created = await createPiAgentSession({
     cwd: roots.cwd,
     agentDir: roots.agentDir,
     modelRuntime: wiring.modelRuntime,
@@ -1074,8 +1395,20 @@ async function bindStageSession(
     settingsManager: wiring.settingsManager,
   });
   const session = created.session;
-  ensureStageSessionFlushed(sessionManager, input.stage.id);
-  await session.bindExtensions({});
+  ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
+  try {
+    await session.bindExtensions({});
+    if (wiring.connecting !== undefined) {
+      await wiring.connecting;
+    }
+  } catch (err) {
+    wiring.cancelConnecting?.();
+    await shutdownSession(session);
+    if (err instanceof StageMcpError) {
+      return { ok: false, reason: err.message };
+    }
+    throw err;
+  }
 
   const resolved = resolveCliModel({
     cliModel: input.stage.model,
@@ -1094,6 +1427,13 @@ async function bindStageSession(
     if (resolved.thinkingLevel) {
       session.setThinkingLevel(resolved.thinkingLevel);
     }
+    await input.onResolvedModel?.({
+      stageId: runtimeStageId(input),
+      model: resolved.model.id,
+      ...(resolved.thinkingLevel !== undefined
+        ? { thinkingLevel: resolved.thinkingLevel }
+        : {}),
+    });
   } catch (err) {
     await shutdownSession(session);
     return {
@@ -1116,13 +1456,28 @@ export class PiAgentAdapter implements AgentPort {
   openStage(input: StageRunInput): StageHandle {
     const timeoutMs = input.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS;
     const askWaitChannel = new AskOperatorWaitChannel();
-    const sessionFile =
-      input.resumeToken ?? stageSessionFilePath(input.roots, input.stage.id);
+    const sessionFile = resolveStageSessionFile(input);
+    const sessionMode: StageSessionMode = input.sessionMode ?? "fresh";
 
     let sessionManager: SessionManager | undefined;
     let resumeWaiting = false;
+    let feedbackResume = false;
+    let timeoutResume = false;
+    let forceNewSession = sessionMode === "new_session";
 
-    if (existsSync(sessionFile)) {
+    if (sessionMode === "feedback_resume") {
+      if (input.feedbackLoopContext === undefined) {
+        throw new StageSessionReconstructError(
+          `feedback_resume requires feedbackLoopContext: ${sessionFile}`,
+          { stageId: runtimeStageId(input), sessionFile },
+        );
+      }
+      if (!existsSync(sessionFile)) {
+        throw new StageSessionReconstructError(
+          `stage session file missing for feedback_resume: ${sessionFile}`,
+          { stageId: runtimeStageId(input), sessionFile },
+        );
+      }
       try {
         sessionManager = SessionManager.open(
           sessionFile,
@@ -1131,22 +1486,75 @@ export class PiAgentAdapter implements AgentPort {
         );
       } catch (err) {
         throw new StageSessionReconstructError(
-          `stage session file corrupt or unreadable for resume: ${sessionFile}`,
+          `stage session file corrupt or unreadable for feedback_resume: ${sessionFile}`,
           {
-            stageId: input.stage.id,
+            stageId: runtimeStageId(input),
             sessionFile,
             cause: err,
           },
         );
       }
-      ensureStageSessionFlushed(sessionManager, input.stage.id);
-      if (!findOpenToolCall(sessionManager)) {
+      ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
+      feedbackResume = true;
+    } else if (sessionMode === "timeout_resume") {
+      if (!existsSync(sessionFile)) {
         throw new StageSessionReconstructError(
-          `stage session has no open tool call for resume: ${sessionFile}`,
-          { stageId: input.stage.id, sessionFile },
+          `stage session file missing for timeout_resume: ${sessionFile}`,
+          { stageId: runtimeStageId(input), sessionFile },
         );
       }
-      resumeWaiting = true;
+      try {
+        sessionManager = SessionManager.open(
+          sessionFile,
+          path.dirname(sessionFile),
+          input.roots.cwd,
+        );
+      } catch (err) {
+        throw new StageSessionReconstructError(
+          `stage session file corrupt or unreadable for timeout_resume: ${sessionFile}`,
+          {
+            stageId: runtimeStageId(input),
+            sessionFile,
+            cause: err,
+          },
+        );
+      }
+      ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
+      timeoutResume = true;
+    } else if (sessionMode !== "new_session") {
+      if (sessionMode === "waiting_resume" || existsSync(sessionFile)) {
+        if (existsSync(sessionFile)) {
+          try {
+            sessionManager = SessionManager.open(
+              sessionFile,
+              path.dirname(sessionFile),
+              input.roots.cwd,
+            );
+          } catch (err) {
+            throw new StageSessionReconstructError(
+              `stage session file corrupt or unreadable for resume: ${sessionFile}`,
+              {
+                stageId: runtimeStageId(input),
+                sessionFile,
+                cause: err,
+              },
+            );
+          }
+          ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
+          if (!findOpenToolCall(sessionManager)) {
+            throw new StageSessionReconstructError(
+              `stage session has no open tool call for resume: ${sessionFile}`,
+              { stageId: runtimeStageId(input), sessionFile },
+            );
+          }
+          resumeWaiting = true;
+        } else {
+          throw new StageSessionReconstructError(
+            `stage session file missing for resume: ${sessionFile}`,
+            { stageId: runtimeStageId(input), sessionFile },
+          );
+        }
+      }
     }
 
     let session: AgentSession | undefined;
@@ -1155,10 +1563,16 @@ export class PiAgentAdapter implements AgentPort {
     let prepareError: StageRunResult | undefined;
 
     const preparePromise = (async () => {
+      if (forceNewSession) {
+        await mkdir(path.dirname(sessionFile), { recursive: true });
+        await writeFile(sessionFile, "");
+        sessionManager = undefined;
+      }
       if (!sessionManager) {
         sessionManager = await createStageSessionManager(
           input.roots,
-          input.stage.id,
+          runtimeStageId(input),
+          sessionFile,
         );
       }
       const prepared = await prepareStageSessionWiring(
@@ -1179,7 +1593,12 @@ export class PiAgentAdapter implements AgentPort {
         return;
       }
       session = bound;
-      unsubscribeProgress = attachStageProgress(session, input.onActivity);
+      unsubscribeProgress = attachStageProgress(
+        session,
+        input.onActivity,
+        wiring.usage,
+        input.onAssistantTextDelta,
+      );
     })();
 
     const runWithTimeout = async (
@@ -1197,19 +1616,24 @@ export class PiAgentAdapter implements AgentPort {
         const workPromise = work();
         const abortPromise = new Promise<never>((_, reject) => {
           controller.signal.addEventListener("abort", () => {
-            reject(new Error(`stage timed out after ${timeoutMs}ms`));
+            void session?.abort();
+            reject(new Error(stageTimeoutReason(timeoutMs)));
           });
         });
         await Promise.race([workPromise, abortPromise]);
-        return resultFromCapture(wiring.capture);
+        return { ...resultFromCapture(wiring.capture), usage: wiring.usage };
       } catch (err) {
+        if (sessionManager) {
+          ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
+        }
         if (wiring.capture.envelope && isAdvancingEnvelope(wiring.capture.envelope)) {
-          return { ok: true, envelope: wiring.capture.envelope };
+          return { ok: true, envelope: wiring.capture.envelope, usage: wiring.usage };
         }
         return {
           ok: false,
           reason: err instanceof Error ? err.message : String(err),
           envelope: wiring.capture.envelope,
+          usage: wiring.usage,
         };
       } finally {
         clearTimeout(timer);
@@ -1217,15 +1641,32 @@ export class PiAgentAdapter implements AgentPort {
     };
 
     return createConnectedAskWaitStageHandle({
-      stageId: input.stage.id,
+      stageId: runtimeStageId(input),
       askWaitChannel,
       onBeforeWaitYield: () => {
         if (sessionManager) {
-          ensureStageSessionFlushed(sessionManager, input.stage.id);
+          ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
         }
       },
       run: async () => {
         return runWithTimeout(async () => {
+          if (feedbackResume) {
+            syncAgentMessagesFromSession(session!, sessionManager!);
+            await session!.prompt(composeFeedbackResumePrompt(input));
+            return;
+          }
+          if (timeoutResume) {
+            syncAgentMessagesFromSession(session!, sessionManager!);
+            if (findOpenToolCall(sessionManager!)) {
+              injectOpaqueAnswerIntoSession(
+                sessionManager!,
+                TIMEOUT_ABORT_TOOL_RESULT,
+              );
+              syncAgentMessagesFromSession(session!, sessionManager!);
+            }
+            await session!.prompt(composeTimeoutResumePrompt());
+            return;
+          }
           const userPrompt = composeStageUserPrompt(
             input,
             wiring!.emitDefName,
@@ -1241,7 +1682,7 @@ export class PiAgentAdapter implements AgentPort {
               if (!sessionManager) {
                 throw new StageSessionReconstructError(
                   "stage session missing during resume deliver",
-                  { stageId: input.stage.id, sessionFile },
+                  { stageId: runtimeStageId(input), sessionFile },
                 );
               }
               injectOpaqueAnswerIntoSession(sessionManager, answer);
@@ -1254,7 +1695,7 @@ export class PiAgentAdapter implements AgentPort {
                 if (!session || !sessionManager) {
                   throw new StageSessionReconstructError(
                     "stage session missing during resume continue",
-                    { stageId: input.stage.id, sessionFile },
+                    { stageId: runtimeStageId(input), sessionFile },
                   );
                 }
                 syncAgentMessagesFromSession(session, sessionManager);
@@ -1267,7 +1708,7 @@ export class PiAgentAdapter implements AgentPort {
         await preparePromise.catch(() => undefined);
         if (closeOptions?.park) {
           if (sessionManager) {
-            ensureStageSessionFlushed(sessionManager, input.stage.id);
+            ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
             if (askWaitChannel.hasPending) {
               await repairPrematureAskOperatorClosure(sessionFile);
             }

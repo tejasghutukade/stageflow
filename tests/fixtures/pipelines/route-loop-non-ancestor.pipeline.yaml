@@ -1,0 +1,42 @@
+id: route-loop-non-ancestor
+stages:
+  - id: plan
+    entry: true
+    route:
+      - to: implement
+      - to: sibling
+    system_prompt: Create the plan.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: implement
+    route:
+      - type: loop
+        to: sibling
+        max_replays: 1
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: Implement the approved plan.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: sibling
+    system_prompt: An unrelated sibling stage, not an ancestor of implement.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

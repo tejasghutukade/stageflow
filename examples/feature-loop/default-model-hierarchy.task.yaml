@@ -1,0 +1,58 @@
+id: default-model-hierarchy
+goal: >
+  Implement default model resolution across Stageflow YAML layers so a
+  model can be set once on stageflow.yaml or a pipeline and inherited by
+  stages that omit model. Resolution priority must be stage first, then
+  pipeline, then the global stageflow.yaml default. Split the work into
+  stories, plan each story, align the plans, implement them in the agreed
+  order, verify coverage, review the whole diff, address review feedback,
+  and open an operator-approved pull request.
+context: |
+  This repository is Stageflow itself (tejasghutukade/stageflow). The
+  checkout for this run is a dedicated git worktree already on branch
+  scratch/extra-workspace, tracking origin/main.
+
+  Epic (pasted — treat this block as the requirements document):
+
+  Today every stage must declare model (string). Omitting it fails load.
+  There is no pipeline-level or stageflow.yaml default for model. The
+  agent backend already resolves as stage > pipeline > global > "pi";
+  model needs the same shape of hierarchy, without reusing the agent key.
+
+  Required behavior:
+  1. Optional top-level model on stageflow.yaml (global default).
+  2. Optional top-level model on *.pipeline.yaml (pipeline default for
+     all stages in that pipeline).
+  3. Stage model remains allowed on inline stage bodies and external
+     stage YAML, but becomes optional when a higher default can fill it.
+  4. Effective resolution for each stage at load or run time:
+     stage.model ?? pipeline.model ?? stageflow.yaml model.
+     If still unset after that chain, load/run must fail with a clear
+     error — never invent a silent hardcoded model string.
+  5. Priority is always stage override, then pipeline, then global.
+
+  Likely touch points (verify against the tree; do not assume line
+  numbers): src/types/stageflowManifest.ts, src/types/pipeline.ts,
+  src/types for StageConfig, src/config/loadStageflowManifest.ts,
+  src/config load/merge pipeline helpers, src/config/loadStage.ts,
+  resolveAgentPort.ts (pattern to mirror for model, not to conflate),
+  stage worker / adapters that read stage.model, docs/yaml-catalog.md,
+  fixtures under tests/fixtures/, and any create/init surfaces that
+  currently require stage model.
+
+  Keep model (LLM id string) distinct from agent (pi | claude backend).
+
+  - Publish target: tejasghutukade/stageflow
+  - Base branch: main
+  - Head branch: the checkout's current branch (do not create or switch)
+constraints: |
+  Do not create, rename, or switch branches — the checkout is already
+  on the correct feature branch (scratch/extra-workspace).
+  Do not commit, push, or open a pull request except in publish, and
+  only after the operator accepts ship-package.md.
+  Do not expand scope past the epic. Story plans and sequential
+  implement clones must stay inside their assigned slices.
+  Do not change agent-backend resolution semantics except where
+  documentation must clarify that model and agent are separate.
+  publish_repo and base_branch must be the values named here, never guessed.
+checkout: /Users/tejasghutukade/Projects/software-factory/.worktrees/scratch/extra-workspace

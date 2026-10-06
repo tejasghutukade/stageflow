@@ -15,6 +15,7 @@ describe("canAbandon eligibility", () => {
     expect(canAbandon("failed")).toBe(false);
     expect(canAbandon("succeeded")).toBe(false);
     expect(canAbandon("pending")).toBe(false);
+    expect(canAbandon("skipped")).toBe(false);
   });
 });
 
@@ -38,6 +39,16 @@ describe("isStageActionBusy", () => {
         "stage-c",
       ),
     ).toBe(false);
+    expect(
+      isStageActionBusy(
+        {
+          retryingStageIds: new Set(),
+          abandoningStageId: null,
+          resumingStageIds: new Set(["stage-d"]),
+        },
+        "stage-d",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -109,6 +120,31 @@ describe("createStageAbandonSession", () => {
 
     expect(abandon).toHaveBeenCalledOnce();
     expect(abandon).toHaveBeenCalledWith("stage-a");
+  });
+
+  it("in-flight abandon of author-diagrams~1 does not start abandon of ~2", async () => {
+    let resolveFirst: (() => void) | undefined;
+    const abandon = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const onSuccess = vi.fn();
+    const confirm = vi.fn(() => true);
+    const session = createStageAbandonSession({ abandon, onSuccess, confirm });
+
+    const first = session.abandon("author-diagrams~1");
+    const second = session.abandon("author-diagrams~2");
+    expect(session.getState().abandoningStageId).toBe("author-diagrams~1");
+
+    resolveFirst?.();
+    await first;
+    await second;
+
+    expect(abandon).toHaveBeenCalledOnce();
+    expect(abandon).toHaveBeenCalledWith("author-diagrams~1");
+    expect(abandon).not.toHaveBeenCalledWith("author-diagrams~2");
   });
 });
 

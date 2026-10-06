@@ -224,9 +224,9 @@ it("reads through in-process stage execution and rejects bad account declaration
   cleanups.push(() => releaseEmailHost(root));
   const previous = process.env.MAIL_SECRET; process.env.MAIL_SECRET = "fixture-secret";
   await mkdir(path.join(root, "pipelines")); await mkdir(path.join(root, "stages"));
-  await writeFile(path.join(root, "pipelines", "read.yaml"), "id: read\nstages: [read]\n");
-  await writeFile(path.join(root, "stages", "read.yaml"), `id: read\nmodel: test\nsystem_prompt: Read\nemail:\n  - accountId: ${account.accountId}\n    operations: [search, getMessage]\n`);
-  const loaded = await loadPipeline("read", { cwd: root });
+  await writeFile(path.join(root, "pipelines", "read.pipeline.yaml"), "id: read\nstages:\n  - id: read\n    uses: ../stages/read.yaml\n    entry: true\n");
+  await writeFile(path.join(root, "stages", "read.yaml"), `id: read\nmodel: test\nsystem_prompt: Read\nemail:\n  - accountId: ${account.accountId}\n    operations: [search, getMessage]\nio:\n  input:\n    schema: { type: object }\n  output:\n    schema: { type: object }\n`);
+  const loaded = await loadPipeline("pipelines/read.pipeline.yaml", { cwd: root });
   const store = createRunStore({ rootDir: root });
   const run = await store.createRun({ pipelineId: "read", taskYaml: "id: read\ngoal: Read\n" });
   let openedCount = 0;

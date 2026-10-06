@@ -1,0 +1,504 @@
+import path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { createA2aHost, type A2aHost } from "../a2a/server.js";
+import { A2aStore } from "../a2a/store.js";
+import type { AgentPort } from "../agent/port.js";
+import type { ProviderAuthContext } from "../agent/providerAuth.js";
+import type Database from "better-sqlite3";
+import { createRunStoreWithConnection, type RunStoreKind } from "../runstore/createStore.js";
+import { resolveA2aConfigPath } from "../a2a/configDiscovery.js";
+import { ensureGlobalHome } from "../project/globalHome.js";
+import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
+import { findProjectRoot } from "../project/findProjectRoot.js";
+import type { RunStore } from "../runstore/port.js";
+import { warnDurableRootDiskIfNeeded } from "../runstore/diskUsage.js";
+import { assertStoreFilesystemSupported } from "../runstore/storeFilesystem.js";
+import type { StoreFilesystemClassification } from "../runstore/storeFilesystem.js";
+import {
+  assertStoreQuickCheck,
+  isSqliteCorruptError,
+  maybeCheckpointResidualWal,
+  rethrowAsStoreIntegrityFailed,
+} from "../runstore/sqlite/applyStorePragmas.js";
+import { RunManager } from "../runtime/runManager.js";
+import { PI_CODING_AGENT_DIR_ENV } from "../runtime/stageRoots.js";
+import {
+  ScheduleSource,
+  triggerTickIntervalMsFromEnv,
+} from "../runtime/scheduleSource.js";
+import {
+  GithubPollSource,
+  githubPollIntervalMsFromEnv,
+} from "../runtime/githubPollSource.js";
+import { EmailSource } from "../runtime/emailSource.js";
+import { emailHostFor, releaseEmailHost } from "../email/host.js";
+import { EmailTriggers } from "../email/triggers.js";
+import { fireTrigger } from "../runtime/triggerRunner.js";
+import type { TriggerFireEvent } from "../runtime/triggerPort.js";
+import {
+  createRunChangeBus,
+  getRunChangeBusFromWrappedStore,
+  isRunStoreWrapped,
+  wrapRunStoreWithChangeBus,
+  type RunChangeBus,
+} from "../runtime/runChangeBus.js";
+import {
+  createMcpHttpHandler,
+  resolveMcpStateless,
+  type McpHttpHandler,
+} from "../mcp/server.js";
+import {
+  loadHostConfig,
+  type HostConfig,
+} from "../config/hostConfig.js";
+import { bootProviderConfig } from "../agent/bootProviderConfig.js";
+import {
+  applyPendingRestoreAtBoot,
+  type BootRestoreOutcome,
+} from "../runstore/restore.js";
+import { assertTmpdirUsable } from "../runstore/assertTmpdir.js";
+import { logger as rootLogger } from "../logging/logger.js";
+
+export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
+
+export type StageflowHostOptions = {
+  agent: AgentPort;
+  cwd?: string;
+  agentDir?: string;
+  rootDir?: string;
+  store?: RunStore;
+  storeKind?: RunStoreKind;
+  maxConcurrent?: number;
+  providerAuthContext?: ProviderAuthContext;
+  mcpStateless?: boolean;
+  runChangeBus?: RunChangeBus;
+  env?: NodeJS.ProcessEnv;
+  hostConfig?: HostConfig;
+  /** Skip HostConfig load (tests that inject store/manager pieces only). */
+  skipHostConfig?: boolean;
+  emailTriggerQueue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"];
+};
+
+export type StageflowHostBootstrap = {
+  a2a?: A2aHost;
+  cwd: string;
+  agentDir: string;
+  rootDir: string;
+  isGitProject: boolean;
+  /** Absent when `serveBlocked` — store must not be opened after a failed restore. */
+  store?: RunStore;
+  /** Absent when `serveBlocked` — no RunManager lifecycle/resume. */
+  manager?: RunManager;
+  runChangeBus: RunChangeBus;
+  mcpStateless: boolean;
+  providerAuthContext: ProviderAuthContext | undefined;
+  mcpHandler: McpHttpHandler;
+  hostConfig?: HostConfig;
+  providerBoot?: Awaited<ReturnType<typeof bootProviderConfig>>;
+  /** Periodic retention GC handle when enabled; already `.unref()`'d. */
+  gcInterval?: NodeJS.Timeout;
+  stopGcInterval: () => void;
+  /** Stops the schedule-trigger tick loop started at boot. */
+  stopScheduleSource: () => void;
+  /** Stops the GitHub poll-trigger loop started at boot. */
+  stopGithubPollSource: () => void;
+  /** Stops the email-trigger IMAP/IDLE listeners started at boot. */
+  stopEmailSource: () => void;
+  email?: ReturnType<typeof emailHostFor> & { triggers: EmailTriggers; stop: () => Promise<void> };
+  /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
+  storeFilesystem?: StoreFilesystemClassification;
+  /**
+   * When set, Host must not serve API/MCP (restore.failed or failed boot apply).
+   * /livez still answers; /readyz fails.
+   */
+  serveBlocked?: { code: string; reason: string };
+};
+
+function sqliteConnectionFromStore(
+  store: RunStore,
+): Database.Database | undefined {
+  const connection = (store as { connection?: unknown }).connection;
+  if (
+    connection !== undefined &&
+    connection !== null &&
+    typeof (connection as { prepare?: unknown }).prepare === "function"
+  ) {
+    return connection as Database.Database;
+  }
+  return undefined;
+}
+
+/** Parse `STAGEFLOW_GC_INTERVAL_MS`; default 1h; `0` disables. */
+export function gcIntervalMsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env.STAGEFLOW_GC_INTERVAL_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_GC_INTERVAL_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_GC_INTERVAL_MS;
+  return parsed;
+}
+
+/**
+ * Start the unattended retention sweep. First fire is one interval after start
+ * (`setInterval` semantics). Returns undefined when intervalMs is 0.
+ */
+export function startPeriodicRunGc(
+  manager: RunManager,
+  intervalMs: number,
+  options?: {
+    logError?: (message: string) => void;
+  },
+): NodeJS.Timeout | undefined {
+  if (intervalMs <= 0) return undefined;
+  const logError =
+    options?.logError ??
+    ((message: string) => {
+      console.error(message);
+    });
+  let inFlight = false;
+  return setInterval(() => {
+    if (inFlight) return;
+    inFlight = true;
+    void manager
+      .gcRuns({ execute: true, channel: "periodic" })
+      .then((result) => {
+        if (!result.ok) {
+          logError(`periodic run GC failed: ${result.reason}`);
+        }
+      })
+      .catch((err) => {
+        logError(
+          `periodic run GC failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      })
+      .finally(() => {
+        inFlight = false;
+      });
+  }, intervalMs).unref();
+}
+
+export async function bootstrapStageflowHost(
+  options: StageflowHostOptions,
+): Promise<StageflowHostBootstrap> {
+  const env = options.env ?? process.env;
+  const invocationCwd = options.cwd ?? process.cwd();
+  const ctx = await resolveStageflowContext(invocationCwd);
+  const cwd = ctx.invocationCwd;
+  ensureGlobalHome();
+  assertTmpdirUsable(env);
+  const hostConfig =
+    options.hostConfig ??
+    (options.skipHostConfig
+      ? undefined
+      : loadHostConfig({
+          env,
+          homeDir: ctx.globalHome,
+          overrides:
+            options.maxConcurrent !== undefined
+              ? { maxConcurrentRuns: options.maxConcurrent }
+              : undefined,
+        }));
+  for (const warning of hostConfig?.warnings ?? []) {
+    console.warn(`stageflow: ${warning}`);
+  }
+  const providerBoot = options.skipHostConfig
+    ? undefined
+    : await bootProviderConfig({
+        cwd: invocationCwd,
+        env,
+        requireProviders: hostConfig?.requireProviders,
+        authContext: options.providerAuthContext,
+      });
+  process.env[PI_CODING_AGENT_DIR_ENV] = path.join(ctx.globalHome, "agent");
+  const agentDir = options.agentDir ?? getAgentDir();
+  const rootDir = options.rootDir ?? ctx.projectRoot;
+  // Validate project account configuration before starting host resources.
+  const emailHost = emailHostFor(rootDir);
+  const isGitProject =
+    options.rootDir !== undefined
+      ? findProjectRoot(rootDir) !== null
+      : ctx.isGitProject;
+
+  const storeFilesystem = assertStoreFilesystemSupported(ctx.globalHome, {
+    env,
+    warn: (message) => console.warn(message),
+  });
+
+  const bootLog = rootLogger.child({ component: "bootstrap" });
+  let serveBlocked: { code: string; reason: string } | undefined;
+  let restoreOutcome: BootRestoreOutcome = { status: "none" };
+  if (!options.store) {
+    restoreOutcome = await applyPendingRestoreAtBoot(ctx.globalHome);
+    if (restoreOutcome.status === "blocked") {
+      serveBlocked = {
+        code: "restore_failed",
+        reason: restoreOutcome.reason,
+      };
+      bootLog.error(
+        "restore.blocked",
+        `restore.failed: ${restoreOutcome.reason}`,
+      );
+    } else if (restoreOutcome.status === "failed") {
+      serveBlocked = {
+        code: "restore_failed",
+        reason: restoreOutcome.reason,
+      };
+      bootLog.error(
+        "restore.apply_failed",
+        `restore apply failed (attempts=${restoreOutcome.attempts}): ${restoreOutcome.reason}`,
+      );
+    } else if (restoreOutcome.status === "applied") {
+      bootLog.info(
+        "restore.applied",
+        `restore applied schema_version=${restoreOutcome.result.schema_version}`,
+      );
+    }
+  }
+
+  if (serveBlocked !== undefined) {
+    const runChangeBus = options.runChangeBus ?? createRunChangeBus();
+    const mcpStateless = resolveMcpStateless({
+      mcpStateless: options.mcpStateless,
+    });
+    return {
+      cwd,
+      agentDir,
+      rootDir,
+      isGitProject,
+      runChangeBus,
+      mcpStateless,
+      providerAuthContext: options.providerAuthContext,
+      mcpHandler: {
+        handle: async () => {},
+        close: async () => {},
+      },
+      stopGcInterval: () => {},
+      stopScheduleSource: () => {},
+      stopGithubPollSource: () => {},
+      stopEmailSource: () => {},
+      storeFilesystem,
+      serveBlocked,
+      ...(hostConfig !== undefined ? { hostConfig } : {}),
+      ...(providerBoot !== undefined ? { providerBoot } : {}),
+    };
+  }
+
+  let rawStore: RunStore;
+  let sqliteConnection: Database.Database | undefined;
+  const storeRootDir = options.store
+    ? (options.rootDir ?? ctx.globalHome)
+    : ctx.globalHome;
+  if (options.store) {
+    rawStore = options.store;
+    sqliteConnection = sqliteConnectionFromStore(rawStore);
+  } else {
+    try {
+      const created = createRunStoreWithConnection({
+        rootDir: ctx.globalHome,
+        kind: options.storeKind,
+        openerMode: "migrate",
+      });
+      rawStore = created.store;
+      sqliteConnection = created.connection;
+    } catch (err) {
+      if (isSqliteCorruptError(err)) {
+        rethrowAsStoreIntegrityFailed(err);
+      }
+      throw err;
+    }
+  }
+
+  if (sqliteConnection !== undefined) {
+    try {
+      assertStoreQuickCheck(sqliteConnection);
+    } catch (err) {
+      if (isSqliteCorruptError(err)) {
+        rethrowAsStoreIntegrityFailed(err);
+      }
+      throw err;
+    }
+    maybeCheckpointResidualWal(storeRootDir, sqliteConnection, {
+      log: (event, fields) => {
+        bootLog.info(event, event, fields);
+      },
+    });
+  }
+  const a2aStore =
+    sqliteConnection !== undefined
+      ? new A2aStore(storeRootDir, sqliteConnection)
+      : undefined;
+  const boundBus = isRunStoreWrapped(rawStore)
+    ? getRunChangeBusFromWrappedStore(rawStore)
+    : undefined;
+  if (
+    boundBus !== undefined &&
+    options.runChangeBus !== undefined &&
+    options.runChangeBus !== boundBus
+  ) {
+    throw new Error(
+      "runChangeBus does not match the bus already bound to the provided store",
+    );
+  }
+  const runChangeBus =
+    options.runChangeBus ?? boundBus ?? createRunChangeBus();
+  const store = wrapRunStoreWithChangeBus(rawStore, runChangeBus);
+  const manager = new RunManager({
+    agent: options.agent,
+    cwd,
+    projectRoot: rootDir,
+    isGitProject,
+    store,
+    maxConcurrent:
+      options.maxConcurrent ??
+      (hostConfig?.maxConcurrentRunsExplicit
+        ? hostConfig.maxConcurrentRuns
+        : undefined),
+    maxQueued: hostConfig?.maxQueued,
+    maxConcurrentPerProject: hostConfig?.maxConcurrentRunsPerProject,
+    callerQuotas: Object.fromEntries(
+      Object.entries(hostConfig?.callers ?? {}).map(([id, cfg]) => [
+        id,
+        cfg.maxConcurrent,
+      ]),
+    ),
+    operatorCatalog: { cwd, agentDir },
+    a2aStore,
+  });
+  await manager.attachWaitingStages();
+  await manager.reconcileOrphanedStages();
+  await manager.sweepBrowserSessions().catch(() => undefined);
+  await manager.autoResumeInterruptedStages();
+  await manager.resumeStalledSchedules();
+  await manager.reenqueuePersistedQueuedRuns();
+  await warnDurableRootDiskIfNeeded(ctx.globalHome, { env });
+  const gcInterval = startPeriodicRunGc(manager, gcIntervalMsFromEnv(env));
+  const stopGcInterval = () => {
+    if (gcInterval !== undefined) clearInterval(gcInterval);
+  };
+
+  const scheduleSource = new ScheduleSource({
+    store,
+    cwd,
+    intervalMs: triggerTickIntervalMsFromEnv(env),
+    logError: (message) => bootLog.error("trigger.schedule_source_failed", message),
+  });
+  const onTriggerFire = async (event: TriggerFireEvent) => {
+    try {
+      const result = await fireTrigger(event.triggerId, store, manager, {
+        cwd,
+        task: event.task,
+      });
+      if (!result.ok) {
+        bootLog.error(
+          "trigger.fire_failed",
+          `trigger "${event.triggerId}" fire failed: ${result.reason}`,
+        );
+      }
+    } catch (err) {
+      bootLog.error(
+        "trigger.fire_failed",
+        `trigger "${event.triggerId}" fire threw: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  };
+  try {
+    // Boot-time catch-up: fire once for any schedule trigger whose next_run_at
+    // already passed while the Host was down, then reschedule from now —
+    // before starting the periodic ticker so this pass never races it.
+    await scheduleSource.tick(onTriggerFire);
+  } catch (err) {
+    bootLog.error(
+      "trigger.schedule_catchup_failed",
+      `boot catch-up tick failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  await scheduleSource.start(onTriggerFire);
+  const stopScheduleSource = () => {
+    void scheduleSource.stop();
+  };
+
+  const githubPollSource = new GithubPollSource({
+    store,
+    cwd,
+    intervalMs: githubPollIntervalMsFromEnv(env),
+    logError: (message) => bootLog.error("trigger.github_poll_source_failed", message),
+  });
+  await githubPollSource.start(onTriggerFire);
+  const stopGithubPollSource = () => {
+    void githubPollSource.stop();
+  };
+
+  const emailSource = new EmailSource({
+    store,
+    cwd,
+    logError: (message) => bootLog.error("trigger.email_source_failed", message),
+  });
+  await emailSource.start(onTriggerFire);
+  const emailTriggers = new EmailTriggers({ cwd: rootDir, accounts: emailHost.accounts, mailbox: emailHost.mailbox, manager, store, queue: options.emailTriggerQueue });
+  let stoppingEmail: Promise<void> | undefined;
+  const stopAccountEmail = (): Promise<void> => stoppingEmail ??= Promise.all([emailTriggers.stop(), releaseEmailHost(rootDir)]).then(() => undefined);
+  void emailTriggers.recover().catch(() => undefined);
+  try {
+    await emailHost.mailbox.start(event => emailTriggers.accept(event));
+  } catch (error) {
+    await Promise.all([stopAccountEmail(), emailSource.stop(), scheduleSource.stop(), githubPollSource.stop()]);
+    throw error;
+  }
+  const stopEmailSource = () => {
+    void emailSource.stop();
+    void stopAccountEmail();
+  };
+
+  const mcpStateless = resolveMcpStateless({
+    mcpStateless: options.mcpStateless,
+  });
+  const mcpHandler = createMcpHttpHandler(
+    {
+      manager,
+      store,
+      cwd,
+      agentDir,
+      runChangeBus,
+      providerAuthContext: options.providerAuthContext,
+      projectRoot: rootDir,
+      ...(providerBoot !== undefined ? { providerBoot } : {}),
+    },
+    { mcpStateless },
+  );
+  return {
+    a2a: await createA2aHost(
+      {
+        manager,
+        runStore: store,
+        rootDir: storeRootDir,
+        connection: sqliteConnection,
+        a2aStore,
+      },
+      resolveA2aConfigPath(rootDir),
+    ),
+    cwd,
+    agentDir,
+    rootDir,
+    isGitProject,
+    store,
+    manager,
+    runChangeBus,
+    mcpStateless,
+    providerAuthContext: options.providerAuthContext,
+    mcpHandler,
+    ...(hostConfig !== undefined ? { hostConfig } : {}),
+    ...(providerBoot !== undefined ? { providerBoot } : {}),
+    ...(gcInterval !== undefined ? { gcInterval } : {}),
+    stopGcInterval,
+    stopScheduleSource,
+    stopGithubPollSource,
+    stopEmailSource,
+    email: { ...emailHost, triggers: emailTriggers, stop: stopAccountEmail },
+    storeFilesystem,
+  };
+}

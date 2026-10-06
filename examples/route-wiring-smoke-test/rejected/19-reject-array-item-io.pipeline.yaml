@@ -1,0 +1,55 @@
+id: route-demo-reject-array-item-io
+schemas:
+  finding-id:
+    type: object
+    required: [id]
+    properties:
+      id:
+        type: string
+  finding-full:
+    type: object
+    required: [id, severity]
+    properties:
+      id:
+        type: string
+      severity:
+        type: string
+        enum: [low, medium, high]
+stages:
+  - id: draft
+    entry: true
+    route:
+      - to: review
+    system_prompt: Draft.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [findings]
+          properties:
+            findings:
+              type: array
+              minItems: 1
+              items:
+                $ref: "#/schemas/finding-id"
+  - id: review
+    system_prompt: Review.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+          required: [findings]
+          properties:
+            findings:
+              type: array
+              minItems: 1
+              items:
+                $ref: "#/schemas/finding-full"
+      output:
+        schema:
+          type: object

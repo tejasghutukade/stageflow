@@ -4,7 +4,10 @@ import {
   assertRequiredEnvelope,
   isAdvancingEnvelope,
 } from "../envelope/check.js";
+import { assertFeedbackLoopAction } from "../envelope/feedbackLoop.js";
+import { loginCheckIssue } from "../browser/loginCheck.js";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
+import { assertForkEnvelope } from "../envelope/forkChoice.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import {
   assertAnswerMatchesPrompt,
@@ -20,7 +23,11 @@ import type {
   StageRunInput,
   StageRunResult,
 } from "./port.js";
-import { runStageViaOpen } from "./port.js";
+import {
+  runtimeStageId,
+  runStageViaOpen,
+  createCompletedOnlyStageHandle,
+} from "./port.js";
 
 function opaqueEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
@@ -32,7 +39,7 @@ function opaqueEqual(a: unknown, b: unknown): boolean {
 }
 
 export type FakeAgentBehavior =
-  | { type: "emit"; envelope: unknown }
+  | { type: "emit"; envelope: unknown; toolArgs?: string }
   | { type: "never_emit" }
   | { type: "throw"; message: string }
   | {
@@ -124,6 +131,21 @@ export class FakeAgent implements AgentPort {
     let answerPromise: Promise<OpaqueAnswer> | undefined;
     let started = false;
     let resumeCorrupt = false;
+    const sessionMode = input.sessionMode ?? "fresh";
+    const skipHitlPark =
+      sessionMode === "feedback_resume" ||
+      sessionMode === "timeout_resume" ||
+      sessionMode === "new_session";
+
+    if (sessionMode === "feedback_resume" && input.feedbackLoopContext === undefined) {
+      return createCompletedOnlyStageHandle({
+        stageId: runtimeStageId(input),
+        run: async () => ({
+          ok: false,
+          reason: "feedback_resume requires feedbackLoopContext",
+        }),
+      });
+    }
 
     const armWait = () => {
       waiting = true;
@@ -141,8 +163,8 @@ export class FakeAgent implements AgentPort {
       return answer;
     };
 
-    if (behavior.type === "wait_then_emit") {
-      const loaded = loadFakeHitlResume(input.roots, input.stage.id);
+    if (behavior.type === "wait_then_emit" && !skipHitlPark) {
+      const loaded = loadFakeHitlResume(input.roots, runtimeStageId(input));
       if (loaded === "corrupt") {
         resumeCorrupt = true;
       } else if (loaded) {
@@ -157,6 +179,13 @@ export class FakeAgent implements AgentPort {
       }
     }
 
+    if (sessionMode === "feedback_resume" && behavior.type === "wait_then_emit") {
+      behavior = {
+        type: "emit",
+        envelope: behavior.envelope,
+      };
+    }
+
     const emitStartActivity = () => {
       if (started) return;
       started = true;
@@ -165,6 +194,9 @@ export class FakeAgent implements AgentPort {
         event: "tool_start",
         toolName: "fake_tool",
         toolCallId: "fake-1",
+        ...("toolArgs" in behavior && behavior.toolArgs !== undefined
+          ? { argsPreview: behavior.toolArgs }
+          : {}),
       });
       input.onActivity?.({
         event: "tool_end",
@@ -175,7 +207,7 @@ export class FakeAgent implements AgentPort {
     };
 
     const finishEmit = (): StageHandleEvent => {
-      clearFakeHitlResume(input.roots, input.stage.id);
+      clearFakeHitlResume(input.roots, runtimeStageId(input));
       if (behavior.type === "throw") {
         input.onActivity?.({ event: "agent_end" });
         return {
@@ -197,8 +229,23 @@ export class FakeAgent implements AgentPort {
           : undefined;
 
       try {
-        const envelope = assertRequiredEnvelope(envelopeValue);
+        let envelope = assertRequiredEnvelope(envelopeValue);
+        if (envelope.status === "success" && envelope.payload === undefined) {
+          envelope = { ...envelope, payload: {} };
+        }
+        assertFeedbackLoopAction(envelope, input.feedbackLoopEmitContext);
+        const isFeedbackSendBack = envelope.feedback_loop?.action === "send_back";
+        if (!isFeedbackSendBack && input.forkEmitContext !== undefined) {
+          assertForkEnvelope(envelope, input.forkEmitContext);
+        }
         assertEnvelopePayload(envelope, input.stage.payload_schema);
+        if (envelope.status !== "failure") {
+          for (const check of input.stage.pre_emit_checks ?? []) {
+            if (check.type !== "browser_login_check") continue;
+            const issue = loginCheckIssue(envelope.payload, check);
+            if (issue !== undefined) throw new Error(issue);
+          }
+        }
         if (!isAdvancingEnvelope(envelope)) {
           input.onActivity?.({ event: "agent_end" });
           return {
@@ -230,7 +277,7 @@ export class FakeAgent implements AgentPort {
     };
 
     return {
-      stageId: input.stage.id,
+      stageId: runtimeStageId(input),
       async next(): Promise<StageHandleEvent> {
         if (closed) {
           return {
@@ -272,7 +319,7 @@ export class FakeAgent implements AgentPort {
               assertAnswerMatchesPrompt(t2Prompt, parsed);
             } catch (err) {
               input.onActivity?.({ event: "agent_end" });
-              clearFakeHitlResume(input.roots, input.stage.id);
+              clearFakeHitlResume(input.roots, runtimeStageId(input));
               return {
                 status: "completed",
                 result: {
@@ -292,7 +339,7 @@ export class FakeAgent implements AgentPort {
             !opaqueEqual(answer, expected)
           ) {
             input.onActivity?.({ event: "agent_end" });
-            clearFakeHitlResume(input.roots, input.stage.id);
+            clearFakeHitlResume(input.roots, runtimeStageId(input));
             return {
               status: "completed",
               result: {
@@ -307,7 +354,7 @@ export class FakeAgent implements AgentPort {
           const request = behavior.waitRequests[waitIndex];
           waitIndex += 1;
           armWait();
-          writeFakeHitlResume(input.roots, input.stage.id, {
+          writeFakeHitlResume(input.roots, runtimeStageId(input), {
             waitRequests: behavior.waitRequests,
             expectedAnswers: behavior.expectedAnswers,
             envelope: behavior.envelope,

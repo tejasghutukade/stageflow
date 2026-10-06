@@ -1,0 +1,171 @@
+import { describe, expect, it } from "vitest";
+import { cursorProviderSupport } from "../src/agent/cursorProvider.js";
+import type { FeedbackLoopContext } from "../src/agent/port.js";
+import {
+  composeFeedbackResumePrompt,
+  composeStageUserPrompt,
+} from "../src/agent/piAdapter.js";
+import { buildStageRoots } from "../src/runtime/stageRoots.js";
+import type { FeedbackLoopConfig } from "../src/types/pipeline.js";
+
+function baseInput() {
+  return {
+    roots: buildStageRoots("/tmp/run-ws", "oss-plan-investigation"),
+    stage: {
+      id: "oss-plan-investigation",
+      system_prompt: "plan",
+      model: "anthropic/claude-sonnet-4-5",
+    },
+    task: { id: "t", goal: "plan investigation" },
+    priorEnvelope: null,
+  };
+}
+
+const feedbackLoopPolicy: FeedbackLoopConfig = {
+  target: "plan",
+  max_replays: 2,
+  on_max_replays: "require_continue",
+  replay_session: "resume",
+};
+
+function makeFeedbackLoopContext(
+  overrides?: Partial<FeedbackLoopContext>,
+): FeedbackLoopContext {
+  return {
+    loop_id: "loop-1",
+    replay_id: "replay-1",
+    source_stage_id: "review",
+    target_stage_id: "plan",
+    feedback_envelope: {
+      status: "success",
+      summary: "Please tighten the acceptance criteria",
+      artifacts: ["stages/review/attempts/1/artifacts/notes.md"],
+      feedback_loop: { action: "send_back", target: "plan" },
+    },
+    replay_number: 1,
+    max_replays: 2,
+    remaining_replays: 1,
+    is_final_replay: false,
+    replay_session: "resume",
+    route_stage_ids: ["plan", "implement", "review"],
+    ...overrides,
+  };
+}
+
+describe("composeStageUserPrompt", () => {
+  it("does not teach clonable successors or clone_forks", () => {
+    const prompt = composeStageUserPrompt(
+      baseInput(),
+      "emit_stage_envelope",
+    );
+    expect(prompt).not.toContain("Clonable successors");
+    expect(prompt).not.toContain("clone_forks");
+  });
+
+  it("priorEnvelopesByStage renders keyed aggregate instead of first-stage copy", () => {
+    const prompt = composeStageUserPrompt(
+      {
+        ...baseInput(),
+        priorEnvelopesByStage: {
+          research: { status: "success", summary: "from-research", artifacts: [] },
+          validation: { status: "success", summary: "from-validation", artifacts: [] },
+        },
+      },
+      "emit_stage_envelope",
+    );
+    expect(prompt).toContain("Prior envelopes by stage (declaration order):");
+    expect(prompt).toContain("from-research");
+    expect(prompt).toContain("from-validation");
+    expect(prompt).not.toContain("No prior envelope (first stage).");
+    expect(prompt).not.toContain("clones, clone-list order");
+  });
+
+  it("feedback-loop sources are instructed to emit an action and their allowed targets", () => {
+    const prompt = composeStageUserPrompt(
+      { ...baseInput(), feedbackLoopEmitContext: feedbackLoopPolicy },
+      "emit_stage_envelope",
+    );
+    expect(prompt).toContain("feedback_loop is required");
+    expect(prompt).toContain("Allowed send_back target: plan");
+    expect(prompt).toContain("cannot be combined with fork_choice");
+  });
+
+  it("feedbackLoopContext present → labelled Feedback Loop Context section", () => {
+    const ctx = makeFeedbackLoopContext({ is_final_replay: true, remaining_replays: 0 });
+    const prompt = composeStageUserPrompt(
+      {
+        ...baseInput(),
+        sessionMode: "feedback_resume",
+        feedbackLoopContext: ctx,
+      },
+      "emit_stage_envelope",
+    );
+    expect(prompt).toContain("Feedback Loop Context");
+    expect(prompt).toContain("Session mode: feedback_resume (continuing the prior agent session)");
+    expect(prompt).toContain("loop-1");
+    expect(prompt).toContain("replay-1");
+    expect(prompt).toContain('"is_final_replay": true');
+    expect(prompt).toContain("Please tighten the acceptance criteria");
+    const priorIdx = prompt.indexOf("No prior envelope");
+    const feedbackIdx = prompt.indexOf("Feedback Loop Context");
+    const artifactIdx = prompt.indexOf("Create factory stage artifacts");
+    expect(priorIdx).toBeGreaterThanOrEqual(0);
+    expect(feedbackIdx).toBeGreaterThan(priorIdx);
+    expect(artifactIdx).toBeGreaterThan(feedbackIdx);
+  });
+
+  it("feedbackLoopContext with new_session names session mode", () => {
+    const ctx = makeFeedbackLoopContext({ replay_session: "new_session" });
+    const prompt = composeStageUserPrompt(
+      {
+        ...baseInput(),
+        sessionMode: "new_session",
+        feedbackLoopContext: ctx,
+      },
+      "emit_stage_envelope",
+    );
+    expect(prompt).toContain("Session mode: new_session (starting a fresh agent session)");
+  });
+
+  it("feedbackLoopContext absent → no Feedback Loop Context heading", () => {
+    const prompt = composeStageUserPrompt(baseInput(), "emit_stage_envelope");
+    expect(prompt).not.toContain("Feedback Loop Context");
+  });
+
+  it("source on replay gets both emit policy hints and Feedback Loop Context", () => {
+    const prompt = composeStageUserPrompt(
+      {
+        ...baseInput(),
+        feedbackLoopEmitContext: feedbackLoopPolicy,
+        feedbackLoopContext: makeFeedbackLoopContext(),
+      },
+      "emit_stage_envelope",
+    );
+    expect(prompt).toContain("feedback_loop is required");
+    expect(prompt).toContain("Allowed send_back target: plan");
+    expect(prompt).toContain("Feedback Loop Context");
+    expect(prompt).toContain("Please tighten the acceptance criteria");
+  });
+});
+
+describe("composeFeedbackResumePrompt", () => {
+  it("includes labelled Feedback Loop Context for feedback_resume", () => {
+    const ctx = makeFeedbackLoopContext();
+    const prompt = composeFeedbackResumePrompt({
+      ...baseInput(),
+      sessionMode: "feedback_resume",
+      feedbackLoopContext: ctx,
+    });
+    expect(prompt).toContain("Continue this stage after feedback-loop send-back");
+    expect(prompt).toContain("Feedback Loop Context");
+    expect(prompt).toContain("Session mode: feedback_resume (continuing the prior agent session)");
+    expect(prompt).toContain("loop-1");
+    expect(prompt).toContain("Please tighten the acceptance criteria");
+  });
+
+  it("fails closed when feedbackLoopContext is missing", () => {
+    expect(() => composeFeedbackResumePrompt(baseInput())).toThrow(
+      /feedback_resume requires feedbackLoopContext/,
+    );
+  });
+});

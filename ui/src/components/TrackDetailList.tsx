@@ -5,6 +5,7 @@ import { AttemptCountBadge } from "./AttemptCountBadge";
 
 export type TrackDetailRow = {
   stageId: string;
+  label?: string;
   status: StageSnapshot["status"];
   attemptCount?: number;
   readinessLine?: string;
@@ -71,7 +72,7 @@ export function TrackDetailList({
               : undefined
           }
         >
-          <span className="track-detail-row__id">{row.stageId}</span>
+          <span className="track-detail-row__id">{row.label ?? row.stageId}</span>
           <StatusLabel status={row.status} />
           <AttemptCountBadge count={row.attemptCount} />
           {row.readinessLine ? (

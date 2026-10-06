@@ -1,0 +1,4 @@
+id: hitl-four-kinds-proving
+stages:
+  - id: hitl-four-kinds
+    uses: ../stages/hitl-four-kinds.yaml

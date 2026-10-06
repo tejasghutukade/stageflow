@@ -1,5 +1,5 @@
 export type DetailView =
-  | { kind: "stream" }
+  | { kind: "stream"; stageId?: string }
   | { kind: "envelope"; stageId: string }
   | { kind: "artifact"; path: string };
 
@@ -12,6 +12,8 @@ export type Route =
   | { name: "pipeline"; pipelineId: string }
   | { name: "tasks" }
   | { name: "task"; taskId: string }
+  | { name: "triggers" }
+  | { name: "trigger"; triggerId: string }
   | { name: "skills" }
   | { name: "skill"; skillName: string }
   | { name: "extensions" }
@@ -22,7 +24,8 @@ export type Route =
     }
   | { name: "extensionFile"; path: string }
   | { name: "settings" }
-  | { name: "connect" };
+  | { name: "connect" }
+  | { name: "workshop"; pipelinePath?: string; taskPath?: string };
 
 export function navigate(to: string): void {
   window.location.hash = to.startsWith("#") ? to : `#${to}`;
@@ -30,6 +33,10 @@ export function navigate(to: string): void {
 
 export function runStreamPath(runId: string): string {
   return `/runs/${encodeURIComponent(runId)}`;
+}
+
+export function runStagePath(runId: string, stageId: string): string {
+  return `/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}`;
 }
 
 export function runArtifactPath(runId: string, path: string): string {
@@ -48,6 +55,10 @@ export function taskPath(taskId: string): string {
   return `/tasks/${encodeURIComponent(taskId)}`;
 }
 
+export function triggerPath(triggerId: string): string {
+  return `/triggers/${encodeURIComponent(triggerId)}`;
+}
+
 export function skillPath(name: string): string {
   return `/skills/${encodeURIComponent(name)}`;
 }
@@ -61,6 +72,17 @@ export function extensionPackagePath(
 
 export function extensionFilePath(filePath: string): string {
   return `/extensions/files/${encodeURIComponent(filePath)}`;
+}
+
+export function workshopPath(opts?: {
+  pipeline?: string;
+  task?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (opts?.pipeline) params.set("pipeline", opts.pipeline);
+  if (opts?.task) params.set("task", opts.task);
+  const query = params.toString();
+  return query ? `/workshop?${query}` : "/workshop";
 }
 
 export function connectPath(): string {
@@ -117,6 +139,11 @@ export function parseHash(hash = window.location.hash): Route {
     const taskId = firstSegment(path.slice("tasks/".length));
     if (taskId) return { name: "task", taskId };
   }
+  if (path === "triggers") return { name: "triggers" };
+  if (path.startsWith("triggers/")) {
+    const triggerId = firstSegment(path.slice("triggers/".length));
+    if (triggerId) return { name: "trigger", triggerId };
+  }
   if (path === "skills") return { name: "skills" };
   if (path.startsWith("skills/")) {
     const skillName = firstSegment(path.slice("skills/".length));
@@ -145,6 +172,15 @@ export function parseHash(hash = window.location.hash): Route {
   }
   if (path === "settings") return { name: "settings" };
   if (path === "connect") return { name: "connect" };
+  if (path === "workshop" || path === "workshop-lab") {
+    const pipelinePath = params.get("pipeline") ?? undefined;
+    const taskPath = params.get("task") ?? undefined;
+    return {
+      name: "workshop",
+      ...(pipelinePath ? { pipelinePath } : {}),
+      ...(taskPath ? { taskPath } : {}),
+    };
+  }
   if (path.startsWith("runs/")) {
     const parts = path.slice("runs/".length).split("/");
     const runId = decodeURIComponent(parts[0] ?? "");
@@ -160,6 +196,16 @@ export function parseHash(hash = window.location.hash): Route {
         runId,
         view: {
           kind: "envelope",
+          stageId: decodeURIComponent(parts[2]),
+        },
+      };
+    }
+    if (parts[1] === "stages" && parts[2] && parts.length === 3) {
+      return {
+        name: "detail",
+        runId,
+        view: {
+          kind: "stream",
           stageId: decodeURIComponent(parts[2]),
         },
       };

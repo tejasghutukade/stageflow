@@ -1,0 +1,7 @@
+id: route-unknown-target
+stages:
+  - id: clarify
+    entry: true
+    route:
+      - to: missing-stage
+    uses: ../stages/clarify.yaml

@@ -3,9 +3,16 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fakeHitlResumePath, scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import type { StageRunInput } from "../src/agent/port.js";
+import { PiAgentAdapter } from "../src/agent/piAdapter.js";
+import { FakeAgent, fakeHitlResumePath, scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import type { StageHandle, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { globalStageflowHome } from "../src/project/globalHome.js";
+import { loadPipeline } from "../src/config/loadPipeline.js";
+import {
+  appendCloneInstances,
+  buildPipelineDagSnapshotFromLoaded,
+} from "../src/runstore/pipelineDagSnapshot.js";
 import { reconstructAndContinue } from "../src/runtime/resumeReconstruct.js";
 import { StageHitlController } from "../src/runtime/stageHitl.js";
 import { bindPiAgentDirEnv, buildStageRoots } from "../src/runtime/stageRoots.js";
@@ -14,8 +21,11 @@ import { openStageAttempt } from "../src/runtime/stageAttemptBootstrap.js";
 import { exitForOutcome, runStageWorker } from "../src/runtime/stageWorker.js";
 import {
   outcomeToWorkerResult,
+  PROCESS_EXIT_FORCE_MS,
+  scheduleExitWithDrain,
   STAGE_WORKER_EXIT,
 } from "../src/runtime/stageWorkerProtocol.js";
+import { parseRunStageArgs } from "../src/cli.js";
 
 async function writeSkill(dir: string, name: string, body: string): Promise<string> {
   const skillDir = path.join(dir, name);
@@ -28,12 +38,19 @@ async function writeSkill(dir: string, name: string, body: string): Promise<stri
 async function writeNamedSkillPipeline(
   root: string,
   skillName: string,
-): Promise<void> {
+): Promise<string> {
+  const pipelinePath = path.join(root, "pipelines", "named-skill.pipeline.yaml");
   await mkdir(path.join(root, "pipelines"), { recursive: true });
   await mkdir(path.join(root, "stages"), { recursive: true });
   await writeFile(
-    path.join(root, "pipelines", "named-skill.yaml"),
-    "id: named-skill\nstages:\n  - named-stage\n",
+    pipelinePath,
+    [
+      "id: named-skill",
+      "stages:",
+      "  - id: named-stage",
+      "    uses: ../stages/named-stage.yaml",
+      "",
+    ].join("\n"),
     "utf8",
   );
   await writeFile(
@@ -42,33 +59,86 @@ async function writeNamedSkillPipeline(
       "id: named-stage",
       "system_prompt: x",
       "model: anthropic/claude-sonnet-4-5",
+      "io:",
+      "  input:",
+      "    schema:",
+      "      type: object",
+      "  output:",
+      "    schema:",
+      "      type: object",
       `skill: ${skillName}`,
       "",
     ].join("\n"),
     "utf8",
   );
+  return pipelinePath;
 }
 
 describe("stage worker protocol", () => {
-  it("maps outcomes to exit codes", () => {
-    const exit = vi.spyOn(process, "exit").mockImplementation((() => {
-      throw new Error("exit");
-    }) as never);
+  it("maps outcomes to exit codes after IPC flush", async () => {
+    expect(
+      await exitForOutcome({
+        ok: true,
+        envelope: { status: "success", summary: "x", artifacts: [] },
+      }),
+    ).toBe(STAGE_WORKER_EXIT.SUCCEEDED);
 
-    expect(() =>
-      exitForOutcome({ ok: true, envelope: { status: "success", summary: "x", artifacts: [] } }),
-    ).toThrow("exit");
-    expect(exit).toHaveBeenLastCalledWith(STAGE_WORKER_EXIT.SUCCEEDED);
+    expect(await exitForOutcome({ ok: false, reason: "boom" })).toBe(
+      STAGE_WORKER_EXIT.FAILED,
+    );
 
-    exit.mockClear();
-    expect(() => exitForOutcome({ ok: false, reason: "boom" })).toThrow("exit");
-    expect(exit).toHaveBeenLastCalledWith(STAGE_WORKER_EXIT.FAILED);
+    expect(await exitForOutcome({ waiting: true })).toBe(STAGE_WORKER_EXIT.WAITING);
+  });
 
-    exit.mockClear();
-    expect(() => exitForOutcome({ waiting: true })).toThrow("exit");
-    expect(exit).toHaveBeenLastCalledWith(STAGE_WORKER_EXIT.WAITING);
+  it("waits for process.send callback before returning", async () => {
+    let resolveSend: ((err?: Error | null) => void) | undefined;
+    const sendImpl = ((_msg: unknown, cb?: (error: Error | null) => void) => {
+      if (typeof cb === "function") {
+        resolveSend = cb;
+      }
+      return true;
+    }) as typeof process.send;
+    const previousSend = process.send;
+    Object.defineProperty(process, "send", {
+      configurable: true,
+      writable: true,
+      value: sendImpl,
+    });
 
+    let settled: number | undefined;
+    const pending = exitForOutcome({ ok: false, reason: "diag" }).then((code) => {
+      settled = code;
+    });
+    await Promise.resolve();
+    expect(settled).toBeUndefined();
+    expect(resolveSend).toBeTypeOf("function");
+    resolveSend?.(null);
+    await pending;
+    expect(settled).toBe(STAGE_WORKER_EXIT.FAILED);
+
+    if (previousSend === undefined) {
+      delete (process as { send?: typeof process.send }).send;
+    } else {
+      Object.defineProperty(process, "send", {
+        configurable: true,
+        writable: true,
+        value: previousSend,
+      });
+    }
+  });
+
+  it("scheduleExitWithDrain sets exitCode and force-exits after the safety net", () => {
+    vi.useFakeTimers();
+    const prev = process.exitCode;
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    scheduleExitWithDrain(2);
+    expect(process.exitCode).toBe(2);
+    expect(exit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(PROCESS_EXIT_FORCE_MS);
+    expect(exit).toHaveBeenCalledWith(2);
+    process.exitCode = prev;
     exit.mockRestore();
+    vi.useRealTimers();
   });
 
   it("maps outcomes to IPC result messages", () => {
@@ -91,6 +161,390 @@ describe("stage worker protocol", () => {
       "utf8",
     );
     expect(src).not.toContain("repairPrematureAskOperatorClosure");
+  });
+
+  it("parseRunStageArgs accepts feedback_resume and new_session modes", () => {
+    expect(
+      parseRunStageArgs([
+        "--run-id",
+        "r1",
+        "--stage-id",
+        "s1",
+        "--mode",
+        "feedback_resume",
+      ]).mode,
+    ).toBe("feedback_resume");
+    expect(
+      parseRunStageArgs([
+        "--run-id",
+        "r1",
+        "--stage-id",
+        "s1",
+        "--mode",
+        "new_session",
+      ]).mode,
+    ).toBe("new_session");
+  });
+});
+
+describe("stage worker feedback session modes", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-worker-fb-home-"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
+  async function writeSingleStagePipeline(root: string): Promise<string> {
+    await mkdir(path.join(root, "pipelines"), { recursive: true });
+    await mkdir(path.join(root, "stages"), { recursive: true });
+    const pipelineFile = path.join(root, "pipelines", "solo.pipeline.yaml");
+    await writeFile(
+      pipelineFile,
+      [
+        "id: solo",
+        "stages:",
+        "  - id: work",
+        "    uses: ../stages/work.yaml",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, "stages", "work.yaml"),
+      [
+        "id: work",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    return pipelineFile;
+  }
+
+  it("feedback_resume opens with sessionMode and does not call deliverAnswer", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-fb-resume-"));
+    const pipelineFile = await writeSingleStagePipeline(root);
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    const run = await store.createRun({
+      pipelineId: "solo",
+      pipelinePath: pipelineFile,
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    await store.ensureStageWorkspace(run.runId, "work");
+    await store.createStageExecution(run.runId, "work");
+    const policy = {
+      target: "work",
+      max_replays: 2,
+      on_max_replays: "require_continue" as const,
+      replay_session: "resume" as const,
+    };
+    await store.createFeedbackLoop(run.runId, {
+      loop_id: "loop-1",
+      source_stage_id: "work",
+      source_attempt: 1,
+      policy,
+    });
+    await store.createFeedbackReplay(run.runId, {
+      replay_id: "replay-1",
+      loop_id: "loop-1",
+      source_stage_id: "work",
+      source_attempt: 1,
+      target_stage_id: "work",
+      replay_number: 1,
+      max_replays: 2,
+      replay_session: "resume",
+      route_stage_ids: ["work"],
+      feedback_envelope: {
+        status: "success",
+        summary: "send back",
+        artifacts: [],
+        feedback_loop: { action: "send_back", target: "work" },
+      },
+      status: "active",
+    });
+    await store.createStageExecution(run.runId, "work");
+    await store.createFeedbackReplayStagePass(run.runId, {
+      replay_id: "replay-1",
+      stage_id: "work",
+      stage_attempt: 2,
+      session_mode: "resume",
+    });
+    await store.updateFeedbackLoop(run.runId, "loop-1", {
+      current_replay_id: "replay-1",
+      current_replay_number: 1,
+    });
+
+    const deliverAnswer = vi.fn();
+    const openedModes: Array<string | undefined> = [];
+    const openedContexts: Array<string | undefined> = [];
+    vi.spyOn(PiAgentAdapter.prototype, "openStage").mockImplementation(
+      (input: StageRunInput): StageHandle => {
+        openedModes.push(input.sessionMode);
+        openedContexts.push(input.feedbackLoopContext?.loop_id);
+        return {
+          stageId: input.stageId ?? input.stage.id,
+          async next() {
+            return {
+              status: "completed",
+              result: {
+                ok: true,
+                envelope: { status: "success", summary: "done", artifacts: [] },
+              },
+            };
+          },
+          deliverAnswer,
+          async close() {},
+        };
+      },
+    );
+
+    const outcome = await runStageWorker({
+      runId: run.runId,
+      stageId: "work",
+      rootDir: root,
+      mode: "feedback_resume",
+      attempt: 2,
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(openedModes).toEqual(["feedback_resume"]);
+    expect(openedContexts).toEqual(["loop-1"]);
+    expect(deliverAnswer).not.toHaveBeenCalled();
+    const events = await store.listStageEvents(run.runId, "work", 2);
+    expect(events.some((e) => e.event === "started")).toBe(true);
+    const execution = await store.getLatestStageExecution(run.runId, "work");
+    expect(execution?.attempt).toBe(2);
+    expect(execution?.status).toBe("succeeded");
+  });
+
+  it("new_session opens with sessionMode and does not call deliverAnswer", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-new-session-"));
+    const pipelineFile = await writeSingleStagePipeline(root);
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    const run = await store.createRun({
+      pipelineId: "solo",
+      pipelinePath: pipelineFile,
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    await store.ensureStageWorkspace(run.runId, "work");
+    await store.createStageExecution(run.runId, "work");
+    await store.createStageExecution(run.runId, "work");
+
+    const deliverAnswer = vi.fn();
+    const openedModes: Array<string | undefined> = [];
+    vi.spyOn(PiAgentAdapter.prototype, "openStage").mockImplementation(
+      (input: StageRunInput): StageHandle => {
+        openedModes.push(input.sessionMode);
+        return {
+          stageId: input.stageId ?? input.stage.id,
+          async next() {
+            return {
+              status: "completed",
+              result: {
+                ok: true,
+                envelope: { status: "success", summary: "done", artifacts: [] },
+              },
+            };
+          },
+          deliverAnswer,
+          async close() {},
+        };
+      },
+    );
+
+    const outcome = await runStageWorker({
+      runId: run.runId,
+      stageId: "work",
+      rootDir: root,
+      mode: "new_session",
+      attempt: 2,
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(openedModes).toEqual(["new_session"]);
+    expect(deliverAnswer).not.toHaveBeenCalled();
+    const events = await store.listStageEvents(run.runId, "work", 2);
+    expect(events.some((e) => e.event === "started")).toBe(true);
+  });
+
+  it("FakeAgent feedback_resume skips HITL park and emits", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-fake-fb-resume-"));
+    const roots = buildStageRoots(root, "work");
+    const parkPath = fakeHitlResumePath(roots, "work");
+    await mkdir(path.dirname(parkPath), { recursive: true });
+    await writeFile(
+      parkPath,
+      JSON.stringify({
+        waitRequests: ["stale"],
+        envelope: { status: "success", summary: "parked", artifacts: [] },
+        waitIndex: 1,
+      }),
+      "utf8",
+    );
+
+    const agent = new FakeAgent({
+      type: "wait_then_emit",
+      waitRequests: ["would-wait"],
+      envelope: { status: "success", summary: "replayed", artifacts: [] },
+    });
+    const result = await agent.runStage({
+      roots,
+      stage: {
+        id: "work",
+        system_prompt: "x",
+        model: "anthropic/claude-sonnet-4-5",
+      },
+      task: { id: "t", goal: "g" },
+      priorEnvelope: null,
+      sessionMode: "feedback_resume",
+      feedbackLoopContext: {
+        loop_id: "loop-1",
+        replay_id: "replay-1",
+        source_stage_id: "review",
+        target_stage_id: "work",
+        feedback_envelope: {
+          status: "success",
+          summary: "again",
+          artifacts: [],
+        },
+        replay_number: 1,
+        max_replays: 2,
+        remaining_replays: 1,
+        is_final_replay: false,
+        replay_session: "resume",
+        route_stage_ids: ["work", "review"],
+      },
+    });
+    expect(result).toEqual({
+      ok: true,
+      envelope: { status: "success", summary: "replayed", artifacts: [], payload: {} },
+    });
+  });
+});
+
+describe("stage worker reload — inline pipeline run", () => {
+  // Regression test: a stage worker (this is exactly what `sf internal
+  // run-stage` runs — the real subprocess spawned per stage attempt in the
+  // default STAGEFLOW_STAGE_EXECUTION=process mode) has no memory of the
+  // parent process's in-memory pipeline object. It reloads everything from
+  // the store via loadRunContext -> reloadPipelineForRun, which used to
+  // require a stored pipeline_path unconditionally — but an inline pipeline
+  // (used by MCP start_run's inline-pipeline path and by run_stage, which is
+  // ALWAYS inline) never gets one, so this reload always threw "missing
+  // pipeline_path" for any inline-pipeline run in real (non-test) process
+  // mode. `env.VITEST === "true"` auto-forces in-process execution
+  // (src/runtime/stageConcurrency.ts), so no test ever exercised this real
+  // worker-subprocess reload path for an inline pipeline before this test —
+  // calling runStageWorker directly here (as the pre-existing tests above
+  // do) exercises that exact reload path regardless.
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-worker-inline-home-"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
+  it("reloads and runs a stage from an inline pipeline with no pipeline_path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-inline-"));
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    const run = await store.createRun({
+      pipelineId: "standalone-check",
+      // No pipelinePath — this is what an inline pipeline run looks like.
+      inlinePipeline: {
+        id: "standalone-check",
+        stages: [
+          {
+            id: "check",
+            system_prompt: "x",
+            model: "anthropic/claude-sonnet-4-5",
+            io: {
+              input: { schema: { type: "object" } },
+              output: { schema: { type: "object" } },
+            },
+          },
+        ],
+      },
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    await store.ensureStageWorkspace(run.runId, "check");
+    await store.createStageExecution(run.runId, "check");
+
+    vi.spyOn(PiAgentAdapter.prototype, "openStage").mockImplementation(
+      (input: StageRunInput): StageHandle => ({
+        stageId: input.stageId ?? input.stage.id,
+        async next() {
+          return {
+            status: "completed",
+            result: {
+              ok: true,
+              envelope: { status: "success", summary: "done", artifacts: [] },
+            },
+          };
+        },
+        deliverAnswer: vi.fn(),
+        async close() {},
+      }),
+    );
+
+    const outcome = await runStageWorker({
+      runId: run.runId,
+      stageId: "check",
+      rootDir: root,
+      mode: "run",
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    const execution = await store.getLatestStageExecution(run.runId, "check");
+    expect(execution?.status).toBe("succeeded");
+  });
+
+  it("still throws a clear error when a run has neither pipeline_path nor an inline pipeline (defensive/legacy path)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-inline-broken-"));
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    const run = await store.createRun({
+      pipelineId: "broken",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    await store.ensureStageWorkspace(run.runId, "check");
+    await store.createStageExecution(run.runId, "check");
+
+    await expect(
+      runStageWorker({
+        runId: run.runId,
+        stageId: "check",
+        rootDir: root,
+        mode: "run",
+      }),
+    ).rejects.toThrow(/missing pipeline_path/);
   });
 });
 
@@ -132,6 +586,64 @@ describe("runStage workerMode", () => {
     const events = await store.listStageEvents(run.runId, "clarify");
     expect(events.some((e) => e.event === "waiting_for_input")).toBe(true);
     expect(events.some((e) => e.event === "succeeded")).toBe(false);
+  });
+
+  it("worker resume parks a later wait instead of failing without HITL", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-resume-wait-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const stage = {
+      id: "work",
+      system_prompt: "x",
+      model: "anthropic/claude-sonnet-4-5",
+    };
+    const task = { id: "t", goal: "g" };
+    const twoWaits = {
+      type: "wait_then_emit" as const,
+      waitRequests: ["first", "second"],
+      envelope: { status: "success", summary: "done", artifacts: [] },
+    };
+
+    const parked = await runStage({
+      agent: scriptedFakeAgent([twoWaits]),
+      store,
+      runId: run.runId,
+      stage,
+      stageId: "work~2",
+      task,
+      priorEnvelope: null,
+      workerMode: true,
+    });
+    expect(parked).toEqual({ waiting: true });
+
+    const resumeAgent = new FakeAgent(twoWaits);
+    const handle = resumeAgent.openStage({
+      roots: buildStageRoots(store.getWorkspaceDir(run.runId), "work~2"),
+      stage,
+      stageId: "work~2",
+      task,
+      priorEnvelope: null,
+    });
+    handle.deliverAnswer("ok");
+    const resumed = await runStage({
+      agent: resumeAgent,
+      store,
+      runId: run.runId,
+      stage,
+      stageId: "work~2",
+      task,
+      priorEnvelope: null,
+      skipStarted: true,
+      existingHandle: handle,
+      workerMode: true,
+    });
+    expect(resumed).toEqual({ waiting: true });
+    const events = await store.listStageEvents(run.runId, "work~2");
+    expect(events.filter((e) => e.event === "waiting_for_input").length).toBeGreaterThanOrEqual(2);
+    expect(events.some((e) => e.event === "failed")).toBe(false);
   });
 });
 
@@ -365,10 +877,11 @@ describe("operator catalog roots", () => {
       "---\nname: operator-fixture\ndescription: Operator catalog fixture.\n---\n# Operator\n",
     );
     const root = await mkdtemp(path.join(tmpdir(), "sf-op-recon-"));
-    await writeNamedSkillPipeline(root, "operator-fixture");
+    const pipelineFile = await writeNamedSkillPipeline(root, "operator-fixture");
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
       pipelineId: "named-skill",
+      pipelinePath: pipelineFile,
       taskYaml: "id: t\ngoal: g\n",
       taskId: "t",
     });
@@ -428,10 +941,11 @@ describe("operator catalog roots", () => {
 
   it("reconstruct fails before openStage when the named skill is missing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-op-recon-miss-"));
-    await writeNamedSkillPipeline(root, "missing-skill");
+    const pipelineFile = await writeNamedSkillPipeline(root, "missing-skill");
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
       pipelineId: "named-skill",
+      pipelinePath: pipelineFile,
       taskYaml: "id: t\ngoal: g\n",
       taskId: "t",
     });
@@ -493,10 +1007,11 @@ describe("operator catalog roots", () => {
 
   it("worker resume fails before open when the named skill is missing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-op-worker-miss-"));
-    await writeNamedSkillPipeline(root, "missing-skill");
-    const store = createRunStore({ rootDir: root });
+    const pipelineFile = await writeNamedSkillPipeline(root, "missing-skill");
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "named-skill",
+      pipelinePath: pipelineFile,
       taskYaml: "id: t\ngoal: g\n",
       taskId: "t",
     });
@@ -519,13 +1034,39 @@ describe("operator catalog roots", () => {
 });
 
 describe("stage worker prior StageEnvelope", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-worker-prior-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
   it("fails closed with envelopeRouting reason when upstream envelope is missing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-worker-prior-"));
     await mkdir(path.join(root, "pipelines"), { recursive: true });
     await mkdir(path.join(root, "stages"), { recursive: true });
+    const pipelineFile = path.join(root, "pipelines", "needs-parent.pipeline.yaml");
     await writeFile(
-      path.join(root, "pipelines", "needs-parent.yaml"),
-      "id: needs-parent\nstages:\n  - parent-stage\n  - child-stage\n",
+      pipelineFile,
+      [
+        "id: needs-parent",
+        "stages:",
+        "  - id: parent-stage",
+        "    uses: ../stages/parent-stage.yaml",
+        "    entry: true",
+        "    route:",
+        "      - to: child-stage",
+        "  - id: child-stage",
+        "    uses: ../stages/child-stage.yaml",
+        "",
+      ].join("\n"),
       "utf8",
     );
     await writeFile(
@@ -534,6 +1075,13 @@ describe("stage worker prior StageEnvelope", () => {
         "id: parent-stage",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
         "",
       ].join("\n"),
       "utf8",
@@ -544,13 +1092,21 @@ describe("stage worker prior StageEnvelope", () => {
         "id: child-stage",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
         "",
       ].join("\n"),
       "utf8",
     );
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "needs-parent",
+      pipelinePath: pipelineFile,
       taskYaml: "id: t\ngoal: g\n",
       taskId: "t",
     });
@@ -567,3 +1123,222 @@ describe("stage worker prior StageEnvelope", () => {
     });
   });
 });
+
+describe("clone instance definition lookup", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-worker-clone-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
+  async function writeAuthorDiagramsPipeline(root: string): Promise<string> {
+    await mkdir(path.join(root, "pipelines"), { recursive: true });
+    await mkdir(path.join(root, "stages"), { recursive: true });
+    const pipelineFile = path.join(
+      root,
+      "pipelines",
+      "author-diagrams.pipeline.yaml",
+    );
+    await writeFile(
+      pipelineFile,
+      [
+        "id: author-diagrams-pipe",
+        "stages:",
+        "  - id: detect",
+        "    uses: ../stages/detect.yaml",
+        "    entry: true",
+        "    route:",
+        "      - to: author-diagrams",
+        "  - id: author-diagrams",
+        "    uses: ../stages/author-diagrams.yaml",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, "stages", "detect.yaml"),
+      [
+        "id: detect",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, "stages", "author-diagrams.yaml"),
+      [
+        "id: author-diagrams",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    return pipelineFile;
+  }
+
+  it("AE4: worker loads StageConfig via definition_id for author-diagrams~2", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-def-"));
+    const pipelineFile = await writeAuthorDiagramsPipeline(root);
+    const loaded = await loadPipeline(pipelineFile);
+    const frozen = buildPipelineDagSnapshotFromLoaded(loaded);
+    const { snapshot } = appendCloneInstances(frozen, {
+      catalogId: "author-diagrams",
+      predecessorId: "detect",
+      count: 2,
+    });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      pipelinePath: pipelineFile,
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+      pipelineDag: snapshot,
+    });
+
+    const outcome = await runStageWorker({
+      runId: run.runId,
+      stageId: "author-diagrams~2",
+      rootDir: root,
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome).toMatchObject({
+      reason: expect.not.stringMatching(/not in pipeline/),
+    });
+    expect(outcome).toMatchObject({
+      reason: expect.stringMatching(/missing envelope for upstream stage "detect"/),
+    });
+  });
+
+  it("does not recover catalog id by parsing tilde when the DAG node is missing", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-tilde-"));
+    const pipelineFile = await writeAuthorDiagramsPipeline(root);
+    const loaded = await loadPipeline(pipelineFile);
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      pipelinePath: pipelineFile,
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+
+    const outcome = await runStageWorker({
+      runId: run.runId,
+      stageId: "author-diagrams~2",
+      rootDir: root,
+    });
+
+    expect(outcome).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/not in pipeline/),
+    });
+  });
+
+  it("reconstructAndContinue looks up config by definition_id", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-recon-def-"));
+    const pipelineFile = await writeAuthorDiagramsPipeline(root);
+    const loaded = await loadPipeline(pipelineFile);
+    const frozen = buildPipelineDagSnapshotFromLoaded(loaded);
+    const { snapshot } = appendCloneInstances(frozen, {
+      catalogId: "author-diagrams",
+      predecessorId: "detect",
+      count: 2,
+    });
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      pipelinePath: pipelineFile,
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+      pipelineDag: snapshot,
+    });
+    const hitl = new StageHitlController({ store });
+    const outcome = await reconstructAndContinue({
+      runId: run.runId,
+      stageId: "author-diagrams~2",
+      opaqueAnswer: "ok",
+      agent: scriptedFakeAgent([
+        {
+          type: "emit",
+          envelope: { status: "success", summary: "done", artifacts: [] },
+        },
+      ]),
+      store,
+      hitl,
+      executionMode: "inprocess",
+      cwd: root,
+      maxActiveStagesPerRun: 4,
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).not.toMatch(/not in pipeline/);
+  });
+
+  it("runStage keys store events by instance stageId", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-runstage-inst-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const agent = scriptedFakeAgent([
+      {
+        type: "wait_then_emit",
+        waitRequests: ["need-input"],
+        envelope: { status: "success", summary: "done", artifacts: [] },
+      },
+    ]);
+
+    const outcome = await runStage({
+      agent,
+      store,
+      runId: run.runId,
+      stage: {
+        id: "author-diagrams",
+        system_prompt: "x",
+        model: "anthropic/claude-sonnet-4-5",
+      },
+      stageId: "author-diagrams~1",
+      task: { id: "t", goal: "g" },
+      workerMode: true,
+    });
+
+    expect(outcome).toEqual({ waiting: true });
+    const instanceEvents = await store.listStageEvents(
+      run.runId,
+      "author-diagrams~1",
+    );
+    expect(instanceEvents.some((e) => e.event === "waiting_for_input")).toBe(
+      true,
+    );
+    expect(await store.listStageEvents(run.runId, "author-diagrams")).toEqual(
+      [],
+    );
+  });
+});
+

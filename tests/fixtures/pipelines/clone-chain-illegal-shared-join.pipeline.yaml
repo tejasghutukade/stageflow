@@ -1,0 +1,91 @@
+id: clone-chain-illegal-shared-join
+schemas:
+  Issue:
+    type: object
+    required: [id]
+    properties:
+      id:
+        type: string
+  Note:
+    type: object
+    required: [id]
+    properties:
+      id:
+        type: string
+stages:
+  - id: emit-items
+    entry: true
+    clone_cap: 3
+    clone_mode: parallel
+    route:
+      - to: handle-item
+    system_prompt: Emit issues.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/schemas/Issue"
+  - id: handle-item
+    route:
+      - to: gather
+    system_prompt: Handle one issue.
+    model: test/model
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/Issue"
+      output:
+        schema:
+          type: object
+  - id: emit-notes
+    entry: true
+    clone_cap: 2
+    clone_mode: sequential
+    route:
+      - to: handle-note
+    system_prompt: Emit notes.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [notes]
+          properties:
+            notes:
+              type: array
+              items:
+                $ref: "#/schemas/Note"
+  - id: handle-note
+    route:
+      - to: gather
+    system_prompt: Handle one note.
+    model: test/model
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/Note"
+      output:
+        schema:
+          type: object
+  - id: gather
+    system_prompt: Shared gather.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

@@ -1,0 +1,8 @@
+id: duplicate-stage
+stages:
+  - id: clarify
+    uses: ../stages/clarify.yaml
+  - id: design-doc
+    uses: ../stages/design-doc.yaml
+  - id: clarify
+    uses: ../stages/clarify.yaml

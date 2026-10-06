@@ -1,0 +1,6 @@
+{
+  "type": "object",
+  "properties": { "supplier": { "type": "string" } },
+  "required": ["supplier"],
+  "additionalProperties": false
+}

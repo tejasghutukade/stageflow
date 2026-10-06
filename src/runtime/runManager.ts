@@ -1,20 +1,74 @@
 import { randomUUID } from "node:crypto";
-import { readFile, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
+import { RunSubmissionExistsError, type RunSubmission, type RunSubmissionRecord } from "../runstore/submission.js";
+import { access, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
-import { loadPipeline } from "../config/loadPipeline.js";
-import { loadTaskFromYaml } from "../config/loadTask.js";
-import type { RunStore } from "../runstore/port.js";
+import { findProjectRoot } from "../project/findProjectRoot.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
+import { normalizeCatalogPath, normalizeProjectRoot } from "../runstore/normalizeCatalogPath.js";
+import {
+  durableRootDiskBreakdown,
+  readFilesystemSize,
+  refreshRunDiskUsage,
+  resolveMinFreeDiskFloor,
+  type DiskBreakdown,
+  type FreeSpaceReader,
+} from "../runstore/diskUsage.js";
+import { newRunId } from "../runstore/paths.js";
+import { loadRunContext } from "./resumeReconstruct.js";
+import {
+  assertResumableStage,
+  reconstructTimedOutAndContinue,
+} from "./resumeTimedOut.js";
+import { loadTaskFromYamlOutcome } from "../config/loadTask.js";
+import {
+  buildValidationResult,
+  loadPipelineValidated,
+} from "../config/validateCatalog.js";
+import {
+  deriveStatusFromStages,
+  findUnhandledFailedStage,
+  type RunMeta,
+  type RunStore,
+  type RunPipelineDagSnapshot,
+} from "../runstore/port.js";
+import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { TaskFile } from "../types/task.js";
 import {
+  InlinePipelineTooLargeError,
+  PipelinePreflightError,
   PipelineValidationError,
+  QueuedRunActivationAborted,
   startPipeline,
   type PipelineRunResult,
 } from "./pipelineRunner.js";
-import { resumeRun } from "./pipelineScheduler.js";
+import {
+  INLINE_PIPELINE_TOO_LARGE,
+  pipelineBodyBytes,
+  pipelinePersistenceForStart,
+} from "./startPayload.js";
+import {
+  materializeRunSkills,
+  validateSkillsPayload,
+  type SkillsPayload,
+} from "./runSkills.js";
+import {
+  hydrateScheduleFromStore,
+  hydratedScheduleHasRunnableWork,
+  resumeRun,
+  retryRun,
+  runPipelineDag,
+} from "./pipelineScheduler.js";
+import {
+  resolveFeedbackLoopDecision,
+  type FeedbackLoopDecisionKind,
+} from "./feedbackLoopDecision.js";
 import {
   RunRetryCoordinator,
+  readRetryRootWaitTimeoutMs,
   type RetryStageResult,
   type RetryTrackingPort,
 } from "./runRetryCoordinator.js";
@@ -24,12 +78,49 @@ import {
   readStageExecutionMode,
   type StageExecutionMode,
 } from "./stageConcurrency.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
+import { isHumanLoginStage } from "../browser/humanLogin.js";
+import {
+  defaultStageBrowserSupport,
+  resolveStageBrowserEnv,
+} from "../browser/stageBrowserEnv.js";
+import {
+  teardownRunBrowsers,
+  teardownStageBrowser,
+} from "../browser/browserTeardown.js";
+import { createRunLiveness } from "../browser/runLiveness.js";
+import {
+  acquireStageProfile,
+  stageProfileLock,
+} from "../browser/stageProfileLock.js";
+import { sweepOrphanBrowserSessions } from "../browser/browserSweep.js";
+import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
+import { logger as rootLogger } from "../logging/logger.js";
+import { registerNamedSecrets } from "../logging/namedSecrets.js";
+import { shouldRegisterValue } from "../logging/redact.js";
+import {
+  bindingFromFields,
+  buildInitialRunManifest,
+  collectDeclaredSecretValues,
+  finaliseStoredRunManifest,
+} from "../runstore/runManifest.js";
+import { getRequestAuth } from "../server/requestAuthContext.js";
+import { STAGE_ENV_PASSTHROUGH } from "./stageEnvironment.js";
+import { proxyHealthFields } from "../net/proxy.js";
+import { getContainerLimits } from "./containerLimits.js";
+import { stageflowCacheRoot } from "./stageCacheEnv.js";
+import { assertClaudeNotRoot, ClaudeRootError } from "../preflight/claudeRoot.js";
+import {
+  preflightFailureCode,
+  runPipelinePreflight,
+} from "../preflight/pipelinePreflight.js";
+import { asAgentBackendId } from "../agent/agentBackend.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
   parseSlotCount,
-  readMaxConcurrentFromFile,
-  writeMaxConcurrentToFile,
+  readMaxConcurrentFromGlobal,
+  writeMaxConcurrentToGlobal,
 } from "./settingsFile.js";
 import {
   StageHitlController,
@@ -39,32 +130,74 @@ import {
 } from "./stageHitl.js";
 import {
   resolveAndValidateCheckout,
+  resolveEffectiveGitIdentity,
+  stageBindingEnvFromRun,
 } from "./stageRoots.js";
 import { orchestrateAnswerResume } from "./answerResume.js";
 import { reconstructAndContinue as resumeReconstructAndContinue } from "./resumeReconstruct.js";
-import { resumeSessionFilePath } from "./stageAttemptContext.js";
-import { resolveStartTaskInput, type StartTaskInput } from "./taskInput.js";
+import { attemptContext, resumeSessionFilePath } from "./stageAttemptContext.js";
+import { checkTaskEntryInput, resolveStartTaskInput, type StartTaskInput } from "./taskInput.js";
 import {
-  failStageAsInterrupted,
+  markStageInterrupted,
+  OPERATOR_CANCEL_REASON,
   syncRunStatusFromStages,
 } from "./stageRecovery.js";
+import { deleteRunEverywhere } from "./runDeletion.js";
+import {
+  runRetentionSweep,
+  type RetentionSweepReport,
+  type RunRetentionSweepOptions,
+} from "./runRetentionSweep.js";
+import type { A2aStore } from "../a2a/store.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import {
+  blocksGenericRetry,
+  manualRecoveryEligibility,
+  readManualRecoveryState,
+  type ManualRecoveryEligibility,
+} from "./manualRecoveryState.js";
+import { resolveWorkspaceBinding, type WorkspaceBinding } from "./workspaceBinding.js";
+import {
+  derivedBindingKindFromMeta,
+  materializeWorkspaceBinding,
+  StartLinkError,
+  type StartFailureCode,
+} from "./repositoryMaterialize.js";
 
-export type BusyCode = "busy_capacity" | "busy_checkout";
+export type BusyCode = "busy_capacity" | "busy_checkout" | "busy_caller_quota";
+
+export type { StartFailureCode } from "./repositoryMaterialize.js";
 
 export type StartRunResult =
-  | { ok: true; runId: string; done: Promise<PipelineRunResult> }
+  | {
+      ok: true;
+      runId: string;
+      done: Promise<PipelineRunResult>;
+      queued?: boolean;
+      queuePosition?: number;
+      /** Present when queued because the caller hit its concurrency quota. */
+      queuedCode?: "busy_caller_quota";
+    }
   | {
       ok: false;
       reason: string;
       status?: number;
-      code?: BusyCode;
+      code?: StartFailureCode;
       activeCount?: number;
       maxConcurrent?: number;
       activeRunIds?: string[];
+      scope?: "global" | "project" | "caller";
+      project_root?: string;
+      caller_id?: string;
       conflictingRunId?: string;
       conflictingCheckout?: string;
+      freeBytes?: number;
+      minFreeBytes?: number;
+      stderr?: string;
     };
+
+export const PROJECT_ROOT_UNAVAILABLE_REASON = "project_root_unavailable";
+export const INSUFFICIENT_DISK_CANCEL_REASON = "insufficient_disk";
 
 export type CapacityHealth = {
   ok: true;
@@ -74,7 +207,42 @@ export type CapacityHealth = {
   slotsAvailable: number;
   activeStageProcesses: number;
   maxActiveStageProcesses: number | null;
+  disk?: DiskBreakdown;
+  stage_env_passthrough?: boolean;
+  proxy?: Record<string, unknown>;
+  container?: {
+    max_old_space_size_mb: number;
+    max_active_stage_processes: number;
+    memory_limit_bytes: number | null;
+    source: string;
+  };
+  cache?: { root: string };
 };
+
+export type StartRunOnceResult =
+  | {
+      ok: true;
+      runId: string;
+      /** False only for the caller whose submission durably created this run for the first time. */
+      reused: boolean;
+      /**
+       * Present when this call observed the run being launched in this process — either it launched
+       * the run itself, or it piggybacked on another in-flight call to the same submission key while
+       * that launch was still starting. Absent when the submission was already durably committed by
+       * an earlier, separate call: `reused: true` does not by itself imply `done` is absent, since a
+       * piggybacked call is also `reused: true`. Callers that need completion regardless of which case
+       * they hit must still fall back to polling run status by `runId`.
+       */
+      done?: Promise<PipelineRunResult>;
+    }
+  | Extract<StartRunResult, { ok: false }>;
+
+function existingSubmissionResult(existing: RunSubmissionRecord, request: RunSubmission): StartRunOnceResult {
+  if (existing.requestHash !== request.requestHash) {
+    return { ok: false, status: 409, reason: "Submission key was already used for different input" };
+  }
+  return { ok: true, runId: existing.runId, reused: true };
+}
 
 export type { DeliverAnswerResult };
 
@@ -84,48 +252,301 @@ export type AbandonStageResult =
   | { ok: true; runId: string; stageId: string }
   | { ok: false; reason: string; status?: number };
 
+export type CancelRunResult =
+  | { ok: true; runId: string }
+  | { ok: false; reason: string; status?: number };
+
+export type DeleteRunChannel = "mcp" | "rest" | "cli";
+
+export type DeleteRunResult =
+  | { ok: true; runId: string }
+  | { ok: false; reason: string; status?: number };
+
+export type GcRunsChannel = "mcp" | "rest" | "cli" | "periodic";
+
+export type GcRunsResult =
+  | ({ ok: true } & RetentionSweepReport)
+  | { ok: false; reason: string; status?: number };
+
+export const FORCE_DELETE_CANCEL_REASON = "delete_run: force";
+
+export type DecideFeedbackLoopResult =
+  | {
+      ok: true;
+      effect: "extended" | "continued" | "abandoned";
+      loopId: string;
+    }
+  | { ok: false; reason: string; status?: number };
+
+export type StopManualRecoveryResult =
+  | { ok: true; runId: string; stageId: string }
+  | { ok: false; reason: string; status?: number };
+
 type ActiveEntry = {
   checkoutKey?: string;
   durableCheckoutRoot?: string;
+  projectRoot?: string;
+  callerId?: string | null;
   generation: number;
+  done?: Promise<unknown>;
 };
 
+type SchedulingHalt = { halted: boolean; hostShutdown: boolean };
+
 const DEFAULT_MAX_CONCURRENT = 3;
-const STARTUP_RECONCILE_REASON =
-  "process_interrupted: no active worker (server restart)";
+const DEFAULT_MAX_QUEUED = 32;
+const DEFAULT_MAX_AUTO_RESUMES = 3;
+const STARTUP_RECONCILE_REASON = "orphaned_no_worker";
+const AUTO_RESUME_CAPPED_REASON = "auto_resume_capped";
+export const STAGEFLOW_AUTO_RESUME_INTERRUPTED =
+  "STAGEFLOW_AUTO_RESUME_INTERRUPTED";
+export const STAGEFLOW_MAX_AUTO_RESUMES = "STAGEFLOW_MAX_AUTO_RESUMES";
 const OPERATOR_ABANDON_REASON =
   "process_interrupted: operator abandoned stage";
+const log = rootLogger.child({ component: "runtime" });
 
 function parseMaxConcurrent(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_CONCURRENT;
   const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 1) return DEFAULT_MAX_CONCURRENT;
+  if (!Number.isFinite(n) || n < 1 || String(n) !== raw.trim()) {
+    throw new Error(
+      `Invalid value for STAGEFLOW_MAX_CONCURRENT_RUNS: ${JSON.stringify(raw)}`,
+    );
+  }
   return n;
 }
+
+function parseMaxQueued(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_QUEUED;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_MAX_QUEUED;
+  return n;
+}
+
+export function isAutoResumeInterruptedEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env[STAGEFLOW_AUTO_RESUME_INTERRUPTED];
+  if (raw === undefined || raw.trim() === "") return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized !== "0" && normalized !== "false";
+}
+
+export function parseMaxAutoResumes(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env[STAGEFLOW_MAX_AUTO_RESUMES];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_AUTO_RESUMES;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_MAX_AUTO_RESUMES;
+  return n;
+}
+
+type AdmissionQueueEntry = {
+  runId: string;
+  createdAt: string;
+  callerId?: string | null;
+};
+
+/** Private FIFO-per-project_root + round-robin dequeue (KTD3). */
+class AdmissionQueue {
+  private readonly byRoot = new Map<string, AdmissionQueueEntry[]>();
+  private rrOrder: string[] = [];
+  private rrIndex = 0;
+
+  get size(): number {
+    let n = 0;
+    for (const list of this.byRoot.values()) n += list.length;
+    return n;
+  }
+
+  clear(): void {
+    this.byRoot.clear();
+    this.rrOrder = [];
+    this.rrIndex = 0;
+  }
+
+  enqueue(projectRoot: string, entry: AdmissionQueueEntry): number {
+    let list = this.byRoot.get(projectRoot);
+    if (list === undefined) {
+      list = [];
+      this.byRoot.set(projectRoot, list);
+      this.rrOrder.push(projectRoot);
+    }
+    list.push(entry);
+    return this.size;
+  }
+
+  requeueFront(projectRoot: string, entry: AdmissionQueueEntry): void {
+    let list = this.byRoot.get(projectRoot);
+    if (list === undefined) {
+      list = [];
+      this.byRoot.set(projectRoot, list);
+      this.rrOrder.push(projectRoot);
+    }
+    list.unshift(entry);
+  }
+
+  remove(runId: string): boolean {
+    for (const [root, list] of this.byRoot) {
+      const idx = list.findIndex((e) => e.runId === runId);
+      if (idx < 0) continue;
+      list.splice(idx, 1);
+      if (list.length === 0) {
+        this.byRoot.delete(root);
+        const orderIdx = this.rrOrder.indexOf(root);
+        if (orderIdx >= 0) {
+          this.rrOrder.splice(orderIdx, 1);
+          if (this.rrOrder.length === 0) {
+            this.rrIndex = 0;
+          } else if (orderIdx < this.rrIndex) {
+            this.rrIndex -= 1;
+          } else if (this.rrIndex >= this.rrOrder.length) {
+            this.rrIndex = 0;
+          }
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  positionOf(runId: string): number | undefined {
+    let position = 0;
+    const rootCount = this.rrOrder.length;
+    if (rootCount === 0) return undefined;
+    const heads = this.rrOrder.map((root) => ({
+      root,
+      list: this.byRoot.get(root) ?? [],
+      i: 0,
+    }));
+    let rr = this.rrIndex % rootCount;
+    let remaining = this.size;
+    while (remaining > 0) {
+      let advanced = false;
+      for (let step = 0; step < rootCount; step++) {
+        const slot = heads[(rr + step) % rootCount];
+        if (slot === undefined || slot.i >= slot.list.length) continue;
+        const entry = slot.list[slot.i];
+        slot.i += 1;
+        remaining -= 1;
+        position += 1;
+        advanced = true;
+        if (entry?.runId === runId) return position;
+        rr = (rr + step + 1) % rootCount;
+        break;
+      }
+      if (!advanced) break;
+    }
+    return undefined;
+  }
+
+  dequeueNext(
+    skipRoots?: ReadonlySet<string>,
+    skipCallers?: ReadonlySet<string>,
+  ): { projectRoot: string; entry: AdmissionQueueEntry } | undefined {
+    if (this.rrOrder.length === 0) return undefined;
+    const start = this.rrIndex % this.rrOrder.length;
+    for (let step = 0; step < this.rrOrder.length; step++) {
+      const idx = (start + step) % this.rrOrder.length;
+      const root = this.rrOrder[idx];
+      if (root === undefined) continue;
+      if (skipRoots?.has(root)) continue;
+      const list = this.byRoot.get(root);
+      if (list === undefined || list.length === 0) continue;
+      let pickIdx = 0;
+      if (skipCallers !== undefined && skipCallers.size > 0) {
+        pickIdx = list.findIndex((e) => {
+          const c = e.callerId;
+          if (c === undefined || c === null || c === "") return true;
+          return !skipCallers.has(c.toLowerCase());
+        });
+        if (pickIdx < 0) continue;
+      }
+      const [entry] = list.splice(pickIdx, 1);
+      if (entry === undefined) continue;
+      if (list.length === 0) {
+        this.byRoot.delete(root);
+        this.rrOrder.splice(idx, 1);
+        if (this.rrOrder.length === 0) {
+          this.rrIndex = 0;
+        } else {
+          this.rrIndex = idx % this.rrOrder.length;
+        }
+      } else {
+        this.rrIndex = (idx + 1) % this.rrOrder.length;
+      }
+      return { projectRoot: root, entry };
+    }
+    return undefined;
+  }
+}
+
+type PendingQueuedStart = {
+  taskYaml: string;
+  pipeline: string | InlinePipelineDefinition;
+  taskLabel: string;
+  cwd: string;
+  projectRoot: string;
+  checkoutOverride?: string;
+  skipGates?: boolean;
+  ciIdentity?: {
+    gitSha?: string;
+    ciPrUrl?: string;
+    ciJobUrl?: string;
+  };
+  taskPath?: string;
+  submission?: RunSubmission;
+  pinned?: { ref: string; resolvedSha: string };
+  pathCheckoutRoot?: string;
+  binding: WorkspaceBinding;
+  checkoutKey?: string;
+  callerId?: string | null;
+  skills?: SkillsPayload;
+};
+
+type QueuedDoneDeferred = {
+  promise: Promise<PipelineRunResult>;
+  resolve: (result: PipelineRunResult) => void;
+};
 
 async function toCheckoutLeaseKey(absPath: string): Promise<string> {
   try {
     return await realpath(absPath);
   } catch {
     const fallback = path.resolve(absPath);
-    console.error(
+    log.error(
+      "checkout.realpath_failed",
       `invariant: checkout realpath failed for ${absPath}; using path.resolve fallback ${fallback}`,
+      { abs_path: absPath, fallback },
     );
     return fallback;
   }
 }
 
 export class RunManager {
+  private readonly submissionsInFlight = new Map<string, { requestHash: string; result: Promise<StartRunOnceResult> }>();
   private readonly active = new Map<string, ActiveEntry>();
+  private readonly schedulingHalts = new Map<string, SchedulingHalt>();
   private readonly checkoutLeases = new Map<string, string>();
   private readonly provisionalIds = new Set<string>();
+  private readonly admissionQueue = new AdmissionQueue();
+  private readonly pendingQueuedStarts = new Map<string, PendingQueuedStart>();
+  private readonly queuedDone = new Map<string, QueuedDoneDeferred>();
+  private admissionDrainInFlight = false;
   private readonly resumeInFlight = new Set<string>();
   private readonly retryInFlight = new Set<string>();
+  private readonly retryStartOwner = new Map<string, string>();
+  private readonly retryStartWaiters = new Map<string, Set<() => void>>();
   private trackingGeneration = 0;
   private maxConcurrent: number;
+  private readonly maxQueued: number;
+  private readonly maxConcurrentPerProject: number | undefined;
+  private readonly callerQuotas: ReadonlyMap<string, number>;
   private readonly maxActiveStagesPerRun: number;
   private readonly executionMode: StageExecutionMode;
   private readonly stageProcessLauncher: StageProcessLauncher | undefined;
+  private a2aStore: A2aStore | undefined;
   private readonly hitl: StageHitlController;
   private readonly attachedWaiting = new Set<string>();
   private readonly retryCoordinator = new RunRetryCoordinator();
@@ -140,6 +561,7 @@ export class RunManager {
     },
     onOrchestrationStarted: (runId, promise) => {
       this.registerResumeUntrack(runId, promise);
+      this.notifyRetryStartWaiters(runId);
     },
     rollbackStartTracking: async (runId, state) => {
       if (state.insertedForResume) {
@@ -155,25 +577,54 @@ export class RunManager {
     },
   };
   private readonly cwd: string;
+  private readonly projectRoot: string;
+  private readonly isGitProject: boolean;
+  private acceptingWork = true;
 
   constructor(
     private readonly options: {
       agent: AgentPort;
       store: RunStore;
       cwd?: string;
+      projectRoot?: string;
+      isGitProject?: boolean;
       operatorCatalog?: OperatorCatalog;
       seams?: HitlSeams;
       maxConcurrent?: number;
+      maxQueued?: number;
+      maxConcurrentPerProject?: number;
+      /** caller_id → max concurrent active runs for that caller. */
+      callerQuotas?: Record<string, number>;
       maxActiveStagesPerRun?: number;
       executionMode?: StageExecutionMode;
       stageProcessLauncher?: StageProcessLauncher;
+      browser?: StageBrowserSupport;
+      a2aStore?: A2aStore;
+      knownWritableProjectRoots?: () =>
+        | Iterable<string>
+        | Promise<Iterable<string>>;
+      freeSpaceReader?: FreeSpaceReader;
+      /** Test-only: await before materialize when activating a queued run. */
+      onBeforeQueuedMaterialize?: (runId: string) => void | Promise<void>;
     },
   ) {
     this.cwd = options.cwd ?? process.cwd();
+    this.projectRoot = options.projectRoot ?? this.cwd;
+    this.isGitProject = options.isGitProject ?? false;
+    this.a2aStore = options.a2aStore;
     this.maxConcurrent =
       options.maxConcurrent ??
-      readMaxConcurrentFromFile(this.cwd) ??
+      readMaxConcurrentFromGlobal() ??
       parseMaxConcurrent(process.env.STAGEFLOW_MAX_CONCURRENT_RUNS);
+    this.maxQueued =
+      options.maxQueued ?? parseMaxQueued(process.env.STAGEFLOW_MAX_QUEUED);
+    this.maxConcurrentPerProject = options.maxConcurrentPerProject;
+    this.callerQuotas = new Map(
+      Object.entries(options.callerQuotas ?? {}).map(([id, n]) => [
+        id.toLowerCase(),
+        n,
+      ]),
+    );
     this.maxActiveStagesPerRun = readMaxActiveStagesPerRun(
       process.env,
       options.maxActiveStagesPerRun,
@@ -202,12 +653,80 @@ export class RunManager {
       throw new Error(INVALID_SLOT_COUNT_MESSAGE);
     }
     this.maxConcurrent = parsed;
-    writeMaxConcurrentToFile(this.cwd, parsed);
+    writeMaxConcurrentToGlobal(parsed);
     return this.getHealth();
   }
 
   getActiveCount(): number {
     return this.active.size;
+  }
+
+  stopAcceptingWork(): void {
+    this.acceptingWork = false;
+    for (const halt of this.schedulingHalts.values()) {
+      halt.halted = true;
+      halt.hostShutdown = true;
+    }
+  }
+
+  isAcceptingWork(): boolean {
+    return this.acceptingWork;
+  }
+
+  async drainActiveStages(options: {
+    deadlineMs: number;
+    isEscalated?: () => boolean;
+  }): Promise<{ forced: boolean }> {
+    for (const halt of this.schedulingHalts.values()) {
+      halt.halted = true;
+      halt.hostShutdown = true;
+    }
+
+    const launcher = this.stageProcessLauncher;
+    if (launcher === undefined || launcher.activeCount() === 0) {
+      return { forced: false };
+    }
+
+    const previouslyActive = launcher.getActiveStageProcesses();
+    const seenRuns = new Set<string>();
+    for (const { runId, stageId } of previouslyActive) {
+      await markStageInterrupted({
+        store: this.options.store,
+        runId,
+        stageId,
+        reason: "host_shutdown",
+        status: "interrupted",
+      });
+      seenRuns.add(runId);
+    }
+    for (const runId of seenRuns) {
+      await syncRunStatusFromStages(this.options.store, runId).catch(
+        () => undefined,
+      );
+    }
+
+    launcher.signalAllActive("SIGTERM");
+
+    while (
+      launcher.activeCount() > 0 &&
+      Date.now() < options.deadlineMs &&
+      !(options.isEscalated?.() ?? false)
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+
+    const remaining = launcher.getActiveStageProcesses();
+    if (remaining.length === 0) {
+      return { forced: false };
+    }
+
+    launcher.signalAllActive("SIGKILL");
+    const killWaitUntil = Date.now() + 500;
+    while (launcher.activeCount() > 0 && Date.now() < killWaitUntil) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+
+    return { forced: true };
   }
 
   getActiveRunIds(): string[] {
@@ -221,6 +740,7 @@ export class RunManager {
     const maxActiveStageProcessesRaw = readMaxActiveStageProcesses(process.env);
     const activeStageProcesses =
       this.stageProcessLauncher?.activeCount() ?? 0;
+    const limits = getContainerLimits();
     return {
       ok: true,
       activeRunIds,
@@ -231,7 +751,93 @@ export class RunManager {
       maxActiveStageProcesses: Number.isFinite(maxActiveStageProcessesRaw)
         ? maxActiveStageProcessesRaw
         : null,
+      stage_env_passthrough:
+        process.env[STAGE_ENV_PASSTHROUGH]?.trim() === "all",
+      proxy: proxyHealthFields(process.env),
+      container: {
+        max_old_space_size_mb: limits.maxOldSpaceSizeMb,
+        max_active_stage_processes: limits.maxActiveStageProcesses,
+        memory_limit_bytes: limits.memoryLimitBytes ?? null,
+        source: limits.source,
+      },
+      cache: { root: stageflowCacheRoot() },
     };
+  }
+
+  getPerProjectCapacity(): {
+    maxConcurrent: number | undefined;
+    projects: Array<{
+      project_root: string;
+      activeCount: number;
+      maxConcurrent: number | undefined;
+    }>;
+  } {
+    const byRoot = new Map<string, number>();
+    for (const entry of this.active.values()) {
+      const root = entry.projectRoot ?? this.projectRoot;
+      byRoot.set(root, (byRoot.get(root) ?? 0) + 1);
+    }
+    return {
+      maxConcurrent: this.maxConcurrentPerProject,
+      projects: [...byRoot.entries()].map(([project_root, activeCount]) => ({
+        project_root,
+        activeCount,
+        maxConcurrent: this.maxConcurrentPerProject,
+      })),
+    };
+  }
+
+  private countActiveForProject(projectRoot: string): number {
+    const normalized = normalizeCatalogPath(projectRoot);
+    let n = 0;
+    for (const entry of this.active.values()) {
+      const root = normalizeCatalogPath(entry.projectRoot ?? this.projectRoot);
+      if (root === normalized) n += 1;
+    }
+    return n;
+  }
+
+  private countActiveForCaller(callerId: string): number {
+    const normalized = callerId.toLowerCase();
+    let n = 0;
+    for (const entry of this.active.values()) {
+      if (entry.callerId?.toLowerCase() === normalized) n += 1;
+    }
+    return n;
+  }
+
+  private callerQuotaLimit(callerId: string | null | undefined): number | undefined {
+    if (callerId === null || callerId === undefined || callerId === "") {
+      return undefined;
+    }
+    return this.callerQuotas.get(callerId.toLowerCase());
+  }
+
+  /** Capacity plus on-demand durable-root disk breakdown (KTD16). */
+  async getHealthWithDisk(): Promise<CapacityHealth> {
+    const base = this.getHealth();
+    try {
+      const disk = await durableRootDiskBreakdown(globalStageflowHome());
+      return { ...base, disk };
+    } catch {
+      return {
+        ...base,
+        disk: {
+          runs_bytes: 0,
+          worktrees_bytes: 0,
+          repos_bytes: 0,
+          state_db_bytes: 0,
+          a2a_artifacts_bytes: 0,
+          cache_bytes: 0,
+          free_bytes: 0,
+        },
+      };
+    }
+  }
+
+  /** Refresh cached `disk_bytes` for one run after a terminal transition. */
+  async refreshRunDiskBytes(runId: string): Promise<void> {
+    await refreshRunDiskUsage(this.options.store, runId);
   }
 
   getHitlController(): StageHitlController {
@@ -273,19 +879,31 @@ export class RunManager {
 
       let checkoutKey: string | undefined;
       let durableCheckoutRoot: string | undefined;
+      let attachCallerId: string | null = null;
+      let attachProjectRoot: string | undefined;
       try {
         const meta = await this.options.store.readRunMeta(runId);
-        const checkoutRoot = meta.checkout_root;
-        if (checkoutRoot !== undefined && checkoutRoot !== "") {
-          durableCheckoutRoot = checkoutRoot;
-          checkoutKey = await toCheckoutLeaseKey(checkoutRoot);
+        attachCallerId = meta.caller_id ?? null;
+        attachProjectRoot = meta.project_root
+          ? normalizeCatalogPath(meta.project_root)
+          : undefined;
+        const kind = derivedBindingKindFromMeta(meta);
+        if (kind === "checkout") {
+          const checkoutRoot = meta.checkout_root;
+          if (checkoutRoot !== undefined && checkoutRoot !== "") {
+            durableCheckoutRoot = checkoutRoot;
+            checkoutKey = await toCheckoutLeaseKey(checkoutRoot);
+          }
         }
       } catch (err) {
-        console.error(
-          `invariant: attach failed reading checkout_root for run ${runId}; tracking without checkout lease: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
+        log
+          .child({ run_id: runId })
+          .error(
+            "attach.checkout_root_failed",
+            `invariant: attach failed reading checkout_root for run ${runId}; tracking without checkout lease: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
       }
 
       const conflictHolder = this.findActiveCheckoutConflict(
@@ -306,6 +924,8 @@ export class RunManager {
       this.active.set(runId, {
         checkoutKey,
         durableCheckoutRoot,
+        projectRoot: attachProjectRoot,
+        callerId: attachCallerId,
         generation: ++this.trackingGeneration,
       });
       for (const stage of waitingStages) {
@@ -325,6 +945,24 @@ export class RunManager {
       .some((entry) => entry.runId === runId && entry.stageId === stageId);
   }
 
+  async sweepBrowserSessions(): Promise<{ closed: string[] }> {
+    const support = this.options.browser ?? defaultStageBrowserSupport();
+    const isRunLive = createRunLiveness(this.options.store);
+    await stageProfileLock(support)
+      .reclaimStale(isRunLive)
+      .catch(() => 0);
+    return sweepOrphanBrowserSessions({
+      isRunLive,
+      ...(support.runner !== undefined ? { runner: support.runner } : {}),
+      ...(support.closeWaitMs !== undefined
+        ? { closeWaitMs: support.closeWaitMs }
+        : {}),
+      ...(support.socketRoot !== undefined
+        ? { socketRoot: support.socketRoot }
+        : {}),
+    });
+  }
+
   async reconcileOrphanedStages(): Promise<{
     reconciled: Array<{ runId: string; stageId: string; reason: string }>;
   }> {
@@ -336,31 +974,95 @@ export class RunManager {
     const runs = await this.options.store.listRuns();
 
     for (const summary of runs) {
+      let meta;
+      try {
+        meta = await this.options.store.readRunMeta(summary.run_id);
+      } catch (err) {
+        log
+          .child({ run_id: summary.run_id })
+          .error(
+            "reconcile.read_meta_failed",
+            `reconcileOrphanedStages: failed to read run meta ${summary.run_id}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        continue;
+      }
+
+      if (meta.status === "queued") continue;
+
       let detail;
       try {
         detail = await this.options.store.readRun(summary.run_id);
       } catch (err) {
-        console.error(
-          `reconcileOrphanedStages: failed to read run ${summary.run_id}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
+        log
+          .child({ run_id: summary.run_id })
+          .error(
+            "reconcile.read_run_failed",
+            `reconcileOrphanedStages: failed to read run ${summary.run_id}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
         continue;
       }
 
       const runId = summary.run_id;
+      const cancelled = meta.status === "cancelled";
       let runChanged = false;
 
       for (const stage of detail.stages) {
+        if (cancelled) {
+          if (
+            stage.status !== "pending" &&
+            stage.status !== "running" &&
+            stage.status !== "waiting_for_input"
+          ) {
+            continue;
+          }
+          try {
+            await markStageInterrupted({
+              store: this.options.store,
+              runId,
+              stageId: stage.stage_id,
+              reason: OPERATOR_CANCEL_REASON,
+              status: "failed",
+            });
+            reconciled.push({
+              runId,
+              stageId: stage.stage_id,
+              reason: OPERATOR_CANCEL_REASON,
+            });
+            runChanged = true;
+            log
+              .child({ run_id: runId, stage_id: stage.stage_id })
+              .error(
+                "reconcile.orphaned_stage",
+                `reconcileOrphanedStages: failed orphaned stage ${runId}/${stage.stage_id}: ${OPERATOR_CANCEL_REASON}`,
+                { reason: OPERATOR_CANCEL_REASON },
+              );
+          } catch (err) {
+            log
+              .child({ run_id: runId, stage_id: stage.stage_id })
+              .error(
+                "reconcile.stage_failed",
+                `reconcileOrphanedStages: failed to reconcile ${runId}/${stage.stage_id}: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+          }
+          continue;
+        }
+
         if (stage.status !== "running") continue;
         if (this.hasActiveWorker(runId, stage.stage_id)) continue;
 
         try {
-          await failStageAsInterrupted({
+          await markStageInterrupted({
             store: this.options.store,
             runId,
             stageId: stage.stage_id,
             reason: STARTUP_RECONCILE_REASON,
+            status: "interrupted",
           });
           reconciled.push({
             runId,
@@ -368,38 +1070,186 @@ export class RunManager {
             reason: STARTUP_RECONCILE_REASON,
           });
           runChanged = true;
-          console.error(
-            `reconcileOrphanedStages: failed orphaned stage ${runId}/${stage.stage_id}: ${STARTUP_RECONCILE_REASON}`,
-          );
+          log
+            .child({ run_id: runId, stage_id: stage.stage_id })
+            .error(
+              "reconcile.orphaned_stage",
+              `reconcileOrphanedStages: interrupted orphaned stage ${runId}/${stage.stage_id}: ${STARTUP_RECONCILE_REASON}`,
+              { reason: STARTUP_RECONCILE_REASON },
+            );
         } catch (err) {
-          console.error(
-            `reconcileOrphanedStages: failed to reconcile ${runId}/${stage.stage_id}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
+          log
+            .child({ run_id: runId, stage_id: stage.stage_id })
+            .error(
+              "reconcile.stage_failed",
+              `reconcileOrphanedStages: failed to reconcile ${runId}/${stage.stage_id}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
         }
       }
 
-      if (runChanged) {
+      if (runChanged && !cancelled) {
         try {
           await syncRunStatusFromStages(this.options.store, runId);
         } catch (err) {
-          console.error(
-            `reconcileOrphanedStages: failed to sync run status for ${runId}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
+          log
+            .child({ run_id: runId })
+            .error(
+              "reconcile.sync_status_failed",
+              `reconcileOrphanedStages: failed to sync run status for ${runId}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
         }
       }
     }
 
     if (reconciled.length > 0) {
-      console.error(
+      log.error(
+        "reconcile.complete",
         `reconcileOrphanedStages: reconciled ${reconciled.length} orphaned stage(s)`,
+        { count: reconciled.length },
       );
     }
 
     return { reconciled };
+  }
+
+  async autoResumeInterruptedStages(): Promise<{
+    resumed: Array<{ runId: string; stageId: string }>;
+    capped: Array<{ runId: string; stageId: string }>;
+    skipped: Array<{ runId: string; stageId: string; reason: string }>;
+  }> {
+    const resumed: Array<{ runId: string; stageId: string }> = [];
+    const capped: Array<{ runId: string; stageId: string }> = [];
+    const skipped: Array<{ runId: string; stageId: string; reason: string }> =
+      [];
+    if (!isAutoResumeInterruptedEnabled()) {
+      return { resumed, capped, skipped };
+    }
+    const maxAutoResumes = parseMaxAutoResumes();
+    const interrupted =
+      await this.options.store.listInterruptedStageExecutions();
+    for (const execution of interrupted) {
+      const runId = execution.run_id;
+      const stageId = execution.stage_id;
+      const attempt = execution.attempt;
+      const latest = await this.options.store.getLatestStageExecution(
+        runId,
+        stageId,
+      );
+      if (latest === null || latest.attempt !== attempt) {
+        skipped.push({
+          runId,
+          stageId,
+          reason: "interrupted attempt is not the latest",
+        });
+        continue;
+      }
+      if (execution.auto_resume_count >= maxAutoResumes) {
+        try {
+          await markStageInterrupted({
+            store: this.options.store,
+            runId,
+            stageId,
+            reason: AUTO_RESUME_CAPPED_REASON,
+            status: "interrupted",
+            attemptCtx: attemptContext(attempt),
+          });
+          capped.push({ runId, stageId });
+          log
+            .child({ run_id: runId, stage_id: stageId, attempt })
+            .info(
+              "auto_resume.capped",
+              `autoResumeInterruptedStages: capped ${runId}/${stageId} at ${execution.auto_resume_count}`,
+              { auto_resume_count: execution.auto_resume_count },
+            );
+        } catch (err) {
+          skipped.push({
+            runId,
+            stageId,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+        continue;
+      }
+      try {
+        await this.options.store.updateStageExecution(runId, stageId, attempt, {
+          auto_resume_count: execution.auto_resume_count + 1,
+        });
+        const result = await this.resumeTimedOutStage(runId, stageId, {
+          source: "auto",
+        });
+        if (result.ok) {
+          resumed.push({ runId, stageId });
+        } else {
+          skipped.push({
+            runId,
+            stageId,
+            reason: result.reason ?? "auto resume failed",
+          });
+        }
+      } catch (err) {
+        skipped.push({
+          runId,
+          stageId,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return { resumed, capped, skipped };
+  }
+
+  async resumeStalledSchedules(): Promise<Array<{ runId: string }>> {
+    const resumed: Array<{ runId: string }> = [];
+    const runs = await this.options.store.listRuns();
+    for (const summary of runs) {
+      if (summary.status !== "running") continue;
+      const runId = summary.run_id;
+      if (this.active.has(runId)) continue;
+      try {
+        if (await this.tryResumeStalledSchedule(runId)) {
+          resumed.push({ runId });
+        }
+      } catch (err) {
+        log
+          .child({ run_id: runId })
+          .error(
+            "resume.stalled_failed",
+            `resumeStalledSchedules: failed to resume ${runId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+      }
+    }
+    return resumed;
+  }
+
+  /** Rebuild in-memory admission queue from persisted `queued` rows (R27). */
+  async reenqueuePersistedQueuedRuns(): Promise<void> {
+    const queued = await this.options.store.listRuns({ status: "queued" });
+    const ordered = [...queued].sort((a, b) =>
+      a.created_at.localeCompare(b.created_at),
+    );
+    this.admissionQueue.clear();
+    for (const row of ordered) {
+      const root = normalizeCatalogPath(row.project_root ?? this.projectRoot);
+      let callerId: string | null = null;
+      try {
+        const meta = await this.options.store.readRunMeta(row.run_id);
+        callerId = meta.caller_id ?? null;
+      } catch {
+        /* leave null; drain stamps from meta on quota miss */
+      }
+      this.admissionQueue.enqueue(root, {
+        runId: row.run_id,
+        createdAt: row.created_at,
+        callerId,
+      });
+      this.ensureQueuedDone(row.run_id);
+    }
+    await this.drainAdmissionQueue();
   }
 
   async abandonStage(
@@ -446,12 +1296,22 @@ export class RunManager {
         await this.stageProcessLauncher.cancelRun(runId);
       }
     }
+    await teardownStageBrowser(
+      this.options.browser ?? defaultStageBrowserSupport(),
+      {
+        runId,
+        runDir: this.options.store.getWorkspaceDir(runId),
+        stageId,
+        events: () => this.options.store.listStageEvents(runId, stageId),
+      },
+    ).catch(() => undefined);
 
-    await failStageAsInterrupted({
+    await markStageInterrupted({
       store: this.options.store,
       runId,
       stageId,
       reason: OPERATOR_ABANDON_REASON,
+      status: "failed",
     });
     if (
       this.retryCoordinator.isActive(runId) &&
@@ -465,6 +1325,19 @@ export class RunManager {
     const hasWaiting = after.stages.some(
       (s) => s.status === "waiting_for_input",
     );
+    if (
+      !hasWaiting &&
+      !(await createRunLiveness(this.options.store)(runId).catch(() => true))
+    ) {
+      await teardownRunBrowsers(
+        this.options.browser ?? defaultStageBrowserSupport(),
+        {
+          runId,
+          runDir: this.options.store.getWorkspaceDir(runId),
+          events: (stageId) => this.options.store.listStageEvents(runId, stageId),
+        },
+      ).catch(() => undefined);
+    }
     if (!hasWaiting && this.active.has(runId)) {
       this.removeActiveEntry(runId, false);
     }
@@ -472,22 +1345,335 @@ export class RunManager {
     return { ok: true, runId, stageId };
   }
 
+  async cancelRun(runId: string, reason: string): Promise<CancelRunResult> {
+    let meta;
+    try {
+      meta = await this.options.store.readRunMeta(runId);
+    } catch {
+      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+    }
+
+    if (meta.status === "cancelled") {
+      return { ok: true, runId };
+    }
+
+    if (meta.status === "succeeded" || meta.status === "failed") {
+      return {
+        ok: false,
+        reason: `Run is ${meta.status} and cannot be cancelled`,
+        status: 409,
+      };
+    }
+
+    const trimmedReason = reason.trim();
+    if (trimmedReason.length === 0) {
+      return {
+        ok: false,
+        reason: "Cancel reason is required",
+        status: 400,
+      };
+    }
+
+    await this.options.store.updateRunStatus(runId, "cancelled");
+    await this.options.store.setCancelReason(runId, trimmedReason);
+    await finaliseStoredRunManifest(this.options.store, runId).catch(
+      () => undefined,
+    );
+    await this.refreshRunDiskBytes(runId).catch(() => undefined);
+
+    const halt = this.schedulingHalts.get(runId);
+    if (halt !== undefined) {
+      halt.halted = true;
+    }
+
+    this.admissionQueue.remove(runId);
+    this.pendingQueuedStarts.delete(runId);
+    this.resolveQueuedDone(runId, {
+      ok: false,
+      outcome: "cancelled",
+      runDir: this.options.store.getWorkspaceDir(runId),
+      runId,
+      reason: trimmedReason,
+    });
+
+    if (this.stageProcessLauncher !== undefined) {
+      await this.stageProcessLauncher.cancelRun(runId);
+    }
+    await teardownRunBrowsers(
+      this.options.browser ?? defaultStageBrowserSupport(),
+      {
+          runId,
+          runDir: this.options.store.getWorkspaceDir(runId),
+          events: (stageId) => this.options.store.listStageEvents(runId, stageId),
+        },
+    );
+
+    const detail = await this.options.store.readRun(runId);
+    for (const stage of detail.stages) {
+      if (
+        stage.status !== "pending" &&
+        stage.status !== "running" &&
+        stage.status !== "waiting_for_input"
+      ) {
+        continue;
+      }
+      const wasWaiting = stage.status === "waiting_for_input";
+      await markStageInterrupted({
+        store: this.options.store,
+        runId,
+        stageId: stage.stage_id,
+        reason: OPERATOR_CANCEL_REASON,
+        status: "failed",
+      });
+      if (wasWaiting) {
+        this.hitl.clearLiveWait(runId, stage.stage_id);
+      }
+    }
+
+    if (this.active.has(runId)) {
+      this.removeActiveEntry(runId, false);
+    }
+
+    return { ok: true, runId };
+  }
+
+  setA2aStore(store: A2aStore): void {
+    this.a2aStore = store;
+  }
+
+  async deleteRun(
+    runId: string,
+    options: { force?: boolean; channel: DeleteRunChannel } = {
+      channel: "rest",
+    },
+  ): Promise<DeleteRunResult> {
+    const force = options.force === true;
+    const channel = options.channel;
+
+    let meta;
+    try {
+      meta = await this.options.store.readRunMeta(runId);
+    } catch {
+      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+    }
+
+    const activeStatus =
+      meta.status === "created" ||
+      meta.status === "queued" ||
+      meta.status === "running";
+    if (activeStatus && !force) {
+      return {
+        ok: false,
+        reason: `Run is ${meta.status} and cannot be deleted without force`,
+        status: 409,
+      };
+    }
+
+    if (activeStatus && force) {
+      const settle = this.active.get(runId)?.done;
+      const cancelled = await this.cancelRun(runId, FORCE_DELETE_CANCEL_REASON);
+      if (!cancelled.ok && cancelled.status !== 404) {
+        return cancelled;
+      }
+      if (settle !== undefined) {
+        try {
+          await this.waitForPromise(settle, 30_000);
+        } catch (err) {
+          return {
+            ok: false,
+            reason: err instanceof Error ? err.message : String(err),
+            status: 500,
+          };
+        }
+      }
+    }
+
+    const a2aStore = this.a2aStore;
+    if (a2aStore === undefined) {
+      return {
+        ok: false,
+        reason: "A2A store is not available for delete_run",
+        status: 500,
+      };
+    }
+
+    try {
+      await deleteRunEverywhere(this.options.store, a2aStore, runId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith("Run not found:")) {
+        return { ok: false, reason: message, status: 404 };
+      }
+      return { ok: false, reason: message, status: 500 };
+    }
+
+    log.child({ run_id: runId }).info("delete_run", "run deleted", {
+      force,
+      channel,
+    });
+
+    return { ok: true, runId };
+  }
+
+  async gcRuns(
+    options: {
+      execute?: boolean;
+      channel?: GcRunsChannel;
+    } & Pick<RunRetentionSweepOptions, "now" | "windows" | "env" | "artifactMaxBytes" | "bareCacheTtlMs"> = {},
+  ): Promise<GcRunsResult> {
+    const execute = options.execute === true;
+    const channel = options.channel ?? "rest";
+
+    let report: RetentionSweepReport;
+    try {
+      report = await runRetentionSweep(this.options.store, this.a2aStore, {
+        execute,
+        now: options.now,
+        windows: options.windows,
+        env: options.env,
+        artifactMaxBytes: options.artifactMaxBytes,
+        bareCacheTtlMs: options.bareCacheTtlMs,
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        reason: err instanceof Error ? err.message : String(err),
+        status: 500,
+      };
+    }
+
+    if (execute) {
+      for (const runId of report.slimmed) {
+        await this.refreshRunDiskBytes(runId).catch(() => undefined);
+      }
+      log.info("run_retention_sweep", "retention sweep executed", {
+        channel,
+        slimmed: report.slimmed,
+        purged: report.purged,
+        bareCachesEvicted: report.bareCachesEvicted,
+      });
+    }
+
+    return { ok: true, ...report };
+  }
+
+  private async waitForPromise(
+    promise: Promise<unknown>,
+    timeoutMs: number,
+  ): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        promise.then(
+          () => undefined,
+          () => undefined,
+        ),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new Error(
+                `Timed out waiting for run to settle after force cancel`,
+              ),
+            );
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  async startRunOnce(
+    input: Parameters<RunManager["startRun"]>[0],
+    submission: RunSubmission,
+  ): Promise<StartRunOnceResult> {
+    if (!submission.key.trim() || submission.key.length > 256 || !/^[a-f0-9]{64}$/.test(submission.requestHash)) {
+      return { ok: false, status: 400, reason: "Submission requires a key and SHA-256 request hash" };
+    }
+    const pending = this.submissionsInFlight.get(submission.key);
+    if (pending) {
+      if (pending.requestHash !== submission.requestHash) {
+        return { ok: false, status: 409, reason: "Submission key was already used for different input" };
+      }
+      const result = await pending.result;
+      return result.ok ? { ...result, reused: true } : result;
+    }
+    const result = this.startSubmittedRun(input, submission);
+    this.submissionsInFlight.set(submission.key, { requestHash: submission.requestHash, result });
+    try {
+      return await result;
+    } finally {
+      this.submissionsInFlight.delete(submission.key);
+    }
+  }
+
+  private async startSubmittedRun(
+    input: Parameters<RunManager["startRun"]>[0],
+    submission: RunSubmission,
+  ): Promise<StartRunOnceResult> {
+    const existing = await this.options.store.getRunBySubmission(submission.key);
+    if (existing) return existingSubmissionResult(existing, submission);
+    try {
+      const result = await this.startRun(input, submission);
+      return result.ok ? { ok: true, runId: result.runId, reused: false, done: result.done } : result;
+    } catch (error) {
+      if (error instanceof RunSubmissionExistsError) return existingSubmissionResult(error.submission, submission);
+      throw error;
+    }
+  }
+
   async startRun(
     input: StartTaskInput & {
-      pipeline: string;
+      pipeline: string | InlinePipelineDefinition;
       task?: string | TaskFile;
       checkoutOverride?: string;
       dispatchKey?: string;
+      skipGates?: boolean;
+      gitSha?: string;
+      ciPrUrl?: string;
+      ciJobUrl?: string;
+      /**
+       * Absolute store-key project root from the wire (registered path or
+       * seeded-mapped absolute). When set, persisted as run project_root;
+       * Host boot / findProjectRoot are not used to override it.
+       */
+      projectRoot?: string;
+      /** Attribution from auth only — never from request body/query. */
+      callerId?: string | null;
+      skills?: SkillsPayload;
     },
+    submission?: RunSubmission,
   ): Promise<StartRunResult> {
-    const cwd = this.options.cwd ?? process.cwd();
+    if (!this.acceptingWork) {
+      return {
+        ok: false,
+        reason: "Host is shutting down",
+        status: 503,
+        code: "shutting_down",
+      };
+    }
+    const hostCwd = this.options.cwd ?? process.cwd();
+    const wireRoot =
+      typeof input.projectRoot === "string" && input.projectRoot.trim().length > 0
+        ? normalizeProjectRoot(input.projectRoot)
+        : undefined;
+    // Wire root wins. Otherwise path pipelines may derive via findProjectRoot;
+    // inline-only without projectRoot keeps Host projectRoot.
+    const derivedProjectRoot =
+      wireRoot ??
+      (typeof input.pipeline === "string"
+        ? (findProjectRoot(
+            path.dirname(path.resolve(hostCwd, input.pipeline)),
+          ) ?? this.projectRoot)
+        : this.projectRoot);
+    const cwd = wireRoot ?? hostCwd;
 
     if (input.dispatchKey) {
       if (!this.options.store.findRunByDispatchKey) throw new Error("Run store does not support durable dispatch");
       const existing = await this.options.store.findRunByDispatchKey(input.dispatchKey);
       if (existing) {
         const meta = await this.options.store.readRunMeta(existing.runId);
-        return { ok: true, runId: existing.runId, done: Promise.resolve({ ok: meta.status === "succeeded", runId: existing.runId, runDir: existing.workspaceDir, reason: "Recovered existing dispatch; execution was not restarted" }) };
+        return { ok: true, runId: existing.runId, done: Promise.resolve({ ok: meta.status === "succeeded", outcome: meta.status === "succeeded" ? "succeeded" : "failed", runId: existing.runId, runDir: existing.workspaceDir, reason: "Recovered existing dispatch; execution was not restarted" }) };
       }
     }
 
@@ -526,63 +1712,632 @@ export class RunManager {
       `task file ${label}`,
       cwd,
       input.checkoutOverride,
+      input.skipGates,
+      {
+        gitSha: input.gitSha,
+        ciPrUrl: input.ciPrUrl,
+        ciJobUrl: input.ciJobUrl,
+      },
+      derivedProjectRoot,
+      resolved.kind === "path" ? resolved.taskPath : undefined,
+      submission,
+      undefined,
+      input.callerId,
+      input.skills,
       input.dispatchKey,
     );
   }
 
-  async rerun(runId: string): Promise<StartRunResult> {
+  async rerun(
+    runId: string,
+    options?: { pinned?: boolean; callerId?: string | null },
+  ): Promise<StartRunResult> {
+    if (!this.acceptingWork) {
+      return {
+        ok: false,
+        reason: "Host is shutting down",
+        status: 503,
+        code: "shutting_down",
+      };
+    }
     const cwd = this.options.cwd ?? process.cwd();
 
-    let pipelineId: string;
+    let pipeline: string | InlinePipelineDefinition;
     let taskYaml: string;
+    let rerunCwd = cwd;
+    let rerunProjectRoot: string | undefined;
+    let skipGates: boolean | undefined;
+    let ciIdentity:
+      | { gitSha?: string; ciPrUrl?: string; ciJobUrl?: string }
+      | undefined;
+    let pinned:
+      | { ref: string; resolvedSha: string }
+      | undefined;
     try {
       const meta = await this.options.store.readRunMeta(runId);
-      pipelineId = meta.pipeline_id;
+      if (meta.pipeline_source === "inline") {
+        const body = await this.options.store.readPipelineBody(runId);
+        if (body === null || body === "") {
+          return {
+            ok: false,
+            reason: `Run ${runId} is missing pipeline_body; re-run of an inline pipeline requires the stored body.`,
+            status: 400,
+          };
+        }
+        try {
+          pipeline = JSON.parse(body) as InlinePipelineDefinition;
+        } catch {
+          return {
+            ok: false,
+            reason: `Run ${runId} has invalid pipeline_body JSON`,
+            status: 400,
+          };
+        }
+      } else if (meta.pipeline_path) {
+        pipeline = normalizeCatalogPath(meta.pipeline_path);
+      } else {
+        return {
+          ok: false,
+          reason: `Run ${runId} has neither pipeline_path nor pipeline_body; cannot re-run.`,
+          status: 400,
+        };
+      }
+      rerunCwd = meta.project_root
+        ? normalizeCatalogPath(meta.project_root)
+        : cwd;
+      rerunProjectRoot = meta.project_root
+        ? normalizeCatalogPath(meta.project_root)
+        : undefined;
       taskYaml = await this.options.store.readTaskYaml(runId);
+      skipGates = meta.skip_gates;
+      ciIdentity = {
+        ...(meta.git_sha !== undefined ? { gitSha: meta.git_sha } : {}),
+        ...(meta.ci_pr_url !== undefined ? { ciPrUrl: meta.ci_pr_url } : {}),
+        ...(meta.ci_job_url !== undefined ? { ciJobUrl: meta.ci_job_url } : {}),
+      };
+      if (options?.pinned) {
+        if (
+          meta.resolved_sha === undefined ||
+          meta.resolved_sha === "" ||
+          meta.ref === undefined ||
+          meta.ref === ""
+        ) {
+          return {
+            ok: false,
+            reason: `Run ${runId} has no resolved_sha/ref to pin`,
+            status: 400,
+            code: "pinned_sha_unavailable",
+          };
+        }
+        pinned = { ref: meta.ref, resolvedSha: meta.resolved_sha };
+      }
     } catch {
       return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
     }
 
     return this.reserveAndStartPipeline(
       taskYaml,
-      pipelineId,
+      pipeline,
       `run ${runId} task`,
-      cwd,
+      rerunCwd,
+      undefined,
+      skipGates,
+      ciIdentity,
+      rerunProjectRoot,
+      undefined,
+      undefined,
+      pinned,
+      options?.callerId,
     );
   }
 
   async retryStage(runId: string, stageId: string): Promise<RetryStageResult> {
+    return this.retryStageInternal(runId, stageId, true);
+  }
+
+  async resumeTimedOutStage(
+    runId: string,
+    stageId: string,
+    options?: { source?: "explicit" | "auto" },
+  ): Promise<RetryStageResult> {
+    if (!this.acceptingWork) {
+      return {
+        ok: false,
+        reason: "Host is shutting down",
+        status: 503,
+        code: "shutting_down",
+      };
+    }
+    const resumeKey = waitKey(runId, stageId);
+    if (this.resumeInFlight.has(resumeKey) || this.retryInFlight.has(resumeKey)) {
+      return {
+        ok: false,
+        reason: `Resume already in progress for run ${runId} stage ${stageId}`,
+        status: 409,
+      };
+    }
+    this.resumeInFlight.add(resumeKey);
+
+    let detail;
+    try {
+      detail = await this.options.store.readRun(runId);
+    } catch {
+      this.resumeInFlight.delete(resumeKey);
+      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+    }
+
+    const stageSnap = detail.stages.find((s) => s.stage_id === stageId);
+    if (!stageSnap) {
+      this.resumeInFlight.delete(resumeKey);
+      return { ok: false, reason: `Stage not found: ${stageId}`, status: 404 };
+    }
+    const eligibility = assertResumableStage(
+      stageSnap.status,
+      stageSnap.events,
+    );
+    if (!eligibility.ok) {
+      this.resumeInFlight.delete(resumeKey);
+      return eligibility;
+    }
+
+    const latest = await this.options.store.getLatestStageExecution(
+      runId,
+      stageId,
+    );
+    const attemptIndex = latest?.attempt ?? 1;
+    if ((options?.source ?? "explicit") === "explicit" && latest !== null) {
+      await this.options.store.updateStageExecution(
+        runId,
+        stageId,
+        attemptIndex,
+        { auto_resume_count: 0 },
+      );
+    }
+    const wasActive = this.active.has(runId);
+    const tracked = await this.ensureResumeTracked(runId);
+    if (!tracked.ok) {
+      this.resumeInFlight.delete(resumeKey);
+      return { ok: false, reason: tracked.reason, status: 409 };
+    }
+    const insertedForResume = !wasActive;
+
+    try {
+      const runProjectRoot = detail.project_root ?? this.projectRoot;
+      const done = reconstructTimedOutAndContinue({
+        runId,
+        stageId,
+        agent: this.options.agent,
+        store: this.options.store,
+        hitl: this.hitl,
+        executionMode: this.executionMode,
+        cwd: runProjectRoot,
+        maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+        factoryCwd: runProjectRoot,
+        ...(this.stageProcessLauncher !== undefined
+          ? { stageProcessLauncher: this.stageProcessLauncher }
+          : {}),
+        ...(this.options.operatorCatalog !== undefined
+          ? { operatorCatalog: this.options.operatorCatalog }
+          : {}),
+      });
+      this.registerResumeUntrack(runId, done);
+      const outcome = await done;
+      if (!outcome.ok) {
+        if (insertedForResume) {
+          this.removeActiveEntry(runId, false);
+        }
+        const missingSession =
+          outcome.reason !== undefined &&
+          outcome.reason.startsWith("missing session to resume");
+        return {
+          ok: false,
+          reason: outcome.reason ?? "timeout resume failed",
+          status: missingSession ? 409 : 500,
+        };
+      }
+      return { ok: true, runId, stageId, attemptIndex };
+    } finally {
+      this.resumeInFlight.delete(resumeKey);
+    }
+  }
+
+  async recoverManualStage(
+    runId: string,
+    stageId: string,
+    guidance?: string,
+  ): Promise<RetryStageResult> {
+    return this.recoverManualStageInternal(runId, stageId, guidance, true);
+  }
+
+  async recoverManualStageUntilStop(
+    runId: string,
+    stageId: string,
+    guidance?: string,
+  ): Promise<
+    | { ok: true; pipeline: PipelineRunResult }
+    | Extract<RetryStageResult, { ok: false }>
+  > {
+    const retryKey = waitKey(runId, stageId);
+    const retried = await this.recoverManualStageInternal(
+      runId,
+      stageId,
+      guidance,
+      false,
+    );
+    if (!retried.ok) return retried;
+    try {
+      if (retried.done === undefined) {
+        return {
+          ok: false,
+          reason: `Recovery orchestration did not start for run ${runId} stage ${stageId}`,
+          status: 500,
+        };
+      }
+      return { ok: true, pipeline: await retried.done };
+    } finally {
+      this.retryInFlight.delete(retryKey);
+    }
+  }
+
+  private async recoverManualStageInternal(
+    runId: string,
+    stageId: string,
+    guidance: string | undefined,
+    awaitRoot: boolean,
+  ): Promise<RetryStageResult> {
+    if (guidance !== undefined && guidance.trim().length > 4_000) {
+      return {
+        ok: false,
+        reason: "Manual recovery guidance must be 4,000 characters or fewer",
+        status: 400,
+      };
+    }
+    const eligibility = await this.manualRecoveryEligibility(runId, stageId);
+    if (!eligibility.ok) return eligibility;
+    return this.retryStageInternal(runId, stageId, awaitRoot, {
+      manualRecovery: true,
+      beforeAttemptStart: async (attempt) => {
+        await this.options.store.appendStageEvent(
+          runId,
+          stageId,
+          {
+            event: "manual_recovery_requested",
+            ...(guidance !== undefined && guidance.trim() !== ""
+              ? { guidance: guidance.trim() }
+              : {}),
+          },
+          { attempt },
+        );
+      },
+    });
+  }
+
+  async stopManualRecovery(
+    runId: string,
+    stageId: string,
+  ): Promise<StopManualRecoveryResult> {
+    const eligibility = await this.manualRecoveryEligibility(runId, stageId);
+    if (!eligibility.ok) return eligibility;
+    await this.options.store.appendStageEvent(
+      runId,
+      stageId,
+      { event: "manual_recovery_stopped" },
+      { attempt: eligibility.failedAttempt },
+    );
+    return { ok: true, runId, stageId };
+  }
+
+  async retryStageUntilStop(
+    runId: string,
+    stageId: string,
+  ): Promise<
+    | { ok: true; pipeline: PipelineRunResult }
+    | Extract<RetryStageResult, { ok: false }>
+  > {
+    const retryKey = waitKey(runId, stageId);
+    const retried = await this.retryStageInternal(runId, stageId, false);
+    if (!retried.ok) return retried;
+    try {
+      if (retried.done === undefined) {
+        return {
+          ok: false,
+          reason: `Retry orchestration did not start for run ${runId} stage ${stageId}`,
+          status: 500,
+        };
+      }
+      const pipeline = await retried.done;
+      return { ok: true, pipeline };
+    } finally {
+      this.retryInFlight.delete(retryKey);
+    }
+  }
+
+  private async retryStageInternal(
+    runId: string,
+    stageId: string,
+    awaitRoot: boolean,
+    options?: {
+      manualRecovery?: boolean;
+      beforeAttemptStart?: (attempt: number) => Promise<void>;
+    },
+  ): Promise<RetryStageResult> {
+    if (!this.acceptingWork) {
+      return {
+        ok: false,
+        reason: "Host is shutting down",
+        status: 503,
+        code: "shutting_down",
+      };
+    }
     const retryKey = waitKey(runId, stageId);
     if (this.retryInFlight.has(retryKey)) {
       return {
         ok: false,
         reason: `Retry already in progress for run ${runId} stage ${stageId}`,
         status: 409,
+        code: "retry_in_progress",
+      };
+    }
+    this.retryInFlight.add(retryKey);
+
+    if (
+      options?.manualRecovery !== true &&
+      await this.blocksGenericRetry(runId, stageId)
+    ) {
+      this.retryInFlight.delete(retryKey);
+      return {
+        ok: false,
+        reason: "Stage uses manual recovery; use the manual recovery action instead of retry",
+        status: 409,
+        code: "manual_recovery_required",
       };
     }
 
-    this.retryInFlight.add(retryKey);
-
     try {
-      const orchestrationConflict =
+      let meta: RunMeta | undefined;
+      let orchestrationConflict =
         this.active.has(runId) &&
         !this.attachedWaiting.has(waitKey(runId, stageId));
-      return await this.retryCoordinator.retryStage({
+      if (!this.retryCoordinator.isActive(runId)) {
+        const entry = this.active.get(runId);
+        const pending = entry?.done;
+        const generation = entry?.generation;
+        if (
+          orchestrationConflict &&
+          pending !== undefined &&
+          (await this.isStartRunWindingDown(runId))
+        ) {
+          if (this.claimRetryStart(runId, stageId)) {
+            await this.awaitStartRunWindDown(runId, pending, generation);
+          } else {
+            await this.waitForRetryCoordinatorOrOwnerRelease(runId);
+          }
+        } else if (!this.claimRetryStart(runId, stageId)) {
+          await this.waitForRetryCoordinatorOrOwnerRelease(runId);
+        }
+        let detail;
+        try {
+          detail = await this.options.store.readRun(runId);
+          meta = await this.options.store.readRunMeta(runId);
+        } catch {
+          this.retryInFlight.delete(retryKey);
+          return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+        }
+        orchestrationConflict =
+          this.active.has(runId) &&
+          !this.attachedWaiting.has(waitKey(runId, stageId)) &&
+          !this.retryCoordinator.isActive(runId);
+        if (
+          orchestrationConflict &&
+          !(await this.isStartRunWindingDown(runId))
+        ) {
+          const hasActiveStage = detail.stages.some(
+            (stage) =>
+              stage.status === "running" ||
+              stage.status === "waiting_for_input",
+          );
+          if (!hasActiveStage) {
+            orchestrationConflict = false;
+          }
+        }
+      }
+      if (meta === undefined) {
+        try {
+          meta = await this.options.store.readRunMeta(runId);
+        } catch {
+          this.retryInFlight.delete(retryKey);
+          return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+        }
+      }
+      const result = await this.retryCoordinator.retryStage({
         runId,
         stageId,
         store: this.options.store,
         agent: this.options.agent,
-        cwd: this.cwd,
+        cwd: meta.project_root ?? this.projectRoot,
         operatorCatalog: this.options.operatorCatalog,
+        ...(this.options.browser !== undefined
+          ? { browser: this.options.browser }
+          : {}),
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
         hitl: this.hitl,
         orchestrationConflict,
         tracking: this.retryTracking,
+        awaitRoot,
+        ...(options?.beforeAttemptStart !== undefined
+          ? { beforeAttemptStart: options.beforeAttemptStart }
+          : {}),
       });
-    } finally {
+      if (!result.ok || awaitRoot !== false) {
+        this.retryInFlight.delete(retryKey);
+      }
+      return result;
+    } catch (err) {
       this.retryInFlight.delete(retryKey);
+      throw err;
+    } finally {
+      this.releaseRetryStart(runId, stageId);
+    }
+  }
+
+  private async isStartRunWindingDown(runId: string): Promise<boolean> {
+    try {
+      const detail = await this.options.store.readRun(runId);
+      const meta = await this.options.store.readRunMeta(runId);
+      let hasPending = false;
+      for (const stage of detail.stages) {
+        if (
+          stage.status === "running" ||
+          stage.status === "waiting_for_input"
+        ) {
+          return false;
+        }
+        if (stage.status === "pending") hasPending = true;
+      }
+      return (
+        findUnhandledFailedStage(detail.stages, meta.pipeline_dag) !==
+          undefined || !hasPending
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async awaitStartRunWindDown(
+    runId: string,
+    pending: Promise<unknown>,
+    generation: number | undefined,
+  ): Promise<void> {
+    let pendingError: unknown;
+    const settled = pending.then(
+      () => undefined,
+      (err: unknown) => {
+        pendingError = err;
+      },
+    );
+    const timedOut = await this.raceRetryRootTimeout(settled);
+    const after = this.active.get(runId);
+    const leftGeneration =
+      after === undefined || after.generation !== generation;
+    if (pendingError !== undefined && !leftGeneration) {
+      throw pendingError instanceof Error
+        ? pendingError
+        : new Error(String(pendingError));
+    }
+    if (timedOut && !leftGeneration) {
+      return;
+    }
+  }
+
+  private async raceRetryRootTimeout(
+    promise: Promise<void>,
+  ): Promise<boolean> {
+    const ms = readRetryRootWaitTimeoutMs();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise.then(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(true), ms);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  private claimRetryStart(runId: string, stageId: string): boolean {
+    const owner = this.retryStartOwner.get(runId);
+    if (owner !== undefined && owner !== stageId) return false;
+    this.retryStartOwner.set(runId, stageId);
+    return true;
+  }
+
+  private releaseRetryStart(runId: string, stageId: string): void {
+    if (this.retryStartOwner.get(runId) !== stageId) return;
+    this.retryStartOwner.delete(runId);
+    this.notifyRetryStartWaiters(runId);
+  }
+
+  private notifyRetryStartWaiters(runId: string): void {
+    const waiters = this.retryStartWaiters.get(runId);
+    if (waiters === undefined) return;
+    this.retryStartWaiters.delete(runId);
+    for (const resolve of waiters) resolve();
+  }
+
+  private async waitForRetryCoordinatorOrOwnerRelease(
+    runId: string,
+  ): Promise<void> {
+    if (
+      this.retryCoordinator.isActive(runId) ||
+      !this.retryStartOwner.has(runId)
+    ) {
+      return;
+    }
+    let onReady: (() => void) | undefined;
+    const watched = new Promise<void>((resolve) => {
+      const list = this.retryStartWaiters.get(runId) ?? new Set();
+      onReady = () => resolve();
+      list.add(onReady);
+      this.retryStartWaiters.set(runId, list);
+      if (
+        this.retryCoordinator.isActive(runId) ||
+        !this.retryStartOwner.has(runId)
+      ) {
+        resolve();
+      }
+    });
+    try {
+      await this.raceRetryRootTimeout(watched);
+    } finally {
+      if (onReady !== undefined) {
+        const list = this.retryStartWaiters.get(runId);
+        if (list !== undefined) {
+          list.delete(onReady);
+          if (list.size === 0) this.retryStartWaiters.delete(runId);
+        }
+      }
+    }
+  }
+
+  private async manualRecoveryEligibility(
+    runId: string,
+    stageId: string,
+  ): Promise<ManualRecoveryEligibility> {
+    try {
+      const eligibility = manualRecoveryEligibility(
+        await readManualRecoveryState(this.options.store, runId, stageId),
+      );
+      if (!eligibility.ok) {
+        return {
+          ...eligibility,
+          reason:
+            eligibility.reason === "Stage is not configured for manual recovery"
+              ? `${eligibility.reason}: ${stageId}`
+              : eligibility.reason === "Stage not found"
+                ? `${eligibility.reason}: ${stageId}`
+                : eligibility.reason,
+        };
+      }
+      return eligibility;
+    } catch {
+      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+    }
+  }
+
+  private async blocksGenericRetry(
+    runId: string,
+    stageId: string,
+  ): Promise<boolean> {
+    try {
+      return blocksGenericRetry(
+        await readManualRecoveryState(this.options.store, runId, stageId),
+      );
+    } catch {
+      return false;
     }
   }
 
@@ -686,12 +2441,193 @@ export class RunManager {
     }
   }
 
+  /**
+   * Resolve a feedback-loop wait_for_human decision after the scheduler has
+   * exited waiting (host-down / HTTP / CLI). Persist-only resolve, then
+   * resume orchestration for extend/continue.
+   */
+  async decideFeedbackLoop(
+    runId: string,
+    stageId: string,
+    input: {
+      decision: FeedbackLoopDecisionKind;
+      loopId?: string;
+      reason?: string;
+    },
+  ): Promise<DecideFeedbackLoopResult> {
+    const resumeKey = waitKey(runId, stageId);
+    if (this.resumeInFlight.has(resumeKey)) {
+      return {
+        ok: false,
+        reason: `Resume already in progress for run ${runId} stage ${stageId}`,
+        status: 409,
+      };
+    }
+    this.resumeInFlight.add(resumeKey);
+
+    let detail;
+    try {
+      detail = await this.options.store.readRun(runId);
+    } catch {
+      this.resumeInFlight.delete(resumeKey);
+      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+    }
+
+    const stageSnap = detail.stages.find((s) => s.stage_id === stageId);
+    if (!stageSnap) {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: `Stage not found: ${stageId}`,
+        status: 404,
+      };
+    }
+
+    const active = detail.active_feedback_loop;
+    if (
+      active === undefined ||
+      active.state !== "waiting_for_human"
+    ) {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: "no feedback loop is waiting_for_human",
+        status: 409,
+      };
+    }
+    if (active.source_stage_id !== stageId) {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: `stage "${stageId}" is not the feedback loop source (expected ${active.source_stage_id})`,
+        status: 409,
+      };
+    }
+    if (
+      input.loopId !== undefined &&
+      input.loopId !== active.loop_id
+    ) {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: `feedback loop not found: ${input.loopId}`,
+        status: 404,
+      };
+    }
+    if (stageSnap.status !== "waiting_for_input") {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: `Stage is not waiting for input (status=${stageSnap.status})`,
+        status: 409,
+      };
+    }
+
+    const wasActive = this.active.has(runId);
+    const tracked = await this.ensureResumeTracked(runId);
+    if (!tracked.ok) {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: tracked.reason,
+        status: 409,
+      };
+    }
+    const insertedForResume = !wasActive;
+
+    try {
+      const decided = await resolveFeedbackLoopDecision({
+        store: this.options.store,
+        runId,
+        decision: input.decision,
+        loopId: input.loopId ?? active.loop_id,
+        reason: input.reason,
+      });
+      if (!decided.ok) {
+        if (insertedForResume) {
+          this.removeActiveEntry(runId, false);
+        }
+        return { ok: false, reason: decided.reason, status: 409 };
+      }
+
+      if (decided.effect === "abandoned") {
+        if (insertedForResume) {
+          this.removeActiveEntry(runId, false);
+        }
+        return {
+          ok: true,
+          effect: "abandoned",
+          loopId: decided.loop.loop_id,
+        };
+      }
+
+      const { meta, task, loaded } = await loadRunContext(
+        this.options.store,
+        runId,
+        this.cwd,
+      );
+      const runProjectRoot = meta.project_root ?? this.projectRoot;
+      const done = runPipelineDag({
+        prepared: {
+          task,
+          loaded,
+          run: {
+            runId,
+            workspaceDir: this.options.store.getWorkspaceDir(runId),
+          },
+          agent: this.options.agent,
+          store: this.options.store,
+          cwd: runProjectRoot,
+          projectRoot: runProjectRoot,
+          checkoutRoot: meta.checkout_root,
+          hitl: this.hitl,
+          operatorCatalog: this.options.operatorCatalog,
+          ...(this.options.browser !== undefined
+            ? { browser: this.options.browser }
+            : {}),
+        },
+        maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+        executionMode: this.executionMode,
+        stageProcessLauncher: this.stageProcessLauncher,
+        schedulingHalt: this.ensureSchedulingHalt(runId),
+      });
+      this.registerResumeUntrack(runId, done);
+      const rest = await done;
+      if (rest.outcome === "failed") {
+        return {
+          ok: false,
+          reason: rest.reason ?? "pipeline failed after feedback decision",
+          status: 500,
+        };
+      }
+      return {
+        ok: true,
+        effect: decided.effect === "extended" ? "extended" : "continued",
+        loopId: decided.loop.loop_id,
+      };
+    } catch (err) {
+      if (insertedForResume) {
+        this.removeActiveEntry(runId, false);
+      }
+      return {
+        ok: false,
+        reason: err instanceof Error ? err.message : String(err),
+        status: 500,
+      };
+    } finally {
+      this.resumeInFlight.delete(resumeKey);
+    }
+  }
+
   private async resumeViaSubprocess(
     runId: string,
     stageId: string,
     opaqueAnswer: OpaqueAnswer,
-  ): Promise<{ ok: boolean; reason?: string }> {
-    const cwd = this.options.cwd ?? process.cwd();
+  ): Promise<{
+    ok: boolean;
+    reason?: string;
+    verification?: "failed_retrying";
+  }> {
     const store = this.options.store;
     const launcher = this.stageProcessLauncher;
     if (!launcher) {
@@ -705,18 +2641,70 @@ export class RunManager {
     const eventOptions = { attempt };
 
     try {
-      const launchMeta = await store.readRunMeta(runId);
-      const launchPipeline = await loadPipeline(launchMeta.pipeline_id, { cwd });
+      const runMeta = await store.readRunMeta(runId);
+      const runProjectRoot = runMeta.project_root ?? this.projectRoot;
+      const { meta, task, loaded } = await loadRunContext(
+        store,
+        runId,
+        runProjectRoot,
+      );
+      const stageBinding = stageBindingEnvFromRun({
+        meta,
+        task,
+        runWorkspaceDir: workspaceDir,
+        hostEnv: process.env,
+      });
+      const resumedStage = loaded.stages.find(
+        (s) => s.id === definitionIdForInstance(meta.pipeline_dag, stageId),
+      );
+      if (resumedStage?.browser?.profile !== undefined) {
+        await acquireStageProfile(
+          this.options.browser ?? defaultStageBrowserSupport(),
+          {
+            profile: resumedStage.browser.profile,
+            owner: { runId, stageId },
+            isRunLive: createRunLiveness(store),
+            halted: () => true,
+          },
+        ).then((outcome) => {
+          if (outcome === "halted") {
+            throw new Error(
+              `browser profile "${resumedStage.browser?.profile}" is held by another run`,
+            );
+          }
+        });
+      }
+      const browserEnv = await resolveStageBrowserEnv(
+        this.options.browser ?? defaultStageBrowserSupport(),
+        {
+          runId,
+          stageId,
+          runDir: workspaceDir,
+          browser: resumedStage?.browser,
+          attempt,
+          humanLogin: isHumanLoginStage(
+            meta.pipeline_dag,
+            definitionIdForInstance(meta.pipeline_dag, stageId),
+            resumedStage?.browser,
+          ),
+          resuming: true,
+        },
+      );
       const launchResult = await launcher.launch({
         runId,
         stageId,
-        stage: launchPipeline.stages.find(value => value.id === stageId),
-        rootDir: cwd,
+        rootDir: runProjectRoot,
+        factoryCwd: runProjectRoot,
+        stage: resumedStage,
         workspaceDir,
+        ...(browserEnv !== undefined ? { browserEnv } : {}),
         mode: "resume",
         resumeAnswer: opaqueAnswer,
         attempt,
         sessionFilePath,
+        env: stageBinding.env,
+        bindingKind: stageBinding.kind,
+        ...(resumedStage !== undefined ? { model: resumedStage.model } : {}),
         ...(this.options.operatorCatalog !== undefined
           ? { operatorCatalog: this.options.operatorCatalog }
           : {}),
@@ -725,8 +2713,51 @@ export class RunManager {
       if (launchResult.type === "waiting") {
         return { ok: true };
       }
+      await teardownStageBrowser(
+        this.options.browser ?? defaultStageBrowserSupport(),
+        {
+          runId,
+          runDir: workspaceDir,
+          stageId,
+          events: () => store.listStageEvents(runId, stageId),
+        },
+      ).catch(() => undefined);
 
       if (launchResult.type === "failed") {
+        const nextRepairAttempt = await this.scheduleRepairAfterVerifyFailure(
+          runId,
+          stageId,
+          meta.pipeline_dag,
+        );
+        if (nextRepairAttempt !== undefined) {
+          await store.updateRunStatus(runId, "running");
+          const repaired = await retryRun({
+            prepared: {
+              task,
+              loaded,
+              run: { runId, workspaceDir: store.getWorkspaceDir(runId) },
+              agent: this.options.agent,
+              store,
+              cwd: meta.project_root ?? this.projectRoot,
+              projectRoot: meta.project_root ?? this.projectRoot,
+              checkoutRoot: meta.checkout_root,
+              hitl: this.hitl,
+              operatorCatalog: this.options.operatorCatalog,
+              ...(this.options.browser !== undefined
+                ? { browser: this.options.browser }
+                : {}),
+            },
+            retryRoots: new Map([[stageId, nextRepairAttempt]]),
+            maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+            executionMode: this.executionMode,
+            stageProcessLauncher: launcher,
+            schedulingHalt: this.ensureSchedulingHalt(runId),
+          });
+          if (repaired.outcome === "failed") {
+            return { ok: false, reason: repaired.reason };
+          }
+          return { ok: true, verification: "failed_retrying" };
+        }
         await store.appendStageEvent(
           runId,
           stageId,
@@ -737,6 +2768,14 @@ export class RunManager {
           eventOptions,
         );
         await store.updateRunStatus(runId, "failed");
+        await teardownRunBrowsers(
+          this.options.browser ?? defaultStageBrowserSupport(),
+          {
+            runId,
+            runDir: workspaceDir,
+            events: (stageId) => store.listStageEvents(runId, stageId),
+          },
+        ).catch(() => undefined);
         return { ok: false, reason: launchResult.reason };
       }
 
@@ -747,11 +2786,6 @@ export class RunManager {
         // downstream resume may read envelope from store
       }
 
-      const meta = await store.readRunMeta(runId);
-      const taskYaml = await store.readTaskYaml(runId);
-      const task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
-      const loaded = await loadPipeline(meta.pipeline_id, { cwd });
-
       const rest = await resumeRun({
         prepared: {
           task,
@@ -759,18 +2793,26 @@ export class RunManager {
           run: { runId, workspaceDir: store.getWorkspaceDir(runId) },
           agent: this.options.agent,
           store,
-          cwd,
+          cwd: meta.project_root ?? this.projectRoot,
+          projectRoot: meta.project_root ?? this.projectRoot,
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
+          ...(this.options.browser !== undefined
+            ? { browser: this.options.browser }
+            : {}),
         },
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         resumeFromStageId: stageId,
         initialPrior,
         executionMode: this.executionMode,
         stageProcessLauncher: launcher,
+        schedulingHalt: this.ensureSchedulingHalt(runId),
       });
-      return rest.ok ? { ok: true } : { ok: false, reason: rest.reason };
+      if (rest.outcome === "failed") {
+        return { ok: false, reason: rest.reason };
+      }
+      return { ok: true };
     } catch (err) {
       const reason =
         err instanceof Error
@@ -787,6 +2829,14 @@ export class RunManager {
           eventOptions,
         );
         await store.updateRunStatus(runId, "failed");
+        await teardownRunBrowsers(
+          this.options.browser ?? defaultStageBrowserSupport(),
+          {
+            runId,
+            runDir: store.getWorkspaceDir(runId),
+            events: (stageId) => store.listStageEvents(runId, stageId),
+          },
+        ).catch(() => undefined);
       } catch {
         // ignore secondary failures
       }
@@ -794,6 +2844,26 @@ export class RunManager {
     } finally {
       this.attachedWaiting.delete(`${runId}\0${stageId}`);
     }
+  }
+
+  /**
+   * A resumed stage whose after-phase verification failed is repaired by the
+   * same policy the scheduler applies to a first-launch failure. Returns the
+   * freshly created attempt, or undefined when the failure is final.
+   */
+  private async scheduleRepairAfterVerifyFailure(
+    runId: string,
+    stageId: string,
+    dag: RunPipelineDagSnapshot | undefined,
+  ): Promise<number | undefined> {
+    const store = this.options.store;
+    const recovery = dag?.nodes.find((node) => node.id === stageId)?.recovery;
+    if (recovery?.mode !== "repair") return undefined;
+    const latest = await store.getLatestStageExecution(runId, stageId);
+    if (latest?.verification_outcome !== "failed") return undefined;
+    const attempts = await store.countStageAttempts(runId, stageId);
+    if (attempts >= recovery.max_attempts) return undefined;
+    return (await store.createStageExecution(runId, stageId)).attempt;
   }
 
   private async reconstructAndContinue(
@@ -812,6 +2882,7 @@ export class RunManager {
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
         cwd: this.cwd,
+        factoryCwd: this.projectRoot,
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         operatorCatalog: this.options.operatorCatalog,
       });
@@ -822,25 +2893,165 @@ export class RunManager {
 
   private async reserveAndStartPipeline(
     taskYaml: string,
-    pipelineId: string,
+    pipeline: string | InlinePipelineDefinition,
     taskLabel: string,
     cwd: string,
     checkoutOverride?: string,
+    skipGates?: boolean,
+    ciIdentity?: {
+      gitSha?: string;
+      ciPrUrl?: string;
+      ciJobUrl?: string;
+    },
+    projectRoot?: string,
+    taskPath?: string,
+    submission?: RunSubmission,
+    pinned?: { ref: string; resolvedSha: string },
+    callerId?: string | null,
+    skills?: SkillsPayload,
     dispatchKey?: string,
   ): Promise<StartRunResult> {
+    const persistence = pipelinePersistenceForStart(pipeline);
+    if (!persistence.ok) {
+      return {
+        ok: false,
+        reason: `Inline pipeline body is ${persistence.bytes} bytes; max is ${persistence.maxBytes}`,
+        status: 400,
+        code: INLINE_PIPELINE_TOO_LARGE,
+      };
+    }
+    const skillsCheck = validateSkillsPayload(skills, {
+      pipelineBytes: pipelineBodyBytes(persistence.fields),
+    });
+    if (!skillsCheck.ok) {
+      return {
+        ok: false,
+        reason: skillsCheck.reason,
+        status: 400,
+        code: skillsCheck.code,
+      };
+    }
+    const validatedSkills = skillsCheck.skills;
+    const hasSkills = Object.keys(validatedSkills).length > 0;
+    const resolvedProjectRoot = normalizeCatalogPath(
+      projectRoot ?? this.projectRoot,
+    );
+    let task: TaskFile;
     let checkoutKey: string | undefined;
+    let pathCheckoutRoot: string | undefined;
+    let binding: WorkspaceBinding;
+    let pipelineId: string;
+    let pipelineDag: ReturnType<typeof buildPipelineDagSnapshotFromLoaded>;
+    let pipelinePath: string | undefined;
+    let loadedPipeline!: LoadedPipeline;
+    let toolchainChecks: import("../preflight/toolchain.js").ToolchainCheck[] =
+      [];
     try {
-      const task = loadTaskFromYaml(taskYaml, taskLabel);
-      const checkoutRoot = await resolveAndValidateCheckout(
-        task,
-        checkoutOverride,
+      const loadedTask = loadTaskFromYamlOutcome(taskYaml, taskLabel);
+      if (!loadedTask.ok) {
+        const issue = loadedTask.issues[0];
+        return {
+          ok: false,
+          reason: issue?.message ?? "Invalid task",
+          status: 400,
+          ...(issue?.code !== undefined
+            ? { code: issue.code as StartFailureCode }
+            : {}),
+        };
+      }
+      task = loadedTask.value;
+      const bindingOutcome = resolveWorkspaceBinding(task, { checkoutOverride });
+      if (!bindingOutcome.ok) {
+        const issue = bindingOutcome.issues[0];
+        return {
+          ok: false,
+          reason: issue?.message ?? "Invalid workspace binding",
+          status: 400,
+          ...(issue?.code !== undefined
+            ? { code: issue.code as StartFailureCode }
+            : {}),
+        };
+      }
+      binding = bindingOutcome.value;
+      if (binding.kind === "checkout") {
+        pathCheckoutRoot = await resolveAndValidateCheckout(
+          task,
+          checkoutOverride,
+          cwd,
+        );
+        checkoutKey =
+          pathCheckoutRoot !== undefined
+            ? await toCheckoutLeaseKey(pathCheckoutRoot)
+            : undefined;
+      }
+
+      const loadResult = await loadPipelineValidated(pipeline, {
         cwd,
-      );
-      checkoutKey =
-        checkoutRoot !== undefined
-          ? await toCheckoutLeaseKey(checkoutRoot)
+        projectRoot: resolvedProjectRoot,
+        validateStages: true,
+      });
+      if (!loadResult.ok) {
+        throw new PipelineValidationError(
+          buildValidationResult("pipeline", loadResult.findings, false),
+        );
+      }
+      loadedPipeline = loadResult.loaded;
+      const pairing = checkTaskEntryInput(task, loadResult.loaded, {
+        cwd,
+        taskPath,
+      });
+      if (pairing.some((finding) => finding.severity === "error")) {
+        throw new PipelineValidationError(
+          buildValidationResult("pipeline", pairing, false),
+        );
+      }
+      pipelineId = loadResult.loaded.pipeline.id;
+      pipelineDag = buildPipelineDagSnapshotFromLoaded(loadResult.loaded);
+      pipelinePath =
+        typeof pipeline === "string"
+          ? normalizeCatalogPath(loadResult.loaded.pipelinePath)
           : undefined;
+      try {
+        const pipelineAgent = asAgentBackendId(loadResult.loaded.pipeline.agent);
+        assertClaudeNotRoot({ backendId: pipelineAgent });
+        for (const stage of loadResult.loaded.stages) {
+          assertClaudeNotRoot({
+            backendId: asAgentBackendId(stage.agent) ?? pipelineAgent,
+          });
+        }
+      } catch (err) {
+        if (err instanceof ClaudeRootError) {
+          return { ok: false, reason: err.message, status: 400, code: err.code };
+        }
+        throw err;
+      }
+
+      const preflight = await runPipelinePreflight(loadResult.loaded, {
+        projectRoot: resolvedProjectRoot,
+        forStart: true,
+      });
+      if (!preflight.ok) {
+        const code =
+          (preflightFailureCode(preflight, { forStart: true }) as StartFailureCode) ??
+          "missing_tool";
+        return {
+          ok: false,
+          reason: `Pipeline preflight failed: ${code}`,
+          status: 400,
+          code,
+        };
+      }
+      toolchainChecks = preflight.toolchain.checks;
     } catch (err) {
+      if (err instanceof PipelineValidationError) throw err;
+      if (err instanceof PipelinePreflightError) {
+        return {
+          ok: false,
+          reason: err.message,
+          status: 400,
+          code: err.code as StartFailureCode,
+        };
+      }
       return {
         ok: false,
         reason: err instanceof Error ? err.message : String(err),
@@ -848,31 +3059,205 @@ export class RunManager {
       };
     }
 
-    const reserved = this.tryReserve(checkoutKey);
-    if (!reserved.ok) return reserved.failure;
+    const diskGate = await this.checkDiskFloorAdmission();
+    if (diskGate !== undefined) return diskGate;
 
+    const admitted = this.tryAdmitOrEnqueue(
+      checkoutKey,
+      resolvedProjectRoot,
+      callerId,
+    );
+    if (admitted.action === "reject") return admitted.failure;
+
+    if (admitted.action === "enqueue") {
+      const runId = newRunId();
+      const gitIdentity = resolveEffectiveGitIdentity(
+        process.env,
+        task.git_identity,
+      );
+      const createdAt = new Date().toISOString();
+      const auth = getRequestAuth();
+      const surface = auth?.surface ?? "cli";
+      const secretNames = loadedPipeline.stages.flatMap((s) =>
+        (s.secrets ?? []).map((d) => d.name),
+      );
+      const namedSecrets = collectDeclaredSecretValues(secretNames).filter(
+        (s) => shouldRegisterValue(s.value),
+      );
+      if (namedSecrets.length > 0) {
+        registerNamedSecrets(namedSecrets);
+      }
+      const runManifest = buildInitialRunManifest({
+        runId,
+        createdAt,
+        callerId: callerId ?? null,
+        surface,
+        binding: bindingFromFields({}),
+        pipelineSource: persistence.fields.pipelineSource,
+        pipelinePath,
+        pipelineBody: persistence.fields.pipelineBody ?? null,
+        taskYaml,
+        taskPath: taskPath
+          ? normalizeCatalogPath(path.resolve(cwd, taskPath))
+          : undefined,
+        skills: hasSkills ? validatedSkills : undefined,
+        stages: loadedPipeline.stages,
+        toolchain: toolchainChecks,
+        namedSecrets,
+      });
+      const created = await this.options.store.createRun({
+        dispatchKey,
+        submission,
+        runId,
+        pipelineId,
+        taskYaml,
+        taskId: task.id,
+        pipelineDag,
+        pipelinePath,
+        taskPath: taskPath
+          ? normalizeCatalogPath(path.resolve(cwd, taskPath))
+          : undefined,
+        projectRoot: resolvedProjectRoot,
+        gitSha: ciIdentity?.gitSha,
+        ciPrUrl: ciIdentity?.ciPrUrl,
+        ciJobUrl: ciIdentity?.ciJobUrl,
+        gitAuthorName: gitIdentity.name,
+        gitAuthorEmail: gitIdentity.email,
+        status: "queued",
+        pipelineSource: persistence.fields.pipelineSource,
+        ...(persistence.fields.pipelineBody !== undefined
+          ? { pipelineBody: persistence.fields.pipelineBody }
+          : {}),
+        ...(callerId !== undefined && callerId !== null
+          ? { callerId }
+          : {}),
+        runManifest,
+        skipGates,
+      });
+      if (created.created === false) {
+        const existing = await this.options.store.readRunMeta(created.runId);
+        return { ok: true, runId: created.runId, done: Promise.resolve({ ok: existing.status === "succeeded", outcome: existing.status === "succeeded" ? "succeeded" : "failed", runId: created.runId, runDir: created.workspaceDir, reason: "Recovered existing dispatch; execution was not restarted" }) };
+      }
+      if (hasSkills) {
+        await materializeRunSkills(created.workspaceDir, validatedSkills);
+      }
+      const meta = await this.options.store.readRunMeta(created.runId);
+      const queuePosition = this.admissionQueue.enqueue(resolvedProjectRoot, {
+        runId: created.runId,
+        createdAt: meta.created_at,
+        callerId: callerId ?? meta.caller_id ?? null,
+      });
+      this.pendingQueuedStarts.set(created.runId, {
+        taskYaml,
+        pipeline,
+        taskLabel,
+        cwd,
+        projectRoot: resolvedProjectRoot,
+        checkoutOverride,
+        skipGates,
+        ciIdentity,
+        taskPath,
+        submission,
+        pinned,
+        pathCheckoutRoot,
+        binding,
+        checkoutKey,
+        callerId,
+        ...(hasSkills ? { skills: validatedSkills } : {}),
+      });
+      const done = this.ensureQueuedDone(created.runId);
+      return {
+        ok: true,
+        runId: created.runId,
+        done,
+        queued: true,
+        queuePosition,
+        ...(admitted.reason === "caller_quota"
+          ? { queuedCode: "busy_caller_quota" as const }
+          : {}),
+      };
+    }
+
+    const runId = newRunId();
+    let rollback: () => Promise<void> = async () => {};
     try {
+      const { materialized, rollback: linkRollback } =
+        await materializeWorkspaceBinding({
+          runId,
+          task,
+          binding,
+          checkoutRoot: pathCheckoutRoot,
+          pinned,
+        });
+      rollback = linkRollback;
+
+      const schedulingHalt = this.ensureSchedulingHalt(materialized.runId);
       const started = await startPipeline({
         dispatchKey,
+        submission,
+        ...(this.options.browser !== undefined
+          ? { browser: this.options.browser }
+          : {}),
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
-        pipeline: pipelineId,
+        taskPath,
+        pipeline,
         cwd,
+        projectRoot: resolvedProjectRoot,
         checkoutOverride,
+        runId: materialized.runId,
+        checkoutRoot: materialized.checkoutRoot,
+        repository: materialized.repository,
+        ref: materialized.ref,
+        resolvedSha: materialized.resolvedSha,
+        runBranch: materialized.runBranch,
+        gitSha: ciIdentity?.gitSha,
+        ciPrUrl: ciIdentity?.ciPrUrl,
+        ciJobUrl: ciIdentity?.ciJobUrl,
         hitl: this.hitl,
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
         operatorCatalog: this.options.operatorCatalog,
+        skipGates,
+        schedulingHalt,
+        callerId,
+        ...(hasSkills ? { skills: validatedSkills } : {}),
       });
-      if (started.created === false) this.clearReservation(reserved.provisionalId);
-      else this.track(reserved.provisionalId, started.runId, started.done);
+      if (started.created === false) this.clearReservation(admitted.provisionalId);
+      else this.track(admitted.provisionalId, started.runId, started.done);
       return { ok: true, runId: started.runId, done: started.done };
     } catch (err) {
-      this.clearReservation(reserved.provisionalId);
-      if (err instanceof PipelineValidationError) {
+      await rollback().catch(() => undefined);
+      this.clearReservation(admitted.provisionalId);
+      if (err instanceof InlinePipelineTooLargeError) {
+        return {
+          ok: false,
+          reason: err.message,
+          status: 400,
+          code: err.code,
+        };
+      }
+      if (err instanceof PipelinePreflightError) {
+        return {
+          ok: false,
+          reason: err.message,
+          status: 400,
+          code: err.code as StartFailureCode,
+        };
+      }
+      if (err instanceof PipelineValidationError || err instanceof RunSubmissionExistsError) {
         throw err;
+      }
+      if (err instanceof StartLinkError) {
+        return {
+          ok: false,
+          reason: err.message,
+          status: err.status,
+          code: err.code,
+          ...(err.stderr !== undefined ? { stderr: err.stderr } : {}),
+        };
       }
       return {
         ok: false,
@@ -887,33 +3272,116 @@ export class RunManager {
     extras?: {
       conflictingRunId?: string;
       conflictingCheckout?: string;
+      scope?: "global" | "project" | "caller";
+      project_root?: string;
+      caller_id?: string;
+      activeCount?: number;
+      maxConcurrent?: number;
     },
   ): Extract<StartRunResult, { ok: false }> {
     const activeRunIds = this.getActiveRunIds();
+    const scope = extras?.scope ?? (code === "busy_caller_quota" ? "caller" : "global");
+    const activeCount = extras?.activeCount ?? this.active.size;
+    const maxConcurrent = extras?.maxConcurrent ?? this.maxConcurrent;
     const reason =
-      code === "busy_capacity"
-        ? `Capacity full: ${this.active.size}/${this.maxConcurrent} active runs`
-        : `Checkout in use by run ${extras?.conflictingRunId ?? "unknown"}`;
+      code === "busy_caller_quota"
+        ? `Caller quota full: ${activeCount}/${maxConcurrent} active runs for caller ${extras?.caller_id ?? "unknown"}`
+        : code === "busy_capacity"
+          ? scope === "project"
+            ? `Project capacity full: ${activeCount}/${maxConcurrent} active runs for ${extras?.project_root ?? "project"}`
+            : this.active.size >= this.maxConcurrent &&
+                this.admissionQueue.size >= this.maxQueued &&
+                this.maxQueued > 0
+              ? `Admission queue full: ${this.admissionQueue.size}/${this.maxQueued} queued runs`
+              : `Capacity full: ${this.active.size}/${this.maxConcurrent} active runs`
+          : `Checkout in use by run ${extras?.conflictingRunId ?? "unknown"}`;
     return {
       ok: false,
       reason,
       status: 409,
       code,
-      activeCount: this.active.size,
-      maxConcurrent: this.maxConcurrent,
+      activeCount,
+      maxConcurrent,
       activeRunIds,
-      ...extras,
+      scope,
+      ...(extras?.project_root !== undefined
+        ? { project_root: extras.project_root }
+        : {}),
+      ...(extras?.caller_id !== undefined ? { caller_id: extras.caller_id } : {}),
+      ...(extras?.conflictingRunId !== undefined
+        ? { conflictingRunId: extras.conflictingRunId }
+        : {}),
+      ...(extras?.conflictingCheckout !== undefined
+        ? { conflictingCheckout: extras.conflictingCheckout }
+        : {}),
     };
   }
 
-  private tryReserve(
-    checkoutKey: string | undefined,
-  ):
-    | { ok: true; provisionalId: string }
-    | { ok: false; failure: Extract<StartRunResult, { ok: false }> } {
-    if (this.active.size >= this.maxConcurrent) {
-      return { ok: false, failure: this.busyFailure("busy_capacity") };
+  private insufficientDiskFailure(
+    freeBytes: number,
+    minFreeBytes: number,
+  ): Extract<StartRunResult, { ok: false }> {
+    return {
+      ok: false,
+      reason: `Insufficient free disk: ${freeBytes} bytes free, floor ${minFreeBytes} bytes`,
+      status: 409,
+      code: "insufficient_disk",
+      freeBytes,
+      minFreeBytes,
+    };
+  }
+
+  private async checkDiskFloorAdmission(): Promise<
+    Extract<StartRunResult, { ok: false }> | undefined
+  > {
+    try {
+      const readFree =
+        this.options.freeSpaceReader ?? readFilesystemSize;
+      const size = await readFree(globalStageflowHome());
+      const minFreeBytes = resolveMinFreeDiskFloor(
+        process.env.STAGEFLOW_MIN_FREE_DISK_BYTES,
+        size.totalBytes,
+      );
+      if (size.freeBytes < minFreeBytes) {
+        return this.insufficientDiskFailure(size.freeBytes, minFreeBytes);
+      }
+      return undefined;
+    } catch (err) {
+      // Default floor is always active via resolveMinFreeDiskFloor — fail closed.
+      return {
+        ok: false,
+        reason: `Disk free-space check failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        status: 503,
+        code: "disk_check_failed",
+      };
     }
+  }
+
+  private async isProjectRootAvailable(projectRoot: string): Promise<boolean> {
+    const provider = this.options.knownWritableProjectRoots;
+    if (provider !== undefined) {
+      const roots = [...(await provider())].map((r) => normalizeCatalogPath(r));
+      const normalized = normalizeCatalogPath(projectRoot);
+      return roots.includes(normalized);
+    }
+    try {
+      await access(projectRoot, constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private tryAdmitOrEnqueue(
+    checkoutKey: string | undefined,
+    projectRoot: string = this.projectRoot,
+    callerId?: string | null,
+  ):
+    | { action: "reserve"; provisionalId: string }
+    | { action: "enqueue"; reason: "capacity" | "caller_quota" }
+    | { action: "reject"; failure: Extract<StartRunResult, { ok: false }> } {
     if (checkoutKey !== undefined) {
       const holder = this.checkoutLeases.get(checkoutKey);
       if (holder !== undefined) {
@@ -921,7 +3389,7 @@ export class RunManager {
           ? undefined
           : holder;
         return {
-          ok: false,
+          action: "reject",
           failure: this.busyFailure("busy_checkout", {
             conflictingRunId,
             conflictingCheckout: checkoutKey,
@@ -930,16 +3398,437 @@ export class RunManager {
       }
     }
 
-    const provisionalId = randomUUID();
-    this.provisionalIds.add(provisionalId);
-    this.active.set(provisionalId, {
-      checkoutKey,
-      generation: ++this.trackingGeneration,
-    });
-    if (checkoutKey !== undefined) {
-      this.checkoutLeases.set(checkoutKey, provisionalId);
+    const normalizedRoot = normalizeCatalogPath(projectRoot);
+    if (this.maxConcurrentPerProject !== undefined) {
+      const projectActive = this.countActiveForProject(normalizedRoot);
+      if (projectActive >= this.maxConcurrentPerProject) {
+        return {
+          action: "reject",
+          failure: this.busyFailure("busy_capacity", {
+            scope: "project",
+            project_root: normalizedRoot,
+            activeCount: projectActive,
+            maxConcurrent: this.maxConcurrentPerProject,
+          }),
+        };
+      }
     }
-    return { ok: true, provisionalId };
+
+    if (this.active.size < this.maxConcurrent) {
+      const quota = this.callerQuotaLimit(callerId);
+      if (
+        quota !== undefined &&
+        callerId !== undefined &&
+        callerId !== null &&
+        this.countActiveForCaller(callerId) >= quota
+      ) {
+        if (this.admissionQueue.size < this.maxQueued) {
+          return { action: "enqueue", reason: "caller_quota" };
+        }
+        return {
+          action: "reject",
+          failure: this.busyFailure("busy_caller_quota", {
+            scope: "caller",
+            caller_id: callerId,
+            activeCount: this.countActiveForCaller(callerId),
+            maxConcurrent: quota,
+          }),
+        };
+      }
+
+      const provisionalId = randomUUID();
+      this.provisionalIds.add(provisionalId);
+      this.active.set(provisionalId, {
+        checkoutKey,
+        projectRoot: normalizedRoot,
+        callerId: callerId ?? null,
+        generation: ++this.trackingGeneration,
+      });
+      if (checkoutKey !== undefined) {
+        this.checkoutLeases.set(checkoutKey, provisionalId);
+      }
+      return { action: "reserve", provisionalId };
+    }
+
+    if (this.admissionQueue.size < this.maxQueued) {
+      return { action: "enqueue", reason: "capacity" };
+    }
+
+    return {
+      action: "reject",
+      failure: this.busyFailure("busy_capacity", { scope: "global" }),
+    };
+  }
+
+  private tryReserve(
+    checkoutKey: string | undefined,
+    projectRoot: string = this.projectRoot,
+    callerId?: string | null,
+  ):
+    | { ok: true; provisionalId: string }
+    | { ok: false; failure: Extract<StartRunResult, { ok: false }> } {
+    const admitted = this.tryAdmitOrEnqueue(checkoutKey, projectRoot, callerId);
+    if (admitted.action === "reserve") {
+      return { ok: true, provisionalId: admitted.provisionalId };
+    }
+    if (admitted.action === "enqueue") {
+      if (admitted.reason === "caller_quota") {
+        const quota = this.callerQuotaLimit(callerId) ?? 0;
+        return {
+          ok: false,
+          failure: this.busyFailure("busy_caller_quota", {
+            scope: "caller",
+            caller_id: callerId ?? undefined,
+            activeCount:
+              callerId !== undefined && callerId !== null
+                ? this.countActiveForCaller(callerId)
+                : 0,
+            maxConcurrent: quota,
+          }),
+        };
+      }
+      return { ok: false, failure: this.busyFailure("busy_capacity") };
+    }
+    return { ok: false, failure: admitted.failure };
+  }
+
+  private ensureQueuedDone(runId: string): Promise<PipelineRunResult> {
+    const existing = this.queuedDone.get(runId);
+    if (existing !== undefined) return existing.promise;
+    let resolve!: (result: PipelineRunResult) => void;
+    const promise = new Promise<PipelineRunResult>((res) => {
+      resolve = res;
+    });
+    this.queuedDone.set(runId, { promise, resolve });
+    return promise;
+  }
+
+  private resolveQueuedDone(runId: string, result: PipelineRunResult): void {
+    const deferred = this.queuedDone.get(runId);
+    if (deferred === undefined) return;
+    this.queuedDone.delete(runId);
+    deferred.resolve(result);
+  }
+
+  private attachQueuedDone(
+    runId: string,
+    done: Promise<PipelineRunResult>,
+  ): void {
+    void done.then(
+      (result) => this.resolveQueuedDone(runId, result),
+      (err) =>
+        this.resolveQueuedDone(runId, {
+          ok: false,
+          outcome: "failed",
+          runDir: this.options.store.getWorkspaceDir(runId),
+          runId,
+          reason: err instanceof Error ? err.message : String(err),
+        }),
+    );
+  }
+
+  private async drainAdmissionQueue(): Promise<void> {
+    if (!this.acceptingWork) return;
+    if (this.admissionDrainInFlight) return;
+    this.admissionDrainInFlight = true;
+    try {
+      const blockedRoots = new Set<string>();
+      const blockedCallers = new Set<string>();
+      while (this.acceptingWork && this.active.size < this.maxConcurrent) {
+        const next = this.admissionQueue.dequeueNext(blockedRoots, blockedCallers);
+        if (next === undefined) break;
+        const outcome = await this.startDequeuedAdmission(next, blockedCallers);
+        if (outcome === "checkout_busy") {
+          this.admissionQueue.requeueFront(next.projectRoot, next.entry);
+          blockedRoots.add(next.projectRoot);
+          continue;
+        }
+        if (outcome === "project_capacity_busy") {
+          blockedRoots.add(next.projectRoot);
+          continue;
+        }
+        if (outcome === "caller_quota_busy") {
+          continue;
+        }
+        if (outcome === "capacity_busy") {
+          break;
+        }
+      }
+    } finally {
+      this.admissionDrainInFlight = false;
+    }
+  }
+
+  private async startDequeuedAdmission(
+    next: {
+      projectRoot: string;
+      entry: AdmissionQueueEntry;
+    },
+    blockedCallers: Set<string>,
+  ): Promise<
+    | "started"
+    | "checkout_busy"
+    | "project_capacity_busy"
+    | "caller_quota_busy"
+    | "capacity_busy"
+    | "cancelled"
+  > {
+    if (!this.acceptingWork) {
+      this.admissionQueue.requeueFront(next.projectRoot, next.entry);
+      return "capacity_busy";
+    }
+    const { runId } = next.entry;
+    let meta;
+    try {
+      meta = await this.options.store.readRunMeta(runId);
+    } catch {
+      this.pendingQueuedStarts.delete(runId);
+      return "cancelled";
+    }
+    if (meta.status !== "queued") {
+      this.pendingQueuedStarts.delete(runId);
+      return "cancelled";
+    }
+
+    if (!(await this.isProjectRootAvailable(next.projectRoot))) {
+      await this.cancelRun(runId, PROJECT_ROOT_UNAVAILABLE_REASON);
+      return "cancelled";
+    }
+
+    const diskGate = await this.checkDiskFloorAdmission();
+    if (diskGate !== undefined) {
+      await this.cancelRun(runId, INSUFFICIENT_DISK_CANCEL_REASON);
+      return "cancelled";
+    }
+
+    const pending = this.pendingQueuedStarts.get(runId);
+    let taskYaml: string;
+    let task: TaskFile;
+    let binding: WorkspaceBinding;
+    let pathCheckoutRoot: string | undefined;
+    let checkoutKey: string | undefined;
+    let pipeline: string | InlinePipelineDefinition;
+    let cwd: string;
+    let projectRoot: string;
+    let checkoutOverride: string | undefined;
+    let skipGates: boolean | undefined;
+    let ciIdentity: PendingQueuedStart["ciIdentity"];
+    let taskPath: string | undefined;
+    let submission: RunSubmission | undefined;
+    let pinned: PendingQueuedStart["pinned"];
+    let callerId: string | null | undefined =
+      pending?.callerId ?? meta.caller_id ?? null;
+    let skills: SkillsPayload | undefined = pending?.skills;
+
+    if (
+      callerId !== undefined &&
+      callerId !== null &&
+      blockedCallers.has(callerId.toLowerCase())
+    ) {
+      next.entry.callerId = next.entry.callerId ?? callerId;
+      this.admissionQueue.requeueFront(next.projectRoot, next.entry);
+      return "caller_quota_busy";
+    }
+
+    try {
+      if (pending !== undefined) {
+        taskYaml = pending.taskYaml;
+        binding = pending.binding;
+        pathCheckoutRoot = pending.pathCheckoutRoot;
+        checkoutKey = pending.checkoutKey;
+        pipeline = pending.pipeline;
+        cwd = pending.cwd;
+        projectRoot = pending.projectRoot;
+        checkoutOverride = pending.checkoutOverride;
+        skipGates = pending.skipGates;
+        ciIdentity = pending.ciIdentity;
+        taskPath = pending.taskPath;
+        submission = pending.submission;
+        pinned = pending.pinned;
+        callerId = pending.callerId ?? meta.caller_id ?? null;
+        const loadedTask = loadTaskFromYamlOutcome(taskYaml, pending.taskLabel);
+        if (!loadedTask.ok) {
+          await this.cancelRun(
+            runId,
+            loadedTask.issues[0]?.message ?? "Invalid task",
+          );
+          return "cancelled";
+        }
+        task = loadedTask.value;
+      } else {
+        taskYaml = await this.options.store.readTaskYaml(runId);
+        const loadedTask = loadTaskFromYamlOutcome(
+          taskYaml,
+          `run ${runId} task`,
+        );
+        if (!loadedTask.ok) {
+          await this.cancelRun(
+            runId,
+            loadedTask.issues[0]?.message ?? "Invalid task",
+          );
+          return "cancelled";
+        }
+        task = loadedTask.value;
+        const bindingOutcome = resolveWorkspaceBinding(task, {});
+        if (!bindingOutcome.ok) {
+          await this.cancelRun(
+            runId,
+            bindingOutcome.issues[0]?.message ?? "Invalid workspace binding",
+          );
+          return "cancelled";
+        }
+        binding = bindingOutcome.value;
+        cwd = meta.project_root ?? this.cwd;
+        projectRoot = normalizeCatalogPath(meta.project_root ?? this.projectRoot);
+        if (binding.kind === "checkout") {
+          pathCheckoutRoot = await resolveAndValidateCheckout(task, undefined, cwd);
+          checkoutKey =
+            pathCheckoutRoot !== undefined
+              ? await toCheckoutLeaseKey(pathCheckoutRoot)
+              : undefined;
+        }
+        if (meta.pipeline_source === "inline") {
+          const body = await this.options.store.readPipelineBody(runId);
+          if (body === null || body === "") {
+            await this.cancelRun(runId, "pipeline_body unavailable after restart");
+            return "cancelled";
+          }
+          try {
+            pipeline = JSON.parse(body) as InlinePipelineDefinition;
+          } catch {
+            await this.cancelRun(runId, "pipeline_body invalid after restart");
+            return "cancelled";
+          }
+        } else if (meta.pipeline_path) {
+          pipeline = normalizeCatalogPath(meta.pipeline_path);
+        } else {
+          await this.cancelRun(runId, "pipeline_path unavailable after restart");
+          return "cancelled";
+        }
+        taskPath = meta.task_path;
+        skipGates = meta.skip_gates;
+        ciIdentity = {
+          gitSha: meta.git_sha,
+          ciPrUrl: meta.ci_pr_url,
+          ciJobUrl: meta.ci_job_url,
+        };
+      }
+    } catch (err) {
+      await this.cancelRun(
+        runId,
+        err instanceof Error ? err.message : String(err),
+      );
+      return "cancelled";
+    }
+
+    const reserved = this.tryReserve(checkoutKey, projectRoot, callerId);
+    if (!reserved.ok) {
+      if (reserved.failure.code === "busy_checkout") {
+        return "checkout_busy";
+      }
+      this.admissionQueue.requeueFront(next.projectRoot, next.entry);
+      if (
+        reserved.failure.code === "busy_capacity" &&
+        reserved.failure.scope === "project"
+      ) {
+        return "project_capacity_busy";
+      }
+      if (reserved.failure.code === "busy_caller_quota") {
+        if (callerId !== undefined && callerId !== null) {
+          blockedCallers.add(callerId.toLowerCase());
+          next.entry.callerId = next.entry.callerId ?? callerId;
+        }
+        return "caller_quota_busy";
+      }
+      return "capacity_busy";
+    }
+
+    let rollback: () => Promise<void> = async () => {};
+    try {
+      if (this.options.onBeforeQueuedMaterialize !== undefined) {
+        await this.options.onBeforeQueuedMaterialize(runId);
+      }
+      const { materialized, rollback: linkRollback } =
+        await materializeWorkspaceBinding({
+          runId,
+          task,
+          binding,
+          checkoutRoot: pathCheckoutRoot,
+          pinned,
+        });
+      rollback = linkRollback;
+
+      let metaAfterMaterialize;
+      try {
+        metaAfterMaterialize = await this.options.store.readRunMeta(runId);
+      } catch {
+        await rollback().catch(() => undefined);
+        this.clearReservation(reserved.provisionalId);
+        this.pendingQueuedStarts.delete(runId);
+        return "cancelled";
+      }
+      if (metaAfterMaterialize.status !== "queued") {
+        await rollback().catch(() => undefined);
+        this.clearReservation(reserved.provisionalId);
+        this.pendingQueuedStarts.delete(runId);
+        this.schedulingHalts.delete(runId);
+        return "cancelled";
+      }
+
+      const schedulingHalt = this.ensureSchedulingHalt(runId);
+      const started = await startPipeline({
+        submission,
+        ...(this.options.browser !== undefined
+          ? { browser: this.options.browser }
+          : {}),
+        agent: this.options.agent,
+        store: this.options.store,
+        taskYaml,
+        taskPath,
+        pipeline,
+        cwd,
+        projectRoot,
+        checkoutOverride,
+        runId: materialized.runId,
+        reuseExistingRun: true,
+        checkoutRoot: materialized.checkoutRoot,
+        repository: materialized.repository,
+        ref: materialized.ref,
+        resolvedSha: materialized.resolvedSha,
+        runBranch: materialized.runBranch,
+        gitSha: ciIdentity?.gitSha,
+        ciPrUrl: ciIdentity?.ciPrUrl,
+        ciJobUrl: ciIdentity?.ciJobUrl,
+        hitl: this.hitl,
+        maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+        executionMode: this.executionMode,
+        stageProcessLauncher: this.stageProcessLauncher,
+        operatorCatalog: this.options.operatorCatalog,
+        skipGates,
+        schedulingHalt,
+        ...(skills !== undefined ? { skills } : {}),
+      });
+      this.pendingQueuedStarts.delete(runId);
+      this.track(reserved.provisionalId, started.runId, started.done);
+      this.attachQueuedDone(started.runId, started.done);
+      return "started";
+    } catch (err) {
+      await rollback().catch(() => undefined);
+      this.clearReservation(reserved.provisionalId);
+      this.pendingQueuedStarts.delete(runId);
+      this.schedulingHalts.delete(runId);
+      if (err instanceof QueuedRunActivationAborted) {
+        return "cancelled";
+      }
+      const reason =
+        err instanceof StartLinkError
+          ? err.code
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      await this.cancelRun(runId, reason);
+      return "cancelled";
+    }
   }
 
   private clearReservation(provisionalId: string): void {
@@ -957,13 +3846,85 @@ export class RunManager {
     this.active.delete(provisionalId);
     this.provisionalIds.delete(provisionalId);
     const generation = ++this.trackingGeneration;
-    this.active.set(runId, { ...entry, generation });
+    this.active.set(runId, { ...entry, generation, done });
     if (entry.checkoutKey !== undefined) {
       this.checkoutLeases.set(entry.checkoutKey, runId);
     }
     void done.finally(() => {
       this.untrackIfGeneration(runId, generation);
     });
+  }
+
+  private async tryResumeStalledSchedule(runId: string): Promise<boolean> {
+    const detail = await this.options.store.readRun(runId);
+    const meta = await this.options.store.readRunMeta(runId);
+    if (
+      detail.stages.some(
+        (stage) =>
+          stage.status === "running" || stage.status === "waiting_for_input",
+      )
+    ) {
+      return false;
+    }
+    if (deriveStatusFromStages(detail.stages, meta.pipeline_dag) !== "running") {
+      return false;
+    }
+    const dag = meta.pipeline_dag;
+    if (dag === undefined) return false;
+
+    const hydrated = await hydrateScheduleFromStore(
+      this.options.store,
+      runId,
+      dag,
+      this.executionMode,
+    );
+    if (!hydratedScheduleHasRunnableWork(hydrated)) return false;
+
+    const tracked = await this.ensureResumeTracked(runId);
+    if (!tracked.ok) {
+      log
+        .child({ run_id: runId })
+        .error(
+          "resume.track_failed",
+          `resumeStalledSchedules: ${tracked.reason}`,
+        );
+      return false;
+    }
+
+    try {
+      const runProjectRoot = meta.project_root ?? this.projectRoot;
+      const { meta: loadedMeta, task, loaded, workspaceDir } =
+        await loadRunContext(this.options.store, runId, this.cwd);
+      const promise = runPipelineDag({
+        prepared: {
+          task,
+          loaded,
+          run: { runId, workspaceDir },
+          agent: this.options.agent,
+          store: this.options.store,
+          cwd: runProjectRoot,
+          projectRoot: runProjectRoot,
+          checkoutRoot: loadedMeta.checkout_root,
+          hitl: this.hitl,
+          operatorCatalog: this.options.operatorCatalog,
+          ...(this.options.browser !== undefined
+            ? { browser: this.options.browser }
+            : {}),
+        },
+        maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+        executionMode: this.executionMode,
+        stageProcessLauncher: this.stageProcessLauncher,
+        initialSchedule: hydrated,
+        schedulingHalt: this.ensureSchedulingHalt(runId),
+      }).finally(() => {
+        void syncRunStatusFromStages(this.options.store, runId).catch(() => {});
+      });
+      this.registerResumeUntrack(runId, promise);
+      return true;
+    } catch (err) {
+      this.removeActiveEntry(runId, false);
+      throw err;
+    }
   }
 
   /**
@@ -979,19 +3940,31 @@ export class RunManager {
 
     let checkoutKey: string | undefined;
     let durableCheckoutRoot: string | undefined;
+    let resumeCallerId: string | null = null;
+    let resumeProjectRoot: string | undefined;
     try {
       const meta = await this.options.store.readRunMeta(runId);
-      const checkoutRoot = meta.checkout_root;
-      if (checkoutRoot !== undefined && checkoutRoot !== "") {
-        durableCheckoutRoot = checkoutRoot;
-        checkoutKey = await toCheckoutLeaseKey(checkoutRoot);
+      resumeCallerId = meta.caller_id ?? null;
+      resumeProjectRoot = meta.project_root
+        ? normalizeCatalogPath(meta.project_root)
+        : undefined;
+      const kind = derivedBindingKindFromMeta(meta);
+      if (kind === "checkout") {
+        const checkoutRoot = meta.checkout_root;
+        if (checkoutRoot !== undefined && checkoutRoot !== "") {
+          durableCheckoutRoot = checkoutRoot;
+          checkoutKey = await toCheckoutLeaseKey(checkoutRoot);
+        }
       }
     } catch (err) {
-      console.error(
-        `invariant: trackResume failed reading checkout_root for run ${runId}; continuing without checkout lease: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+      log
+        .child({ run_id: runId })
+        .error(
+          "resume.checkout_root_failed",
+          `invariant: trackResume failed reading checkout_root for run ${runId}; continuing without checkout lease: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
     }
 
     const conflictHolder = this.findActiveCheckoutConflict(
@@ -1012,6 +3985,8 @@ export class RunManager {
     this.active.set(runId, {
       checkoutKey,
       durableCheckoutRoot,
+      projectRoot: resumeProjectRoot,
+      callerId: resumeCallerId,
       generation: ++this.trackingGeneration,
     });
     return { ok: true };
@@ -1024,7 +3999,7 @@ export class RunManager {
     const entry = this.active.get(runId);
     if (entry === undefined) return;
     const generation = ++this.trackingGeneration;
-    this.active.set(runId, { ...entry, generation });
+    this.active.set(runId, { ...entry, generation, done });
     void done.finally(() => {
       this.untrackIfGeneration(runId, generation);
     });
@@ -1082,7 +4057,7 @@ export class RunManager {
     } catch {
       // ignore secondary failures — still fail-closed in memory
     }
-    console.error(reason);
+    log.child({ run_id: runId }).error("attach.quarantined", reason);
   }
 
   private untrackIfGeneration(runId: string, generation: number): void {
@@ -1095,6 +4070,7 @@ export class RunManager {
     const entry = this.active.get(id);
     if (!entry) return;
     this.active.delete(id);
+    this.schedulingHalts.delete(id);
     if (isProvisional) {
       this.provisionalIds.delete(id);
     }
@@ -1104,5 +4080,20 @@ export class RunManager {
     ) {
       this.checkoutLeases.delete(entry.checkoutKey);
     }
+    if (!isProvisional) {
+      void this.drainAdmissionQueue();
+    }
+  }
+
+  private ensureSchedulingHalt(runId: string): SchedulingHalt {
+    let halt = this.schedulingHalts.get(runId);
+    if (halt === undefined) {
+      halt = {
+        halted: !this.acceptingWork,
+        hostShutdown: !this.acceptingWork,
+      };
+      this.schedulingHalts.set(runId, halt);
+    }
+    return halt;
   }
 }

@@ -1,0 +1,32 @@
+id: route-loop-unknown-key
+stages:
+  - id: plan
+    entry: true
+    route:
+      - to: implement
+    system_prompt: Create the plan.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: implement
+    route:
+      - type: loop
+        to: plan
+        max_replays: 2
+        on_max_replays: require_continue
+        replay_session: resume
+        label: extra
+    system_prompt: Implement the approved plan.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

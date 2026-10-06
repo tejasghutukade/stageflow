@@ -25,15 +25,23 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
+import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  resetGlobalStageflowHomeForTests,
+} from "../src/project/globalHome.js";
 import {
   createRunStore,
   DISK_STORE_REJECTED,
 } from "../src/runstore/createStore.js";
-import { storeRootFor } from "../src/runstore/paths.js";
+import {
+  NESTED_GLOBAL_STORE_CONFLICT,
+  resolveStoreRoot,
+  storeRootFor,
+} from "../src/runstore/paths.js";
 import { SqliteRunStore } from "../src/runstore/sqlite/SqliteRunStore.js";
 import { plantDiskEraRun } from "./helpers/plantDiskEraRun.js";
 
@@ -215,5 +223,216 @@ describe("store root and one-shot migrate", () => {
     expect(() => createRunStore({ rootDir: root, kind: "disk" })).toThrow(
       DISK_STORE_REJECTED,
     );
+  });
+});
+
+describe("global store flatten", () => {
+  const prevStageflowHome = process.env.STAGEFLOW_HOME;
+
+  afterEach(() => {
+    if (prevStageflowHome === undefined) {
+      delete process.env.STAGEFLOW_HOME;
+    } else {
+      process.env.STAGEFLOW_HOME = prevStageflowHome;
+    }
+    resetGlobalStageflowHomeForTests();
+  });
+
+  async function withGlobalHome(
+    fn: (home: string) => Promise<void>,
+  ): Promise<void> {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-global-flat-"));
+    process.env.STAGEFLOW_HOME = home;
+    resetGlobalStageflowHomeForTests();
+    try {
+      await fn(home);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }
+
+  function nestedGlobalStore(home: string): string {
+    return path.join(home, ".stageflow");
+  }
+
+  async function seedNestedPopulatedStore(home: string, runId = "nested-run"): Promise<void> {
+    const nested = nestedGlobalStore(home);
+    await mkdir(path.join(nested, "runs", runId), { recursive: true });
+    await mkdir(path.join(nested, "a2a-artifacts"), { recursive: true });
+    await writeFile(path.join(nested, "state.db-wal"), "wal-marker\n");
+    const nestedStore = new SqliteRunStore(nested);
+    await nestedStore.ready();
+    await nestedStore.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    nestedStore.connection.close();
+  }
+
+  it("moves nested store inventory to the durable root and removes nested dir", async () => {
+    await withGlobalHome(async (home) => {
+      await mkdir(path.join(home, "agent"), { recursive: true });
+      await writeFile(path.join(home, "settings.json"), "global-settings\n");
+      await seedNestedPopulatedStore(home);
+
+      createRunStore({ rootDir: home });
+
+      expect(existsSync(path.join(home, "state.db"))).toBe(true);
+      expect(existsSync(path.join(home, "state.db-wal"))).toBe(true);
+      expect(existsSync(path.join(home, "runs"))).toBe(true);
+      expect(existsSync(path.join(home, "a2a-artifacts"))).toBe(true);
+      expect(existsSync(nestedGlobalStore(home))).toBe(false);
+      expect(await readFile(path.join(home, "settings.json"), "utf8")).toBe(
+        "global-settings\n",
+      );
+      expect(existsSync(path.join(home, "agent"))).toBe(true);
+    });
+  });
+
+  it("does not move anything on a second open", async () => {
+    await withGlobalHome(async (home) => {
+      await seedNestedPopulatedStore(home);
+      createRunStore({ rootDir: home });
+      const flatDbMtime = (await import("node:fs/promises")).stat(
+        path.join(home, "state.db"),
+      );
+      createRunStore({ rootDir: home });
+      const after = await flatDbMtime;
+      const again = await (await import("node:fs/promises")).stat(
+        path.join(home, "state.db"),
+      );
+      expect(again.mtimeMs).toBe(after.mtimeMs);
+      expect(existsSync(nestedGlobalStore(home))).toBe(false);
+    });
+  });
+
+  it("is a no-op when nested store directory is missing", async () => {
+    await withGlobalHome(async (home) => {
+      createRunStore({ rootDir: home });
+      expect(existsSync(path.join(home, "state.db"))).toBe(true);
+      expect(existsSync(nestedGlobalStore(home))).toBe(false);
+    });
+  });
+
+  it("keeps nested state.db when flat state.db already exists", async () => {
+    await withGlobalHome(async (home) => {
+      const nested = nestedGlobalStore(home);
+      await mkdir(nested, { recursive: true });
+      const flatStore = new SqliteRunStore(home);
+      await flatStore.ready();
+      await flatStore.createRun({
+        pipelineId: "flat",
+        taskYaml: "id: flat\ngoal: g\n",
+        taskId: "flat",
+      });
+      flatStore.connection.close();
+
+      const nestedStore = new SqliteRunStore(nested);
+      await nestedStore.ready();
+      await nestedStore.createRun({
+        pipelineId: "nested",
+        taskYaml: "id: nested\ngoal: g\n",
+        taskId: "nested",
+      });
+      nestedStore.connection.close();
+
+      const store = createRunStore({ rootDir: home });
+      if (store instanceof SqliteRunStore) {
+        await store.ready();
+      }
+      const runs = await store.listRuns();
+      expect(runs.some((r) => r.task_id === "flat")).toBe(true);
+      expect(runs.some((r) => r.task_id === "nested")).toBe(false);
+      expect(existsSync(path.join(nested, "state.db"))).toBe(true);
+    });
+  });
+
+  it("moves nested runs/ when flat state.db exists but flat runs/ is absent", async () => {
+    await withGlobalHome(async (home) => {
+      const nested = nestedGlobalStore(home);
+      await mkdir(path.join(nested, "runs", "only-nested"), { recursive: true });
+      await writeFile(
+        path.join(nested, "runs", "only-nested", "meta.json"),
+        "{}",
+      );
+      const flatStore = new SqliteRunStore(home);
+      await flatStore.ready();
+      flatStore.connection.close();
+
+      createRunStore({ rootDir: home });
+
+      expect(existsSync(path.join(home, "runs", "only-nested"))).toBe(true);
+      expect(existsSync(path.join(nested, "runs"))).toBe(false);
+    });
+  });
+
+  it("does not move project .stageflow settings", async () => {
+    const project = await mkdtemp(path.join(tmpdir(), "sf-proj-flat-"));
+    try {
+      const projectStore = path.join(project, ".stageflow");
+      await mkdir(projectStore, { recursive: true });
+      await writeFile(
+        path.join(projectStore, "settings.json"),
+        "project-settings\n",
+      );
+
+      createRunStore({ rootDir: project });
+
+      expect(
+        await readFile(path.join(projectStore, "settings.json"), "utf8"),
+      ).toBe("project-settings\n");
+      expect(resolveStoreRoot(project)).toBe(projectStore);
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("creates state.db at the durable root without a nested .stageflow store dir", async () => {
+    await withGlobalHome(async (home) => {
+      createRunStore({ rootDir: home });
+      expect(existsSync(path.join(home, "state.db"))).toBe(true);
+      expect(existsSync(nestedGlobalStore(home))).toBe(false);
+      expect(resolveStoreRoot(home)).toBe(home);
+    });
+  });
+
+  it("fails when flat state.db lacks runs and nested state.db has runs", async () => {
+    await withGlobalHome(async (home) => {
+      const nested = nestedGlobalStore(home);
+      await mkdir(nested, { recursive: true });
+      const emptyDb = new Database(path.join(home, "state.db"));
+      emptyDb.close();
+      const nestedStore = new SqliteRunStore(nested);
+      await nestedStore.ready();
+      nestedStore.connection.close();
+
+      expect(() => createRunStore({ rootDir: home })).toThrow(
+        NESTED_GLOBAL_STORE_CONFLICT,
+      );
+      expect(existsSync(path.join(home, "state.db"))).toBe(true);
+      expect(existsSync(path.join(nested, "state.db"))).toBe(true);
+    });
+  });
+
+  it("finishes moving state.db sidecars before opening SQLite", async () => {
+    await withGlobalHome(async (home) => {
+      const nested = nestedGlobalStore(home);
+      await mkdir(nested, { recursive: true });
+      await writeFile(path.join(nested, "state.db-wal"), "wal-only\n");
+      const nestedStore = new SqliteRunStore(nested);
+      await nestedStore.ready();
+      nestedStore.connection.close();
+      const { renameSync } = await import("node:fs");
+      renameSync(path.join(nested, "state.db"), path.join(home, "state.db"));
+
+      const store = createRunStore({ rootDir: home });
+      if (store instanceof SqliteRunStore) {
+        await store.ready();
+      }
+      expect(existsSync(path.join(home, "state.db-wal"))).toBe(true);
+      expect(existsSync(path.join(nested, "state.db-wal"))).toBe(false);
+      expect(existsSync(path.join(nested, "state.db"))).toBe(false);
+    });
   });
 });

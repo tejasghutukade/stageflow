@@ -1,0 +1,5 @@
+id: stage-override
+model: test/pipeline-model
+stages:
+  - id: explicit
+    uses: ./explicit.yaml

@@ -1,0 +1,111 @@
+name: Stageflow run
+description: Run a Stageflow pipeline and optionally extract a handoff envelope
+inputs:
+  pipeline:
+    description: Path to pipeline YAML
+    required: true
+  task:
+    description: Path to task YAML
+    required: true
+  checkout:
+    description: Checkout path for sf run
+    required: false
+    default: ${{ github.workspace }}
+  extra-args:
+    description: Additional sf run arguments (e.g. --skip-gates --git-sha ...)
+    required: false
+    default: ""
+  detect-stage:
+    description: Stage id for fork skip detection in handoff extraction
+    required: false
+    default: ""
+  stage:
+    description: Stage id for handoff envelope extraction (when set, writes envelope.json)
+    required: false
+    default: ""
+  export-run:
+    description: Write run-export.json via sf export-run
+    required: false
+    default: "false"
+outputs:
+  run-id:
+    description: Run id from sf-run.json
+    value: ${{ steps.run.outputs.run-id }}
+  run-dir:
+    description: Run directory from sf-run.json
+    value: ${{ steps.run.outputs.run-dir }}
+  skipped:
+    description: "true when handoff JSON has skipped: true"
+    value: ${{ steps.envelope.outputs.skipped }}
+  envelope-path:
+    description: Path to envelope.json handoff output
+    value: ${{ steps.envelope.outputs.envelope-path }}
+  run-export-path:
+    description: Path to run-export.json when export-run is enabled
+    value: ${{ steps.export.outputs.run-export-path }}
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      run: |
+        set -e
+        WORKSPACE="${{ inputs.checkout }}"
+        SF_RUN_JSON="${WORKSPACE}/sf-run.json"
+        set +e
+        # shellcheck disable=SC2086
+        node dist/cli.js run \
+          --pipeline "${{ inputs.pipeline }}" \
+          --task "${{ inputs.task }}" \
+          --checkout "${WORKSPACE}" \
+          --json --include stages \
+          ${{ inputs.extra-args }} \
+          > "${SF_RUN_JSON}"
+        status=$?
+        set -e
+        cat "${SF_RUN_JSON}"
+        if [ "${status}" -ne 0 ]; then
+          exit "${status}"
+        fi
+        RUN_ID="$(jq -r '.runId // empty' "${SF_RUN_JSON}")"
+        RUN_DIR="$(jq -r '.runDir // empty' "${SF_RUN_JSON}")"
+        if [ -z "${RUN_ID}" ] || [ -z "${RUN_DIR}" ]; then
+          echo "error: sf-run.json missing runId or runDir" >&2
+          exit 1
+        fi
+        echo "run-id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
+        echo "run-dir=${RUN_DIR}" >> "${GITHUB_OUTPUT}"
+
+    - id: envelope
+      if: inputs.stage != ''
+      shell: bash
+      run: |
+        set -e
+        WORKSPACE="${{ inputs.checkout }}"
+        SF_RUN_JSON="${WORKSPACE}/sf-run.json"
+        ENVELOPE_JSON="${WORKSPACE}/envelope.json"
+        ARGS=(envelope get --from "${SF_RUN_JSON}" --stage "${{ inputs.stage }}" --format handoff --json)
+        if [ -n "${{ inputs.detect-stage }}" ]; then
+          ARGS+=(--detect-stage "${{ inputs.detect-stage }}")
+        fi
+        node dist/cli.js "${ARGS[@]}" > "${ENVELOPE_JSON}"
+        cat "${ENVELOPE_JSON}"
+        SKIPPED="$(jq -r '.skipped' "${ENVELOPE_JSON}")"
+        echo "skipped=${SKIPPED}" >> "${GITHUB_OUTPUT}"
+        echo "envelope-path=${ENVELOPE_JSON}" >> "${GITHUB_OUTPUT}"
+        if [ "${SKIPPED}" = "true" ]; then
+          echo "No diagram-relevant changes; skipping deliver and PR comment."
+        else
+          echo "diagram_count=$(jq '.diagrams | length' "${ENVELOPE_JSON}")" >> "${GITHUB_OUTPUT}"
+        fi
+
+    - id: export
+      if: inputs.export-run == 'true'
+      shell: bash
+      run: |
+        set -e
+        WORKSPACE="${{ inputs.checkout }}"
+        SF_RUN_JSON="${WORKSPACE}/sf-run.json"
+        EXPORT_JSON="${WORKSPACE}/run-export.json"
+        node dist/cli.js export-run --from "${SF_RUN_JSON}" --out "${EXPORT_JSON}"
+        echo "run-export-path=${EXPORT_JSON}" >> "${GITHUB_OUTPUT}"

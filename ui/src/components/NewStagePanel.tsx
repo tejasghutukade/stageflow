@@ -3,11 +3,23 @@ import {
   createStageWithDetails,
   fetchModels,
   type StageGateKind,
-  type ValidStageListing,
+  type CreatedStageListing,
 } from "../api";
 
+export type GateKindsMode = "all" | "none" | "allowlist";
+
+export function createStageGateKindsPayload(
+  mode: GateKindsMode,
+  selected: StageGateKind[],
+): { gate_kinds?: StageGateKind[] } {
+  if (mode === "all") return {};
+  if (mode === "none") return { gate_kinds: [] };
+  return { gate_kinds: selected };
+}
+
 const STAGE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
-const MODEL_OTHER = "__other__";
+export const MODEL_INHERIT = "__inherit__";
+export const MODEL_OTHER = "__other__";
 
 const GATE_KINDS: StageGateKind[] = [
   "free_text",
@@ -19,15 +31,18 @@ const GATE_KINDS: StageGateKind[] = [
 export type NewStagePanelProps = {
   isOpen: boolean;
   onClose: () => void;
-  onCreated: (stage: ValidStageListing) => void;
+  onCreated: (stage: CreatedStageListing) => void;
+  pipelineDirectory: string;
 };
 
 type FieldErrors = Partial<Record<"id" | "model" | "system_prompt", string>>;
 
-function validateFields(values: {
+export function validateFields(values: {
   id: string;
   model: string;
   system_prompt: string;
+  modelSelect?: string;
+  useDropdown?: boolean;
 }): FieldErrors {
   const errors: FieldErrors = {};
   const id = values.id.trim();
@@ -36,13 +51,35 @@ function validateFields(values: {
   } else if (id.length > 64 || !STAGE_ID_PATTERN.test(id)) {
     errors.id = "Id must be lowercase kebab-case.";
   }
-  if (!values.model.trim()) {
-    errors.model = "Model is required.";
+  if (
+    values.useDropdown &&
+    values.modelSelect === MODEL_OTHER &&
+    !values.model.trim()
+  ) {
+    errors.model = "Model is required when Other is selected.";
   }
   if (!values.system_prompt.trim()) {
     errors.system_prompt = "System prompt is required.";
   }
   return errors;
+}
+
+export function resolveCreateStageModel(options: {
+  useDropdown: boolean;
+  modelSelect: string;
+  customModel: string;
+  plainModel: string;
+}): string {
+  if (options.useDropdown) {
+    if (options.modelSelect === MODEL_INHERIT) {
+      return "";
+    }
+    if (options.modelSelect === MODEL_OTHER) {
+      return options.customModel.trim();
+    }
+    return options.modelSelect.trim();
+  }
+  return options.plainModel.trim();
 }
 
 function stageCreateBanner(status: number, serverError?: string): string {
@@ -57,13 +94,19 @@ function stageCreateBanner(status: number, serverError?: string): string {
 const emptyForm = () => ({
   id: "",
   system_prompt: "",
+  gateMode: "all" as GateKindsMode,
   gateKinds: [] as StageGateKind[],
-  modelSelect: "",
+  modelSelect: MODEL_INHERIT,
   customModel: "",
   plainModel: "",
 });
 
-export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps) {
+export function NewStagePanel({
+  isOpen,
+  onClose,
+  onCreated,
+  pipelineDirectory,
+}: NewStagePanelProps) {
   const [form, setForm] = useState(emptyForm);
   const [models, setModels] = useState<string[] | null>(null);
   const [useDropdown, setUseDropdown] = useState(false);
@@ -81,10 +124,6 @@ export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps
         if (listed.length > 0) {
           setModels(listed);
           setUseDropdown(true);
-          setForm((prev) => ({
-            ...prev,
-            modelSelect: prev.modelSelect || listed[0] || "",
-          }));
         } else {
           setModels([]);
           setUseDropdown(false);
@@ -110,13 +149,12 @@ export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps
   }, [isOpen, onClose]);
 
   function resolvedModel(): string {
-    if (useDropdown) {
-      if (form.modelSelect === MODEL_OTHER) {
-        return form.customModel.trim();
-      }
-      return form.modelSelect.trim();
-    }
-    return form.plainModel.trim();
+    return resolveCreateStageModel({
+      useDropdown,
+      modelSelect: form.modelSelect,
+      customModel: form.customModel,
+      plainModel: form.plainModel,
+    });
   }
 
   function toggleGateKind(kind: StageGateKind) {
@@ -135,15 +173,23 @@ export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps
       system_prompt: form.system_prompt,
       model,
     };
-    const errors = validateFields(payload);
+    const errors = validateFields({
+      ...payload,
+      useDropdown,
+      modelSelect: form.modelSelect,
+    });
     setFieldErrors(errors);
     setFormBanner(null);
     if (Object.keys(errors).length > 0) return;
 
     setSubmitting(true);
     const result = await createStageWithDetails({
-      ...payload,
-      ...(form.gateKinds.length > 0 ? { gate_kinds: form.gateKinds } : {}),
+      pipeline_directory: pipelineDirectory,
+      filename: `${form.id.trim()}.yaml`,
+      id: payload.id,
+      system_prompt: payload.system_prompt,
+      ...(model.length > 0 ? { model } : {}),
+      ...createStageGateKindsPayload(form.gateMode, form.gateKinds),
     });
     setSubmitting(false);
     if (result.ok) {
@@ -214,7 +260,11 @@ export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps
             />
             {fieldErrors.id ? (
               <p className="field-error">{fieldErrors.id}</p>
-            ) : null}
+            ) : (
+              <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
+                Writes <span className="mono">{pipelineDirectory}/&lt;id&gt;.yaml</span>.
+              </p>
+            )}
           </div>
 
           <div className="form-field">
@@ -229,6 +279,7 @@ export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps
                     setForm((prev) => ({ ...prev, modelSelect: e.target.value }))
                   }
                 >
+                  <option value={MODEL_INHERIT}>Inherit default</option>
                   {models.map((model) => (
                     <option key={model} value={model}>
                       {model}
@@ -264,7 +315,11 @@ export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps
             )}
             {fieldErrors.model ? (
               <p className="field-error">{fieldErrors.model}</p>
-            ) : null}
+            ) : (
+              <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
+                Optional. Inherits pipeline then global default when omitted.
+              </p>
+            )}
           </div>
 
           <div className="form-field">
@@ -284,24 +339,66 @@ export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps
           </div>
 
           <div className="form-field">
-            <span className="eyebrow">Gate kinds</span>
+            <span className="eyebrow">HITL</span>
             <p className="muted" style={{ fontSize: "var(--font-size-sm)", margin: "var(--spacing-1) 0 var(--spacing-3)" }}>
-              Optional. Declare which kinds of human input this stage may stop for.
+              All kinds keeps every ask kind available. No HITL unregisters ask_operator. Allowlist restricts kinds.
             </p>
             <div className="pick">
-              {GATE_KINDS.map((kind) => (
-                <label key={kind} className="pick__opt">
-                  <input
-                    type="checkbox"
-                    checked={form.gateKinds.includes(kind)}
-                    onChange={() => toggleGateKind(kind)}
-                  />
-                  <span>
-                    <strong className="mono">{kind}</strong>
-                  </span>
-                </label>
-              ))}
+              <label className="pick__opt">
+                <input
+                  type="radio"
+                  name="new-stage-hitl"
+                  checked={form.gateMode === "all"}
+                  onChange={() => setForm((prev) => ({ ...prev, gateMode: "all" }))}
+                />
+                <span>
+                  <strong>All kinds</strong>
+                  <span className="muted"> Compatible default. Every ask kind is available.</span>
+                </span>
+              </label>
+              <label className="pick__opt">
+                <input
+                  type="radio"
+                  name="new-stage-hitl"
+                  checked={form.gateMode === "none"}
+                  onChange={() => setForm((prev) => ({ ...prev, gateMode: "none" }))}
+                />
+                <span>
+                  <strong>No HITL</strong>
+                  <span className="muted"> Writes gate_kinds: []. The stage cannot ask the operator.</span>
+                </span>
+              </label>
+              <label className="pick__opt">
+                <input
+                  type="radio"
+                  name="new-stage-hitl"
+                  checked={form.gateMode === "allowlist"}
+                  onChange={() =>
+                    setForm((prev) => ({ ...prev, gateMode: "allowlist" }))
+                  }
+                />
+                <span>
+                  <strong>Allowlist</strong>
+                  <span className="muted"> Only the kinds you select.</span>
+                </span>
+              </label>
             </div>
+            {form.gateMode === "allowlist" ? (
+              <div className="pick" style={{ marginTop: "var(--spacing-3)" }}>
+                {GATE_KINDS.map((kind) => (
+                  <label key={kind} className="pick__opt">
+                    <input
+                      type="checkbox"
+                      checked={form.gateKinds.includes(kind)}
+                      onChange={() => toggleGateKind(kind)}
+                    />
+                    <span>
+                      <strong className="mono">{kind}</strong>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <div className="form-actions">

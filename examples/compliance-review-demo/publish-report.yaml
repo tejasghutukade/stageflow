@@ -1,0 +1,79 @@
+id: publish-report
+system_prompt: |
+  Read the evidence log at
+  examples/compliance-review-demo/data/evidence-log.json (checkout-relative,
+  use the Read tool) and the current run's payload.
+
+  Write a short markdown report via write_stage_artifact (for example
+  report.md) showing the timeline for this check_id + resource: every
+  recorded verdict with its timestamp, and — for any row with
+  reviewed = true — the reviewer. Make the human-in-the-loop review visible:
+  call out explicitly which rows were auto-approved (no flip) versus which
+  required a person's confirmation (a flip), since that distinction is the
+  whole point of this pipeline.
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  and artifacts pointing at the report. Your last tool call in this attempt
+  must be emit_stage_envelope. An empty final message is a stage failure.
+model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - bucket
+        - check_id
+        - scenario
+        - source
+        - block_public_acls
+        - ignore_public_acls
+        - block_public_policy
+        - restrict_public_buckets
+        - verdict
+        - resource
+        - failed_fields
+        - reviewed
+        - auto_approved
+        - reviewer
+        - control_id
+        - changed_files
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+        source:
+          type: string
+        block_public_acls:
+          type: boolean
+        ignore_public_acls:
+          type: boolean
+        block_public_policy:
+          type: boolean
+        restrict_public_buckets:
+          type: boolean
+        verdict:
+          type: string
+        resource:
+          type: string
+        failed_fields:
+          type: array
+          items:
+            type: string
+        reviewed:
+          type: boolean
+        auto_approved:
+          type: boolean
+        reviewer:
+          type: string
+        control_id:
+          type: string
+        changed_files:
+          type: array
+          items:
+            type: string
+  output:
+    schema:
+      type: object

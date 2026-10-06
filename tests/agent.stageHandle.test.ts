@@ -28,6 +28,7 @@ const successEnvelope = {
   status: "success" as const,
   summary: "done",
   artifacts: [] as string[],
+  payload: {},
 };
 
 describe("AgentPort stage handle (HITL wait/answer)", () => {

@@ -1,12 +1,14 @@
 # Copy this file to email.yaml in the Stageflow workspace, then set the secret
-# environment variables before you start the host. Use your provider's settings.
+# environment variable before you start the host. Use your provider's settings.
 # This first account shows Gmail with an app password. Your Google account must
-# permit IMAP and SMTP. Replace the address and set both environment variables.
+# permit IMAP and SMTP. Replace the address, set PERSONAL_EMAIL_PASSWORD,
+# and change enabled to true when ready.
 version: 1
 accounts:
-  - accountId: company-inbox
-    displayName: Company inbox
+  - accountId: personal-inbox
+    displayName: My personal email
     address: your-address@gmail.com
+    enabled: false
     imap:
       host: imap.gmail.com
       port: 993
@@ -14,7 +16,7 @@ accounts:
       tls: implicit
       auth:
         type: password
-        secretRef: env:COMPANY_IMAP_PASSWORD
+        secretRef: env:PERSONAL_EMAIL_PASSWORD
     smtp:
       host: smtp.gmail.com
       port: 587
@@ -22,34 +24,6 @@ accounts:
       tls: starttls
       auth:
         type: password
-        secretRef: env:COMPANY_SMTP_PASSWORD
-    folders: [INBOX]
-    sentCopyPolicy: provider-managed
-
-  # Generic provider example. Replace hosts, address, token, and expiry with the
-  # values your provider supplies. Password auth can replace OAuth if permitted.
-  - accountId: support-inbox
-    displayName: Support inbox
-    address: support@example.com
-    # Enable after you supply the token and update its expiry.
-    enabled: false
-    imap:
-      host: imap.example.net
-      port: 993
-      username: support@example.com
-      tls: implicit
-      auth:
-        type: oauth2
-        secretRef: env:SUPPORT_MAIL_TOKEN
-        expiresAt: '2027-01-01T00:00:00Z'
-    smtp:
-      host: smtp.example.net
-      port: 587
-      username: support@example.com
-      tls: starttls
-      auth:
-        type: oauth2
-        secretRef: env:SUPPORT_MAIL_TOKEN
-        expiresAt: '2027-01-01T00:00:00Z'
+        secretRef: env:PERSONAL_EMAIL_PASSWORD
     folders: [INBOX]
     sentCopyPolicy: provider-managed

@@ -1,6 +1,7 @@
 import type { StageRunResult } from "../agent/port.js";
 import type { RunStageOutcome } from "./stageRunner.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import type { DerivedBindingKind } from "./stageRoots.js";
 
 export const SF_STAGE_WORKER = "SF_STAGE_WORKER";
 
@@ -10,15 +11,28 @@ export const STAGE_WORKER_EXIT = {
   WAITING: 2,
 } as const;
 
+export const PROCESS_EXIT_FORCE_MS = 1_000;
+
+export function scheduleExitWithDrain(code: number): void {
+  process.exitCode = code;
+  const timer = setTimeout(() => {
+    process.exit(code);
+  }, PROCESS_EXIT_FORCE_MS);
+  timer.unref();
+}
+
 export type StageWorkerInput = {
   runId: string;
   stageId: string;
   rootDir: string;
-  mode?: "run" | "resume";
+  mode?: "run" | "resume" | "feedback_resume" | "new_session";
   resumeAnswer?: unknown;
   attempt?: number;
   sessionFilePath?: string;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
+  env?: Record<string, string>;
+  bindingKind?: DerivedBindingKind;
 };
 
 export type StageWorkerResult =

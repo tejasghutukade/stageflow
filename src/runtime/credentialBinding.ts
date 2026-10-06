@@ -1,18 +1,22 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { storeRootFor } from "../runstore/paths.js";
+import { ensureGlobalHome } from "../project/globalHome.js";
+import {
+  resolveProjectContext,
+  type ProjectContext,
+} from "../project/resolveProjectContext.js";
 import {
   parseCredentialSource,
-  readCredentialSourceFromFile,
-  writeCredentialSourceToFile,
+  readCredentialSourceFromContext,
+  writeCredentialSourceToContext,
   type CredentialSource,
 } from "./settingsFile.js";
 
 export {
   parseCredentialSource,
-  readCredentialSourceFromFile,
-  writeCredentialSourceToFile,
+  readCredentialSourceFromContext,
+  writeCredentialSourceToContext,
 };
 
 export type CredentialBinding = {
@@ -25,19 +29,23 @@ export type ResolveCredentialBindingOptions = {
   piHomeAuthPath?: string;
 };
 
-export function sfOwnedAgentDir(cwd: string): string {
-  return path.join(storeRootFor(cwd), "agent");
+export function sfOwnedAgentDir(): string {
+  return path.join(ensureGlobalHome(), "agent");
 }
 
-export function sfOwnedAuthPath(cwd: string): string {
-  return path.join(sfOwnedAgentDir(cwd), "auth.json");
+export function sfOwnedAuthPath(): string {
+  return path.join(sfOwnedAgentDir(), "auth.json");
 }
 
+export const PI_HOME_AUTH_PATH_ENV = "STAGEFLOW_PI_HOME_AUTH_PATH";
+
+/** A stage worker's HOME is an empty attempt dir, so the Host passes its own Pi auth path through the environment. */
 export function piHomeAuthPath(
   override?: string,
 ): string {
   return (
     override ??
+    (process.env[PI_HOME_AUTH_PATH_ENV] || undefined) ??
     path.join(os.homedir(), ".pi", "agent", "auth.json")
   );
 }
@@ -52,17 +60,9 @@ export function isUsableAuthFile(authPath: string): boolean {
   }
 }
 
-export function ensureSfOwnedAuthStore(cwd: string): string {
-  const storeRoot = storeRootFor(cwd);
-  mkdirSync(storeRoot, { recursive: true });
-  const agentDir = sfOwnedAgentDir(cwd);
-  mkdirSync(agentDir, { recursive: true });
-  try {
-    chmodSync(agentDir, 0o700);
-  } catch {
-    // best-effort on non-POSIX
-  }
-  const authPath = sfOwnedAuthPath(cwd);
+export function ensureSfOwnedAuthStore(): string {
+  ensureGlobalHome();
+  const authPath = sfOwnedAuthPath();
   if (!existsSync(authPath)) {
     writeFileSync(authPath, "{}\n", { encoding: "utf8", mode: 0o600 });
   }
@@ -75,17 +75,19 @@ export function ensureSfOwnedAuthStore(cwd: string): string {
 }
 
 export function resolveCredentialBinding(
-  cwd: string,
+  ctx: ProjectContext | string,
   options: ResolveCredentialBindingOptions = {},
 ): CredentialBinding {
+  const projectCtx =
+    typeof ctx === "string" ? resolveProjectContext(ctx) : ctx;
   const piHome = piHomeAuthPath(options.piHomeAuthPath);
-  const persisted = readCredentialSourceFromFile(cwd);
+  const persisted = readCredentialSourceFromContext(projectCtx);
 
   if (persisted !== undefined) {
     if (persisted === "sf_owned") {
       return {
         source: "sf_owned",
-        authPath: ensureSfOwnedAuthStore(cwd),
+        authPath: ensureSfOwnedAuthStore(),
         provisional: false,
       };
     }
@@ -106,7 +108,12 @@ export function resolveCredentialBinding(
 
   return {
     source: "sf_owned",
-    authPath: ensureSfOwnedAuthStore(cwd),
+    authPath: ensureSfOwnedAuthStore(),
     provisional: true,
   };
 }
+
+export {
+  readCredentialSourceFromFile,
+  writeCredentialSourceToFile,
+} from "./settingsFile.js";

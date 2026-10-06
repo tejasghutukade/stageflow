@@ -1,0 +1,29 @@
+id: compliance-review-demo
+stages:
+  - id: connect-account
+    uses: ./connect-account.yaml
+    entry: true
+    route:
+      - to: poll-bucket-config
+  - id: poll-bucket-config
+    uses: ./poll-bucket-config.yaml
+    route:
+      - to: run-compliance-check
+  - id: run-compliance-check
+    uses: ./run-compliance-check.yaml
+    route:
+      - to: review-verdict
+  - id: review-verdict
+    uses: ./review-verdict.yaml
+    route:
+      - to: map-to-control
+  - id: map-to-control
+    uses: ./map-to-control.yaml
+    route:
+      - to: store-evidence
+  - id: store-evidence
+    uses: ./store-evidence.yaml
+    route:
+      - to: publish-report
+  - id: publish-report
+    uses: ./publish-report.yaml

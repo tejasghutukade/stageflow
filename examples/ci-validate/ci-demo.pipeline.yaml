@@ -1,0 +1,4 @@
+id: ci-demo
+stages:
+  - id: check
+    uses: ./check.yaml

@@ -10,8 +10,10 @@ import {
 import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
+import { waitKey } from "../src/runtime/stageHitl.js";
 import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
+import { pipelinePath, catalogLocators, SAMPLE_TASK } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -25,6 +27,7 @@ const okEnvelope = (
   status: "success",
   summary,
   artifacts,
+  payload: {},
 });
 
 const promptA: AskOperatorPrompt = {
@@ -134,8 +137,8 @@ async function startMultiWaitRun(
 ) {
   const manager = new RunManager({ agent, store, cwd: fixtures });
   const started = await manager.startRun({
-    pipeline: "parallel-hitl-multi-wait",
-    task: path.join(fixtures, "tasks", "sample.yaml"),
+    pipeline: pipelinePath("parallel-hitl-multi-wait"),
+    task: SAMPLE_TASK,
   });
   expect(started.ok).toBe(true);
   if (!started.ok) throw new Error("start failed");
@@ -153,6 +156,14 @@ async function waitForDualWait(
     return a?.status === "waiting_for_input" && b?.status === "waiting_for_input";
   });
 }
+
+describe("HITL waitKey instance identity", () => {
+  it("clone instance ids get distinct waitKeys", () => {
+    expect(waitKey("run-1", "author-diagrams~1")).not.toBe(
+      waitKey("run-1", "author-diagrams~2"),
+    );
+  });
+});
 
 describe("runtime HITL multi-wait (T3 U3)", () => {
   it("AE1: simultaneous sibling waits with distinct pending prompts", async () => {
@@ -258,7 +269,7 @@ describe("runtime HITL multi-wait (T3 U3)", () => {
     const store = createRunStore({ rootDir: root });
     const taskYaml = "id: sample\ngoal: multi-wait\n";
     const run = await store.createRun({
-      pipelineId: "parallel-hitl-multi-wait",
+      ...catalogLocators("parallel-hitl-multi-wait"),
       taskYaml,
       taskId: "sample",
     });

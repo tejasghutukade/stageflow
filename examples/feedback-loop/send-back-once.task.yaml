@@ -1,0 +1,6 @@
+id: feedback-loop-send-back-once
+goal: Draft a short brief, send it back once from review, then continue and submit
+context: Verification scenario — exactly one send_back to implement, then continue
+constraints: |
+  Docs only. On the first review success, emit feedback_loop send_back target implement.
+  On the second review success, emit feedback_loop continue. Do not send_back twice.

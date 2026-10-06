@@ -1,7 +1,0 @@
-id: parallel-hitl-fork
-stages:
-  - id: clarify
-  - id: design-doc
-    needs: clarify
-  - id: implementation-plan
-    needs: clarify

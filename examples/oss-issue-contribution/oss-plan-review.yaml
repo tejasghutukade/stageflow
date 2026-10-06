@@ -1,0 +1,109 @@
+id: oss-plan-review
+system_prompt: |
+  Produce three or four concrete, non-overlapping review assignments derived from
+  the verified diff. Do not edit files, commit, push,
+  or open a pull request.
+
+  Reading upstream evidence. The user prompt contains a line
+  "Factory run workspace: <absolute path>". Prior artifacts arrive in the prior
+  envelope's artifacts[] as run-relative paths; read each one at
+  <Factory run workspace>/<artifact path>. Treat verification.md as the
+  authoritative record of what was actually validated and
+  implementation-plan.md plus implementation-report.md as the authoritative
+  record of what was changed and why. Prose summaries are secondary.
+
+  Definition of done, checked before you emit:
+  - You read verification.md and implementation-report.md at their resolved
+    absolute paths, plus the current diff in the checkout.
+  - review-plan.md is written and listed in the emitted artifacts.
+  - review_count equals the number of review assignments (three or four).
+  - Every assignment names concrete repo paths taken from the verified diff and
+    questions that a reviewer can answer from those paths.
+
+  1. Read the task, then verification.md, implementation-plan.md, and
+     implementation-report.md via the recipe above. Print the current diff
+     (git diff and git diff --stat) in the checkout and use it as the source of
+     truth for which files are under review.
+  2. Create three assignments in this deterministic order:
+     correctness-regression, test-quality-edge-cases, and
+     upstream-scope-maintainability. Add a fourth security-concurrency
+     assignment only when the issue or diff materially involves trust
+     boundaries, concurrency, lifecycle, cleanup, or shared state.
+  3. Each assignment must include review_id, objective, paths, questions, and
+     constraints. paths must be repo-relative paths that appear in the verified
+     diff (or files that directly consume the changed symbols). questions must
+     be specific to those paths. Generic review themes, empty paths, empty
+     questions, or placeholder entries such as ["see diff"] or "n/a" are a
+     contract violation. Scopes must not overlap.
+  4. Write review-plan.md explaining the chosen coverage, listing each
+     review_id with its files and questions, and stating why the scopes are
+     independent. Preserve the inherited plan, implementation, and verification
+     artifact paths so reviewers can resolve them.
+  5. Emit exactly one success envelope with payload matching the schema and the
+     complete success envelope with a non-empty summary, artifacts containing
+     review-plan.md plus all inherited evidence, and that assignment payload.
+
+  emitting fewer than three or more than four assignments. Writing review-plan.md is
+  never a substitute for deriving real assignments from the diff.
+
+  Payload discipline. Every string field must carry real content; n/a, none,
+  tbd, and pending are contract violations. Every array field must hold
+  substantive entries, never placeholders.
+
+  Summary authoring. The emitted summary describes outcomes and state for the
+  downstream review stages: what was verified, which files the diff touches, and
+  which review scopes were assigned. Do not restate this stage's own
+  prohibitions or scope limits in the summary. Downstream stages receive this
+  summary verbatim and will mistake stage-local prohibitions for their own
+  instructions.
+
+  Do not put fork_choice on the envelope.
+model: omniroute/auto
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - result
+        - commands
+        - changed_files
+        - remaining_risks
+      properties:
+        result:
+          type: string
+          enum:
+            - pass
+        commands:
+          type: array
+          items:
+            type: string
+        changed_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        remaining_risks:
+          type: array
+          items:
+            type: string
+  output:
+    schema:
+      type: object
+      required:
+        - review_count
+        - strategy
+      properties:
+        review_count:
+          type: integer
+          minimum: 3
+          maximum: 4
+        strategy:
+          type: string
+verify:
+  - id: review-plan
+    type: artifact
+    path: review-plan.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

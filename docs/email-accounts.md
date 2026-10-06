@@ -211,7 +211,7 @@ The same loopback Host and Origin rules apply. Example create body:
   "folder": "INBOX",
   "from": "customer@example.com",
   "subjectContains": "review request",
-  "pipeline": "review-email",
+  "pipeline": "pipelines/review-email.pipeline.yaml",
   "task": {
     "id": "email-review",
     "goal": "Review the request and write a report. Ask the operator before taking external action.",
@@ -222,13 +222,16 @@ The same loopback Host and Origin rules apply. Example create body:
 }
 ```
 
-The account, configured receive folder, catalog pipeline, and task template must be valid. The pipeline value is a catalog name. Task fields are `id`, `goal`, optional `context`, `constraints`, and `checkout`. PATCH replaces the whole task object when supplied. Each successful edit increments the rule version. Concurrent edits with the same starting version return `EMAIL_OPERATION_CONFLICT`; read the rule before you submit another edit.
+The account, configured receive folder, catalog pipeline, and task template must be valid. The pipeline value is a project-relative `.pipeline.yaml` or `.pipeline.yml` path. Parent-directory segments are not allowed. Task fields are `id`, `goal`, optional `context`, `constraints`, and `checkout`. PATCH replaces the whole task object when supplied. Each successful edit increments the rule version. Concurrent edits with the same starting version return `EMAIL_OPERATION_CONFLICT`; read the rule before you submit another edit.
 
 Sender matching compares the complete address without case distinctions. Subject matching searches for the supplied text without case distinctions. All supplied conditions must match. Two matching rules can each create one run. A focused agent action uses a normal pipeline with one stage, for example:
 
 ```yaml
 id: review-email
-stages: [review-request]
+stages:
+  - id: review-request
+    uses: ../stages/review-request.yaml
+    entry: true
 ```
 
 New rules, enabled rules, and changed rules apply only to events detected strictly after the saved `activeAfter` time. Rule evaluation is stored once, including events with no match. Repeated delivery does not apply a later rule version to an old event. Historical replay requires an explicit request.

@@ -1,0 +1,12 @@
+id: fork-choice-smoke
+stages:
+  - id: decide
+    entry: true
+    route:
+      - to: path-a
+      - to: path-b
+    uses: ../stages/decide.yaml
+  - id: path-a
+    uses: ../stages/path-a.yaml
+  - id: path-b
+    uses: ../stages/path-b.yaml

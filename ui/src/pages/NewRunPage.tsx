@@ -4,9 +4,16 @@ import {
   fetchTasks,
   startRunWithDetails,
   type PipelineListing,
+  type StageGateKind,
   type StartRunResult,
   type TaskListing,
 } from "../api";
+import { stageMayAsk } from "../catalogJoin";
+
+export function previewGateMeta(gateKinds?: StageGateKind[]): string {
+  if (!Array.isArray(gateKinds) || gateKinds.length === 0) return "no gate";
+  return "will ask you";
+}
 import { useRunCatalog } from "../catalog/useRunCatalog";
 import { waitingRunsAmongView } from "../catalog/views";
 import { PipelineTrack, type TrackStage } from "../components/PipelineTrack";
@@ -14,11 +21,11 @@ import { loadProviderAuthReadiness } from "../providers/readiness";
 
 export function NewRunPage({
   onStarted,
-  initialPipelineId,
+  initialPipelinePath,
   initialTaskPath,
 }: {
   onStarted: (runId: string) => void;
-  initialPipelineId?: string;
+  initialPipelinePath?: string;
   initialTaskPath?: string;
 }) {
   const [tasks, setTasks] = useState<TaskListing[]>([]);
@@ -46,26 +53,26 @@ export function NewRunPage({
             ? initialTaskPath
             : (t.tasks[0]?.path ?? "");
         const preferredPipeline =
-          initialPipelineId &&
-          p.pipelines.some((item) => item.id === initialPipelineId)
-            ? initialPipelineId
-            : (p.pipelines[0]?.id ?? "");
+          initialPipelinePath &&
+          p.pipelines.some((item) => item.path === initialPipelinePath)
+            ? initialPipelinePath
+            : (p.pipelines[0]?.path ?? "");
         setTask(preferredTask);
         setPipeline(preferredPipeline);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     })();
-  }, [initialPipelineId, initialTaskPath]);
+  }, [initialPipelinePath, initialTaskPath]);
 
-  const selectedPipeline = pipelines.find((p) => p.id === pipeline) ?? null;
+  const selectedPipeline = pipelines.find((p) => p.path === pipeline) ?? null;
   const previewStages: TrackStage[] = useMemo(() => {
     if (!selectedPipeline) return [];
     return selectedPipeline.stages.map((s) => ({
       id: s.id,
       label: s.id,
-      status: ((s.gate_kinds?.length ?? 0) > 0 ? "waiting" : "pending") as TrackStage["status"],
-      meta: (s.gate_kinds?.length ?? 0) > 0 ? "will ask you" : "no gate",
+      status: (stageMayAsk(s.gate_kinds) ? "waiting" : "pending") as TrackStage["status"],
+      meta: previewGateMeta(s.gate_kinds),
     }));
   }, [selectedPipeline]);
 
@@ -118,7 +125,7 @@ export function NewRunPage({
       <div className="page-head">
         <div>
           <h1>Start a run</h1>
-          <p>A run is a task plus a pipeline. Nothing else is decided here.</p>
+          <p>A run is a task path plus a pipeline path. Nothing else is decided here.</p>
         </div>
       </div>
 
@@ -168,6 +175,7 @@ export function NewRunPage({
                   <span>
                     <strong>{t.id}</strong>
                     <span>{t.goal}</span>
+                    <span className="mono muted" style={{ display: "block", fontSize: "var(--font-size-xs)" }}>{t.path}</span>
                   </span>
                 </label>
               ))}
@@ -179,11 +187,12 @@ export function NewRunPage({
             <div className="card__head"><h2>Pipeline</h2></div>
             <div className="pick">
               {pipelines.map(p => (
-                <label key={p.id} className="pick__opt">
-                  <input type="radio" name="pipeline" checked={pipeline === p.id} onChange={() => setPipeline(p.id)} />
+                <label key={p.path} className="pick__opt">
+                  <input type="radio" name="pipeline" checked={pipeline === p.path} onChange={() => setPipeline(p.path)} />
                   <span>
                     <strong>{p.id}</strong>
                     <span>{p.stages.length} stages</span>
+                    <span className="mono muted" style={{ display: "block", fontSize: "var(--font-size-xs)" }}>{p.path}</span>
                   </span>
                 </label>
               ))}

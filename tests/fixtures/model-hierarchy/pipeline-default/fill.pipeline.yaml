@@ -1,0 +1,5 @@
+id: pipeline-default-fill
+model: test/pipeline-model
+stages:
+  - id: inherits
+    uses: ./inherits.yaml

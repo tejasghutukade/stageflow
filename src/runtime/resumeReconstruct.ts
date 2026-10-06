@@ -1,9 +1,15 @@
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { fakeHitlResumePath } from "../agent/fakeAgent.js";
-import { loadPipeline } from "../config/loadPipeline.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
+import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
+import {
+  reloadPipelineForRun,
+  reloadTaskForRun,
+} from "./reloadRunCatalog.js";
 import type { RunStore, RunMeta } from "../runstore/port.js";
+import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import { WAIT_WITHOUT_WORKER_DISPATCH } from "./answerResume.js";
@@ -29,6 +35,7 @@ export type PreparedResumeContext = {
   executionMode: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   cwd: string;
+  factoryCwd?: string;
   maxActiveStagesPerRun: number;
   operatorCatalog?: OperatorCatalog;
 };
@@ -47,9 +54,20 @@ export async function loadRunContext(
   cwd: string,
 ): Promise<LoadedRunContext> {
   const meta = await store.readRunMeta(runId);
-  const taskYaml = await store.readTaskYaml(runId);
-  const task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
-  const loaded = await loadPipeline(meta.pipeline_id, { cwd });
+  const reloadMeta: RunMeta = {
+    ...meta,
+    project_root: meta.project_root ?? normalizeCatalogPath(cwd),
+  };
+  const loaded = await reloadPipelineForRun(reloadMeta);
+  let taskYaml: string;
+  let task: TaskFile;
+  if (meta.task_path) {
+    task = await reloadTaskForRun(meta);
+    taskYaml = await readFile(normalizeCatalogPath(meta.task_path), "utf8");
+  } else {
+    taskYaml = await store.readTaskYaml(runId);
+    task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
+  }
   const workspaceDir = store.getWorkspaceDir(runId);
   return { meta, taskYaml, task, loaded, workspaceDir };
 }
@@ -65,7 +83,9 @@ export async function reconstructAndContinue(
     const attemptOpt = attemptCtx.eventOptions();
 
     const { meta, task, loaded } = await loadRunContext(store, runId, cwd);
-    const stageIndex = loaded.stages.findIndex((s) => s.id === stageId);
+    const factoryCwd = meta.project_root ?? ctx.factoryCwd ?? cwd;
+    const definitionId = definitionIdForInstance(meta.pipeline_dag, stageId);
+    const stageIndex = loaded.stages.findIndex((s) => s.id === definitionId);
     if (stageIndex < 0) {
       const reason = `Stage ${stageId} not in pipeline ${meta.pipeline_id}`;
       await store.appendStageEvent(
@@ -81,6 +101,7 @@ export async function reconstructAndContinue(
       return { ok: false, reason };
     }
     const stage = loaded.stages[stageIndex]!;
+    const dag = meta.pipeline_dag ?? loaded.dag;
 
     const workspaceDir = store.getWorkspaceDir(runId);
     const checkoutRoot = meta.checkout_root;
@@ -91,7 +112,7 @@ export async function reconstructAndContinue(
         checkoutRoot,
         attemptCtx,
       ),
-      cwd,
+      factoryCwd,
     );
 
     const fakeResume = fakeHitlResumePath(roots, stageId);
@@ -116,11 +137,12 @@ export async function reconstructAndContinue(
       store,
       runId,
       stage,
+      stageId,
       task,
-      dag: loaded.dag,
+      dag,
       checkoutRoot,
       workspaceDir,
-      factoryCwd: cwd,
+      factoryCwd,
       attemptCtx,
       operatorCatalog: ctx.operatorCatalog,
       onActivity: (event) => {
@@ -148,15 +170,16 @@ export async function reconstructAndContinue(
       store,
       runId,
       stage,
+      stageId,
       task,
-      dag: loaded.dag,
+      dag,
       checkoutRoot,
       workspaceDir,
       hitl: ctx.hitl,
       skipStarted: true,
       existingHandle: opened.handle,
       attemptCtx,
-      factoryCwd: cwd,
+      factoryCwd,
       operatorCatalog: ctx.operatorCatalog,
     });
 
@@ -180,7 +203,8 @@ export async function reconstructAndContinue(
         run: { runId, workspaceDir },
         agent,
         store,
-        cwd,
+        cwd: factoryCwd,
+        projectRoot: factoryCwd,
         checkoutRoot,
         hitl: ctx.hitl,
         operatorCatalog: ctx.operatorCatalog,
@@ -191,9 +215,10 @@ export async function reconstructAndContinue(
       executionMode: ctx.executionMode,
       stageProcessLauncher: ctx.stageProcessLauncher,
     });
-    return rest.ok
-      ? { ok: true }
-      : { ok: false, reason: rest.reason };
+    if (rest.outcome === "failed") {
+      return { ok: false, reason: rest.reason };
+    }
+    return { ok: true };
   } catch (err) {
     const reason =
       err instanceof Error

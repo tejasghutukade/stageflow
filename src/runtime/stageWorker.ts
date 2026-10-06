@@ -1,12 +1,22 @@
-import { PiAgentAdapter } from "../agent/piAdapter.js";
-import { loadPipeline } from "../config/loadPipeline.js";
-import { loadTaskFromYaml } from "../config/loadTask.js";
+import { resolveAgentPort } from "../agent/resolveAgentPort.js";
+import { asAgentBackendId } from "../agent/agentBackend.js";
+import { loadStageflowManifestOutcome } from "../config/loadStageflowManifest.js";
+import { loadNamedSecretsFromAttemptDir } from "../logging/namedSecrets.js";
+import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
+import { attemptWorkspaceDir } from "../runstore/workspaceLayout.js";
 import { createRunStore } from "../runstore/createStore.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import { loadRunContext } from "./resumeReconstruct.js";
 import {
   bindPiAgentDirEnv,
+  overlayStageBindingEnv,
   rootsForStageWorker,
+  stageBindingEnvFromRun,
   withResolvedAuthPath,
 } from "./stageRoots.js";
+import { buildStageEnvironment } from "./stageEnvironment.js";
+import { ensureStageCacheDirs } from "./stageCacheEnv.js";
+import { PACKAGE_VERSION } from "../package-meta.js";
 import {
   runStage,
   type RunStageOutcome,
@@ -14,8 +24,10 @@ import {
 } from "./stageRunner.js";
 import { openStageAttempt } from "./stageAttemptBootstrap.js";
 import { attemptContext } from "./stageAttemptContext.js";
+import { loadActiveFeedbackLoopContext } from "./feedbackLoopCoordinator.js";
 import {
   outcomeToWorkerResult,
+  SF_STAGE_WORKER,
   STAGE_WORKER_EXIT,
   type StageWorkerInput,
   type StageWorkerResult,
@@ -23,15 +35,18 @@ import {
 
 export type { StageWorkerInput, StageWorkerResult } from "./stageWorkerProtocol.js";
 
+
 export async function runStageWorker(
   input: StageWorkerInput,
 ): Promise<RunStageOutcome> {
-  const store = createRunStore({ rootDir: input.rootDir });
-  const meta = await store.readRunMeta(input.runId);
-  const taskYaml = await store.readTaskYaml(input.runId);
-  const task = loadTaskFromYaml(taskYaml, `run ${input.runId} task`);
-  const loaded = await loadPipeline(meta.pipeline_id, { cwd: input.rootDir });
-  const stage = loaded.stages.find((s) => s.id === input.stageId);
+  const store = createRunStore({ rootDir: globalStageflowHome() });
+  const { meta, task, loaded } = await loadRunContext(
+    store,
+    input.runId,
+    input.rootDir,
+  );
+  const definitionId = definitionIdForInstance(meta.pipeline_dag, input.stageId);
+  const stage = loaded.stages.find((s) => s.id === definitionId);
   if (!stage) {
     return {
       ok: false,
@@ -39,11 +54,51 @@ export async function runStageWorker(
     };
   }
 
-  const agent = new PiAgentAdapter();
+  const dag = meta.pipeline_dag ?? loaded.dag;
+
+  const manifestOutcome = await loadStageflowManifestOutcome(input.rootDir);
+  const agent = resolveAgentPort({
+    global: manifestOutcome.ok
+      ? asAgentBackendId(manifestOutcome.value.manifest.agent)
+      : undefined,
+    pipeline: asAgentBackendId(loaded.pipeline.agent),
+    stage: asAgentBackendId(stage.agent),
+  });
   const workspaceDir = store.getWorkspaceDir(input.runId);
   const checkoutRoot = meta.checkout_root;
+  const binding =
+    input.env !== undefined
+      ? {
+          env: input.env,
+          kind: input.bindingKind ?? "unbound",
+        }
+      : stageBindingEnvFromRun({
+          meta,
+          task,
+          runWorkspaceDir: workspaceDir,
+          hostEnv: process.env,
+        });
+  const baseEnv: Record<string, string> =
+    process.env[SF_STAGE_WORKER] === "1"
+      ? Object.fromEntries(
+          Object.entries(process.env).filter(
+            (e): e is [string, string] => e[1] !== undefined,
+          ),
+        )
+      : buildStageEnvironment({
+          hostEnv: process.env,
+          cacheVars: ensureStageCacheDirs(),
+          packageVersion: PACKAGE_VERSION,
+        }).env;
+  const stageEnv: Record<string, string> = Object.fromEntries(
+    Object.entries(overlayStageBindingEnv(baseEnv, binding.env, binding.kind))
+      .filter((e): e is [string, string] => e[1] !== undefined),
+  );
   const mode = input.mode ?? "run";
   const attempt = input.attempt ?? 1;
+  loadNamedSecretsFromAttemptDir(
+    attemptWorkspaceDir(workspaceDir, input.stageId, attempt),
+  );
   const attemptCtx =
     input.attempt !== undefined ? attemptContext(input.attempt) : undefined;
   const eventOptions = { attempt };
@@ -66,8 +121,9 @@ export async function runStageWorker(
         store,
         runId: input.runId,
         stage,
+        stageId: input.stageId,
         task,
-        dag: loaded.dag,
+        dag,
         checkoutRoot,
         workspaceDir,
         factoryCwd: input.rootDir,
@@ -75,6 +131,8 @@ export async function runStageWorker(
         operatorCatalog: input.operatorCatalog,
         roots,
         resumeToken: input.sessionFilePath,
+        sessionMode: "waiting_resume",
+        stageEnv,
         onActivity: (event) => {
           void store.appendStageEvent(
             input.runId,
@@ -93,18 +151,91 @@ export async function runStageWorker(
         store,
         runId: input.runId,
         stage,
+        stageId: input.stageId,
         task,
-        dag: loaded.dag,
+        dag,
         checkoutRoot,
         workspaceDir,
         skipStarted: true,
         existingHandle: opened.handle,
+        workerMode: true,
         roots,
         attemptCtx,
         factoryCwd: input.rootDir,
         operatorCatalog: input.operatorCatalog,
+        skipGates: input.skipGates,
+        stageEnv,
       });
       return outcome;
+    }
+
+    if (mode === "feedback_resume" || mode === "new_session") {
+      const feedbackLoopContext = await loadActiveFeedbackLoopContext(
+        store,
+        input.runId,
+        input.stageId,
+      );
+      if (mode === "feedback_resume" && feedbackLoopContext === undefined) {
+        return {
+          ok: false,
+          reason: "feedback_resume requires an active feedback-loop context",
+        };
+      }
+      const priorAttempt = feedbackLoopContext?.prior_stage_attempt;
+      const resumeToken =
+        input.sessionFilePath ??
+        (mode === "feedback_resume" && priorAttempt !== undefined
+          ? attemptContext(priorAttempt).sessionPath(workspaceDir, input.stageId)
+          : undefined);
+      const opened = await openStageAttempt({
+        agent,
+        store,
+        runId: input.runId,
+        stage,
+        stageId: input.stageId,
+        task,
+        dag,
+        checkoutRoot,
+        workspaceDir,
+        factoryCwd: input.rootDir,
+        attemptCtx,
+        operatorCatalog: input.operatorCatalog,
+        roots,
+        ...(resumeToken !== undefined ? { resumeToken } : {}),
+        sessionMode: mode,
+        ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
+        stageEnv,
+        onActivity: (event) => {
+          void store.appendStageEvent(
+            input.runId,
+            input.stageId,
+            event,
+            eventOptions,
+          );
+        },
+      });
+      if (!opened.ok) {
+        return { ok: false, reason: opened.reason };
+      }
+      return runStage({
+        agent,
+        store,
+        runId: input.runId,
+        stage,
+        stageId: input.stageId,
+        task,
+        dag,
+        checkoutRoot,
+        workspaceDir,
+        existingHandle: opened.handle,
+        workerMode: true,
+        roots,
+        attemptCtx,
+        factoryCwd: input.rootDir,
+        operatorCatalog: input.operatorCatalog,
+        skipGates: input.skipGates,
+        stageEnv,
+      });
     }
 
     return runStage({
@@ -112,8 +243,9 @@ export async function runStageWorker(
       store,
       runId: input.runId,
       stage,
+      stageId: input.stageId,
       task,
-      dag: loaded.dag,
+      dag,
       checkoutRoot,
       workspaceDir,
       workerMode: true,
@@ -121,26 +253,45 @@ export async function runStageWorker(
       attemptCtx,
       factoryCwd: input.rootDir,
       operatorCatalog: input.operatorCatalog,
+      skipGates: input.skipGates,
+      stageEnv,
     });
   } finally {
     unbindAgentDir();
   }
 }
 
-export function sendWorkerResult(result: StageWorkerResult): void {
-  if (typeof process.send === "function") {
-    process.send(result);
+export function sendWorkerResult(result: StageWorkerResult): Promise<void> {
+  if (typeof process.send !== "function") {
+    return Promise.resolve();
   }
+  return new Promise((resolve) => {
+    try {
+      const ok = process.send!(result, (err) => {
+        void err;
+        resolve();
+      });
+      if (ok === false) {
+        resolve();
+      }
+    } catch {
+      resolve();
+    }
+  });
 }
 
-export function exitForOutcome(outcome: RunStageOutcome): never {
-  const message = outcomeToWorkerResult(outcome);
-  sendWorkerResult(message);
+export function exitCodeForOutcome(outcome: RunStageOutcome): number {
   if (isRunStageWaiting(outcome)) {
-    process.exit(STAGE_WORKER_EXIT.WAITING);
+    return STAGE_WORKER_EXIT.WAITING;
   }
   if (outcome.ok) {
-    process.exit(STAGE_WORKER_EXIT.SUCCEEDED);
+    return STAGE_WORKER_EXIT.SUCCEEDED;
   }
-  process.exit(STAGE_WORKER_EXIT.FAILED);
+  return STAGE_WORKER_EXIT.FAILED;
+}
+
+export async function exitForOutcome(outcome: RunStageOutcome): Promise<number> {
+  const message = outcomeToWorkerResult(outcome);
+  await sendWorkerResult(message);
+  return exitCodeForOutcome(outcome);
 }

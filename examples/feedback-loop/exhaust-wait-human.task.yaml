@@ -1,0 +1,11 @@
+id: feedback-loop-exhaust-wait-human
+goal: Send work back twice so the loop parks for a human decision
+context: Verification scenario — wait_for_human after max_replays 1
+constraints: |
+  MUST pair with pipeline feedback-loop-wait-human.pipeline.yaml
+  (on_max_replays: wait_for_human, max_replays: 1). Do NOT use
+  feedback-loop.pipeline.yaml (require_continue) — that never asks a human.
+  Docs only. Every review success until the run parks MUST emit send_back
+  target implement — never emit continue. First review: send_back implement;
+  after replay, second review: send_back implement again so the loop parks
+  for feedback-decide.

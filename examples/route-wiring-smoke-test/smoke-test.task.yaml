@@ -1,0 +1,4 @@
+id: route-smoke-test
+goal: Do the minimal amount of work each stage asks for — one or two sentences is enough.
+context: Route wiring smoke test — the point is exercising pipeline wiring, not the content.
+constraints: Docs only; no implementation code. Keep every stage's output short.

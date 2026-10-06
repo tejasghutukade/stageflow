@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 
 const readFileMock = vi.hoisted(() => vi.fn());
 
@@ -18,7 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import * as loadPipelineModule from "../src/config/loadPipeline.js";
+import * as validateCatalogModule from "../src/config/validateCatalog.js";
 import {
   PipelineValidationError,
   runPipeline,
@@ -27,7 +28,7 @@ import {
 import { createRunStore } from "../src/runstore/createStore.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
-const sampleTaskPath = path.join(fixtures, "tasks", "sample.yaml");
+const sampleTaskPath = SAMPLE_TASK;
 
 describe("preparePipeline validation gate", () => {
   afterEach(() => {
@@ -36,7 +37,7 @@ describe("preparePipeline validation gate", () => {
   });
 
   it("AE-S3-1: broken pipeline rejects before task read and createRun", async () => {
-    const loadSpy = vi.spyOn(loadPipelineModule, "loadPipelineValidated");
+    const loadSpy = vi.spyOn(validateCatalogModule, "loadPipelineValidated");
     const root = await mkdtemp(path.join(tmpdir(), "sf-val-gate-"));
     const store = createRunStore({ rootDir: root });
     const createRunSpy = vi.spyOn(store, "createRun");
@@ -52,7 +53,7 @@ describe("preparePipeline validation gate", () => {
         agent,
         store,
         taskPath: sampleTaskPath,
-        pipeline: "broken",
+        pipeline: pipelinePath("broken"),
         cwd: fixtures,
       }),
     ).rejects.toBeInstanceOf(PipelineValidationError);
@@ -75,7 +76,7 @@ describe("preparePipeline validation gate", () => {
         agent,
         store,
         taskPath: sampleTaskPath,
-        pipeline: "broken",
+        pipeline: pipelinePath("broken"),
         cwd: fixtures,
       });
     } catch (err) {
@@ -93,7 +94,7 @@ describe("preparePipeline validation gate", () => {
   });
 
   it("AE-S3-2: docs-only succeeds despite broken sibling pipeline", async () => {
-    const loadSpy = vi.spyOn(loadPipelineModule, "loadPipelineValidated");
+    const loadSpy = vi.spyOn(validateCatalogModule, "loadPipelineValidated");
     const root = await mkdtemp(path.join(tmpdir(), "sf-val-gate-"));
     const store = createRunStore({ rootDir: root });
     const agent = scriptedFakeAgent([
@@ -115,7 +116,7 @@ describe("preparePipeline validation gate", () => {
       agent,
       store,
       taskPath: sampleTaskPath,
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       cwd: fixtures,
     });
 
@@ -134,7 +135,7 @@ describe("preparePipeline validation gate", () => {
         agent,
         store,
         taskYaml: "id: t\ngoal: g\n",
-        pipeline: "broken",
+        pipeline: pipelinePath("broken"),
         cwd: fixtures,
       }),
     ).rejects.toBeInstanceOf(PipelineValidationError);

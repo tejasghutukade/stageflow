@@ -1,0 +1,5 @@
+id: binding-conflict
+goal: Both repository and checkout must fail
+repository: acme/api
+ref: main
+checkout: /abs/project/checkout

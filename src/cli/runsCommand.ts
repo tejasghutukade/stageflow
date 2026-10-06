@@ -1,0 +1,1020 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { projectRun } from "../projection/projectRun.js";
+import { waitRun, type WaitUntil } from "../mcp/waitRun.js";
+import { projectWaitingGates } from "../mcp/waitingGates.js";
+import { completeCliRun } from "./runCommand.js";
+import { reportCliRun, writeQueuedAdmissionLine, type CliRunReportIo } from "./runOutput.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  createRunStore,
+  createRunStoreAfterHostEnsure,
+  storeNeedsHostMigration,
+} from "../runstore/createStore.js";
+import type { ListRunsFilter, RunStatus, RunStore } from "../runstore/port.js";
+import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
+import {
+  ensureGlobalService,
+  hostBaseUrl,
+  type EnsureGlobalServiceResult,
+} from "../server/ensureGlobalService.js";
+import { mapRetryStageFailure } from "../server/operatorResults.js";
+import {
+  httpAbandonStage,
+  httpCancelRun,
+  httpDecideFeedbackLoop,
+  httpDeleteRun,
+  httpDeliverAnswer,
+  httpGcRuns,
+  httpRecoverManualStageUntilStop,
+  httpRerun,
+  httpResumeTimedOutStage,
+  httpRetryStageUntilStop,
+  httpStopManualRecovery,
+} from "./hostClient.js";
+import {
+  AskOperatorError,
+  parseAskOperatorAnswer,
+} from "../tools/askOperator.js";
+
+export const RUNS_USAGE = `Usage:
+  sf runs list [--status created|queued|running|succeeded|failed|cancelled] [--since <iso>] [--pipeline <id-or-path>] [--json]
+  sf runs show --run <runId> [--from <sf-run.json>] [--json]
+  sf runs verify --run <runId> --stage <stageId> [--json]
+  sf runs recover --run <runId> --stage <stageId> [--guidance <text>] [--stop] [--json]
+  sf runs waiting [--run <runId>] [--json]
+  sf runs wait --run <runId> [--from <sf-run.json>] [--until any|waiting|terminal] [--timeout-ms <n>] [--json]
+  sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
+  sf runs feedback-decide --run <runId> --stage <sourceStageId> [--loop <loopId>] --decision extend|continue|abandon [--reason <text>] [--json]
+  sf runs retry --run <runId> --stage <stageId> [--json]
+  sf runs resume --run <runId> --stage <stageId> [--json]
+  sf runs abandon --run <runId> --stage <stageId> [--json]
+  sf runs cancel --run <runId> --reason <text> [--json]
+  sf runs delete --run <runId> [--force] [--json]
+  sf runs gc [--dry-run] [--json]
+  sf runs rerun --run <runId> [--pinned] [--json]`;
+
+export type RunsCommandIo = {
+  log: (line: string) => void;
+  error: (line: string) => void;
+};
+
+const defaultIo: RunsCommandIo = {
+  log: (line) => console.log(line),
+  error: (line) => console.error(line),
+};
+
+const RUN_STATUSES: readonly RunStatus[] = [
+  "created",
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+];
+
+const LIST_FLAGS = new Set([
+  "--status",
+  "--since",
+  "--pipeline",
+  "--json",
+  "--help",
+  "-h",
+]);
+const SHOW_FLAGS = new Set(["--run", "--from", "--json", "--help", "-h"]);
+const VERIFY_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
+const RECOVER_FLAGS = new Set([
+  "--run",
+  "--stage",
+  "--guidance",
+  "--stop",
+  "--json",
+  "--help",
+  "-h",
+]);
+const WAITING_FLAGS = new Set(["--run", "--json", "--help", "-h"]);
+const WAIT_FLAGS = new Set([
+  "--run",
+  "--from",
+  "--until",
+  "--timeout-ms",
+  "--json",
+  "--help",
+  "-h",
+]);
+const ANSWER_FLAGS = new Set([
+  "--run",
+  "--stage",
+  "--answer",
+  "--guidance",
+  "--json",
+  "--help",
+  "-h",
+]);
+const FEEDBACK_DECIDE_FLAGS = new Set([
+  "--run",
+  "--stage",
+  "--loop",
+  "--decision",
+  "--reason",
+  "--json",
+  "--help",
+  "-h",
+]);
+const RETRY_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
+const ABANDON_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
+const CANCEL_FLAGS = new Set(["--run", "--reason", "--json", "--help", "-h"]);
+const DELETE_FLAGS = new Set(["--run", "--force", "--json", "--help", "-h"]);
+const GC_FLAGS = new Set(["--dry-run", "--json", "--help", "-h"]);
+const RERUN_FLAGS = new Set(["--run", "--pinned", "--json", "--help", "-h"]);
+
+const VALUE_FLAGS = new Set([
+  "--status",
+  "--since",
+  "--pipeline",
+  "--run",
+  "--from",
+  "--until",
+  "--timeout-ms",
+  "--stage",
+  "--answer",
+  "--loop",
+  "--decision",
+  "--reason",
+  "--guidance",
+]);
+
+type ParsedRunsArgs = {
+  help: boolean;
+  json: boolean;
+  subcommand?: string;
+  status?: string;
+  since?: string;
+  pipeline?: string;
+  runId?: string;
+  fromPath?: string;
+  until?: string;
+  timeoutMs?: number;
+  stageId?: string;
+  answer?: string;
+  guidance?: string;
+  stop?: boolean;
+  pinned?: boolean;
+  force?: boolean;
+  dryRun?: boolean;
+  loopId?: string;
+  decision?: string;
+  reason?: string;
+};
+
+function flagsFor(subcommand: string): Set<string> | undefined {
+  switch (subcommand) {
+    case "list":
+      return LIST_FLAGS;
+    case "show":
+      return SHOW_FLAGS;
+    case "verify":
+      return VERIFY_FLAGS;
+    case "recover":
+      return RECOVER_FLAGS;
+    case "waiting":
+      return WAITING_FLAGS;
+    case "wait":
+      return WAIT_FLAGS;
+    case "answer":
+      return ANSWER_FLAGS;
+    case "feedback-decide":
+      return FEEDBACK_DECIDE_FLAGS;
+    case "retry":
+      return RETRY_FLAGS;
+    case "resume":
+      return RETRY_FLAGS;
+    case "abandon":
+      return ABANDON_FLAGS;
+    case "cancel":
+      return CANCEL_FLAGS;
+    case "delete":
+      return DELETE_FLAGS;
+    case "gc":
+      return GC_FLAGS;
+    case "rerun":
+      return RERUN_FLAGS;
+    default:
+      return undefined;
+  }
+}
+
+function parseRunsArgs(args: string[]): ParsedRunsArgs {
+  if (args.length === 0) {
+    return { help: false, json: false };
+  }
+  if (args[0] === "--help" || args[0] === "-h") {
+    return { help: true, json: false };
+  }
+
+  const subcommand = args[0];
+  const allowed = flagsFor(subcommand);
+  if (allowed === undefined) {
+    return { subcommand, help: false, json: false };
+  }
+
+  let help = false;
+  let json = false;
+  let status: string | undefined;
+  let since: string | undefined;
+  let pipeline: string | undefined;
+  let runId: string | undefined;
+  let fromPath: string | undefined;
+  let until: string | undefined;
+  let timeoutMs: number | undefined;
+  let stageId: string | undefined;
+  let answer: string | undefined;
+  let guidance: string | undefined;
+  let stop = false;
+  let pinned = false;
+  let force = false;
+  let dryRun = false;
+  let loopId: string | undefined;
+  let decision: string | undefined;
+  let reason: string | undefined;
+
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--help" || arg === "-h") {
+      help = true;
+    } else if (arg === "--json") {
+      json = true;
+    } else if (arg === "--stop") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      stop = true;
+    } else if (arg === "--pinned") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      pinned = true;
+    } else if (arg === "--force") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      force = true;
+    } else if (arg === "--dry-run") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      dryRun = true;
+    } else if (VALUE_FLAGS.has(arg)) {
+      if (!allowed.has(arg)) {
+        throw new Error(`Unknown flag: ${arg}`);
+      }
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error(`Missing value for ${arg}`);
+      }
+      if (arg === "--status") status = value;
+      else if (arg === "--since") since = value;
+      else if (arg === "--pipeline") pipeline = value;
+      else if (arg === "--run") runId = value;
+      else if (arg === "--from") fromPath = value;
+      else if (arg === "--until") until = value;
+      else if (arg === "--timeout-ms") timeoutMs = Number(value);
+      else if (arg === "--stage") stageId = value;
+      else if (arg === "--answer") answer = value;
+      else if (arg === "--guidance") guidance = value;
+      else if (arg === "--loop") loopId = value;
+      else if (arg === "--decision") decision = value;
+      else if (arg === "--reason") reason = value;
+    } else if (arg.startsWith("-")) {
+      throw new Error(`Unknown flag: ${arg}`);
+    } else {
+      throw new Error(`Unexpected argument: ${arg}`);
+    }
+  }
+
+  return {
+    help,
+    json,
+    subcommand,
+    status,
+    since,
+    pipeline,
+    runId,
+    fromPath,
+    until,
+    timeoutMs,
+    stageId,
+    answer,
+    guidance,
+    stop,
+    pinned,
+    force,
+    dryRun,
+    loopId,
+    decision,
+    reason,
+  };
+}
+
+function resolveRunIdFromFile(fromPath: string, cwd: string): string {
+  const resolved = path.resolve(cwd, fromPath);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(resolved, "utf8")) as unknown;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to read --from file: ${message}`);
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("--from file must contain a JSON object with runId");
+  }
+  const runId = (parsed as { runId?: unknown }).runId;
+  if (typeof runId !== "string" || runId.length === 0) {
+    throw new Error("--from file must contain a JSON object with runId");
+  }
+  return runId;
+}
+
+function printJson(io: RunsCommandIo, payload: unknown): void {
+  io.log(JSON.stringify(payload, null, 2));
+}
+
+function isRunStatus(value: string): value is RunStatus {
+  return (RUN_STATUSES as readonly string[]).includes(value);
+}
+
+function isWaitUntil(value: string): value is WaitUntil {
+  return value === "any" || value === "waiting" || value === "terminal";
+}
+
+function usageError(io: RunsCommandIo, message?: string): number {
+  if (message !== undefined) io.error(message);
+  io.error(RUNS_USAGE);
+  return 1;
+}
+
+async function resolveShowWaitRunId(
+  parsed: ParsedRunsArgs,
+  cwd: string,
+  io: RunsCommandIo,
+): Promise<string | undefined> {
+  if (parsed.fromPath !== undefined) {
+    try {
+      return resolveRunIdFromFile(parsed.fromPath, cwd);
+    } catch (err) {
+      io.error(err instanceof Error ? err.message : String(err));
+      return undefined;
+    }
+  }
+  return parsed.runId;
+}
+
+const MUTATING_SUBCOMMANDS = new Set([
+  "answer",
+  "feedback-decide",
+  "retry",
+  "resume",
+  "recover",
+  "abandon",
+  "cancel",
+  "delete",
+  "gc",
+  "rerun",
+]);
+
+const READ_ONLY_SUBCOMMANDS = new Set([
+  "list",
+  "show",
+  "verify",
+  "waiting",
+  "wait",
+]);
+
+export async function runRunsCommand(
+  args: string[],
+  options: {
+    cwd?: string;
+    io?: Partial<RunsCommandIo>;
+    store?: RunStore;
+    stdinIsTTY?: boolean;
+    readStdin?: () => string;
+    waitSignal?: AbortSignal;
+    env?: NodeJS.ProcessEnv;
+    hostBaseUrl?: string;
+    ensureService?: () => Promise<EnsureGlobalServiceResult>;
+  } = {},
+): Promise<number> {
+  const cwd = options.cwd ?? process.cwd();
+  const out: RunsCommandIo = { ...defaultIo, ...options.io };
+  const stdinIsTTY = options.stdinIsTTY ?? process.stdin.isTTY === true;
+  const readStdin =
+    options.readStdin ?? (() => readFileSync(0, "utf8"));
+  const base = options.hostBaseUrl ?? hostBaseUrl();
+  const ensureService = options.ensureService ?? (() => ensureGlobalService());
+
+  let parsed: ParsedRunsArgs;
+  try {
+    parsed = parseRunsArgs(args);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return usageError(out, message);
+  }
+
+  if (parsed.help) {
+    out.error(RUNS_USAGE);
+    return 0;
+  }
+
+  if (!parsed.subcommand) {
+    return usageError(out);
+  }
+
+  let resolvedStore: RunStore | undefined = options.store;
+  const getStore = (): RunStore => {
+    if (resolvedStore === undefined) {
+      resolvedStore = createRunStore({ rootDir: globalStageflowHome() });
+    }
+    return resolvedStore;
+  };
+
+  const mutatingIo: CliRunReportIo = out;
+
+  if (MUTATING_SUBCOMMANDS.has(parsed.subcommand)) {
+    const ensured = await ensureService();
+    if (!ensured.ok) {
+      if (parsed.json) {
+        printJson(out, { error: ensured.message, reason: ensured.reason });
+      } else {
+        out.error(ensured.message);
+      }
+      return 1;
+    }
+  }
+
+  if (
+    READ_ONLY_SUBCOMMANDS.has(parsed.subcommand) &&
+    resolvedStore === undefined
+  ) {
+    if (storeNeedsHostMigration(globalStageflowHome())) {
+      const ensured = await ensureService();
+      if (!ensured.ok) {
+        if (parsed.json) {
+          printJson(out, { error: ensured.message, reason: ensured.reason });
+        } else {
+          out.error(ensured.message);
+        }
+        return 1;
+      }
+    }
+  }
+
+  switch (parsed.subcommand) {
+    case "list": {
+      if (parsed.status === "waiting") {
+        out.error(
+          "waiting is not a run status; parked HITL runs stay running. Use sf runs waiting.",
+        );
+        return 1;
+      }
+      if (parsed.status !== undefined && !isRunStatus(parsed.status)) {
+        out.error(
+          "--status must be created, queued, running, succeeded, failed, or cancelled",
+        );
+        return 1;
+      }
+      if (parsed.since !== undefined && !Number.isFinite(Date.parse(parsed.since))) {
+        out.error("since must be a valid date");
+        return 1;
+      }
+      const filter: ListRunsFilter = {};
+      if (parsed.status !== undefined) filter.status = parsed.status;
+      if (parsed.since !== undefined) filter.since = parsed.since;
+      if (parsed.pipeline !== undefined) filter.pipeline = parsed.pipeline;
+      const runs = await getStore().listRuns(
+        Object.keys(filter).length > 0 ? filter : undefined,
+      );
+      if (parsed.json) {
+        printJson(out, { runs });
+      } else {
+        for (const run of runs) {
+          out.log(`${run.run_id}\t${run.status}`);
+        }
+      }
+      return 0;
+    }
+
+    case "show": {
+      const runId = await resolveShowWaitRunId(parsed, cwd, out);
+      if (parsed.fromPath !== undefined && runId === undefined) {
+        return 1;
+      }
+      if (!runId) {
+        return usageError(out, "Missing --run (or --from <sf-run.json>)");
+      }
+      try {
+        const detail = await getStore().readRun(runId);
+        const projection = projectRun(detail);
+        if (parsed.json) {
+          printJson(out, projection);
+        } else {
+          out.log(`${projection.run_id}\t${projection.status}`);
+        }
+        return 0;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        out.error(message);
+        return 1;
+      }
+    }
+
+    case "verify": {
+      if (!parsed.runId) return usageError(out, "Missing --run");
+      if (!parsed.stageId) return usageError(out, "Missing --stage");
+      try {
+        const history = await readStageVerificationHistory(
+          getStore(),
+          parsed.runId,
+          parsed.stageId,
+        );
+        if (parsed.json) {
+          printJson(out, history);
+        } else {
+          for (const attempt of history.attempts) {
+            const checks = attempt.checks
+              .map((check) => `${check.check_id}:${check.status}`)
+              .join(", ");
+            out.log(`attempt ${attempt.attempt}\t${attempt.status}${checks ? `\t${checks}` : ""}`);
+          }
+        }
+        return 0;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        out.error(message);
+        return 1;
+      }
+    }
+
+    case "waiting": {
+      const waiting = await projectWaitingGates(getStore(), {
+        runId: parsed.runId,
+      });
+      if (parsed.json) {
+        printJson(out, { waiting });
+      } else {
+        for (const item of waiting) {
+          const runId = typeof item.runId === "string" ? item.runId : "";
+          const stageId = typeof item.stageId === "string" ? item.stageId : "";
+          out.log(`${runId}\t${stageId}`);
+        }
+      }
+      return 0;
+    }
+
+    case "wait": {
+      const runId = await resolveShowWaitRunId(parsed, cwd, out);
+      if (parsed.fromPath !== undefined && runId === undefined) {
+        return 1;
+      }
+      if (!runId) {
+        return usageError(out, "Missing --run (or --from <sf-run.json>)");
+      }
+      const untilRaw = parsed.until ?? "any";
+      if (!isWaitUntil(untilRaw)) {
+        return usageError(
+          out,
+          "--until must be any, waiting, or terminal",
+        );
+      }
+
+      let signal = options.waitSignal;
+      let onSigInt: (() => void) | undefined;
+      if (signal === undefined) {
+        const controller = new AbortController();
+        signal = controller.signal;
+        onSigInt = () => controller.abort();
+        process.once("SIGINT", onSigInt);
+      }
+
+      try {
+        const result = await waitRun({
+          store: getStore(),
+          runId,
+          timeoutMs: parsed.timeoutMs,
+          until: untilRaw,
+          signal,
+        });
+        if (!result.ok) {
+          if (result.code === "aborted") {
+            if (parsed.json) {
+              printJson(out, { error: result.error, code: "aborted" });
+            } else {
+              out.error(result.error);
+            }
+            return 130;
+          }
+          if (parsed.json) {
+            const payload: Record<string, unknown> = { error: result.error };
+            if (result.status !== undefined) payload.status = result.status;
+            printJson(out, payload);
+          } else {
+            out.error(result.error);
+          }
+          return 1;
+        }
+        if (parsed.json) {
+          printJson(out, result);
+        } else {
+          out.log(`${result.reason}\t${result.run.status}`);
+        }
+        return 0;
+      } finally {
+        if (onSigInt !== undefined) {
+          process.removeListener("SIGINT", onSigInt);
+        }
+      }
+    }
+
+    case "answer": {
+      if (!parsed.runId) {
+        return usageError(out, "Missing --run");
+      }
+      if (!parsed.stageId) {
+        return usageError(out, "Missing --stage");
+      }
+      let answerRaw = parsed.answer;
+      if (answerRaw === undefined) {
+        if (stdinIsTTY) {
+          return usageError(
+            out,
+            "Missing --answer (pass --answer '<json>' or pipe JSON on stdin)",
+          );
+        }
+        answerRaw = readStdin().trim();
+        if (answerRaw.length === 0) {
+          return usageError(
+            out,
+            "Missing --answer (pass --answer '<json>' or pipe JSON on stdin)",
+          );
+        }
+      }
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(answerRaw) as unknown;
+      } catch {
+        const message = "--answer must be valid JSON";
+        if (parsed.json) {
+          printJson(out, { error: message, status: 400 });
+        } else {
+          out.error(message);
+        }
+        return 1;
+      }
+      let answer;
+      try {
+        answer = parseAskOperatorAnswer(parsedJson);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof AskOperatorError) {
+          if (parsed.json) {
+            printJson(out, { error: message, status: 400 });
+          } else {
+            out.error(message);
+          }
+          return 1;
+        }
+        out.error(message);
+        return 1;
+      }
+      const result = await httpDeliverAnswer(
+        base,
+        parsed.runId,
+        parsed.stageId,
+        parsedJson,
+      );
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(
+          out,
+          result.verification !== undefined
+            ? { ok: true, verification: result.verification }
+            : { ok: true },
+        );
+      } else {
+        out.log(
+          result.verification !== undefined
+            ? `ok (${result.verification})`
+            : "ok",
+        );
+      }
+      return 0;
+    }
+
+    case "feedback-decide": {
+      if (!parsed.runId) {
+        return usageError(out, "Missing --run");
+      }
+      if (!parsed.stageId) {
+        return usageError(out, "Missing --stage");
+      }
+      if (!parsed.decision) {
+        return usageError(out, "Missing --decision");
+      }
+      if (
+        parsed.decision !== "extend" &&
+        parsed.decision !== "continue" &&
+        parsed.decision !== "abandon"
+      ) {
+        const message =
+          "--decision must be extend, continue, or abandon";
+        if (parsed.json) {
+          printJson(out, { error: message, status: 400 });
+        } else {
+          out.error(message);
+        }
+        return 1;
+      }
+      const result = await httpDecideFeedbackLoop(
+        base,
+        parsed.runId,
+        parsed.stageId,
+        {
+          decision: parsed.decision,
+          ...(parsed.loopId !== undefined ? { loopId: parsed.loopId } : {}),
+          ...(parsed.reason !== undefined ? { reason: parsed.reason } : {}),
+        },
+      );
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          effect: result.effect,
+          loopId: result.loopId,
+        });
+      } else {
+        out.log(`ok\t${result.effect}\t${result.loopId}`);
+      }
+      return 0;
+    }
+
+    case "retry": {
+      if (!parsed.runId || !parsed.stageId) {
+        return usageError(out, "Missing --run and/or --stage");
+      }
+      const result = await httpRetryStageUntilStop(
+        base,
+        parsed.runId,
+        parsed.stageId,
+      );
+      if (!result.ok) {
+        if (parsed.json) {
+          printJson(out, {
+            ...mapRetryStageFailure(result),
+            status: result.status,
+          });
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      return reportCliRun(
+        { kind: "completion", result: result.pipeline },
+        { json: parsed.json, io: mutatingIo },
+      );
+    }
+
+    case "resume": {
+      if (!parsed.runId || !parsed.stageId) {
+        return usageError(out, "Missing --run and/or --stage");
+      }
+      const result = await httpResumeTimedOutStage(
+        base,
+        parsed.runId,
+        parsed.stageId,
+      );
+      if (!result.ok) {
+        if (parsed.json) {
+          printJson(out, {
+            ...mapRetryStageFailure(result),
+            status: result.status,
+          });
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          runId: result.runId,
+          stageId: result.stageId,
+          attemptIndex: result.attemptIndex,
+        });
+      } else {
+        out.log(`ok\t${result.runId}\t${result.stageId}\t${result.attemptIndex}`);
+      }
+      return 0;
+    }
+
+    case "recover": {
+      if (!parsed.runId || !parsed.stageId) {
+        return usageError(out, "Missing --run and/or --stage");
+      }
+      if (parsed.stop) {
+        if (parsed.guidance !== undefined) {
+          return usageError(out, "--guidance cannot be used with --stop");
+        }
+        const result = await httpStopManualRecovery(
+          base,
+          parsed.runId,
+          parsed.stageId,
+        );
+        if (!result.ok) {
+          if (parsed.json) {
+            printJson(out, { error: result.reason, status: result.status });
+          } else {
+            out.error(result.reason);
+          }
+          return 1;
+        }
+        if (parsed.json) {
+          printJson(out, result);
+        } else {
+          out.log(`${result.runId}\t${result.stageId}\tstopped`);
+        }
+        return 0;
+      }
+      const result = await httpRecoverManualStageUntilStop(
+        base,
+        parsed.runId,
+        parsed.stageId,
+        parsed.guidance,
+      );
+      if (!result.ok) {
+        if (parsed.json) {
+          printJson(out, { ...mapRetryStageFailure(result), status: result.status });
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      return reportCliRun(
+        { kind: "completion", result: result.pipeline },
+        { json: parsed.json, io: mutatingIo },
+      );
+    }
+
+    case "abandon": {
+      if (!parsed.runId || !parsed.stageId) {
+        return usageError(out, "Missing --run and/or --stage");
+      }
+      const result = await httpAbandonStage(base, parsed.runId, parsed.stageId);
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          runId: result.runId,
+          stageId: result.stageId,
+        });
+      } else {
+        out.log(`${result.runId}\t${result.stageId}`);
+      }
+      return 0;
+    }
+
+    case "cancel": {
+      if (!parsed.runId || !parsed.reason) {
+        return usageError(out, "Missing --run and/or --reason");
+      }
+      const result = await httpCancelRun(base, parsed.runId, parsed.reason);
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          runId: result.runId,
+        });
+      } else {
+        out.log(result.runId);
+      }
+      return 0;
+    }
+
+    case "delete": {
+      if (!parsed.runId) {
+        return usageError(out, "Missing --run");
+      }
+      const result = await httpDeleteRun(base, parsed.runId, {
+        force: parsed.force === true,
+      });
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          runId: result.runId,
+        });
+      } else {
+        out.log(result.runId);
+      }
+      return 0;
+    }
+
+    case "gc": {
+      const execute = parsed.dryRun !== true;
+      const result = await httpGcRuns(base, { execute });
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      const report = {
+        slimmed: result.slimmed,
+        purged: result.purged,
+        bareCachesEvicted: result.bareCachesEvicted,
+      };
+      if (parsed.json) {
+        printJson(out, report);
+      } else {
+        out.log(
+          [
+            `slimmed:\t${report.slimmed.length}`,
+            ...report.slimmed.map((id) => `\t${id}`),
+            `purged:\t${report.purged.length}`,
+            ...report.purged.map((id) => `\t${id}`),
+            `bareCachesEvicted:\t${report.bareCachesEvicted.length}`,
+            ...report.bareCachesEvicted.map((id) => `\t${id}`),
+          ].join("\n"),
+        );
+      }
+      return 0;
+    }
+
+    case "rerun": {
+      if (!parsed.runId) {
+        return usageError(out, "Missing --run");
+      }
+      const started = await httpRerun(
+        base,
+        parsed.runId,
+        parsed.pinned ? { pinned: true } : undefined,
+      );
+      if (!started.ok) {
+        return reportCliRun(
+          { kind: "start-failure", started },
+          { json: parsed.json, io: mutatingIo },
+        );
+      }
+      writeQueuedAdmissionLine(started, mutatingIo);
+      return completeCliRun(started, mutatingIo, {
+        json: parsed.json,
+        store: getStore(),
+      });
+    }
+
+    default:
+      return usageError(
+        out,
+        `Unknown runs subcommand: ${parsed.subcommand}`,
+      );
+  }
+}

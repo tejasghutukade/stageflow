@@ -1,0 +1,19 @@
+id: archify-on-pr
+stages:
+  - id: detect-changes
+    uses: ./detect-changes.yaml
+    entry: true
+    route:
+      - to: author-diagrams
+        if:
+          field: author_diagrams
+          op: eq
+          value: true
+    on_verify_fail:
+      mode: repair
+      max_attempts: 2
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: author-diagrams
+    uses: ./author-diagrams.yaml
+    skill: archify

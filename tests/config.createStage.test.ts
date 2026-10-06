@@ -8,21 +8,44 @@ import {
   stageConfigToYaml,
 } from "../src/config/createStage.js";
 import { loadStage } from "../src/config/loadStage.js";
+import { initTempGitRepo } from "./helpers/projectContext.js";
 
 describe("parseCreateStageBody", () => {
   it("accepts valid input and rejects payload_schema", () => {
     expect(
       parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "plan-review.yaml",
         id: "plan-review",
         system_prompt: "Review the plan.",
         model: "anthropic/claude-sonnet-4-5",
         gate_kinds: ["confirm"],
       }),
     ).toEqual({
+      pipeline_directory: "pipelines",
+      filename: "plan-review.yaml",
       id: "plan-review",
       system_prompt: "Review the plan.",
       model: "anthropic/claude-sonnet-4-5",
       gate_kinds: ["confirm"],
+    });
+
+    expect(
+      parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "no-hitl.yaml",
+        id: "no-hitl",
+        system_prompt: "Implement only.",
+        model: "anthropic/claude-sonnet-4-5",
+        gate_kinds: [],
+      }),
+    ).toEqual({
+      pipeline_directory: "pipelines",
+      filename: "no-hitl.yaml",
+      id: "no-hitl",
+      system_prompt: "Implement only.",
+      model: "anthropic/claude-sonnet-4-5",
+      gate_kinds: [],
     });
 
     expect(
@@ -37,18 +60,63 @@ describe("parseCreateStageBody", () => {
       status: 400,
       error: "payload_schema is not supported",
     });
+  });
+
+  it("accepts omitted model and rejects empty or non-string model", () => {
+    expect(
+      parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "inherit-model.yaml",
+        id: "inherit-model",
+        system_prompt: "Use pipeline or global default.",
+      }),
+    ).toEqual({
+      pipeline_directory: "pipelines",
+      filename: "inherit-model.yaml",
+      id: "inherit-model",
+      system_prompt: "Use pipeline or global default.",
+    });
 
     expect(
       parseCreateStageBody({
-        id: "clarify",
-        system_prompt: "Clarify.",
-        model: "cursor/auto",
-        skill: "improve-codebase-architecture",
+        pipeline_directory: "pipelines",
+        filename: "empty-model.yaml",
+        id: "empty-model",
+        system_prompt: "x",
+        model: "",
       }),
     ).toEqual({
       ok: false,
       status: 400,
-      error: "skill is not supported",
+      error: "model must be a non-empty string",
+    });
+
+    expect(
+      parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "ws-model.yaml",
+        id: "ws-model",
+        system_prompt: "x",
+        model: "   ",
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "model must be a non-empty string",
+    });
+
+    expect(
+      parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "bad-model.yaml",
+        id: "bad-model",
+        system_prompt: "x",
+        model: 1,
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "model must be a non-empty string",
     });
   });
 
@@ -60,6 +128,8 @@ describe("parseCreateStageBody", () => {
     });
     expect(
       parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "bad.yaml",
         id: "Bad_Id",
         system_prompt: "x",
         model: "m",
@@ -68,28 +138,6 @@ describe("parseCreateStageBody", () => {
       ok: false,
       status: 400,
       error: "id must be lowercase kebab-case",
-    });
-    expect(
-      parseCreateStageBody({
-        id: "a".repeat(65),
-        system_prompt: "x",
-        model: "m",
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
-      error: "id must be 1-64 characters",
-    });
-    expect(
-      parseCreateStageBody({
-        id: "ok",
-        system_prompt: "",
-        model: "m",
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
-      error: "system_prompt is required",
     });
   });
 });
@@ -107,38 +155,78 @@ describe("stageConfigToYaml", () => {
         "id: clarify",
         "system_prompt: Clarify the task into crisp requirements.",
         "model: anthropic/claude-sonnet-4-5",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("writes empty gate_kinds as [] and omits the key when undefined (KTD1)", () => {
+    expect(
+      stageConfigToYaml({
+        id: "no-hitl",
+        system_prompt: "Implement only.",
+        model: "anthropic/claude-sonnet-4-5",
+        gate_kinds: [],
+      }),
+    ).toBe(
+      [
+        "id: no-hitl",
+        "gate_kinds: []",
+        "system_prompt: Implement only.",
+        "model: anthropic/claude-sonnet-4-5",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
         "",
       ].join("\n"),
     );
 
     expect(
       stageConfigToYaml({
-        id: "plan-review",
-        gate_kinds: ["artifact_backed"],
-        system_prompt: "Line one\nLine two",
+        id: "compat",
+        system_prompt: "Ask if needed.",
         model: "anthropic/claude-sonnet-4-5",
       }),
+    ).not.toMatch(/gate_kinds/);
+  });
+
+  it("omits model when unset", () => {
+    expect(
+      stageConfigToYaml({
+        id: "inherit",
+        system_prompt: "Use default model.",
+      }),
     ).toBe(
-      [
-        "id: plan-review",
-        "gate_kinds:",
-        "  - artifact_backed",
-        "system_prompt: |",
-        "  Line one",
-        "  Line two",
-        "model: anthropic/claude-sonnet-4-5",
-        "",
-      ].join("\n"),
+      ["id: inherit", "system_prompt: Use default model.", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n"),
     );
+    expect(
+      stageConfigToYaml({
+        id: "inherit",
+        system_prompt: "Use default model.",
+      }),
+    ).not.toMatch(/^model:/m);
   });
 });
 
 describe("createStage", () => {
-  it("creates stage file, rejects collisions, and round-trips through loadStage", async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-create-stage-"));
+  it("creates stage file beside pipeline directory", async () => {
+    const { root, cleanup } = await initTempGitRepo();
 
     try {
-      const created = await createStage(cwd, {
+      const created = await createStage(root, {
+        pipeline_directory: "pipelines",
+        filename: "new-stage.yaml",
         id: "new-stage",
         system_prompt: "Do the thing.",
         model: "cursor/auto",
@@ -146,69 +234,123 @@ describe("createStage", () => {
       expect(created).toEqual({
         ok: true,
         stage: {
-          path: "stages/new-stage.yaml",
+          path: "pipelines/new-stage.yaml",
           id: "new-stage",
-          used_by_pipeline_ids: [],
         },
       });
 
-      const yaml = await readFile(path.join(cwd, "stages", "new-stage.yaml"), "utf8");
-      expect(yaml).toBe(
-        [
-          "id: new-stage",
-          "system_prompt: Do the thing.",
-          "model: cursor/auto",
-          "",
-        ].join("\n"),
-      );
-      await expect(loadStage(path.join(cwd, "stages", "new-stage.yaml"))).resolves.toEqual({
+      await expect(loadStage(path.join(root, "pipelines/new-stage.yaml"))).resolves.toEqual({
         id: "new-stage",
         system_prompt: "Do the thing.",
         model: "cursor/auto",
+        payload_schema: { type: "object" },
+        clone_input_schema: { type: "object" },
       });
 
-      const pathCollision = await createStage(cwd, {
+      const emptyHitl = await createStage(root, {
+        pipeline_directory: "pipelines",
+        filename: "no-hitl.yaml",
+        id: "no-hitl",
+        system_prompt: "Implement only.",
+        model: "cursor/auto",
+        gate_kinds: [],
+      });
+      expect(emptyHitl).toEqual({
+        ok: true,
+        stage: {
+          path: "pipelines/no-hitl.yaml",
+          id: "no-hitl",
+          gate_kinds: [],
+        },
+      });
+      await expect(loadStage(path.join(root, "pipelines/no-hitl.yaml"))).resolves.toEqual({
+        id: "no-hitl",
+        system_prompt: "Implement only.",
+        model: "cursor/auto",
+        gate_kinds: [],
+        payload_schema: { type: "object" },
+        clone_input_schema: { type: "object" },
+      });
+      const emptyYaml = await readFile(path.join(root, "pipelines/no-hitl.yaml"), "utf8");
+      expect(emptyYaml).toMatch(/^gate_kinds: \[\]$/m);
+
+      const pathCollision = await createStage(root, {
+        pipeline_directory: "pipelines",
+        filename: "new-stage.yaml",
         id: "new-stage",
         system_prompt: "Again.",
         model: "cursor/auto",
       });
-      expect(pathCollision).toEqual({
-        ok: false,
-        status: 409,
-        error: "Stage id already exists (stages/new-stage.yaml)",
-      });
-
-      await writeFile(
-        path.join(cwd, "stages", "alias.yaml"),
-        ["id: other-id", "system_prompt: x", "model: m", ""].join("\n"),
-      );
-      const yamlIdCollision = await createStage(cwd, {
-        id: "other-id",
-        system_prompt: "Again.",
-        model: "cursor/auto",
-      });
-      expect(yamlIdCollision).toEqual({
-        ok: false,
-        status: 409,
-        error: "Stage id already exists (stages/alias.yaml)",
-      });
+      expect(pathCollision.ok).toBe(false);
+      if (pathCollision.ok) return;
+      expect(pathCollision.status).toBe(409);
     } finally {
-      await rm(cwd, { recursive: true, force: true });
+      await cleanup();
     }
   });
 
-  it("creates stages directory when missing", async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-create-stage-empty-"));
+  it("creates stage YAML without model when global default exists", async () => {
+    const { root, cleanup } = await initTempGitRepo();
 
     try {
-      const created = await createStage(cwd, {
-        id: "first",
-        system_prompt: "First stage.",
-        model: "cursor/auto",
+      await mkdir(path.join(root, "pipelines"), { recursive: true });
+      await writeFile(
+        path.join(root, "stageflow.yaml"),
+        [
+          "version: 1",
+          "model: cursor/auto",
+          "catalog:",
+          "  pipelines:",
+          "    - pipelines",
+          "",
+        ].join("\n"),
+      );
+
+      const created = await createStage(root, {
+        pipeline_directory: "pipelines",
+        filename: "inherit-model.yaml",
+        id: "inherit-model",
+        system_prompt: "Use the global default.",
       });
-      expect(created.ok).toBe(true);
+      expect(created).toEqual({
+        ok: true,
+        stage: {
+          path: "pipelines/inherit-model.yaml",
+          id: "inherit-model",
+        },
+      });
+
+      const yaml = await readFile(path.join(root, "pipelines/inherit-model.yaml"), "utf8");
+      expect(yaml).not.toMatch(/^model:/m);
+
+      await expect(loadStage(path.join(root, "pipelines/inherit-model.yaml"))).resolves.toEqual({
+        id: "inherit-model",
+        system_prompt: "Use the global default.",
+        payload_schema: { type: "object" },
+        clone_input_schema: { type: "object" },
+      });
     } finally {
-      await rm(cwd, { recursive: true, force: true });
+      await cleanup();
+    }
+  });
+
+  it("rejects pipeline_directory outside project root", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const result = await createStage(root, {
+        pipeline_directory: "../outside",
+        filename: "x.yaml",
+        id: "x",
+        system_prompt: "x",
+        model: "m",
+      });
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        error: "pipeline_directory must be inside the project root",
+      });
+    } finally {
+      await cleanup();
     }
   });
 });

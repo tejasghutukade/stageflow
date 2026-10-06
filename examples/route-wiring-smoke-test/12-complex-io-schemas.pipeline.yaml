@@ -1,0 +1,138 @@
+id: route-demo-complex-io
+schemas:
+  finding:
+    type: object
+    required: [id, severity]
+    properties:
+      id:
+        type: string
+        minLength: 1
+      severity:
+        type: string
+        enum: [low, medium, high]
+      detail:
+        type: string
+        nullable: true
+  report:
+    type: object
+    required: [title, status, findings, score, metadata]
+    properties:
+      title:
+        type: string
+        minLength: 1
+        maxLength: 200
+        pattern: "^[A-Za-z0-9].+"
+      status:
+        type: string
+        enum: [draft, review, final]
+      findings:
+        type: array
+        minItems: 1
+        items:
+          $ref: "#/schemas/finding"
+      score:
+        type: integer
+        minimum: 0
+        maximum: 100
+      notes:
+        type: string
+      metadata:
+        type: object
+        required: [source]
+        properties:
+          source:
+            type: string
+          version:
+            type: integer
+            minimum: 1
+  analyzed:
+    type: object
+    required: [title, status, findings, score, metadata, summary]
+    properties:
+      title:
+        type: string
+        minLength: 1
+        maxLength: 200
+        pattern: "^[A-Za-z0-9].+"
+      status:
+        type: string
+        enum: [draft, review, final]
+      findings:
+        type: array
+        minItems: 1
+        items:
+          $ref: "#/schemas/finding"
+      score:
+        type: integer
+        minimum: 0
+        maximum: 100
+      notes:
+        type: string
+      metadata:
+        type: object
+        required: [source]
+        properties:
+          source:
+            type: string
+          version:
+            type: integer
+            minimum: 1
+      summary:
+        type: string
+        minLength: 1
+stages:
+  - id: draft
+    entry: true
+    route:
+      - to: analyze
+    system_prompt: |
+      Draft a findings report in one or two sentences.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and a payload matching #/schemas/report. Copy this example:
+      {"title":"Smoke report","status":"draft","findings":[{"id":"f1","severity":"low","detail":"none"}],"score":80,"metadata":{"source":"smoke-test"}}
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          $ref: "#/schemas/report"
+  - id: analyze
+    route:
+      - to: summarize
+    system_prompt: |
+      Keep the report fields and add a summary string.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and a payload matching #/schemas/analyzed. Copy this example:
+      {"title":"Smoke report","status":"review","findings":[{"id":"f1","severity":"low","detail":"none"}],"score":80,"metadata":{"source":"smoke-test"},"summary":"One low finding; score 80."}
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/report"
+      output:
+        schema:
+          $ref: "#/schemas/analyzed"
+  - id: summarize
+    system_prompt: |
+      Summarize using title, summary, and score from the prior payload. One sentence is enough.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+          required: [title, summary, score]
+          properties:
+            title:
+              type: string
+              minLength: 1
+            summary:
+              type: string
+              minLength: 1
+            score:
+              type: number
+              minimum: 0
+              maximum: 100
+      output:
+        schema:
+          type: object

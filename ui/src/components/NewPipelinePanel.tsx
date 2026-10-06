@@ -1,33 +1,35 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createPipelineWithDetails,
-  isValidStageListing,
   type PipelineListing,
-  type StageListing,
-  type ValidStageListing,
 } from "../api";
 
 const PIPELINE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+const STAGE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
 export type NewPipelinePanelProps = {
   isOpen: boolean;
   onClose: () => void;
   onCreated: (pipeline: PipelineListing) => void;
-  stages: StageListing[];
-  initialStageIds?: string[];
+  pipelines: PipelineListing[];
 };
 
 type CompositionMode = "linear" | "dependencies";
 
-type FieldErrors = Partial<Record<"id" | "stages", string>>;
+type FieldErrors = Partial<Record<"directory" | "id" | "stages", string>>;
 
 function validateFields(values: {
+  directory: string;
   id: string;
   selectedStageIds: string[];
   compositionMode: CompositionMode;
   stageNeeds: Record<string, string>;
 }): FieldErrors {
   const errors: FieldErrors = {};
+  const directory = values.directory.trim();
+  if (!directory) {
+    errors.directory = "Directory is required.";
+  }
   const id = values.id.trim();
   if (!id) {
     errors.id = "Id is required.";
@@ -35,16 +37,24 @@ function validateFields(values: {
     errors.id = "Id must be lowercase kebab-case.";
   }
   if (values.selectedStageIds.length === 0) {
-    errors.stages = "Pick at least one Stage.";
+    errors.stages = "Add at least one stage id.";
   } else if (new Set(values.selectedStageIds).size !== values.selectedStageIds.length) {
-    errors.stages = "A Pipeline cannot repeat the same Stage.";
-  } else if (values.compositionMode === "dependencies") {
-    const selected = new Set(values.selectedStageIds);
+    errors.stages = "A pipeline cannot repeat the same stage id.";
+  } else {
     for (const stageId of values.selectedStageIds) {
-      const needs = values.stageNeeds[stageId];
-      if (needs && (!selected.has(needs) || needs === stageId)) {
-        errors.stages = `Stage "${stageId}" needs a stage that is in this pipeline.`;
+      if (!STAGE_ID_PATTERN.test(stageId)) {
+        errors.stages = `Stage id "${stageId}" must be lowercase kebab-case.`;
         break;
+      }
+    }
+    if (!errors.stages && values.compositionMode === "dependencies") {
+      const selected = new Set(values.selectedStageIds);
+      for (const stageId of values.selectedStageIds) {
+        const needs = values.stageNeeds[stageId];
+        if (needs && (!selected.has(needs) || needs === stageId)) {
+          errors.stages = `Stage "${stageId}" needs a stage that is in this pipeline.`;
+          break;
+        }
       }
     }
   }
@@ -55,44 +65,26 @@ function pipelineCreateBanner(status: number, serverError?: string): string {
   const detail = serverError?.trim();
   let base: string;
   if (status === 409) {
-    base = "Could not create Pipeline: this id already exists.";
+    base = "Could not create pipeline: this id already exists.";
   } else if (status === 422) {
     const lower = detail?.toLowerCase() ?? "";
     if (lower.includes("cycle")) {
-      base = "Could not create Pipeline: dependency cycle detected.";
+      base = "Could not create pipeline: dependency cycle detected.";
     } else if (lower.includes("unknown needs")) {
       base =
-        "Could not create Pipeline: a stage needs another stage that is not in this pipeline.";
+        "Could not create pipeline: a stage needs another stage that is not in this pipeline.";
     } else if (lower.includes("duplicate")) {
-      base = "Could not create Pipeline: the same Stage was selected more than once.";
-    } else if (lower.includes("no longer exist") || lower.includes("exist")) {
-      base = "Could not create Pipeline: one or more selected Stages no longer exist.";
+      base = "Could not create pipeline: the same stage was listed more than once.";
+    } else if (lower.includes("missing stage file")) {
+      base =
+        "Could not create pipeline: create stage files beside the pipeline directory first.";
     } else {
-      base = "Could not create Pipeline. Try again.";
+      base = "Could not create pipeline. Try again.";
     }
   } else {
-    base = "Could not create Pipeline. Try again.";
+    base = "Could not create pipeline. Try again.";
   }
   return detail ? `${base} ${detail}` : base;
-}
-
-function gateLabel(kinds: string[] | undefined): string {
-  if (!kinds || kinds.length === 0) return "none";
-  return kinds.join(" · ");
-}
-
-function usageLabel(stage: ValidStageListing): string {
-  const count = stage.used_by_pipeline_ids.length;
-  if (count === 0) return "unused";
-  return count === 1 ? "1 pipeline" : `${count} pipelines`;
-}
-
-function validStageIds(stages: StageListing[]): Set<string> {
-  const ids = new Set<string>();
-  for (const stage of stages) {
-    if (isValidStageListing(stage)) ids.add(stage.id);
-  }
-  return ids;
 }
 
 function chainNeedsFromOrder(stageIds: string[]): Record<string, string> {
@@ -103,15 +95,28 @@ function chainNeedsFromOrder(stageIds: string[]): Record<string, string> {
   return needs;
 }
 
+function catalogDirectories(pipelines: PipelineListing[]): string[] {
+  const dirs = new Set<string>();
+  for (const pipeline of pipelines) {
+    const normalized = pipeline.path.replace(/\\/g, "/");
+    const slash = normalized.lastIndexOf("/");
+    dirs.add(slash >= 0 ? normalized.slice(0, slash) : "pipelines");
+  }
+  if (dirs.size === 0) dirs.add("pipelines");
+  return [...dirs].sort();
+}
+
 export function NewPipelinePanel({
   isOpen,
   onClose,
   onCreated,
-  stages,
-  initialStageIds,
+  pipelines,
 }: NewPipelinePanelProps) {
+  const directoryOptions = catalogDirectories(pipelines);
+  const [directory, setDirectory] = useState(directoryOptions[0] ?? "pipelines");
   const [id, setId] = useState("");
   const [selectedStageIds, setSelectedStageIds] = useState<string[]>([]);
+  const [newStageId, setNewStageId] = useState("");
   const [compositionMode, setCompositionMode] = useState<CompositionMode>("linear");
   const [stageNeeds, setStageNeeds] = useState<Record<string, string>>({});
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -121,18 +126,17 @@ export function NewPipelinePanel({
 
   useEffect(() => {
     if (isOpen && !wasOpen.current) {
-      const allowed = validStageIds(stages);
+      setDirectory(catalogDirectories(pipelines)[0] ?? "pipelines");
       setId("");
-      setSelectedStageIds(
-        (initialStageIds ?? []).filter((stageId) => allowed.has(stageId)),
-      );
+      setSelectedStageIds([]);
+      setNewStageId("");
       setCompositionMode("linear");
       setStageNeeds({});
       setFieldErrors({});
       setFormBanner(null);
     }
     wasOpen.current = isOpen;
-  }, [isOpen, initialStageIds, stages]);
+  }, [isOpen, pipelines]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -153,10 +157,11 @@ export function NewPipelinePanel({
     setCompositionMode(mode);
   }
 
-  function addStage(stageId: string) {
-    setSelectedStageIds((prev) =>
-      prev.includes(stageId) ? prev : [...prev, stageId],
-    );
+  function addStageId() {
+    const stageId = newStageId.trim();
+    if (!stageId || selectedStageIds.includes(stageId)) return;
+    setSelectedStageIds((prev) => [...prev, stageId]);
+    setNewStageId("");
   }
 
   function moveStage(index: number, direction: -1 | 1) {
@@ -200,7 +205,9 @@ export function NewPipelinePanel({
 
   async function onSubmit() {
     const trimmedId = id.trim();
+    const trimmedDirectory = directory.trim();
     const errors = validateFields({
+      directory: trimmedDirectory,
       id: trimmedId,
       selectedStageIds,
       compositionMode,
@@ -211,14 +218,17 @@ export function NewPipelinePanel({
     if (Object.keys(errors).length > 0) return;
 
     setSubmitting(true);
-    const stagesPayload =
-      compositionMode === "linear"
-        ? selectedStageIds
-        : selectedStageIds.map((stageId) => {
-            const needs = stageNeeds[stageId];
-            return needs ? { id: stageId, needs } : { id: stageId };
-          });
+    const stagesPayload = selectedStageIds.map((stageId) => {
+      if (compositionMode === "dependencies") {
+        const needs = stageNeeds[stageId];
+        return needs
+          ? { id: stageId, uses: `./${stageId}.yaml`, needs }
+          : { id: stageId, uses: `./${stageId}.yaml` };
+      }
+      return { id: stageId, uses: `./${stageId}.yaml` };
+    });
     const result = await createPipelineWithDetails({
+      directory: trimmedDirectory,
       id: trimmedId,
       stages: stagesPayload,
     });
@@ -233,6 +243,7 @@ export function NewPipelinePanel({
   function handleClose() {
     setId("");
     setSelectedStageIds([]);
+    setNewStageId("");
     setCompositionMode("linear");
     setStageNeeds({});
     setFieldErrors({});
@@ -241,8 +252,6 @@ export function NewPipelinePanel({
   }
 
   if (!isOpen) return null;
-
-  const selectedSet = new Set(selectedStageIds);
 
   return (
     <>
@@ -282,6 +291,31 @@ export function NewPipelinePanel({
           ) : null}
 
           <div className="form-field">
+            <label htmlFor="new-pipeline-directory">Directory</label>
+            <input
+              id="new-pipeline-directory"
+              className="input"
+              list="pipeline-directory-options"
+              value={directory}
+              onChange={(e) => setDirectory(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <datalist id="pipeline-directory-options">
+              {directoryOptions.map((option) => (
+                <option key={option} value={option} />
+              ))}
+            </datalist>
+            {fieldErrors.directory ? (
+              <p className="field-error">{fieldErrors.directory}</p>
+            ) : (
+              <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
+                Repo-relative folder for <span className="mono">{id.trim() || "id"}.pipeline.yaml</span> and stage files.
+              </p>
+            )}
+          </div>
+
+          <div className="form-field">
             <label htmlFor="new-pipeline-id">Id</label>
             <input
               id="new-pipeline-id"
@@ -316,18 +350,35 @@ export function NewPipelinePanel({
           </div>
 
           <div className="form-field">
-            <span className="eyebrow">Selected stages</span>
+            <span className="eyebrow">Stage ids</span>
             <p
               className="muted"
               style={{ fontSize: "var(--font-size-sm)", margin: "var(--spacing-1) 0 var(--spacing-3)" }}
             >
-              {compositionMode === "linear"
-                ? "Order matters. Stages run top to bottom."
-                : "Set which stage each row must wait for. Stages with the same needs can run in parallel."}
+              Each id maps to <span className="mono">./&lt;id&gt;.yaml</span> beside the pipeline file. Create stage files first.
             </p>
+            <div style={{ display: "flex", gap: "var(--spacing-2)", marginBottom: "var(--spacing-3)" }}>
+              <input
+                className="input"
+                value={newStageId}
+                onChange={(e) => setNewStageId(e.target.value)}
+                placeholder="stage-id"
+                autoComplete="off"
+                spellCheck={false}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addStageId();
+                  }
+                }}
+              />
+              <button type="button" className="btn btn--sm" onClick={addStageId}>
+                Add
+              </button>
+            </div>
             {selectedStageIds.length === 0 ? (
               <p className="muted" style={{ fontSize: "var(--font-size-sm)" }}>
-                No stages selected yet.
+                No stages added yet.
               </p>
             ) : (
               <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
@@ -364,7 +415,7 @@ export function NewPipelinePanel({
                         >
                           <option value="">(none — root)</option>
                           {selectedStageIds
-                            .filter((id) => id !== stageId)
+                            .filter((optionId) => optionId !== stageId)
                             .map((optionId) => (
                               <option key={optionId} value={optionId}>
                                 {optionId}
@@ -403,76 +454,6 @@ export function NewPipelinePanel({
             {fieldErrors.stages ? (
               <p className="field-error">{fieldErrors.stages}</p>
             ) : null}
-          </div>
-
-          <div className="form-field">
-            <span className="eyebrow">Stage library</span>
-            <p className="muted" style={{ fontSize: "var(--font-size-sm)", margin: "var(--spacing-1) 0 var(--spacing-3)" }}>
-              Add stages from the catalog. Broken files are shown for diagnosis but cannot be selected.
-            </p>
-            {stages.length === 0 ? (
-              <p className="muted" style={{ fontSize: "var(--font-size-sm)" }}>
-                No stages in the catalog yet.
-              </p>
-            ) : (
-              <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-                {stages.map((stage) => {
-                  if (!isValidStageListing(stage)) {
-                    return (
-                      <li
-                        key={stage.path}
-                        style={{
-                          padding: "var(--spacing-3)",
-                          marginBottom: "var(--spacing-2)",
-                          border: "1px solid var(--color-border)",
-                          borderRadius: "var(--radius-container)",
-                          opacity: 0.7,
-                        }}
-                        aria-disabled="true"
-                      >
-                        <span className="mono">{stage.id ?? stage.path}</span>
-                        <span className="field-error" style={{ display: "block", marginTop: "var(--spacing-1)" }}>
-                          {stage.error}
-                        </span>
-                      </li>
-                    );
-                  }
-                  const added = selectedSet.has(stage.id);
-                  return (
-                    <li
-                      key={stage.path}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "var(--spacing-3)",
-                        padding: "var(--spacing-3)",
-                        marginBottom: "var(--spacing-2)",
-                        border: "1px solid var(--color-border)",
-                        borderRadius: "var(--radius-container)",
-                      }}
-                    >
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <span className="mono">{stage.id}</span>
-                        <span
-                          className="muted"
-                          style={{ display: "block", fontSize: "var(--font-size-xs)", marginTop: "var(--spacing-1)" }}
-                        >
-                          gate: {gateLabel(stage.gate_kinds)} · {usageLabel(stage)}
-                        </span>
-                      </span>
-                      <button
-                        type="button"
-                        className="btn btn--sm"
-                        disabled={added}
-                        onClick={() => addStage(stage.id)}
-                      >
-                        {added ? "Added" : "Add"}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
           </div>
 
           <div className="form-actions">

@@ -8,12 +8,12 @@ import {
   loginWithApiKey,
   loginWithOauth,
   logoutProvider,
-  ProviderAuthError,
   setCredentialSource,
   type ProviderAuthContext,
   type ProviderAuthStatus,
   type ProviderSummary,
 } from "../agent/providerAuth.js";
+import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { createTerminalAuthInteraction } from "./terminalAuthInteraction.js";
 import { promptSecret, readApiKeyFromEnv } from "./terminalSecret.js";
 
@@ -192,8 +192,9 @@ export async function runProvidersCommand(
           }
           return 0;
         } catch (err) {
-          if (err instanceof ProviderAuthError && err.status === 404) {
-            out.error("Provider not found");
+          const mapped = mapProviderAuthError(err);
+          if (mapped.status === 404) {
+            out.error(mapped.body.error);
             return 1;
           }
           throw err;

@@ -4,36 +4,79 @@ import { Collapsible } from "@astryxdesign/core/Collapsible";
 import {
   fetchPipelines,
   fetchRun,
+  fetchStageVerification,
+  recoverManualStage,
   rerun,
+  stopManualRecovery,
   type PipelineListing,
   type RunDetail,
+  type StageVerificationHistory,
 } from "../api";
 import { useRunCatalogHandle } from "../catalog/useRunCatalog";
+import {
+  bindingLocatorText,
+  bindingLocatorTitle,
+  runLocatorSubtitle,
+  runTaskLabel,
+} from "../catalog/displayCatalogPath";
 import { ReplyZone } from "../ReplyZone";
-import { StatusLabel } from "../StatusLabel";
 import { AttemptCountBadge } from "../components/AttemptCountBadge";
+import { CostBadge, formatCostUsd } from "../components/CostBadge";
 import { ArtifactAside } from "../components/ArtifactAside";
 import { ArtifactReader } from "../components/ArtifactReader";
 import { ArtifactDecideColumn } from "../components/DecidePanel";
 import { EnvelopeDrawer } from "../components/EnvelopeDrawer";
 import { EnvelopeRecord } from "../components/EnvelopeFields";
-import { RunTrack } from "../components/RunTrack";
+import { FeedbackDecidePanel } from "../components/FeedbackDecidePanel";
+import { FeedbackLoopPanel } from "../components/FeedbackLoopPanel";
+import { LogPanel } from "../components/LogPanel";
+import { SpatialRunMap } from "../components/SpatialRunMap";
 import { TranscriptStream } from "../components/TranscriptStream";
 import { TranscriptTurns } from "../components/TranscriptTurns";
+import { VerificationHistory } from "../components/VerificationHistory";
 import type { DetailView } from "../routes";
-import { cssStatusToken, statusCopy } from "../status/runStatus";
+import {
+  canCancelRun,
+  canDeleteRun,
+} from "../runLifecycle/runActions";
+import { useRunCancel, useRunDelete } from "../runLifecycle/useRunLifecycle";
+import {
+  abandonedDisplayCopy,
+  cancelledDisplayCopy,
+  cssStatusToken,
+  isAbandonedDisplay,
+  statusCopy,
+} from "../status/runStatus";
 import {
   canAbandon,
   canRetry,
+  canResumeTimedOut,
   isStageActionBusy,
   useStageAbandon,
+  useStageResume,
   useStageRetry,
 } from "../stageAction";
 import {
+  activeWaitKey,
+  parseEnvelopeAsidePath,
   resolveRunWorkspace,
+  runDetailShouldPoll,
+  stageCloneLabel,
   type RunWorkspace,
   type SessionChipKind,
 } from "../workspace/resolveRunWorkspace";
+import { resolveStreamRoute } from "../workspace/resolveStreamRoute";
+
+const WORK_DEFAULT_H = 300;
+const WORK_MIN_H = 200;
+const MAP_MIN_H = 140;
+const WORK_ARROW_STEP = 24;
+
+export function clampWorkHeight(requested: number, paneHeight: number): number {
+  const maxByMap = paneHeight - MAP_MIN_H;
+  if (paneHeight < 340) return Math.max(0, maxByMap);
+  return Math.max(WORK_MIN_H, Math.min(requested, maxByMap));
+}
 
 function sessionChipEl(kind: SessionChipKind) {
   if (kind === "alive") return <span className="chip">session alive</span>;
@@ -86,21 +129,37 @@ export function RunDetailPage({
   view: DetailView;
   onBack: () => void;
   onReran: (runId: string) => void;
-  onOpenStream: () => void;
+  onOpenStream: (stageId?: string) => void;
   onOpenArtifact: (path: string) => void;
   onOpenEnvelope: (stageId: string) => void;
 }) {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [pipelines, setPipelines] = useState<PipelineListing[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [userPickedStageId, setUserPickedStageId] = useState<string | null>(null);
+  const [verification, setVerification] = useState<StageVerificationHistory | null>(null);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [manualRecoveryBusy, setManualRecoveryBusy] = useState(false);
+  const [manualRecoveryError, setManualRecoveryError] = useState<string | null>(null);
+  const [userPickedStageId, setUserPickedStageId] = useState<string | null>(
+    () => (view.kind === "stream" && view.stageId ? view.stageId : null),
+  );
   const previousStageIdRef = useRef<string | null>(null);
   const [drawerStageId, setDrawerStageId] = useState<string | null>(null);
+  const [dismissedWaitKey, setDismissedWaitKey] = useState<string | null>(null);
+  const [workHeight, setWorkHeight] = useState(WORK_DEFAULT_H);
+  const [hiddenCenterSide, setHiddenCenterSide] = useState<"transcript" | "logs" | null>(
+    null,
+  );
+  const [paneHeight, setPaneHeight] = useState(0);
+  const [splitDragging, setSplitDragging] = useState(false);
+  const paneRef = useRef<HTMLDivElement>(null);
+  const splitGestureRef = useRef<{ id: number; y: number; h: number } | null>(null);
   const [rerunning, setRerunning] = useState(false);
   const wasWaitingArtifact = useRef(false);
   const onOpenStreamRef = useRef(onOpenStream);
   onOpenStreamRef.current = onOpenStream;
   const catalog = useRunCatalogHandle();
+  const streamViewStageId = view.kind === "stream" ? view.stageId : undefined;
 
   const load = useCallback(async () => {
     try {
@@ -117,12 +176,72 @@ export function RunDetailPage({
     catalog.refresh();
   }, [load, catalog]);
 
+  const recoverStage = useCallback(
+    async (stageId: string, guidance: string) => {
+      setManualRecoveryBusy(true);
+      setManualRecoveryError(null);
+      try {
+        await recoverManualStage(runId, stageId, guidance);
+        await onStageActionSuccess();
+      } catch (err) {
+        setManualRecoveryError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setManualRecoveryBusy(false);
+      }
+    },
+    [onStageActionSuccess, runId],
+  );
+
+  const stopStageRecovery = useCallback(
+    async (stageId: string) => {
+      if (!window.confirm("Stop manual recovery? This stage will remain failed in this run.")) {
+        return;
+      }
+      setManualRecoveryBusy(true);
+      setManualRecoveryError(null);
+      try {
+        await stopManualRecovery(runId, stageId);
+        await onStageActionSuccess();
+      } catch (err) {
+        setManualRecoveryError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setManualRecoveryBusy(false);
+      }
+    },
+    [onStageActionSuccess, runId],
+  );
+
   const {
     retryingStageIds,
     error: retryError,
     retry,
     clearError: clearRetryError,
   } = useStageRetry(runId, onStageActionSuccess);
+
+  const retryAndSelect = useCallback(
+    (stageId: string) => {
+      setUserPickedStageId(stageId);
+      onOpenStream(stageId);
+      retry(stageId);
+    },
+    [onOpenStream, retry],
+  );
+
+  const {
+    resumingStageIds,
+    error: resumeError,
+    resume,
+    clearError: clearResumeError,
+  } = useStageResume(runId, onStageActionSuccess);
+
+  const resumeAndSelect = useCallback(
+    (stageId: string) => {
+      setUserPickedStageId(stageId);
+      onOpenStream(stageId);
+      resume(stageId);
+    },
+    [onOpenStream, resume],
+  );
 
   const {
     abandoningStageId,
@@ -131,23 +250,55 @@ export function RunDetailPage({
     clearError: clearAbandonError,
   } = useStageAbandon(runId, onStageActionSuccess);
 
+  const onDeleted = useCallback(async () => {
+    catalog.refresh();
+    onBack();
+  }, [catalog, onBack]);
+
+  const {
+    cancelling,
+    error: cancelError,
+    cancel,
+    clearError: clearCancelError,
+  } = useRunCancel(runId, onStageActionSuccess);
+
+  const {
+    deleting,
+    error: deleteError,
+    deleteRun: removeRun,
+    clearError: clearDeleteError,
+  } = useRunDelete(runId, run?.status, onDeleted);
+
   const actionBusy = {
     retryingStageIds,
     abandoningStageId,
+    resumingStageIds,
   };
 
   useEffect(() => {
-    setUserPickedStageId(null);
+    setUserPickedStageId(streamViewStageId ?? null);
     previousStageIdRef.current = null;
     setDrawerStageId(null);
+    setDismissedWaitKey(null);
+    setWorkHeight(WORK_DEFAULT_H);
+    setHiddenCenterSide(null);
     setRun(null);
     setError(null);
+    setVerification(null);
+    setVerificationError(null);
+    setManualRecoveryBusy(false);
+    setManualRecoveryError(null);
     wasWaitingArtifact.current = false;
   }, [runId]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (view.kind !== "stream") return;
+    setUserPickedStageId(streamViewStageId ?? null);
+  }, [view.kind, streamViewStageId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,16 +314,16 @@ export function RunDetailPage({
     };
   }, []);
 
+  const live = runDetailShouldPoll(run, {
+    retrying: retryingStageIds.size > 0,
+    abandoning: abandoningStageId !== null,
+  });
+
   useEffect(() => {
-    const live =
-      run?.status === "created" ||
-      run?.status === "running" ||
-      retryingStageIds.size > 0 ||
-      abandoningStageId !== null;
     if (!live) return;
     const id = window.setInterval(() => void load(), 1000);
     return () => window.clearInterval(id);
-  }, [load, run?.status, retryingStageIds, abandoningStageId]);
+  }, [load, live]);
 
   const plannedStageIds =
     pipelines?.find((p) => p.id === run?.pipeline_id)?.stages.map((s) => s.id) ??
@@ -186,11 +337,37 @@ export function RunDetailPage({
           previousStageId: userPickedStageId ?? previousStageIdRef.current,
           userPicked: userPickedStageId !== null,
           drawerStageId,
+          dismissedWaitKey,
           wasWaitingArtifact: wasWaitingArtifact.current,
         },
         plannedStageIds,
       )
     : null;
+
+  const verificationStageId = workspace?.selectedStageId;
+  const verificationAttemptCount = workspace?.selectedStage?.attempt_count;
+  useEffect(() => {
+    if (!verificationStageId) {
+      setVerification(null);
+      setVerificationError(null);
+      return;
+    }
+    let cancelled = false;
+    setVerification(null);
+    setVerificationError(null);
+    void fetchStageVerification(runId, verificationStageId)
+      .then((history) => {
+        if (!cancelled) setVerification(history);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setVerificationError(err instanceof Error ? err.message : String(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, verificationStageId, verificationAttemptCount]);
 
   if (workspace) previousStageIdRef.current = workspace.selectedStageId;
 
@@ -201,16 +378,77 @@ export function RunDetailPage({
   }
 
   useEffect(() => {
-    if (workspace?.syncStreamRoute) {
-      onOpenStreamRef.current();
+    const command = resolveStreamRoute({
+      view,
+      streamViewStageId,
+      run,
+      plannedStageIds,
+      selectedStageId: workspace?.selectedStageId ?? null,
+      syncStreamRoute: workspace?.syncStreamRoute ?? false,
+      userPickedStageId,
+      dismissedWaitKey,
+    });
+    if (command.action === "openStream") {
+      onOpenStreamRef.current(command.stageId);
     }
-  }, [workspace?.syncStreamRoute]);
+  }, [
+    view,
+    streamViewStageId,
+    run,
+    plannedStageIds,
+    workspace?.selectedStageId,
+    workspace?.syncStreamRoute,
+    userPickedStageId,
+    dismissedWaitKey,
+  ]);
+
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    const measure = () => setPaneHeight(el.getBoundingClientRect().height);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const applyWorkHeight = useCallback(
+    (requested: number) => {
+      const height = paneRef.current?.getBoundingClientRect().height ?? paneHeight;
+      setWorkHeight(clampWorkHeight(requested, height));
+    },
+    [paneHeight],
+  );
+
+  const hideWorkspace = useCallback(() => {
+    if (run) setDismissedWaitKey(activeWaitKey(run));
+    setUserPickedStageId(null);
+    previousStageIdRef.current = null;
+    setDrawerStageId(null);
+    onOpenStream();
+  }, [onOpenStream, run]);
+
+  const openSelectedStream = useCallback(() => {
+    const stageId =
+      workspace?.selectedStageId ??
+      (view.kind === "envelope" ? view.stageId : undefined) ??
+      userPickedStageId;
+    if (stageId) {
+      setUserPickedStageId(stageId);
+      onOpenStream(stageId);
+      return;
+    }
+    onOpenStream();
+  }, [onOpenStream, userPickedStageId, view, workspace?.selectedStageId]);
 
   async function onRerunClick() {
     setRerunning(true);
     setError(null);
     clearRetryError();
     clearAbandonError();
+    clearResumeError();
+    clearCancelError();
+    clearDeleteError();
     try {
       const result = await rerun(runId);
       onReran(result.runId);
@@ -222,80 +460,160 @@ export function RunDetailPage({
   }
 
   const stage = workspace?.selectedStage ?? null;
+  const manualRecovery =
+    verification !== null && verification.stage_id === stage?.stage_id
+      ? verification.manual_recovery
+      : undefined;
   const selectedPath = workspace?.selectedPath;
   const runToken = run ? cssStatusToken(run.status) : undefined;
   const composer = workspace
     ? composerEl(runId, workspace, onOpenArtifact)
     : undefined;
+  const hasMapNodes = Boolean(workspace && workspace.spatialLayout.nodes.length > 0);
+  const showWorkspace = Boolean(
+    workspace &&
+      (workspace.selectedStageId ||
+        workspace.kind === "artifact" ||
+        workspace.kind === "envelope"),
+  );
 
-  let body;
+  const abandoned = stage ? isAbandonedDisplay(stage.events) : false;
+  const hideButton = (
+    <button type="button" className="btn btn--sm" onClick={hideWorkspace}>
+      Hide workspace
+    </button>
+  );
+
+  let center;
   if (error) {
-    body = (
+    center = (
       <div style={{ padding: "var(--spacing-4)" }}>
         <div className="banner banner--error">{error}</div>
       </div>
     );
   } else if (!run || !workspace) {
-    body = (
+    center = (
       <div style={{ padding: "var(--spacing-4)" }}>
         <p>Loading…</p>
       </div>
     );
-  } else if (workspace.kind === "empty") {
-    body = (
-      <div style={{ padding: "var(--spacing-4)" }}>
-        <p>
-          {run.stages.length === 0
-            ? "No stages have started yet."
-            : "Select a stage to inspect."}
-        </p>
-      </div>
-    );
   } else if (workspace.kind === "artifact" && selectedPath) {
-    body = (
+    center = (
       <ArtifactReader
         runId={runId}
         path={selectedPath}
         readOnly={workspace.artifactReadOnly}
-        onBackToTranscript={onOpenStream}
+        onBackToTranscript={openSelectedStream}
+        onHide={hideWorkspace}
       />
     );
   } else if (workspace.kind === "envelope" && workspace.envelope) {
-    body = workspace.envelope.envelope ? (
+    center = workspace.envelope.envelope ? (
       <EnvelopeRecord
         fromStageId={workspace.envelope.fromStageId}
         toStageId={workspace.envelope.toStageId}
         envelope={workspace.envelope.envelope}
-        onBackToTranscript={onOpenStream}
+        onBackToTranscript={openSelectedStream}
+        onHide={hideWorkspace}
         onArtifactClick={onOpenArtifact}
+        stageLabel={(id) => stageCloneLabel(run, id)}
       />
     ) : (
-      <div style={{ padding: "var(--spacing-4)" }}>
-        <div className="banner banner--warning">{workspace.envelope.fromStageId} has not emitted a handoff envelope.</div>
+      <div className="stream" style={{ height: "100%" }}>
+        <header className="stream__head">
+          <h3 className="stream__name">Handoff envelope</h3>
+          <span className="topbar__spacer"></span>
+          <div className="stream__head-trail">
+            <button type="button" className="btn btn--sm" onClick={openSelectedStream}>
+              ← Transcript
+            </button>
+            {hideButton}
+          </div>
+        </header>
+        <div style={{ padding: "var(--spacing-4)" }}>
+          <div className="banner banner--warning">{workspace.envelope.fromStageId} has not emitted a handoff envelope.</div>
+        </div>
       </div>
     );
-  } else if (stage) {
-    body = (
+  } else if (workspace.selectedStageId) {
+    const streamStageId = workspace.selectedStageId;
+    const stageToken = stage ? cssStatusToken(stage.status) : undefined;
+    const showTranscript = hiddenCenterSide !== "transcript";
+    const showLogs = hiddenCenterSide !== "logs";
+    const transcriptTrailing = (
+      <>
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={() => setHiddenCenterSide(showLogs ? "logs" : null)}
+        >
+          {showLogs ? "Hide logs" : "Show logs"}
+        </button>
+        {hideButton}
+      </>
+    );
+    const logsHeaderAction = (
+      <>
+        {stage ? <CostBadge costUsd={stage.cost_usd} /> : null}
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={() => setHiddenCenterSide(showTranscript ? "transcript" : null)}
+        >
+          {showTranscript ? "Hide transcript" : "Show transcript"}
+        </button>
+        {hideButton}
+      </>
+    );
+    center = (
+      <div className="center-split">
+      <div className="center-split__transcript" hidden={!showTranscript}>
       <TranscriptStream
-        stageName={stage.stage_id}
+        stageName={
+          workspace.trackStages.find((s) => s.id === streamStageId)?.label ??
+          streamStageId
+        }
         status={
           <>
-            <StatusLabel status={stage.status} />
-            <AttemptCountBadge count={stage.attempt_count} />
+            {abandoned ? (
+              <span className="status status--failed">
+                <span className="dot dot--failed"></span>
+                {" "}{abandonedDisplayCopy()}
+              </span>
+            ) : (
+              <span className={`status${stageToken && stageToken !== "running" ? ` status--${stageToken}` : ""}`}>
+                <span className={`dot${stageToken ? ` dot--${stageToken}` : ""}`}></span>
+                {" "}{stage ? statusCopy(stage.status) : "pending"}
+              </span>
+            )}
+            {stage ? <AttemptCountBadge count={stage.attempt_count} /> : null}
+            {stage ? <CostBadge costUsd={stage.cost_usd} /> : null}
             {sessionChipEl(workspace.sessionChip)}
-            {canRetry(stage.status) ? (
+            {stage && canResumeTimedOut(stage) && manualRecovery === undefined ? (
               <button
                 type="button"
                 className="btn btn--sm"
                 disabled={isStageActionBusy(actionBusy, stage.stage_id)}
-                onClick={() => retry(stage.stage_id)}
+                onClick={() => resumeAndSelect(stage.stage_id)}
+              >
+                {resumingStageIds.has(stage.stage_id)
+                  ? "Resuming…"
+                  : "Resume session"}
+              </button>
+            ) : null}
+            {stage && canRetry(stage.status) && manualRecovery === undefined ? (
+              <button
+                type="button"
+                className="btn btn--sm"
+                disabled={isStageActionBusy(actionBusy, stage.stage_id)}
+                onClick={() => retryAndSelect(stage.stage_id)}
               >
                 {retryingStageIds.has(stage.stage_id)
                   ? "Retrying…"
                   : "Retry stage"}
               </button>
             ) : null}
-            {canAbandon(stage.status) ? (
+            {stage && canAbandon(stage.status) ? (
               <button
                 type="button"
                 className="btn btn--sm btn--reject"
@@ -307,123 +625,324 @@ export function RunDetailPage({
             ) : null}
           </>
         }
+        trailing={transcriptTrailing}
         autoScroll={workspace.liveStream}
-        scrollKey={stage.events.length}
+        scrollKey={stage?.events.length}
         composer={composer}
       >
         <TranscriptTurns
-          events={stage.events}
+          events={stage?.events ?? []}
           inboundEnvelope={workspace.inboundEnvelope}
         />
+        <VerificationHistory
+          history={verification}
+          error={verificationError}
+          recovering={manualRecoveryBusy}
+          onRecover={stage ? (guidance) => void recoverStage(stage.stage_id, guidance) : undefined}
+          onStop={stage ? () => void stopStageRecovery(stage.stage_id) : undefined}
+        />
       </TranscriptStream>
+      </div>
+      <div className="center-split__logs" hidden={!showLogs}>
+        <LogPanel events={stage?.events ?? []} headerAction={logsHeaderAction} />
+      </div>
+      </div>
     );
   }
 
+  const splitMax = Math.max(0, paneHeight - MAP_MIN_H);
+  const splitMin = paneHeight < 340 ? splitMax : WORK_MIN_H;
+
   return (
     <>
-      <div className="pane" style={{ height: "100%" }}>
-        <div className="topbar">
-          <a className="topbar__back" href="#/runs" onClick={e => { e.preventDefault(); onBack(); }}>← Runs</a>
-          <h2 className="topbar__title">{run?.pipeline_id ?? runId}</h2>
-          {run?.task_id ? <span className="topbar__sub">{run.task_id}</span> : null}
-          {run ? (
-            <span className={`status${runToken && runToken !== "running" ? ` status--${runToken}` : ""}`}>
-              <span className={`dot${runToken ? ` dot--${runToken}` : ""}`}></span>
-              {" "}{statusCopy(run.status)}
-            </span>
-          ) : null}
-          <span className="topbar__spacer"></span>
-          <button className="btn btn--primary" disabled={rerunning} onClick={() => void onRerunClick()}>
-            {rerunning ? "Starting fresh…" : "Start fresh"}
-          </button>
-        </div>
-
-        {retryError ? (
-          <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
-            {retryError}
-          </div>
-        ) : null}
-
-        {abandonError ? (
-          <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
-            {abandonError}
-          </div>
-        ) : null}
-
-        {run && workspace && (workspace.trackLayout.mode === "linear"
-          ? workspace.trackLayout.linearStages.length > 0
-          : workspace.trackLayout.dagLayers.some((l) => l.length > 0) ||
-            workspace.detailListRows.length > 0) ? (
-          <RunTrack
-            trackLayout={workspace.trackLayout}
-            detailListRows={workspace.detailListRows}
-            selectedStageId={workspace.selectedStageId}
-            onSelect={(id) => {
-              setUserPickedStageId(id);
-              onOpenStream();
-            }}
-            onEnvelopeClick={(fromStageId) => setDrawerStageId(fromStageId)}
-            activeEnvelopeId={workspace.activeEnvelopeId}
-            retryingStageIds={retryingStageIds}
-            onRetryStage={retry}
-            abandoningStageId={abandoningStageId}
-            onAbandonStage={abandon}
-          />
-        ) : null}
-
-        <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-          {run && run.stages.length > 0 && workspace ? (
-            <div style={{ width: 240, flexShrink: 0, borderRight: "1px solid var(--color-border)", overflow: "auto" }}>
-              <ArtifactAside
-                files={workspace.artifactFiles}
-                selectedPath={selectedPath}
-                onSelect={onOpenArtifact}
-                footer={
-                  <Collapsible
-                    trigger={<span style={{ fontSize: "var(--font-size-sm)", fontWeight: 500 }}>Input</span>}
-                    defaultIsOpen={false}
-                  >
-                    <CodeBlock
-                      code={run.task_yaml}
-                      language="yaml"
-                      container="section"
-                      maxHeight={200}
-                      width="100%"
-                    />
-                  </Collapsible>
-                }
-              />
-            </div>
-          ) : null}
-
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            {body}
-          </div>
-
-          {workspace?.showDecide && workspace.decidePrompt && stage ? (
-            <div style={{ width: 320, flexShrink: 0, borderLeft: "1px solid var(--color-border)" }}>
-              <ArtifactDecideColumn
-                runId={runId}
-                stageId={stage.stage_id}
-                prompt={workspace.decidePrompt}
-                events={stage.events}
-                inboundEnvelope={workspace.inboundEnvelope}
-                inboundFromStageId={workspace.inboundFromStageId}
-                inboundToStageId={workspace.inboundToStageId}
-                selectedPath={selectedPath}
-                onSelectArtifact={onOpenArtifact}
-                onOpenInboundEnvelope={
-                  workspace.inboundFromStageId
-                    ? () => {
-                        const fromId = workspace.inboundFromStageId;
-                        if (fromId) setDrawerStageId(fromId);
-                      }
+      <div
+        ref={paneRef}
+        className={`pane run-detail${showWorkspace ? " has-stage" : ""}${splitDragging ? " is-resizing" : ""}`}
+        style={{ height: "100%", ["--work-h" as string]: `${workHeight}px` }}
+      >
+        <div>
+          <div className="topbar">
+            <a className="topbar__back" href="#/runs" onClick={e => { e.preventDefault(); onBack(); }}>← Runs</a>
+            <h2 className="topbar__title">{run ? runTaskLabel(run) : "Loading…"}</h2>
+            {run ? (
+              <span className="topbar__sub" title={runLocatorSubtitle(run)}>
+                {runLocatorSubtitle(run)}
+              </span>
+            ) : null}
+            {run?.binding ? (
+              <span
+                className="topbar__sub"
+                title={bindingLocatorTitle(run.binding)}
+              >
+                {bindingLocatorText(run.binding)}
+              </span>
+            ) : null}
+            {run ? (
+              <span
+                className={`status${runToken && runToken !== "running" ? ` status--${runToken}` : ""}`}
+                title={
+                  run.status === "cancelled" && run.cancel_reason
+                    ? run.cancel_reason
                     : undefined
                 }
-              />
+              >
+                <span className={`dot${runToken ? ` dot--${runToken}` : ""}`}></span>
+                {" "}
+                {run.status === "cancelled"
+                  ? cancelledDisplayCopy(run.cancel_reason)
+                  : statusCopy(run.status)}
+              </span>
+            ) : null}
+            {run && formatCostUsd(run.total_cost_usd) ? (
+              <span className="topbar__sub" title="Total cost across every stage in this run">
+                {formatCostUsd(run.total_cost_usd)}
+              </span>
+            ) : null}
+            <span className="topbar__spacer"></span>
+            {run && canCancelRun(run.status) ? (
+              <button
+                type="button"
+                className="btn btn--sm"
+                disabled={cancelling || deleting || rerunning}
+                onClick={() => {
+                  clearCancelError();
+                  cancel();
+                }}
+              >
+                {cancelling ? "Cancelling…" : "Cancel"}
+              </button>
+            ) : null}
+            {run && canDeleteRun(run.status) ? (
+              <button
+                type="button"
+                className="btn btn--sm btn--reject"
+                disabled={cancelling || deleting || rerunning}
+                onClick={() => {
+                  clearDeleteError();
+                  removeRun();
+                }}
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            ) : null}
+            <button className="btn btn--primary" disabled={rerunning || cancelling || deleting} onClick={() => void onRerunClick()}>
+              {rerunning
+                ? run?.status === "created"
+                  ? "Starting…"
+                  : "Starting fresh…"
+                : run?.status === "created"
+                  ? "Start run"
+                  : "Start fresh"}
+            </button>
+          </div>
+
+          {retryError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {retryError}
+            </div>
+          ) : null}
+
+          {resumeError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {resumeError}
+            </div>
+          ) : null}
+
+          {abandonError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {abandonError}
+            </div>
+          ) : null}
+
+          {cancelError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {cancelError}
+            </div>
+          ) : null}
+
+          {deleteError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {deleteError}
+            </div>
+          ) : null}
+
+          {manualRecoveryError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {manualRecoveryError}
             </div>
           ) : null}
         </div>
+
+        {error && !run ? (
+          <div style={{ padding: "var(--spacing-4)" }}>
+            <div className="banner banner--error">{error}</div>
+          </div>
+        ) : !run || !workspace ? (
+          <div style={{ padding: "var(--spacing-4)" }}>
+            <p>Loading…</p>
+          </div>
+        ) : hasMapNodes ? (
+          <div className="workspace">
+            {(run.active_feedback_loop || (run.feedback_loops?.length ?? 0) > 0) ? (
+              <FeedbackLoopPanel
+                active={run.active_feedback_loop}
+                history={run.feedback_loops ?? []}
+              />
+            ) : null}
+            <SpatialRunMap
+              layout={workspace.spatialLayout}
+              stages={run.stages}
+              nodeChrome={workspace.nodeChrome}
+              selectedStageId={workspace.selectedStageId}
+              onSelectStage={(id) => {
+                setUserPickedStageId(id);
+                onOpenStream(id);
+              }}
+              onDeselect={hideWorkspace}
+              retryingStageIds={retryingStageIds}
+              onRetryStage={retryAndSelect}
+              resumingStageIds={resumingStageIds}
+              onResumeStage={resumeAndSelect}
+              abandoningStageId={abandoningStageId}
+              onAbandonStage={abandon}
+              runId={runId}
+              showHint={!showWorkspace}
+              feedbackOverlays={workspace.feedbackOverlays}
+            />
+          </div>
+        ) : (
+          <div style={{ padding: "var(--spacing-4)" }}>
+            <p>No stages have started yet.</p>
+          </div>
+        )}
+
+        {showWorkspace && run && workspace ? (
+          <div className="work">
+            <div
+              className={`work-split${splitDragging ? " is-dragging" : ""}`}
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize workspace"
+              aria-valuemin={splitMin}
+              aria-valuemax={splitMax}
+              aria-valuenow={Math.round(workHeight)}
+              tabIndex={0}
+              onPointerDown={(event) => {
+                if (event.button != null && event.button !== 0) return;
+                event.preventDefault();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                setSplitDragging(true);
+                splitGestureRef.current = {
+                  id: event.pointerId,
+                  y: event.clientY,
+                  h: workHeight,
+                };
+              }}
+              onPointerMove={(event) => {
+                const gesture = splitGestureRef.current;
+                if (!gesture || gesture.id !== event.pointerId) return;
+                applyWorkHeight(gesture.h + (gesture.y - event.clientY));
+              }}
+              onPointerUp={(event) => {
+                if (splitGestureRef.current?.id !== event.pointerId) return;
+                splitGestureRef.current = null;
+                setSplitDragging(false);
+              }}
+              onPointerCancel={(event) => {
+                if (splitGestureRef.current?.id !== event.pointerId) return;
+                splitGestureRef.current = null;
+                setSplitDragging(false);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  applyWorkHeight(workHeight + WORK_ARROW_STEP);
+                }
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  applyWorkHeight(workHeight - WORK_ARROW_STEP);
+                }
+                if (event.key === "Home") {
+                  event.preventDefault();
+                  applyWorkHeight(splitMax);
+                }
+                if (event.key === "End") {
+                  event.preventDefault();
+                  applyWorkHeight(splitMin);
+                }
+              }}
+            >
+              <span className="work-split__grip" aria-hidden="true"></span>
+            </div>
+            <div className="work-row">
+              <div className="aside" style={{ width: 240, flexShrink: 0, overflow: "auto" }}>
+                <ArtifactAside
+                  files={workspace.artifactFiles}
+                  selectedPath={selectedPath}
+                  onSelect={(path) => {
+                    const envelopeStageId = parseEnvelopeAsidePath(path);
+                    if (envelopeStageId) {
+                      setUserPickedStageId(envelopeStageId);
+                      onOpenEnvelope(envelopeStageId);
+                      return;
+                    }
+                    onOpenArtifact(path);
+                  }}
+                  footer={
+                    <Collapsible
+                      trigger={<span style={{ fontSize: "var(--font-size-sm)", fontWeight: 500 }}>Input</span>}
+                      defaultIsOpen={false}
+                    >
+                      <CodeBlock
+                        code={run.task_yaml}
+                        language="yaml"
+                        container="section"
+                        maxHeight={200}
+                        width="100%"
+                      />
+                    </Collapsible>
+                  }
+                />
+              </div>
+
+              <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                {center}
+              </div>
+
+              {workspace.showFeedbackDecide && workspace.feedbackDecide ? (
+                <div className="decide" style={{ width: 320, flexShrink: 0 }}>
+                  <FeedbackDecidePanel
+                    runId={runId}
+                    decide={workspace.feedbackDecide}
+                    onSuccess={onStageActionSuccess}
+                  />
+                </div>
+              ) : workspace.showDecide && workspace.decidePrompt && stage ? (
+                <div className="decide" style={{ width: 320, flexShrink: 0 }}>
+                  <ArtifactDecideColumn
+                    runId={runId}
+                    stageId={stage.stage_id}
+                    prompt={workspace.decidePrompt}
+                    events={stage.events}
+                    inboundEnvelope={workspace.inboundEnvelope}
+                    inboundFromStageId={workspace.inboundFromStageId}
+                    inboundToStageId={workspace.inboundToStageId}
+                    selectedPath={selectedPath}
+                    onSelectArtifact={onOpenArtifact}
+                    onOpenInboundEnvelope={
+                      workspace.inboundFromStageId
+                        ? () => {
+                            const fromId = workspace.inboundFromStageId;
+                            if (fromId) setDrawerStageId(fromId);
+                          }
+                        : undefined
+                    }
+                  />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {workspace?.drawer ? (

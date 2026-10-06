@@ -54,7 +54,9 @@ export function formatActivityLabel(event: StageLogEvent): string {
     case "succeeded":
       return "Stage succeeded";
     case "failed":
-      return event.reason ? `Stage failed: ${event.reason}` : "Stage failed";
+      return "Stage failed";
+    case "interrupted":
+      return "Stage interrupted";
     case "agent_start":
       return "Agent started";
     case "agent_end":
@@ -67,6 +69,8 @@ export function formatActivityLabel(event: StageLogEvent): string {
       return event.isError
         ? `✕ ${event.toolName ?? "tool"}`
         : `✓ ${event.toolName ?? "tool"}`;
+    case "tool_progress":
+      return `│ ${event.toolName ?? "tool"}`;
     case "message": {
       const role = event.role ?? "message";
       if (event.text) return `${role}: ${event.text}`;
@@ -80,16 +84,38 @@ export function formatActivityLabel(event: StageLogEvent): string {
       return waitingOnYouTitle();
     case "resumed":
       return "Stage resumed";
+    case "feedback_loop_decided":
+      return "Feedback loop decided";
     default:
       return event.event;
   }
 }
 
+function describeFeedbackLoopDecided(event: StageLogEvent): string | undefined {
+  const decision = event.decision;
+  if (
+    decision !== "extend" &&
+    decision !== "continue" &&
+    decision !== "abandon"
+  ) {
+    return undefined;
+  }
+  const reason =
+    typeof event.reason === "string" && event.reason.trim()
+      ? activitySnippet(event.reason)
+      : undefined;
+  return reason ? `${decision} — ${reason}` : decision;
+}
+
 export function formatActivityDescription(event: StageLogEvent): string | undefined {
   if (event.event === "tool_start" && event.argsPreview) return event.argsPreview;
   if (event.event === "tool_end" && event.resultPreview) return event.resultPreview;
+  if (event.event === "tool_progress" && event.textPreview) return event.textPreview;
   if (event.event === "failed" && event.reason) return event.reason;
+  if (event.event === "interrupted" && event.reason) return event.reason;
+  if (event.event === "turn_start" && event.reason) return event.reason;
   if (event.event === "operator_prompt") return describeOperatorPrompt(event);
   if (event.event === "operator_answer") return describeOperatorAnswer(event);
+  if (event.event === "feedback_loop_decided") return describeFeedbackLoopDecided(event);
   return undefined;
 }

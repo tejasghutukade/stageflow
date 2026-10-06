@@ -1,5 +1,12 @@
 import type { AgentPort } from "../agent/port.js";
-import type { RunDetail, RunStatus, RunStore } from "../runstore/port.js";
+import {
+  findUnhandledFailedStage,
+  type RunDetail,
+  type RunPipelineDagSnapshot,
+  type RunStatus,
+  type RunStore,
+  type StageSnapshot,
+} from "../runstore/port.js";
 import type { PipelineRunResult } from "./pipelineRunner.js";
 import {
   retryRun,
@@ -8,6 +15,7 @@ import {
 } from "./pipelineScheduler.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import type { StageExecutionMode } from "./stageConcurrency.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
 import type { StageProcessLauncher } from "./stageProcessLauncher.js";
 import type { StageHitlController } from "./stageHitl.js";
 import { syncRunStatusFromStages } from "./stageRecovery.js";
@@ -63,8 +71,14 @@ export type RunRetryCoordinatorStartOptions = {
 };
 
 export type RetryStageResult =
-  | { ok: true; runId: string; stageId: string; attemptIndex: number }
-  | { ok: false; reason: string; status?: number };
+  | {
+      ok: true;
+      runId: string;
+      stageId: string;
+      attemptIndex: number;
+      done?: Promise<PipelineRunResult>;
+    }
+  | { ok: false; reason: string; status?: number; code?: string };
 
 export type RetryTrackingPort = {
   ensureResumeTracked(runId: string): Promise<
@@ -92,25 +106,50 @@ export type RetryStageRequest = {
   agent: AgentPort;
   cwd: string;
   operatorCatalog?: OperatorCatalog;
+  browser?: StageBrowserSupport;
   maxActiveStagesPerRun: number;
   executionMode: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   hitl: StageHitlController;
   orchestrationConflict: boolean;
   tracking: RetryTrackingPort;
+  awaitRoot?: boolean;
+  beforeAttemptStart?: (attempt: number) => Promise<void>;
 };
+
+export function succeededStageRetryBlocker(
+  stageSnap: StageSnapshot,
+): string | undefined {
+  if (
+    stageSnap.definition_id !== undefined &&
+    stageSnap.definition_id !== stageSnap.stage_id
+  ) {
+    return `Cannot re-run a succeeded clone instance stage (stage=${stageSnap.stage_id}, definition=${stageSnap.definition_id}): clone instances are created by upstream fan-out and cannot be rebuilt in place. Use rerun to start a new run.`;
+  }
+  if (stageSnap.envelope?.fork_choice !== undefined) {
+    return `Cannot re-run a succeeded fork stage (stage=${stageSnap.stage_id}): its envelope recorded a fork_choice and skipped branches cannot be restored. Use rerun to start a new run.`;
+  }
+  return undefined;
+}
 
 export function assertStageRetryEligible(
   detail: RunDetail,
   stageId: string,
-  opts?: { recoveryActive?: boolean },
-): { ok: true } | { ok: false; reason: string; status: number } {
+  opts?: {
+    recoveryActive?: boolean;
+    persistedStatus?: RunStatus;
+    dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null;
+  },
+): {
+  ok: true;
+} | { ok: false; reason: string; status: number; code: string } {
   const stageSnap = detail.stages.find((s) => s.stage_id === stageId);
   if (!stageSnap) {
     return {
       ok: false,
       reason: `Stage not found: ${stageId}`,
       status: 404,
+      code: "stage_not_found",
     };
   }
 
@@ -119,26 +158,47 @@ export function assertStageRetryEligible(
       ok: false,
       reason: `Stage is waiting for input and cannot be retried`,
       status: 409,
+      code: "hitl_not_retriable",
     };
   }
 
+  const runStatus = opts?.persistedStatus ?? detail.status;
   const recoveryActive = opts?.recoveryActive === true;
-  if (detail.status !== "failed") {
-    if (!(detail.status === "running" && recoveryActive)) {
+  if (runStatus !== "failed" && runStatus !== "succeeded") {
+    const acceptedPendingRetry =
+      runStatus === "running" &&
+      stageSnap.status === "failed" &&
+      findUnhandledFailedStage(detail.stages, opts?.dag) === undefined &&
+      detail.stages.some((stage) => stage.status === "pending");
+    if (!(runStatus === "running" && recoveryActive) && !acceptedPendingRetry) {
       return {
         ok: false,
-        reason: `Run is not failed (status=${detail.status})`,
+        reason: `Run is not failed or succeeded (status=${runStatus})`,
         status: 409,
+        code: "run_not_retryable",
       };
     }
   }
 
-  if (stageSnap.status !== "failed") {
+  if (stageSnap.status !== "failed" && stageSnap.status !== "succeeded") {
     return {
       ok: false,
-      reason: `Stage is not failed (status=${stageSnap.status})`,
+      reason: `Stage is not failed or succeeded (status=${stageSnap.status})`,
       status: 409,
+      code: "stage_not_failed",
     };
+  }
+
+  if (stageSnap.status === "succeeded") {
+    const blocker = succeededStageRetryBlocker(stageSnap);
+    if (blocker !== undefined) {
+      return {
+        ok: false,
+        reason: blocker,
+        status: 409,
+        code: "run_not_retryable",
+      };
+    }
   }
 
   return { ok: true };
@@ -152,7 +212,7 @@ function rootWaitKey(runId: string, stageId: string, attempt: number): string {
   return `${runId}\0${stageId}\0${attempt}`;
 }
 
-function readRetryRootWaitTimeoutMs(): number {
+export function readRetryRootWaitTimeoutMs(): number {
   const raw = process.env.STAGEFLOW_RETRY_ROOT_WAIT_TIMEOUT_MS;
   if (raw !== undefined && raw !== "") {
     const parsed = Number(raw);
@@ -342,22 +402,35 @@ export class RunRetryCoordinator {
     const { runId, stageId, store, tracking } = req;
 
     let detail;
+    let metaStatus: RunStatus;
+    let dag: RunPipelineDagSnapshot | undefined;
     try {
       detail = await store.readRun(runId);
+      const meta = await store.readRunMeta(runId);
+      metaStatus = meta.status ?? detail.status;
+      dag = meta.pipeline_dag;
     } catch {
-      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+      return {
+        ok: false,
+        reason: `Run not found: ${runId}`,
+        status: 404,
+        code: "run_not_found",
+      };
     }
 
     const recoveryActive = this.isActive(runId);
 
     const eligibility = assertStageRetryEligible(detail, stageId, {
       recoveryActive,
+      persistedStatus: metaStatus,
+      ...(dag !== undefined ? { dag } : {}),
     });
     if (!eligibility.ok) {
       return {
         ok: false,
         reason: eligibility.reason,
         status: eligibility.status,
+        code: eligibility.code,
       };
     }
 
@@ -367,6 +440,7 @@ export class RunRetryCoordinator {
           ok: false,
           reason: `Retry already in progress for run ${runId} stage ${stageId}`,
           status: 409,
+          code: "retry_in_progress",
         };
       }
     }
@@ -376,10 +450,11 @@ export class RunRetryCoordinator {
         ok: false,
         reason: `Run ${runId} already has active orchestration`,
         status: 409,
+        code: "run_not_retryable",
       };
     }
 
-    const priorRunStatus = detail.status;
+    const priorRunStatus = metaStatus;
     let insertedForResume = false;
     let bumpedRunning = false;
 
@@ -395,7 +470,7 @@ export class RunRetryCoordinator {
         }
         insertedForResume = tracked.insertedForResume === true;
 
-        if (priorRunStatus === "failed") {
+        if (priorRunStatus === "failed" || priorRunStatus === "succeeded") {
           await store.updateRunStatus(runId, "running");
           bumpedRunning = true;
         }
@@ -412,6 +487,7 @@ export class RunRetryCoordinator {
         }
       }
       const execution = await store.createStageExecution(runId, stageId);
+      await req.beforeAttemptStart?.(execution.attempt);
 
       const { meta, task, loaded, workspaceDir } = await loadRunContext(
         store,
@@ -429,9 +505,10 @@ export class RunRetryCoordinator {
         checkoutRoot: meta.checkout_root,
         hitl: req.hitl,
         operatorCatalog: req.operatorCatalog,
+        ...(req.browser !== undefined ? { browser: req.browser } : {}),
       };
 
-      if (recoveryActive) {
+      if (this.isActive(runId)) {
         await this.addRoot(runId, stageId, execution.attempt);
       } else {
         this.start({
@@ -448,13 +525,16 @@ export class RunRetryCoordinator {
         }
       }
 
-      await this.waitForRoot(runId, stageId, store);
+      if (req.awaitRoot !== false) {
+        await this.waitForRoot(runId, stageId, store);
+      }
 
       return {
         ok: true,
         runId,
         stageId,
         attemptIndex: execution.attempt,
+        done: this.getOrchestrationPromise(runId),
       };
     } catch (err) {
       await tracking.rollbackStartTracking(runId, {

@@ -1,7 +1,0 @@
-id: linear-explicit
-stages:
-  - id: clarify
-  - id: design-doc
-    needs: clarify
-  - id: implementation-plan
-    needs: design-doc

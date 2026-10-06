@@ -1,0 +1,4 @@
+id: demo
+stages:
+  - id: step
+    uses: ./step.yaml

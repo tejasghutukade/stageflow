@@ -1,3 +1,14 @@
+import type { PreEmitCheck } from "./preEmitCheck.js";
+import type { StageSecretDecl } from "../runtime/stageSecretDecl.js";
+import type { ToolRequirement } from "../config/toolRequires.js";
+
+/** Typed emit/schema fields from `compileTargetContract`. Not catalog YAML keys. */
+export type CompiledStageEmitBody = {
+  payload_schema?: unknown;
+  clone_input_schema?: unknown;
+  pre_emit_checks?: PreEmitCheck[];
+};
+
 export const STAGE_GATE_KINDS = [
   "free_text",
   "confirm",
@@ -7,14 +18,63 @@ export const STAGE_GATE_KINDS = [
 
 export type StageGateKind = (typeof STAGE_GATE_KINDS)[number];
 
+/** Target YAML `io:` block. Compiles onto StageConfig.payload_schema / clone_input_schema. */
+export type StageIoYaml = {
+  input: { schema: unknown };
+  output: { schema: unknown };
+};
+
+/**
+ * Loaded stage IR. Field names are the runtime contract (emit, VSE, snapshots),
+ * not the catalog YAML spelling. Target YAML `io` / `verify` compile onto these
+ * in `src/config/yamlDialect.ts`. Do not add new catalog keys here — add them on
+ * the YAML dialect and map them in compileTargetContract.
+ */
+export type StageBrowserConfig = {
+  profile?: string;
+  headed?: boolean;
+  allow_domains?: string[];
+  /** Page the Host opens for a human login stage; defaults to `check.url`. */
+  login_url?: string;
+  check?: {
+    url: string;
+    logged_in_url?: string;
+    logged_out_url?: string | string[];
+  };
+};
+
 export type StageConfig = {
   id: string;
   system_prompt: string;
-  model: string;
-  /** Optional JSON Schema (subset) for envelope.payload on success. */
+  model?: string;
+  /** IR: success envelope.payload schema. YAML: `io.output.schema`. */
   payload_schema?: unknown;
   /** Declared ask_operator kinds this stage is expected to stop on. */
   gate_kinds?: StageGateKind[];
+  /** IR: emit-phase checks. YAML: `verify` items whose `when` includes `emit`. */
+  pre_emit_checks?: PreEmitCheck[];
+  /** IR: inbound assignment schema. YAML: `io.input.schema`. */
+  clone_input_schema?: unknown;
+  /** Optional stage wall-clock timeout in milliseconds (default 60 minutes). */
+  timeout_ms?: number;
   skill?: string;
   email?: { accountId: string; operations: ("send" | "reply" | "getMessage" | "search" | "downloadAttachment")[] }[];
+  mcp?: string[];
+  /** Declared Host secret names this stage may receive (Slot 6). */
+  secrets?: StageSecretDecl[];
+  /** Declared toolchain binaries this stage needs (Slot 9). */
+  requires?: ToolRequirement[];
+  /** Browser session settings for this stage; adds the agent-browser requirement. */
+  browser?: StageBrowserConfig;
+  /**
+   * Selects the AgentPort backend for this stage, overriding pipeline/global.
+   * Parsed but not yet consulted — see STAGE_LEVEL_AGENT_OVERRIDE_ENABLED.
+   */
+  agent?: string;
+};
+
+export type LoadedStageConfig = StageConfig & {
+  model: string;
+  /** Which catalog tier supplied `model` (stage > pipeline > global). */
+  model_tier?: "stage" | "pipeline" | "global";
 };

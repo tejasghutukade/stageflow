@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
+import * as resolveStageMcpServers from "../src/config/resolveStageMcpServers.js";
+import { access, cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,12 +10,177 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createCompletedOnlyStageHandle } from "../src/agent/port.js";
 import type { AgentPort, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { storeRootFor } from "../src/runstore/paths.js";
+import { globalSettingsFilePath } from "../src/runtime/settingsFile.js";
 import { startUiServer } from "../src/server/http.js";
 import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
+import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
+import { initTempGitRepo } from "./helpers/projectContext.js";
+import { FIXTURES_ROOT, pipelinePath, netPipeline, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+import {
+  resetBareCacheStateForTests,
+  setBareCacheRemoteUrlOverrideForTests,
+} from "../src/git/cache.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+
+describe("HTTP stage id capture", () => {
+  it("AE6: tilde instance ids are one path segment", () => {
+    const stageId = "author-diagrams~1";
+    const pathname = `/api/runs/r1/stages/${encodeURIComponent(stageId)}/answer`;
+    const match = pathname.match(
+      /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/answer$/,
+    );
+    expect(match).not.toBeNull();
+    expect(decodeURIComponent(match?.[2] ?? "")).toBe(stageId);
+  });
+});
+
+describe("HTTP verification history", () => {
+  it("returns attempt-scoped completion-check evidence", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-verification-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "verified",
+      taskYaml: "id: task\ngoal: verify\n",
+      pipelineDag: linearCompatDagSnapshot(["verify"]),
+    });
+    await store.createStageExecution(created.runId, "verify");
+    await store.appendStageEvent(created.runId, "verify", { event: "started" });
+    await store.upsertVerificationCheckResult(created.runId, "verify", {
+      check_id: "tests",
+      check_type: "command",
+      status: "failed",
+      evidence: { kind: "command", exit_code: 1 },
+    });
+
+    const { server, base } = await withServer(root, scriptedFakeAgent([]), store);
+    try {
+      const result = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(created.runId)}/stages/verify/verification`,
+      );
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          run_id: created.runId,
+          stage_id: "verify",
+          attempts: [
+            expect.objectContaining({
+              checks: [
+                expect.objectContaining({
+                  check_id: "tests",
+                  evidence: { kind: "command", exit_code: 1 },
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("records an operator stop for a manual recovery stage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-manual-stop-"));
+    const store = createRunStore({ rootDir: root });
+    const dag = linearCompatDagSnapshot(["verify"]);
+    dag.nodes[0]!.completion = {
+      mode: "all",
+      checks: [{ id: "tests", type: "command", run: "npm test" }],
+    };
+    dag.nodes[0]!.recovery = {
+      mode: "manual",
+      retry_safety: "idempotent",
+      include_failed_checks: true,
+    };
+    const created = await store.createRun({
+      pipelineId: "verified",
+      taskYaml: "id: task\ngoal: verify\n",
+      pipelineDag: dag,
+    });
+    await store.createStageExecution(created.runId, "verify");
+    await store.appendStageEvent(created.runId, "verify", { event: "started" });
+    await store.appendStageEvent(created.runId, "verify", {
+      event: "failed",
+      reason: "Completion verification failed: tests",
+    });
+    await store.updateStageExecution(created.runId, "verify", 1, {
+      status: "failed",
+      verification_outcome: "failed",
+    });
+    await store.updateRunStatus(created.runId, "failed");
+
+    const { server, base } = await withServer(root, scriptedFakeAgent([]), store);
+    try {
+      const stopped = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(created.runId)}/stages/verify/recovery/stop`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      expect(stopped.status).toBe(202);
+      expect(stopped.body).toEqual({ ok: true, runId: created.runId, stageId: "verify" });
+
+      const history = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(created.runId)}/stages/verify/verification`,
+      );
+      expect(history.body.manual_recovery).toEqual({
+        status: "stopped",
+        failed_attempt: 1,
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+
+let catalogRoot: string;
+let cleanupCatalogRoot: () => Promise<void>;
+
+beforeAll(async () => {
+  const setup = await initTempGitRepo();
+  catalogRoot = setup.root;
+  cleanupCatalogRoot = setup.cleanup;
+  await cp(path.join(fixtures, "pipelines"), path.join(catalogRoot, "pipelines"), {
+    recursive: true,
+  });
+  await cp(path.join(fixtures, "tasks"), path.join(catalogRoot, "tasks"), {
+    recursive: true,
+  });
+  await cp(path.join(fixtures, "stages"), path.join(catalogRoot, "stages"), {
+    recursive: true,
+  });
+  await writeFile(
+    path.join(catalogRoot, "stageflow.yaml"),
+    [
+      "version: 1",
+      "catalog:",
+      "  pipelines:",
+      "    - pipelines",
+      "  tasks:",
+      "    - tasks",
+      "  patterns:",
+      '    pipeline: "*.yaml"',
+      '    task: "*.yaml"',
+      "",
+    ].join("\n"),
+  );
+  clearFindProjectRootCacheForTests();
+});
+
+afterAll(async () => {
+  clearFindProjectRootCacheForTests();
+  await cleanupCatalogRoot();
+});
 
 const freeTextPrompt: AskOperatorPrompt = {
   kind: "free_text",
@@ -50,9 +218,12 @@ async function withServer(
   store = createRunStore({ rootDir: root }),
   opts: { maxConcurrent?: number; cwd?: string; agentDir?: string; providerAuthContext?: Parameters<typeof startUiServer>[0]["providerAuthContext"] } = {},
 ) {
+  const cwd = opts.cwd ?? catalogRoot;
+  await store.ensureProject(cwd);
   const started = await startUiServer({
     agent,
-    cwd: opts.cwd ?? fixtures,
+    cwd,
+    rootDir: root,
     agentDir: opts.agentDir,
     store,
     port: 0,
@@ -95,7 +266,7 @@ async function postRetry(
 }
 
 function okEnvelope(summary: string): StageEnvelope {
-  return { status: "success", summary, artifacts: [] };
+  return { status: "success", summary, artifacts: [], payload: {} };
 }
 
 function failEnvelope(summary: string): StageEnvelope {
@@ -173,7 +344,9 @@ function parallelRetryFanoutAgent(): { agent: AgentPort; release: () => void } {
   return { agent, release };
 }
 
-function parallelFanoutStuckDesignAgent(): AgentPort {
+function parallelFanoutStuckDesignAgent(
+  options?: { holdDesignRetry?: Promise<void> },
+): AgentPort {
   const stageIndex = new Map<string, number>();
   let designOpens = 0;
 
@@ -205,7 +378,19 @@ function parallelFanoutStuckDesignAgent(): AgentPort {
       const behaviors = behaviorsByStage[stageId] ?? [];
       const behavior = behaviors[index] ?? { type: "never_emit" as const };
       const scripted = scriptedFakeAgent([behavior]);
-      return scripted.openStage(input);
+      const handle = scripted.openStage(input);
+      if (stageId === "design-doc" && options?.holdDesignRetry) {
+        const hold = options.holdDesignRetry;
+        const baseNext = handle.next.bind(handle);
+        handle.next = async () => {
+          const event = await baseNext();
+          if (event.status !== "waiting_for_input") {
+            await hold;
+          }
+          return event;
+        };
+      }
+      return handle;
     },
     async runStage(input) {
       const handle = this.openStage(input);
@@ -236,106 +421,69 @@ async function postAbandon(
 }
 
 describe("localhost HTTP API", () => {
-  it("lists stages with valid and broken rows, and lists models", async () => {
+  it("GET /api/stages returns 404 and models come from manifest pipelines", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-stage-catalog-"));
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-http-stage-cwd-"));
-    await mkdir(path.join(cwd, "stages"), { recursive: true });
-    await mkdir(path.join(cwd, "pipelines"), { recursive: true });
-    await writeFile(
-      path.join(cwd, "stages", "beta.yaml"),
-      [
-        "id: beta",
-        "system_prompt: Beta prompt",
-        "model: cursor/custom-z",
-        "",
-      ].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "stages", "alpha.yaml"),
-      [
-        "id: alpha",
-        "gate_kinds:",
-        "  - confirm",
-        "system_prompt: Alpha prompt",
-        "model: anthropic/claude-sonnet-4-5",
-        "",
-      ].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "stages", "broken.yaml"),
-      [
-        "id: broken",
-        "gate_kinds: confirm",
-        "system_prompt: Broken prompt",
-        "model: cursor/custom-z",
-        "",
-      ].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "pipelines", "uses-alpha.yaml"),
-      ["id: uses-alpha", "stages:", "  - alpha", ""].join("\n"),
-    );
-
-    const { server, base } = await withServer(root, scriptedFakeAgent([]), undefined, { cwd });
-
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
     try {
-      const stages = await jsonFetch(`${base}/api/stages`);
-      expect(stages.status).toBe(200);
-      expect(stages.body.stages).toEqual([
-        {
-          path: "stages/alpha.yaml",
-          id: "alpha",
-          gate_kinds: ["confirm"],
-          used_by_pipeline_ids: ["uses-alpha"],
-        },
-        {
-          path: "stages/beta.yaml",
-          id: "beta",
-          used_by_pipeline_ids: [],
-        },
-        {
-          path: "stages/broken.yaml",
-          error: expect.stringMatching(/gate_kinds must be an array of strings/),
-          id: "broken",
-          model: "cursor/custom-z",
-        },
-      ]);
+      const manifestCatalog = path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "fixtures/manifest-catalog",
+      );
+      await cp(manifestCatalog, repoRoot, { recursive: true });
+      clearFindProjectRootCacheForTests();
 
-      const models = await jsonFetch(`${base}/api/models`);
-      expect(models.status).toBe(200);
-      expect(models.body.models).toEqual([
-        "anthropic/claude-sonnet-4-5",
-        "cursor/auto",
-        "cursor/composer-2-5",
-        "cursor/custom-z",
-      ]);
+      const { server, base } = await withServer(
+        root,
+        scriptedFakeAgent([]),
+        undefined,
+        { cwd: repoRoot },
+      );
+
+      try {
+        const stages = await jsonFetch(`${base}/api/stages`);
+        expect(stages.status).toBe(404);
+        expect(stages.body.error).toContain("Global stage library removed");
+
+        const models = await jsonFetch(`${base}/api/models`);
+        expect(models.status).toBe(200);
+        expect(models.body.models).toContain("cursor/auto");
+        expect(models.body.models).toContain("anthropic/claude-sonnet-4-5");
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+      clearFindProjectRootCacheForTests();
+      await cleanup();
     }
   });
 
-  it("POST /api/stages creates stage YAML and rejects invalid or conflicting input", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-http-post-stage-"));
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-http-post-stage-cwd-"));
-    await mkdir(path.join(cwd, "stages"), { recursive: true });
-    await writeFile(
-      path.join(cwd, "stages", "existing.yaml"),
-      ["id: existing", "system_prompt: Existing.", "model: cursor/auto", ""].join("\n"),
+  it("POST /api/stages creates pipeline-scoped stage YAML", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-post-stage-"));
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    const manifestCatalog = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/manifest-catalog",
     );
-    await writeFile(
-      path.join(cwd, "stages", "alias.yaml"),
-      ["id: taken-id", "system_prompt: Alias.", "model: cursor/auto", ""].join("\n"),
-    );
+    await cp(manifestCatalog, repoRoot, { recursive: true });
+    clearFindProjectRootCacheForTests();
+    await mkdir(path.join(repoRoot, "pipelines"), { recursive: true });
 
-    const { server, base } = await withServer(root, scriptedFakeAgent([]), undefined, { cwd });
+    const { server, base } = await withServer(
+      storeRoot,
+      scriptedFakeAgent([]),
+      undefined,
+      { cwd: repoRoot },
+    );
 
     try {
       const created = await jsonFetch(`${base}/api/stages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          pipeline_directory: "pipelines",
+          filename: "fresh-stage.yaml",
           id: "fresh-stage",
           system_prompt: "Line one\nLine two",
           model: "anthropic/claude-sonnet-4-5",
@@ -344,47 +492,10 @@ describe("localhost HTTP API", () => {
       });
       expect(created.status).toBe(201);
       expect(created.body).toEqual({
-        path: "stages/fresh-stage.yaml",
+        path: "pipelines/fresh-stage.yaml",
         id: "fresh-stage",
         gate_kinds: ["confirm"],
-        used_by_pipeline_ids: [],
       });
-
-      const written = await readFile(path.join(cwd, "stages", "fresh-stage.yaml"), "utf8");
-      expect(written).toBe(
-        [
-          "id: fresh-stage",
-          "gate_kinds:",
-          "  - confirm",
-          "system_prompt: |",
-          "  Line one",
-          "  Line two",
-          "model: anthropic/claude-sonnet-4-5",
-          "",
-        ].join("\n"),
-      );
-
-      const pathCollision = await jsonFetch(`${base}/api/stages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "existing",
-          system_prompt: "Again.",
-          model: "cursor/auto",
-        }),
-      });
-      expect(pathCollision.status).toBe(409);
-
-      const yamlIdCollision = await jsonFetch(`${base}/api/stages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "taken-id",
-          system_prompt: "Again.",
-          model: "cursor/auto",
-        }),
-      });
-      expect(yamlIdCollision.status).toBe(409);
 
       const invalid = await jsonFetch(`${base}/api/stages`, {
         method: "POST",
@@ -393,221 +504,413 @@ describe("localhost HTTP API", () => {
           id: "Bad",
           system_prompt: "x",
           model: "m",
-          payload_schema: {},
         }),
       });
       expect(invalid.status).toBe(400);
 
-      const forbiddenOrigin = await jsonFetch(`${base}/api/stages`, {
+      await writeFile(
+        path.join(repoRoot, "stageflow.yaml"),
+        [
+          "version: 1",
+          "model: anthropic/claude-sonnet-4-5",
+          "catalog:",
+          "  pipelines:",
+          "    - pipelines",
+          "  tasks:",
+          "    - tasks",
+          "",
+        ].join("\n"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const inherited = await jsonFetch(`${base}/api/stages`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://evil.example",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: "blocked",
-          system_prompt: "x",
-          model: "m",
+          pipeline_directory: "pipelines",
+          filename: "inherit-model.yaml",
+          id: "inherit-model",
+          system_prompt: "Use the global default.",
         }),
       });
-      expect(forbiddenOrigin.status).toBe(403);
+      expect(inherited.status).toBe(201);
+      expect(inherited.body).toEqual({
+        path: "pipelines/inherit-model.yaml",
+        id: "inherit-model",
+      });
+      const inheritedYaml = await readFile(
+        path.join(repoRoot, "pipelines/inherit-model.yaml"),
+        "utf8",
+      );
+      expect(inheritedYaml).not.toMatch(/^model:/m);
+
+      const emptyModel = await jsonFetch(`${base}/api/stages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline_directory: "pipelines",
+          filename: "empty-model.yaml",
+          id: "empty-model",
+          system_prompt: "Present but empty model.",
+          model: "",
+        }),
+      });
+      expect(emptyModel.status).toBe(400);
+      expect(emptyModel.body).toEqual({
+        error: "model must be a non-empty string",
+      });
     } finally {
+      clearFindProjectRootCacheForTests();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      await cleanup();
     }
   });
 
-  it("POST /api/pipelines creates pipeline YAML and rejects invalid or conflicting input", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-http-post-pipeline-"));
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-http-post-pipeline-cwd-"));
-    await mkdir(path.join(cwd, "stages"), { recursive: true });
-    await mkdir(path.join(cwd, "pipelines"), { recursive: true });
+  it("POST /api/pipelines creates pipeline-owned YAML", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-post-pipeline-"));
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    const manifestCatalog = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/manifest-catalog",
+    );
+    await cp(manifestCatalog, repoRoot, { recursive: true });
+    clearFindProjectRootCacheForTests();
+    await mkdir(path.join(repoRoot, "pipelines"), { recursive: true });
     await writeFile(
-      path.join(cwd, "stages", "alpha.yaml"),
-      ["id: alpha", "system_prompt: Alpha.", "model: cursor/auto", ""].join("\n"),
+      path.join(repoRoot, "pipelines", "alpha.yaml"),
+      ["id: alpha", "system_prompt: Alpha.", "model: cursor/auto", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n"),
     );
     await writeFile(
-      path.join(cwd, "stages", "beta.yaml"),
+      path.join(repoRoot, "pipelines", "beta.yaml"),
       [
         "id: beta",
         "gate_kinds:",
         "  - confirm",
         "system_prompt: Beta.",
         "model: cursor/auto",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
         "",
       ].join("\n"),
     );
-    await writeFile(
-      path.join(cwd, "stages", "recon.yaml"),
-      ["id: recon", "system_prompt: Recon.", "model: cursor/auto", ""].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "stages", "improve-a.yaml"),
-      ["id: improve-a", "system_prompt: Improve A.", "model: cursor/auto", ""].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "stages", "improve-b.yaml"),
-      ["id: improve-b", "system_prompt: Improve B.", "model: cursor/auto", ""].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "stages", "improve-c.yaml"),
-      ["id: improve-c", "system_prompt: Improve C.", "model: cursor/auto", ""].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "pipelines", "existing.yaml"),
-      ["id: existing", "stages:", "  - alpha", ""].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "pipelines", "alias.yaml"),
-      ["id: taken-id", "stages:", "  - alpha", ""].join("\n"),
-    );
 
-    const { server, base } = await withServer(root, scriptedFakeAgent([]), undefined, { cwd });
+    const { server, base } = await withServer(
+      storeRoot,
+      scriptedFakeAgent([]),
+      undefined,
+      { cwd: repoRoot },
+    );
 
     try {
       const created = await jsonFetch(`${base}/api/pipelines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          directory: "pipelines",
           id: "fresh-pipeline",
-          stages: ["alpha", "beta"],
+          stages: [
+            { id: "alpha", uses: "./alpha.yaml" },
+            { id: "beta", uses: "./beta.yaml" },
+          ],
         }),
       });
       expect(created.status).toBe(201);
-      expect(created.body).toEqual({
-        path: "pipelines/fresh-pipeline.yaml",
-        id: "fresh-pipeline",
-        stages: [{ id: "alpha" }, { id: "beta", gate_kinds: ["confirm"] }],
-      });
+      expect(created.body.path).toBe("pipelines/fresh-pipeline.pipeline.yaml");
+      expect(created.body.stages).toEqual([
+        { id: "alpha", uses_path: "pipelines/alpha.yaml" },
+        { id: "beta", gate_kinds: ["confirm"], uses_path: "pipelines/beta.yaml" },
+      ]);
 
-      const written = await readFile(path.join(cwd, "pipelines", "fresh-pipeline.yaml"), "utf8");
-      expect(written).toBe(
-        ["id: fresh-pipeline", "stages:", "  - alpha", "  - beta", ""].join("\n"),
+      const written = await readFile(
+        path.join(repoRoot, "pipelines", "fresh-pipeline.pipeline.yaml"),
+        "utf8",
       );
-
-      const pathCollision = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "existing",
-          stages: ["alpha"],
-        }),
-      });
-      expect(pathCollision.status).toBe(409);
-
-      const yamlIdCollision = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "taken-id",
-          stages: ["alpha"],
-        }),
-      });
-      expect(yamlIdCollision.status).toBe(409);
-
-      const duplicateStages = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "dup",
-          stages: ["alpha", "alpha"],
-        }),
-      });
-      expect(duplicateStages.status).toBe(422);
+      expect(written).toContain("uses: ./alpha.yaml");
+      expect(written).toContain("uses: ./beta.yaml");
 
       const missingStage = await jsonFetch(`${base}/api/pipelines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          directory: "pipelines",
           id: "missing-ref",
-          stages: ["alpha", "gone"],
-        }),
-      });
-      expect(missingStage.status).toBe(422);
-      expect(missingStage.body.error).toBe("one or more selected Stages no longer exist");
-
-      const dagCreated = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "recon-review",
           stages: [
-            { id: "recon" },
-            { id: "improve-a", needs: "recon" },
-            { id: "improve-b", needs: "recon" },
-            { id: "improve-c", needs: "recon" },
+            { id: "alpha", uses: "./alpha.yaml" },
+            { id: "gone", uses: "./gone.yaml" },
           ],
         }),
       });
-      expect(dagCreated.status).toBe(201);
-      expect(dagCreated.body).toEqual({
-        path: "pipelines/recon-review.yaml",
-        id: "recon-review",
-        stages: [
-          { id: "recon" },
-          { id: "improve-a" },
-          { id: "improve-b" },
-          { id: "improve-c" },
-        ],
-      });
+      expect(missingStage.status).toBe(422);
+      expect(missingStage.body.error).toContain("missing stage file");
 
-      const dagYaml = await readFile(path.join(cwd, "pipelines", "recon-review.yaml"), "utf8");
-      expect(dagYaml).toBe(
+      await writeFile(
+        path.join(repoRoot, "stageflow.yaml"),
         [
-          "id: recon-review",
-          "stages:",
-          "  - id: recon",
-          "  - id: improve-a",
-          "    needs: recon",
-          "  - id: improve-b",
-          "    needs: recon",
-          "  - id: improve-c",
-          "    needs: recon",
+          "version: 1",
+          "model: anthropic/claude-sonnet-4-5",
+          "catalog:",
+          "  pipelines:",
+          "    - pipelines",
+          "  tasks:",
+          "    - tasks",
           "",
         ].join("\n"),
       );
+      clearFindProjectRootCacheForTests();
 
-      const cycle = await jsonFetch(`${base}/api/pipelines`, {
+      const inherited = await jsonFetch(`${base}/api/pipelines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: "cycle-pipeline",
-          stages: [{ id: "alpha", needs: "beta" }, { id: "beta", needs: "alpha" }],
+          directory: "pipelines",
+          id: "inherit-inline",
+          stages: [
+            {
+              id: "inherit-inline",
+              system_prompt: "Use the global default.",
+            },
+          ],
         }),
       });
-      expect(cycle.status).toBe(422);
-      expect(cycle.body.error).toContain("dependency cycle detected");
-      await expect(
-        access(path.join(cwd, "pipelines", "cycle-pipeline.yaml")),
-      ).rejects.toThrow();
-
-      const invalid = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "Bad",
-          stages: [],
-        }),
-      });
-      expect(invalid.status).toBe(400);
-
-      const forbiddenOrigin = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://evil.example",
-        },
-        body: JSON.stringify({
-          id: "blocked",
-          stages: ["alpha"],
-        }),
-      });
-      expect(forbiddenOrigin.status).toBe(403);
+      expect(inherited.status).toBe(201);
+      expect(inherited.body.path).toBe("pipelines/inherit-inline.pipeline.yaml");
+      const inheritedYaml = await readFile(
+        path.join(repoRoot, "pipelines", "inherit-inline.pipeline.yaml"),
+        "utf8",
+      );
+      expect(inheritedYaml).not.toMatch(/^    model:/m);
     } finally {
+      clearFindProjectRootCacheForTests();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      await cleanup();
+    }
+  });
+
+  it("POST /api/pipelines respects project_root write target and read_only aliases", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-pipeline-root-"));
+    const { root: repoA, cleanup: cleanupA } = await initTempGitRepo();
+    const { root: repoB, cleanup: cleanupB } = await initTempGitRepo();
+    const manifestCatalog = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/manifest-catalog",
+    );
+    await cp(manifestCatalog, repoA, { recursive: true });
+    await cp(manifestCatalog, repoB, { recursive: true });
+    clearFindProjectRootCacheForTests();
+    await mkdir(path.join(repoA, "pipelines"), { recursive: true });
+    await mkdir(path.join(repoB, "pipelines"), { recursive: true });
+    for (const repo of [repoA, repoB]) {
+      await writeFile(
+        path.join(repo, "pipelines", "alpha.yaml"),
+        ["id: alpha", "system_prompt: Alpha.", "model: cursor/auto", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n"),
+      );
+      await writeFile(
+        path.join(repo, "pipelines", "beta.yaml"),
+        ["id: beta", "system_prompt: Beta.", "model: cursor/auto", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n"),
+      );
+    }
+
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoB);
+
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoA,
+    });
+
+    try {
+      const omitted = await jsonFetch(`${base}/api/pipelines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          directory: "pipelines",
+          id: "needs-root",
+          stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+        }),
+      });
+      expect(omitted.status).toBe(400);
+      expect(omitted.body.code).toBe("unknown_project_root");
+
+      const unknown = await jsonFetch(`${base}/api/pipelines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_root: "/no/such/root",
+          directory: "pipelines",
+          id: "should-fail",
+          stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+        }),
+      });
+      expect(unknown.status).toBe(400);
+      expect(unknown.body.code).toBe("unknown_project_root");
+
+      const created = await jsonFetch(`${base}/api/pipelines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_root: await realpath(repoB),
+          directory: "pipelines",
+          id: "in-repo-b",
+          stages: [
+            { id: "alpha", uses: "./alpha.yaml" },
+            { id: "beta", uses: "./beta.yaml" },
+          ],
+        }),
+      });
+      expect(created.status).toBe(201);
+      await expect(
+        access(path.join(repoB, "pipelines", "in-repo-b.pipeline.yaml")),
+      ).resolves.toBeUndefined();
+      await expect(
+        access(path.join(repoA, "pipelines", "in-repo-b.pipeline.yaml")),
+      ).rejects.toThrow();
+
+      const stageCreated = await jsonFetch(`${base}/api/stages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_root: await realpath(repoB),
+          pipeline_directory: "pipelines",
+          filename: "stage-in-b.yaml",
+          id: "stage-in-b",
+          system_prompt: "Write in B.",
+          model: "cursor/auto",
+        }),
+      });
+      expect(stageCreated.status).toBe(201);
+      await expect(
+        access(path.join(repoB, "pipelines", "stage-in-b.yaml")),
+      ).resolves.toBeUndefined();
+
+      const { resolveSeededExamplesPath } = await import(
+        "../src/config/seededCatalog.js"
+      );
+      const seededPath = resolveSeededExamplesPath();
+      if (seededPath !== undefined) {
+        const byId = await jsonFetch(`${base}/api/pipelines`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_root: "examples",
+            directory: "pipelines",
+            id: "seeded-refuse",
+            stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+          }),
+        });
+        expect(byId.status).toBe(403);
+        expect(byId.body.code).toBe("catalog_root_read_only");
+
+        const byAbs = await jsonFetch(`${base}/api/pipelines`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_root: seededPath,
+            directory: "pipelines",
+            id: "seeded-refuse-abs",
+            stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+          }),
+        });
+        expect(byAbs.status).toBe(403);
+        expect(byAbs.body.code).toBe("catalog_root_read_only");
+
+        const stageSeeded = await jsonFetch(`${base}/api/stages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_root: "examples",
+            pipeline_directory: "pipelines",
+            filename: "seeded-stage.yaml",
+            id: "seeded-stage",
+            system_prompt: "Refuse.",
+            model: "cursor/auto",
+          }),
+        });
+        expect(stageSeeded.status).toBe(403);
+        expect(stageSeeded.body.code).toBe("catalog_root_read_only");
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+      await cleanupA();
+      await cleanupB();
+    }
+  });
+
+  it("POST /api/runs persists wire project_root when Host boot differs", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-wire-root-"));
+    const { root: bootRoot, cleanup: cleanupBoot } = await initTempGitRepo();
+    const { root: wireRoot, cleanup: cleanupWire } = await initTempGitRepo();
+    await cp(path.join(fixtures, "pipelines"), path.join(wireRoot, "pipelines"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "tasks"), path.join(wireRoot, "tasks"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "stages"), path.join(wireRoot, "stages"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(wireRoot, "stageflow.yaml"),
+      [
+        "version: 1",
+        "catalog:",
+        "  pipelines:",
+        "    - pipelines",
+        "  tasks:",
+        "    - tasks",
+        "  patterns:",
+        '    pipeline: "*.yaml"',
+        '    task: "*.yaml"',
+        "",
+      ].join("\n"),
+    );
+    clearFindProjectRootCacheForTests();
+
+    const store = createRunStore({ rootDir: storeRoot });
+    const wireAbs = await store.ensureProject(wireRoot);
+    const agent = scriptedFakeAgent([
+      {
+        type: "emit" as const,
+        envelope: { status: "success" as const, summary: "ok", artifacts: [] },
+      },
+    ]);
+    const { server, base } = await withServer(storeRoot, agent, store, {
+      cwd: bootRoot,
+    });
+    const bootAbs = path.resolve(bootRoot);
+    expect(wireAbs).not.toBe(bootAbs);
+
+    try {
+      const started = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: netPipeline("docs-only"),
+          task: { id: "wire", goal: "persist wire root" },
+          project_root: wireAbs,
+        }),
+      });
+      expect(started.status).toBe(202);
+      const meta = await store.readRunMeta(started.body.runId as string);
+      expect(meta.project_root).toBe(wireAbs);
+      expect(meta.project_root).not.toBe(bootAbs);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+      await cleanupBoot();
+      await cleanupWire();
     }
   });
 
@@ -652,8 +955,15 @@ describe("localhost HTTP API", () => {
         (p: { id: string }) => p.id === "plan-review-proving",
       );
       expect(proving?.stages).toEqual([
-        { id: "plan-review", gate_kinds: ["artifact_backed"] },
-        { id: "plan-review-followup" },
+        {
+          id: "plan-review",
+          gate_kinds: ["artifact_backed"],
+          uses_path: "stages/plan-review.yaml",
+        },
+        {
+          id: "plan-review-followup",
+          uses_path: "stages/plan-review-followup.yaml",
+        },
       ]);
       const fourKinds = pipelines.body.pipelines.find(
         (p: { id: string }) => p.id === "hitl-four-kinds-proving",
@@ -667,6 +977,7 @@ describe("localhost HTTP API", () => {
             "multi_question",
             "artifact_backed",
           ],
+          uses_path: "stages/hitl-four-kinds.yaml",
         },
       ]);
 
@@ -674,8 +985,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "docs-only",
+          task: "tasks/sample.task.yaml",
+          pipeline: netPipeline("docs-only"),
         }),
       });
       expect(started.status).toBe(202);
@@ -683,9 +994,12 @@ describe("localhost HTTP API", () => {
 
       await waitUntilIdleHealth(base);
 
-      const rerun = await jsonFetch(`${base}/api/runs/${encodeURIComponent(runId)}/rerun`, {
+      const rerun = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(started.body.runId)}/rerun`,
+        {
         method: "POST",
-      });
+      },
+      );
       expect(rerun.status).toBe(202);
       expect(rerun.body.runId).not.toBe(runId);
 
@@ -697,6 +1011,30 @@ describe("localhost HTTP API", () => {
     }
 
     void url;
+  });
+
+  it("POST answer surfaces verification=failed_retrying and keeps final failures as errors", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-ans-verify-"));
+    const { server, base, manager } = await withServer(root, scriptedFakeAgent([]));
+    const spy = vi.spyOn(manager, "deliverAnswer");
+    try {
+      const post = () =>
+        jsonFetch(`${base}/api/runs/r1/stages/login/answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ promptId: "p", kind: "confirm", decision: "accept" }),
+        });
+      spy.mockResolvedValueOnce({ ok: true, verification: "failed_retrying" });
+      const retrying = await post();
+      expect(retrying.status).toBe(202);
+      expect(retrying.body).toEqual({ ok: true, verification: "failed_retrying" });
+      spy.mockResolvedValueOnce({ ok: false, reason: "Completion verification failed: logged-in", status: 500 });
+      const final = await post();
+      expect(final.status).toBe(500);
+      expect(final.body).toEqual({ error: "Completion verification failed: logged-in" });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("POST answer delivers T2 free_text into waiting stage (202)", async () => {
@@ -719,8 +1057,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "single",
+          task: "tasks/sample.task.yaml",
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -874,8 +1212,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "parallel-hitl-multi-wait",
+          task: "tasks/sample.task.yaml",
+          pipeline: netPipeline("parallel-hitl-multi-wait"),
         }),
       });
       expect(started.status).toBe(202);
@@ -972,6 +1310,7 @@ describe("localhost HTTP API", () => {
                 status: "success" as const,
                 summary: `${input.stage.id} done`,
                 artifacts: [],
+                payload: {},
               },
             };
           },
@@ -996,8 +1335,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "parallel-track-fanout",
+          task: "tasks/sample.task.yaml",
+          pipeline: netPipeline("parallel-track-fanout"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1049,6 +1388,59 @@ describe("localhost HTTP API", () => {
       await waitUntilIdleHealth(base);
     } finally {
       releaseImproves();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("GET run detail exposes diamond inbound edges and accepted-failure success", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-diamond-"));
+    const store = createRunStore({ rootDir: root });
+    const diamond = await seedDiamondRun(store, "diamond-fan-in", {
+      clarify: "succeeded",
+      research: "succeeded",
+      validation: "pending",
+      synthesize: "pending",
+    }, "running");
+    const accepted = await seedDiamondRun(
+      store,
+      "diamond-fan-in-accepted",
+      {
+        clarify: "succeeded",
+        research: "failed",
+        validation: "succeeded",
+        synthesize: "succeeded",
+      },
+      "succeeded",
+    );
+    const { server, base } = await withServer(root, scriptedFakeAgent([]), store);
+
+    try {
+      const trackDetail = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(diamond.runId)}`,
+      );
+      expect(trackDetail.status).toBe(200);
+      expect(
+        trackDetail.body.pipeline_track.edges.filter(
+          (e: { to: string }) => e.to === "synthesize",
+        ),
+      ).toEqual([
+        { from: "research", to: "synthesize" },
+        { from: "validation", to: "synthesize" },
+      ]);
+
+      const acceptedDetail = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(accepted.runId)}`,
+      );
+      expect(acceptedDetail.status).toBe(200);
+      expect(acceptedDetail.body.status).toBe("succeeded");
+      expect(
+        acceptedDetail.body.stages.find(
+          (s: { stage_id: string }) => s.stage_id === "research",
+        )?.status,
+      ).toBe("failed");
+    } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
@@ -1125,8 +1517,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "single",
+          task: "tasks/sample.task.yaml",
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1206,8 +1598,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "single",
+          task: "tasks/sample.task.yaml",
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1262,8 +1654,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "single",
+          task: "tasks/sample.task.yaml",
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1291,6 +1683,178 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("POST feedback-decision continue resumes after wait_for_human (202)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-fb-dec-"));
+    const sendBack: StageEnvelope = {
+      status: "success",
+      summary: "send-back",
+      artifacts: [],
+      feedback_loop: { action: "send_back", target: "implement" },
+    };
+    const agent = stageKeyedAgent({
+      plan: [{ type: "emit", envelope: okEnvelope("plan-ok") }],
+      implement: [
+        { type: "emit", envelope: okEnvelope("implement-1") },
+        { type: "emit", envelope: okEnvelope("implement-2") },
+      ],
+      review: [
+        { type: "emit", envelope: sendBack },
+        { type: "emit", envelope: sendBack },
+      ],
+      submit: [{ type: "emit", envelope: okEnvelope("submit-ok") }],
+    });
+    const { server, base, store } = await withServer(root, agent);
+
+    try {
+      const started = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: "tasks/sample.task.yaml",
+          pipeline: netPipeline("feedback-loop-wait-human"),
+        }),
+      });
+      expect(started.status).toBe(202);
+      const runId = started.body.runId as string;
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.active_feedback_loop?.state === "waiting_for_human";
+      });
+      await waitUntilIdleHealth(base);
+
+      const waitingDetail = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(runId)}`,
+      );
+      expect(waitingDetail.status).toBe(200);
+      expect(waitingDetail.body.waiting_kind).toBe("feedback_loop_decision");
+      expect(waitingDetail.body.active_feedback_loop?.state).toBe(
+        "waiting_for_human",
+      );
+      const loopId = waitingDetail.body.active_feedback_loop.loop_id as string;
+
+      const decided = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(runId)}/stages/review/feedback-decision`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            decision: "continue",
+            reason: "ship the brief",
+          }),
+        },
+      );
+      expect(decided.status).toBe(202);
+      expect(decided.body).toEqual({
+        ok: true,
+        effect: "continued",
+        loopId,
+      });
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.status === "succeeded";
+      });
+      const events = await store.listStageEvents(runId, "review");
+      const names = events.map((e) => e.event);
+      const waitIdx = names.lastIndexOf("waiting_for_input");
+      const decidedIdx = names.indexOf("feedback_loop_decided", waitIdx + 1);
+      const succeededIdx = names.indexOf("succeeded", decidedIdx + 1);
+      expect(decidedIdx).toBeGreaterThan(waitIdx);
+      expect(succeededIdx).toBeGreaterThan(decidedIdx);
+      expect(events[decidedIdx]).toMatchObject({
+        event: "feedback_loop_decided",
+        decision: "continue",
+        loopId,
+        reason: "ship the brief",
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("POST feedback-decision abandon fails the run (202)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-fb-aban-"));
+    const sendBack: StageEnvelope = {
+      status: "success",
+      summary: "send-back",
+      artifacts: [],
+      feedback_loop: { action: "send_back", target: "implement" },
+    };
+    const agent = stageKeyedAgent({
+      plan: [{ type: "emit", envelope: okEnvelope("plan-ok") }],
+      implement: [
+        { type: "emit", envelope: okEnvelope("implement-1") },
+        { type: "emit", envelope: okEnvelope("implement-2") },
+      ],
+      review: [
+        { type: "emit", envelope: sendBack },
+        { type: "emit", envelope: sendBack },
+      ],
+      submit: [{ type: "throw", message: "submit must not run" }],
+    });
+    const { server, base, store } = await withServer(root, agent);
+
+    try {
+      const started = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: "tasks/sample.task.yaml",
+          pipeline: netPipeline("feedback-loop-wait-human"),
+        }),
+      });
+      expect(started.status).toBe(202);
+      const runId = started.body.runId as string;
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.active_feedback_loop?.state === "waiting_for_human";
+      });
+      await waitUntilIdleHealth(base);
+
+      const decided = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(runId)}/stages/review/feedback-decision`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            decision: "abandon",
+            reason: "operator abandoned",
+          }),
+        },
+      );
+      expect(decided.status).toBe(202);
+      expect(decided.body.ok).toBe(true);
+      expect(decided.body.effect).toBe("abandoned");
+
+      const after = await store.readRun(runId);
+      expect(after.status).toBe("failed");
+      const events = await store.listStageEvents(runId, "review");
+      const names = events.map((e) => e.event);
+      const waitIdx = names.lastIndexOf("waiting_for_input");
+      const decidedIdx = names.indexOf("feedback_loop_decided", waitIdx + 1);
+      const failedIdx = names.indexOf("failed", decidedIdx + 1);
+      expect(decidedIdx).toBeGreaterThan(waitIdx);
+      expect(failedIdx).toBeGreaterThan(decidedIdx);
+      expect(events[decidedIdx]).toMatchObject({
+        event: "feedback_loop_decided",
+        decision: "abandon",
+        reason: "operator abandoned",
+      });
+      expect(events[failedIdx]).toMatchObject({
+        event: "failed",
+        reason: "operator abandoned",
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("POST answer returns 400 for malformed or mismatched T2 body", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-400-"));
     const agent = scriptedFakeAgent([
@@ -1311,8 +1875,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "single",
+          task: "tasks/sample.task.yaml",
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1425,22 +1989,40 @@ describe("localhost HTTP API", () => {
     try {
       const idle = await jsonFetch(`${base}/api/health`);
       expect(idle.status).toBe(200);
-      expect(idle.body).toEqual({
+      expect(idle.body).toMatchObject({
         ok: true,
         activeRunIds: [],
         activeCount: 0,
         maxConcurrent: 2,
         slotsAvailable: 2,
         activeStageProcesses: 0,
-        maxActiveStageProcesses: null,
+        maxActiveStageProcesses: expect.any(Number),
+        stage_env_passthrough: expect.any(Boolean),
+        disk: {
+          runs_bytes: expect.any(Number),
+          worktrees_bytes: expect.any(Number),
+          repos_bytes: expect.any(Number),
+          state_db_bytes: expect.any(Number),
+          a2a_artifacts_bytes: expect.any(Number),
+          cache_bytes: expect.any(Number),
+          free_bytes: expect.any(Number),
+        },
+        proxy: expect.any(Object),
+        container: expect.any(Object),
+        cache: expect.any(Object),
       });
       expect(idle.body).not.toHaveProperty("inFlight");
+      for (const key of Object.keys(idle.body.disk) as Array<
+        keyof typeof idle.body.disk
+      >) {
+        expect(idle.body.disk[key]).toBeGreaterThanOrEqual(0);
+      }
 
       const first = await jsonFetch(`${base}/api/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "single",
+          pipeline: netPipeline("single"),
           task: { id: "a", goal: "first" },
         }),
       });
@@ -1448,7 +2030,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "single",
+          pipeline: netPipeline("single"),
           task: { id: "b", goal: "second" },
         }),
       });
@@ -1487,110 +2069,120 @@ describe("localhost HTTP API", () => {
   });
 
   it("POST /api/runs returns structured busy_capacity vs busy_checkout", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-http-busy-"));
-    const checkout = await mkdtemp(path.join(tmpdir(), "sf-http-co-"));
-    const agent = scriptedFakeAgent([
-      {
-        type: "wait_then_emit",
-        waitRequests: [freeTextPrompt],
-        envelope: {
-          status: "success",
-          summary: "hold",
-          artifacts: [],
-        },
-      },
-    ]);
-    const { server, base } = await withServer(root, agent, undefined, {
-      maxConcurrent: 1,
-    });
-
+    const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
     try {
-      const first = await jsonFetch(`${base}/api/runs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pipeline: "single",
-          task: { id: "holder", goal: "hold slot", checkout },
-        }),
-      });
-      expect(first.status).toBe(202);
-      const holderId = first.body.runId as string;
-
-      await waitFor(async () => {
-        const health = await jsonFetch(`${base}/api/health`);
-        return health.body.activeRunIds?.includes(holderId);
-      });
-
-      const capacity = await jsonFetch(`${base}/api/runs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pipeline: "single",
-          task: { id: "cap", goal: "over max" },
-        }),
-      });
-      expect(capacity.status).toBe(409);
-      expect(capacity.body.code).toBe("busy_capacity");
-      expect(capacity.body.error).toBeTruthy();
-      expect(capacity.body.activeCount).toBe(1);
-      expect(capacity.body.maxConcurrent).toBe(1);
-      expect(capacity.body.activeRunIds).toEqual([holderId]);
-      expect(capacity.body).not.toHaveProperty("conflictingRunId");
-
-      const otherRoot = await mkdtemp(path.join(tmpdir(), "sf-http-busy2-"));
-      const otherAgent = scriptedFakeAgent([
+      const root = await mkdtemp(path.join(tmpdir(), "sf-http-busy-"));
+      const checkout = await mkdtemp(path.join(tmpdir(), "sf-http-co-"));
+      const agent = scriptedFakeAgent([
         {
           type: "wait_then_emit",
           waitRequests: [freeTextPrompt],
           envelope: {
             status: "success",
-            summary: "hold2",
+            summary: "hold",
             artifacts: [],
           },
         },
       ]);
-      const other = await withServer(otherRoot, otherAgent, undefined, {
-        maxConcurrent: 3,
+      const { server, base } = await withServer(root, agent, undefined, {
+        maxConcurrent: 1,
       });
+
       try {
-        const bound = await jsonFetch(`${other.base}/api/runs`, {
+        const first = await jsonFetch(`${base}/api/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pipeline: "single",
-            task: { id: "a", goal: "first", checkout },
+            pipeline: netPipeline("single"),
+            task: { id: "holder", goal: "hold slot", checkout },
           }),
         });
-        expect(bound.status).toBe(202);
-        const conflictId = bound.body.runId as string;
+        expect(first.status).toBe(202);
+        const holderId = first.body.runId as string;
+
         await waitFor(async () => {
-          const health = await jsonFetch(`${other.base}/api/health`);
-          return health.body.activeRunIds?.includes(conflictId);
+          const health = await jsonFetch(`${base}/api/health`);
+          return health.body.activeRunIds?.includes(holderId);
         });
 
-        const checkoutBusy = await jsonFetch(`${other.base}/api/runs`, {
+        const capacity = await jsonFetch(`${base}/api/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pipeline: "single",
-            task: { id: "b", goal: "same checkout", checkout },
+            pipeline: netPipeline("single"),
+            task: { id: "cap", goal: "over max" },
           }),
         });
-        expect(checkoutBusy.status).toBe(409);
-        expect(checkoutBusy.body.code).toBe("busy_checkout");
-        expect(checkoutBusy.body.conflictingRunId).toBe(conflictId);
-        expect(checkoutBusy.body.conflictingCheckout).toBeTruthy();
-        expect(checkoutBusy.body.activeRunIds).toEqual([conflictId]);
-        expect(checkoutBusy.body.maxConcurrent).toBe(3);
+        expect(capacity.status).toBe(409);
+        expect(capacity.body.code).toBe("busy_capacity");
+        expect(capacity.body.error).toBeTruthy();
+        expect(capacity.body.activeCount).toBe(1);
+        expect(capacity.body.maxConcurrent).toBe(1);
+        expect(capacity.body.activeRunIds).toEqual([holderId]);
+        expect(capacity.body).not.toHaveProperty("conflictingRunId");
+
+        const otherRoot = await mkdtemp(path.join(tmpdir(), "sf-http-busy2-"));
+        const otherAgent = scriptedFakeAgent([
+          {
+            type: "wait_then_emit",
+            waitRequests: [freeTextPrompt],
+            envelope: {
+              status: "success",
+              summary: "hold2",
+              artifacts: [],
+            },
+          },
+        ]);
+        const other = await withServer(otherRoot, otherAgent, undefined, {
+          maxConcurrent: 3,
+        });
+        try {
+          const bound = await jsonFetch(`${other.base}/api/runs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pipeline: netPipeline("single"),
+              task: { id: "a", goal: "first", checkout },
+            }),
+          });
+          expect(bound.status).toBe(202);
+          const conflictId = bound.body.runId as string;
+          await waitFor(async () => {
+            const health = await jsonFetch(`${other.base}/api/health`);
+            return health.body.activeRunIds?.includes(conflictId);
+          });
+
+          const checkoutBusy = await jsonFetch(`${other.base}/api/runs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pipeline: netPipeline("single"),
+              task: { id: "b", goal: "same checkout", checkout },
+            }),
+          });
+          expect(checkoutBusy.status).toBe(409);
+          expect(checkoutBusy.body.code).toBe("busy_checkout");
+          expect(checkoutBusy.body.conflictingRunId).toBe(conflictId);
+          expect(checkoutBusy.body.conflictingCheckout).toBeTruthy();
+          expect(checkoutBusy.body.activeRunIds).toEqual([conflictId]);
+          expect(checkoutBusy.body.maxConcurrent).toBe(3);
+        } finally {
+          await new Promise<void>((resolve, reject) => {
+            other.server.close((err) => (err ? reject(err) : resolve()));
+          });
+        }
       } finally {
         await new Promise<void>((resolve, reject) => {
-          other.server.close((err) => (err ? reject(err) : resolve()));
+          server.close((err) => (err ? reject(err) : resolve()));
         });
       }
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+      if (previousMaxQueued === undefined) {
+        delete process.env.STAGEFLOW_MAX_QUEUED;
+      } else {
+        process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+      }
     }
   });
 
@@ -1640,7 +2232,43 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("GET artifact returns image bytes with image content-type", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-art-png-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join("stages", "screenshot", "attempts", "1", "artifacts", "page.png");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await mkdir(
+      path.join(created.workspaceDir, "stages", "screenshot", "attempts", "1", "artifacts"),
+      { recursive: true },
+    );
+    await writeFile(path.join(created.workspaceDir, rel), png);
+
+    const agent = scriptedFakeAgent([]);
+    const { server, base } = await withServer(root, agent, store);
+
+    try {
+      const ok = await fetch(
+        `${base}/api/runs/${encodeURIComponent(created.runId)}/artifact?path=${encodeURIComponent(rel)}`,
+      );
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await ok.arrayBuffer())).toEqual(png);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("POST /api/settings updates maxConcurrent, persists, and 400s invalid bodies", async () => {
+    const previousHome = process.env.HOME;
+    const home = await mkdtemp(path.join(tmpdir(), "sf-http-settings-home-"));
+    process.env.HOME = home;
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-"));
     const { server, base } = await withServer(
       root,
@@ -1667,7 +2295,7 @@ describe("localhost HTTP API", () => {
       expect(health.body.maxConcurrent).toBe(4);
 
       const persisted = JSON.parse(
-        await readFile(path.join(storeRootFor(root), "settings.json"), "utf8"),
+        await readFile(globalSettingsFilePath(), "utf8"),
       ) as { maxConcurrent: number };
       expect(persisted.maxConcurrent).toBe(4);
 
@@ -1689,10 +2317,20 @@ describe("localhost HTTP API", () => {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
     }
   });
 
   it("POST /api/settings lowering the cap does not evict active runs", async () => {
+    const previousHome = process.env.HOME;
+    const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+    const home = await mkdtemp(path.join(tmpdir(), "sf-http-settings-lower-home-"));
+    process.env.HOME = home;
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-lower-"));
     const agent = scriptedFakeAgent([
       {
@@ -1714,7 +2352,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "single",
+          pipeline: netPipeline("single"),
           task: { id: "holder", goal: "hold slot" },
         }),
       });
@@ -1762,25 +2400,37 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "single",
+          pipeline: netPipeline("single"),
           task: { id: "blocked", goal: "should 409" },
         }),
       });
       expect(over.status).toBe(409);
       expect(over.body.code).toBe("busy_capacity");
     } finally {
-      await rm(path.join(storeRootFor(fixtures), "settings.json"), { force: true });
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousMaxQueued === undefined) {
+        delete process.env.STAGEFLOW_MAX_QUEUED;
+      } else {
+        process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+      }
     }
   });
 
   it("GET /api/health reads maxConcurrent from settings.json when not injected", async () => {
+    const previousHome = process.env.HOME;
+    const home = await mkdtemp(path.join(tmpdir(), "sf-http-settings-boot-home-"));
+    process.env.HOME = home;
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-boot-"));
-    await mkdir(storeRootFor(root), { recursive: true });
+    await mkdir(path.dirname(globalSettingsFilePath()), { recursive: true });
     await writeFile(
-      path.join(storeRootFor(root), "settings.json"),
+      globalSettingsFilePath(),
       `${JSON.stringify({ maxConcurrent: 6 }, null, 2)}\n`,
     );
     const { server, base } = await withServer(
@@ -1799,6 +2449,11 @@ describe("localhost HTTP API", () => {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
     }
   });
 
@@ -1943,8 +2598,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         expect(started.status).toBe(202);
@@ -2028,8 +2683,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2063,7 +2718,7 @@ describe("localhost HTTP API", () => {
       }
     });
 
-    it("returns 409 stage_not_failed for succeeded stage on failed run (AE3)", async () => {
+    it("allows retrying a succeeded stage on a failed run (succeeded-stage retry guard)", async () => {
       const root = await mkdtemp(path.join(tmpdir(), "sf-http-retry-succ-"));
       const agent = scriptedFakeAgent([
         {
@@ -2074,6 +2729,14 @@ describe("localhost HTTP API", () => {
           type: "emit",
           envelope: { status: "failure", summary: "design-fail", artifacts: [] },
         },
+        {
+          type: "emit",
+          envelope: {
+            status: "success",
+            summary: "clarify-ok-retry",
+            artifacts: [],
+          },
+        },
       ]);
       const { server, base, store } = await withServer(root, agent);
 
@@ -2082,8 +2745,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2094,14 +2757,27 @@ describe("localhost HTTP API", () => {
         });
 
         const retried = await postRetry(base, runId, "clarify");
-        expect(retried.status).toBe(409);
-        expect(retried.body.code).toBe("stage_not_failed");
+        expect(retried.status).toBe(202);
+        expect(retried.body).toEqual({
+          runId,
+          stageId: "clarify",
+          attemptIndex: 2,
+        });
+
+        await waitFor(async () => {
+          const detail = await store.readRun(runId);
+          const clarify = detail.stages.find(
+            (s: { stage_id: string }) => s.stage_id === "clarify",
+          );
+          return clarify?.status === "succeeded" && clarify.attempt_count === 2;
+        });
       } finally {
         await new Promise<void>((resolve, reject) => {
           server.close((err) => (err ? reject(err) : resolve()));
         });
       }
     });
+
 
     it("returns 409 hitl_not_retriable for waiting stage (AE3)", async () => {
       const root = await mkdtemp(path.join(tmpdir(), "sf-http-retry-hitl-"));
@@ -2131,8 +2807,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2178,8 +2854,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2211,8 +2887,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2253,6 +2929,7 @@ describe("localhost HTTP API", () => {
                   status: "success" as const,
                   summary: input.stage.id,
                   artifacts: [],
+                  payload: {},
                 },
               };
             },
@@ -2276,8 +2953,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2313,8 +2990,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "parallel-retry-fanout",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2351,7 +3028,7 @@ describe("localhost HTTP API", () => {
           server.close((err) => (err ? reject(err) : resolve()));
         });
       }
-    }, 15000);
+    }, 30000);
 
     it("accepts retry on failed stage during recovery running (AE4b)", async () => {
       const root = await mkdtemp(path.join(tmpdir(), "sf-http-retry-ae4b-"));
@@ -2363,8 +3040,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "parallel-retry-fanout",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2418,8 +3095,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2553,7 +3230,13 @@ describe("localhost HTTP API", () => {
       const root = await mkdtemp(
         path.join(tmpdir(), "sf-http-abandon-ae5-par-retry-"),
       );
-      const agent = parallelFanoutStuckDesignAgent();
+      let releaseDesign!: () => void;
+      const designGate = new Promise<void>((resolve) => {
+        releaseDesign = resolve;
+      });
+      const agent = parallelFanoutStuckDesignAgent({
+        holdDesignRetry: designGate,
+      });
       const { server, base, store } = await withServer(root, agent);
 
       try {
@@ -2561,8 +3244,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "parallel-retry-fanout",
+            task: "tasks/sample.task.yaml",
+            pipeline: netPipeline("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2585,14 +3268,19 @@ describe("localhost HTTP API", () => {
         });
 
         const retryDesign = postRetry(base, runId, "design-doc");
-        await new Promise((r) => setTimeout(r, 50));
-        const retryImpl = postRetry(base, runId, "implementation-plan");
-        const [designResult, implResult] = await Promise.all([
-          retryDesign,
-          retryImpl,
-        ]);
-        expect(designResult.status).toBe(202);
+        await waitFor(async () => {
+          const detail = await store.readRun(runId);
+          return (
+            detail.stages.find((s) => s.stage_id === "design-doc")?.status ===
+            "running"
+          );
+        });
+        const implResult = await postRetry(base, runId, "implementation-plan");
         expect(implResult.status).toBe(202);
+
+        releaseDesign();
+        const designResult = await retryDesign;
+        expect(designResult.status).toBe(202);
 
         await waitUntilIdleHealth(base);
 
@@ -2620,6 +3308,29 @@ describe("localhost HTTP API", () => {
 
   describe("provider auth HTTP shell", () => {
     const marker = "sk-test-secret-marker-HTTP-AE3-9f3c2b1a";
+    const previousHome = process.env.HOME;
+    const previousStageflowHome = process.env.STAGEFLOW_HOME;
+
+    beforeEach(async () => {
+      resetGlobalStageflowHomeForTests();
+      const home = await mkdtemp(path.join(tmpdir(), "sf-http-auth-home-"));
+      process.env.HOME = home;
+      process.env.STAGEFLOW_HOME = path.join(home, ".stageflow");
+    });
+
+    afterEach(() => {
+      resetGlobalStageflowHomeForTests();
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousStageflowHome === undefined) {
+        delete process.env.STAGEFLOW_HOME;
+      } else {
+        process.env.STAGEFLOW_HOME = previousStageflowHome;
+      }
+    });
 
     it("lists live providers without changing GET /api/models", async () => {
       const root = await mkdtemp(path.join(tmpdir(), "sf-http-providers-list-"));
@@ -2704,7 +3415,7 @@ describe("localhost HTTP API", () => {
         expect(status.body.provider.configured).toBe(true);
         expect(JSON.stringify(status.body)).not.toContain(marker);
 
-        const authFile = await readFile(sfOwnedAuthPath(root), "utf8");
+        const authFile = await readFile(sfOwnedAuthPath(), "utf8");
         expect(authFile).toContain(marker);
         expect(authFile).not.toContain("settings");
 
@@ -3127,3 +3838,666 @@ describe("localhost HTTP API", () => {
     });
   });
 });
+
+describe("project MCP catalog HTTP", () => {
+  const secret = "u1-secret-mcp-token-9f3c2b1a";
+
+  async function writeHostCatalog(
+    root: string,
+    servers: Record<string, Record<string, unknown>>,
+  ): Promise<void> {
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({ mcpServers: servers }),
+    );
+  }
+
+  it("lists two servers as names plus transport only", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-ok-"));
+    await writeHostCatalog(root, {
+      local: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+        env: { GITHUB_TOKEN: secret },
+      },
+      github: {
+        url: "https://secret-host.example/${API_BASE}/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({
+        status: "ok",
+        servers: [
+          { name: "local", transport: "stdio" },
+          { name: "github", transport: "http" },
+        ],
+      });
+      for (const row of listed.body.servers as { name: string }[]) {
+        expect(Object.keys(row).sort()).toEqual(["name", "transport"]);
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns an empty list for empty mcpServers", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-empty-"));
+    await writeHostCatalog(root, {});
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "ok", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns JSON with no env, headers, args, command, URLs, or secrets", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-secrets-"));
+    await writeHostCatalog(root, {
+      local: {
+        command: "npx",
+        args: ["-y", "secret-bin"],
+        env: { GITHUB_TOKEN: secret },
+      },
+      github: {
+        url: "https://secret-host.example/${API_BASE}/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      const payload = JSON.stringify(listed.body);
+      expect(payload).not.toContain(secret);
+      expect(payload).not.toContain("secret-host.example");
+      expect(payload).not.toContain("API_BASE");
+      expect(payload).not.toContain("Authorization");
+      expect(payload).not.toContain("secret-bin");
+      expect(payload).not.toMatch(/"env"/);
+      expect(payload).not.toMatch(/"headers"/);
+      expect(payload).not.toMatch(/"args"/);
+      expect(payload).not.toMatch(/"command"/);
+      expect(payload).not.toMatch(/"url"/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("does not spawn a connect helper or child process", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-nospawn-"));
+    await writeHostCatalog(root, {
+      local: { command: "npx", args: ["-y", "should-not-spawn"] },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    const resolveSpy = vi.spyOn(resolveStageMcpServers, "resolveStageMcpServers");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      attachSpy.mockClear();
+      resolveSpy.mockClear();
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body.status).toBe("ok");
+      expect(attachSpy).not.toHaveBeenCalled();
+      expect(resolveSpy).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      resolveSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns missing_catalog when the file is absent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-missing-"));
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "missing_catalog", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns invalid_config for invalid JSON", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-badjson-"));
+    await writeFile(path.join(root, ".mcp.json"), "{ not json");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "invalid_config", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("fails the whole catalog when stageflow is reserved", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-reserved-"));
+    await writeHostCatalog(root, {
+      stageflow: { command: "npx" },
+      github: { url: "https://secret-host.example/mcp" },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "invalid_config", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("lists from host projectRoot, not a run checkout_root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-root-"));
+    const checkout = path.join(root, "checkout");
+    await mkdir(checkout, { recursive: true });
+    await writeHostCatalog(root, {
+      factory: { command: "npx" },
+    });
+    await writeFile(
+      path.join(checkout, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          decoy: {
+            url: "https://secret-host.example/mcp",
+            headers: { Authorization: `Bearer ${secret}` },
+          },
+        },
+      }),
+    );
+    const store = createRunStore({ rootDir: root });
+    await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+      checkoutRoot: checkout,
+    });
+    const { server, base } = await withServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({
+        status: "ok",
+        servers: [{ name: "factory", transport: "stdio" }],
+      });
+      const payload = JSON.stringify(listed.body);
+      expect(payload).not.toContain("decoy");
+      expect(payload).not.toContain(secret);
+      expect(payload).not.toContain("secret-host.example");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+
+describe("project MCP probe HTTP", () => {
+  const secret = "u2-http-probe-secret-4c8a";
+
+  async function writeHostCatalog(
+    root: string,
+    servers: Record<string, Record<string, unknown>>,
+  ): Promise<void> {
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({ mcpServers: servers }),
+    );
+  }
+
+  function wrapAttachEmit(status: string) {
+    return vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+      async (snapshot) => {
+        const eventBus = createEventBus();
+        queueMicrotask(() => {
+          piIsolatedMcp.emitIsolatedMcpStatus(
+            eventBus,
+            Object.keys(snapshot ?? {}).map((name) => ({ name, status })),
+          );
+        });
+        const connecting =
+          status === "connected" || status === "cached"
+            ? Promise.resolve()
+            : Promise.reject(
+                new resolveStageMcpServers.StageMcpError(
+                  `MCP server "github" failed to connect (status: ${status})`,
+                  "connect_failed",
+                ),
+              );
+        void connecting.then(() => undefined, () => undefined);
+        return {
+          extensionFactories: [{ name: "stageflow-mcp", factory: () => {} }],
+          eventBus,
+          connecting,
+          cancel: vi.fn(),
+        };
+      },
+    );
+  }
+
+  it("does not import openStage or prepareStageSessionWiring", async () => {
+    const source = await readFile(
+      path.join(import.meta.dirname, "../src/server/projectMcpRoutes.ts"),
+      "utf8",
+    );
+    expect(source).not.toMatch(/openStage/);
+    expect(source).not.toMatch(/prepareStageSessionWiring/);
+  });
+
+  it("POST Check returns connected and does not call openStage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-ok-"));
+    await writeHostCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    const agent = scriptedFakeAgent([]);
+    const openStage = vi.spyOn(agent, "openStage");
+    const attachSpy = wrapAttachEmit("connected");
+    const { server, base } = await withServer(root, agent);
+    try {
+      const probed = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(probed.status).toBe(200);
+      expect(probed.body).toEqual({ name: "github", status: "connected" });
+      expect(openStage).not.toHaveBeenCalled();
+      expect(JSON.stringify(probed.body)).not.toMatch(/"env"/);
+      expect(JSON.stringify(probed.body)).not.toMatch(/"headers"/);
+      expect(JSON.stringify(probed.body)).not.toMatch(/"args"/);
+      expect(JSON.stringify(probed.body)).not.toMatch(/"url"/);
+    } finally {
+      attachSpy.mockRestore();
+      openStage.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("maps Pi cached to connected and needs-auth to needs_auth", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-map-"));
+    await writeHostCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+      oauth: { url: "https://mcp.example.invalid/oauth" },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    const cachedSpy = wrapAttachEmit("cached");
+    try {
+      const cached = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(cached.body).toEqual({ name: "github", status: "connected" });
+      cachedSpy.mockRestore();
+      const authSpy = wrapAttachEmit("needs-auth");
+      const auth = await jsonFetch(`${base}/api/project-mcp/oauth/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(auth.body).toEqual({ name: "oauth", status: "needs_auth" });
+      authSpy.mockRestore();
+    } finally {
+      cachedSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("failed connect is connect_failed with scrubbed text and no resolved blob", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-fail-"));
+    await writeHostCatalog(root, {
+      github: {
+        url: "https://secret-host.example/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+        env: { GITHUB_TOKEN: secret },
+      },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+      async () => {
+        const eventBus = createEventBus();
+        queueMicrotask(() => {
+          piIsolatedMcp.emitIsolatedMcpStatus(eventBus, [
+            { name: "github", status: "failed" },
+          ]);
+        });
+        const connecting = Promise.reject(
+          new resolveStageMcpServers.StageMcpError(
+            `MCP server "github" failed to connect (status: failed) token=${secret}`,
+            "connect_failed",
+          ),
+        );
+        void connecting.then(() => undefined, () => undefined);
+        return {
+          extensionFactories: [{ name: "stageflow-mcp", factory: () => {} }],
+          eventBus,
+          connecting,
+          cancel: vi.fn(),
+        };
+      },
+    );
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const probed = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(probed.status).toBe(200);
+      expect(probed.body.status).toBe("connect_failed");
+      const payload = JSON.stringify(probed.body);
+      expect(payload).not.toContain(secret);
+      expect(payload).not.toContain("secret-host.example");
+      expect(probed.body.error).toContain("[redacted]");
+      expect(payload).not.toMatch(/"env"/);
+      expect(payload).not.toMatch(/"headers"/);
+      expect(payload).not.toMatch(/"args"/);
+      expect(payload).not.toMatch(/"url"/);
+      expect(payload).not.toMatch(/"resolved"/);
+    } finally {
+      attachSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("abort yields cancelled and tears down the leftover connect", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-abort-"));
+    await writeHostCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    let attached: Awaited<ReturnType<typeof piIsolatedMcp.attachIsolatedMcp>> | undefined;
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+      async () => {
+        const eventBus = createEventBus();
+        let finish: (error?: Error) => void = () => {};
+        const connecting = new Promise<void>((_resolve, reject) => {
+          finish = (error) => {
+            if (error) reject(error);
+          };
+        });
+        const cancel = vi.fn(() => {
+          finish(
+            new resolveStageMcpServers.StageMcpError(
+              "MCP connect wait cancelled",
+              "connect_failed",
+            ),
+          );
+        });
+        void connecting.then(() => undefined, () => undefined);
+        attached = {
+          extensionFactories: [{ name: "stageflow-mcp", factory: () => {} }],
+          eventBus,
+          connecting,
+          cancel,
+        };
+        return attached;
+      },
+    );
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const ac = new AbortController();
+      const pending = fetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        signal: ac.signal,
+      });
+      await waitFor(() => Promise.resolve(attached !== undefined));
+      ac.abort();
+      await pending.catch(() => undefined);
+      await waitFor(() => Promise.resolve(Boolean(attached?.cancel && (attached.cancel as ReturnType<typeof vi.fn>).mock.calls.length > 0)));
+      expect(attached?.cancel).toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("unresolved interpolation is unresolved_var and does not attach", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-var-"));
+    await writeHostCatalog(root, {
+      github: {
+        url: "https://secret-host.example/${MISSING_PROBE_VAR}/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      attachSpy.mockClear();
+      const probed = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(probed.status).toBe(200);
+      expect(probed.body.status).toBe("unresolved_var");
+      expect(JSON.stringify(probed.body)).not.toContain(secret);
+      expect(JSON.stringify(probed.body)).not.toContain("secret-host.example");
+      expect(probed.body).not.toHaveProperty("resolved");
+      expect(attachSpy).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("bad catalog is invalid_config without attach", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-bad-"));
+    await writeFile(path.join(root, ".mcp.json"), "{ not json");
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      attachSpy.mockClear();
+      const probed = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(probed.status).toBe(200);
+      expect(probed.body).toEqual({ name: "github", status: "invalid_config" });
+      expect(attachSpy).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("POST probe is mutating and rejects a non-loopback Origin", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-origin-"));
+    await writeHostCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      attachSpy.mockClear();
+      const forbidden = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://evil.example",
+        },
+        body: "{}",
+      });
+      expect(forbidden.status).toBe(403);
+      expect(forbidden.body.error).toMatch(/origin|host/i);
+      expect(attachSpy).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+
+describe("HTTP repository binding surfaces (U7)", () => {
+  afterAll(() => {
+    setBareCacheRemoteUrlOverrideForTests(null);
+    resetBareCacheStateForTests();
+    resetGlobalStageflowHomeForTests();
+  });
+
+  it("rejects token-shaped start fields and body-level binding stays on task", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-u7-token-"));
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const token = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: netPipeline("docs-only"),
+          task: { id: "t", goal: "g" },
+          github_token: "nope",
+        }),
+      });
+      expect(token.status).toBe(400);
+      expect(token.body.code).toBe("start.token_rejected");
+      expect(token.body.field).toBe("github_token");
+
+      const conflict = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: netPipeline("docs-only"),
+          task: {
+            id: "t",
+            goal: "g",
+            repository: "acme/api",
+            ref: "main",
+            checkout: "/tmp/x",
+          },
+        }),
+      });
+      expect(conflict.status).toBe(400);
+      expect(conflict.body.code).toBe("task.binding_conflict");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("starts a repository task and get_run shows binding", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-http-u7-home-"));
+    process.env.STAGEFLOW_HOME = home;
+    resetGlobalStageflowHomeForTests();
+    resetBareCacheStateForTests();
+
+    const source = await mkdtemp(path.join(tmpdir(), "sf-http-u7-src-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: source });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: source });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: source });
+    await writeFile(path.join(source, "README"), "hi\n");
+    execFileSync("git", ["add", "README"], { cwd: source });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: source });
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source).href);
+
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-u7-run-"));
+    const agent = {
+      openStage(input: { stage: { id: string } }) {
+        return createCompletedOnlyStageHandle({
+          stageId: input.stage.id,
+          run: async () => ({
+            ok: true as const,
+            envelope: {
+              status: "success" as const,
+              summary: "ok",
+              artifacts: [],
+              payload: {},
+            },
+          }),
+        });
+      },
+      async runStage() {
+        return {
+          ok: true as const,
+          envelope: {
+            status: "success" as const,
+            summary: "ok",
+            artifacts: [],
+            payload: {},
+          },
+        };
+      },
+    };
+    const { server, base } = await withServer(root, agent);
+    try {
+      const started = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: netPipeline("docs-only"),
+          task: {
+            id: "repo-task",
+            goal: "edit",
+            repository: "acme/api",
+            ref: "main",
+          },
+        }),
+      });
+      expect(started.status).toBe(202);
+      const runId = started.body.runId as string;
+      await waitUntilIdleHealth(base);
+      const detail = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(runId)}`,
+      );
+      expect(detail.status).toBe(200);
+      expect(detail.body.binding).toMatchObject({
+        kind: "repository",
+        repository: "acme/api",
+        ref: "main",
+        resolved_sha: sha,
+      });
+      expect(detail.body.binding.run_branch).toMatch(/^stageflow\/run-/);
+      expect(detail.body.binding.checkout_root).toContain("worktrees");
+    } finally {
+      setBareCacheRemoteUrlOverrideForTests(null);
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+

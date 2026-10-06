@@ -1,0 +1,5 @@
+id: manual-dangling-refs
+pipeline: does-not-exist
+task: also-missing
+kind: manual
+enabled: true

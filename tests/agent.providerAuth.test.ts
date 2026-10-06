@@ -13,9 +13,15 @@ import {
   type ProviderAuthContext,
   type ProviderAuthRuntime,
 } from "../src/agent/providerAuth.js";
+import {
+  inspectProviderReadiness,
+  mapProviderAuthError,
+} from "../src/agent/providerInspect.js";
 import { writeCredentialSourceToFile } from "../src/runtime/settingsFile.js";
 import { sfOwnedAuthPath } from "../src/runtime/credentialBinding.js";
 import { storeRootFor } from "../src/runstore/paths.js";
+import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
+import { initTempGitRepo, withIsolatedHome } from "./helpers/projectContext.js";
 
 function fakeProvider(partial: {
   id: string;
@@ -74,6 +80,7 @@ function fakeProvider(partial: {
 
 function createFakeRuntime(options?: {
   providers?: Provider[];
+  credentials?: Record<string, "api_key" | "oauth">;
   onLogin?: (
     providerId: string,
     type: "api_key" | "oauth",
@@ -92,7 +99,9 @@ function createFakeRuntime(options?: {
       supportsOauth: true,
     }),
   ];
-  const store = new Map<string, "api_key" | "oauth">();
+  const store = new Map<string, "api_key" | "oauth">(
+    Object.entries(options?.credentials ?? {}),
+  );
 
   return {
     getProviders: () => providers,
@@ -221,18 +230,137 @@ describe("providerAuth", () => {
   });
 
   it("does not persist api keys into settings.json", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-pa-settings-"));
-    writeCredentialSourceToFile(root, "sf_owned");
-    const runtime = createFakeRuntime();
-    const ctx = makeTestContext(runtime);
-    const marker = "sk-test-secret-marker-SETTINGS";
-    await loginWithApiKey(root, "key-provider", marker, ctx);
-    const settings = await readFile(
-      path.join(storeRootFor(root), "settings.json"),
-      "utf8",
-    );
-    expect(settings).not.toContain(marker);
-    expect(settings).toContain("sf_owned");
-    expect(sfOwnedAuthPath(root).endsWith("auth.json")).toBe(true);
+    await withIsolatedHome(async (home) => {
+      writeCredentialSourceToFile(home, "sf_owned");
+      const runtime = createFakeRuntime();
+      const ctx = makeTestContext(runtime);
+      const marker = "sk-test-secret-marker-SETTINGS";
+      await loginWithApiKey(home, "key-provider", marker, ctx);
+      const settings = await readFile(
+        path.join(storeRootFor(home), "settings.json"),
+        "utf8",
+      );
+      expect(settings).not.toContain(marker);
+      expect(settings).toContain("sf_owned");
+      expect(sfOwnedAuthPath().endsWith("auth.json")).toBe(true);
+    });
+  });
+});
+
+describe("inspectProviderReadiness", () => {
+  afterEach(() => {
+    clearFindProjectRootCacheForTests();
+  });
+
+  it("returns configured login-capable rows plus detect and no secrets", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      writeCredentialSourceToFile(root, "sf_owned");
+      clearFindProjectRootCacheForTests();
+      const runtime = createFakeRuntime({
+        credentials: { "key-provider": "api_key" },
+        providers: [
+          fakeProvider({
+            id: "key-provider",
+            name: "Key Provider",
+            supportsApiKeyLogin: true,
+          }),
+          fakeProvider({
+            id: "oauth-provider",
+            name: "OAuth Provider",
+            supportsOauth: true,
+          }),
+          fakeProvider({
+            id: "env-only",
+            name: "Env Only",
+          }),
+        ],
+      });
+      const inspect = await inspectProviderReadiness(
+        root,
+        makeTestContext(runtime),
+      );
+      expect(inspect.authShell).toBe("pi");
+      expect(inspect.via).toBe("pi");
+      expect(inspect.providers.map((p) => p.id)).toEqual([
+        "key-provider",
+        "oauth-provider",
+      ]);
+      expect(inspect.providers[0]).toEqual({
+        id: "key-provider",
+        name: "Key Provider",
+        supportsApiKey: true,
+        supportsOauth: false,
+        configured: true,
+        authKind: "api_key",
+        source: "stored",
+      });
+      expect(inspect.providers[1]).toMatchObject({
+        id: "oauth-provider",
+        name: "OAuth Provider",
+        supportsApiKey: false,
+        supportsOauth: true,
+        configured: false,
+      });
+      expect(typeof inspect.detect.piHomeUsable).toBe("boolean");
+      expect(inspect.detect.source).toBe("sf_owned");
+      expect(inspect.detect).not.toHaveProperty("authPath");
+      expect(inspect).not.toHaveProperty("authPath");
+      expect(JSON.stringify(inspect)).not.toMatch(
+        /accessToken|refreshToken|"apiKey"|"key"\s*:|authPath|sk-/,
+      );
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("treats unconfigured as success with configured false", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      writeCredentialSourceToFile(root, "sf_owned");
+      clearFindProjectRootCacheForTests();
+      const inspect = await inspectProviderReadiness(
+        root,
+        makeTestContext(createFakeRuntime()),
+      );
+      expect(inspect.providers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "key-provider",
+            configured: false,
+          }),
+        ]),
+      );
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+});
+
+describe("mapProviderAuthError", () => {
+  it("passes ProviderAuthError status through", () => {
+    expect(
+      mapProviderAuthError(new ProviderAuthError("Provider not found", 404)),
+    ).toEqual({
+      status: 404,
+      body: { error: "Provider not found" },
+    });
+    expect(mapProviderAuthError(new ProviderAuthError("nope", 502))).toEqual({
+      status: 502,
+      body: { error: "nope" },
+    });
+  });
+
+  it("maps unknown errors to 500 with a generic message", () => {
+    expect(mapProviderAuthError(new Error("boom"))).toEqual({
+      status: 500,
+      body: { error: "Provider auth operation failed" },
+    });
+    expect(mapProviderAuthError("string-err")).toEqual({
+      status: 500,
+      body: { error: "Provider auth operation failed" },
+    });
   });
 });

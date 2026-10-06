@@ -1,0 +1,18 @@
+id: home-path-other-absolute
+stages:
+  - id: other-abs
+    entry: true
+    system_prompt: |
+      Use /usr/bin/git and /tmp/scratch if needed; emit success.
+    model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+    verify:
+      - id: which-git
+        type: command
+        run: test -x /usr/bin/git

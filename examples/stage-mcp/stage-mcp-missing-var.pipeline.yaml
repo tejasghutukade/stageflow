@@ -1,0 +1,5 @@
+id: stage-mcp-missing-var
+stages:
+  - id: use-echo
+    uses: ./use-echo.yaml
+    mcp: [needs-token]

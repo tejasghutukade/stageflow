@@ -1,0 +1,16 @@
+id: mcp-hitl-tour
+goal: |
+  Produce a short operator-readable brief on the given topic. At intake, the
+  operator chooses audience (operators or executives). Both a Clone Chain
+  draft and a short draft always run, then join at polish. Review always
+  sends the brief back once so the operator decides the loop.
+context: |
+  MCP operator-host walkthrough. Answer the intake free_text gate with exactly
+  operators or executives. Every review success MUST emit send_back target
+  polish — never continue — until waiting_kind is feedback_loop_decision.
+constraints: |
+  Docs only; no implementation code; no git push. First review: send_back
+  polish. After the polish replay, second review: send_back polish again so
+  the operator can call decide_feedback_loop.
+input:
+  topic: Local-first notes apps for small teams

@@ -1,15 +1,34 @@
 import Database from "better-sqlite3";
+import { existsSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { StageEnvelope } from "../../types/envelope.js";
+import type { StageUsage } from "../../types/usage.js";
+import type { FeedbackLoopConfig, InlinePipelineDefinition } from "../../types/pipeline.js";
 import type { StageLogLine } from "../../agent/activity.js";
 import { derivePendingPrompt } from "../../hitl/qaTrail.js";
 import {
   stageStatusFromEvents,
+  type CreateFeedbackLoopInput,
+  type CreateFeedbackReplayInput,
+  type CreateFeedbackReplayStagePassInput,
+  type CreateForkGenerationInput,
   type CreateRunInput,
   type CreatedRun,
+  type FeedbackLoopHistory,
+  type FeedbackLoopPatch,
+  type FeedbackLoopRecord,
+  type FeedbackLoopState,
+  type FeedbackReplayPatch,
+  type FeedbackReplayRecord,
+  type FeedbackReplayStagePassPatch,
+  type FeedbackReplayStagePassRecord,
+  type ForkGenerationPatch,
+  type ForkGenerationRecord,
+  type ListRunsFilter,
   type RunDetail,
   type RunMeta,
+  type RunPipelineDagSnapshot,
   type RunStatus,
   type RunStore,
   type RunSummary,
@@ -17,8 +36,14 @@ import {
   type StageExecutionPatch,
   type StageLogEvent,
   type StageSnapshot,
+  type TriggerRecord,
+  type UpsertTriggerInput,
+  type VerificationCheckResult,
+  type VerificationCheckResultPatch,
+  type ConfigOriginRecord,
 } from "../port.js";
 import { projectRunDetail, projectRunSummary, orderStageSnapshots } from "../runProjection.js";
+import { normalizeCatalogPath, normalizeProjectRoot } from "../normalizeCatalogPath.js";
 import { buildStageSnapshotFromStore } from "../stageSnapshot.js";
 import { parsePipelineDagSnapshot } from "../pipelineDagSnapshot.js";
 import { newRunId, runWorkspaceDir } from "../paths.js";
@@ -28,7 +53,15 @@ import {
   stageDir,
 } from "../workspaceLayout.js";
 import { importDiskRunsIfEmpty } from "./migrateFromDisk.js";
-import { SCHEMA_SQL } from "./schema.js";
+import {
+  applyPendingMigrations,
+  assertSchemaVersion,
+} from "./migrations/index.js";
+import { StoreSchemaError } from "./storeSchemaError.js";
+import { applyStorePragmas } from "./applyStorePragmas.js";
+import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
+
+type SqliteRunStoreOpenerMode = "assert" | "migrate";
 
 type RunRow = {
   run_id: string;
@@ -40,6 +73,29 @@ type RunRow = {
   updated_at: string;
   checkout_root: string | null;
   pipeline_dag_json: string | null;
+  git_sha: string | null;
+  ci_pr_url: string | null;
+  ci_job_url: string | null;
+  pipeline_path: string | null;
+  task_path: string | null;
+  project_root: string | null;
+  repository: string | null;
+  ref: string | null;
+  resolved_sha: string | null;
+  run_branch: string | null;
+  git_author_name: string | null;
+  git_author_email: string | null;
+  cancel_reason: string | null;
+  finished_at: string | null;
+  slimmed_at: string | null;
+  disk_bytes: number | null;
+  disk_measured_at: string | null;
+  config_origins_json: string | null;
+  pipeline_source: string | null;
+  pipeline_body: string | null;
+  caller_id: string | null;
+  run_manifest: string | null;
+  skip_gates: number | null;
 };
 
 type StageRow = {
@@ -63,71 +119,98 @@ type ExecutionRow = {
   stage_id: string;
   attempt: number;
   status: string;
+  verification_outcome: StageExecution["verification_outcome"] | null;
   started_at: string | null;
   finished_at: string | null;
   envelope_json: string | null;
+  cost_usd: number | null;
+  usage_json: string | null;
+  auto_resume_count: number | null;
+};
+
+const EXECUTION_SELECT_COLS =
+  `run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json, auto_resume_count`;
+
+type VerificationCheckResultRow = {
+  run_id: string;
+  stage_id: string;
+  attempt: number;
+  check_id: string;
+  check_type: VerificationCheckResult["check_type"];
+  status: VerificationCheckResult["status"];
+  started_at: string | null;
+  finished_at: string | null;
+  evidence_json: string | null;
+};
+
+type FeedbackLoopRow = {
+  run_id: string;
+  loop_id: string;
+  source_stage_id: string;
+  source_attempt: number;
+  policy_json: string;
+  state: string;
+  current_replay_id: string | null;
+  current_replay_number: number | null;
+  deferred_send_back_json: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeedbackReplayRow = {
+  run_id: string;
+  replay_id: string;
+  loop_id: string;
+  source_stage_id: string;
+  source_attempt: number;
+  target_stage_id: string;
+  replay_number: number;
+  max_replays: number;
+  replay_session: string;
+  route_stage_ids_json: string;
+  feedback_envelope_json: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeedbackReplayStagePassRow = {
+  run_id: string;
+  replay_id: string;
+  stage_id: string;
+  stage_attempt: number;
+  session_origin_attempt: number | null;
+  session_mode: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  emitted_envelope_json: string | null;
+};
+
+type ForkGenerationRow = {
+  run_id: string;
+  generation_id: string;
+  replay_id: string | null;
+  fork_parent_stage_id: string;
+  generation_number: number;
+  clone_stage_ids_json: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type TriggerRow = {
+  id: string;
+  definition_ref: string;
+  enabled: number;
+  last_fired_at: string | null;
+  last_run_id: string | null;
+  next_run_at: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 const ensuredStageDirs = new Set<string>();
-
-const DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5000;
-
-function readSqliteBusyTimeoutMs(): number {
-  const raw = process.env.STAGEFLOW_SQLITE_BUSY_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "") {
-    return DEFAULT_SQLITE_BUSY_TIMEOUT_MS;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return DEFAULT_SQLITE_BUSY_TIMEOUT_MS;
-  }
-  return parsed;
-}
-
-function ensureCheckoutRootColumn(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === "checkout_root")) {
-    db.exec(`ALTER TABLE runs ADD COLUMN checkout_root TEXT`);
-  }
-}
-
-function ensurePipelineDagColumn(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === "pipeline_dag_json")) {
-    db.exec(`ALTER TABLE runs ADD COLUMN pipeline_dag_json TEXT`);
-  }
-}
-
-function ensureStageExecutionsTable(db: Database.Database): void {
-  db.exec(`
-CREATE TABLE IF NOT EXISTS stage_executions (
-  run_id TEXT NOT NULL,
-  stage_id TEXT NOT NULL,
-  attempt INTEGER NOT NULL,
-  status TEXT NOT NULL,
-  started_at TEXT,
-  finished_at TEXT,
-  envelope_json TEXT,
-  PRIMARY KEY (run_id, stage_id, attempt),
-  FOREIGN KEY (run_id) REFERENCES runs(run_id)
-);
-CREATE INDEX IF NOT EXISTS idx_stage_executions_run_stage
-  ON stage_executions (run_id, stage_id, attempt);
-`);
-}
-
-function ensureStageEventsAttemptColumn(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(stage_events)`)
-    .all() as { name: string }[];
-  if (!cols.some((c) => c.name === "attempt")) {
-    db.exec(`ALTER TABLE stage_events ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1`);
-    db.exec(`
-CREATE INDEX IF NOT EXISTS idx_stage_events_run_stage_attempt_at
-  ON stage_events (run_id, stage_id, attempt, at);
-`);
-  }
-}
 
 function executionFromRow(row: ExecutionRow): StageExecution {
   return {
@@ -135,11 +218,132 @@ function executionFromRow(row: ExecutionRow): StageExecution {
     stage_id: row.stage_id,
     attempt: row.attempt,
     status: row.status as StageExecution["status"],
+    verification_outcome: row.verification_outcome ?? "not_run",
     ...(row.started_at != null ? { started_at: row.started_at } : {}),
     ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
     envelope: row.envelope_json
       ? (JSON.parse(row.envelope_json) as StageExecution["envelope"])
       : null,
+    ...(row.cost_usd != null ? { cost_usd: row.cost_usd } : {}),
+    ...(row.usage_json != null
+      ? { usage: JSON.parse(row.usage_json) as StageUsage }
+      : {}),
+    auto_resume_count: row.auto_resume_count ?? 0,
+  };
+}
+
+function verificationCheckResultFromRow(
+  row: VerificationCheckResultRow,
+): VerificationCheckResult {
+  return {
+    run_id: row.run_id,
+    stage_id: row.stage_id,
+    attempt: row.attempt,
+    check_id: row.check_id,
+    check_type: row.check_type,
+    status: row.status,
+    ...(row.started_at != null ? { started_at: row.started_at } : {}),
+    ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
+    ...(row.evidence_json != null
+      ? { evidence: JSON.parse(row.evidence_json) as Record<string, unknown> }
+      : {}),
+  };
+}
+
+function feedbackLoopFromRow(row: FeedbackLoopRow): FeedbackLoopRecord {
+  return {
+    run_id: row.run_id,
+    loop_id: row.loop_id,
+    source_stage_id: row.source_stage_id,
+    source_attempt: row.source_attempt,
+    policy: JSON.parse(row.policy_json) as FeedbackLoopConfig,
+    state: row.state as FeedbackLoopRecord["state"],
+    ...(row.current_replay_id != null
+      ? { current_replay_id: row.current_replay_id }
+      : {}),
+    ...(row.current_replay_number != null
+      ? { current_replay_number: row.current_replay_number }
+      : {}),
+    ...(row.deferred_send_back_json != null
+      ? {
+          deferred_send_back: JSON.parse(
+            row.deferred_send_back_json,
+          ) as FeedbackLoopRecord["deferred_send_back"],
+        }
+      : {}),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function triggerFromRow(row: TriggerRow): TriggerRecord {
+  return {
+    id: row.id,
+    definition_ref: row.definition_ref,
+    enabled: row.enabled !== 0,
+    ...(row.last_fired_at != null ? { last_fired_at: row.last_fired_at } : {}),
+    ...(row.last_run_id != null ? { last_run_id: row.last_run_id } : {}),
+    ...(row.next_run_at != null ? { next_run_at: row.next_run_at } : {}),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function feedbackReplayFromRow(row: FeedbackReplayRow): FeedbackReplayRecord {
+  return {
+    run_id: row.run_id,
+    replay_id: row.replay_id,
+    loop_id: row.loop_id,
+    source_stage_id: row.source_stage_id,
+    source_attempt: row.source_attempt,
+    target_stage_id: row.target_stage_id,
+    replay_number: row.replay_number,
+    max_replays: row.max_replays,
+    replay_session: row.replay_session as FeedbackReplayRecord["replay_session"],
+    route_stage_ids: JSON.parse(row.route_stage_ids_json) as string[],
+    feedback_envelope: JSON.parse(row.feedback_envelope_json) as StageEnvelope,
+    status: row.status as FeedbackReplayRecord["status"],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function feedbackReplayStagePassFromRow(
+  row: FeedbackReplayStagePassRow,
+): FeedbackReplayStagePassRecord {
+  return {
+    run_id: row.run_id,
+    replay_id: row.replay_id,
+    stage_id: row.stage_id,
+    stage_attempt: row.stage_attempt,
+    ...(row.session_origin_attempt != null
+      ? { session_origin_attempt: row.session_origin_attempt }
+      : {}),
+    session_mode: row.session_mode as FeedbackReplayStagePassRecord["session_mode"],
+    status: row.status as FeedbackReplayStagePassRecord["status"],
+    ...(row.started_at != null ? { started_at: row.started_at } : {}),
+    ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
+    ...(row.emitted_envelope_json != null
+      ? {
+          emitted_envelope: JSON.parse(
+            row.emitted_envelope_json,
+          ) as StageEnvelope,
+        }
+      : {}),
+  };
+}
+
+function forkGenerationFromRow(row: ForkGenerationRow): ForkGenerationRecord {
+  return {
+    run_id: row.run_id,
+    generation_id: row.generation_id,
+    ...(row.replay_id != null ? { replay_id: row.replay_id } : {}),
+    fork_parent_stage_id: row.fork_parent_stage_id,
+    generation_number: row.generation_number,
+    clone_stage_ids: JSON.parse(row.clone_stage_ids_json) as string[],
+    status: row.status as ForkGenerationRecord["status"],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
 }
 
@@ -147,27 +351,60 @@ export class SqliteRunStore implements RunStore {
   private readonly db: Database.Database;
   private migratePromise: Promise<void>;
 
-  constructor(private readonly storeRoot: string) {
+  constructor(
+    private readonly storeRoot: string,
+    options?: { openerMode?: SqliteRunStoreOpenerMode },
+  ) {
+    const openerMode =
+      options?.openerMode ??
+      (process.env.VITEST === "true" ? "migrate" : "assert");
     const dbPath = path.join(storeRoot, "state.db");
-    this.db = new Database(dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma(`busy_timeout = ${readSqliteBusyTimeoutMs()}`);
-    this.db.exec(SCHEMA_SQL);
-    ensureCheckoutRootColumn(this.db);
-    ensurePipelineDagColumn(this.db);
-    const runColumns = this.db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-    if (!runColumns.some(column => column.name === "dispatch_key")) {
-      this.db.exec(`ALTER TABLE runs ADD COLUMN dispatch_key TEXT`);
+    if (openerMode === "assert") {
+      if (!existsSync(dbPath)) {
+        throw new StoreSchemaError(
+          "store_schema_migration_required: database file is missing",
+          "store_schema_migration_required",
+        );
+      }
+      this.db = new Database(dbPath);
+      applyStorePragmas(this.db);
+      assertSchemaVersion(this.db);
+      this.migratePromise = Promise.resolve();
+      return;
     }
-    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_dispatch_key ON runs(dispatch_key)`);
-    ensureStageExecutionsTable(this.db);
-    ensureStageEventsAttemptColumn(this.db);
+    this.db = new Database(dbPath);
+    applyStorePragmas(this.db);
+    applyPendingMigrations(this.db);
     this.migratePromise = importDiskRunsIfEmpty(this.db, storeRoot).then(() => undefined);
   }
 
   /** Await one-shot disk import before catalog reads (create paths also wait). */
   async ready(): Promise<void> {
     await this.migratePromise;
+  }
+
+  async close(): Promise<void> {
+    await this.ready();
+    this.db.pragma("wal_checkpoint(TRUNCATE)");
+    this.db.close();
+  }
+
+  async snapshotInto(destPath: string): Promise<{ userVersion: number }> {
+    await this.ready();
+    const userVersion = this.db.pragma("user_version", {
+      simple: true,
+    }) as number;
+    const escaped = destPath.replace(/'/g, "''");
+    this.db.exec(`VACUUM INTO '${escaped}'`);
+    return { userVersion };
+  }
+
+  /**
+   * The connection this store owns, for the one caller allowed to share it: the composition root
+   * wiring the A2A tables into the same `state.db` file. Not part of the `RunStore` interface.
+   */
+  get connection(): Database.Database {
+    return this.db;
   }
 
   getWorkspaceDir(runId: string): string {
@@ -178,18 +415,41 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const existing = input.dispatchKey ? await this.findRunByDispatchKey(input.dispatchKey) : undefined;
     if (existing) return existing;
-    const runId = newRunId();
+    const runId = input.runId ?? newRunId();
     const workspaceDir = this.getWorkspaceDir(runId);
     if (!input.dispatchKey) await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
 
     const now = new Date().toISOString();
-    this.db
+    const pipelinePath = input.pipelinePath
+      ? normalizeCatalogPath(input.pipelinePath)
+      : null;
+    const taskPath = input.taskPath
+      ? normalizeCatalogPath(input.taskPath)
+      : null;
+    const projectRoot = input.projectRoot
+      ? normalizeCatalogPath(input.projectRoot)
+      : null;
+    const pipelineBody =
+      input.pipelineBody ??
+      (input.inlinePipeline !== undefined
+        ? JSON.stringify(input.inlinePipeline)
+        : null);
+    const pipelineSource =
+      input.pipelineSource ??
+      (pipelineBody != null && pipelinePath == null ? "inline" : null);
+
+    this.db.transaction(() => {
+      if (input.submission) {
+        const existing = this.readSubmission(input.submission.key);
+        if (existing) throw new RunSubmissionExistsError(existing);
+      }
+      const inserted = this.db
       .prepare(
         `INSERT INTO runs
-          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, dispatch_key)
+          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates, dispatch_key)
          VALUES
-          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @dispatch_key)
-         ON CONFLICT(dispatch_key) DO NOTHING`,
+          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root, @repository, @ref, @resolved_sha, @run_branch, @git_author_name, @git_author_email, @pipeline_source, @pipeline_body, @caller_id, @run_manifest, @skip_gates, @dispatch_key)
+          ON CONFLICT(dispatch_key) DO NOTHING`,
       )
       .run({
         run_id: runId,
@@ -197,38 +457,316 @@ export class SqliteRunStore implements RunStore {
         pipeline_id: input.pipelineId,
         task_id: input.taskId ?? null,
         task_yaml: input.taskYaml,
-        status: "running",
+        status: input.status ?? "running",
         created_at: now,
         updated_at: now,
         checkout_root: input.checkoutRoot ?? null,
         pipeline_dag_json: input.pipelineDag
           ? JSON.stringify(input.pipelineDag)
           : null,
+        git_sha: input.gitSha ?? null,
+        ci_pr_url: input.ciPrUrl ?? null,
+        ci_job_url: input.ciJobUrl ?? null,
+        pipeline_path: pipelinePath,
+        task_path: taskPath,
+        project_root: projectRoot,
+        repository: input.repository ?? null,
+        ref: input.ref ?? null,
+        resolved_sha: input.resolvedSha ?? null,
+        run_branch: input.runBranch ?? null,
+        git_author_name: input.gitAuthorName ?? null,
+        git_author_email: input.gitAuthorEmail ?? null,
+        pipeline_source: pipelineSource,
+        pipeline_body: pipelineBody,
+        caller_id: input.callerId ?? null,
+        run_manifest:
+          input.runManifest !== undefined
+            ? JSON.stringify(input.runManifest)
+            : null,
+        skip_gates:
+          input.skipGates === undefined ? null : input.skipGates ? 1 : 0,
       });
+      if (!inserted.changes) return;
+      if (input.submission) {
+        this.db.prepare("INSERT INTO run_submissions (submission_key, request_hash, run_id) VALUES (?, ?, ?)")
+          .run(input.submission.key, input.submission.requestHash, runId);
+      }
+    })();
 
     if (input.dispatchKey) {
       const selected = await this.findRunByDispatchKey(input.dispatchKey);
       if (selected && selected.runId !== runId) return selected;
+      await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
     }
-    if (input.dispatchKey) await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
-    return { runId, workspaceDir, created: true };
+    return { runId, workspaceDir, ...(input.dispatchKey ? { created: true } : {}) };
   }
 
   async findRunByDispatchKey(dispatchKey: string): Promise<CreatedRun | undefined> {
     await this.ready();
-    const row = this.db.prepare(`SELECT run_id FROM runs WHERE dispatch_key = ?`).get(dispatchKey) as { run_id: string } | undefined;
+    const row = this.db.prepare("SELECT run_id FROM runs WHERE dispatch_key = ?").get(dispatchKey) as { run_id: string } | undefined;
     return row ? { runId: row.run_id, workspaceDir: this.getWorkspaceDir(row.run_id), created: false } : undefined;
+  }
+
+  private readSubmission(key: string): RunSubmissionRecord | null {
+    const row = this.db.prepare("SELECT submission_key AS key, request_hash AS requestHash, run_id AS runId FROM run_submissions WHERE submission_key = ?")
+      .get(key) as RunSubmissionRecord | undefined;
+    return row ?? null;
+  }
+
+  async getRunBySubmission(key: string): Promise<RunSubmissionRecord | null> {
+    await this.ready();
+    return this.readSubmission(key);
   }
 
   async updateRunStatus(runId: string, status: RunStatus): Promise<void> {
     await this.ready();
+    const now = new Date().toISOString();
+    const isTerminal =
+      status === "succeeded" || status === "failed" || status === "cancelled";
+    const result = isTerminal
+      ? this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at,
+              finished_at = COALESCE(finished_at, @finished_at)
+             WHERE run_id = @run_id`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            updated_at: now,
+            finished_at: now,
+          })
+      : this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at WHERE run_id = @run_id`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            updated_at: now,
+          });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async tryUpdateRunStatus(
+    runId: string,
+    status: RunStatus,
+    expectedStatus: RunStatus,
+  ): Promise<boolean> {
+    await this.ready();
+    const now = new Date().toISOString();
+    const isTerminal =
+      status === "succeeded" || status === "failed" || status === "cancelled";
+    const result = isTerminal
+      ? this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at,
+              finished_at = COALESCE(finished_at, @finished_at)
+             WHERE run_id = @run_id AND status = @expected_status`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            expected_status: expectedStatus,
+            updated_at: now,
+            finished_at: now,
+          })
+      : this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at
+             WHERE run_id = @run_id AND status = @expected_status`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            expected_status: expectedStatus,
+            updated_at: now,
+          });
+    if (result.changes > 0) return true;
+    const exists = this.db
+      .prepare(`SELECT 1 AS ok FROM runs WHERE run_id = ?`)
+      .get(runId);
+    if (exists === undefined) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    return false;
+  }
+
+  async patchRunWorkspaceBinding(
+    runId: string,
+    patch: {
+      checkoutRoot?: string;
+      repository?: string;
+      ref?: string;
+      resolvedSha?: string;
+      runBranch?: string;
+    },
+  ): Promise<void> {
+    await this.ready();
+    const sets: string[] = ["updated_at = @updated_at"];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.checkoutRoot !== undefined) {
+      sets.push("checkout_root = @checkout_root");
+      params.checkout_root = patch.checkoutRoot;
+    }
+    if (patch.repository !== undefined) {
+      sets.push("repository = @repository");
+      params.repository = patch.repository;
+    }
+    if (patch.ref !== undefined) {
+      sets.push("ref = @ref");
+      params.ref = patch.ref;
+    }
+    if (patch.resolvedSha !== undefined) {
+      sets.push("resolved_sha = @resolved_sha");
+      params.resolved_sha = patch.resolvedSha;
+    }
+    if (patch.runBranch !== undefined) {
+      sets.push("run_branch = @run_branch");
+      params.run_branch = patch.runBranch;
+    }
+    if (sets.length === 1) {
+      return;
+    }
+    const result = this.db
+      .prepare(`UPDATE runs SET ${sets.join(", ")} WHERE run_id = @run_id`)
+      .run(params);
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async appendConfigOrigins(
+    runId: string,
+    origins: ConfigOriginRecord[],
+  ): Promise<void> {
+    await this.ready();
+    if (origins.length === 0) return;
+    const row = this.getRunRow(runId);
+    const existing: ConfigOriginRecord[] = row.config_origins_json
+      ? (JSON.parse(row.config_origins_json) as ConfigOriginRecord[])
+      : [];
+    const keyOf = (o: ConfigOriginRecord) =>
+      `${o.name}\0${o.origin}\0${o.path ?? ""}`;
+    const seen = new Set(existing.map(keyOf));
+    const merged = [...existing];
+    for (const origin of origins) {
+      const key = keyOf(origin);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(origin);
+    }
+    if (merged.length === existing.length) return;
     const result = this.db
       .prepare(
-        `UPDATE runs SET status = @status, updated_at = @updated_at WHERE run_id = @run_id`,
+        `UPDATE runs SET config_origins_json = @config_origins_json, updated_at = @updated_at WHERE run_id = @run_id`,
       )
       .run({
         run_id: runId,
-        status,
+        config_origins_json: JSON.stringify(merged),
+        updated_at: new Date().toISOString(),
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async setCancelReason(runId: string, reason: string): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET cancel_reason = @cancel_reason, updated_at = @updated_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        cancel_reason: reason,
+        updated_at: new Date().toISOString(),
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async setRunDiskUsage(
+    runId: string,
+    diskBytes: number,
+    measuredAt: string,
+  ): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET disk_bytes = @disk_bytes, disk_measured_at = @disk_measured_at
+         WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        disk_bytes: diskBytes,
+        disk_measured_at: measuredAt,
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async setSlimmedAt(runId: string, slimmedAt: string): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET slimmed_at = @slimmed_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        slimmed_at: slimmedAt,
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async deleteRun(runId: string): Promise<void> {
+    await this.ready();
+    const deleteAll = this.db.transaction(() => {
+      const exists = this.db
+        .prepare(`SELECT 1 AS ok FROM runs WHERE run_id = ?`)
+        .get(runId) as { ok: number } | undefined;
+      if (exists === undefined) {
+        throw new Error(`Run not found: ${runId}`);
+      }
+      this.db.prepare(`DELETE FROM stage_events WHERE run_id = ?`).run(runId);
+      this.db
+        .prepare(`DELETE FROM verification_check_results WHERE run_id = ?`)
+        .run(runId);
+      this.db.prepare(`DELETE FROM stage_executions WHERE run_id = ?`).run(runId);
+      this.db
+        .prepare(`DELETE FROM feedback_replay_stage_passes WHERE run_id = ?`)
+        .run(runId);
+      this.db.prepare(`DELETE FROM fork_generations WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM feedback_replays WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM feedback_loops WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM stages WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM run_submissions WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM runs WHERE run_id = ?`).run(runId);
+    });
+    deleteAll();
+  }
+
+  async updatePipelineDag(
+    runId: string,
+    dag: RunPipelineDagSnapshot,
+  ): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET pipeline_dag_json = @pipeline_dag_json, updated_at = @updated_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        pipeline_dag_json: JSON.stringify(dag),
         updated_at: new Date().toISOString(),
       });
     if (result.changes === 0) {
@@ -244,6 +782,30 @@ export class SqliteRunStore implements RunStore {
   async readTaskYaml(runId: string): Promise<string> {
     await this.ready();
     return this.getRunRow(runId).task_yaml;
+  }
+
+  async readPipelineBody(runId: string): Promise<string | null> {
+    await this.ready();
+    return this.getRunRow(runId).pipeline_body;
+  }
+
+  async updateRunManifest(runId: string, manifest: unknown): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET run_manifest = @run_manifest, updated_at = @updated_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        run_manifest:
+          manifest === null || manifest === undefined
+            ? null
+            : JSON.stringify(manifest),
+        updated_at: new Date().toISOString(),
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
   }
 
   async ensureStageWorkspace(runId: string, stageId: string): Promise<void> {
@@ -300,18 +862,19 @@ export class SqliteRunStore implements RunStore {
       const attempt = (maxRow?.max_attempt ?? 0) + 1;
       this.db
         .prepare(
-          `INSERT INTO stage_executions (run_id, stage_id, attempt, status)
-           VALUES (@run_id, @stage_id, @attempt, @status)`,
+          `INSERT INTO stage_executions (run_id, stage_id, attempt, status, verification_outcome)
+           VALUES (@run_id, @stage_id, @attempt, @status, @verification_outcome)`,
         )
         .run({
           run_id: runId,
           stage_id: stageId,
           attempt,
           status: "pending",
+          verification_outcome: "not_run",
         });
       const row = this.db
         .prepare(
-          `SELECT run_id, stage_id, attempt, status, started_at, finished_at, envelope_json
+          `SELECT ${EXECUTION_SELECT_COLS}
            FROM stage_executions
            WHERE run_id = ? AND stage_id = ? AND attempt = ?`,
         )
@@ -327,7 +890,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const rows = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, started_at, finished_at, envelope_json
+        `SELECT ${EXECUTION_SELECT_COLS}
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ?
          ORDER BY attempt ASC`,
@@ -343,7 +906,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const row = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, started_at, finished_at, envelope_json
+        `SELECT ${EXECUTION_SELECT_COLS}
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ?
          ORDER BY attempt DESC
@@ -372,7 +935,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const row = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, started_at, finished_at, envelope_json
+        `SELECT ${EXECUTION_SELECT_COLS}
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ? AND attempt = ?`,
       )
@@ -383,6 +946,24 @@ export class SqliteRunStore implements RunStore {
       );
     }
     return executionFromRow(row);
+  }
+
+  async listInterruptedStageExecutions(): Promise<StageExecution[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(
+        `SELECT ${EXECUTION_SELECT_COLS}
+         FROM stage_executions e
+         WHERE e.status = 'interrupted'
+           AND e.attempt = (
+             SELECT MAX(e2.attempt)
+             FROM stage_executions e2
+             WHERE e2.run_id = e.run_id AND e2.stage_id = e.stage_id
+           )
+         ORDER BY e.run_id ASC, e.stage_id ASC, e.attempt ASC`,
+      )
+      .all() as ExecutionRow[];
+    return rows.map(executionFromRow);
   }
 
   async updateStageExecution(
@@ -402,6 +983,10 @@ export class SqliteRunStore implements RunStore {
       sets.push("status = @status");
       params.status = patch.status;
     }
+    if (patch.verification_outcome !== undefined) {
+      sets.push("verification_outcome = @verification_outcome");
+      params.verification_outcome = patch.verification_outcome;
+    }
     if (patch.started_at !== undefined) {
       sets.push("started_at = @started_at");
       params.started_at = patch.started_at;
@@ -415,6 +1000,18 @@ export class SqliteRunStore implements RunStore {
       params.envelope_json =
         patch.envelope != null ? JSON.stringify(patch.envelope) : null;
     }
+    if (patch.cost_usd !== undefined) {
+      sets.push("cost_usd = @cost_usd");
+      params.cost_usd = patch.cost_usd;
+    }
+    if (patch.usage !== undefined) {
+      sets.push("usage_json = @usage_json");
+      params.usage_json = JSON.stringify(patch.usage);
+    }
+    if (patch.auto_resume_count !== undefined) {
+      sets.push("auto_resume_count = @auto_resume_count");
+      params.auto_resume_count = patch.auto_resume_count;
+    }
     if (sets.length === 0) return;
     const result = this.db
       .prepare(
@@ -427,6 +1024,68 @@ export class SqliteRunStore implements RunStore {
         `Stage execution not found: ${runId}/${stageId} attempt ${attempt}`,
       );
     }
+  }
+
+  async upsertVerificationCheckResult(
+    runId: string,
+    stageId: string,
+    result: VerificationCheckResultPatch,
+    options?: { attempt?: number },
+  ): Promise<void> {
+    await this.ready();
+    const attempt = options?.attempt ?? 1;
+    await this.getStageExecution(runId, stageId, attempt);
+    this.db
+      .prepare(
+        `INSERT INTO verification_check_results
+          (run_id, stage_id, attempt, check_id, check_type, status, started_at, finished_at, evidence_json)
+         VALUES
+          (@run_id, @stage_id, @attempt, @check_id, @check_type, @status, @started_at, @finished_at, @evidence_json)
+         ON CONFLICT(run_id, stage_id, attempt, check_id) DO UPDATE SET
+          check_type = excluded.check_type,
+          status = excluded.status,
+          started_at = COALESCE(excluded.started_at, verification_check_results.started_at),
+          finished_at = COALESCE(excluded.finished_at, verification_check_results.finished_at),
+          evidence_json = COALESCE(excluded.evidence_json, verification_check_results.evidence_json)`,
+      )
+      .run({
+        run_id: runId,
+        stage_id: stageId,
+        attempt,
+        check_id: result.check_id,
+        check_type: result.check_type,
+        status: result.status,
+        started_at: result.started_at ?? null,
+        finished_at: result.finished_at ?? null,
+        evidence_json:
+          result.evidence !== undefined ? JSON.stringify(result.evidence) : null,
+      });
+  }
+
+  async listVerificationCheckResults(
+    runId: string,
+    stageId: string,
+    attempt?: number,
+  ): Promise<VerificationCheckResult[]> {
+    await this.ready();
+    const rows = attempt === undefined
+      ? (this.db
+          .prepare(
+            `SELECT run_id, stage_id, attempt, check_id, check_type, status, started_at, finished_at, evidence_json
+             FROM verification_check_results
+             WHERE run_id = ? AND stage_id = ?
+             ORDER BY attempt ASC, rowid ASC`,
+          )
+          .all(runId, stageId) as VerificationCheckResultRow[])
+      : (this.db
+          .prepare(
+            `SELECT run_id, stage_id, attempt, check_id, check_type, status, started_at, finished_at, evidence_json
+             FROM verification_check_results
+             WHERE run_id = ? AND stage_id = ? AND attempt = ?
+             ORDER BY rowid ASC`,
+          )
+          .all(runId, stageId, attempt) as VerificationCheckResultRow[]);
+    return rows.map(verificationCheckResultFromRow);
   }
 
   async writeEnvelope(
@@ -458,8 +1117,19 @@ export class SqliteRunStore implements RunStore {
     await this.updateStageExecution(runId, stageId, attempt, { envelope });
   }
 
-  async readEnvelope(runId: string, stageId: string): Promise<StageEnvelope> {
+  async readEnvelope(
+    runId: string,
+    stageId: string,
+    attempt?: number,
+  ): Promise<StageEnvelope> {
     await this.ready();
+    if (attempt !== undefined) {
+      const execution = await this.getStageExecution(runId, stageId, attempt);
+      if (execution.envelope != null) {
+        return execution.envelope;
+      }
+      throw new Error(`Envelope not found: ${runId}/${stageId}`);
+    }
     const execution = await this.getLatestStageExecution(runId, stageId);
     if (execution?.envelope != null) {
       return execution.envelope;
@@ -566,22 +1236,185 @@ export class SqliteRunStore implements RunStore {
     return this.loadEvents(runId, stageId, attempt);
   }
 
-  async listRuns(): Promise<RunSummary[]> {
+  async listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
     await this.ready();
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+
+    if (filter?.status !== undefined) {
+      clauses.push("status = ?");
+      params.push(filter.status);
+    }
+    if (filter?.since !== undefined) {
+      clauses.push("created_at >= ?");
+      params.push(filter.since);
+    }
+    if (filter?.pipeline !== undefined && filter.pipeline.trim().length > 0) {
+      const pipeline = filter.pipeline.trim();
+      const normalized = normalizeCatalogPath(pipeline);
+      clauses.push(
+        "(pipeline_id = ? OR pipeline_path = ? OR pipeline_path = ?)",
+      );
+      params.push(pipeline, pipeline, normalized);
+    }
+    if (filter?.caller_id !== undefined) {
+      clauses.push("caller_id = ?");
+      params.push(filter.caller_id);
+    }
+
+    const where =
+      clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json
-         FROM runs ORDER BY created_at DESC`,
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
+         FROM runs ${where} ORDER BY created_at DESC`,
       )
-      .all() as RunRow[];
+      .all(...params) as RunRow[];
 
     const summaries: RunSummary[] = [];
     for (const row of rows) {
       const dagSnapshot = this.readPipelineDagSnapshotFromRow(row);
       const stages = await this.loadStageSnapshots(row.run_id, dagSnapshot?.stage_ids);
-      summaries.push(projectRunSummary(this.runMetaFromRow(row), stages));
+      const { active } = await this.loadFeedbackLoopHistory(row.run_id);
+      summaries.push(
+        projectRunSummary(this.runMetaFromRow(row), stages, {
+          active_feedback_loop: active,
+        }),
+      );
     }
     return summaries;
+  }
+
+  async ensureProject(absPath: string): Promise<string> {
+    await this.ready();
+    const resolved = path.resolve(absPath);
+    let st;
+    try {
+      st = statSync(resolved);
+    } catch {
+      throw new Error(`project_root does not exist: ${resolved}`);
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`project_root is not a directory: ${resolved}`);
+    }
+    const normalized = normalizeProjectRoot(absPath);
+    if (normalized === path.parse(normalized).root) {
+      throw new Error(`project_root must not be filesystem root: ${normalized}`);
+    }
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO projects (project_root, created_at) VALUES (?, ?)
+         ON CONFLICT(project_root) DO NOTHING`,
+      )
+      .run(normalized, now);
+    return normalized;
+  }
+
+  async listRegisteredProjects(): Promise<string[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(`SELECT project_root FROM projects ORDER BY project_root`)
+      .all() as { project_root: string }[];
+    return rows.map((row) => row.project_root);
+  }
+
+  async upsertTrigger(input: UpsertTriggerInput): Promise<TriggerRecord> {
+    await this.ready();
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO triggers (id, definition_ref, enabled, created_at, updated_at)
+         VALUES (@id, @definition_ref, @enabled, @created_at, @updated_at)
+         ON CONFLICT(id) DO UPDATE SET
+           definition_ref = @definition_ref,
+           enabled = @enabled,
+           updated_at = @updated_at`,
+      )
+      .run({
+        id: input.id,
+        definition_ref: input.definitionRef,
+        enabled: input.enabled ? 1 : 0,
+        created_at: now,
+        updated_at: now,
+      });
+    const record = await this.getTrigger(input.id);
+    if (!record) throw new Error(`Trigger not found after upsert: ${input.id}`);
+    return record;
+  }
+
+  async getTrigger(id: string): Promise<TriggerRecord | null> {
+    await this.ready();
+    const row = this.db
+      .prepare(
+        `SELECT id, definition_ref, enabled, last_fired_at, last_run_id, next_run_at, created_at, updated_at
+         FROM triggers WHERE id = ?`,
+      )
+      .get(id) as TriggerRow | undefined;
+    return row ? triggerFromRow(row) : null;
+  }
+
+  async listTriggers(): Promise<TriggerRecord[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(
+        `SELECT id, definition_ref, enabled, last_fired_at, last_run_id, next_run_at, created_at, updated_at
+         FROM triggers ORDER BY id`,
+      )
+      .all() as TriggerRow[];
+    return rows.map(triggerFromRow);
+  }
+
+  async recordTriggerFired(id: string, runId: string): Promise<void> {
+    await this.ready();
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE triggers SET last_fired_at = @last_fired_at, last_run_id = @last_run_id, updated_at = @updated_at
+         WHERE id = @id`,
+      )
+      .run({ id, last_fired_at: now, last_run_id: runId, updated_at: now });
+    if (result.changes === 0) {
+      throw new Error(`Trigger not found: ${id}`);
+    }
+  }
+
+  async setTriggerNextRun(id: string, nextRunAt: string): Promise<void> {
+    await this.ready();
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE triggers SET next_run_at = @next_run_at, updated_at = @updated_at
+         WHERE id = @id`,
+      )
+      .run({ id, next_run_at: nextRunAt, updated_at: now });
+    if (result.changes === 0) {
+      throw new Error(`Trigger not found: ${id}`);
+    }
+  }
+
+  async getTriggerAdapterState(triggerId: string, key: string): Promise<string | null> {
+    await this.ready();
+    const row = this.db
+      .prepare(
+        `SELECT value FROM trigger_adapter_state WHERE trigger_id = ? AND key = ?`,
+      )
+      .get(triggerId, key) as { value: string } | undefined;
+    return row ? row.value : null;
+  }
+
+  async setTriggerAdapterState(triggerId: string, key: string, value: string): Promise<void> {
+    await this.ready();
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO trigger_adapter_state (trigger_id, key, value, updated_at)
+         VALUES (@trigger_id, @key, @value, @updated_at)
+         ON CONFLICT(trigger_id, key) DO UPDATE SET
+           value = @value,
+           updated_at = @updated_at`,
+      )
+      .run({ trigger_id: triggerId, key, value, updated_at: now });
   }
 
   async readRun(runId: string): Promise<RunDetail> {
@@ -589,12 +1422,495 @@ export class SqliteRunStore implements RunStore {
     const row = this.getRunRow(runId);
     const dagSnapshot = this.readPipelineDagSnapshotFromRow(row);
     const stages = await this.loadStageSnapshots(runId, dagSnapshot?.stage_ids);
+    const { history, active } = await this.loadFeedbackLoopHistory(runId);
     return projectRunDetail(
       this.runMetaFromRow(row),
       stages,
       row.task_yaml,
       dagSnapshot,
+      {
+        feedback_loops: history,
+        active_feedback_loop: active,
+      },
     );
+  }
+
+  async createFeedbackLoop(
+    runId: string,
+    input: CreateFeedbackLoopInput,
+  ): Promise<FeedbackLoopRecord> {
+    await this.ready();
+    this.getRunRow(runId);
+    const now = new Date().toISOString();
+    const state = input.state ?? "active";
+    this.db
+      .prepare(
+        `INSERT INTO feedback_loops
+          (run_id, loop_id, source_stage_id, source_attempt, policy_json, state,
+           current_replay_id, current_replay_number, created_at, updated_at)
+         VALUES
+          (@run_id, @loop_id, @source_stage_id, @source_attempt, @policy_json, @state,
+           NULL, NULL, @created_at, @updated_at)`,
+      )
+      .run({
+        run_id: runId,
+        loop_id: input.loop_id,
+        source_stage_id: input.source_stage_id,
+        source_attempt: input.source_attempt,
+        policy_json: JSON.stringify(input.policy),
+        state,
+        created_at: now,
+        updated_at: now,
+      });
+    return this.getFeedbackLoop(runId, input.loop_id);
+  }
+
+  async getFeedbackLoop(runId: string, loopId: string): Promise<FeedbackLoopRecord> {
+    await this.ready();
+    const row = this.db
+      .prepare(
+        `SELECT run_id, loop_id, source_stage_id, source_attempt, policy_json, state,
+                current_replay_id, current_replay_number, deferred_send_back_json,
+                created_at, updated_at
+         FROM feedback_loops WHERE run_id = ? AND loop_id = ?`,
+      )
+      .get(runId, loopId) as FeedbackLoopRow | undefined;
+    if (!row) {
+      throw new Error(`Feedback loop not found: ${runId}/${loopId}`);
+    }
+    return feedbackLoopFromRow(row);
+  }
+
+  async listFeedbackLoops(runId: string): Promise<FeedbackLoopRecord[]> {
+    await this.ready();
+    this.getRunRow(runId);
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, loop_id, source_stage_id, source_attempt, policy_json, state,
+                current_replay_id, current_replay_number, deferred_send_back_json,
+                created_at, updated_at
+         FROM feedback_loops WHERE run_id = ? ORDER BY created_at ASC`,
+      )
+      .all(runId) as FeedbackLoopRow[];
+    return rows.map(feedbackLoopFromRow);
+  }
+
+  async updateFeedbackLoop(
+    runId: string,
+    loopId: string,
+    patch: FeedbackLoopPatch,
+    options?: { expectedState?: FeedbackLoopState },
+  ): Promise<boolean> {
+    await this.ready();
+    const sets: string[] = ["updated_at = @updated_at"];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      loop_id: loopId,
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.state !== undefined) {
+      sets.push("state = @state");
+      params.state = patch.state;
+    }
+    if (patch.current_replay_id !== undefined) {
+      sets.push("current_replay_id = @current_replay_id");
+      params.current_replay_id = patch.current_replay_id;
+    }
+    if (patch.current_replay_number !== undefined) {
+      sets.push("current_replay_number = @current_replay_number");
+      params.current_replay_number = patch.current_replay_number;
+    }
+    if (patch.policy !== undefined) {
+      sets.push("policy_json = @policy_json");
+      params.policy_json = JSON.stringify(patch.policy);
+    }
+    if (patch.deferred_send_back !== undefined) {
+      sets.push("deferred_send_back_json = @deferred_send_back_json");
+      params.deferred_send_back_json =
+        patch.deferred_send_back === null
+          ? null
+          : JSON.stringify(patch.deferred_send_back);
+    }
+    const whereParts = ["run_id = @run_id", "loop_id = @loop_id"];
+    if (options?.expectedState !== undefined) {
+      whereParts.push("state = @expected_state");
+      params.expected_state = options.expectedState;
+    }
+    const result = this.db
+      .prepare(
+        `UPDATE feedback_loops SET ${sets.join(", ")}
+         WHERE ${whereParts.join(" AND ")}`,
+      )
+      .run(params);
+    if (result.changes === 0) {
+      if (options?.expectedState !== undefined) {
+        const exists = this.db
+          .prepare(
+            `SELECT 1 AS ok FROM feedback_loops WHERE run_id = ? AND loop_id = ?`,
+          )
+          .get(runId, loopId) as { ok: number } | undefined;
+        if (exists === undefined) {
+          throw new Error(`Feedback loop not found: ${runId}/${loopId}`);
+        }
+        return false;
+      }
+      throw new Error(`Feedback loop not found: ${runId}/${loopId}`);
+    }
+    return true;
+  }
+
+  async createFeedbackReplay(
+    runId: string,
+    input: CreateFeedbackReplayInput,
+  ): Promise<FeedbackReplayRecord> {
+    await this.ready();
+    await this.getFeedbackLoop(runId, input.loop_id);
+    const now = new Date().toISOString();
+    const status = input.status ?? "scheduled";
+    this.db
+      .prepare(
+        `INSERT INTO feedback_replays
+          (run_id, replay_id, loop_id, source_stage_id, source_attempt, target_stage_id,
+           replay_number, max_replays, replay_session, route_stage_ids_json,
+           feedback_envelope_json, status, created_at, updated_at)
+         VALUES
+          (@run_id, @replay_id, @loop_id, @source_stage_id, @source_attempt, @target_stage_id,
+           @replay_number, @max_replays, @replay_session, @route_stage_ids_json,
+           @feedback_envelope_json, @status, @created_at, @updated_at)`,
+      )
+      .run({
+        run_id: runId,
+        replay_id: input.replay_id,
+        loop_id: input.loop_id,
+        source_stage_id: input.source_stage_id,
+        source_attempt: input.source_attempt,
+        target_stage_id: input.target_stage_id,
+        replay_number: input.replay_number,
+        max_replays: input.max_replays,
+        replay_session: input.replay_session,
+        route_stage_ids_json: JSON.stringify(input.route_stage_ids),
+        feedback_envelope_json: JSON.stringify(input.feedback_envelope),
+        status,
+        created_at: now,
+        updated_at: now,
+      });
+    return this.getFeedbackReplay(runId, input.replay_id);
+  }
+
+  async getFeedbackReplay(
+    runId: string,
+    replayId: string,
+  ): Promise<FeedbackReplayRecord> {
+    await this.ready();
+    const row = this.db
+      .prepare(
+        `SELECT run_id, replay_id, loop_id, source_stage_id, source_attempt, target_stage_id,
+                replay_number, max_replays, replay_session, route_stage_ids_json,
+                feedback_envelope_json, status, created_at, updated_at
+         FROM feedback_replays WHERE run_id = ? AND replay_id = ?`,
+      )
+      .get(runId, replayId) as FeedbackReplayRow | undefined;
+    if (!row) {
+      throw new Error(`Feedback replay not found: ${runId}/${replayId}`);
+    }
+    return feedbackReplayFromRow(row);
+  }
+
+  async listFeedbackReplays(
+    runId: string,
+    loopId: string,
+  ): Promise<FeedbackReplayRecord[]> {
+    await this.ready();
+    await this.getFeedbackLoop(runId, loopId);
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, replay_id, loop_id, source_stage_id, source_attempt, target_stage_id,
+                replay_number, max_replays, replay_session, route_stage_ids_json,
+                feedback_envelope_json, status, created_at, updated_at
+         FROM feedback_replays
+         WHERE run_id = ? AND loop_id = ?
+         ORDER BY replay_number ASC`,
+      )
+      .all(runId, loopId) as FeedbackReplayRow[];
+    return rows.map(feedbackReplayFromRow);
+  }
+
+  async updateFeedbackReplay(
+    runId: string,
+    replayId: string,
+    patch: FeedbackReplayPatch,
+  ): Promise<void> {
+    await this.ready();
+    const sets: string[] = ["updated_at = @updated_at"];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      replay_id: replayId,
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.status !== undefined) {
+      sets.push("status = @status");
+      params.status = patch.status;
+    }
+    const result = this.db
+      .prepare(
+        `UPDATE feedback_replays SET ${sets.join(", ")}
+         WHERE run_id = @run_id AND replay_id = @replay_id`,
+      )
+      .run(params);
+    if (result.changes === 0) {
+      throw new Error(`Feedback replay not found: ${runId}/${replayId}`);
+    }
+  }
+
+  async createFeedbackReplayStagePass(
+    runId: string,
+    input: CreateFeedbackReplayStagePassInput,
+  ): Promise<FeedbackReplayStagePassRecord> {
+    await this.ready();
+    await this.getFeedbackReplay(runId, input.replay_id);
+    const status = input.status ?? "pending";
+    this.db
+      .prepare(
+        `INSERT INTO feedback_replay_stage_passes
+          (run_id, replay_id, stage_id, stage_attempt, session_origin_attempt,
+           session_mode, status, started_at, finished_at, emitted_envelope_json)
+         VALUES
+          (@run_id, @replay_id, @stage_id, @stage_attempt, @session_origin_attempt,
+           @session_mode, @status, @started_at, @finished_at, @emitted_envelope_json)`,
+      )
+      .run({
+        run_id: runId,
+        replay_id: input.replay_id,
+        stage_id: input.stage_id,
+        stage_attempt: input.stage_attempt,
+        session_origin_attempt: input.session_origin_attempt ?? null,
+        session_mode: input.session_mode,
+        status,
+        started_at: input.started_at ?? null,
+        finished_at: input.finished_at ?? null,
+        emitted_envelope_json:
+          input.emitted_envelope !== undefined
+            ? JSON.stringify(input.emitted_envelope)
+            : null,
+      });
+    const row = this.db
+      .prepare(
+        `SELECT run_id, replay_id, stage_id, stage_attempt, session_origin_attempt,
+                session_mode, status, started_at, finished_at, emitted_envelope_json
+         FROM feedback_replay_stage_passes
+         WHERE run_id = ? AND replay_id = ? AND stage_id = ?`,
+      )
+      .get(runId, input.replay_id, input.stage_id) as FeedbackReplayStagePassRow;
+    return feedbackReplayStagePassFromRow(row);
+  }
+
+  async listFeedbackReplayStagePasses(
+    runId: string,
+    replayId: string,
+  ): Promise<FeedbackReplayStagePassRecord[]> {
+    await this.ready();
+    await this.getFeedbackReplay(runId, replayId);
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, replay_id, stage_id, stage_attempt, session_origin_attempt,
+                session_mode, status, started_at, finished_at, emitted_envelope_json
+         FROM feedback_replay_stage_passes
+         WHERE run_id = ? AND replay_id = ?
+         ORDER BY stage_id ASC`,
+      )
+      .all(runId, replayId) as FeedbackReplayStagePassRow[];
+    return rows.map(feedbackReplayStagePassFromRow);
+  }
+
+  async updateFeedbackReplayStagePass(
+    runId: string,
+    replayId: string,
+    stageId: string,
+    patch: FeedbackReplayStagePassPatch,
+  ): Promise<void> {
+    await this.ready();
+    const sets: string[] = [];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      replay_id: replayId,
+      stage_id: stageId,
+    };
+    if (patch.status !== undefined) {
+      sets.push("status = @status");
+      params.status = patch.status;
+    }
+    if (patch.stage_attempt !== undefined) {
+      sets.push("stage_attempt = @stage_attempt");
+      params.stage_attempt = patch.stage_attempt;
+    }
+    if (patch.started_at !== undefined) {
+      sets.push("started_at = @started_at");
+      params.started_at = patch.started_at;
+    }
+    if (patch.finished_at !== undefined) {
+      sets.push("finished_at = @finished_at");
+      params.finished_at = patch.finished_at;
+    }
+    if (patch.emitted_envelope !== undefined) {
+      sets.push("emitted_envelope_json = @emitted_envelope_json");
+      params.emitted_envelope_json =
+        patch.emitted_envelope === null
+          ? null
+          : JSON.stringify(patch.emitted_envelope);
+    }
+    if (sets.length === 0) return;
+    const result = this.db
+      .prepare(
+        `UPDATE feedback_replay_stage_passes SET ${sets.join(", ")}
+         WHERE run_id = @run_id AND replay_id = @replay_id AND stage_id = @stage_id`,
+      )
+      .run(params);
+    if (result.changes === 0) {
+      throw new Error(
+        `Feedback replay stage pass not found: ${runId}/${replayId}/${stageId}`,
+      );
+    }
+  }
+
+  async createForkGeneration(
+    runId: string,
+    input: CreateForkGenerationInput,
+  ): Promise<ForkGenerationRecord> {
+    await this.ready();
+    this.getRunRow(runId);
+    if (input.replay_id !== undefined) {
+      await this.getFeedbackReplay(runId, input.replay_id);
+    }
+    const now = new Date().toISOString();
+    const status = input.status ?? "active";
+    this.db
+      .prepare(
+        `INSERT INTO fork_generations
+          (run_id, generation_id, replay_id, fork_parent_stage_id, generation_number,
+           clone_stage_ids_json, status, created_at, updated_at)
+         VALUES
+          (@run_id, @generation_id, @replay_id, @fork_parent_stage_id, @generation_number,
+           @clone_stage_ids_json, @status, @created_at, @updated_at)`,
+      )
+      .run({
+        run_id: runId,
+        generation_id: input.generation_id,
+        replay_id: input.replay_id ?? null,
+        fork_parent_stage_id: input.fork_parent_stage_id,
+        generation_number: input.generation_number,
+        clone_stage_ids_json: JSON.stringify(input.clone_stage_ids),
+        status,
+        created_at: now,
+        updated_at: now,
+      });
+    const row = this.db
+      .prepare(
+        `SELECT run_id, generation_id, replay_id, fork_parent_stage_id, generation_number,
+                clone_stage_ids_json, status, created_at, updated_at
+         FROM fork_generations WHERE run_id = ? AND generation_id = ?`,
+      )
+      .get(runId, input.generation_id) as ForkGenerationRow;
+    return forkGenerationFromRow(row);
+  }
+
+  async listForkGenerations(
+    runId: string,
+    options?: { replayId?: string; forkParentStageId?: string },
+  ): Promise<ForkGenerationRecord[]> {
+    await this.ready();
+    this.getRunRow(runId);
+    const clauses = ["run_id = ?"];
+    const params: unknown[] = [runId];
+    if (options?.replayId !== undefined) {
+      clauses.push("replay_id = ?");
+      params.push(options.replayId);
+    }
+    if (options?.forkParentStageId !== undefined) {
+      clauses.push("fork_parent_stage_id = ?");
+      params.push(options.forkParentStageId);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, generation_id, replay_id, fork_parent_stage_id, generation_number,
+                clone_stage_ids_json, status, created_at, updated_at
+         FROM fork_generations
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY created_at ASC`,
+      )
+      .all(...params) as ForkGenerationRow[];
+    return rows.map(forkGenerationFromRow);
+  }
+
+  async updateForkGeneration(
+    runId: string,
+    generationId: string,
+    patch: ForkGenerationPatch,
+  ): Promise<void> {
+    await this.ready();
+    const sets: string[] = ["updated_at = @updated_at"];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      generation_id: generationId,
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.status !== undefined) {
+      sets.push("status = @status");
+      params.status = patch.status;
+    }
+    const result = this.db
+      .prepare(
+        `UPDATE fork_generations SET ${sets.join(", ")}
+         WHERE run_id = @run_id AND generation_id = @generation_id`,
+      )
+      .run(params);
+    if (result.changes === 0) {
+      throw new Error(`Fork generation not found: ${runId}/${generationId}`);
+    }
+  }
+
+  private async loadFeedbackLoopHistory(runId: string): Promise<{
+    history: FeedbackLoopHistory[];
+    active?: FeedbackLoopRecord;
+  }> {
+    const loops = await this.listFeedbackLoops(runId);
+    const allForkGens = await this.listForkGenerations(runId);
+    const nullReplayGens = allForkGens.filter((g) => g.replay_id == null);
+    const history: FeedbackLoopHistory[] = [];
+    for (const loop of loops) {
+      const replays = await this.listFeedbackReplays(runId, loop.loop_id);
+      const replayEntries = [];
+      for (const replay of replays) {
+        const stage_passes = await this.listFeedbackReplayStagePasses(
+          runId,
+          replay.replay_id,
+        );
+        const fork_generations = allForkGens.filter(
+          (g) => g.replay_id === replay.replay_id,
+        );
+        replayEntries.push({ replay, stage_passes, fork_generations });
+      }
+      history.push({
+        loop,
+        replays: replayEntries,
+        fork_generations: nullReplayGens,
+      });
+    }
+
+    const activeCandidates = loops.filter(
+      (l) => l.state === "active" || l.state === "waiting_for_human",
+    );
+    let active: FeedbackLoopRecord | undefined;
+    if (activeCandidates.length > 0) {
+      active = [...activeCandidates].sort((a, b) => {
+        const byUpdated = b.updated_at.localeCompare(a.updated_at);
+        if (byUpdated !== 0) return byUpdated;
+        return b.created_at.localeCompare(a.created_at);
+      })[0];
+    }
+    return {
+      history,
+      ...(active !== undefined ? { active } : {}),
+    };
   }
 
   private readPipelineDagSnapshotFromRow(row: RunRow) {
@@ -603,6 +1919,7 @@ export class SqliteRunStore implements RunStore {
   }
 
   private runMetaFromRow(row: RunRow): RunMeta {
+    const pipeline_dag = this.readPipelineDagSnapshotFromRow(row);
     return {
       run_id: row.run_id,
       pipeline_id: row.pipeline_id,
@@ -611,13 +1928,59 @@ export class SqliteRunStore implements RunStore {
       task_id: row.task_id ?? undefined,
       updated_at: row.updated_at,
       ...(row.checkout_root != null ? { checkout_root: row.checkout_root } : {}),
+      ...(row.git_sha != null ? { git_sha: row.git_sha } : {}),
+      ...(row.ci_pr_url != null ? { ci_pr_url: row.ci_pr_url } : {}),
+      ...(row.ci_job_url != null ? { ci_job_url: row.ci_job_url } : {}),
+      ...(row.pipeline_path != null ? { pipeline_path: row.pipeline_path } : {}),
+      ...(row.task_path != null ? { task_path: row.task_path } : {}),
+      ...(row.project_root != null ? { project_root: row.project_root } : {}),
+      ...(row.repository != null ? { repository: row.repository } : {}),
+      ...(row.ref != null ? { ref: row.ref } : {}),
+      ...(row.resolved_sha != null ? { resolved_sha: row.resolved_sha } : {}),
+      ...(row.run_branch != null ? { run_branch: row.run_branch } : {}),
+      ...(row.git_author_name != null
+        ? { git_author_name: row.git_author_name }
+        : {}),
+      ...(row.git_author_email != null
+        ? { git_author_email: row.git_author_email }
+        : {}),
+      ...(row.cancel_reason != null ? { cancel_reason: row.cancel_reason } : {}),
+      ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
+      ...(row.slimmed_at != null ? { slimmed_at: row.slimmed_at } : {}),
+      ...(row.disk_bytes != null ? { disk_bytes: row.disk_bytes } : {}),
+      ...(row.disk_measured_at != null
+        ? { disk_measured_at: row.disk_measured_at }
+        : {}),
+      ...(row.config_origins_json
+        ? {
+            config_origins: JSON.parse(
+              row.config_origins_json,
+            ) as ConfigOriginRecord[],
+          }
+        : {}),
+      ...(row.pipeline_source === "inline" || row.pipeline_source === "path"
+        ? { pipeline_source: row.pipeline_source }
+        : {}),
+      ...(row.caller_id != null ? { caller_id: row.caller_id } : {}),
+      ...(row.run_manifest
+        ? { run_manifest: JSON.parse(row.run_manifest) as unknown }
+        : {}),
+      ...(row.skip_gates != null ? { skip_gates: row.skip_gates !== 0 } : {}),
+      ...(pipeline_dag ? { pipeline_dag } : {}),
+      ...(row.pipeline_body
+        ? {
+            inline_pipeline: JSON.parse(
+              row.pipeline_body,
+            ) as InlinePipelineDefinition,
+          }
+        : {}),
     };
   }
 
   private getRunRow(runId: string): RunRow {
     const row = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
          FROM runs WHERE run_id = ?`,
       )
       .get(runId) as RunRow | undefined;

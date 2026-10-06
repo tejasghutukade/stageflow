@@ -1,0 +1,60 @@
+id: clone-chain-illegal-if-child-edge
+schemas:
+  Issue:
+    type: object
+    required: [id]
+    properties:
+      id:
+        type: string
+stages:
+  - id: emit-items
+    entry: true
+    clone_cap: 4
+    clone_mode: parallel
+    route:
+      - to: handle-item
+    system_prompt: Emit items.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/schemas/Issue"
+  - id: handle-item
+    route:
+      - to: gather
+        if:
+          field: id
+          op: eq
+          value: keep
+    system_prompt: Handle one.
+    model: test/model
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/Issue"
+      output:
+        schema:
+          type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+  - id: gather
+    system_prompt: Gather.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

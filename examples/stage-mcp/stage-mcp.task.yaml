@@ -1,0 +1,4 @@
+id: stage-mcp
+goal: Call the echo fixture tool, then emit a success envelope the operator can inspect.
+context: Domain-neutral walkthrough for stage MCP. The happy path passes only the echo server.
+constraints: Do not call ask_operator. Do not use unused catalog servers.

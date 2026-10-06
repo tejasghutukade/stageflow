@@ -1,3 +1,10 @@
 id: improve-a
 system_prompt: Improve branch A.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

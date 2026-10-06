@@ -1,0 +1,126 @@
+# AGENTS.md
+
+Guidance for contributors and AI coding agents working on the Stageflow repository.
+
+## What Stageflow is
+
+Stageflow is a runtime for **configurable multi-stage agent workflows**, with a local operator console. [Pi](https://github.com/badlogic/pi-mono) is the current agent execution backend.
+
+- Users author **pipeline-owned YAML** (`*.pipeline.yaml`, `*.task.yaml`, optional `stageflow.yaml` manifest)
+- Each stage runs in a fresh Pi agent session
+- Stages hand off via typed envelopes and artifacts
+- HITL gates pause for operator input; the same pipeline runs locally, in CI (`sf run --json`), via MCP when `sf ui` or `sf mcp` is running, and host-down via `sf runs`
+- The orchestration layer is separated from agent execution by `AgentPort`
+
+**Stages are domain-agnostic.** Release automation, research flows, content review, SDLC, and ops runbooks are all valid patterns. Stageflow validates shape and wiring; it does not ship domain-specific stage types.
+
+## Repository layout
+
+| Path | Purpose |
+|------|---------|
+| `src/` | CLI, runtime, config loader, MCP, HTTP server |
+| `ui/` | Operator console (Vite + React workspace) |
+| `tests/` | Vitest suite; **`tests/fixtures/`** is canonical YAML |
+| `examples/` | Runnable walkthroughs with READMEs |
+| `docs/` | Public reference (YAML, CLI, CI, MCP, etc.) |
+| `skills/` | Harness Agent Skills suite — router, shared MCP-vs-CLI reference, job skills |
+
+### `src/` map (high level)
+
+| Directory | Responsibility |
+|-----------|----------------|
+| `cli/` | `sf run`, `sf runs`, `sf validate`, `sf ui`, `sf providers` |
+| `config/` | YAML load/validate, pipeline DAG resolution |
+| `runtime/` | Pipeline runner, stage worker, HITL, scheduling |
+| `runstore/` | SQLite run state under `$STAGEFLOW_HOME` (default `~/.stageflow/`) |
+| `agent/` | Pi coding agent adapter |
+| `mcp/` | MCP server and tools |
+| `server/` | HTTP routes for the operator console API |
+| `browser/` | Browser sessions: profile store, lock, host, login check, teardown (see `docs/browser.md`) |
+| `tools/` | Pi tools (`ask_operator`, `emit_stage_envelope`, …) |
+| `envelope/` | Envelope schema and validation |
+
+Entry point: `src/cli.ts`. Library exports: `src/index.ts`.
+
+## Commands
+
+From repo root after `npm i`:
+
+```bash
+npm run build          # compile CLI to dist/
+npm test               # vitest (src + integration)
+npm run typecheck      # tsc --noEmit
+npm run ui:build       # build console + copy assets into dist/ui
+npm run ui:test        # vitest in ui workspace
+sf ui                  # operator console (requires build + ui:build)
+```
+
+Dev entrypoint without a global install:
+
+```bash
+npm run dev -- ui
+npm run dev -- run \
+  --task tests/fixtures/tasks/sample.task.yaml \
+  --pipeline tests/fixtures/pipelines/single.pipeline.yaml
+```
+
+Optional: `npm run ui:dev` for Vite hot reload against a running `sf ui` backend.
+
+Repo-root [`stageflow.yaml`](stageflow.yaml) lists example catalog roots and excludes `tests/fixtures` from operator-console browse (fixtures remain loadable by explicit path in tests).
+
+## YAML authoring
+
+When changing pipeline/stage/task schema, validation, or doc examples:
+
+- Read **[docs/yaml-catalog.md](docs/yaml-catalog.md)** — authoritative schema reference, including `io` / `verify` / `on_verify_fail`, [Clone Chain](docs/yaml-catalog.md#clone-chain), and stage `mcp` / `.mcp.json` ([Stage MCP](docs/yaml-catalog.md#stage-mcp)). Do not author `clonable` / `clone_forks` (rejected).
+- **YAML vs IR.** Author new catalog contracts as `io` / `verify` / `on_verify_fail` and map them in `compileTargetContract` (`src/config/yamlDialect.ts`). Runtime types, DAG snapshots, emit, and VSE keep `payload_schema` / `pre_emit_checks` / `completion` / `recovery`. Dual-read of old YAML keys: [`src/config/legacyYaml.ts`](src/config/legacyYaml.ts)
+- Treat **`tests/fixtures/`** as canonical YAML; keep `examples/` in sync when behavior changes
+- Runnable walkthroughs: **[examples/README.md](examples/README.md)**
+
+Related docs: [envelopes.md](docs/envelopes.md), [hitl.md](docs/hitl.md), [cli-reference.md](docs/cli-reference.md), [ci.md](docs/ci.md), [mcp.md](docs/mcp.md).
+
+## Making changes
+
+1. Match existing patterns in the area you touch — minimal, focused diffs
+2. Run `npm test`, `npm run ui:test`, and `npm run typecheck` before finishing
+3. No comments unless logic is non-obvious
+4. Do not commit secrets or `.env` files
+
+### CLI / runtime work
+
+- JSON output and exit codes are part of the public contract — see `docs/ci.md` and `tests/cli.*.test.ts`
+- Stage worker protocol: `src/runtime/stageWorkerProtocol.ts`
+- Provider auth: `src/agent/providerAuth.ts`, `docs/providers.md`
+
+### Browser sessions
+
+Stage `browser:` field, saved logins, shared browser per run. Code: `src/browser/`, `src/cli/browserCommand.ts`, `src/config/stageBrowser.ts`, `builtin-skills/browser/SKILL.md`, plus hooks in `src/runtime/` (scheduler, run manager, stage launcher). Read [docs/browser-internals.md](docs/browser-internals.md) before changing it; user docs are [docs/browser.md](docs/browser.md).
+
+Rules every change must keep:
+
+- The stage browser env is byte-identical for every command, attempt, and resume worker. Compute once, persist, reuse.
+- YAML never carries a path or a scope. The Host chooses both.
+- The owner scope is fixed to `local` today. Hosted multi-tenant work is tracked in `TODO(multi-tenant)` comments (`grep -rn "TODO(multi-tenant)" src`) and the table in [docs/browser-internals.md](docs/browser-internals.md#multi-tenant-todo). Keep new code taking a scope as input, never a literal.
+- Tests use an injected `BrowserRunner` (no real `agent-browser`) and a per-test `socketRoot`. `tests/globalSetup.socketLeakGuard.ts` fails the run on leaked socket dirs.
+
+Real Chrome smoke test (opt-in, needs `agent-browser` on `PATH`): `STAGEFLOW_BROWSER_SMOKE=1 npx vitest run tests/browser.realChrome.smoke.test.ts`
+
+### Tests
+
+- Tests live in `tests/*.test.ts`
+- Fixtures: `tests/fixtures/pipelines/`, `stages/`, `tasks/`
+- Prefer extending fixtures over inline YAML when behavior is catalog-driven
+
+## UI work
+
+Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** for UI-specific rules (Astryx workflow, chrome exception, UX docs, component map). Do not duplicate that file here.
+
+## Documentation
+
+- Public docs index: [docs/README.md](docs/README.md)
+- Human contributor flow: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Planning artifacts under `docs/plans/`, `docs/ideation/`, and `docs/adr/` are local-only (gitignored), as are `docs/compare-conductor.md` and `docs/migrate-real-oss-issue-pipeline.md`
+
+## Positioning (public copy)
+
+When writing user-facing text, avoid framing Stageflow as an SDLC-only tool. Lead with **configurable stages / pipelines**; cite SDLC as one example among others (releases, research, ops, etc.).

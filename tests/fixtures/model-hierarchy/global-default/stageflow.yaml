@@ -1,0 +1,6 @@
+version: 1
+model: test/global-model
+catalog:
+  pipelines:
+    - .
+  tasks: []

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,6 +26,7 @@ const successEnvelope = {
   status: "success" as const,
   summary: "done",
   artifacts: [] as string[],
+  payload: {},
 };
 
 async function loadPair(name: string): Promise<{
@@ -66,8 +68,8 @@ describe("runtime HITL durable Q&A ordering (T3 U2)", () => {
     ]);
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "single",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: pipelinePath("single"),
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -117,8 +119,8 @@ describe("runtime HITL durable Q&A ordering (T3 U2)", () => {
     ]);
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "single",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: pipelinePath("single"),
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -178,8 +180,8 @@ describe("runtime HITL durable Q&A ordering (T3 U2)", () => {
     ]);
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "single",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: pipelinePath("single"),
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -223,8 +225,8 @@ describe("runtime HITL durable Q&A ordering (T3 U2)", () => {
     ]);
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "single",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: pipelinePath("single"),
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;

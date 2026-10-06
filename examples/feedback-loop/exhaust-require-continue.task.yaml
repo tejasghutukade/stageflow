@@ -1,0 +1,6 @@
+id: feedback-loop-exhaust-require-continue
+goal: Keep sending work back from review until the loop rejects further send_back
+context: Verification scenario — force require_continue max_replays exhaustion
+constraints: |
+  Docs only. Every successful review must emit feedback_loop send_back target implement.
+  Never emit continue. Expect the third send_back to fail after max_replays 2.

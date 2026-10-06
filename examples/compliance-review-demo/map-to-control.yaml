@@ -1,0 +1,123 @@
+id: map-to-control
+system_prompt: |
+  Read verdict, check_id, resource, reviewed, auto_approved, and reviewer
+  from the prior stage's payload.
+
+  Map check_id "bucket-public-access-block" to SOC2 control
+  "CC6.1 — logical access is restricted", regardless of which cloud the
+  bucket lives in. This demo hardcodes one mapping; a real build would look
+  this up from a maintained check-to-control table (Prowler ships one for
+  its AWS checks; a GCP-equivalent would need its own).
+
+  summary and payload are handed to the next stage verbatim. State outcomes
+  and artifact pointers only. Do not repeat this stage's prohibitions in
+  summary — downstream will obey them literally.
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload matching io.output.schema: everything carried
+  forward from the prior stage, plus control_id = "CC6.1". Your last tool
+  call in this attempt must be emit_stage_envelope. An empty final message
+  is a stage failure.
+model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - bucket
+        - check_id
+        - scenario
+        - source
+        - block_public_acls
+        - ignore_public_acls
+        - block_public_policy
+        - restrict_public_buckets
+        - verdict
+        - resource
+        - failed_fields
+        - reviewed
+        - auto_approved
+        - reviewer
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+        source:
+          type: string
+        block_public_acls:
+          type: boolean
+        ignore_public_acls:
+          type: boolean
+        block_public_policy:
+          type: boolean
+        restrict_public_buckets:
+          type: boolean
+        verdict:
+          type: string
+        resource:
+          type: string
+        failed_fields:
+          type: array
+          items:
+            type: string
+        reviewed:
+          type: boolean
+        auto_approved:
+          type: boolean
+        reviewer:
+          type: string
+  output:
+    schema:
+      type: object
+      required:
+        - bucket
+        - check_id
+        - scenario
+        - source
+        - block_public_acls
+        - ignore_public_acls
+        - block_public_policy
+        - restrict_public_buckets
+        - verdict
+        - resource
+        - failed_fields
+        - reviewed
+        - auto_approved
+        - reviewer
+        - control_id
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+        source:
+          type: string
+        block_public_acls:
+          type: boolean
+        ignore_public_acls:
+          type: boolean
+        block_public_policy:
+          type: boolean
+        restrict_public_buckets:
+          type: boolean
+        verdict:
+          type: string
+        resource:
+          type: string
+        failed_fields:
+          type: array
+          items:
+            type: string
+        reviewed:
+          type: boolean
+        auto_approved:
+          type: boolean
+        reviewer:
+          type: string
+        control_id:
+          type: string

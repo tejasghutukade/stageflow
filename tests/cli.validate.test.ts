@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { ValidationResult } from "../src/config/validateCatalog.js";
 import { runValidateCommand } from "../src/cli/validateCommand.js";
+import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
+import { initTempGitRepo } from "./helpers/projectContext.js";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import {
   exitCodeForValidation,
   formatValidationHuman,
@@ -16,6 +19,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const fixtures = path.join(root, "tests", "fixtures");
+const manifestCatalog = path.join(fixtures, "manifest-catalog");
+const demoPipeline = path.join(manifestCatalog, "pipelines", "demo.pipeline.yaml");
 
 function runCli(args: string[], cwd = fixtures) {
   return spawnSync(process.execPath, [tsxCli, cli, ...args], {
@@ -29,6 +34,13 @@ const validStageYaml = (id: string) =>
     `id: ${id}`,
     "system_prompt: test",
     "model: anthropic/claude-sonnet-4-5",
+    "io:",
+    "  input:",
+    "    schema:",
+    "      type: object",
+    "  output:",
+    "    schema:",
+    "      type: object",
     "",
   ].join("\n");
 
@@ -75,7 +87,9 @@ describe("runValidateCommand", () => {
     expect(validateCatalog).toHaveBeenCalledWith({
       scope: "full",
       cwd,
+      projectRoot: cwd,
       pipeline: undefined,
+      task: undefined,
       strict: false,
     });
   });
@@ -83,7 +97,7 @@ describe("runValidateCommand", () => {
   it("passes pipeline scope for --pipeline docs-only", async () => {
     const validateCatalog = vi.fn(async () => cannedResult({ scope: "pipeline" }));
     const cwd = "/tmp/project";
-    const code = await runValidateCommand(["--pipeline", "docs-only"], {
+    const code = await runValidateCommand(["--pipeline", demoPipeline], {
       cwd,
       validateCatalog,
       io: { log: () => undefined, error: () => undefined },
@@ -92,7 +106,9 @@ describe("runValidateCommand", () => {
     expect(validateCatalog).toHaveBeenCalledWith({
       scope: "pipeline",
       cwd,
-      pipeline: "docs-only",
+      projectRoot: cwd,
+      pipeline: demoPipeline,
+      task: undefined,
       strict: false,
     });
   });
@@ -108,9 +124,75 @@ describe("runValidateCommand", () => {
     expect(validateCatalog).toHaveBeenCalledWith({
       scope: "full",
       cwd,
+      projectRoot: cwd,
       pipeline: undefined,
+      task: undefined,
       strict: true,
     });
+  });
+
+  it("passes task scope for --task", async () => {
+    const validateCatalog = vi.fn(async () => cannedResult({ scope: "task" }));
+    const cwd = "/tmp/project";
+    const taskPath = "/tmp/project/tasks/hello.task.yaml";
+    const code = await runValidateCommand(["--task", taskPath], {
+      cwd,
+      validateCatalog,
+      io: { log: () => undefined, error: () => undefined },
+    });
+    expect(code).toBe(0);
+    expect(validateCatalog).toHaveBeenCalledWith({
+      scope: "task",
+      cwd,
+      projectRoot: cwd,
+      pipeline: undefined,
+      task: taskPath,
+      strict: false,
+    });
+  });
+
+  it("forwards explicit projectRoot when it differs from cwd", async () => {
+    const validateCatalog = vi.fn(async () => cannedResult());
+    const cwd = "/tmp/nested";
+    const projectRoot = "/tmp/project";
+    const code = await runValidateCommand([], {
+      cwd,
+      projectRoot,
+      validateCatalog,
+      io: { log: () => undefined, error: () => undefined },
+    });
+    expect(code).toBe(0);
+    expect(validateCatalog).toHaveBeenCalledWith({
+      scope: "full",
+      cwd,
+      projectRoot,
+      pipeline: undefined,
+      task: undefined,
+      strict: false,
+    });
+  });
+
+  it("AE5: rejects both --pipeline and --task", async () => {
+    const errors: string[] = [];
+    const code = await runValidateCommand(
+      ["--pipeline", "a.yaml", "--task", "b.yaml"],
+      {
+        cwd: fixtures,
+        io: { log: () => undefined, error: (line) => errors.push(line) },
+      },
+    );
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toMatch(/at most one/i);
+  });
+
+  it("--task without value exits non-zero", async () => {
+    const errors: string[] = [];
+    const code = await runValidateCommand(["--task"], {
+      cwd: fixtures,
+      io: { log: () => undefined, error: (line) => errors.push(line) },
+    });
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toMatch(/Missing value for --task/);
   });
 
   it("prints JSON only to stdout in --json mode", async () => {
@@ -121,7 +203,7 @@ describe("runValidateCommand", () => {
         {
           severity: "error",
           code: "pipeline.missing_stage",
-          path: "pipelines/broken.yaml",
+          path: "pipelines/broken.pipeline.yaml",
           message: "missing stage",
           category: "pipeline",
         },
@@ -175,7 +257,7 @@ describe("formatValidationHuman", () => {
       ],
     });
     const output = formatValidationHuman(result);
-    expect(output).toMatch(/Scope: pipeline and stage YAML only/);
+    expect(output).toMatch(/Scope: catalog YAML/);
     expect(output.indexOf("stages/a.yaml")).toBeLessThan(output.indexOf("pipelines/b.yaml"));
     const aSection = output.slice(
       output.indexOf("stages/a.yaml"),
@@ -190,23 +272,23 @@ describe("formatValidationHuman", () => {
     expect(output).toMatch(/Validation passed\./);
   });
 
-  it("promotes orphan prefix to error under strict", () => {
+  it("promotes manifest_missing warning to error under strict", () => {
     const result = cannedResult({
       ok: false,
       summary: { errors: 1, warnings: 0 },
       findings: [
         {
           severity: "warning",
-          code: "catalog.orphan_stage",
-          path: "stages/unused.yaml",
-          message: "orphan stage",
+          code: "catalog.manifest_missing",
+          path: "stageflow.yaml",
+          message: "No catalog manifest",
           category: "catalog",
         },
       ],
     });
     const output = formatValidationHuman(result, { strict: true });
-    expect(output).toMatch(/error: orphan stage/);
-    expect(output).not.toMatch(/warning: orphan stage/);
+    expect(output).toMatch(/error: No catalog manifest/);
+    expect(output).not.toMatch(/warning: No catalog manifest/);
   });
 });
 
@@ -219,7 +301,7 @@ describe("formatValidationJson and exitCodeForValidation", () => {
         {
           severity: "error",
           code: "pipeline.dag_error",
-          path: "pipelines/cycle.yaml",
+          path: "pipelines/cycle.pipeline.yaml",
           message: "dependency cycle",
           category: "pipeline",
         },
@@ -240,13 +322,15 @@ describe("formatValidationJson and exitCodeForValidation", () => {
     };
     expect(parsed.ok).toBe(false);
     expect(parsed.scope).toBe("full");
-    expect(parsed.checks).toMatch(/pipeline and stage YAML only/);
+    expect(parsed.checks).toMatch(
+      /catalog YAML \(pipelines, stages, tasks as selected by flags\)/,
+    );
     expect(parsed.summary).toEqual({ errors: 1, warnings: 0 });
     expect(parsed.findings[0]).toEqual({
       severity: "error",
       category: "pipeline",
       code: "pipeline.dag_error",
-      file: "pipelines/cycle.yaml",
+      file: "pipelines/cycle.pipeline.yaml",
       message: "dependency cycle",
     });
   });
@@ -262,43 +346,67 @@ describe("formatValidationJson and exitCodeForValidation", () => {
 });
 
 describe("sf validate integration", { timeout: 30_000 }, () => {
-  it("AE-S2-2: full catalog reports missing stage on broken pipeline", () => {
-    const result = runCli(["validate"]);
-    expect(result.status).toBe(1);
-    const out = result.stdout + result.stderr;
-    expect(out).toMatch(/missing stage/i);
-    expect(out).toMatch(/broken/);
-    expect(out).not.toMatch(/at Object/);
+  it("AE-S2-2: manifest-all reports broken pipeline in catalog", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await cp(manifestCatalog, root, { recursive: true });
+      clearFindProjectRootCacheForTests();
+      const result = runCli(["validate"], root);
+      expect(result.status).toBe(1);
+      const out = result.stdout + result.stderr;
+      expect(out).toMatch(/invalid|error/i);
+      expect(out).toMatch(/broken/);
+      expect(out).not.toMatch(/at Object/);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
   });
 
-  it("AE-S2-3: targeted validate passes when sibling pipeline is broken", () => {
-    const result = runCli(["validate", "--pipeline", "docs-only"]);
-    expect(result.status).toBe(0);
-    const out = result.stdout + result.stderr;
-    expect(out).toMatch(/Validation passed/);
-    expect(out).not.toMatch(/pipelines\/broken\.yaml/);
+  it("AE-S2-3: targeted validate passes when sibling pipeline is broken", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await cp(manifestCatalog, root, { recursive: true });
+      clearFindProjectRootCacheForTests();
+      const demoPath = path.join(root, "pipelines", "demo.pipeline.yaml");
+      const result = runCli(["validate", "--pipeline", demoPath], root);
+      expect(result.status).toBe(0);
+      const out = result.stdout + result.stderr;
+      expect(out).toMatch(/Validation passed/);
+      expect(out).not.toMatch(/broken\.pipeline\.yaml/);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
   });
 
-  it("AE-S2-5: JSON output reports cycle failure", () => {
-    const result = runCli(["validate", "--json"]);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("");
-    const parsed = JSON.parse(result.stdout) as {
-      ok: boolean;
-      findings: Array<{ severity: string; file: string; message: string }>;
-    };
-    expect(parsed.ok).toBe(false);
-    expect(
-      parsed.findings.some(
-        (finding) =>
-          finding.severity === "error" &&
-          finding.file.includes("cycle") &&
-          /cycle/i.test(finding.message),
-      ),
-    ).toBe(true);
+  it("AE-S2-5: JSON output reports duplicate pipeline id failure", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await cp(manifestCatalog, root, { recursive: true });
+      clearFindProjectRootCacheForTests();
+      const result = runCli(["validate", "--json"], root);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toBe("");
+      const parsed = JSON.parse(result.stdout) as {
+        ok: boolean;
+        findings: Array<{ severity: string; file: string; message: string; code: string }>;
+      };
+      expect(parsed.ok).toBe(false);
+      expect(
+        parsed.findings.some(
+          (finding) =>
+            finding.severity === "error" &&
+            finding.code === "catalog.duplicate_pipeline_id",
+        ),
+      ).toBe(true);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
   });
 
-  it("AE-S2-4: orphan warns by default and fails under strict", async () => {
+  it("AE-S2-4: manifest_missing warns by default and fails under strict", async () => {
     const catalogRoot = await mkdtemp(path.join(tmpdir(), "sf-validate-cli-orphan-"));
     await writeCatalog(catalogRoot, {
       pipelines: {
@@ -314,31 +422,361 @@ describe("sf validate integration", { timeout: 30_000 }, () => {
     expect(defaultResult.status).toBe(0);
     const defaultOut = defaultResult.stdout + defaultResult.stderr;
     expect(defaultOut).toMatch(/warning:/i);
-    expect(defaultOut).toMatch(/unused/);
+    expect(defaultOut).toMatch(/manifest/i);
 
     const strictResult = runCli(["validate", "--strict"], catalogRoot);
     expect(strictResult.status).toBe(1);
     const strictOut = strictResult.stdout + strictResult.stderr;
     expect(strictOut).toMatch(/error:/i);
-    expect(strictOut).toMatch(/unused/);
+    expect(strictOut).toMatch(/manifest/i);
   });
 
-  it("AE-S2-1: full catalog pass with two valid pipelines and no orphans", async () => {
-    const catalogRoot = await mkdtemp(path.join(tmpdir(), "sf-validate-cli-pass-"));
-    await writeCatalog(catalogRoot, {
-      pipelines: {
-        "alpha.yaml": ["id: alpha", "stages:", "  - alpha-stage", ""].join("\n"),
-        "beta.yaml": ["id: beta", "stages:", "  - beta-stage", ""].join("\n"),
-      },
-      stages: {
-        "alpha-stage.yaml": validStageYaml("alpha-stage"),
-        "beta-stage.yaml": validStageYaml("beta-stage"),
-      },
-    });
+  it("AE-S2-1: full catalog pass with two valid pipelines", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await writeFile(
+        path.join(root, "stageflow.yaml"),
+        [
+          "version: 1",
+          "catalog:",
+          "  pipelines: [pipelines]",
+          "  tasks: [tasks/placeholder.task.yaml]",
+          "  patterns:",
+          "    pipeline: \"*.pipeline.yaml\"",
+          "    task: \"*.task.yaml\"",
+          "",
+        ].join("\n"),
+      );
+      await writeCatalog(root, {
+        pipelines: {
+          "alpha.pipeline.yaml": [
+            "id: alpha",
+            "stages:",
+            "  - id: alpha-stage",
+            "    system_prompt: test",
+            "    model: anthropic/claude-sonnet-4-5",
+            "    io:",
+            "      input:",
+            "        schema:",
+            "          type: object",
+            "      output:",
+            "        schema:",
+            "          type: object",
+            "",
+          ].join("\n"),
+          "beta.pipeline.yaml": [
+            "id: beta",
+            "stages:",
+            "  - id: beta-stage",
+            "    system_prompt: test",
+            "    model: anthropic/claude-sonnet-4-5",
+            "    io:",
+            "      input:",
+            "        schema:",
+            "          type: object",
+            "      output:",
+            "        schema:",
+            "          type: object",
+            "",
+          ].join("\n"),
+        },
+      });
+      await mkdir(path.join(root, "tasks"), { recursive: true });
+      await writeFile(
+        path.join(root, "tasks/placeholder.task.yaml"),
+        "id: t\ngoal: g\n",
+      );
+      clearFindProjectRootCacheForTests();
+      const result = runCli(["validate"], root);
+      expect(result.status).toBe(0);
+      expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
 
-    const result = runCli(["validate"], catalogRoot);
+  it("manifest-all discovers a trigger's dangling pipeline/task refs", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await mkdir(path.join(root, "pipelines"), { recursive: true });
+      await mkdir(path.join(root, "tasks"), { recursive: true });
+      await mkdir(path.join(root, "triggers"), { recursive: true });
+      await writeFile(
+        path.join(root, "stageflow.yaml"),
+        "version: 1\ncatalog:\n  pipelines:\n    - pipelines\n  tasks:\n    - tasks\n  triggers:\n    - triggers\n",
+      );
+      await cp(
+        path.join(fixtures, "triggers", "manual-dangling-refs.trigger.yaml"),
+        path.join(root, "triggers", "manual-dangling-refs.trigger.yaml"),
+      );
+      clearFindProjectRootCacheForTests();
+      const result = runCli(["validate", "--json"], root);
+      expect(result.status).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        ok: boolean;
+        findings: Array<{ code: string; file: string }>;
+      };
+      expect(parsed.ok).toBe(false);
+      expect(
+        parsed.findings.some(
+          (f) => f.code === "trigger.unknown_pipeline" && f.file.includes("manual-dangling-refs"),
+        ),
+      ).toBe(true);
+      expect(
+        parsed.findings.some(
+          (f) => f.code === "trigger.unknown_task" && f.file.includes("manual-dangling-refs"),
+        ),
+      ).toBe(true);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+});
+
+describe("catalog.legacy_yaml findings", () => {
+  const legacyInline = [
+    "id: legacy-inline",
+    "stages:",
+    "  - id: work",
+    "    system_prompt: do the work",
+    "    model: anthropic/claude-sonnet-4-5",
+    "    payload_schema:",
+    "      type: object",
+    "    clone_input_schema:",
+    "      type: object",
+    "",
+  ].join("\n");
+
+  it("CLI --json validate of a legacy file includes catalog.legacy_yaml and stays ok", async () => {
+    const catalogRoot = await mkdtemp(path.join(tmpdir(), "sf-validate-legacy-"));
+    const pipelinePath = path.join(catalogRoot, "legacy.pipeline.yaml");
+    await writeFile(pipelinePath, legacyInline);
+    const logs: string[] = [];
+    const code = await runValidateCommand(["--pipeline", pipelinePath, "--json"], {
+      cwd: catalogRoot,
+      io: { log: (line) => logs.push(line), error: () => undefined },
+    });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(logs[0]!) as {
+      ok: boolean;
+      findings: Array<{ code: string; file: string; message: string }>;
+    };
+    expect(parsed.ok).toBe(true);
+    const legacy = parsed.findings.find((finding) => finding.code === "catalog.legacy_yaml");
+    expect(legacy).toBeDefined();
+    expect(legacy?.file).toMatch(/legacy\.pipeline\.yaml/);
+    expect(legacy?.message).toMatch(/payload_schema → io\.output\.schema/);
+  });
+
+  it("--strict does not fail catalog.legacy_yaml", async () => {
+    const catalogRoot = await mkdtemp(path.join(tmpdir(), "sf-validate-legacy-strict-"));
+    const pipelinePath = path.join(catalogRoot, "legacy.pipeline.yaml");
+    await writeFile(pipelinePath, legacyInline);
+    const logs: string[] = [];
+    const code = await runValidateCommand(
+      ["--pipeline", pipelinePath, "--strict", "--json"],
+      {
+        cwd: catalogRoot,
+        io: { log: (line) => logs.push(line), error: () => undefined },
+      },
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(logs[0]!) as {
+      ok: boolean;
+      summary: { errors: number; warnings: number };
+      findings: Array<{ code: string; severity: string }>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.summary.errors).toBe(0);
+    expect(
+      parsed.findings.some(
+        (finding) => finding.code === "catalog.legacy_yaml" && finding.severity === "warning",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("sequential io compatibility via sf validate", { timeout: 30_000 }, () => {
+  it("validate --pipeline sequential io handoff --strict exits 0", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/11-sequential-io-handoff.pipeline.yaml",
+        "--strict",
+      ],
+      root,
+    );
     expect(result.status).toBe(0);
     expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+  });
+
+  it("validate --pipeline complex io schemas --strict exits 0", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/12-complex-io-schemas.pipeline.yaml",
+        "--strict",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+  });
+
+  it("validate --pipeline ref io handoff --strict exits 0", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/13-ref-io-handoff.pipeline.yaml",
+        "--strict",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+  });
+
+  it("validate --pipeline if eq gating --strict exits 0", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/14-if-eq-gating.pipeline.yaml",
+        "--strict",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+  });
+
+  it("validate --pipeline all-gated if --strict still exits 0 with pipeline.route_all_gated warning", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/15-if-all-gated.pipeline.yaml",
+        "--strict",
+        "--json",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      summary: { errors: number; warnings: number };
+      findings: Array<{ code: string; severity: string }>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.summary.errors).toBe(0);
+    expect(
+      parsed.findings.some(
+        (finding) =>
+          finding.code === "pipeline.route_all_gated" && finding.severity === "warning",
+      ),
+    ).toBe(true);
+  });
+
+  it("validate --pipeline if composition --strict exits 0", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/16-if-composition.pipeline.yaml",
+        "--strict",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+  });
+
+  it.each([
+    "22-reject-if-unknown-field.pipeline.yaml",
+    "23-reject-if-optional-field.pipeline.yaml",
+    "24-reject-if-empty-all.pipeline.yaml",
+    "25-reject-if-gt-on-string.pipeline.yaml",
+    "26-reject-if-optional-nested.pipeline.yaml",
+    "27-reject-if-on-loop.pipeline.yaml",
+    "29-reject-if-on-failed.pipeline.yaml",
+  ])("validate --pipeline %s --json reports pipeline.route_if_invalid", (file) => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        `examples/route-wiring-smoke-test/rejected/${file}`,
+        "--json",
+      ],
+      root,
+    );
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      findings: Array<{ code: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(
+      parsed.findings.some((finding) => finding.code === "pipeline.route_if_invalid"),
+    ).toBe(true);
+    expect(
+      parsed.findings.some((finding) => finding.code === "pipeline.dag_error"),
+    ).toBe(false);
+  });
+
+  it("validate --pipeline incompatible io --json reports pipeline.io_incompatible", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/rejected/17-reject-io-incompatible.pipeline.yaml",
+        "--json",
+      ],
+      root,
+    );
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      findings: Array<{ code: string; message: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(
+      parsed.findings.some(
+        (finding) =>
+          finding.code === "pipeline.io_incompatible" &&
+          /structural subset/.test(finding.message),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "18-reject-nested-io.pipeline.yaml",
+    "19-reject-array-item-io.pipeline.yaml",
+    "20-reject-closed-io.pipeline.yaml",
+    "21-reject-ref-io.pipeline.yaml",
+  ])("validate --pipeline %s --json reports pipeline.io_incompatible", (file) => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        `examples/route-wiring-smoke-test/rejected/${file}`,
+        "--json",
+      ],
+      root,
+    );
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      findings: Array<{ code: string; message: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(
+      parsed.findings.some((finding) => finding.code === "pipeline.io_incompatible"),
+    ).toBe(true);
   });
 });
 

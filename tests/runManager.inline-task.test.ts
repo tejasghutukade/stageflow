@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,11 +19,26 @@ function successEnvelope(summary: string) {
       status: "success" as const,
       summary,
       artifacts: [],
+      payload: {},
     },
   };
 }
 
 describe("run manager inline task", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("starts a run from an inline TaskFile without a tasks/ path", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-inline-"));
     const store = createRunStore({ rootDir: root });
@@ -34,7 +50,7 @@ describe("run manager inline task", () => {
     const manager = new RunManager({ agent, cwd: fixtures, store });
 
     const result = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: {
         id: "inline-demo",
         goal: "prove inline task start",
@@ -66,8 +82,8 @@ describe("run manager inline task", () => {
     const manager = new RunManager({ agent, cwd: fixtures, store });
 
     const result = await manager.startRun({
-      pipeline: "docs-only",
-      task: "tasks/sample.yaml",
+      pipeline: pipelinePath("docs-only"),
+      task: "tasks/sample.task.yaml",
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -87,7 +103,7 @@ describe("run manager inline task", () => {
     });
 
     const result = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: 1, goal: "x" } as unknown as { id: string; goal: string },
     });
     expect(result.ok).toBe(false);
@@ -115,6 +131,7 @@ describe("run manager inline task", () => {
                 status: "success" as const,
                 summary: "ok",
                 artifacts: [],
+                payload: {},
               },
             };
           },
@@ -128,6 +145,7 @@ describe("run manager inline task", () => {
             status: "success" as const,
             summary: "ok",
             artifacts: [],
+            payload: {},
           },
         };
       },
@@ -140,14 +158,17 @@ describe("run manager inline task", () => {
     });
 
     const firstPromise = manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "a", goal: "first" },
     });
-    await new Promise((r) => setTimeout(r, 20));
+    const deadline = Date.now() + 2_000;
+    while (manager.getActiveCount() === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     expect(manager.getActiveCount()).toBeGreaterThan(0);
 
     const second = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "b", goal: "second" },
     });
     expect(second.ok).toBe(false);

@@ -1,7 +1,25 @@
 import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadPipeline } from "../src/config/loadPipeline.js";
 import type { RunPipelineDagSnapshot, StageSnapshot } from "../src/runstore/port.js";
+import {
+  appendCloneInstances,
+  buildPipelineDagSnapshotFromLoaded,
+} from "../src/runstore/pipelineDagSnapshot.js";
 import { overlayPlannedStages } from "../src/runstore/runProjection.js";
 import { buildPipelineTrack } from "../src/runstore/trackProjection.js";
+import { pipelinePath } from "./helpers/fixturePaths.js";
+
+const fixtures = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures",
+);
+
+async function loadDiamondDag(stem: string): Promise<RunPipelineDagSnapshot> {
+  const loaded = await loadPipeline(pipelinePath(stem), { cwd: fixtures });
+  return buildPipelineDagSnapshotFromLoaded(loaded);
+}
 
 function snap(
   stage_id: string,
@@ -188,6 +206,294 @@ describe("buildPipelineTrack", () => {
     );
   });
 
+  it("marks fork-skipped stages with skipped readiness", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["detect", "author"],
+      roots: ["detect"],
+      childrenOf: { detect: ["author"] },
+      nodes: [
+        { id: "detect", needs: null, ancestors: [], stageIndex: 0 },
+        { id: "author", needs: "detect", ancestors: ["detect"], stageIndex: 1 },
+      ],
+    };
+    const stages = [
+      snap("detect", "succeeded"),
+      snap("author", "skipped"),
+    ];
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages,
+      runStatus: "succeeded",
+    });
+    expect(track.nodes.find((n) => n.stage_id === "author")?.readiness).toBe(
+      "skipped",
+    );
+  });
+
+  it("AE1: freeze-shaped chain track nodes carry definition_id", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["detect", "author-diagrams", "collect"],
+      roots: ["detect"],
+      childrenOf: { detect: ["author-diagrams"], "author-diagrams": ["collect"] },
+      nodes: [
+        {
+          id: "detect",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          definition_id: "detect",
+        },
+        {
+          id: "author-diagrams",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 1,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "collect",
+          needs: "author-diagrams",
+          ancestors: ["detect", "author-diagrams"],
+          stageIndex: 2,
+          definition_id: "collect",
+        },
+      ],
+    };
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [], dag),
+      runStatus: "created",
+    });
+    expect(track.nodes.map((n) => [n.stage_id, n.definition_id])).toEqual([
+      ["detect", "detect"],
+      ["author-diagrams", "author-diagrams"],
+      ["collect", "collect"],
+    ]);
+  });
+
+  it("projects empty gate_kinds instead of dropping them (KTD1)", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["no-hitl"],
+      roots: ["no-hitl"],
+      childrenOf: {},
+      nodes: [
+        {
+          id: "no-hitl",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          definition_id: "no-hitl",
+        },
+      ],
+      gate_kinds: { "no-hitl": [] },
+    };
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [], dag),
+      runStatus: "created",
+    });
+    expect(track.nodes.find((n) => n.stage_id === "no-hitl")?.gate_kinds).toEqual(
+      [],
+    );
+  });
+
+  it("AE5: clone join edges carry each instance envelope summary", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["detect", "author-diagrams~1", "author-diagrams~2", "collect"],
+      roots: ["detect"],
+      childrenOf: {
+        detect: ["author-diagrams~1", "author-diagrams~2"],
+        "author-diagrams": ["collect"],
+      },
+      nodes: [
+        {
+          id: "detect",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          definition_id: "detect",
+        },
+        {
+          id: "author-diagrams~1",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 1,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "author-diagrams~2",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 2,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "collect",
+          needs: "author-diagrams",
+          ancestors: ["detect", "author-diagrams"],
+          stageIndex: 3,
+          definition_id: "collect",
+        },
+      ],
+    };
+    const stages = [
+      snap("detect", "succeeded", {
+        envelope: { status: "success", summary: "detect done", artifacts: [] },
+      }),
+      snap("author-diagrams~1", "succeeded", {
+        envelope: { status: "success", summary: "clone 1 done", artifacts: [] },
+      }),
+      snap("author-diagrams~2", "succeeded", {
+        envelope: { status: "success", summary: "clone 2 done", artifacts: [] },
+      }),
+      snap("collect", "pending"),
+    ];
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, stages, dag),
+      runStatus: "running",
+    });
+    expect(track.nodes.find((n) => n.stage_id === "detect")?.layer).toBe(0);
+    expect(
+      track.nodes
+        .filter((n) => n.definition_id === "author-diagrams")
+        .every((n) => n.layer === 1),
+    ).toBe(true);
+    expect(track.nodes.find((n) => n.stage_id === "collect")?.layer).toBe(2);
+    expect(track.nodes.find((n) => n.stage_id === "collect")?.readiness).toBe(
+      "ready",
+    );
+    expect(track.edges).toEqual(
+      expect.arrayContaining([
+        {
+          from: "detect",
+          to: "author-diagrams~1",
+          envelope_summary: "detect done",
+        },
+        {
+          from: "detect",
+          to: "author-diagrams~2",
+          envelope_summary: "detect done",
+        },
+        {
+          from: "author-diagrams~1",
+          to: "collect",
+          envelope_summary: "clone 1 done",
+        },
+        {
+          from: "author-diagrams~2",
+          to: "collect",
+          envelope_summary: "clone 2 done",
+        },
+      ]),
+    );
+    expect(track.edges.some((e) => e.from === "author-diagrams")).toBe(false);
+  });
+
+  it("diamond track has both inbound edges and synthesize after both parents", async () => {
+    const dag = await loadDiamondDag("diamond-fan-in");
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [], dag),
+      runStatus: "created",
+    });
+    const byId = new Map(track.nodes.map((n) => [n.stage_id, n]));
+    expect(byId.get("clarify")?.layer).toBe(0);
+    expect(byId.get("research")?.layer).toBe(1);
+    expect(byId.get("validation")?.layer).toBe(1);
+    expect(byId.get("synthesize")?.layer).toBe(2);
+    expect(track.edges).toEqual(
+      expect.arrayContaining([
+        { from: "clarify", to: "research" },
+        { from: "clarify", to: "validation" },
+        { from: "research", to: "synthesize" },
+        { from: "validation", to: "synthesize" },
+      ]),
+    );
+    expect(track.edges.filter((e) => e.to === "synthesize")).toEqual([
+      { from: "research", to: "synthesize" },
+      { from: "validation", to: "synthesize" },
+    ]);
+  });
+
+  it("diamond synthesize blocked_by lists both pending parents", async () => {
+    const dag = await loadDiamondDag("diamond-fan-in");
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("research", "pending"),
+      snap("validation", "pending"),
+      snap("synthesize", "pending"),
+    ];
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, stages, dag),
+      runStatus: "running",
+    });
+    const synthesize = track.nodes.find((n) => n.stage_id === "synthesize");
+    expect(synthesize?.readiness).toBe("blocked");
+    expect(synthesize?.blocked_by).toEqual(["research", "validation"]);
+  });
+
+  it("diamond synthesize blocked_by drops the succeeded parent", async () => {
+    const dag = await loadDiamondDag("diamond-fan-in");
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("research", "succeeded"),
+      snap("validation", "pending"),
+      snap("synthesize", "pending"),
+    ];
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, stages, dag),
+      runStatus: "running",
+    });
+    const synthesize = track.nodes.find((n) => n.stage_id === "synthesize");
+    expect(synthesize?.readiness).toBe("blocked");
+    expect(synthesize?.blocked_by).toEqual(["validation"]);
+  });
+
+  it("accepted failed parent does not block or overlay-skip the join", async () => {
+    const dag = await loadDiamondDag("diamond-fan-in-accepted");
+    const blocked = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(
+        dag.stage_ids,
+        [
+          snap("clarify", "succeeded"),
+          snap("research", "failed"),
+          snap("validation", "pending"),
+          snap("synthesize", "pending"),
+        ],
+        dag,
+      ),
+      runStatus: "running",
+    });
+    const blockedJoin = blocked.nodes.find((n) => n.stage_id === "synthesize");
+    expect(blockedJoin?.readiness).toBe("blocked");
+    expect(blockedJoin?.blocked_by).toEqual(["validation"]);
+
+    const ready = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(
+        dag.stage_ids,
+        [
+          snap("clarify", "succeeded"),
+          snap("research", "failed"),
+          snap("validation", "succeeded"),
+          snap("synthesize", "pending"),
+        ],
+        dag,
+      ),
+      runStatus: "running",
+    });
+    const readyJoin = ready.nodes.find((n) => n.stage_id === "synthesize");
+    expect(readyJoin?.readiness).toBe("ready");
+    expect(readyJoin?.blocked_by).toBeUndefined();
+    expect(ready.nodes.find((n) => n.stage_id === "research")?.readiness).toBe(
+      "failed",
+    );
+  });
+
   it("falls back to linear compat when dag snapshot is missing", () => {
     const stages = [
       snap("alpha", "succeeded"),
@@ -204,5 +510,42 @@ describe("buildPipelineTrack", () => {
       { from: "alpha", to: "beta" },
       { from: "beta", to: "gamma" },
     ]);
+  });
+
+  it("projects feedback_loop target onto track nodes", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["implement", "review"],
+      roots: ["implement"],
+      childrenOf: { implement: ["review"] },
+      nodes: [
+        { id: "implement", needs: null, ancestors: [], stageIndex: 0 },
+        {
+          id: "review",
+          needs: "implement",
+          ancestors: ["implement"],
+          stageIndex: 1,
+          feedback_loop: {
+            target: "implement",
+            max_replays: 2,
+            on_max_replays: "wait_for_human",
+            replay_session: "resume",
+          },
+        },
+      ],
+    };
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [
+        snap("implement", "pending"),
+        snap("review", "pending"),
+      ]),
+      runStatus: "running",
+    });
+    expect(track.nodes.find((n) => n.stage_id === "review")?.feedback_loop).toEqual({
+      target: "implement",
+    });
+    expect(
+      track.nodes.find((n) => n.stage_id === "implement")?.feedback_loop,
+    ).toBeUndefined();
   });
 });

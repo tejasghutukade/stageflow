@@ -1,0 +1,104 @@
+id: clone-chain-after-chain
+schemas:
+  Issue:
+    type: object
+    required: [id, title]
+    properties:
+      id:
+        type: string
+      title:
+        type: string
+  Batch:
+    type: object
+    required: [id, label]
+    properties:
+      id:
+        type: string
+      label:
+        type: string
+stages:
+  - id: emit-items
+    entry: true
+    clone_cap: 4
+    clone_mode: parallel
+    route:
+      - to: handle-item
+    system_prompt: Emit a list of issues.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/schemas/Issue"
+            summary:
+              type: string
+  - id: handle-item
+    route:
+      - to: gather
+    system_prompt: Handle one issue.
+    model: test/model
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/Issue"
+      output:
+        schema:
+          type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+  - id: gather
+    clone_cap: 3
+    clone_mode: parallel
+    route:
+      - to: handle-batch
+    system_prompt: Gather clone results and emit batches.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [batches]
+          properties:
+            batches:
+              type: array
+              items:
+                $ref: "#/schemas/Batch"
+  - id: handle-batch
+    route:
+      - to: gather-batches
+    system_prompt: Handle one batch.
+    model: test/model
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/Batch"
+      output:
+        schema:
+          type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+  - id: gather-batches
+    system_prompt: Gather the second Clone Chain.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

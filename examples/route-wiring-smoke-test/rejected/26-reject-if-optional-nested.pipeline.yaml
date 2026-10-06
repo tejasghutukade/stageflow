@@ -1,0 +1,36 @@
+id: route-demo-reject-if-optional-nested
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          field: customer.tier
+          op: eq
+          value: gold
+    system_prompt: Triage.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [customer]
+          properties:
+            customer:
+              type: object
+              properties:
+                tier:
+                  type: string
+  - id: page
+    system_prompt: Page.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

@@ -1,0 +1,21 @@
+id: inline-leaf
+stages:
+  - id: decide
+    uses: ./decide.yaml
+    entry: true
+    route:
+      - to: branch-a
+      - to: branch-b
+  - id: branch-a
+    uses: ./branch-a.yaml
+  - id: branch-b
+    system_prompt: |
+      Inline branch-b stage body.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

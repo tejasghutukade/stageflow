@@ -1,0 +1,66 @@
+id: route-if-join
+stages:
+  - id: kickoff
+    entry: true
+    route:
+      - to: write
+      - to: draw
+    system_prompt: Kick off write and draw.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: write
+    route:
+      - to: assemble
+        if:
+          field: ready
+          op: eq
+          value: true
+    system_prompt: Write.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [ready]
+          properties:
+            ready:
+              type: boolean
+  - id: draw
+    route:
+      - to: assemble
+        if:
+          field: complete
+          op: eq
+          value: true
+    system_prompt: Draw.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [complete]
+          properties:
+            complete:
+              type: boolean
+  - id: assemble
+    system_prompt: Assemble write and draw.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

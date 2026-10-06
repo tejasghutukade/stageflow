@@ -1,9 +1,28 @@
 import { describe, expect, it } from "vitest";
-import type { PendingPrompt, PipelineTrackNode, RunDetail, StageSnapshot } from "../api";
+import type {
+  FeedbackLoopHistory,
+  FeedbackLoopRecord,
+  PendingPrompt,
+  PipelineTrackNode,
+  RunDetail,
+  StageSnapshot,
+} from "../api";
 import type { DetailView } from "../routes";
 import { statusCopy } from "../status/runStatus";
+import { formatEnvelopeSubtitle } from "../components/EnvelopeFields";
+import { spatialNodeKicker } from "../components/SpatialRunMap";
 import {
+  buildFeedbackOverlays,
+  collectSupersededCloneStageIds,
+  collectSupersededStageIds,
+  envelopeAsidePath,
+  formatCloneLabel,
+  parseEnvelopeAsidePath,
+  resolveFeedbackDecide,
   resolveRunWorkspace,
+  runDetailShouldPoll,
+  stageCloneLabel,
+  stageIdKnown,
   type OperatorSelection,
 } from "./resolveRunWorkspace";
 
@@ -35,6 +54,7 @@ function detail(
     task_yaml: "goal: test",
     stages,
     pipeline_track: { nodes: [], edges: [] },
+    feedback_loops: [],
     ...overrides,
   };
 }
@@ -46,6 +66,7 @@ function selection(
     previousStageId: null,
     userPicked: false,
     drawerStageId: null,
+    dismissedWaitKey: null,
     ...overrides,
   };
 }
@@ -70,31 +91,17 @@ const envelope = {
 };
 
 describe("stage selection", () => {
-  it("with no operator pick selects the first waiting_for_input stage", () => {
+  it("stream view with no pick and no wait is empty", () => {
     const run = detail([
       stage({ stage_id: "intake", status: "succeeded" }),
-      stage({ stage_id: "clarify", status: "waiting_for_input" }),
-      stage({ stage_id: "review", status: "waiting_for_input" }),
+      stage({ stage_id: "review", status: "succeeded" }),
     ]);
-    expect(
-      resolveRunWorkspace(stream, run, selection()).selectedStageId,
-    ).toBe("clarify");
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.selectedStageId).toBeNull();
+    expect(workspace.kind).toBe("empty");
   });
 
-  it("prefers waiting_stage_id when it is set", () => {
-    const run = detail(
-      [
-        stage({ stage_id: "clarify", status: "waiting_for_input" }),
-        stage({ stage_id: "review", status: "waiting_for_input" }),
-      ],
-      { waiting_stage_id: "review" },
-    );
-    expect(
-      resolveRunWorkspace(stream, run, selection()).selectedStageId,
-    ).toBe("review");
-  });
-
-  it("with no waiting stage selects the first running stage", () => {
+  it("does not auto-select a running-only stream", () => {
     const run = detail([
       stage({ stage_id: "intake", status: "succeeded" }),
       stage({ stage_id: "build", status: "running" }),
@@ -102,10 +109,10 @@ describe("stage selection", () => {
     ]);
     expect(
       resolveRunWorkspace(stream, run, selection()).selectedStageId,
-    ).toBe("build");
+    ).toBeNull();
   });
 
-  it("with neither waiting nor running selects the first failed stage", () => {
+  it("does not auto-select a failed-only stream", () => {
     const run = detail([
       stage({ stage_id: "intake", status: "succeeded" }),
       stage({ stage_id: "build", status: "failed" }),
@@ -113,10 +120,10 @@ describe("stage selection", () => {
     ]);
     expect(
       resolveRunWorkspace(stream, run, selection()).selectedStageId,
-    ).toBe("build");
+    ).toBeNull();
   });
 
-  it("with no waiting, running, or failed keeps the previous selection", () => {
+  it("does not keep a previous stage without a user pick", () => {
     const run = detail([
       stage({ stage_id: "intake", status: "succeeded" }),
       stage({ stage_id: "review", status: "succeeded" }),
@@ -127,24 +134,177 @@ describe("stage selection", () => {
         run,
         selection({ previousStageId: "review" }),
       ).selectedStageId,
+    ).toBeNull();
+  });
+
+  it("selects waiting_stage_id when the wait is not dismissed", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "clarify",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+        stage({
+          stage_id: "review",
+          status: "waiting_for_input",
+          pending_prompt: { kind: "confirm", id: "p-cf", message: "OK?" },
+        }),
+      ],
+      { waiting_stage_id: "review" },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.selectedStageId).toBe("review");
+    expect(workspace.kind).toBe("stream");
+    expect(workspace.composer).toEqual({
+      kind: "reply",
+      prompt: { kind: "confirm", id: "p-cf", message: "OK?" },
+    });
+  });
+
+  it("stays empty after Hide workspace while the same wait is open", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "clarify",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+      ],
+      { waiting_stage_id: "clarify" },
+    );
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ dismissedWaitKey: "clarify:p-ft" }),
+    );
+    expect(workspace.selectedStageId).toBeNull();
+    expect(workspace.kind).toBe("empty");
+  });
+
+  it("selects a new wait after a dismissed key", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "review",
+          status: "waiting_for_input",
+          pending_prompt: { kind: "confirm", id: "p-cf", message: "OK?" },
+        }),
+      ],
+      { waiting_stage_id: "review" },
+    );
+    expect(
+      resolveRunWorkspace(
+        stream,
+        run,
+        selection({ dismissedWaitKey: "clarify:p-ft" }),
+      ).selectedStageId,
     ).toBe("review");
   });
 
-  it("with no previous selection falls back to the first stage", () => {
-    const run = detail([
-      stage({ stage_id: "intake", status: "succeeded" }),
-      stage({ stage_id: "review", status: "succeeded" }),
-    ]);
+  it("falls back to waiting_prompt_id when the waiter has no snapshot prompt", () => {
+    const run = detail(
+      [stage({ stage_id: "clarify", status: "waiting_for_input" })],
+      { waiting_stage_id: "clarify", waiting_prompt_id: "p-run" },
+    );
     expect(
       resolveRunWorkspace(stream, run, selection()).selectedStageId,
-    ).toBe("intake");
+    ).toBe("clarify");
+    expect(
+      resolveRunWorkspace(
+        stream,
+        run,
+        selection({ dismissedWaitKey: "p-run" }),
+      ).selectedStageId,
+    ).toBeNull();
   });
 
-  it("preserves an operator pick when the stage still exists", () => {
+  it("selects the artifact owner and keeps artifact kind", () => {
+    const run = detail([
+      stage({
+        stage_id: "intake",
+        status: "succeeded",
+        artifacts: ["notes.md"],
+      }),
+      stage({
+        stage_id: "design",
+        status: "succeeded",
+        artifacts: ["plan.md"],
+      }),
+    ]);
+    const workspace = resolveRunWorkspace(artifactView, run, selection());
+    expect(workspace.selectedStageId).toBe("design");
+    expect(workspace.kind).toBe("artifact");
+  });
+
+  it("keeps artifact kind when no snapshot owns the path", () => {
+    const run = detail([
+      stage({ stage_id: "design", status: "succeeded", artifacts: ["other.md"] }),
+    ]);
+    const workspace = resolveRunWorkspace(artifactView, run, selection());
+    expect(workspace.kind).toBe("artifact");
+    expect(workspace.selectedStageId).toBeNull();
+    expect(workspace.selectedPath).toBe("plan.md");
+  });
+
+  it("selects a stream stageId from the view", () => {
+    const run = detail([
+      stage({ stage_id: "design", status: "running" }),
+      stage({ stage_id: "review", status: "pending" }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      { kind: "stream", stageId: "design" },
+      run,
+      selection(),
+    );
+    expect(workspace.selectedStageId).toBe("design");
+    expect(workspace.kind).toBe("stream");
+  });
+
+  it("ignores an unknown stream stageId and stays map-only", () => {
+    const run = detail([stage({ stage_id: "design", status: "running" })]);
+    const workspace = resolveRunWorkspace(
+      { kind: "stream", stageId: "ghost" },
+      run,
+      selection(),
+    );
+    expect(stageIdKnown(run, "ghost")).toBe(false);
+    expect(workspace.selectedStageId).toBeNull();
+    expect(workspace.kind).toBe("empty");
+  });
+
+  it("opens stream workspace for a pending planned stageId", () => {
+    const run = detail([stage({ stage_id: "design", status: "running" })]);
+    const workspace = resolveRunWorkspace(
+      { kind: "stream", stageId: "review" },
+      run,
+      selection(),
+      ["design", "review"],
+    );
+    expect(workspace.selectedStageId).toBe("review");
+    expect(workspace.kind).toBe("stream");
+    expect(workspace.composer).toEqual({ kind: "idle", label: "Session closed" });
+  });
+
+  it("selects the envelope route stage without a user pick", () => {
+    const run = detail([
+      stage({ stage_id: "clarify", status: "succeeded", envelope }),
+      stage({ stage_id: "review", status: "running" }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      { kind: "envelope", stageId: "clarify" },
+      run,
+      selection(),
+    );
+    expect(workspace.selectedStageId).toBe("clarify");
+    expect(workspace.kind).toBe("envelope");
+  });
+
+  it("preserves a user pick of a running clone when a sibling is waiting", () => {
     const run = detail(
       [
         stage({ stage_id: "clarify", status: "waiting_for_input" }),
-        stage({ stage_id: "review", status: "pending" }),
+        stage({ stage_id: "review", status: "running" }),
       ],
       { waiting_stage_id: "clarify" },
     );
@@ -157,10 +317,28 @@ describe("stage selection", () => {
     ).toBe("review");
   });
 
-  it("drops an operator pick when the stage no longer exists", () => {
+  it("clears a HITL-only pick when the wait ends", () => {
+    const run = detail([
+      stage({ stage_id: "clarify", status: "succeeded" }),
+      stage({ stage_id: "review", status: "running" }),
+    ]);
+    expect(
+      resolveRunWorkspace(
+        stream,
+        run,
+        selection({ previousStageId: "clarify", userPicked: false }),
+      ).selectedStageId,
+    ).toBeNull();
+  });
+
+  it("drops an operator pick when the stage no longer exists and edge-triggers the waiter", () => {
     const run = detail(
       [
-        stage({ stage_id: "clarify", status: "waiting_for_input" }),
+        stage({
+          stage_id: "clarify",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
         stage({ stage_id: "review", status: "pending" }),
       ],
       { waiting_stage_id: "clarify" },
@@ -173,17 +351,38 @@ describe("stage selection", () => {
       ).selectedStageId,
     ).toBe("clarify");
   });
+
+  it("resolves an artifact owner from envelope artifacts in track order", () => {
+    const run = detail([
+      stage({
+        stage_id: "design",
+        status: "succeeded",
+        envelope: { ...envelope, artifacts: ["plan.md"] },
+      }),
+      stage({
+        stage_id: "review",
+        status: "succeeded",
+        artifacts: ["plan.md"],
+      }),
+    ]);
+    expect(
+      resolveRunWorkspace(artifactView, run, selection()).selectedStageId,
+    ).toBe("design");
+  });
 });
 
 describe("composer and session chip", () => {
   it("stream + waiting + pending_prompt returns a composer that accepts a reply", () => {
-    const run = detail([
-      stage({
-        stage_id: "clarify",
-        status: "waiting_for_input",
-        pending_prompt: freeText,
-      }),
-    ]);
+    const run = detail(
+      [
+        stage({
+          stage_id: "clarify",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+      ],
+      { waiting_stage_id: "clarify" },
+    );
     const workspace = resolveRunWorkspace(stream, run, selection());
     expect(workspace.kind).toBe("stream");
     expect(workspace.composer).toEqual({ kind: "reply", prompt: freeText });
@@ -394,13 +593,13 @@ describe("track stages", () => {
       selection(),
       ["a", "b", "c"],
     );
-    expect(workspace.selectedStageId).toBe("a");
+    expect(workspace.selectedStageId).toBeNull();
     expect(workspace.trackStages).toEqual([
       {
         id: "a",
         label: "a",
         status: "running",
-        selected: true,
+        selected: false,
         meta: undefined,
         envelope: null,
       },
@@ -596,8 +795,8 @@ const fanOutTrack = {
   ],
 };
 
-describe("DAG track layout", () => {
-  it("uses dag mode for fan-out projection", () => {
+describe("spatial track layout", () => {
+  it("projects fan-out nodes and waiting chrome", () => {
     const run = detail(
       [
         stage({ stage_id: "recon", status: "succeeded" }),
@@ -621,14 +820,19 @@ describe("DAG track layout", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.trackLayout.mode).toBe("dag");
-    expect(workspace.detailListRows.filter((r) => r.isWaitingAttention)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ stageId: "improve-a" }),
-        expect.objectContaining({ stageId: "improve-c" }),
-      ]),
-    );
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
+      "recon",
+      "improve-a",
+      "improve-b",
+      "improve-c",
+      "report-b",
+    ]);
+    expect(workspace.spatialLayout.edges).toEqual(fanOutTrack.edges);
+    expect(
+      workspace.nodeChrome.filter((c) => c.isWaitingAttention).map((c) => c.stageId),
+    ).toEqual(["improve-a", "improve-c"]);
     expect(workspace.selectedStageId).toBe("improve-a");
+    expect(workspace.kind).toBe("stream");
   });
 
   it("resolves inbound envelope via DAG edges not declaration order", () => {
@@ -649,7 +853,7 @@ describe("DAG track layout", () => {
     expect(workspace.inboundEnvelope).toEqual(envelope);
   });
 
-  it("shows blocked readiness on detail rows", () => {
+  it("shows blocked readiness on node chrome", () => {
     const run = detail(
       [
         stage({ stage_id: "improve-b", status: "running" }),
@@ -657,13 +861,13 @@ describe("DAG track layout", () => {
       ],
       { pipeline_track: fanOutTrack },
     );
-    const row = resolveRunWorkspace(stream, run, selection()).detailListRows.find(
-      (r) => r.stageId === "report-b",
+    const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
+      (c) => c.stageId === "report-b",
     );
-    expect(row?.readinessLine).toBe("Blocked on improve-b");
+    expect(chrome?.readinessLine).toBe("Blocked on improve-b");
   });
 
-  it("passes attempt_count into detail list rows", () => {
+  it("passes attempt_count into node chrome", () => {
     const run = detail(
       [
         stage({ stage_id: "improve-b", status: "failed", attempt_count: 2 }),
@@ -692,13 +896,13 @@ describe("DAG track layout", () => {
         },
       },
     );
-    const row = resolveRunWorkspace(stream, run, selection()).detailListRows.find(
-      (r) => r.stageId === "improve-b",
+    const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
+      (c) => c.stageId === "improve-b",
     );
-    expect(row?.attemptCount).toBe(2);
+    expect(chrome?.attemptCount).toBe(2);
   });
 
-  it("keeps linear mode for single-chain projection", () => {
+  it("lays out a single-chain projection as a spatial row", () => {
     const run = detail(
       [
         stage({ stage_id: "a", status: "succeeded" }),
@@ -720,6 +924,1351 @@ describe("DAG track layout", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.trackLayout.mode).toBe("linear");
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual(["a", "b", "c"]);
+    expect(workspace.spatialLayout.edges).toEqual([
+      { from: "a", to: "b" },
+      { from: "b", to: "c" },
+    ]);
+  });
+});
+
+describe("formatCloneLabel", () => {
+  it("returns stageId when definitionId is missing", () => {
+    expect(formatCloneLabel("author-diagrams~1")).toBe("author-diagrams~1");
+  });
+
+  it("returns definitionId when stageId equals definitionId", () => {
+    expect(formatCloneLabel("collect", "collect")).toBe("collect");
+  });
+
+  it("returns definition plus 1-based ordinal for fan-out instances", () => {
+    expect(formatCloneLabel("author-diagrams~1", "author-diagrams", 1)).toBe(
+      "author-diagrams · 1",
+    );
+  });
+});
+
+function cloneTrackNode(
+  overrides: Partial<PipelineTrackNode> & Pick<PipelineTrackNode, "stage_id">,
+): PipelineTrackNode {
+  return {
+    status: "pending",
+    readiness: "blocked",
+    layer: 0,
+    layer_order: 0,
+    ...overrides,
+  };
+}
+
+const threeCloneTrack = {
+  nodes: [
+    cloneTrackNode({
+      stage_id: "detect-changes",
+      definition_id: "detect-changes",
+      status: "succeeded",
+      readiness: "succeeded",
+      layer: 0,
+      layer_order: 0,
+    }),
+    cloneTrackNode({
+      stage_id: "author-diagrams~1",
+      definition_id: "author-diagrams",
+      status: "succeeded",
+      readiness: "succeeded",
+      layer: 1,
+      layer_order: 0,
+    }),
+    cloneTrackNode({
+      stage_id: "author-diagrams~2",
+      definition_id: "author-diagrams",
+      status: "waiting_for_input",
+      readiness: "waiting",
+      layer: 1,
+      layer_order: 1,
+    }),
+    cloneTrackNode({
+      stage_id: "author-diagrams~3",
+      definition_id: "author-diagrams",
+      status: "running",
+      readiness: "running",
+      layer: 1,
+      layer_order: 2,
+    }),
+    cloneTrackNode({
+      stage_id: "collect",
+      definition_id: "collect",
+      status: "pending",
+      readiness: "blocked",
+      layer: 2,
+      layer_order: 0,
+      blocked_by: ["author-diagrams~2", "author-diagrams~3"],
+    }),
+  ],
+  edges: [
+    { from: "detect-changes", to: "author-diagrams~1" },
+    { from: "detect-changes", to: "author-diagrams~2" },
+    { from: "detect-changes", to: "author-diagrams~3" },
+    { from: "author-diagrams~1", to: "collect" },
+    { from: "author-diagrams~2", to: "collect" },
+    { from: "author-diagrams~3", to: "collect" },
+  ],
+};
+
+describe("AE-console-nodes clone labels", () => {
+  it("renders three clone nodes with definition-plus-index labels in dag mode", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "detect-changes", status: "succeeded" }),
+        stage({ stage_id: "author-diagrams~1", status: "succeeded" }),
+        stage({
+          stage_id: "author-diagrams~2",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+        stage({ stage_id: "author-diagrams~3", status: "running" }),
+        stage({ stage_id: "collect", status: "pending" }),
+      ],
+      {
+        pipeline_track: threeCloneTrack,
+        waiting_stage_id: "author-diagrams~1",
+        waiting_stage_ids: ["author-diagrams~2"],
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(
+      workspace.spatialLayout.nodes
+        .filter((n) => n.layerIndex === 1)
+        .map((n) => n.stageId),
+    ).toEqual(["author-diagrams~1", "author-diagrams~2", "author-diagrams~3"]);
+    expect(
+      workspace.nodeChrome
+        .filter((c) => c.kicker === "author-diagrams" && c.stageId !== "author-diagrams")
+        .map((c) => c.title),
+    ).toEqual(["author-diagrams · 1", "author-diagrams · 2", "author-diagrams · 3"]);
+    expect(workspace.trackStages.find((s) => s.id === "detect-changes")?.label).toBe(
+      "detect-changes",
+    );
+    expect(workspace.trackStages.find((s) => s.id === "collect")?.label).toBe(
+      "collect",
+    );
+    const cloneChrome = workspace.nodeChrome.find((c) => c.stageId === "author-diagrams~2");
+    expect(cloneChrome?.title).toBe("author-diagrams · 2");
+    expect(cloneChrome?.kicker).toBe("author-diagrams");
+    expect(spatialNodeKicker(cloneChrome!.kicker, cloneChrome!.title)).toBe(
+      "author-diagrams",
+    );
+
+    const picked = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "author-diagrams~2", userPicked: true }),
+    );
+    expect(picked.selectedStageId).toBe("author-diagrams~2");
+    expect(picked.trackStages.find((s) => s.selected)?.label).toBe(
+      "author-diagrams · 2",
+    );
+  });
+
+  it("joins clone chrome kicker against the ordinal title", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "author-diagrams~2",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+      ],
+      { pipeline_track: threeCloneTrack, waiting_stage_id: "author-diagrams~2" },
+    );
+    const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
+      (c) => c.stageId === "author-diagrams~2",
+    );
+    expect(chrome).toEqual(
+      expect.objectContaining({
+        title: "author-diagrams · 2",
+        kicker: "author-diagrams",
+      }),
+    );
+    expect(spatialNodeKicker(chrome!.kicker, chrome!.title)).not.toBeNull();
+  });
+
+  it("labels a run-once author-diagrams node with the catalog id", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "detect-changes", status: "succeeded" }),
+        stage({ stage_id: "author-diagrams", status: "running" }),
+        stage({ stage_id: "collect", status: "pending" }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            cloneTrackNode({
+              stage_id: "detect-changes",
+              definition_id: "detect-changes",
+              layer: 0,
+              status: "succeeded",
+              readiness: "succeeded",
+            }),
+            cloneTrackNode({
+              stage_id: "author-diagrams",
+              definition_id: "author-diagrams",
+              layer: 1,
+              status: "running",
+              readiness: "running",
+            }),
+            cloneTrackNode({
+              stage_id: "collect",
+              definition_id: "collect",
+              layer: 2,
+              status: "pending",
+              readiness: "blocked",
+            }),
+          ],
+          edges: [
+            { from: "detect-changes", to: "author-diagrams" },
+            { from: "author-diagrams", to: "collect" },
+          ],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
+      "detect-changes",
+      "author-diagrams",
+      "collect",
+    ]);
+    expect(workspace.trackStages.find((s) => s.id === "author-diagrams")?.label).toBe(
+      "author-diagrams",
+    );
+    const chrome = workspace.nodeChrome.find((c) => c.stageId === "author-diagrams");
+    expect(chrome?.title).toBe("author-diagrams");
+    expect(chrome?.kicker).toBe("author-diagrams");
+    expect(spatialNodeKicker(chrome!.kicker, chrome!.title)).toBeNull();
+  });
+});
+
+describe("AE-today-first-waiter clone waiters", () => {
+  it("defaults to waiting_stage_id, sticks a user pick of ~2, and marks both waiters", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "author-diagrams~1",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+        stage({
+          stage_id: "author-diagrams~2",
+          status: "waiting_for_input",
+          pending_prompt: { kind: "confirm", id: "p2", message: "OK?" },
+        }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            cloneTrackNode({
+              stage_id: "author-diagrams~1",
+              definition_id: "author-diagrams",
+              layer: 0,
+              layer_order: 0,
+              status: "waiting_for_input",
+              readiness: "waiting",
+            }),
+            cloneTrackNode({
+              stage_id: "author-diagrams~2",
+              definition_id: "author-diagrams",
+              layer: 0,
+              layer_order: 1,
+              status: "waiting_for_input",
+              readiness: "waiting",
+            }),
+          ],
+          edges: [],
+        },
+        waiting_stage_id: "author-diagrams~1",
+        waiting_stage_ids: ["author-diagrams~1", "author-diagrams~2"],
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.selectedStageId).toBe("author-diagrams~1");
+    expect(workspace.kind).toBe("stream");
+    expect(
+      workspace.nodeChrome.filter((c) => c.isWaitingAttention).map((c) => c.stageId),
+    ).toEqual(["author-diagrams~1", "author-diagrams~2"]);
+
+    const picked = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "author-diagrams~2", userPicked: true }),
+    );
+    expect(picked.selectedStageId).toBe("author-diagrams~2");
+  });
+});
+
+describe("AE-skipped-leftovers", () => {
+  it("shows sequential leftover clones as selectable skipped inspect nodes", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "author-diagrams~1", status: "succeeded" }),
+        stage({ stage_id: "author-diagrams~2", status: "failed" }),
+        stage({ stage_id: "author-diagrams~3", status: "skipped" }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            cloneTrackNode({
+              stage_id: "author-diagrams~1",
+              definition_id: "author-diagrams",
+              layer: 0,
+              layer_order: 0,
+              status: "succeeded",
+              readiness: "succeeded",
+            }),
+            cloneTrackNode({
+              stage_id: "author-diagrams~2",
+              definition_id: "author-diagrams",
+              layer: 0,
+              layer_order: 1,
+              status: "failed",
+              readiness: "failed",
+            }),
+            cloneTrackNode({
+              stage_id: "author-diagrams~3",
+              definition_id: "author-diagrams",
+              layer: 0,
+              layer_order: 2,
+              status: "skipped",
+              readiness: "skipped",
+            }),
+          ],
+          edges: [],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "author-diagrams~3", userPicked: true }),
+    );
+    expect(workspace.trackStages.map((s) => s.id)).toEqual([
+      "author-diagrams~1",
+      "author-diagrams~2",
+      "author-diagrams~3",
+    ]);
+    expect(workspace.selectedStageId).toBe("author-diagrams~3");
+    expect(workspace.selectedStage?.status).toBe("skipped");
+    expect(workspace.trackStages.find((s) => s.id === "author-diagrams~3")?.status).toBe(
+      "skipped",
+    );
+    expect(workspace.composer).toEqual({ kind: "idle", label: "Session closed" });
+    expect(workspace.sessionChip).toBe("closed");
+  });
+});
+
+describe("aside and envelope clone labels", () => {
+  it("uses definition · N for clone artifact meta", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "work~1",
+          status: "succeeded",
+          artifacts: ["out.md"],
+        }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            cloneTrackNode({
+              stage_id: "work~1",
+              definition_id: "work",
+              layer: 0,
+              status: "succeeded",
+              readiness: "succeeded",
+            }),
+          ],
+          edges: [],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "work~1", userPicked: true }),
+    );
+    expect(stageCloneLabel(run, "work~1")).toBe("work · 1");
+    expect(workspace.artifactFiles).toEqual([
+      { path: "out.md", meta: "work · 1" },
+    ]);
+  });
+
+  it("keeps a non-clone stage meta without an ordinal", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "design",
+          status: "succeeded",
+          artifacts: ["plan.md"],
+        }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            cloneTrackNode({
+              stage_id: "design",
+              definition_id: "design",
+              layer: 0,
+              status: "succeeded",
+              readiness: "succeeded",
+            }),
+          ],
+          edges: [],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "design", userPicked: true }),
+    );
+    expect(workspace.artifactFiles[0]?.meta).toBe("design");
+  });
+
+  it("joins two formatted envelope labels with an arrow", () => {
+    expect(
+      formatEnvelopeSubtitle("work~1", "collect", (id) =>
+        id === "work~1" ? "work · 1" : "collect",
+      ),
+    ).toBe("work · 1 → collect");
+  });
+});
+
+describe("handoff envelope aside", () => {
+  it("prepends a Handoff envelope row when the selected stage has an envelope", () => {
+    const run = detail([
+      stage({
+        stage_id: "clarify",
+        status: "succeeded",
+        envelope,
+        artifacts: ["notes.md"],
+      }),
+      stage({
+        stage_id: "review",
+        status: "running",
+        artifacts: ["plan.md"],
+      }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "clarify", userPicked: true }),
+    );
+    expect(workspace.artifactFiles[0]).toEqual({
+      path: envelopeAsidePath("clarify"),
+      label: "Handoff envelope",
+      meta: "clarify",
+    });
+    expect(workspace.artifactFiles.slice(1)).toEqual([
+      { path: "notes.md", meta: "clarify" },
+      { path: "plan.md", meta: "review" },
+    ]);
+  });
+
+  it("omits the envelope row when the selected stage has no envelope", () => {
+    const run = detail([
+      stage({
+        stage_id: "clarify",
+        status: "succeeded",
+        envelope,
+        artifacts: ["notes.md"],
+      }),
+      stage({
+        stage_id: "review",
+        status: "running",
+        artifacts: ["plan.md"],
+      }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "review", userPicked: true }),
+    );
+    expect(workspace.artifactFiles.every((f) => f.label !== "Handoff envelope")).toBe(
+      true,
+    );
+    expect(workspace.artifactFiles).toEqual([
+      { path: "notes.md", meta: "clarify" },
+      { path: "plan.md", meta: "review" },
+    ]);
+  });
+
+  it("selects the envelope sentinel while the envelope view is open", () => {
+    const run = detail([
+      stage({
+        stage_id: "clarify",
+        status: "succeeded",
+        envelope,
+      }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      { kind: "envelope", stageId: "clarify" },
+      run,
+      selection(),
+    );
+    expect(workspace.kind).toBe("envelope");
+    expect(workspace.selectedPath).toBe(envelopeAsidePath("clarify"));
+  });
+
+  it("focuses the envelope stage in Files when the envelope route is open", () => {
+    const run = detail([
+      stage({
+        stage_id: "clarify",
+        status: "succeeded",
+        envelope,
+      }),
+      stage({
+        stage_id: "review",
+        status: "running",
+      }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      { kind: "envelope", stageId: "clarify" },
+      run,
+      selection({ previousStageId: "review", userPicked: true }),
+    );
+    expect(workspace.selectedStageId).toBe("clarify");
+    expect(workspace.artifactFiles[0]).toEqual({
+      path: envelopeAsidePath("clarify"),
+      label: "Handoff envelope",
+      meta: "clarify",
+    });
+    expect(workspace.selectedPath).toBe(envelopeAsidePath("clarify"));
+  });
+
+  it("parses envelope aside paths and rejects ordinary artifact paths", () => {
+    expect(parseEnvelopeAsidePath(envelopeAsidePath("clarify"))).toBe("clarify");
+    expect(parseEnvelopeAsidePath(envelopeAsidePath("author-diagrams~2"))).toBe(
+      "author-diagrams~2",
+    );
+    expect(parseEnvelopeAsidePath("notes.md")).toBeNull();
+    expect(parseEnvelopeAsidePath("stageflow:envelope:")).toBeNull();
+    expect(parseEnvelopeAsidePath("stageflow:other:clarify")).toBeNull();
+  });
+});
+
+describe("runDetailShouldPoll", () => {
+  const idle = { retrying: false, abandoning: false };
+
+  it("polls a failed run while a clone is still waiting", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "work~1", status: "failed" }),
+        stage({
+          stage_id: "work~2",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+      ],
+      { status: "failed", waiting_stage_id: "work~2" },
+    );
+    expect(runDetailShouldPoll(run, idle)).toBe(true);
+  });
+
+  it("polls a failed run while a retried clone is running", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "work~1", status: "failed" }),
+        stage({ stage_id: "work~2", status: "running" }),
+      ],
+      { status: "failed" },
+    );
+    expect(runDetailShouldPoll(run, idle)).toBe(true);
+  });
+
+  it("stops polling when every stage has finished and nothing is retrying", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "work~1", status: "failed" }),
+        stage({ stage_id: "work~2", status: "failed" }),
+      ],
+      { status: "failed" },
+    );
+    expect(runDetailShouldPoll(run, idle)).toBe(false);
+    expect(runDetailShouldPoll(run, { retrying: true, abandoning: false })).toBe(
+      true,
+    );
+  });
+});
+
+const feedbackEnvelope = {
+  status: "needs_revision",
+  summary: "send back",
+  artifacts: [],
+};
+
+function feedbackLoop(
+  overrides: Partial<FeedbackLoopRecord> = {},
+): FeedbackLoopRecord {
+  return {
+    run_id: "run-1",
+    loop_id: "loop-1",
+    source_stage_id: "review",
+    source_attempt: 1,
+    policy: {
+      target: "implement",
+      max_replays: 2,
+      on_max_replays: "wait_for_human",
+      replay_session: "resume",
+    },
+    state: "active",
+    created_at: "2026-08-18T00:00:00.000Z",
+    updated_at: "2026-08-18T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("feedback loop workspace", () => {
+  it("builds a deferred overlay from the active loop", () => {
+    const active = feedbackLoop({
+      state: "waiting_for_human",
+      current_replay_number: 2,
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: feedbackEnvelope,
+        source_attempt: 2,
+      },
+    });
+    expect(buildFeedbackOverlays(active, [])).toEqual([
+      { from: "review", to: "implement", kind: "deferred" },
+    ]);
+  });
+
+  it("prefers deferred overlay over historical replay overlays", () => {
+    const active = feedbackLoop({
+      state: "waiting_for_human",
+      current_replay_number: 2,
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: feedbackEnvelope,
+        source_attempt: 2,
+      },
+    });
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: active,
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-1",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "implement",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "completed",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(active, history)).toEqual([
+      { from: "review", to: "implement", kind: "deferred" },
+    ]);
+  });
+
+  it("builds replay overlays from history and marks superseded clones", () => {
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop({ current_replay_number: 1 }),
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-1",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "implement",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "active",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [
+              {
+                run_id: "run-1",
+                replay_id: "replay-1",
+                stage_id: "implement~old",
+                stage_attempt: 1,
+                session_mode: "resume",
+                status: "superseded",
+              },
+            ],
+            fork_generations: [
+              {
+                run_id: "run-1",
+                generation_id: "gen-1",
+                fork_parent_stage_id: "fork",
+                generation_number: 1,
+                clone_stage_ids: ["work~1"],
+                status: "superseded",
+                created_at: "2026-08-18T00:00:00.000Z",
+                updated_at: "2026-08-18T00:00:00.000Z",
+              },
+            ],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(feedbackLoop(), history)).toEqual([
+      { from: "review", to: "implement", kind: "replay" },
+    ]);
+    expect([...collectSupersededStageIds(history)].sort()).toEqual([
+      "implement~old",
+      "work~1",
+    ]);
+    expect([...collectSupersededCloneStageIds(history)]).toEqual(["work~1"]);
+  });
+
+  it("shows completed replay overlays when no live replays remain", () => {
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop({
+          state: "continued",
+          current_replay_number: 1,
+          policy: {
+            target: "implement",
+            max_replays: 2,
+            on_max_replays: "require_continue",
+            replay_session: "resume",
+          },
+        }),
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-1",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "implement",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "completed",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(undefined, history)).toEqual([
+      { from: "review", to: "implement", kind: "replay" },
+    ]);
+  });
+
+  it("prefers live replay overlays over completed history", () => {
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop({ current_replay_number: 2 }),
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-1",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "plan",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["plan", "implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "completed",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-2",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 2,
+              target_stage_id: "implement",
+              replay_number: 2,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "active",
+              created_at: "2026-08-18T00:01:00.000Z",
+              updated_at: "2026-08-18T00:01:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(feedbackLoop({ current_replay_number: 2 }), history)).toEqual([
+      { from: "review", to: "implement", kind: "replay" },
+    ]);
+  });
+
+  it("skips superseded and failed replays for overlays", () => {
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop(),
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-failed",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "plan",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["plan", "implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "failed",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-superseded",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "implement",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "superseded",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(undefined, history)).toEqual([]);
+  });
+
+  it("shows feedback decide when waiting_kind is feedback_loop_decision", () => {
+    const active = feedbackLoop({
+      state: "waiting_for_human",
+      current_replay_number: 2,
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: feedbackEnvelope,
+        source_attempt: 2,
+      },
+    });
+    const run = detail(
+      [
+        stage({ stage_id: "implement", status: "succeeded" }),
+        stage({ stage_id: "review", status: "waiting_for_input" }),
+      ],
+      {
+        waiting_stage_id: "review",
+        waiting_kind: "feedback_loop_decision",
+        waiting_summary: "Feedback loop limit reached",
+        active_feedback_loop: active,
+        feedback_loops: [
+          {
+            loop: active,
+            replays: [],
+            fork_generations: [],
+          },
+        ],
+        pipeline_track: {
+          nodes: [
+            {
+              stage_id: "implement",
+              status: "succeeded",
+              readiness: "succeeded",
+              layer: 0,
+              layer_order: 0,
+            },
+            {
+              stage_id: "review",
+              status: "waiting_for_input",
+              readiness: "waiting",
+              layer: 1,
+              layer_order: 0,
+            },
+          ],
+          edges: [{ from: "implement", to: "review" }],
+        },
+      },
+    );
+    expect(resolveFeedbackDecide(run)).toEqual({
+      loopId: "loop-1",
+      sourceStageId: "review",
+      deferredTarget: "implement",
+      replayNumber: 2,
+      maxReplays: 2,
+      summary: "Feedback loop limit reached",
+    });
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.showFeedbackDecide).toBe(true);
+    expect(workspace.feedbackOverlays).toEqual([
+      { from: "review", to: "implement", kind: "deferred" },
+    ]);
+    const review = workspace.nodeChrome.find((n) => n.stageId === "review");
+    const implement = workspace.nodeChrome.find((n) => n.stageId === "implement");
+    expect(review?.isFeedbackSource).toBe(true);
+    expect(implement?.isFeedbackTarget).toBe(true);
+  });
+
+  it("does not change pipeline_track edge layout when overlays are present", () => {
+    const active = feedbackLoop({
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: feedbackEnvelope,
+        source_attempt: 1,
+      },
+    });
+    const run = detail(
+      [
+        stage({ stage_id: "implement", status: "succeeded" }),
+        stage({ stage_id: "review", status: "succeeded" }),
+      ],
+      {
+        active_feedback_loop: active,
+        pipeline_track: {
+          nodes: [
+            {
+              stage_id: "implement",
+              status: "succeeded",
+              readiness: "succeeded",
+              layer: 0,
+              layer_order: 0,
+            },
+            {
+              stage_id: "review",
+              status: "succeeded",
+              readiness: "succeeded",
+              layer: 1,
+              layer_order: 0,
+            },
+          ],
+          edges: [{ from: "implement", to: "review" }],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.spatialLayout.edges).toEqual([
+      { from: "implement", to: "review" },
+    ]);
+    expect(workspace.feedbackOverlays).toHaveLength(1);
+  });
+
+  it("emits policy overlays from pipeline_track when no live history exists", () => {
+    const track = {
+      nodes: [
+        {
+          stage_id: "implement",
+          status: "pending" as const,
+          readiness: "ready" as const,
+          layer: 0,
+          layer_order: 0,
+        },
+        {
+          stage_id: "review",
+          status: "pending" as const,
+          readiness: "blocked" as const,
+          layer: 1,
+          layer_order: 0,
+          feedback_loop: { target: "implement" },
+        },
+        {
+          stage_id: "plan",
+          status: "pending" as const,
+          readiness: "ready" as const,
+          layer: 0,
+          layer_order: 1,
+        },
+      ],
+      edges: [
+        { from: "plan", to: "implement" },
+        { from: "implement", to: "review" },
+      ],
+    };
+    expect(buildFeedbackOverlays(undefined, [], track)).toEqual([
+      { from: "review", to: "implement", kind: "policy" },
+    ]);
+  });
+
+  it("prefers deferred and replay overlays over policy stubs for the same route", () => {
+    const track = {
+      nodes: [
+        {
+          stage_id: "implement",
+          status: "succeeded" as const,
+          readiness: "succeeded" as const,
+          layer: 0,
+          layer_order: 0,
+        },
+        {
+          stage_id: "review",
+          status: "waiting_for_input" as const,
+          readiness: "waiting" as const,
+          layer: 1,
+          layer_order: 0,
+          feedback_loop: { target: "implement" },
+        },
+        {
+          stage_id: "plan",
+          status: "succeeded" as const,
+          readiness: "succeeded" as const,
+          layer: 0,
+          layer_order: 1,
+        },
+      ],
+      edges: [],
+    };
+    const active = feedbackLoop({
+      state: "waiting_for_human",
+      current_replay_number: 2,
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: feedbackEnvelope,
+        source_attempt: 2,
+      },
+      policy: {
+        target: "implement",
+        max_replays: 2,
+        on_max_replays: "wait_for_human",
+        replay_session: "resume",
+      },
+    });
+    expect(buildFeedbackOverlays(active, [], track)).toEqual([
+      { from: "review", to: "implement", kind: "deferred" },
+    ]);
+
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop({ current_replay_number: 1 }),
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-1",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "plan",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["plan", "implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "active",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(undefined, history, track)).toEqual([
+      { from: "review", to: "implement", kind: "policy" },
+      { from: "review", to: "plan", kind: "replay" },
+    ]);
+  });
+
+  it("shows policy overlays on a fresh run via resolveRunWorkspace", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "plan", status: "pending" }),
+        stage({ stage_id: "implement", status: "pending" }),
+        stage({ stage_id: "review", status: "pending" }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            {
+              stage_id: "plan",
+              status: "pending",
+              readiness: "ready",
+              layer: 0,
+              layer_order: 0,
+            },
+            {
+              stage_id: "implement",
+              status: "pending",
+              readiness: "blocked",
+              layer: 1,
+              layer_order: 0,
+            },
+            {
+              stage_id: "review",
+              status: "pending",
+              readiness: "blocked",
+              layer: 2,
+              layer_order: 0,
+              feedback_loop: { target: "implement" },
+            },
+          ],
+          edges: [
+            { from: "plan", to: "implement" },
+            { from: "implement", to: "review" },
+          ],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.feedbackOverlays).toEqual([
+      { from: "review", to: "implement", kind: "policy" },
+    ]);
+    expect(
+      workspace.nodeChrome.find((n) => n.stageId === "review")?.isFeedbackSource,
+    ).toBe(true);
+    expect(
+      workspace.nodeChrome.find((n) => n.stageId === "implement")?.isFeedbackTarget,
+    ).toBe(true);
+  });
+
+  it("omits superseded clone instances from the spatial map", () => {
+    const cloneTrack = {
+      nodes: [
+        cloneTrackNode({
+          stage_id: "fork",
+          definition_id: "fork",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 0,
+          layer_order: 0,
+        }),
+        cloneTrackNode({
+          stage_id: "work~1",
+          definition_id: "work",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 1,
+          layer_order: 0,
+        }),
+        cloneTrackNode({
+          stage_id: "work~2",
+          definition_id: "work",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 1,
+          layer_order: 1,
+        }),
+        cloneTrackNode({
+          stage_id: "work~3",
+          definition_id: "work",
+          status: "running",
+          readiness: "running",
+          layer: 1,
+          layer_order: 2,
+        }),
+        cloneTrackNode({
+          stage_id: "join",
+          definition_id: "join",
+          status: "pending",
+          readiness: "blocked",
+          layer: 2,
+          layer_order: 0,
+        }),
+      ],
+      edges: [
+        { from: "fork", to: "work~1" },
+        { from: "fork", to: "work~2" },
+        { from: "fork", to: "work~3" },
+        { from: "work~1", to: "join" },
+        { from: "work~2", to: "join" },
+        { from: "work~3", to: "join" },
+      ],
+    };
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop(),
+        replays: [],
+        fork_generations: [
+          {
+            run_id: "run-1",
+            generation_id: "gen-1",
+            fork_parent_stage_id: "fork",
+            generation_number: 1,
+            clone_stage_ids: ["work~1", "work~2"],
+            status: "superseded",
+            created_at: "2026-08-18T00:00:00.000Z",
+            updated_at: "2026-08-18T00:00:00.000Z",
+          },
+        ],
+      },
+    ];
+    const run = detail(
+      [
+        stage({ stage_id: "fork", status: "succeeded" }),
+        stage({ stage_id: "work~1", status: "succeeded" }),
+        stage({ stage_id: "work~2", status: "succeeded" }),
+        stage({ stage_id: "work~3", status: "running" }),
+        stage({ stage_id: "join", status: "pending" }),
+      ],
+      {
+        pipeline_track: cloneTrack,
+        feedback_loops: history,
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
+      "fork",
+      "work~3",
+      "join",
+    ]);
+    expect(workspace.trackStages.map((s) => s.id)).toEqual([
+      "fork",
+      "work~3",
+      "join",
+    ]);
+    expect(workspace.nodeChrome.map((c) => c.stageId)).toEqual([
+      "fork",
+      "work~3",
+      "join",
+    ]);
+    expect(workspace.spatialLayout.edges).toEqual([
+      { from: "fork", to: "work~3" },
+      { from: "work~3", to: "join" },
+    ]);
+  });
+
+  it("keeps every clone on the map when no fork generation is superseded", () => {
+    const cloneTrack = {
+      nodes: [
+        cloneTrackNode({
+          stage_id: "fork",
+          definition_id: "fork",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 0,
+          layer_order: 0,
+        }),
+        cloneTrackNode({
+          stage_id: "work~1",
+          definition_id: "work",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 1,
+          layer_order: 0,
+        }),
+        cloneTrackNode({
+          stage_id: "work~2",
+          definition_id: "work",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 1,
+          layer_order: 1,
+        }),
+        cloneTrackNode({
+          stage_id: "join",
+          definition_id: "join",
+          status: "pending",
+          readiness: "blocked",
+          layer: 2,
+          layer_order: 0,
+        }),
+      ],
+      edges: [
+        { from: "fork", to: "work~1" },
+        { from: "fork", to: "work~2" },
+        { from: "work~1", to: "join" },
+        { from: "work~2", to: "join" },
+      ],
+    };
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop(),
+        replays: [],
+        fork_generations: [
+          {
+            run_id: "run-1",
+            generation_id: "gen-1",
+            fork_parent_stage_id: "fork",
+            generation_number: 1,
+            clone_stage_ids: ["work~1", "work~2"],
+            status: "active",
+            created_at: "2026-08-18T00:00:00.000Z",
+            updated_at: "2026-08-18T00:00:00.000Z",
+          },
+        ],
+      },
+    ];
+    const run = detail(
+      [
+        stage({ stage_id: "fork", status: "succeeded" }),
+        stage({ stage_id: "work~1", status: "succeeded" }),
+        stage({ stage_id: "work~2", status: "succeeded" }),
+        stage({ stage_id: "join", status: "pending" }),
+      ],
+      {
+        pipeline_track: cloneTrack,
+        feedback_loops: history,
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
+      "fork",
+      "work~1",
+      "work~2",
+      "join",
+    ]);
+    expect(workspace.trackStages.map((s) => s.id)).toEqual([
+      "fork",
+      "work~1",
+      "work~2",
+      "join",
+    ]);
+    expect(workspace.nodeChrome.map((c) => c.stageId)).toEqual([
+      "fork",
+      "work~1",
+      "work~2",
+      "join",
+    ]);
+    expect(workspace.spatialLayout.edges).toEqual(cloneTrack.edges);
   });
 });

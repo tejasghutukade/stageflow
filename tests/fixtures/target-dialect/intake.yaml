@@ -1,0 +1,12 @@
+id: intake
+system_prompt: |
+  Collect the topic from task input and emit it as the success payload.
+  When finished, call emit_stage_envelope once with status, summary, and a
+  payload matching io.output (topic string).
+io:
+  input:
+    schema:
+      $ref: "#/schemas/topic-brief"
+  output:
+    schema:
+      $ref: "#/schemas/topic-brief"

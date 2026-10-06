@@ -1,0 +1,89 @@
+id: detect-changes
+system_prompt: |
+  Emit the detect-changes handoff from ci-context.json. Do not invent types or paths.
+
+  1. Read ci-context.json at the repository root. It already has pr_number, base_ref,
+     head_sha, relevant_files, diagram_types, change_summary, and content_hash.
+     Do not run git diff or re-derive diagram types. Ignore expected_fork_choice.
+
+  2. Write changes.json via write_stage_artifact with exactly:
+     - pr_number, base_ref, head_sha, content_hash — copied from ci-context.json
+     - changed_files — copy relevant_files as-is (same order)
+     - diagram_types — copy diagram_types as-is
+     - change_summary — copy change_summary as-is
+     - author_diagrams — true when diagram_types is non-empty, false when empty
+
+  3. Call emit_stage_envelope exactly once with status success, changes.json in
+     artifacts, a one-sentence summary, and payload matching the stage schema
+     (same field values as changes.json). Set author_diagrams true iff
+     diagram_types is non-empty, false iff empty. Do not put fork_choice on
+     the envelope or in changes.json.
+
+  Do not call ask_operator. Do not stop after a chat reply. Do not select types yourself.
+model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
+      required:
+        - pr_number
+        - base_ref
+        - head_sha
+        - changed_files
+        - diagram_types
+        - change_summary
+        - content_hash
+        - author_diagrams
+      properties:
+        pr_number:
+          type: string
+        base_ref:
+          type: string
+        head_sha:
+          type: string
+        changed_files:
+          type: array
+          items:
+            type: string
+        diagram_types:
+          type: array
+          items:
+            type: string
+            enum:
+              - architecture
+              - workflow
+              - sequence
+              - dataflow
+              - lifecycle
+        change_summary:
+          type: string
+        content_hash:
+          type: string
+        author_diagrams:
+          type: boolean
+      additionalProperties: false
+verify:
+  - id: changes-json-declared
+    type: artifact
+    basename: changes.json
+    when:
+      - emit
+  - id: changes-on-disk
+    type: artifact
+    path: changes.json
+    nonempty: true
+    when:
+      - after
+  - id: payload-ok
+    type: payload_schema
+    when:
+      - after
+  - id: matches-ci-context
+    type: command
+    run: node scripts/validate-detect-envelope.mjs
+    timeout_ms: 30000
+    when:
+      - after

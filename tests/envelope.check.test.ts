@@ -58,4 +58,73 @@ describe("assertRequiredEnvelope", () => {
     });
     expect(isAdvancingEnvelope(envelope)).toBe(false);
   });
+
+  it("accepts explicit checklist attestations and rejects malformed ones", () => {
+    const envelope = assertRequiredEnvelope({
+      status: "success",
+      summary: "reviewed",
+      artifacts: [],
+      checklist_attestations: [
+        { check_id: "self-review", items: ["Tests pass", "No unrelated changes"] },
+      ],
+    });
+    expect(envelope.checklist_attestations).toEqual([
+      { check_id: "self-review", items: ["Tests pass", "No unrelated changes"] },
+    ]);
+
+    expect(() =>
+      assertRequiredEnvelope({
+        status: "success",
+        summary: "bad",
+        artifacts: [],
+        checklist_attestations: [{ check_id: "self-review", items: "not-an-array" }],
+      }),
+    ).toThrow(/checklist_attestations/);
+  });
+
+  it("U1: pathPrefix qualifies missing status", () => {
+    expect(() =>
+      assertRequiredEnvelope(
+        { summary: "ok", artifacts: [] },
+        "nested.envelope",
+      ),
+    ).toThrow(/nested\.envelope\.status must be/);
+  });
+
+  it("U1: pathPrefix qualifies missing summary", () => {
+    expect(() =>
+      assertRequiredEnvelope(
+        { status: "success", artifacts: [] },
+        "nested.envelope",
+      ),
+    ).toThrow(/nested\.envelope\.summary/);
+  });
+
+  it("U1: pathPrefix qualifies bad artifacts", () => {
+    expect(() =>
+      assertRequiredEnvelope(
+        { status: "success", summary: "ok", artifacts: "nope" },
+        "nested.envelope",
+      ),
+    ).toThrow(/nested\.envelope\.artifacts/);
+  });
+
+  it("U1: no pathPrefix retains bare status message", () => {
+    expect(() =>
+      assertRequiredEnvelope({ summary: "ok", artifacts: [] }),
+    ).toThrow(/^status must be "success" or "failure"$/);
+  });
+
+  it('rejects clone_forks with a message naming the field and pointing at Clone Chain', () => {
+    expect(() =>
+      assertRequiredEnvelope({
+        status: "success",
+        summary: "ok",
+        artifacts: [],
+        clone_forks: [{ successor_id: "implement", action: "skip" }],
+      }),
+    ).toThrow(
+      /"clone_forks" is no longer supported — use a Clone Chain instead/,
+    );
+  });
 });

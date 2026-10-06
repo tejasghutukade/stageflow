@@ -1,7 +1,11 @@
 import type { AskOperatorPrompt } from "../tools/askOperator.js";
-import { deriveStatusFromStages } from "./port.js";
+import { deriveStatusFromStages, findUnhandledFailedStage } from "./port.js";
 import type {
   CompactStage,
+  FeedbackLoopHistory,
+  FeedbackLoopRecord,
+  RunBindingCompact,
+  RunBindingDetail,
   RunDetail,
   RunMeta,
   RunPipelineDagSnapshot,
@@ -15,12 +19,70 @@ import { buildPipelineTrack } from "./trackProjection.js";
 
 export { syntheticPendingSnapshot } from "./syntheticStageSnapshot.js";
 
+export type FeedbackProjectionInput = {
+  feedback_loops?: FeedbackLoopHistory[];
+  active_feedback_loop?: FeedbackLoopRecord;
+};
+
+export function projectRunBindingCompact(meta: RunMeta): RunBindingCompact {
+  if (meta.repository != null && meta.repository !== "") {
+    return {
+      kind: "repository",
+      repository: meta.repository,
+      ...(meta.ref !== undefined ? { ref: meta.ref } : {}),
+      ...(meta.resolved_sha !== undefined
+        ? { resolved_sha: meta.resolved_sha }
+        : {}),
+    };
+  }
+  if (meta.checkout_root != null && meta.checkout_root !== "") {
+    return {
+      kind: "checkout",
+      ...(meta.resolved_sha !== undefined
+        ? { resolved_sha: meta.resolved_sha }
+        : {}),
+    };
+  }
+  return { kind: "unbound" };
+}
+
+export function projectRunBindingDetail(meta: RunMeta): RunBindingDetail {
+  const compact = projectRunBindingCompact(meta);
+  if (compact.kind === "unbound") return compact;
+  if (compact.kind === "checkout") {
+    return {
+      ...compact,
+      ...(meta.checkout_root !== undefined
+        ? { checkout_root: meta.checkout_root }
+        : {}),
+    };
+  }
+  return {
+    ...compact,
+    ...(meta.run_branch !== undefined ? { run_branch: meta.run_branch } : {}),
+    ...(meta.checkout_root !== undefined
+      ? { checkout_root: meta.checkout_root }
+      : {}),
+  };
+}
+
 export function overlayPlannedStages(
   stageIds: string[],
   snapshots: StageSnapshot[],
+  dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
 ): StageSnapshot[] {
   const byId = new Map(snapshots.map((s) => [s.stage_id, s]));
-  return stageIds.map((id) => byId.get(id) ?? syntheticPendingSnapshot(id));
+  const nodeById = new Map((dag?.nodes ?? []).map((n) => [n.id, n]));
+  return stageIds.map((id) => {
+    const node = nodeById.get(id);
+    const definitionId = node?.definition_id ?? node?.id;
+    const existing = byId.get(id);
+    const base = existing ?? syntheticPendingSnapshot(id, definitionId);
+    if (definitionId === undefined || base.definition_id === definitionId) {
+      return base;
+    }
+    return { ...base, definition_id: definitionId };
+  });
 }
 
 export function orderStageSnapshots(
@@ -35,7 +97,15 @@ function compactStages(stages: StageSnapshot[]): CompactStage[] {
     id: s.stage_id,
     status: s.status,
     attempt_count: s.attempt_count,
+    ...(s.definition_id !== undefined ? { definition_id: s.definition_id } : {}),
+    ...(s.cost_usd !== undefined ? { cost_usd: s.cost_usd } : {}),
   }));
+}
+
+function totalCostUsd(stages: StageSnapshot[]): number | undefined {
+  const costs = stages.map((s) => s.cost_usd).filter((c): c is number => c !== undefined);
+  if (costs.length === 0) return undefined;
+  return costs.reduce((sum, c) => sum + c, 0);
 }
 
 function waitingSummaryFromPrompt(
@@ -86,8 +156,9 @@ function waitingFieldsFromStages(
 
 function failedFieldsFromStages(
   stages: StageSnapshot[],
+  dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
 ): Pick<RunSummary, "failed_stage_id" | "failed_reason"> {
-  const failed = stages.find((s) => s.status === "failed");
+  const failed = findUnhandledFailedStage(stages, dag);
   if (!failed) return {};
   let failed_reason: string | undefined;
   for (const ev of failed.events) {
@@ -102,25 +173,68 @@ function failedFieldsFromStages(
 function resolveListedStatus(
   stages: StageSnapshot[],
   meta: RunMeta,
+  dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
 ): RunStatus {
-  const derived = deriveStatusFromStages(stages);
-  return stages.length > 0 ? derived : (meta.status ?? derived);
+  if (stages.length === 0) return meta.status ?? "created";
+  const derived = deriveStatusFromStages(stages, dag, meta.status);
+  if (meta.status === "succeeded" && derived === "running") {
+    const hasActiveStage = stages.some(
+      (s) => s.status === "running" || s.status === "waiting_for_input",
+    );
+    if (!hasActiveStage) return "succeeded";
+  }
+  return derived;
 }
 
 export function projectRunSummary(
   meta: RunMeta,
   stages: StageSnapshot[],
+  feedback?: Pick<FeedbackProjectionInput, "active_feedback_loop">,
 ): RunSummary {
+  const dag = meta.pipeline_dag;
+  const waiting = waitingFieldsFromStages(stages);
+  const cost = totalCostUsd(stages);
+  if (
+    feedback?.active_feedback_loop?.state === "waiting_for_human" &&
+    waiting.waiting_stage_id !== undefined &&
+    waiting.waiting_kind === undefined
+  ) {
+    waiting.waiting_kind = "feedback_loop_decision";
+    if (waiting.waiting_summary === undefined || waiting.waiting_summary === "Waiting for input") {
+      waiting.waiting_summary =
+        "Feedback loop limit reached — extend, continue, or abandon";
+    }
+  }
   return {
     run_id: meta.run_id,
     pipeline_id: meta.pipeline_id,
     task_id: meta.task_id,
-    status: resolveListedStatus(stages, meta),
+    ...(meta.pipeline_path !== undefined ? { pipeline_path: meta.pipeline_path } : {}),
+    ...(meta.task_path !== undefined ? { task_path: meta.task_path } : {}),
+    ...(meta.project_root !== undefined ? { project_root: meta.project_root } : {}),
+    ...(meta.pipeline_source !== undefined
+      ? { pipeline_source: meta.pipeline_source }
+      : {}),
+    status: resolveListedStatus(stages, meta, dag),
     created_at: meta.created_at,
     updated_at: meta.updated_at,
+    binding: projectRunBindingCompact(meta),
     stages: compactStages(stages),
-    ...waitingFieldsFromStages(stages),
-    ...failedFieldsFromStages(stages),
+    ...waiting,
+    ...failedFieldsFromStages(stages, dag),
+    ...(feedback?.active_feedback_loop !== undefined
+      ? { active_feedback_loop: feedback.active_feedback_loop }
+      : {}),
+    ...(cost !== undefined ? { total_cost_usd: cost } : {}),
+    ...(meta.cancel_reason !== undefined
+      ? { cancel_reason: meta.cancel_reason }
+      : {}),
+    ...(meta.finished_at !== undefined ? { finished_at: meta.finished_at } : {}),
+    ...(meta.slimmed_at !== undefined ? { slimmed_at: meta.slimmed_at } : {}),
+    ...(meta.disk_bytes !== undefined ? { disk_bytes: meta.disk_bytes } : {}),
+    ...(meta.disk_measured_at !== undefined
+      ? { disk_measured_at: meta.disk_measured_at }
+      : {}),
   };
 }
 
@@ -129,14 +243,18 @@ export function projectRunDetail(
   stages: StageSnapshot[],
   task_yaml: string,
   dagSnapshot?: RunPipelineDagSnapshot | null,
+  feedback?: FeedbackProjectionInput,
 ): RunDetail {
-  const ordered = dagSnapshot
-    ? overlayPlannedStages(dagSnapshot.stage_ids, stages)
+  const dag = dagSnapshot ?? meta.pipeline_dag ?? null;
+  const ordered = dag
+    ? overlayPlannedStages(dag.stage_ids, stages, dag)
     : stages;
-  const summary = projectRunSummary(meta, ordered);
-  const snapshot =
-    dagSnapshot ??
-    linearCompatDagSnapshot(ordered.map((s) => s.stage_id));
+  const summary = projectRunSummary(
+    dag ? { ...meta, pipeline_dag: dag } : meta,
+    ordered,
+    { active_feedback_loop: feedback?.active_feedback_loop },
+  );
+  const snapshot = dag ?? linearCompatDagSnapshot(ordered.map((s) => s.stage_id));
   const pipeline_track = buildPipelineTrack({
     dagSnapshot: snapshot,
     stages: ordered,
@@ -144,8 +262,17 @@ export function projectRunDetail(
   });
   return {
     ...summary,
+    binding: projectRunBindingDetail(dag ? { ...meta, pipeline_dag: dag } : meta),
     task_yaml,
     stages: ordered,
     pipeline_track,
+    feedback_loops: feedback?.feedback_loops ?? [],
+    ...(meta.config_origins !== undefined && meta.config_origins.length > 0
+      ? { config_origins: meta.config_origins }
+      : {}),
+    ...(meta.caller_id !== undefined ? { caller_id: meta.caller_id } : {}),
+    ...(meta.run_manifest !== undefined
+      ? { run_manifest: meta.run_manifest }
+      : {}),
   };
 }

@@ -22,10 +22,36 @@ const CURSOR_SETTING_SOURCES_ENV = "PI_CURSOR_SETTING_SOURCES";
  *
  * Resolution order:
  * 1. STAGEFLOW_CURSOR_EXTENSION (absolute path to the extension .ts/.js)
- * 2. Path package from ~/.pi/agent/settings.json (same source interactive pi uses)
- * 3. npm install under ~/.pi/agent/npm/node_modules/pi-cursor-sdk
+ * 2. Path package from the Pi agent settings.json (same source interactive pi uses)
+ * 3. npm install under <pi-agent>/npm/node_modules/pi-cursor-sdk
+ *    (`dist/index.js` for 0.3+, `src/index.ts` for older publishes)
  * 4. Sibling checkout at ../pi-cursor-sdk relative to this repo
+ *
+ * A stage worker's HOME is an empty attempt directory, so the Pi agent dir is
+ * the directory of STAGEFLOW_PI_HOME_AUTH_PATH when the Host set it, not
+ * os.homedir().
  */
+const CURSOR_PACKAGE_ENTRIES = ["dist/index.js", "src/index.ts"] as const;
+
+/** Pi agent dir. Stage workers must not use os.homedir(): HOME is the attempt dir. */
+function piAgentDir(): string {
+  const auth = process.env.STAGEFLOW_PI_HOME_AUTH_PATH?.trim();
+  if (auth) return path.dirname(path.resolve(auth));
+  return path.join(os.homedir(), ".pi", "agent");
+}
+
+export function cursorExtensionEntryInPackage(
+  packageRoot: string,
+): string | undefined {
+  for (const rel of CURSOR_PACKAGE_ENTRIES) {
+    const full = path.join(packageRoot, rel);
+    if (existsSync(full)) {
+      return full;
+    }
+  }
+  return undefined;
+}
+
 export function resolveCursorExtensionPath(): string | undefined {
   const fromEnv = process.env.STAGEFLOW_CURSOR_EXTENSION?.trim();
   if (fromEnv && existsSync(fromEnv)) {
@@ -37,27 +63,16 @@ export function resolveCursorExtensionPath(): string | undefined {
     return fromSettings;
   }
 
-  const npmEntry = path.join(
-    os.homedir(),
-    ".pi",
-    "agent",
-    "npm",
-    "node_modules",
-    "pi-cursor-sdk",
-    "src",
-    "index.ts",
+  const npmEntry = cursorExtensionEntryInPackage(
+    path.join(piAgentDir(), "npm", "node_modules", "pi-cursor-sdk"),
   );
-  if (existsSync(npmEntry)) {
+  if (npmEntry) {
     return npmEntry;
   }
 
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const sibling = path.resolve(here, "../../../pi-cursor-sdk/src/index.ts");
-  if (existsSync(sibling)) {
-    return sibling;
-  }
-
-  return undefined;
+  const siblingRoot = path.resolve(here, "../../../pi-cursor-sdk");
+  return cursorExtensionEntryInPackage(siblingRoot);
 }
 
 export function isCursorModelRef(modelRef: string): boolean {
@@ -82,7 +97,7 @@ function missingExtensionReason(modelRef: string): string {
   return [
     `Model "${modelRef}" requires pi-cursor-sdk, but no extension entry was found.`,
     "Install with `pi install npm:pi-cursor-sdk`, or set STAGEFLOW_CURSOR_EXTENSION",
-    "to the absolute path of pi-cursor-sdk/src/index.ts.",
+    "to the absolute path of pi-cursor-sdk/dist/index.js (or src/index.ts).",
     "Also ensure a Cursor SDK API key is available via Pi /login or CURSOR_API_KEY.",
   ].join(" ");
 }
@@ -98,6 +113,28 @@ function prepareCursor(modelRef: string): ProviderPrepareResult {
     // rules/plugins/MCP for isolated stages unless the operator already set it.
     restore: sealCursorSettingSources(),
   };
+}
+
+export function workshopCursorBridgeHint(toolNames: readonly string[]): string {
+  const lines = toolNames.map(
+    (name) => `- pi__${name} (playbook name: ${name})`,
+  );
+  return [
+    "Cursor bridge: call the workshop tools by these MCP names. The playbook uses the bare names; they are the same tools.",
+    ...lines,
+    "When the operator asks you to create or edit the draft, do not finish without one of these tool calls.",
+  ].join("\n");
+}
+
+export function cursorBridgePrompt(
+  message: string,
+  modelId: string | undefined,
+  toolNames: readonly string[],
+): string {
+  if (!modelId || !isCursorModelRef(modelId) || toolNames.length === 0) {
+    return message;
+  }
+  return `${message}\n\n${workshopCursorBridgeHint(toolNames)}`;
 }
 
 export const cursorProviderSupport: StageProviderSupport = {
@@ -117,7 +154,8 @@ export const cursorProviderSupport: StageProviderSupport = {
 registerProviderSupport(cursorProviderSupport);
 
 function resolveFromPiSettings(): string | undefined {
-  const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+  const agentDir = piAgentDir();
+  const settingsPath = path.join(agentDir, "settings.json");
   if (!existsSync(settingsPath)) {
     return undefined;
   }
@@ -135,7 +173,6 @@ function resolveFromPiSettings(): string | undefined {
     return undefined;
   }
 
-  const agentDir = path.join(os.homedir(), ".pi", "agent");
   for (const entry of settings.packages) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       continue;
@@ -162,8 +199,8 @@ function resolveFromPiSettings(): string | undefined {
       }
     }
 
-    const declared = path.join(packageRoot, "src", "index.ts");
-    if (existsSync(declared)) {
+    const declared = cursorExtensionEntryInPackage(packageRoot);
+    if (declared) {
       return declared;
     }
   }

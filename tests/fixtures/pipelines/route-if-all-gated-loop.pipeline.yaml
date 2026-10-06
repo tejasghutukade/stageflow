@@ -1,0 +1,50 @@
+id: route-if-all-gated-loop
+stages:
+  - id: implement
+    entry: true
+    route:
+      - to: review
+    system_prompt: Implement.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: review
+    route:
+      - to: submit
+        if:
+          field: verdict
+          op: eq
+          value: pass
+      - type: loop
+        to: implement
+        max_replays: 2
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: Review.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [verdict]
+          properties:
+            verdict:
+              type: string
+  - id: submit
+    system_prompt: Submit.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

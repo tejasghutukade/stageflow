@@ -1,0 +1,5 @@
+id: stage-mcp
+stages:
+  - id: use-echo
+    uses: ./use-echo.yaml
+    mcp: [echo]

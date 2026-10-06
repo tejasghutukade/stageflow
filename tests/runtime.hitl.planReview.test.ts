@@ -6,7 +6,7 @@
  * FakeAgent green alone as epic done.
  *
  * From repo cwd (live catalog: pipelines/plan-review-proving.yaml,
- * tasks/prove-plan-review.yaml; Pi adapter + UI/server):
+ * tasks/prove-plan-review.task.yaml; Pi adapter + UI/server):
  *
  * 1. Start UI/server with the Pi agent (not FakeAgent).
  * 2. Start task `prove-plan-review` / pipeline `plan-review-proving`.
@@ -23,6 +23,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, catalogLocators, taskPath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -49,12 +50,14 @@ const planReviewEnvelope = {
   status: "success" as const,
   summary: "plan accepted",
   artifacts: ["stages/plan-review/attempts/1/artifacts/plan.md"],
+  payload: {},
 };
 
 const followupEnvelope = {
   status: "success" as const,
   summary: "follow-up ack",
   artifacts: [] as string[],
+  payload: {},
 };
 
 async function loadPair(name: string): Promise<{
@@ -113,8 +116,8 @@ describe("runtime HITL plan-review proving (U3)", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "plan-review-proving",
-      task: path.join(fixtures, "tasks", "prove-plan-review.yaml"),
+      pipeline: pipelinePath("plan-review-proving"),
+      task: taskPath("prove-plan-review"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -185,8 +188,8 @@ describe("runtime HITL plan-review proving (U3)", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "plan-review-proving",
-      task: path.join(fixtures, "tasks", "prove-plan-review.yaml"),
+      pipeline: pipelinePath("plan-review-proving"),
+      task: taskPath("prove-plan-review"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -229,12 +232,9 @@ describe("runtime HITL plan-review proving (U3)", () => {
   it("error: missing resume context fails closed (T1 KTD7)", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-plan-review-"));
     const store = createRunStore({ rootDir: root });
-    const taskYaml = await readFile(
-      path.join(fixtures, "tasks", "prove-plan-review.yaml"),
-      "utf8",
-    );
+    const taskYaml = await readFile(taskPath("prove-plan-review"), "utf8");
     const run = await store.createRun({
-      pipelineId: "plan-review-proving",
+      ...catalogLocators("plan-review-proving"),
       taskYaml,
       taskId: "prove-plan-review",
     });
@@ -309,8 +309,8 @@ describe("runtime HITL plan-review proving (U3)", () => {
         ]);
         const manager = new RunManager({ agent, store, cwd: fixtures });
         const started = await manager.startRun({
-          pipeline: "single",
-          task: path.join(fixtures, "tasks", "sample.yaml"),
+          pipeline: pipelinePath("single"),
+          task: SAMPLE_TASK,
         });
         expect(started.ok).toBe(true);
         if (!started.ok) return;

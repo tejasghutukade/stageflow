@@ -9,6 +9,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
+import type { HostGateContext } from "../browser/gateHandoff.js";
+import { prepareAskOperatorArguments } from "./prepareToolArguments.js";
 
 export class AskOperatorError extends Error {
   constructor(message: string) {
@@ -71,7 +73,7 @@ export type MultiQuestionItem = {
   id: string;
 };
 
-export type AskOperatorPrompt =
+export type AskOperatorPrompt = (
   | { kind: "free_text"; message: string; id: string }
   | { kind: "confirm"; message: string; id: string }
   | {
@@ -84,7 +86,9 @@ export type AskOperatorPrompt =
       message: string;
       artifacts: string[];
       id: string;
-    };
+    }
+) &
+  HostGateContext;
 
 export type Decision = "accept" | "reject";
 
@@ -131,29 +135,60 @@ const multiQuestionItemSchema = Type.Object({
   id: Type.Optional(Type.String()),
 });
 
+const freeTextParamsSchema = Type.Object({
+  kind: Type.Literal("free_text"),
+  message: Type.String({ minLength: 1 }),
+  id: Type.Optional(Type.String()),
+});
+
+const confirmParamsSchema = Type.Object({
+  kind: Type.Literal("confirm"),
+  message: Type.String({ minLength: 1 }),
+  id: Type.Optional(Type.String()),
+});
+
+const multiQuestionParamsSchema = Type.Object({
+  kind: Type.Literal("multi_question"),
+  questions: Type.Array(multiQuestionItemSchema, { minItems: 1 }),
+  id: Type.Optional(Type.String()),
+});
+
+const artifactBackedParamsSchema = Type.Object({
+  kind: Type.Literal("artifact_backed"),
+  message: Type.String({ minLength: 1 }),
+  artifacts: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
+  id: Type.Optional(Type.String()),
+});
+
+const KIND_PARAM_SCHEMAS = {
+  free_text: freeTextParamsSchema,
+  confirm: confirmParamsSchema,
+  multi_question: multiQuestionParamsSchema,
+  artifact_backed: artifactBackedParamsSchema,
+} as const;
+
 export const askOperatorParamsSchema = Type.Union([
-  Type.Object({
-    kind: Type.Literal("free_text"),
-    message: Type.String({ minLength: 1 }),
-    id: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("confirm"),
-    message: Type.String({ minLength: 1 }),
-    id: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("multi_question"),
-    questions: Type.Array(multiQuestionItemSchema, { minItems: 1 }),
-    id: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("artifact_backed"),
-    message: Type.String({ minLength: 1 }),
-    artifacts: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-    id: Type.Optional(Type.String()),
-  }),
+  freeTextParamsSchema,
+  confirmParamsSchema,
+  multiQuestionParamsSchema,
+  artifactBackedParamsSchema,
 ]);
+
+/**
+ * Narrows the ask_operator params schema to only the declared gate kinds
+ * (stage `gate_kinds` allowlist). Omitted/empty falls back to the full
+ * union so back-compat stages keep accepting every kind.
+ */
+export function askOperatorParamsSchemaFor(
+  allowedKinds?: readonly AskOperatorKind[],
+) {
+  if (!allowedKinds || allowedKinds.length === 0) {
+    return askOperatorParamsSchema;
+  }
+  const schemas = allowedKinds.map((kind) => KIND_PARAM_SCHEMAS[kind]);
+  if (schemas.length === 1) return schemas[0];
+  return Type.Union(schemas as [typeof schemas[0], typeof schemas[0], ...typeof schemas]);
+}
 
 const decisionSchema = Type.Union([
   Type.Literal("accept"),
@@ -267,11 +302,12 @@ function parseSubQuestion(
 }
 
 export function parseAskOperatorParams(value: unknown): AskOperatorParams {
-  if (!isRecord(value)) {
+  const prepared = prepareAskOperatorArguments(value);
+  if (!isRecord(prepared)) {
     throw new AskOperatorError("ask_operator params must be an object");
   }
 
-  const kind = value.kind;
+  const kind = prepared.kind;
   if (typeof kind !== "string") {
     throw new AskOperatorError("kind is required");
   }
@@ -286,41 +322,41 @@ export function parseAskOperatorParams(value: unknown): AskOperatorParams {
     );
   }
 
-  const id = optionalId(value.id, "id");
+  const id = optionalId(prepared.id, "id");
 
   if (kind === "free_text" || kind === "confirm") {
     return {
       kind,
-      message: requireNonEmptyString(value.message, "message"),
+      message: requireNonEmptyString(prepared.message, "message"),
       ...(id !== undefined ? { id } : {}),
     };
   }
 
   if (kind === "artifact_backed") {
-    if (!Array.isArray(value.artifacts)) {
+    if (!Array.isArray(prepared.artifacts)) {
       throw new AskOperatorError("artifacts must be an array");
     }
-    if (value.artifacts.length < 1) {
+    if (prepared.artifacts.length < 1) {
       throw new AskOperatorError("artifacts must contain at least one path");
     }
-    const artifacts = value.artifacts.map((item, index) =>
+    const artifacts = prepared.artifacts.map((item, index) =>
       requireNonEmptyString(item, `artifacts[${index}]`),
     );
     return {
       kind,
-      message: requireNonEmptyString(value.message, "message"),
+      message: requireNonEmptyString(prepared.message, "message"),
       artifacts,
       ...(id !== undefined ? { id } : {}),
     };
   }
 
-  if (!Array.isArray(value.questions)) {
+  if (!Array.isArray(prepared.questions)) {
     throw new AskOperatorError("questions must be an array");
   }
-  if (value.questions.length < 1) {
+  if (prepared.questions.length < 1) {
     throw new AskOperatorError("questions must contain at least one item");
   }
-  const questions = value.questions.map((item, index) =>
+  const questions = prepared.questions.map((item, index) =>
     parseSubQuestion(item, `questions[${index}]`),
   );
   return {
@@ -547,7 +583,9 @@ export type AskOperatorWaitBridge = {
   requestWait: (prompt: AskOperatorPrompt) => Promise<unknown>;
 };
 
-export type AskOperatorToolOptions = AskOperatorWaitBridge;
+export type AskOperatorToolOptions = AskOperatorWaitBridge & {
+  allowedKinds?: readonly AskOperatorKind[];
+};
 
 export type AskOperatorToolDetails = {
   prompt: AskOperatorPrompt | null;
@@ -567,7 +605,7 @@ function toolResult(
   };
 }
 
-function summarizeAnswer(answer: AskOperatorAnswer): string {
+export function summarizeAnswer(answer: AskOperatorAnswer): string {
   if (answer.kind === "free_text") {
     return `Operator answered: ${answer.text}`;
   }
@@ -581,18 +619,33 @@ function summarizeAnswer(answer: AskOperatorAnswer): string {
 }
 
 export function createAskOperatorTool(options: AskOperatorToolOptions) {
-  const { requestWait } = options;
+  const { requestWait, allowedKinds } = options;
+  const allowed =
+    allowedKinds && allowedKinds.length > 0
+      ? new Set<AskOperatorKind>(allowedKinds)
+      : null;
+  const kindList = allowed
+    ? [...allowed].join(", ")
+    : ASK_OPERATOR_KINDS.join(", ");
 
   return {
     name: "ask_operator",
     label: "Ask operator",
     description:
-      "Ask the operator a question and wait for their answer. Supports free_text, confirm, multi_question, and artifact_backed prompts. Does not complete the stage — call emit_stage_envelope when finished.",
-    parameters: askOperatorParamsSchema,
+      `Ask the operator a question and wait for their answer. Supports ${kindList} prompts. Does not complete the stage — call emit_stage_envelope when finished.`,
+    parameters: askOperatorParamsSchemaFor(allowedKinds),
+    prepareArguments: prepareAskOperatorArguments as (
+      args: unknown,
+    ) => never,
     execute: async (_toolCallId: string, params: unknown) => {
       let prompt: AskOperatorPrompt;
       try {
         const parsed = parseAskOperatorParams(params);
+        if (allowed && !allowed.has(parsed.kind)) {
+          throw new AskOperatorError(
+            `unsupported prompt kind "${parsed.kind}" (allowed: ${kindList})`,
+          );
+        }
         prompt = normalizePromptIds(parsed);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

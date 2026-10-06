@@ -1,0 +1,112 @@
+id: oss-plan-investigation
+system_prompt: |
+  Partition the reproduced issue into one to five independent read-only
+  investigation assignments, recorded in investigation-map.md. Do not edit files, commit, push, or open a pull request.
+
+  Reading upstream artifacts: the prior envelope's artifacts[] entries are
+  run-relative paths. The user prompt gives the absolute "Factory run
+  workspace" path; read each one at <Factory run workspace>/<artifact path>
+  with the builtin read tool. issue-intake.md and reproduction.md are
+  authoritative over any prose summary.
+
+  1. Read the task plus the intake and reproduction envelopes/artifacts.
+  2. Map the failure to one through five independent investigation areas. Each
+     area must have a focused objective, likely paths, concrete questions, and
+     constraints. Avoid duplicate scopes. Useful boundaries include runtime
+     control flow, state/persistence, integration boundaries, and existing test
+     coverage, but choose scopes from the actual repository evidence.
+  3. Call write_stage_artifact with path investigation-map.md describing the
+     scopes, the repo paths each one owns, and why they can proceed
+     independently. Preserve the inherited intake and reproduction artifact
+     paths for downstream stages.
+  4. Emit exactly one success envelope with payload matching the schema,
+     artifacts containing investigation-map.md plus the inherited evidence,
+     and investigation areas in deterministic order.
+
+  Definition of done — every item must be true before emitting success:
+  - investigation-map.md was written through write_stage_artifact and appears in
+    the emitted artifacts.
+  - payload.investigation_count equals the number of investigation areas (1–5).
+  - Each area payload.paths lists repo-relative paths that exist in this
+    checkout and are specific enough to open. A bare top-level directory such
+    as src, or a path you never verified, is a rejected assignment — narrow it
+    or drop the area.
+  - Each area payload.questions lists questions answerable by reading the
+    named paths, phrased so an answer is a finding. "Investigate the area" or
+    a restated objective is not a question.
+  - Each area payload.objective and constraints are specific to that area, not
+    copies of the task goal.
+  - Skipping is not permitted. Emit 1–5 areas, never zero.
+
+  Anti-loophole rules:
+  - No payload string may be n/a, none, tbd, pending, or equivalent filler. If
+    the real value does not exist, emit failure instead.
+  - No payload array may hold placeholders such as ["see diff"] or ["src"].
+  - Writing investigation-map.md is not a substitute for reading the checkout
+    to confirm the paths and questions are real. The artifact records the
+    partition; it does not validate it.
+
+  Summary authoring: the emitted summary states the partition and its rationale
+  for downstream stages — how many areas, what each one owns, and where the map
+  lives. Do not restate this stage's prohibitions or scope limits there.
+  Downstream stages receive the summary verbatim and will misread "do not edit
+  files" as an instruction to themselves.
+
+  Do not create more than five areas. Do not put fork_choice on the emitted
+  envelope.
+model: omniroute/auto
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - reproduced
+        - evidence_kind
+        - failing_commands
+        - observed_behavior
+        - expected_behavior
+        - affected_areas
+        - base_commit
+      properties:
+        reproduced:
+          type: boolean
+        evidence_kind:
+          type: string
+          enum:
+            - failing_test
+            - demonstrated_gap
+        failing_commands:
+          type: array
+          items:
+            type: string
+        observed_behavior:
+          type: string
+        expected_behavior:
+          type: string
+        affected_areas:
+          type: array
+          items:
+            type: string
+        base_commit:
+          type: string
+  output:
+    schema:
+      type: object
+      required:
+        - investigation_count
+        - strategy
+      properties:
+        investigation_count:
+          type: integer
+          minimum: 1
+          maximum: 5
+        strategy:
+          type: string
+verify:
+  - id: investigation-map
+    type: artifact
+    path: investigation-map.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

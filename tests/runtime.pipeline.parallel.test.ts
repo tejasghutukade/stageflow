@@ -12,12 +12,16 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
 import { runPipeline } from "../src/runtime/pipelineRunner.js";
-import { runPipelineDag } from "../src/runtime/pipelineScheduler.js";
+import {
+  resumeRun,
+  runPipelineDag,
+} from "../src/runtime/pipelineScheduler.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
+import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -31,6 +35,7 @@ const okEnvelope = (
   status: "success",
   summary,
   artifacts,
+  payload: {},
 });
 
 async function waitFor(
@@ -125,10 +130,10 @@ async function prepareProcessPipeline(
   pipelineId: string,
 ) {
   const store = createRunStore({ rootDir: root });
-  const taskPath = path.join(fixtures, "tasks", "sample.yaml");
+  const taskPath = SAMPLE_TASK;
   const taskYaml = await readFile(taskPath, "utf8");
   const task = loadTaskFromYaml(taskYaml, taskPath);
-  const loaded = await loadPipeline(pipelineId, { cwd: fixtures });
+  const loaded = await loadPipeline(pipelinePath(pipelineId), { cwd: fixtures });
   const run = await store.createRun({
     pipelineId: loaded.pipeline.id,
     taskYaml,
@@ -195,6 +200,7 @@ describe("parallel pipeline scheduler process mode", () => {
     release();
     const result = await runPromise;
 
+    expect(result.outcome).toBe("succeeded");
     expect(result.ok).toBe(true);
     expect(launch).toHaveBeenCalledWith(
       expect.objectContaining({ stageId: "design-doc" }),
@@ -248,12 +254,114 @@ describe("parallel pipeline scheduler process mode", () => {
 
     expect(launched).toContain("design-doc");
     expect(launched).toContain("implementation-plan");
-    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("waiting");
+    expect(result.ok).toBe(false);
 
     const detail = await store.readRun(prepared.run.runId);
+    expect(detail.status).toBe("running");
     expect(
       detail.stages.find((s) => s.stage_id === "design-doc")?.status,
     ).toBe("waiting_for_input");
+  });
+
+  it("waiting plus scheduling halt is failed not waiting", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-parallel-halt-wait-"));
+    const { prepared, store } = await prepareProcessPipeline(
+      root,
+      "parallel-after-clarify",
+    );
+
+    const launch = vi.fn(
+      async ({
+        runId,
+        stageId,
+      }: {
+        runId: string;
+        stageId: string;
+      }) => {
+        if (stageId === "design-doc") {
+          await store.appendStageEvent(runId, stageId, {
+            event: "waiting_for_input",
+          });
+          return { type: "waiting" as const };
+        }
+        if (stageId === "implementation-plan") {
+          return { type: "failed" as const, reason: "sibling exploded" };
+        }
+        await store.writeEnvelope(runId, stageId, okEnvelope(stageId));
+        return { type: "succeeded" as const };
+      },
+    );
+    const mockLauncher = { launch } as unknown as StageProcessLauncher;
+
+    const result = await runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 3,
+      executionMode: "process",
+      stageProcessLauncher: mockLauncher,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("sibling exploded");
+  });
+
+  it("process mode succeeded without envelope fails the stage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-no-envelope-"));
+    const { prepared } = await prepareProcessPipeline(
+      root,
+      "parallel-after-clarify",
+    );
+
+    const launch = vi.fn(async () => ({ type: "succeeded" as const }));
+    const mockLauncher = { launch } as unknown as StageProcessLauncher;
+
+    const result = await runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 3,
+      executionMode: "process",
+      stageProcessLauncher: mockLauncher,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBeTruthy();
+  });
+
+  it("resumeRun hasActive early return is waiting not succeeded", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-resume-active-"));
+    const { prepared, store } = await prepareProcessPipeline(
+      root,
+      "parallel-after-clarify",
+    );
+    const runId = prepared.run.runId;
+
+    await store.createStageExecution(runId, "clarify");
+    await store.appendStageEvent(runId, "clarify", { event: "started" });
+    await store.writeEnvelope(runId, "clarify", okEnvelope("clarify"));
+    await store.appendStageEvent(runId, "clarify", { event: "succeeded" });
+
+    await store.createStageExecution(runId, "design-doc");
+    await store.appendStageEvent(runId, "design-doc", { event: "started" });
+    await store.appendStageEvent(runId, "design-doc", {
+      event: "waiting_for_input",
+    });
+
+    await store.createStageExecution(runId, "implementation-plan");
+    await store.appendStageEvent(runId, "implementation-plan", {
+      event: "started",
+    });
+
+    const result = await resumeRun({
+      prepared,
+      maxActiveStagesPerRun: 3,
+      resumeFromStageId: "design-doc",
+      initialPrior: okEnvelope("design-doc"),
+      executionMode: "process",
+    });
+
+    expect(result.outcome).toBe("waiting");
+    expect(result.ok).toBe(false);
   });
 });
 
@@ -289,8 +397,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const runPromise = runPipeline({
       agent: wrapped,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-after-clarify",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-after-clarify"),
       cwd: fixtures,
     });
 
@@ -325,10 +433,10 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const wrapped = {
       openStage(input: StageRunInput) {
         if (input.stage.id === "design-doc") {
+          priors[input.stage.id] = input.priorEnvelope?.summary;
           return createCompletedOnlyStageHandle({
             stageId: input.stage.id,
             run: async () => {
-              priors[input.stage.id] = input.priorEnvelope?.summary;
               await bGate;
               return {
                 ok: true as const,
@@ -358,12 +466,16 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const runPromise = runPipeline({
       agent: wrapped,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-after-clarify",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-after-clarify"),
       cwd: fixtures,
     });
 
-    await waitFor(async () => priors["implementation-plan"] !== undefined);
+    await waitFor(
+      async () =>
+        priors["implementation-plan"] !== undefined &&
+        priors["design-doc"] !== undefined,
+    );
     expect(priors["implementation-plan"]).toBe("ancestor");
     expect(priors["design-doc"]).toBe("ancestor");
 
@@ -396,8 +508,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const runPromise = runPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-five-fork",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-five-fork"),
       cwd: fixtures,
       maxActiveStagesPerRun: 3,
     });
@@ -467,8 +579,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const runPromise = runPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-after-clarify",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-after-clarify"),
       cwd: fixtures,
     });
 
@@ -481,7 +593,9 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
 
     releaseC();
     const result = await runPromise;
+    expect(result.outcome).toBe("failed");
     expect(result.ok).toBe(false);
+    expect(result.reason).toBe("branch-b failed");
 
     const runId = result.runId;
     await expect(store.readEnvelope(runId, "clarify")).resolves.toBeDefined();
@@ -546,8 +660,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "parallel-hitl-fork",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: pipelinePath("parallel-hitl-fork"),
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -600,8 +714,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const runPromise = runPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-five-fork",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-five-fork"),
       cwd: fixtures,
       maxActiveStagesPerRun: 2,
     });

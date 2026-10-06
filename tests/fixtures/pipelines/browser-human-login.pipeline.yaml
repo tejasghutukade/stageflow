@@ -1,0 +1,71 @@
+id: browser-human-login
+stages:
+  - id: check
+    entry: true
+    system_prompt: Report the Host login check result.
+    model: test/model
+    browser:
+      profile: acct
+      headed: false
+      check:
+        url: https://app.example.test/home
+        logged_in_url: https://app.example.test/home*
+        logged_out_url: [https://app.example.test/login*]
+    route:
+      - to: login
+        if:
+          field: logged_in
+          op: eq
+          value: false
+      - to: work
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [logged_in, url]
+          properties:
+            logged_in:
+              type: boolean
+            url:
+              type: string
+  - id: login
+    system_prompt: Ask the operator to log in.
+    model: test/model
+    gate_kinds: [confirm]
+    browser:
+      profile: acct
+      login_url: https://app.example.test/login
+      check:
+        url: https://app.example.test/home
+        logged_in_url: https://app.example.test/home*
+        logged_out_url: [https://app.example.test/login*]
+    verify:
+      - id: logged-in
+        type: browser_login
+    on_verify_fail:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+    route:
+      - to: work
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: work
+    system_prompt: Do the work.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

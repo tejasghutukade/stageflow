@@ -1,0 +1,218 @@
+# OSS issue contribution pipeline
+
+Use a real upstream issue to demonstrate Stageflow's strongest runtime features:
+evidence-preserving stages, parallel investigation, explicit handoffs, human
+approval, one controlled writer, independent verification, parallel review, and
+a final publication gate.
+
+The pipeline is repository-neutral. Point the task's `checkout` at a dedicated,
+clean branch in Mastra, Pydantic AI, or another project. It reads that project's
+own contribution instructions before acting.
+
+This catalog is **route-wired** (`entry` / `route` / multiple `to:`). Investigation
+and review are parallel DAG fan-out, not a sealed
+[Clone Chain](../../docs/yaml-catalog.md#clone-chain) (emitter → clone child → Join).
+One Clone Instance per investigation or review item remains intended future
+wiring; author that shape from
+[`tests/fixtures/pipelines/clone-chain-*.pipeline.yaml`](../../tests/fixtures/pipelines/).
+
+## Flow
+
+1. Capture the issue, repository baseline, and contribution rules.
+2. In parallel with reproduction, write a ce-explain HTML teaching artifact for the issue (no HITL).
+3. Reproduce the failure without editing tracked files.
+4. Intended Clone Chain: one Clone Instance per investigation item (parallel).
+5. Join the evidence into an implementation plan and ask for approval.
+6. Write the regression test in its own short stage, then implement the fix
+   and drive the plan's full validation command list to green in one
+   session — the only stage that can edit the checkout owns the whole
+   fix-and-validate loop, rather than handing an unfinished fix to a
+   read-only stage that could only report the gap.
+7. Independently verify the diff and relevant tests.
+8. In parallel with review planning, write a ce-explain HTML teaching artifact for the verified fix (no HITL).
+9. Intended Clone Chain: one Clone Instance per focused review (parallel).
+10. Address every blocking review finding in one fixup stage — sweeping for
+    every instance of the same category of problem, not only the ones
+    reviewers happened to cite. This catalog stays a DAG (parallel fan-out
+    via multiple `to:`); it does not declare `{ type: loop }` back to
+    oss-implement-source-fix or a second review pass.
+11. Join into a PR-ready package, ask for final approval, and — once the
+    operator accepts — push the branch and open the pull request against the
+    fork in that same stage.
+
+No stage ever targets the upstream repo, and no stage before the final one
+commits, pushes, or opens a pull request. `oss-approve-contribution` writes
+`contribution-package.md`, calls `ask_operator`, and only runs `git`/`gh`
+against the fork after an explicit accept through its `artifact_backed` gate.
+There is no separate publish flag or dry-run mode: the operator's accept is
+the only gate between "package written" and "PR opened."
+
+## Runtime contracts
+
+Several stages opt into Stageflow runtime contracts that make the pipeline fail
+closed when a stage skips its deliverable.
+
+Every stage except the two approval stages declares `gate_kinds: []`, which
+unregisters the `ask_operator` tool entirely. Those stages cannot pause for
+operator input or offer to substitute a report for real work. Only
+`oss-approve-plan` and `oss-approve-contribution` keep
+`gate_kinds: [artifact_backed]`.
+
+### Review feedback has no loop in this catalog
+
+Loops exist via `{ type: loop }` on `route` (see
+[`examples/feedback-loop/`](../feedback-loop/)). This pipeline does not use
+one: it stays a DAG with parallel fan-out via multiple `to:`. If
+`oss-review-change` finds a blocking problem, the run does not resume
+`oss-implement-source-fix` or `oss-verify-fix`. `oss-address-review-feedback`
+is the accommodation: a single fixup stage after review and before approval
+that addresses every blocking finding — sweeping for other instances of the
+same category of problem, not only the ones a reviewer happened to cite — then
+hands off to `oss-approve-contribution`, which independently re-checks the
+fix before accepting it. It cannot get a fresh review of its own fix,
+though: if its patch introduces something new, `oss-approve-contribution`'s
+fail-closed check is the backstop, and the operator has to intervene by hand —
+see [docs/cli-reference.md](../../docs/cli-reference.md) for `sf runs retry`,
+which can retry a succeeded stage in place and reset everything downstream.
+
+Every stage declares `verify` with at least one `type: artifact` check, so a
+success emit is rejected unless the named file appears in the envelope's
+artifact list. Writer stages add `type: checkout_changes` with `path_fields`;
+approval stages also declare a `type: gate` check (`kind: artifact_backed`).
+Pipeline entries wire `on_verify_fail` (repair for most stages; `manual` on
+`oss-approve-contribution`) so after-phase failures retry or wait for an
+operator instead of silently advancing.
+
+| Stage | Gate | Required artifacts | Other checks |
+|-------|------|--------------------|--------------|
+| `oss-issue-intake` | `[]` | `issue-intake.md` | — |
+| `oss-explain-issue` | `[]` | `issue-explainer.html` | — |
+| `oss-reproduce-issue` | `[]` | `reproduction.md` | — |
+| `oss-plan-investigation` | `[]` | `investigation-map.md` | intended Clone Chain emitter |
+| `oss-investigate-area` | `[]` | `investigation.md` | intended clone child |
+| `oss-approve-plan` | `[artifact_backed]` | `implementation-plan.md` | — |
+| `oss-write-regression-test` | `[]` | `regression-test-report.md` | `[test_files]` |
+| `oss-implement-source-fix` | `[]` | `implementation-report.md` | `[changed_files]` |
+| `oss-verify-fix` | `[]` | `verification.md` | — |
+| `oss-explain-fix` | `[]` | `fix-explainer.html` | — |
+| `oss-plan-review` | `[]` | `review-plan.md` | intended Clone Chain emitter |
+| `oss-review-change` | `[]` | `review.md` | intended clone child |
+| `oss-address-review-feedback` | `[]` | `review-feedback-report.md` | — |
+| `oss-approve-contribution` | `[artifact_backed]` | `contribution-package.md`, `pull-request.md` | — |
+
+Intended Clone Chains: `oss-plan-investigation` → `oss-investigate-area` → `oss-approve-plan`, and `oss-plan-review` → `oss-review-change` → join at address/approve. This directory's YAML is not yet that shape. See [YAML catalog — Clone Chain](../../docs/yaml-catalog.md#clone-chain).
+
+`oss-investigate-area` and `oss-review-change` use empty `io.input` (a subset of each parent's `io.output`). Assignment fields (`area_id`/`objective`/`paths`/`questions`/`constraints` or the review equivalent) belong on intended Clone Chain payloads, not this DAG.
+
+Plan approval (`oss-approve-plan`) and contribution approval
+(`oss-approve-contribution`) use `artifact_backed` HITL and cannot self-approve;
+the runtime checks the QA trail before accepting a success emit.
+
+`oss-write-regression-test` and `oss-implement-source-fix` require an array
+field (`test_files` or `changed_files`) with `minItems: 1` on `io.output.schema`.
+That constraint only checks the array is non-empty — it does not verify the
+entries are real edits in the checkout, and a Stageflow artifact path satisfies
+it. A run that never touched the checkout has passed this way before.
+
+Both writer stages therefore also declare a `verify` check of
+`type: checkout_changes` with `path_fields` naming that array field, so the
+runtime enforces after the stage what the prompts alone could not:
+
+- `type: checkout_changes` rejects a success outcome when
+  `git status --porcelain` in the bound task checkout is empty.
+- `path_fields: [changed_files]` (or `[test_files]`) rejects a success outcome
+  when any listed entry is not a path inside the checkout — including the
+  `stages/<id>/attempts/<n>/artifacts/...` paths returned by
+  `write_stage_artifact`.
+
+Stageflow is a configurable-stage runtime. These contracts are opt-in per
+catalog; this example is one consumer that uses them to enforce a strict
+contribution workflow.
+
+## Explainers
+
+The two explainer stages are dead-end siblings: they do not pause investigation,
+implementation, or review, and they do not call `ask_operator`. Each composes a
+ce-explain HTML teaching artifact — concept for the issue, diff for the verified
+fix — grounded in quoted checkout source and an inline SVG, written with
+`write_stage_artifact`. Open `issue-explainer.html` and `fix-explainer.html`
+from the run artifacts when you want them. They require the `ce-explain` skill
+at `.pi/skills/ce-explain/` (copy the skill tree from Compound Engineering;
+`sf skills install` expects a doctor binary this skill does not ship).
+
+## Prepare the target repository
+
+Use a dedicated branch and begin with a clean tracked worktree:
+
+```bash
+git clone https://github.com/mastra-ai/mastra.git
+cd mastra
+git switch -c investigate-22863
+git status --short
+```
+
+## Create a task outside the target checkout
+
+Task context is the pipeline's portable issue input. Include the issue body or
+acceptance criteria so the run remains useful if GitHub access is unavailable.
+
+```yaml
+id: mastra-22863
+goal: >
+  Deliver a verified minimal fix for Mastra issue #22863, applied as source and
+  test edits in the checkout working tree.
+context: |
+  Issue: https://github.com/mastra-ai/mastra/issues/22863
+  Title: <copy the current issue title>
+  Reported behavior: <copy or summarize the concrete failure>
+  Expected behavior: <copy or summarize the acceptance criterion>
+  Current triage/maintainer status: <record what you verified today>
+constraints: |
+  Respect all repository contribution and agent instructions.
+  Do not publish while the issue is awaiting maintainer direction.
+  Do not commit, push, or open a pull request.
+  Keep the change limited to the reproduced issue and its regression test.
+checkout: /absolute/path/to/mastra
+```
+
+For Pydantic AI, use the same shape with a Pydantic issue and set `checkout` to
+the absolute path of that clone. A ready task for issue #7971 is
+`pydantic-ai-7971.task.yaml`. The stage definitions do not need to change.
+
+## Run
+
+From any directory with Stageflow installed:
+
+```bash
+sf validate \
+  --pipeline /path/to/stageflow/examples/oss-issue-contribution/oss-issue-contribution.pipeline.yaml \
+  --strict
+
+sf run \
+  --pipeline /path/to/stageflow/examples/oss-issue-contribution/oss-issue-contribution.pipeline.yaml \
+  --task /path/to/mastra-22863.task.yaml
+```
+
+`oss-approve-contribution` pushes and opens the pull request against the fork
+as soon as the operator accepts its `artifact_backed` gate — there is no
+dry-run mode and no extra flag. `gh` must be on `PATH` and authenticated
+(`GH_TOKEN` or `GITHUB_TOKEN`) before you accept, or the publish step will
+fail after approval.
+
+Run `sf ui` in another terminal to inspect envelopes, artifacts, Clone Instances,
+and answer the two artifact-backed gates. The explainer HTML files are ordinary
+stage artifacts; they do not appear as gates.
+
+## Safety and interpretation
+
+- Plan approval authorizes only local edits in the task checkout.
+- Review Clone Instances always complete successfully and carry `pass` or
+  `changes_required` in their payload, allowing the Join to see every review.
+- Any blocking review fails the final stage closed.
+- The operator's accept through `oss-approve-contribution`'s `artifact_backed`
+  gate is the only authorization to publish, and it happens moments before the
+  stage runs `git push` / `gh pr create` in the same session — there is no
+  separate flag and no second chance to reconsider after accepting. It never
+  authorizes targeting upstream.
+- Issue labels, assignments, and maintainer guidance can change. Re-verify them
+  before accepting the gate on a run that will open a pull request.

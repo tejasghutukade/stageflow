@@ -1,0 +1,21 @@
+id: parallel-five-fork
+stages:
+  - id: clarify
+    entry: true
+    route:
+      - to: parallel-branch-a
+      - to: parallel-branch-b
+      - to: parallel-branch-c
+      - to: parallel-branch-d
+      - to: parallel-branch-e
+    uses: ../stages/clarify.yaml
+  - id: parallel-branch-a
+    uses: ../stages/parallel-branch-a.yaml
+  - id: parallel-branch-b
+    uses: ../stages/parallel-branch-b.yaml
+  - id: parallel-branch-c
+    uses: ../stages/parallel-branch-c.yaml
+  - id: parallel-branch-d
+    uses: ../stages/parallel-branch-d.yaml
+  - id: parallel-branch-e
+    uses: ../stages/parallel-branch-e.yaml

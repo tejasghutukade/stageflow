@@ -9,14 +9,19 @@ export function readinessDetail(input: {
   const { readiness, blocked_by, status } = input;
 
   if (readiness === "blocked") {
-    const blocker = blocked_by?.[0];
-    return blocker ? `Blocked on ${blocker}` : "Blocked";
+    return blocked_by?.length
+      ? `Blocked on ${blocked_by.join(", ")}`
+      : "Blocked";
   }
   if (readiness === "skipped") return "Skipped";
   if (readiness === "ready") return "Ready";
   if (readiness === "waiting" && status === "waiting_for_input") {
     return undefined;
   }
+  if (readiness === "interrupted" && status === "interrupted") {
+    return undefined;
+  }
+  if (readiness === "interrupted") return statusCopy("interrupted");
   if (readiness === "succeeded") return statusCopy("succeeded");
   if (readiness === "failed") return statusCopy("failed");
   if (readiness === "running") return statusCopy("running");

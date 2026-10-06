@@ -241,9 +241,9 @@ describe("attachment worker IPC", () => {
     try {
       await mkdir(path.join(root, "pipelines"));
       await mkdir(path.join(root, "stages"));
-      await writeFile(path.join(root, "pipelines", "notify.yaml"), "id: notify\nstages: [notify]\n");
-      await writeFile(path.join(root, "stages", "notify.yaml"), `id: notify\nmodel: model\nsystem_prompt: notify\nemail:\n  - accountId: ${account.accountId}\n    operations: [send, downloadAttachment]\n`);
-      const loaded = await loadPipeline("notify", { cwd: root });
+      await writeFile(path.join(root, "pipelines", "notify.pipeline.yaml"), "id: notify\nstages:\n  - id: notify\n    uses: ../stages/notify.yaml\n    entry: true\n");
+      await writeFile(path.join(root, "stages", "notify.yaml"), `id: notify\nmodel: model\nsystem_prompt: notify\nemail:\n  - accountId: ${account.accountId}\n    operations: [send, downloadAttachment]\nio:\n  input:\n    schema: { type: object }\n  output:\n    schema: { type: object }\n`);
+      const loaded = await loadPipeline("pipelines/notify.pipeline.yaml", { cwd: root });
       const store = createRunStore({ rootDir: root });
       const run = await store.createRun({ pipelineId: "notify", taskYaml: "id: report\ngoal: Share report\n" });
       const artifact = "stages/notify/attempts/1/artifacts/report.bin";

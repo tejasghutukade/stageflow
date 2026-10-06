@@ -176,6 +176,23 @@ describe("catalog views", () => {
     ).toEqual(["newer", "older"]);
   });
 
+  it("per-pipeline view matches stored pipeline_path locators", () => {
+    const pipeline = {
+      path: "pipelines/demo.pipeline.yaml",
+      id: "demo",
+      stages: [],
+    };
+    const run = summary({
+      run_id: "adhoc",
+      pipeline_id: "other",
+      pipeline_path: "/repo/pipelines/demo.pipeline.yaml",
+      project_root: "/repo",
+    });
+    expect(runsForPipelineView(snapshot([run]), pipeline).map((r) => r.run_id)).toEqual([
+      "adhoc",
+    ]);
+  });
+
   it("empty listing yields five empty views and a capacity view that renders without health", () => {
     const empty = snapshot([]);
     expect(waitingView(empty)).toEqual([]);

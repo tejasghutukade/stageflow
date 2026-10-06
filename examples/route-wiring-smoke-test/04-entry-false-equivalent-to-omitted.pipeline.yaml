@@ -1,0 +1,27 @@
+id: route-demo-entry-false
+stages:
+  - id: draft
+    entry: false
+    system_prompt: |
+      Write one sentence as a standalone stage explicitly marked entry false.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: review
+    system_prompt: |
+      Write one sentence as another independent stage.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

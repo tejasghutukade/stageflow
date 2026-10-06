@@ -1,28 +1,102 @@
-import { readdir } from "node:fs/promises";
 import path from "node:path";
-import { loadPipelineOutcome, loadPipelineValidated } from "./loadPipeline.js";
+import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
+import type { TriggerFile } from "../types/trigger.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  INLINE_PIPELINE_PATH,
+  loadPipelineFromObjectOutcome,
+  loadPipelineOutcome,
+  resolvePipelinePath,
+} from "./loadPipeline.js";
 import type { LoadIssue } from "./loadOutcome.js";
 import { loadStageOutcome } from "./loadStage.js";
+import { loadTaskOutcome } from "./loadTask.js";
+import { loadTriggerOutcome } from "./loadTrigger.js";
 import { readYamlObject } from "./readYamlObject.js";
-import { extractPipelineStageIds } from "./resolvePipelineDag.js";
+import { resolveCatalogContext } from "./resolveCatalogContext.js";
+import { getCatalogScanPaths } from "./browseCatalog.js";
+import { manifestPathForProject } from "./loadStageflowManifest.js";
+import {
+  MCP_CATALOG_FILENAME,
+  StageMcpError,
+  assertMcpAllowlistKnown,
+  loadMcpCatalog,
+  mcpCatalogPath,
+} from "./resolveStageMcpServers.js";
+import { loadSecretRegistry } from "../runtime/stageSecrets.js";
+import { isForeverDeniedSecret } from "../runtime/stageEnvironment.js";
+import { findMissingMcpCommands } from "../preflight/mcpCommands.js";
 
 export type ValidationSeverity = "error" | "warning";
 
-export type ValidationCategory = "pipeline" | "stage" | "catalog";
+export type ValidationCategory = "pipeline" | "stage" | "catalog" | "task" | "trigger";
 
 export type ValidationFindingCode =
   | "pipeline.invalid_shape"
   | "pipeline.dag_error"
   | "pipeline.missing_stage"
   | "pipeline.load_error"
+  | "pipeline.string_stage_ref"
+  | "pipeline.stage_uses_inline_conflict"
+  | "pipeline.stage_missing_body"
+  | "pipeline.stage_id_mismatch"
+  | "pipeline.invalid_completion"
+  | "catalog.path_case_mismatch"
+  | "pipeline.invalid_recovery"
+  | "pipeline.include_cycle"
+  | "pipeline.include_invalid"
+  | "pipeline.include_duplicate_stage"
+  | "pipeline.invalid_agent"
+  | "pipeline.invalid_model"
+  | "pipeline.invalid_verify"
+  | "pipeline.io_incompatible"
+  | "pipeline.model_applies"
+  | "pipeline.route_if_invalid"
+  | "pipeline.route_all_gated"
+  | "pipeline.invalid_requires"
+  | "pipeline.requires_conflict"
   | "stage.invalid_shape"
+  | "stage.invalid_model"
+  | "stage.missing_model"
   | "stage.invalid_payload_schema"
+  | "stage.invalid_clone_input_schema"
+  | "stage.unresolved_schema_ref"
+  | "stage.invalid_clone_actions"
   | "stage.invalid_gate_kinds"
+  | "stage.invalid_pre_emit_checks"
+  | "stage.invalid_timeout_ms"
   | "stage.invalid_skill"
+  | "stage.invalid_mcp"
+  | "stage.invalid_browser"
+  | "stage.invalid_secrets"
+  | "stage.unknown_secret"
+  | "stage.denied_secret"
+  | "stage.invalid_requires"
+  | "stage.invalid_agent"
+  | "stage.invalid_io"
   | "stage.load_error"
   | "stage.id_filename_mismatch"
+  | "task.invalid_shape"
+  | "task.load_error"
+  | "task.entry_input_unmet"
+  | "task.binding_conflict"
+  | "task.repository_ref_required"
+  | "task.ref_without_repository"
+  | "task.repository_invalid"
+  | "trigger.invalid_shape"
+  | "trigger.load_error"
+  | "trigger.unknown_pipeline"
+  | "trigger.unknown_task"
   | "catalog.duplicate_pipeline_id"
-  | "catalog.orphan_stage";
+  | "catalog.manifest_missing"
+  | "catalog.manifest_invalid"
+  | "catalog.empty_catalog"
+  | "catalog.manifest_load_error"
+  | "catalog.invalid_mcp"
+  | "catalog.mcp_command_missing"
+  | "catalog.mixed_yaml_dialect"
+  | "catalog.legacy_yaml"
+  | "catalog.stageflow_home_absolute_path";
 
 export type ValidationFinding = {
   severity: ValidationSeverity;
@@ -34,13 +108,15 @@ export type ValidationFinding = {
   stageId?: string;
 };
 
-export type ValidationScope = "full" | "pipeline";
+export type ValidationScope = "full" | "pipeline" | "task" | "trigger";
 
 export type ValidateCatalogOptions = {
   cwd?: string;
-  stagesDir?: string;
+  projectRoot?: string;
   scope: ValidationScope;
   pipeline?: string;
+  task?: string;
+  trigger?: string;
   strict?: boolean;
 };
 
@@ -52,8 +128,13 @@ export type ValidationResult = {
 };
 
 export function relPath(cwd: string, absPath: string): string {
-  return path.relative(cwd, absPath);
+  return path.relative(cwd, absPath).replace(/\\/g, "/");
 }
+
+const STRICT_CATALOG_WARNINGS = new Set<string>([
+  "catalog.manifest_missing",
+  "catalog.empty_catalog",
+]);
 
 const SEVERITY_RANK: Record<ValidationSeverity, number> = {
   error: 0,
@@ -79,7 +160,7 @@ export function effectiveSeverity(
   if (
     strict &&
     finding.severity === "warning" &&
-    finding.code === "catalog.orphan_stage"
+    STRICT_CATALOG_WARNINGS.has(finding.code)
   ) {
     return "error";
   }
@@ -119,6 +200,7 @@ type FindingBase = {
   category: ValidationCategory;
   pipelineId?: string;
   stageId?: string;
+  severity?: ValidationSeverity;
 };
 
 function baseFinding(fields: FindingBase, severity: ValidationSeverity): ValidationFinding {
@@ -139,6 +221,7 @@ function findingPipelineError(
   message: string,
   code: ValidationFindingCode,
   pipelineId?: string,
+  stageId?: string,
 ): ValidationFinding {
   return baseFinding(
     {
@@ -148,6 +231,7 @@ function findingPipelineError(
       code,
       category: "pipeline",
       pipelineId,
+      stageId,
     },
     "error",
   );
@@ -173,6 +257,61 @@ function findingStageError(
   );
 }
 
+function findingTaskError(
+  cwd: string,
+  absPath: string,
+  message: string,
+  code: ValidationFindingCode,
+): ValidationFinding {
+  return baseFinding(
+    {
+      cwd,
+      absPath,
+      message,
+      code,
+      category: "task",
+    },
+    "error",
+  );
+}
+
+function findingTriggerError(
+  cwd: string,
+  absPath: string,
+  message: string,
+  code: ValidationFindingCode,
+): ValidationFinding {
+  return baseFinding(
+    {
+      cwd,
+      absPath,
+      message,
+      code,
+      category: "trigger",
+    },
+    "error",
+  );
+}
+
+function findingCatalog(
+  cwd: string,
+  absPath: string,
+  message: string,
+  code: ValidationFindingCode,
+  severity: ValidationSeverity,
+): ValidationFinding {
+  return baseFinding(
+    {
+      cwd,
+      absPath,
+      message,
+      code,
+      category: "catalog",
+    },
+    severity,
+  );
+}
+
 export function findingsFromLoadIssues(
   cwd: string,
   absPath: string,
@@ -180,20 +319,73 @@ export function findingsFromLoadIssues(
 ): ValidationFinding[] {
   return issues.flatMap((issue) => {
     if (issue.category === "pipeline") {
+      if (issue.code === "pipeline.model_applies" || issue.code === "pipeline.route_all_gated") {
+        return [
+          baseFinding(
+            {
+              cwd,
+              absPath,
+              message: issue.message,
+              code: issue.code,
+              category: "pipeline",
+              pipelineId: issue.pipelineId,
+              stageId: issue.stageId,
+            },
+            "warning",
+          ),
+        ];
+      }
       return [
         findingPipelineError(
           cwd,
           absPath,
           issue.message,
-          issue.code,
+          issue.code as ValidationFindingCode,
           issue.pipelineId,
+          issue.stageId,
         ),
       ];
     }
     if (issue.category === "stage") {
       return [
-        findingStageError(cwd, absPath, issue.message, issue.code, issue.stageId),
+        findingStageError(
+          cwd,
+          absPath,
+          issue.message,
+          issue.code as ValidationFindingCode,
+          issue.stageId,
+        ),
       ];
+    }
+    if (issue.category === "task") {
+      return [
+        findingTaskError(
+          cwd,
+          absPath,
+          issue.message,
+          issue.code as ValidationFindingCode,
+        ),
+      ];
+    }
+    if (issue.category === "trigger") {
+      return [
+        findingTriggerError(
+          cwd,
+          absPath,
+          issue.message,
+          issue.code as ValidationFindingCode,
+        ),
+      ];
+    }
+    if (issue.category === "catalog") {
+      const code = issue.code as ValidationFindingCode;
+      const severity =
+        code === "catalog.manifest_missing" ||
+        code === "catalog.empty_catalog" ||
+        code === "catalog.legacy_yaml"
+          ? "warning"
+          : "error";
+      return [findingCatalog(cwd, absPath, issue.message, code, severity)];
     }
     return [];
   });
@@ -218,55 +410,37 @@ export function findingStageIdFilenameMismatch(
   );
 }
 
-function findingCatalogDuplicatePipelineId(
+/** Parent readdir case check — warn by default; error under --strict. */
+export async function findingPathCaseMismatch(
   cwd: string,
-  absPath: string,
-  pipelineId: string,
-  conflictingPaths: string[],
-): ValidationFinding {
-  const relConflicts = conflictingPaths.map((p) => relPath(cwd, p));
+  referencedPath: string,
+): Promise<ValidationFinding | null> {
+  const { readdir } = await import("node:fs/promises");
+  const abs = path.isAbsolute(referencedPath)
+    ? referencedPath
+    : path.resolve(cwd, referencedPath);
+  const parent = path.dirname(abs);
+  const base = path.basename(abs);
+  let entries: string[];
+  try {
+    entries = await readdir(parent);
+  } catch {
+    return null;
+  }
+  const exact = entries.includes(base);
+  if (exact) return null;
+  const match = entries.find((e) => e.toLowerCase() === base.toLowerCase());
+  if (match === undefined) return null;
   return baseFinding(
     {
       cwd,
-      absPath,
-      message: `Duplicate pipeline id "${pipelineId}" declared in: ${relConflicts.join(", ")}`,
-      code: "catalog.duplicate_pipeline_id",
+      absPath: abs,
+      message: `Path casing differs on disk: referenced "${base}" but found "${match}"`,
+      code: "catalog.path_case_mismatch",
       category: "catalog",
-      pipelineId,
-    },
-    "error",
-  );
-}
-
-function findingCatalogOrphanStage(
-  cwd: string,
-  absPath: string,
-  stageId: string,
-): ValidationFinding {
-  return baseFinding(
-    {
-      cwd,
-      absPath,
-      message: `Stage "${stageId}" is not referenced by any pipeline`,
-      code: "catalog.orphan_stage",
-      category: "catalog",
-      stageId,
     },
     "warning",
   );
-}
-
-async function listYamlFiles(dir: string): Promise<string[]> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".yaml"))
-    .map((entry) => path.join(dir, entry.name))
-    .sort((a, b) => a.localeCompare(b));
 }
 
 async function checkStageIdFilename(
@@ -313,68 +487,393 @@ async function validateStageFile(
   return findings;
 }
 
-type PipelineValidationResult = {
-  findings: ValidationFinding[];
-  pipelineId?: string;
-  referencedStageIds: Set<string>;
-};
-
-async function validatePipelineFile(
-  pipelinePath: string,
-  options: { cwd: string; stagesDir: string; validateStages: boolean },
-): Promise<PipelineValidationResult> {
-  const { cwd, stagesDir, validateStages } = options;
-  const findings: ValidationFinding[] = [];
-  const referencedStageIds = new Set<string>();
-
-  let pipelineId: string | undefined;
-  try {
-    const raw = await readYamlObject(pipelinePath);
-    if (typeof raw?.id === "string") {
-      pipelineId = raw.id;
-      if (Array.isArray(raw.stages)) {
-        const stageIds = extractPipelineStageIds(raw.stages);
-        if (stageIds) {
-          for (const stageId of stageIds) {
-            referencedStageIds.add(stageId);
-          }
-        }
-      }
-    }
-  } catch {
-    // loadPipelineOutcome will report read errors
-  }
-
-  const outcome = await loadPipelineOutcome(pipelinePath, { cwd, stagesDir });
-  if (!outcome.ok) {
-    findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
-    if (validateStages) {
-      for (const stageId of referencedStageIds) {
-        const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-        findings.push(...(await validateStageFile(cwd, stagePath)));
-      }
-    }
-    return { findings, pipelineId, referencedStageIds };
-  }
-
-  for (const stageId of outcome.value.pipeline.stages) {
-    referencedStageIds.add(stageId);
-    if (validateStages) {
-      const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-      findings.push(...(await validateStageFile(cwd, stagePath)));
+function collectMcpAllowlistNames(loaded: LoadedPipeline): string[] {
+  const names = new Set<string>();
+  for (const stage of loaded.stages) {
+    for (const name of stage.mcp ?? []) {
+      names.add(name);
     }
   }
-
-  return { findings, pipelineId: outcome.value.pipeline.id, referencedStageIds };
+  return [...names];
 }
 
-async function collectPipelineIds(
-  pipelinesDir: string,
+function findingsForStageSecrets(
+  cwd: string,
+  pipelinePath: string,
+  loaded: LoadedPipeline,
+): ValidationFinding[] {
+  const registry = loadSecretRegistry(process.env);
+  const findings: ValidationFinding[] = [];
+  for (const stage of loaded.stages) {
+    for (const decl of stage.secrets ?? []) {
+      if (isForeverDeniedSecret(decl.name)) {
+        findings.push(
+          findingStageError(
+            cwd,
+            pipelinePath,
+            `secret "${decl.name}" is permanently denied and cannot be granted`,
+            "stage.denied_secret",
+            stage.id,
+          ),
+        );
+        continue;
+      }
+      if (!registry.has(decl.name)) {
+        findings.push(
+          findingStageError(
+            cwd,
+            pipelinePath,
+            `unknown secret "${decl.name}" is not in the Host secret registry`,
+            "stage.unknown_secret",
+            stage.id,
+          ),
+        );
+      }
+    }
+  }
+  return findings;
+}
+
+const ABSOLUTE_PATH_IN_TEXT_RE =
+  /(?:^|[\s"'`=:(])(\/(?:[^\s"'`;|&<>()]+))/g;
+
+const TRAILING_PATH_PUNCT_RE = /[.,:;!?)\]]+$/;
+
+export function collectAbsolutePathCandidates(text: string): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  ABSOLUTE_PATH_IN_TEXT_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = ABSOLUTE_PATH_IN_TEXT_RE.exec(text)) !== null) {
+    const raw = match[1]?.replace(TRAILING_PATH_PUNCT_RE, "") ?? "";
+    if (!raw || !path.isAbsolute(raw) || seen.has(raw)) continue;
+    seen.add(raw);
+    found.push(raw);
+  }
+  return found;
+}
+
+export function isPathUnderStageflowHome(candidate: string, home: string): boolean {
+  if (!path.isAbsolute(candidate)) return false;
+  const resolved = path.resolve(candidate);
+  const homeResolved = path.resolve(home);
+  return (
+    resolved === homeResolved || resolved.startsWith(`${homeResolved}${path.sep}`)
+  );
+}
+
+function stageSourcePath(loaded: LoadedPipeline, stageId: string): string {
+  const source = loaded.stageSources?.[stageId];
+  if (source?.kind === "file") return source.path;
+  return loaded.pipelinePath;
+}
+
+function stageflowHomeAbsolutePathMessage(
+  stageId: string,
+  location: string,
+  absolutePath: string,
+): string {
+  return (
+    `Stage "${stageId}" ${location} contains absolute path under STAGEFLOW_HOME ` +
+    `("${absolutePath}"). Use STAGEFLOW_CHECKOUT / STAGEFLOW_RUN_WORKSPACE ` +
+    `(and related binding env vars) instead of durable-home paths`
+  );
+}
+
+function findingsForStageflowHomeAbsolutePaths(
+  cwd: string,
+  loaded: LoadedPipeline,
+): ValidationFinding[] {
+  const home = globalStageflowHome();
+  const findings: ValidationFinding[] = [];
+  const seen = new Set<string>();
+
+  const pushFinding = (
+    stageId: string,
+    absPath: string,
+    location: string,
+    absolutePath: string,
+  ): void => {
+    const key = `${stageId}\0${location}\0${absolutePath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    findings.push(
+      baseFinding(
+        {
+          cwd,
+          absPath,
+          message: stageflowHomeAbsolutePathMessage(stageId, location, absolutePath),
+          code: "catalog.stageflow_home_absolute_path",
+          category: "catalog",
+          pipelineId: loaded.pipeline.id,
+          stageId,
+        },
+        "error",
+      ),
+    );
+  };
+
+  const scanText = (
+    stageId: string,
+    absPath: string,
+    location: string,
+    text: string,
+  ): void => {
+    for (const candidate of collectAbsolutePathCandidates(text)) {
+      if (isPathUnderStageflowHome(candidate, home)) {
+        pushFinding(stageId, absPath, location, candidate);
+      }
+    }
+  };
+
+  for (const stage of loaded.stages) {
+    const absPath = stageSourcePath(loaded, stage.id);
+    scanText(stage.id, absPath, "system_prompt", stage.system_prompt);
+  }
+
+  for (const node of loaded.dag.nodes) {
+    const checks = node.completion?.checks ?? [];
+    for (const check of checks) {
+      if (check.type !== "command") continue;
+      const absPath = stageSourcePath(loaded, node.id);
+      scanText(node.id, absPath, `verify command "${check.id}" run`, check.run);
+      if (typeof check.cwd === "string") {
+        scanText(node.id, absPath, `verify command "${check.id}" cwd`, check.cwd);
+      }
+    }
+  }
+
+  return findings;
+}
+
+async function findingsForStageMcpCatalog(
+  cwd: string,
+  loaded: LoadedPipeline,
+): Promise<ValidationFinding[]> {
+  const allowlist = collectMcpAllowlistNames(loaded);
+  const ctx = await resolveCatalogContext(cwd);
+  const projectRoot = ctx.projectRoot;
+  const catalogAbsPath = projectRoot
+    ? mcpCatalogPath(projectRoot)
+    : path.resolve(cwd, MCP_CATALOG_FILENAME);
+
+  if (!projectRoot) {
+    if (allowlist.length === 0) return [];
+    return [
+      findingCatalog(
+        cwd,
+        catalogAbsPath,
+        `MCP catalog "${MCP_CATALOG_FILENAME}" is missing`,
+        "catalog.invalid_mcp",
+        "error",
+      ),
+    ];
+  }
+
+  let catalog;
+  try {
+    catalog = await loadMcpCatalog(projectRoot);
+  } catch (err) {
+    if (!(err instanceof StageMcpError)) throw err;
+    if (err.code === "missing_catalog" && allowlist.length === 0) return [];
+    return [
+      findingCatalog(cwd, catalogAbsPath, err.message, "catalog.invalid_mcp", "error"),
+    ];
+  }
+
+  try {
+    assertMcpAllowlistKnown(catalog.servers, allowlist);
+  } catch (err) {
+    if (err instanceof StageMcpError) {
+      return [
+        findingCatalog(cwd, catalogAbsPath, err.message, "catalog.invalid_mcp", "error"),
+      ];
+    }
+    throw err;
+  }
+
+  const findings: ValidationFinding[] = [];
+  const serversForPath: Record<string, { command?: string }> = {};
+  for (const name of allowlist) {
+    const entry = catalog.servers[name] as { command?: string } | undefined;
+    if (entry) serversForPath[name] = entry;
+  }
+  for (const missing of findMissingMcpCommands(serversForPath, process.env)) {
+    findings.push(
+      findingCatalog(
+        cwd,
+        catalogAbsPath,
+        `MCP server "${missing.serverName}" command "${missing.command}" was not found on PATH`,
+        "catalog.mcp_command_missing",
+        "error",
+      ),
+    );
+  }
+  return findings;
+}
+
+type PipelineValidationCoreResult =
+  | { ok: true; loaded: LoadedPipeline; findings: ValidationFinding[] }
+  | { ok: false; findings: ValidationFinding[] };
+
+async function runPipelineValidation(
+  nameOrPath: string | InlinePipelineDefinition,
+  options: { cwd: string; projectRoot?: string; validateStages: boolean },
+): Promise<PipelineValidationCoreResult> {
+  const { cwd, validateStages } = options;
+  const projectRoot = options.projectRoot ?? cwd;
+
+  let pipelinePath: string;
+  let outcome: Awaited<ReturnType<typeof loadPipelineOutcome>>;
+  if (typeof nameOrPath === "string") {
+    try {
+      pipelinePath = await resolvePipelinePath(nameOrPath, cwd);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        findings: findingsFromLoadIssues(cwd, path.resolve(cwd, nameOrPath), [
+          {
+            code: "pipeline.load_error",
+            message,
+            category: "pipeline",
+          },
+        ]),
+      };
+    }
+    outcome = await loadPipelineOutcome(pipelinePath, { cwd, projectRoot });
+  } else {
+    pipelinePath = path.resolve(cwd, INLINE_PIPELINE_PATH);
+    outcome = await loadPipelineFromObjectOutcome(nameOrPath, { cwd, projectRoot });
+  }
+  const findings: ValidationFinding[] = [];
+
+  if (!outcome.ok) {
+    findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
+    return { ok: false, findings };
+  }
+
+  if (outcome.issues) {
+    findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
+  }
+
+  findings.push(...(await findingsForStageMcpCatalog(cwd, outcome.value)));
+  findings.push(...findingsForStageSecrets(cwd, pipelinePath, outcome.value));
+  findings.push(...findingsForStageflowHomeAbsolutePaths(cwd, outcome.value));
+
+  if (validateStages && outcome.value.stageSources) {
+    for (const source of Object.values(outcome.value.stageSources)) {
+      if (source.kind === "file") {
+        const extra = await validateStageFile(cwd, source.path);
+        findings.push(
+          ...extra.filter((finding) => finding.code !== "stage.unresolved_schema_ref"),
+        );
+      }
+    }
+  }
+
+  if (findings.some((finding) => finding.severity === "error")) {
+    return { ok: false, findings };
+  }
+
+  return { ok: true, loaded: outcome.value, findings };
+}
+
+export type ValidatePipelineOptions = {
+  cwd?: string;
+  projectRoot?: string;
+  validateStages?: boolean;
+  strict?: boolean;
+};
+
+export async function validatePipeline(
+  nameOrPath: string,
+  options: ValidatePipelineOptions = {},
+): Promise<ValidationResult> {
+  const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
+  const validateStages = options.validateStages ?? true;
+  const strict = options.strict ?? false;
+  const core = await runPipelineValidation(nameOrPath, {
+    cwd,
+    projectRoot,
+    validateStages,
+  });
+  return buildValidationResult("pipeline", core.findings, strict);
+}
+
+export type LoadPipelineValidatedResult =
+  | { ok: true; loaded: LoadedPipeline; findings: ValidationFinding[] }
+  | { ok: false; findings: ValidationFinding[] };
+
+export async function loadPipelineValidated(
+  nameOrPath: string | InlinePipelineDefinition,
+  options: { cwd?: string; projectRoot?: string; validateStages?: boolean } = {},
+): Promise<LoadPipelineValidatedResult> {
+  const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
+  const validateStages = options.validateStages ?? true;
+  const core = await runPipelineValidation(nameOrPath, {
+    cwd,
+    projectRoot,
+    validateStages,
+  });
+  if (core.ok) {
+    return { ok: true, loaded: core.loaded, findings: core.findings };
+  }
+  return { ok: false, findings: core.findings };
+}
+
+function findingCatalogDuplicatePipelineId(
+  cwd: string,
+  absPath: string,
+  pipelineId: string,
+  conflictingPaths: string[],
+): ValidationFinding {
+  const relConflicts = conflictingPaths.map((p) => relPath(cwd, p));
+  return baseFinding(
+    {
+      cwd,
+      absPath,
+      message: `Duplicate pipeline id "${pipelineId}" declared in: ${relConflicts.join(", ")}`,
+      code: "catalog.duplicate_pipeline_id",
+      category: "catalog",
+      pipelineId,
+    },
+    "error",
+  );
+}
+
+function findingManifestMissing(cwd: string, projectRoot: string): ValidationFinding {
+  return findingCatalog(
+    cwd,
+    manifestPathForProject(projectRoot),
+    "No stageflow.yaml manifest found at project root",
+    "catalog.manifest_missing",
+    "warning",
+  );
+}
+
+function findingEmptyCatalog(
+  cwd: string,
+  manifestPath: string,
+  kind: "pipelines" | "tasks",
+): ValidationFinding {
+  return findingCatalog(
+    cwd,
+    manifestPath,
+    `Manifest catalog.${kind} is empty`,
+    "catalog.empty_catalog",
+    "warning",
+  );
+}
+
+export async function collectPipelineIdsFromPaths(
+  pipelinePaths: string[],
 ): Promise<Map<string, string[]>> {
-  const files = await listYamlFiles(pipelinesDir);
   const idToPaths = new Map<string, string[]>();
 
-  for (const filePath of files) {
+  for (const filePath of pipelinePaths) {
     try {
       const raw = await readYamlObject(filePath);
       if (typeof raw?.id !== "string") continue;
@@ -387,6 +886,19 @@ async function collectPipelineIds(
   }
 
   return idToPaths;
+}
+
+export async function collectTaskIdsFromPaths(taskPaths: string[]): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const filePath of taskPaths) {
+    try {
+      const raw = await readYamlObject(filePath);
+      if (typeof raw?.id === "string") ids.add(raw.id);
+    } catch {
+      // unreadable files handled by task validation loop
+    }
+  }
+  return ids;
 }
 
 function findingsForDuplicatePipelineIds(
@@ -405,97 +917,203 @@ function findingsForDuplicatePipelineIds(
   return findings;
 }
 
-async function collectReferencedStageIds(pipelinesDir: string): Promise<Set<string>> {
-  const files = await listYamlFiles(pipelinesDir);
-  const referenced = new Set<string>();
+async function validateManifestAll(
+  invocationCwd: string,
+): Promise<ValidationFinding[]> {
+  const ctx = await resolveCatalogContext(invocationCwd);
+  const findings: ValidationFinding[] = [];
 
-  for (const filePath of files) {
-    try {
-      const raw = await readYamlObject(filePath);
-      if (typeof raw?.id !== "string" || !Array.isArray(raw.stages)) continue;
-      const stageIds = extractPipelineStageIds(raw.stages);
-      if (!stageIds) continue;
-      for (const stageId of stageIds) {
-        referenced.add(stageId);
-      }
-    } catch {
-      // skip unreadable
+  if (ctx.manifestStatus === "not_git" || ctx.manifestStatus === "missing") {
+    if (ctx.projectRoot) {
+      findings.push(findingManifestMissing(invocationCwd, ctx.projectRoot));
+    } else {
+      findings.push(
+        findingCatalog(
+          invocationCwd,
+          path.resolve(invocationCwd),
+          "Not inside a git repository; no catalog manifest",
+          "catalog.manifest_missing",
+          "warning",
+        ),
+      );
+    }
+    return findings;
+  }
+
+  if (ctx.manifestStatus === "invalid") {
+    const manifestPath = ctx.projectRoot
+      ? manifestPathForProject(ctx.projectRoot)
+      : path.resolve(invocationCwd, "stageflow.yaml");
+    findings.push(...findingsFromLoadIssues(invocationCwd, manifestPath, ctx.issues));
+    return findings;
+  }
+
+  const { projectRoot, manifest } = ctx;
+  if (!projectRoot || !manifest) {
+    return findings;
+  }
+
+  if (manifest.manifest.catalog.pipelines.length === 0) {
+    findings.push(findingEmptyCatalog(invocationCwd, manifest.path, "pipelines"));
+  }
+  if (manifest.manifest.catalog.tasks.length === 0) {
+    findings.push(findingEmptyCatalog(invocationCwd, manifest.path, "tasks"));
+  }
+
+  const scanPaths = await getCatalogScanPaths(ctx);
+  if (!scanPaths) {
+    return findings;
+  }
+  const { pipelinePaths, taskPaths, triggerPaths } = scanPaths;
+
+  for (const pipelinePath of pipelinePaths) {
+    const core = await runPipelineValidation(pipelinePath, {
+      cwd: projectRoot,
+      validateStages: true,
+    });
+    if (!core.ok) {
+      findings.push(...core.findings);
     }
   }
 
-  return referenced;
-}
+  for (const taskPath of taskPaths) {
+    const outcome = await loadTaskOutcome(taskPath);
+    if (!outcome.ok) {
+      findings.push(...findingsFromLoadIssues(projectRoot, taskPath, outcome.issues));
+    }
+  }
 
-async function findingsForOrphanStages(
-  cwd: string,
-  stagesDir: string,
-  referencedStageIds: Set<string>,
-): Promise<ValidationFinding[]> {
-  const findings: ValidationFinding[] = [];
-  const stageFiles = await listYamlFiles(stagesDir);
+  const idToPaths = await collectPipelineIdsFromPaths(pipelinePaths);
+  findings.push(...findingsForDuplicatePipelineIds(projectRoot, idToPaths));
 
-  for (const stagePath of stageFiles) {
-    const stageId = path.basename(stagePath, ".yaml");
-    if (referencedStageIds.has(stageId)) continue;
-    findings.push(findingCatalogOrphanStage(cwd, stagePath, stageId));
-    findings.push(...(await validateStageFile(cwd, stagePath)));
+  if (triggerPaths.length > 0) {
+    const pipelineIds = new Set(idToPaths.keys());
+    const taskIds = await collectTaskIdsFromPaths(taskPaths);
+    for (const triggerPath of triggerPaths) {
+      const outcome = await loadTriggerOutcome(triggerPath);
+      if (!outcome.ok) {
+        findings.push(...findingsFromLoadIssues(projectRoot, triggerPath, outcome.issues));
+        continue;
+      }
+      findings.push(
+        ...findingsForTriggerRefs(projectRoot, triggerPath, outcome.value, {
+          pipelineIds,
+          taskIds,
+        }),
+      );
+    }
   }
 
   return findings;
+}
+
+export type TriggerCatalogRefs = {
+  pipelineIds: ReadonlySet<string>;
+  taskIds: ReadonlySet<string>;
+};
+
+/** Confirms a trigger's `pipeline`/`task` refs resolve against known catalog ids. */
+export function findingsForTriggerRefs(
+  cwd: string,
+  absPath: string,
+  trigger: TriggerFile,
+  refs: TriggerCatalogRefs,
+): ValidationFinding[] {
+  const findings: ValidationFinding[] = [];
+  if (!refs.pipelineIds.has(trigger.pipeline)) {
+    findings.push(
+      findingTriggerError(
+        cwd,
+        absPath,
+        `Trigger "${trigger.id}" references unknown pipeline "${trigger.pipeline}"`,
+        "trigger.unknown_pipeline",
+      ),
+    );
+  }
+  if (trigger.task !== undefined && !refs.taskIds.has(trigger.task)) {
+    findings.push(
+      findingTriggerError(
+        cwd,
+        absPath,
+        `Trigger "${trigger.id}" references unknown task "${trigger.task}"`,
+        "trigger.unknown_task",
+      ),
+    );
+  }
+  return findings;
+}
+
+async function validateSingleTask(
+  invocationCwd: string,
+  taskArg: string,
+): Promise<ValidationFinding[]> {
+  const ctx = await resolveCatalogContext(invocationCwd);
+  const relCwd = ctx.projectRoot ?? invocationCwd;
+  const taskPath = path.resolve(invocationCwd, taskArg);
+  const outcome = await loadTaskOutcome(taskPath);
+  if (!outcome.ok) {
+    return findingsFromLoadIssues(relCwd, taskPath, outcome.issues);
+  }
+  return [];
+}
+
+async function validateSingleTrigger(
+  invocationCwd: string,
+  triggerArg: string,
+): Promise<ValidationFinding[]> {
+  const ctx = await resolveCatalogContext(invocationCwd);
+  const relCwd = ctx.projectRoot ?? invocationCwd;
+  const triggerPath = path.resolve(invocationCwd, triggerArg);
+  const outcome = await loadTriggerOutcome(triggerPath);
+  if (!outcome.ok) {
+    return findingsFromLoadIssues(relCwd, triggerPath, outcome.issues);
+  }
+
+  const scanPaths = await getCatalogScanPaths(ctx);
+  const pipelineIds = scanPaths
+    ? new Set((await collectPipelineIdsFromPaths(scanPaths.pipelinePaths)).keys())
+    : new Set<string>();
+  const taskIds = scanPaths
+    ? await collectTaskIdsFromPaths(scanPaths.taskPaths)
+    : new Set<string>();
+
+  return findingsForTriggerRefs(relCwd, triggerPath, outcome.value, {
+    pipelineIds,
+    taskIds,
+  });
 }
 
 export async function validateCatalog(
   options: ValidateCatalogOptions,
 ): Promise<ValidationResult> {
   const cwd = options.cwd ?? process.cwd();
-  const stagesDir = options.stagesDir ?? path.join(cwd, "stages");
   const strict = options.strict ?? false;
-  const pipelinesDir = path.join(cwd, "pipelines");
 
   if (options.scope === "pipeline" && !options.pipeline) {
     throw new Error("validateCatalog: pipeline is required when scope is \"pipeline\"");
+  }
+  if (options.scope === "task" && !options.task) {
+    throw new Error("validateCatalog: task is required when scope is \"task\"");
+  }
+  if (options.scope === "trigger" && !options.trigger) {
+    throw new Error("validateCatalog: trigger is required when scope is \"trigger\"");
   }
 
   const allFindings: ValidationFinding[] = [];
 
   if (options.scope === "pipeline") {
-    const result = await loadPipelineValidated(options.pipeline!, {
+    return validatePipeline(options.pipeline!, {
       cwd,
-      stagesDir,
+      projectRoot: options.projectRoot ?? cwd,
       validateStages: true,
+      strict,
     });
-    if (!result.ok) {
-      allFindings.push(...result.findings);
-    }
+  } else if (options.scope === "task") {
+    allFindings.push(...(await validateSingleTask(cwd, options.task!)));
+  } else if (options.scope === "trigger") {
+    allFindings.push(...(await validateSingleTrigger(cwd, options.trigger!)));
   } else {
-    const referencedStageIds = await collectReferencedStageIds(pipelinesDir);
-    const pipelineFiles = await listYamlFiles(pipelinesDir);
-
-    for (const pipelinePath of pipelineFiles) {
-      const result = await validatePipelineFile(pipelinePath, {
-        cwd,
-        stagesDir,
-        validateStages: false,
-      });
-      allFindings.push(...result.findings);
-      for (const stageId of result.referencedStageIds) {
-        referencedStageIds.add(stageId);
-      }
-    }
-
-    const validatedStages = new Set<string>();
-    for (const stageId of referencedStageIds) {
-      if (validatedStages.has(stageId)) continue;
-      validatedStages.add(stageId);
-      const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-      allFindings.push(...(await validateStageFile(cwd, stagePath)));
-    }
-
-    const idToPaths = await collectPipelineIds(pipelinesDir);
-    allFindings.push(...findingsForDuplicatePipelineIds(cwd, idToPaths));
-    allFindings.push(
-      ...(await findingsForOrphanStages(cwd, stagesDir, referencedStageIds)),
-    );
+    allFindings.push(...(await validateManifestAll(cwd)));
   }
 
   return buildValidationResult(options.scope, allFindings, strict);

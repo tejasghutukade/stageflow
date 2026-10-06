@@ -1,0 +1,4 @@
+id: feedback-loop-continue-only
+goal: Draft a short brief and submit it after review continues on the first pass
+context: Verification scenario — review must emit continue (no send_back)
+constraints: Docs only. review must emit feedback_loop.action continue on the first success.

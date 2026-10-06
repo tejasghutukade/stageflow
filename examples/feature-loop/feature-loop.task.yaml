@@ -1,0 +1,25 @@
+id: feature-loop
+goal: >
+  Implement the epic in the requirements document named in context:
+  split it into stories, plan each story, align the plans, implement
+  them in the agreed order, verify coverage, review the whole diff,
+  address review feedback, and open an operator-approved pull request.
+context: |
+  Point this task at a real checkout already on the feature branch.
+  Name the requirements/epic path (checkout-relative), the publish
+  repository (owner/name), and the base branch.
+
+  Replace the placeholders below before running:
+
+  - Requirements/epic: <path-to-requirements.md>
+  - Publish target: <owner/repo>
+  - Base branch: main
+  - Head branch: the checkout's current branch (do not create or switch)
+constraints: |
+  Do not create, rename, or switch branches — the checkout is already
+  on the correct feature branch.
+  Do not commit, push, or open a pull request except in publish, and
+  only after the operator accepts ship-package.md.
+  Do not expand scope past the epic. Story plans and sequential
+  implement clones must stay inside their assigned slices.
+  publish_repo and base_branch must be the values named here, never guessed.

@@ -1,0 +1,35 @@
+id: route-if-array-index
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          field: items.0
+          op: eq
+          value: high
+    system_prompt: Triage the payload.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                type: string
+  - id: page
+    system_prompt: Page on-call.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

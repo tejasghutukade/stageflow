@@ -1,4 +1,6 @@
 export { AppRail, defaultRailItems } from "./AppRail";
+export { StageflowIcon } from "./StageflowIcon";
+export type { StageflowIconProps } from "./StageflowIcon";
 export type { AppRailProps, RailItem } from "./AppRail";
 
 export { ArtifactAside } from "./ArtifactAside";
@@ -11,6 +13,12 @@ export type { ArtifactReaderProps } from "./ArtifactReader";
 
 export { ArtifactDecideColumn, DecidePanel } from "./DecidePanel";
 export type { DecidePanelProps } from "./DecidePanel";
+
+export { FeedbackDecidePanel } from "./FeedbackDecidePanel";
+export type { FeedbackDecidePanelProps } from "./FeedbackDecidePanel";
+
+export { FeedbackLoopPanel } from "./FeedbackLoopPanel";
+export type { FeedbackLoopPanelProps } from "./FeedbackLoopPanel";
 
 export { EnvelopeDrawer } from "./EnvelopeDrawer";
 export type { EnvelopeDrawerProps } from "./EnvelopeDrawer";
@@ -35,6 +43,9 @@ export type { DagTrackNode, PipelineDagTrackProps } from "./PipelineDagTrack";
 export { RunTrack } from "./RunTrack";
 export type { RunTrackProps, TrackLayout } from "./RunTrack";
 
+export { SpatialRunMap } from "./SpatialRunMap";
+export type { SpatialRunMapProps } from "./SpatialRunMap";
+
 export { TrackDetailList } from "./TrackDetailList";
 export type { TrackDetailListProps, TrackDetailRow } from "./TrackDetailList";
 
@@ -48,6 +59,8 @@ export { SettingsAppearance } from "./SettingsAppearance";
 export type { SettingsAppearanceProps } from "./SettingsAppearance";
 
 export { SettingsProviders } from "./SettingsProviders";
+
+export { SettingsProjectMcp } from "./SettingsProjectMcp";
 
 export { ProviderConnectRow } from "./ProviderConnectRow";
 export type { ProviderConnectRowProps } from "./ProviderConnectRow";
@@ -64,3 +77,5 @@ export { TranscriptStream } from "./TranscriptStream";
 export type { TranscriptStreamProps } from "./TranscriptStream";
 
 export { TranscriptTurns } from "./TranscriptTurns";
+
+export { VerificationHistory } from "./VerificationHistory";

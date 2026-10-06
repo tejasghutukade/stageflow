@@ -1,0 +1,65 @@
+id: route-demo-if-composition
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          not:
+            all:
+              - field: severity
+                op: eq
+                value: low
+              - field: customer.tier
+                op: in
+                value: [bronze]
+      - to: notify
+    system_prompt: |
+      Triage in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"severity": "low", "customer": {"tier": "bronze"}}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [severity, customer]
+          properties:
+            severity:
+              type: string
+            customer:
+              type: object
+              required: [tier]
+              properties:
+                tier:
+                  type: string
+  - id: page
+    system_prompt: |
+      Page on-call in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+          required: [severity]
+          properties:
+            severity:
+              type: string
+      output:
+        schema:
+          type: object
+  - id: notify
+    system_prompt: |
+      Notify the team in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

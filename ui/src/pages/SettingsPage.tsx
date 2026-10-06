@@ -1,5 +1,10 @@
-import { useState } from "react";
-import { postSettings } from "../api";
+import { useEffect, useState } from "react";
+import {
+  fetchModels,
+  fetchSettings,
+  postSettings,
+  postWorkshopModel,
+} from "../api";
 import {
   useRunCatalog,
   useRunCatalogHandle,
@@ -7,6 +12,7 @@ import {
 import type { ThemeMode } from "../themePreference";
 import { SettingsAppearance } from "../components/SettingsAppearance";
 import { SettingsMcp } from "../components/SettingsMcp";
+import { SettingsProjectMcp } from "../components/SettingsProjectMcp";
 import { SettingsProviders } from "../components/SettingsProviders";
 import {
   notificationPermission,
@@ -14,6 +20,17 @@ import {
   writeNotifyPreference,
   type NotifyPreference,
 } from "../useWaitingNotifications";
+
+const DEFAULT_WORKSHOP_MODEL = "cursor/auto";
+
+function formatDiskBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
 
 export function SettingsPage({
   themeMode,
@@ -35,6 +52,35 @@ export function SettingsPage({
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [slotsSaving, setSlotsSaving] = useState(false);
   const [permission, setPermission] = useState(notificationPermission);
+  const [workshopModel, setWorkshopModel] = useState<string>("");
+  const [workshopModels, setWorkshopModels] = useState<string[]>([]);
+  const [workshopModelError, setWorkshopModelError] = useState<string | null>(
+    null,
+  );
+  const [workshopModelSaving, setWorkshopModelSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [settings, models] = await Promise.all([
+          fetchSettings(),
+          fetchModels(),
+        ]);
+        if (cancelled) return;
+        setWorkshopModel(settings.workshopModel ?? "");
+        setWorkshopModels(models.models);
+      } catch (err) {
+        if (cancelled) return;
+        setWorkshopModelError(
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function onNotifySelect(value: string) {
     const next: NotifyPreference = value === "system" ? "system" : "off";
@@ -60,6 +106,20 @@ export function SettingsPage({
     }
   }
 
+  async function onWorkshopModelChange(value: string) {
+    setWorkshopModelSaving(true);
+    setWorkshopModelError(null);
+    try {
+      const next = value.trim() || DEFAULT_WORKSHOP_MODEL;
+      const result = await postWorkshopModel(next);
+      setWorkshopModel(result.workshopModel ?? next);
+    } catch (err) {
+      setWorkshopModelError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWorkshopModelSaving(false);
+    }
+  }
+
   const SLOT_CHOICES = [1, 2, 3, 4, 6];
   const currentSlots = health?.maxConcurrent;
   const slotOptions =
@@ -79,6 +139,58 @@ export function SettingsPage({
       <SettingsAppearance value={themeMode} onChange={onThemeChange} />
 
       <SettingsProviders />
+
+      <section className="card">
+        <div className="card__head">
+          <h2>Workshop</h2>
+        </div>
+        <div className="setting">
+          <span>
+            <strong>Workshop model</strong>
+            <p>
+              Default model for Workshop Author chat. Uses the same configured
+              providers as stage runs — no separate credentials. Override per
+              session in Workshop chrome.
+            </p>
+          </span>
+          <select
+            className="select"
+            value={workshopModel || DEFAULT_WORKSHOP_MODEL}
+            disabled={workshopModelSaving}
+            onChange={(e) => void onWorkshopModelChange(e.target.value)}
+          >
+            {!workshopModels.includes(workshopModel || DEFAULT_WORKSHOP_MODEL) ? (
+              <option value={workshopModel || DEFAULT_WORKSHOP_MODEL}>
+                {workshopModel || DEFAULT_WORKSHOP_MODEL}
+              </option>
+            ) : null}
+            {workshopModels.length === 0 ? (
+              <option value={DEFAULT_WORKSHOP_MODEL}>
+                {DEFAULT_WORKSHOP_MODEL}
+              </option>
+            ) : (
+              workshopModels.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))
+            )}
+          </select>
+        </div>
+        {workshopModelError ? (
+          <p
+            style={{
+              color: "var(--color-text-red)",
+              fontSize: "var(--font-size-sm)",
+              marginBottom: "var(--spacing-3)",
+            }}
+          >
+            Could not update Workshop model: {workshopModelError}
+          </p>
+        ) : null}
+      </section>
+
+      <SettingsProjectMcp />
 
       <SettingsMcp />
 
@@ -125,10 +237,68 @@ export function SettingsPage({
         <div className="setting">
           <span>
             <strong>When slots are full</strong>
-            <p>Reject with busy_capacity. There is no queue.</p>
+            <p>
+              New starts enter the admission queue until{" "}
+              <span className="mono">STAGEFLOW_MAX_QUEUED</span> is full, then
+              reject with <span className="mono">busy_capacity</span>.
+            </p>
           </span>
-          <span className="muted">Reject with busy_capacity</span>
+          <span className="muted">Queue, then busy_capacity</span>
         </div>
+      </section>
+
+      <section className="card">
+        <div className="card__head"><h2>Disk</h2></div>
+        {healthError ? (
+          <p style={{ color: "var(--color-text-red)", fontSize: "var(--font-size-sm)", marginBottom: "var(--spacing-3)" }}>
+            Could not load disk: {healthError}
+          </p>
+        ) : null}
+        {healthLoading ? (
+          <p className="muted">—</p>
+        ) : health?.disk ? (
+          <>
+            <div className="setting">
+              <span>
+                <strong>Runs</strong>
+                <p>Cached workspaces under the durable root.</p>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.runs_bytes)}</span>
+            </div>
+            <div className="setting">
+              <span>
+                <strong>Worktrees</strong>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.worktrees_bytes)}</span>
+            </div>
+            <div className="setting">
+              <span>
+                <strong>Repos caches</strong>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.repos_bytes)}</span>
+            </div>
+            <div className="setting">
+              <span>
+                <strong>State database</strong>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.state_db_bytes)}</span>
+            </div>
+            <div className="setting">
+              <span>
+                <strong>A2A artifacts</strong>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.a2a_artifacts_bytes)}</span>
+            </div>
+            <div className="setting">
+              <span>
+                <strong>Free on volume</strong>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.free_bytes)}</span>
+            </div>
+          </>
+        ) : (
+          <p className="muted">Disk breakdown unavailable.</p>
+        )}
       </section>
 
       <section className="card">

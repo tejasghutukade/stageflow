@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { loadPipelineValidated } from "../config/loadPipeline.js";
+import { loadPipelineOutcome } from "../config/loadPipeline.js";
 import { storeRootFor } from "../runstore/paths.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
@@ -31,7 +31,7 @@ const ruleInput = z.object({
   enabled: z.boolean().default(true),
   accountId: z.string().min(1), folder: z.string().min(1).max(200).default("INBOX"),
   from: z.email().optional(), subjectContains: z.string().min(1).max(4096).optional(),
-  pipeline: z.string().regex(/^[A-Za-z0-9_-]+$/),
+  pipeline: z.string().min(1).max(4096).regex(/\.pipeline\.ya?ml$/).refine(value => !path.isAbsolute(value) && !value.split(/[\\/]/).includes("..") && !/[\x00-\x1f]/.test(value)),
   task: z.object({
     id: z.string().min(1).max(200), goal: z.string().min(1).max(8192),
     context: z.string().max(8192).optional(), constraints: z.string().max(8192).optional(),
@@ -409,7 +409,7 @@ export class EmailTriggers {
     if (!parsed.success) throw new EmailError("EMAIL_INVALID_INPUT");
     const account = this.options.accounts.get(parsed.data.accountId, false);
     if (!account.folders.includes(parsed.data.folder)) throw new EmailError("EMAIL_INVALID_INPUT");
-    const pipeline = await loadPipelineValidated(parsed.data.pipeline, { cwd: this.options.cwd, validateStages: true });
+    const pipeline = await loadPipelineOutcome(parsed.data.pipeline, { cwd: this.options.cwd, projectRoot: this.options.cwd });
     if (!pipeline.ok) throw new EmailError("EMAIL_TRIGGER_TARGET_INVALID");
     taskFileToYaml(parsed.data.task);
     return parsed.data;
@@ -483,7 +483,7 @@ export class EmailTriggers {
     }
     let result;
     try {
-      result = await this.options.manager.startRun({ pipeline: dispatch.rule.pipeline, taskYaml: taskFileToYaml(task), dispatchKey: dispatch.dispatchKey });
+      result = await this.options.manager.startRun({ pipeline: dispatch.rule.pipeline, taskYaml: taskFileToYaml(task), projectRoot: this.options.cwd, dispatchKey: dispatch.dispatchKey });
     } catch (error) {
       this.saveOutcome(dispatch, error instanceof PipelineValidationError ? "failed" : "pending",
         error instanceof PipelineValidationError ? "EMAIL_TRIGGER_TARGET_INVALID" : "EMAIL_STORAGE_FAILED"); return;

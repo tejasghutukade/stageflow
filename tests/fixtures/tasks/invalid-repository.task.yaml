@@ -1,0 +1,4 @@
+id: invalid-repository
+goal: Non owner/repo forms must fail
+repository: gitlab.com/a/b
+ref: main

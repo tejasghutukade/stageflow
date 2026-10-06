@@ -12,10 +12,12 @@ import { NewRunPage } from "./pages/NewRunPage";
 import { TodayPage } from "./pages/TodayPage";
 import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
+import { TriggersPage } from "./pages/TriggersPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ProviderConnectPage } from "./pages/ProviderConnectPage";
+import { WorkshopPage } from "./pages/WorkshopPage";
 import { fetchProvidersDetect } from "./api";
 import { needsFirstRun } from "./providers/helpers";
 import {
@@ -23,6 +25,7 @@ import {
   parseHash,
   runArtifactPath,
   runEnvelopePath,
+  runStagePath,
   runStreamPath,
   type Route,
 } from "./routes";
@@ -39,6 +42,7 @@ function railActiveId(route: Route): string {
   if (route.name === "new") return "today";
   if (route.name === "pipeline") return "pipelines";
   if (route.name === "task") return "tasks";
+  if (route.name === "trigger") return "triggers";
   if (route.name === "skill") return "skills";
   if (
     route.name === "extensionPackage" ||
@@ -104,7 +108,7 @@ function AppShell() {
     content = (
       <NewRunPage
         onStarted={(id) => go(runStreamPath(id))}
-        initialPipelineId={route.pipelineId}
+        initialPipelinePath={route.pipelineId}
         initialTaskPath={route.taskPath}
       />
     );
@@ -115,7 +119,9 @@ function AppShell() {
         view={route.view}
         onBack={() => go("/runs")}
         onReran={(id) => go(runStreamPath(id))}
-        onOpenStream={() => go(runStreamPath(route.runId))}
+        onOpenStream={(stageId) =>
+          go(stageId ? runStagePath(route.runId, stageId) : runStreamPath(route.runId))
+        }
         onOpenArtifact={(path) => go(runArtifactPath(route.runId, path))}
         onOpenEnvelope={(stageId) => go(runEnvelopePath(route.runId, stageId))}
       />
@@ -137,6 +143,10 @@ function AppShell() {
     content = <TasksPage onNew={go} />;
   } else if (route.name === "task") {
     content = <TasksPage taskId={route.taskId} onNew={go} />;
+  } else if (route.name === "triggers") {
+    content = <TriggersPage />;
+  } else if (route.name === "trigger") {
+    content = <TriggersPage triggerId={route.triggerId} />;
   } else if (route.name === "skills") {
     content = <SkillsPage />;
   } else if (route.name === "skill") {
@@ -170,6 +180,8 @@ function AppShell() {
         }}
       />
     );
+  } else if (route.name === "workshop") {
+    content = <WorkshopPage />;
   } else {
     content = (
       <TodayPage

@@ -1,0 +1,14 @@
+id: requires-demo
+model: anthropic/claude-sonnet-4-5
+requires:
+  - tool: node
+    version: ">=20"
+  - tool: pnpm
+    version: ">=9"
+stages:
+  - id: clarify
+    uses: ../stages/clarify.yaml
+    requires:
+      - tool: pnpm
+        version: ">=9.5"
+      - tool: git

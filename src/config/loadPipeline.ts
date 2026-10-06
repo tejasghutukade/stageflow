@@ -1,88 +1,239 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
-import type { LoadedPipeline, PipelineConfig } from "../types/pipeline.js";
+import type {
+  InlinePipelineDefinition,
+  LoadedPipeline,
+  PipelineConfig,
+  PipelineStageSource,
+  ResolvedPipelineDag,
+} from "../types/pipeline.js";
+import type { CompletionContract } from "../types/completion.js";
 import type { StageConfig } from "../types/stage.js";
-import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
-import { loadStageOutcome } from "./loadStage.js";
-import { readYamlObject } from "./readYamlObject.js";
-import { extractPipelineStageIds, resolvePipelineDag } from "./resolvePipelineDag.js";
-import type { ValidationFinding } from "./validateCatalog.js";
 import {
-  findingStageIdFilenameMismatch,
-  findingsFromLoadIssues,
-} from "./validateCatalog.js";
+  compilePayloadSchema,
+  expandPayloadSchemaRefs,
+  isPayloadSchemaSubset,
+  UnresolvedSchemaRefError,
+  type PayloadSchemaMap,
+} from "../envelope/payloadSchema.js";
+import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
+import {
+  mergeInlinePipelineStages,
+  mergePipelineStages,
+  type RawMergedEntry,
+} from "./mergePipelineIncludes.js";
+import {
+  normalizePipelineStageEntries,
+  toWiringRefs,
+} from "./normalizePipelineStageEntry.js";
+import { loadStageFromObjectOutcome, loadStageOutcome, afterCompletionForStage } from "./loadStage.js";
+import { materializeStageModels } from "./materializeStageModels.js";
+import { predecessorEdges } from "./pipelineNeeds.js";
+import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
+import { recoveryRequiresCompletionIssue } from "./parseCompletionContract.js";
+import { validateCompletionContractForStage } from "./validateCompletionContract.js";
+import { applyCloneChains } from "./cloneChain.js";
+import {
+  collectRouteIfSchemaIssues,
+  collectRouteIfIllegalCombos,
+  collectRouteAllGatedWarnings,
+} from "./routeIf.js";
+import { mergeToolRequires, type ToolRequirement } from "./toolRequires.js";
+import { withBrowserRequires } from "./stageBrowser.js";
 
 export type { LoadedPipeline } from "../types/pipeline.js";
 export type { LoadIssue, LoadOutcome } from "./loadOutcome.js";
 
-export type LoadPipelineValidatedResult =
-  | { ok: true; loaded: LoadedPipeline }
-  | { ok: false; findings: ValidationFinding[] };
+function schemaCompileIssue(
+  stageId: string,
+  field: "payload_schema" | "clone_input_schema",
+  err: unknown,
+  pipelineId: string,
+): LoadIssue {
+  const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof UnresolvedSchemaRefError) {
+    return {
+      code: "stage.unresolved_schema_ref",
+      message: `Pipeline ${pipelineId}: stage "${stageId}" ${field}: ${message}`,
+      category: "stage",
+      stageId,
+    };
+  }
+  return {
+    code: field === "payload_schema" ? "stage.invalid_payload_schema" : "stage.invalid_clone_input_schema",
+    message: `Pipeline ${pipelineId}: stage "${stageId}" ${field}: ${message}`,
+    category: "stage",
+    stageId,
+  };
+}
 
-async function resolvePipelinePath(nameOrPath: string, cwd: string): Promise<string> {
-  const direct = path.resolve(cwd, nameOrPath);
+function attachPipelineSchemas(
+  stages: StageConfig[],
+  schemas: PayloadSchemaMap | undefined,
+  pipelineId: string,
+): LoadOutcome<void> {
+  const options = schemas !== undefined ? { schemas } : undefined;
+  for (const stage of stages) {
+    if (stage.payload_schema !== undefined) {
+      try {
+        compilePayloadSchema(stage.payload_schema, options);
+        stage.payload_schema = expandPayloadSchemaRefs(stage.payload_schema, options);
+      } catch (err) {
+        return loadFailure([schemaCompileIssue(stage.id, "payload_schema", err, pipelineId)]);
+      }
+    }
+    if (stage.clone_input_schema !== undefined) {
+      try {
+        compilePayloadSchema(stage.clone_input_schema, options);
+        stage.clone_input_schema = expandPayloadSchemaRefs(stage.clone_input_schema, options);
+      } catch (err) {
+        return loadFailure([schemaCompileIssue(stage.id, "clone_input_schema", err, pipelineId)]);
+      }
+    }
+  }
+  return loadSuccess(undefined);
+}
+
+function checkSequentialIoCompatibility(
+  stages: StageConfig[],
+  dag: ResolvedPipelineDag,
+  pipelineId: string,
+  schemas: PayloadSchemaMap | undefined,
+): LoadOutcome<void> {
+  const stageById = new Map(stages.map((stage) => [stage.id, stage]));
+  const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
+  const options = schemas !== undefined ? { schemas } : undefined;
+
+  for (const child of stages) {
+    const node = nodeById.get(child.id);
+    if (!node) continue;
+    for (const parentEdge of predecessorEdges(node)) {
+      const parentNode = nodeById.get(parentEdge.id);
+      if (parentNode?.clone_array_field !== undefined) continue;
+      const parent = stageById.get(parentEdge.id);
+      if (!parent?.payload_schema || child.clone_input_schema === undefined) continue;
+      if (
+        !isPayloadSchemaSubset(child.clone_input_schema, parent.payload_schema, options)
+      ) {
+        return loadFailure([
+          {
+            code: "pipeline.io_incompatible",
+            message: `Pipeline ${pipelineId}: stage "${child.id}" io.input is not a structural subset of "${parent.id}" io.output`,
+            category: "pipeline",
+            pipelineId,
+          },
+        ]);
+      }
+    }
+  }
+  return loadSuccess(undefined);
+}
+
+export async function resolvePipelinePath(
+  pipelinePath: string,
+  cwd: string,
+): Promise<string> {
+  const resolved = path.normalize(path.resolve(cwd, pipelinePath));
   try {
-    await access(direct);
-    return direct;
+    await access(resolved);
+    return resolved;
   } catch {
-    const candidate = path.resolve(cwd, "pipelines", `${nameOrPath}.yaml`);
-    await access(candidate);
-    return candidate;
+    throw new Error(
+      `Pipeline file not found: ${resolved}. Pass a filesystem path to --pipeline (e.g. pipelines/hello.pipeline.yaml), not a bare pipeline id.`,
+    );
   }
 }
 
-export async function loadPipelineOutcome(
-  nameOrPath: string,
-  options: { cwd?: string; stagesDir?: string } = {},
+/** Synthetic `pipelinePath` for a `LoadedPipeline` built from an inline object with no backing file. */
+export const INLINE_PIPELINE_PATH = "<inline>";
+
+async function loadPipelineFromPath(
+  pipelinePath: string,
+  cwd: string,
+  projectRoot: string = cwd,
+  requireIo: boolean = true,
 ): Promise<LoadOutcome<LoadedPipeline>> {
-  const cwd = options.cwd ?? process.cwd();
-  const stagesDir = options.stagesDir ?? path.join(cwd, "stages");
+  const normalizedPipelinePath = path.normalize(path.resolve(pipelinePath));
 
-  let pipelinePath: string;
-  try {
-    pipelinePath = await resolvePipelinePath(nameOrPath, cwd);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return loadFailure([
-      {
-        code: "pipeline.load_error",
-        message,
-        category: "pipeline",
-      },
-    ]);
+  const mergeOutcome = await mergePipelineStages(normalizedPipelinePath);
+  if (!mergeOutcome.ok) {
+    return loadFailure(mergeOutcome.issues);
   }
 
-  let raw: Record<string, unknown>;
-  try {
-    raw = await readYamlObject(pipelinePath);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return loadFailure([
-      {
-        code: "pipeline.load_error",
-        message,
-        category: "pipeline",
-      },
-    ]);
+  return buildLoadedPipelineFromMerge(mergeOutcome.value, {
+    projectRoot,
+    requireIo,
+    pipelinePath: normalizedPipelinePath,
+  });
+}
+
+export async function loadPipelineFromObjectOutcome(
+  raw: InlinePipelineDefinition,
+  options: { cwd?: string; projectRoot?: string; requireIo?: boolean } = {},
+): Promise<LoadOutcome<LoadedPipeline>> {
+  const projectRoot = options.projectRoot ?? options.cwd ?? process.cwd();
+  const requireIo = options.requireIo !== false;
+
+  const mergeOutcome = await mergeInlinePipelineStages(raw);
+  if (!mergeOutcome.ok) {
+    return loadFailure(mergeOutcome.issues);
   }
 
-  if (typeof raw?.id !== "string" || !Array.isArray(raw.stages)) {
-    return loadFailure([
-      {
-        code: "pipeline.invalid_shape",
-        message: `Invalid pipeline ${pipelinePath}: id and stages[] are required`,
-        category: "pipeline",
-      },
-    ]);
+  return buildLoadedPipelineFromMerge(mergeOutcome.value, {
+    projectRoot,
+    requireIo,
+    pipelinePath: INLINE_PIPELINE_PATH,
+  });
+}
+
+export async function loadPipelineFromObject(
+  raw: InlinePipelineDefinition,
+  options: { cwd?: string; projectRoot?: string; requireIo?: boolean } = {},
+): Promise<LoadedPipeline> {
+  const outcome = await loadPipelineFromObjectOutcome(raw, options);
+  if (!outcome.ok) {
+    throw new Error(outcome.issues[0].message);
+  }
+  return outcome.value;
+}
+
+async function buildLoadedPipelineFromMerge(
+  merge: {
+    entries: RawMergedEntry[];
+    pipelineId: string;
+    agent?: string;
+    model?: string;
+    schemas?: PayloadSchemaMap;
+    requires?: ToolRequirement[];
+    warnings: LoadIssue[];
+  },
+  options: { projectRoot: string; requireIo: boolean; pipelinePath: string },
+): Promise<LoadOutcome<LoadedPipeline>> {
+  const { projectRoot, requireIo, pipelinePath } = options;
+  const {
+    entries: rawEntries,
+    pipelineId,
+    agent: pipelineAgent,
+    model: pipelineModel,
+    schemas: pipelineSchemas,
+    requires: pipelineRequires,
+    warnings: mergeWarnings,
+  } = merge;
+  const ctx = { pipelineId, path: pipelinePath };
+  const warnings = [...mergeWarnings];
+
+  const normalizeOutcome = normalizePipelineStageEntries(rawEntries, ctx);
+  if (!normalizeOutcome.ok) {
+    return loadFailure(normalizeOutcome.issues);
   }
 
-  const pipelineId = raw.id;
-  const ctx = { pipelineId: raw.id, path: pipelinePath };
+  const normalizedEntries = normalizeOutcome.value;
+  const wiringRefs = toWiringRefs(normalizedEntries);
 
   let stageIds: string[];
   let dag: LoadedPipeline["dag"];
   try {
-    const resolved = resolvePipelineDag(raw.stages, ctx);
+    const resolved = resolvePipelineDagFromRefs(wiringRefs, ctx);
     stageIds = resolved.stages;
     dag = resolved.dag;
   } catch (err) {
@@ -97,147 +248,249 @@ export async function loadPipelineOutcome(
     ]);
   }
 
-  const pipeline: PipelineConfig = {
-    id: raw.id,
-    stages: stageIds,
-  };
-
+  const entryById = new Map(normalizedEntries.map((entry) => [entry.id, entry]));
+  const stageSources: Record<string, PipelineStageSource> = {};
   const stages: StageConfig[] = [];
-  for (const stageId of pipeline.stages) {
-    const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-    const stageOutcome = await loadStageOutcome(stagePath);
-    if (!stageOutcome.ok) {
-      const message = `Pipeline ${pipeline.id} references missing stage "${stageId}" at ${stagePath}`;
+  const fileAfterById = new Map<string, CompletionContract>();
+
+  for (const stageId of stageIds) {
+    const entry = entryById.get(stageId);
+    if (!entry) {
       return loadFailure([
         {
-          code: "pipeline.missing_stage",
-          message,
+          code: "pipeline.invalid_shape",
+          message: `Pipeline ${pipelineId}: missing normalized entry for stage "${stageId}"`,
           category: "pipeline",
           pipelineId,
         },
       ]);
     }
-    stages.push(stageOutcome.value);
-  }
 
-  return loadSuccess({ pipeline, stages, dag });
-}
-
-async function checkStageIdFilename(
-  cwd: string,
-  stagePath: string,
-): Promise<ValidationFinding | null> {
-  const fileStem = path.basename(stagePath, ".yaml");
-  try {
-    const raw = await readYamlObject(stagePath);
-    if (typeof raw?.id === "string" && raw.id !== fileStem) {
-      return findingStageIdFilenameMismatch(cwd, stagePath, fileStem, raw.id);
+    if (entry.body.kind === "inline") {
+      const inlineOutcome = loadStageFromObjectOutcome(entry.body.raw, {
+        entryId: entry.id,
+        declaringPath: entry.declaringPath,
+        deferSchemaRefs: true,
+        requireIo,
+      });
+      if (!inlineOutcome.ok) {
+        return loadFailure(inlineOutcome.issues);
+      }
+      let stage = inlineOutcome.value;
+      if (entry.requires !== undefined) {
+        const merged = mergeToolRequires(
+          [stage.requires, entry.requires],
+          { pipelineId, label: `stage "${entry.id}"` },
+        );
+        if (!merged.ok) return loadFailure(merged.issues);
+        stage = { ...stage, requires: merged.value };
+      }
+      const inlineRequires = withBrowserRequires(stage, {
+        pipelineId,
+        stageId: entry.id,
+      });
+      if (!inlineRequires.ok) return loadFailure(inlineRequires.issues);
+      if (inlineRequires.value !== undefined) {
+        stage = { ...stage, requires: inlineRequires.value };
+      }
+      stages.push(stage);
+      stageSources[stageId] = { kind: "inline" };
+      continue;
     }
-  } catch {
-    // loadStageOutcome will report read errors
-  }
-  return null;
-}
 
-async function validateStageFile(
-  cwd: string,
-  stagePath: string,
-): Promise<ValidationFinding[]> {
-  const findings: ValidationFinding[] = [];
-  const mismatch = await checkStageIdFilename(cwd, stagePath);
-  if (mismatch) findings.push(mismatch);
+    const stageOutcome = await loadStageOutcome(entry.body.absolutePath, {
+      deferSchemaRefs: true,
+      requireIo,
+    });
+    if (!stageOutcome.ok) {
+      if (stageOutcome.issues.some((issue) => issue.code === "catalog.mixed_yaml_dialect")) {
+        return loadFailure(stageOutcome.issues);
+      }
+      return loadFailure([
+        {
+          code: "pipeline.missing_stage",
+          message: `Pipeline ${pipelineId} references missing stage "${stageId}" at ${entry.body.absolutePath}`,
+          category: "pipeline",
+          pipelineId,
+        },
+        ...stageOutcome.issues,
+      ]);
+    }
+    if (stageOutcome.issues) warnings.push(...stageOutcome.issues);
 
-  const outcome = await loadStageOutcome(stagePath);
-  if (!outcome.ok) {
-    findings.push(...findingsFromLoadIssues(cwd, stagePath, outcome.issues));
-    return findings;
-  }
+    const fileAfter = afterCompletionForStage(stageOutcome.value);
+    if (fileAfter && entry.completion) {
+      return loadFailure([
+        {
+          code: "pipeline.invalid_completion",
+          message: `Pipeline ${pipelineId}: stage "${stageId}" after-checks come from both body verify and wrapper completion`,
+          category: "pipeline",
+          pipelineId,
+        },
+      ]);
+    }
+    if (fileAfter && !entry.completion) {
+      fileAfterById.set(stageId, fileAfter);
+    }
 
-  if (!mismatch && path.basename(stagePath, ".yaml") !== outcome.value.id) {
-    findings.push(
-      findingStageIdFilenameMismatch(
-        cwd,
-        stagePath,
-        path.basename(stagePath, ".yaml"),
-        outcome.value.id,
-      ),
+    if (stageOutcome.value.id !== entry.id) {
+      return loadFailure([
+        {
+          code: "pipeline.stage_id_mismatch",
+          message: `Pipeline ${pipelineId}: stage entry "${entry.id}" in ${entry.declaringPath} uses ${entry.body.path} which declares id "${stageOutcome.value.id}"`,
+          category: "pipeline",
+          pipelineId,
+        },
+      ]);
+    }
+
+    let stageRequires = stageOutcome.value.requires;
+    if (entry.requires !== undefined) {
+      const merged = mergeToolRequires(
+        [stageRequires, entry.requires],
+        { pipelineId, label: `stage "${entry.id}"` },
+      );
+      if (!merged.ok) return loadFailure(merged.issues);
+      stageRequires = merged.value;
+    }
+
+    const browser = entry.browser ?? stageOutcome.value.browser;
+    const fileRequires = withBrowserRequires(
+      { browser, requires: stageRequires },
+      { pipelineId, stageId: entry.id },
     );
+    if (!fileRequires.ok) return loadFailure(fileRequires.issues);
+    stageRequires = fileRequires.value;
+
+    const stage: StageConfig = {
+      ...stageOutcome.value,
+      ...(browser !== undefined ? { browser } : {}),
+      ...(entry.skill !== undefined ? { skill: entry.skill } : {}),
+      ...(entry.mcp !== undefined ? { mcp: entry.mcp } : {}),
+      ...(entry.secrets !== undefined ? { secrets: entry.secrets } : {}),
+      ...(stageRequires !== undefined ? { requires: stageRequires } : {}),
+    };
+    stages.push(stage);
+    stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
   }
 
-  return findings;
+  const cloneChainOutcome = applyCloneChains(stages, wiringRefs, dag, pipelineId);
+  if (!cloneChainOutcome.ok) return cloneChainOutcome;
+
+  const schemaOutcome = attachPipelineSchemas(stages, pipelineSchemas, pipelineId);
+  if (!schemaOutcome.ok) return schemaOutcome;
+
+  const routeIfIssues = [
+    ...collectRouteIfSchemaIssues(stages, wiringRefs, pipelineId),
+    ...collectRouteIfIllegalCombos(wiringRefs, pipelineId),
+  ];
+  if (routeIfIssues.length > 0) {
+    return loadFailure(routeIfIssues);
+  }
+  warnings.push(...collectRouteAllGatedWarnings(wiringRefs, pipelineId));
+
+  const ioOutcome = checkSequentialIoCompatibility(
+    stages,
+    dag,
+    pipelineId,
+    pipelineSchemas,
+  );
+  if (!ioOutcome.ok) return ioOutcome;
+
+  if (pipelineModel !== undefined) {
+    const inheritingIds = stages
+      .filter((stage) => stage.model === undefined)
+      .map((stage) => stage.id);
+    if (inheritingIds.length > 0) {
+      warnings.push({
+        code: "pipeline.model_applies",
+        message: `Pipeline ${pipelineId}: pipeline-root model now applies to stages that omit model (${inheritingIds.join(", ")})`,
+        category: "pipeline",
+        pipelineId,
+      });
+    }
+  }
+
+  const materializeOutcome = await materializeStageModels(stages, {
+    pipelineModel,
+    pipelineId,
+    projectRoot,
+  });
+  if (!materializeOutcome.ok) {
+    return loadFailure(materializeOutcome.issues);
+  }
+  const loadedStages = materializeOutcome.value;
+
+  const pipeline: PipelineConfig = {
+    id: pipelineId,
+    stages: stageIds,
+    ...(pipelineAgent !== undefined ? { agent: pipelineAgent } : {}),
+    ...(pipelineModel !== undefined ? { model: pipelineModel } : {}),
+    ...(pipelineSchemas !== undefined ? { schemas: pipelineSchemas } : {}),
+    ...(pipelineRequires !== undefined ? { requires: pipelineRequires } : {}),
+  };
+
+  const effectiveRequires = mergeToolRequires(
+    [pipelineRequires, ...loadedStages.map((s) => s.requires)],
+    { pipelineId },
+  );
+  if (!effectiveRequires.ok) return loadFailure(effectiveRequires.issues);
+
+  const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
+  for (const [stageId, after] of fileAfterById) {
+    const node = nodeById.get(stageId);
+    if (node) node.completion = after;
+  }
+  for (const node of dag.nodes) {
+    if (node.recovery !== undefined && node.completion === undefined) {
+      return loadFailure([recoveryRequiresCompletionIssue(node.id)]);
+    }
+  }
+  for (const stage of loadedStages) {
+    const completion = nodeById.get(stage.id)?.completion;
+    const completionOutcome = validateCompletionContractForStage(stage, completion);
+    if (!completionOutcome.ok) return loadFailure(completionOutcome.issues);
+  }
+
+  return loadSuccess(
+    {
+      pipeline,
+      stages: loadedStages,
+      dag,
+      pipelinePath,
+      stageSources,
+    },
+    warnings,
+  );
 }
 
-export async function loadPipelineValidated(
+export async function loadPipelineOutcome(
   nameOrPath: string,
-  options: { cwd?: string; stagesDir?: string; validateStages?: boolean } = {},
-): Promise<LoadPipelineValidatedResult> {
+  options: { cwd?: string; projectRoot?: string; requireIo?: boolean } = {},
+): Promise<LoadOutcome<LoadedPipeline>> {
   const cwd = options.cwd ?? process.cwd();
-  const stagesDir = options.stagesDir ?? path.join(cwd, "stages");
-  const validateStages = options.validateStages ?? true;
+  const projectRoot = options.projectRoot ?? cwd;
 
   let pipelinePath: string;
   try {
     pipelinePath = await resolvePipelinePath(nameOrPath, cwd);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      findings: findingsFromLoadIssues(cwd, path.resolve(cwd, nameOrPath), [
-        {
-          code: "pipeline.load_error",
-          message,
-          category: "pipeline",
-        },
-      ]),
-    };
+    return loadFailure([
+      {
+        code: "pipeline.load_error",
+        message,
+        category: "pipeline",
+      },
+    ]);
   }
 
-  const referencedStageIds = new Set<string>();
-  try {
-    const raw = await readYamlObject(pipelinePath);
-    if (typeof raw?.id === "string" && Array.isArray(raw.stages)) {
-      const stageIds = extractPipelineStageIds(raw.stages);
-      if (stageIds) {
-        for (const stageId of stageIds) {
-          referencedStageIds.add(stageId);
-        }
-      }
-    }
-  } catch {
-    // loadPipelineOutcome will report read errors
-  }
-
-  const outcome = await loadPipelineOutcome(nameOrPath, { cwd, stagesDir });
-  const findings: ValidationFinding[] = [];
-
-  if (!outcome.ok) {
-    findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
-    if (validateStages) {
-      for (const stageId of referencedStageIds) {
-        const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-        findings.push(...(await validateStageFile(cwd, stagePath)));
-      }
-    }
-    return { ok: false, findings };
-  }
-
-  if (validateStages) {
-    for (const stageId of outcome.value.pipeline.stages) {
-      const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-      findings.push(...(await validateStageFile(cwd, stagePath)));
-    }
-  }
-
-  if (findings.some((finding) => finding.severity === "error")) {
-    return { ok: false, findings };
-  }
-
-  return { ok: true, loaded: outcome.value };
+  return loadPipelineFromPath(pipelinePath, cwd, projectRoot, options.requireIo !== false);
 }
 
 export async function loadPipeline(
   nameOrPath: string,
-  options: { cwd?: string; stagesDir?: string } = {},
+  options: { cwd?: string; projectRoot?: string; requireIo?: boolean } = {},
 ): Promise<LoadedPipeline> {
   const outcome = await loadPipelineOutcome(nameOrPath, options);
   if (!outcome.ok) {

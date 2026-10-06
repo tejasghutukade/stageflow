@@ -1,0 +1,4 @@
+id: single
+stages:
+  - id: clarify
+    uses: ../stages/clarify.yaml

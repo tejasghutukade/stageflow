@@ -1,0 +1,54 @@
+id: mcp-hitl-tour
+model: cursor/auto
+schemas:
+  Angle:
+    type: object
+    required: [id, title, topic]
+    properties:
+      id:
+        type: string
+      title:
+        type: string
+      topic:
+        type: string
+stages:
+  - id: intake
+    uses: ./intake.yaml
+    entry: true
+    route:
+      - to: emit-angles
+      - to: draft-short
+  - id: emit-angles
+    uses: ./emit-angles.yaml
+    clone_cap: 2
+    clone_mode: sequential
+    route:
+      - to: draft-angle
+  - id: draft-angle
+    uses: ./draft-angle.yaml
+    route:
+      - to: gather
+  - id: gather
+    uses: ./gather.yaml
+    route:
+      - to: polish
+  - id: draft-short
+    uses: ./draft-short.yaml
+    route:
+      - to: polish
+  - id: polish
+    uses: ./polish.yaml
+    route:
+      - to: review
+  - id: review
+    uses: ./review.yaml
+    route:
+      - to: ship
+      - type: loop
+        to: polish
+        max_replays: 1
+        on_max_replays: wait_for_human
+        replay_session: resume
+  - id: ship
+    uses: ./ship.yaml
+    replay_safe: false

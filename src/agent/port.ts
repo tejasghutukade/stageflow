@@ -1,29 +1,109 @@
-import type { StageEnvelope } from "../types/envelope.js";
-import type { StageConfig } from "../types/stage.js";
+import type { StageEnvelope, TerminalEnvelope } from "../types/envelope.js";
+import type { CompletionContract } from "../types/completion.js";
+import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
+import type { LoadedStageConfig } from "../types/stage.js";
+import type { FeedbackLoopConfig } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import type { StageActivityEvent } from "./activity.js";
+import type { ResolvedMcpServers } from "../config/resolveStageMcpServers.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import type { StageEmail } from "../email/host.js";
+import type { QaExchange } from "../hitl/qaTrail.js";
+import type { StageUsage } from "../types/usage.js";
 
 /** Opaque to runtime; adapters interpret. */
 export type StageResumeToken = string;
 
-export type StageRunInput = {
-  roots: StageRoots;
-  stage: StageConfig;
-  task: TaskFile;
-  priorEnvelope: StageEnvelope | null;
-  timeoutMs?: number;
-  resumeToken?: StageResumeToken;
-  /** Optional observe hook; HITL wait/answer uses openStage beside this. */
-  onActivity?: (event: StageActivityEvent) => void;
-  skillFilePath?: string;
-  email?: StageEmail;
+export type StageSessionMode =
+  | "fresh"
+  | "waiting_resume"
+  | "feedback_resume"
+  | "timeout_resume"
+  | "new_session";
+
+export type StageRepairContext = {
+  prior_attempt: number;
+  /** Operator-authored instructions for an explicitly approved manual retry. */
+  operator_guidance?: string;
+  failed_checks?: Array<{
+    id: string;
+    type: string;
+    evidence_preview?: string;
+  }>;
 };
 
+export type FeedbackLoopContext = {
+  loop_id: string;
+  replay_id: string;
+  source_stage_id: string;
+  target_stage_id: string;
+  /** Original send-back envelope from the source (feedback + artifacts). */
+  feedback_envelope: StageEnvelope;
+  /** One-based replay number for this send-back. */
+  replay_number: number;
+  max_replays: number;
+  remaining_replays: number;
+  is_final_replay: boolean;
+  replay_session: "resume" | "new_session";
+  /** Persistent stages on the active target→source route, forward order. */
+  route_stage_ids: string[];
+  /** Prior pass/session identity for THIS stage when resuming, if any. */
+  prior_stage_attempt?: number;
+  prior_pass_status?: string;
+  /** Active fork generation for this stage's parent fan-out, if any. */
+  active_fork_generation_id?: string;
+  active_fork_clone_stage_ids?: string[];
+};
+
+export type StageRunInput = {
+  roots: StageRoots;
+  stage: LoadedStageConfig;
+  /** Runtime instance id (`work~2`). Defaults to `stage.id` when omitted. */
+  stageId?: string;
+  task: TaskFile;
+  priorEnvelope: StageEnvelope | null;
+  priorEnvelopes?: StageEnvelope[];
+  priorEnvelopesByStage?: Record<string, TerminalEnvelope | TerminalEnvelope[]>;
+  timeoutMs?: number;
+  resolvedMcpServers?: ResolvedMcpServers;
+  resumeToken?: StageResumeToken;
+  /** Launch/session mode; omitted is treated as `"fresh"`. */
+  sessionMode?: StageSessionMode;
+  /** Optional observe hook; HITL wait/answer uses openStage beside this. */
+  onActivity?: (event: StageActivityEvent) => void;
+  /** Optional raw assistant-text-delta sink, fired alongside onActivity, not instead of it. */
+  onAssistantTextDelta?: (delta: string) => void;
+  skillFilePath?: string;
+  email?: StageEmail;
+  /** Bundled browser skill; set by the runtime when the stage has `browser`. */
+  browserSkillFilePath?: string;
+  forkEmitContext?: ForkEmitContext;
+  cloneEmitContext?: CloneEmitContext;
+  /** Declared source policy; successful emits must continue or send work back. */
+  feedbackLoopEmitContext?: FeedbackLoopConfig;
+  /** Replay context for stages being replayed (and typically the source on send-back). */
+  feedbackLoopContext?: FeedbackLoopContext;
+  /** Frozen pipeline-owned checks that must pass before Stageflow advances. */
+  completionContract?: CompletionContract;
+  /** Compact evidence from the failed verification that triggered this repair. */
+  repairContext?: StageRepairContext;
+  /** Live attempt-scoped QA trail; read at emit execute time, not bootstrap time. */
+  readQaTrail?: () => QaExchange[] | Promise<QaExchange[]>;
+  /** Optional: record the provider-resolved model after resolveCliModel. */
+  onResolvedModel?: (info: {
+    stageId: string;
+    model: string;
+    thinkingLevel?: string;
+  }) => void | Promise<void>;
+};
+
+export function runtimeStageId(input: Pick<StageRunInput, "stage" | "stageId">): string {
+  return input.stageId ?? input.stage.id;
+}
+
 export type StageRunResult =
-  | { ok: true; envelope: StageEnvelope }
-  | { ok: false; reason: string; envelope?: StageEnvelope };
+  | { ok: true; envelope: StageEnvelope; usage?: StageUsage }
+  | { ok: false; reason: string; envelope?: StageEnvelope; usage?: StageUsage };
 
 /** Opaque wait-request blob; T2 owns concrete prompt shapes later. */
 export type OpaqueWaitRequest = unknown;
@@ -108,4 +188,4 @@ export function createCompletedOnlyStageHandle(options: {
   };
 }
 
-export const DEFAULT_STAGE_TIMEOUT_MS = 15 * 60 * 1000;
+export const DEFAULT_STAGE_TIMEOUT_MS = 60 * 60 * 1000;

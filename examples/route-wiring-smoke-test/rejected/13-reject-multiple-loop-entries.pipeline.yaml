@@ -1,0 +1,51 @@
+id: route-demo-reject-multi-loop-entries
+stages:
+  - id: implement
+    entry: true
+    route:
+      - to: middle
+    system_prompt: Implement.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: middle
+    route:
+      - to: review
+    system_prompt: Middle.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+# Two loop entries with DIFFERENT (both valid) targets -- so the rejection
+  # below is specifically "at most one loop entry", not a duplicate-target
+  # error from having two entries pointing at the same place.
+  - id: review
+    route:
+      - type: loop
+        to: implement
+        max_replays: 1
+        on_max_replays: require_continue
+        replay_session: resume
+      - type: loop
+        to: middle
+        max_replays: 2
+        on_max_replays: wait_for_human
+        replay_session: new_session
+    system_prompt: Review.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

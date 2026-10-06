@@ -1,0 +1,3 @@
+id: stage-mcp-missing-var
+goal: Exercise a passed MCP server that interpolates a required variable with no default.
+context: Run without STAGE_MCP_REQUIRED_TOKEN so the stage fails before tools are treated as present.

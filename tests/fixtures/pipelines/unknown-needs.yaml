@@ -1,5 +1,0 @@
-id: unknown-needs
-stages:
-  - id: clarify
-  - id: design-doc
-    needs: missing-stage

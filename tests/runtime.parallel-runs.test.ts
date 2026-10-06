@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, catalogLocators, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -39,6 +40,7 @@ function gatedAgent(gate: Promise<void>) {
               status: "success" as const,
               summary: "ok",
               artifacts: [],
+              payload: {},
             },
           };
         },
@@ -52,6 +54,7 @@ function gatedAgent(gate: Promise<void>) {
           status: "success" as const,
           summary: "ok",
           artifacts: [],
+          payload: {},
         },
       };
     },
@@ -103,6 +106,20 @@ async function waitFor(
 }
 
 describe("parallel pipeline runs (U1)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("max=2: two unbound concurrent starts ok; third is busy_capacity", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-par-cap-"));
     const store = createRunStore({ rootDir: root });
@@ -118,11 +135,11 @@ describe("parallel pipeline runs (U1)", () => {
     });
 
     const first = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "a", goal: "first" },
     });
     const second = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "b", goal: "second" },
     });
     expect(first.ok).toBe(true);
@@ -130,7 +147,7 @@ describe("parallel pipeline runs (U1)", () => {
     if (!first.ok || !second.ok) return;
 
     const third = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "c", goal: "third" },
     });
     expect(third.ok).toBe(false);
@@ -165,14 +182,14 @@ describe("parallel pipeline runs (U1)", () => {
     });
 
     const first = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "a", goal: "first", checkout },
     });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
 
     const second = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "b", goal: "second", checkout },
     });
     expect(second.ok).toBe(false);
@@ -188,7 +205,7 @@ describe("parallel pipeline runs (U1)", () => {
 
     const otherCheckout = await mkdtemp(path.join(tmpdir(), "sf-checkout-b-"));
     const peer = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "c", goal: "peer", checkout: otherCheckout },
     });
     expect(peer.ok).toBe(true);
@@ -227,8 +244,8 @@ describe("parallel pipeline runs (U1)", () => {
     });
 
     const first = await manager.startRun({
-      pipeline: "docs-only",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: LINEAR_EXPLICIT_PIPELINE,
+      task: SAMPLE_TASK,
     });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
@@ -247,7 +264,7 @@ describe("parallel pipeline runs (U1)", () => {
     expect(manager.getActiveCount()).toBe(1);
 
     const second = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: LINEAR_EXPLICIT_PIPELINE,
       task: { id: "blocked", goal: "should not start" },
     });
     expect(second.ok).toBe(false);
@@ -277,13 +294,14 @@ describe("parallel pipeline runs (U1)", () => {
 
     const source = await store.createRun({
       pipelineId: "docs-only",
+      pipelinePath: DOCS_ONLY_PIPELINE,
       taskYaml: `id: snap\ngoal: from copy\ncheckout: ${checkout}\n`,
       taskId: "snap",
       checkoutRoot: checkout,
     });
 
     const active = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "holder", goal: "holds lease", checkout },
     });
     expect(active.ok).toBe(true);
@@ -311,7 +329,7 @@ describe("parallel pipeline runs (U1)", () => {
       maxConcurrent: 1,
     });
     const holder = await manager2.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "other", goal: "other checkout" },
     });
     expect(holder.ok).toBe(true);
@@ -356,7 +374,7 @@ describe("parallel pipeline runs (U1)", () => {
       maxConcurrent: 2,
     });
     const peer = await manager2.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "peer", goal: "takes freed lease", checkout },
     });
     expect(peer.ok).toBe(true);
@@ -367,6 +385,20 @@ describe("parallel pipeline runs (U1)", () => {
 });
 
 describe("parallel pipeline runs (U2 bound env)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("F8: HITL-waiting bound run allows peer bound stage on other checkout without env throw", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-par-f8-"));
     const checkoutA = await mkdtemp(path.join(tmpdir(), "sf-checkout-a-"));
@@ -421,7 +453,7 @@ describe("parallel pipeline runs (U2 bound env)", () => {
     });
 
     const first = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: LINEAR_EXPLICIT_PIPELINE,
       task: { id: "a", goal: "bound-a", checkout: checkoutA },
     });
     expect(first.ok).toBe(true);
@@ -436,7 +468,7 @@ describe("parallel pipeline runs (U2 bound env)", () => {
     });
 
     const second = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: LINEAR_EXPLICIT_PIPELINE,
       task: { id: "b", goal: "bound-b", checkout: checkoutB },
     });
     expect(second.ok).toBe(true);
@@ -455,7 +487,7 @@ describe("parallel pipeline runs (U2 bound env)", () => {
     ).toBe(true);
 
     const sameCheckout = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "c", goal: "same-as-a", checkout: checkoutA },
     });
     expect(sameCheckout.ok).toBe(false);
@@ -473,6 +505,7 @@ const successEnvelope = {
   status: "success" as const,
   summary: "done",
   artifacts: [] as string[],
+  payload: {},
 };
 
 async function seedWaitingRun(
@@ -488,8 +521,11 @@ async function seedWaitingRun(
     checkout !== undefined
       ? `id: ${opts.taskId}\ngoal: wait\ncheckout: ${checkout}\n`
       : `id: ${opts.taskId}\ngoal: wait\n`;
+  const pipelineId = opts.pipelineId ?? "single";
+  const locators = catalogLocators(pipelineId);
   const run = await store.createRun({
-    pipelineId: opts.pipelineId ?? "single",
+    pipelineId: locators.pipelineId,
+    pipelinePath: locators.pipelinePath,
     taskYaml,
     taskId: opts.taskId,
     checkoutRoot: checkout,
@@ -520,8 +556,10 @@ async function seedIntraRunMultiWait(
   opts: { taskId: string },
 ): Promise<{ runId: string; workspaceDir: string }> {
   const taskYaml = `id: ${opts.taskId}\ngoal: wait\n`;
+  const locators = catalogLocators("parallel-hitl-multi-wait");
   const run = await store.createRun({
-    pipelineId: "parallel-hitl-multi-wait",
+    pipelineId: locators.pipelineId,
+    pipelinePath: locators.pipelinePath,
     taskYaml,
     taskId: opts.taskId,
   });
@@ -552,6 +590,19 @@ async function seedIntraRunMultiWait(
 }
 
 describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
   it("attach two waiters: both active; answer one leaves other waiting; lease blocks same checkout", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-par-u4-attach-"));
     const checkoutA = await mkdtemp(path.join(tmpdir(), "sf-checkout-u4a-"));
@@ -595,7 +646,7 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
     );
 
     const sameAsA = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "peer-a", goal: "same as A", checkout: checkoutA },
     });
     expect(sameAsA.ok).toBe(false);
@@ -624,7 +675,7 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
     expect(manager.getActiveRunIds()).toContain(runB.runId);
 
     const sameAsB = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "peer-b", goal: "same as B", checkout: checkoutB },
     });
     expect(sameAsB.ok).toBe(false);
@@ -673,7 +724,7 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
     expect(manager.getActiveCount()).toBe(2);
 
     const overCap = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "new", goal: "blocked by capacity" },
     });
     expect(overCap.ok).toBe(false);
@@ -701,7 +752,7 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
     expect(manager.getActiveRunIds()).toContain(runB.runId);
 
     const stillCap = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "still", goal: "still at max with B waiting" },
     });
     expect(stillCap.ok).toBe(false);
@@ -759,7 +810,7 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
     ).toBe(true);
 
     const conflict = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "peer", goal: "same checkout", checkout },
     });
     expect(conflict.ok).toBe(false);
@@ -791,7 +842,7 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
     });
 
     const first = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "a", goal: "first" },
     });
     expect(first.ok).toBe(true);
@@ -988,7 +1039,7 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
     });
 
     const holder = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "holder", goal: "holds lease", checkout },
     });
     expect(holder.ok).toBe(true);
@@ -1058,17 +1109,17 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
       {
         runId: runOrphan.runId,
         stageId: "clarify",
-        reason: "process_interrupted: no active worker (server restart)",
+        reason: "orphaned_no_worker",
       },
     ]);
     expect(manager.getActiveRunIds()).toContain(runWaiting.runId);
     expect(manager.getActiveRunIds()).not.toContain(runOrphan.runId);
 
     const orphanDetail = await store2.readRun(runOrphan.runId);
-    expect(orphanDetail.status).toBe("failed");
+    expect(orphanDetail.status).toBe("running");
     expect(
       orphanDetail.stages.find((s) => s.stage_id === "clarify")?.status,
-    ).toBe("failed");
+    ).toBe("interrupted");
 
     const stillWaiting = await store2.readRun(runWaiting.runId);
     expect(
@@ -1105,6 +1156,20 @@ function createCliEquivalentManager(opts: {
 }
 
 describe("CLI-equivalent startRun (S5)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("AE-S5-1: startRun then await done honors busy_capacity; no createRun on reject", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-s5-cap-"));
     const store = createRunStore({ rootDir: root });
@@ -1121,7 +1186,7 @@ describe("CLI-equivalent startRun (S5)", () => {
     });
 
     const first = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "a", goal: "first" },
     });
     expect(first.ok).toBe(true);
@@ -1136,7 +1201,7 @@ describe("CLI-equivalent startRun (S5)", () => {
     });
 
     const second = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "b", goal: "second" },
     });
     expect(second.ok).toBe(false);
@@ -1173,7 +1238,7 @@ describe("CLI-equivalent startRun (S5)", () => {
     });
 
     const first = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "a", goal: "first" },
       checkoutOverride: checkout,
     });
@@ -1182,7 +1247,7 @@ describe("CLI-equivalent startRun (S5)", () => {
     const createsAfterFirst = createRunSpy.mock.calls.length;
 
     const second = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "b", goal: "second" },
       checkoutOverride: checkout,
     });
@@ -1216,7 +1281,7 @@ describe("CLI-equivalent startRun (S5)", () => {
     });
 
     const started = await manager.startRun({
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       task: { id: "block", goal: "wait for release" },
     });
     expect(started.ok).toBe(true);

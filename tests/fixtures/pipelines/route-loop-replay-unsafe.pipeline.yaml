@@ -1,0 +1,44 @@
+id: route-loop-replay-unsafe
+stages:
+  - id: plan
+    entry: true
+    route:
+      - to: implement
+    system_prompt: Create the plan.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: implement
+    replay_safe: false
+    route:
+      - to: review
+    system_prompt: Implement the approved plan.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: review
+    route:
+      - type: loop
+        to: plan
+        max_replays: 2
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: Review the work and explicitly continue or send it back.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

@@ -1,0 +1,13 @@
+id: linear-explicit
+stages:
+  - id: clarify
+    entry: true
+    route:
+      - to: design-doc
+    uses: ../stages/clarify.yaml
+  - id: design-doc
+    uses: ../stages/design-doc.yaml
+    route:
+      - to: implementation-plan
+  - id: implementation-plan
+    uses: ../stages/implementation-plan.yaml

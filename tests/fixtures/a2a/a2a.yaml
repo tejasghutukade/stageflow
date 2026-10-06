@@ -1,0 +1,21 @@
+version: 1
+public_url: https://agents.example.com
+callers:
+  - id: procurement
+    token_env: PROCUREMENT_TOKEN
+  - id: other
+    token_env: OTHER_TOKEN
+publications:
+  - id: supplier_assessment
+    name: Assess a supplier
+    description: Research a supplier against purchasing requirements.
+    project_root: .
+    pipeline: supplier.pipeline.yaml
+    goal: Produce an evidence-backed supplier assessment.
+    allowed_callers: [procurement]
+    input_schema: supplier.schema.json
+    results:
+      stage: final_report
+      include_payload: true
+      artifacts: [assessment.md]
+    caller_answerable_stages: [clarify]

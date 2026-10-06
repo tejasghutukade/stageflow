@@ -1,0 +1,20 @@
+id: gated-example
+model: anthropic/claude-sonnet-4-20250514
+stages:
+  - id: approve
+    entry: true
+    system_prompt: Approve or reject the request.
+    gate_kinds: [confirm]
+    io:
+      input:
+        schema:
+          type: object
+          properties:
+            note: { type: string }
+          required: [note]
+      output:
+        schema:
+          type: object
+          properties:
+            note: { type: string }
+          required: [note]

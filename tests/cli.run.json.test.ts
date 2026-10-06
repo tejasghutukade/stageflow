@@ -1,0 +1,1089 @@
+import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll, vi } from "vitest";
+import { mkdtemp, readdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { createCompletedOnlyStageHandle } from "../src/agent/port.js";
+import { completeCliRun, runRunCommand } from "../src/cli/runCommand.js";
+import { formatValidationJson } from "../src/cli/validateOutput.js";
+import { createRunStore } from "../src/runstore/createStore.js";
+import { PipelineValidationError } from "../src/runtime/pipelineRunner.js";
+import type { PipelineRunResult } from "../src/runtime/pipelineRunner.js";
+import { RunManager } from "../src/runtime/runManager.js";
+import type { StartRunResult } from "../src/runtime/runManager.js";
+import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
+import type { RunStore } from "../src/runstore/port.js";
+import { validateCatalog } from "../src/config/validateCatalog.js";
+import { SAMPLE_TASK, SINGLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { spawnTestGlobalService, type TestGlobalService } from "./helpers/testGlobalService.js";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const cli = path.join(root, "src", "cli.ts");
+const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
+const fixtures = path.join(root, "tests", "fixtures");
+const sampleTask = SAMPLE_TASK;
+const singlePipeline = SINGLE_PIPELINE;
+const brokenPipeline = path.join(fixtures, "manifest-catalog", "pipelines", "broken.pipeline.yaml");
+
+function gatedAgent(gate: Promise<void>) {
+  return {
+    openStage(input: { stage: { id: string } }) {
+      return createCompletedOnlyStageHandle({
+        stageId: input.stage.id,
+        run: async () => {
+          await gate;
+          return {
+            ok: true as const,
+            envelope: {
+              status: "success" as const,
+              summary: "ok",
+              artifacts: [],
+              payload: {},
+            },
+          };
+        },
+      });
+    },
+    async runStage() {
+      await gate;
+      return {
+        ok: true as const,
+        envelope: {
+          status: "success" as const,
+          summary: "ok",
+          artifacts: [],
+          payload: {},
+        },
+      };
+    },
+  };
+}
+
+function runCli(args: string[], cwd = root) {
+  return spawnSync(process.execPath, [tsxCli, cli, ...args], {
+    cwd,
+    encoding: "utf8",
+  });
+}
+
+function captureIo() {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  return {
+    stdout,
+    stderr,
+    io: {
+      log: (line: string) => {
+        stdout.push(line);
+      },
+      error: (line: string) => {
+        stderr.push(line);
+      },
+    },
+    stdoutText() {
+      return stdout.join("\n");
+    },
+    stderrText() {
+      return stderr.join("\n");
+    },
+  };
+}
+
+describe("sf run --json parse (U1)", { timeout: 15_000 }, () => {
+  it("sf run --help mentions --json on the run usage line", () => {
+    const result = runCli(["run", "--help"]);
+    expect(result.status).toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/sf run[^\n]*--json/);
+  });
+
+  it("top-level --help mentions --json on the run usage line", () => {
+    const result = runCli(["--help"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/sf run[^\n]*--json/);
+  });
+
+  it("sf run --nope prints Unknown flag on stderr and exits 1", () => {
+    const result = runCli(["run", "--nope"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/Unknown flag: --nope/);
+    expect(result.stdout).toBe("");
+  });
+
+  it("sf run --json without --task/--pipeline stays human on stderr with no stdout JSON", () => {
+    const result = runCli(["run", "--json"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/Missing --task and\/or --pipeline/);
+    expect(result.stdout.trim()).toBe("");
+    expect(() => JSON.parse(result.stdout)).toThrow();
+  });
+
+  it("unknown flag does not start a Run", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-run-json-unknown-"));
+    const startRun = vi.fn();
+    const cap = captureIo();
+    const code = await runRunCommand(["--nope"], { cwd, io: cap.io, startRun });
+    expect(code).toBe(1);
+    expect(startRun).not.toHaveBeenCalled();
+    expect(cap.stderrText()).toMatch(/Unknown flag: --nope/);
+
+    const spawned = runCli(["run", "--nope"], cwd);
+    expect(spawned.status).toBe(1);
+    const stageflowDir = path.join(cwd, ".stageflow");
+    await expect(readdir(stageflowDir)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
+
+describe("sf run start-failure mapping (U2)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
+  it("human busy start exits 1 with busy_capacity stderr, never 409", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-run-json-busy-"));
+    const store = createRunStore({ rootDir: storeRoot });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const manager = new RunManager({
+      agent: gatedAgent(gate),
+      cwd: fixtures,
+      store,
+      maxConcurrent: 1,
+      executionMode: "inprocess",
+    });
+    const first = await manager.startRun({
+      pipeline: singlePipeline,
+      task: { id: "hold", goal: "hold slot" },
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        cwd: fixtures,
+        io: cap.io,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(1);
+    expect(code).not.toBe(409);
+    expect(cap.stderrText()).toMatch(/busy_capacity:/);
+    expect(cap.stdoutText()).toBe("");
+
+    release();
+    await first.done;
+  });
+
+  it("--json busy start prints busy envelope without runId and exits 1", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-run-json-busy-json-"));
+    const store = createRunStore({ rootDir: storeRoot });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const manager = new RunManager({
+      agent: gatedAgent(gate),
+      cwd: fixtures,
+      store,
+      maxConcurrent: 1,
+      executionMode: "inprocess",
+    });
+    const first = await manager.startRun({
+      pipeline: singlePipeline,
+      task: { id: "hold", goal: "hold slot" },
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        cwd: fixtures,
+        io: cap.io,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(1);
+    expect(cap.stderrText()).not.toMatch(/busy_capacity/);
+    const parsed = JSON.parse(cap.stdoutText()) as {
+      ok: boolean;
+      outcome: string;
+      code: string;
+      reason: string;
+      activeCount: number;
+      maxConcurrent: number;
+      activeRunIds: string[];
+      runId?: string;
+      runDir?: string;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.outcome).toBe("busy");
+    expect(parsed.code).toBe("busy_capacity");
+    expect(parsed.reason).toMatch(/Capacity full/);
+    expect(parsed.activeCount).toBe(1);
+    expect(parsed.maxConcurrent).toBe(1);
+    expect(parsed.activeRunIds).toEqual([first.runId]);
+    expect(parsed).not.toHaveProperty("runId");
+    expect(parsed).not.toHaveProperty("runDir");
+    expect(parsed).not.toHaveProperty("conflictingRunId");
+    expect(parsed).not.toHaveProperty("conflictingCheckout");
+
+    release();
+    await first.done;
+  });
+
+  it("busy_checkout JSON includes conflict keys when present and omits them when absent", async () => {
+    const withConflict: Extract<StartRunResult, { ok: false }> = {
+      ok: false,
+      reason: "Checkout in use by run run-hold",
+      status: 409,
+      code: "busy_checkout",
+      activeCount: 1,
+      maxConcurrent: 3,
+      activeRunIds: ["run-hold"],
+      conflictingRunId: "run-hold",
+      conflictingCheckout: "/tmp/checkout",
+    };
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      { io: cap.io, startRun: async () => withConflict },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
+    expect(parsed.outcome).toBe("busy");
+    expect(parsed.code).toBe("busy_checkout");
+    expect(parsed.conflictingRunId).toBe("run-hold");
+    expect(parsed.conflictingCheckout).toBe("/tmp/checkout");
+    expect(parsed).not.toHaveProperty("runId");
+
+    const withoutConflict: Extract<StartRunResult, { ok: false }> = {
+      ok: false,
+      reason: "Checkout in use by run unknown",
+      status: 409,
+      code: "busy_checkout",
+      activeCount: 1,
+      maxConcurrent: 3,
+      activeRunIds: ["provisional"],
+    };
+    const cap2 = captureIo();
+    await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      { io: cap2.io, startRun: async () => withoutConflict },
+    );
+    const parsed2 = JSON.parse(cap2.stdoutText()) as Record<string, unknown>;
+    expect(parsed2.outcome).toBe("busy");
+    expect(parsed2).not.toHaveProperty("conflictingRunId");
+    expect(parsed2).not.toHaveProperty("conflictingCheckout");
+  });
+
+  it("non-busy start reject JSON is outcome failed, never busy", async () => {
+    const rejected: Extract<StartRunResult, { ok: false }> = {
+      ok: false,
+      reason: "task file missing",
+      status: 400,
+    };
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      { io: cap.io, startRun: async () => rejected },
+    );
+    expect(code).toBe(1);
+    expect(code).not.toBe(400);
+    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
+    expect(parsed).toEqual({
+      ok: false,
+      outcome: "failed",
+      reason: "task file missing",
+    });
+    expect(parsed).not.toHaveProperty("runId");
+    expect(cap.stderrText()).toBe("");
+  });
+});
+
+function startedOk(result: PipelineRunResult): Extract<StartRunResult, { ok: true }> {
+  return {
+    ok: true,
+    runId: result.runId,
+    done: Promise.resolve(result),
+  };
+}
+
+describe("sf run --json completion (U3)", () => {
+  it("no-HITL success prints succeeded envelope on stdout and exits 0", async () => {
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        io: cap.io,
+        startRun: async () =>
+          startedOk({
+            ok: true,
+            outcome: "succeeded",
+            runId: "run-ok",
+            runDir: "/tmp/runs/ok",
+          }),
+      },
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
+    expect(parsed).toEqual({
+      ok: true,
+      outcome: "succeeded",
+      runId: "run-ok",
+      runDir: "/tmp/runs/ok",
+    });
+    expect(cap.stdoutText()).not.toMatch(/Pipeline succeeded/);
+    expect(cap.stderrText()).toBe("");
+  });
+
+  it("omitted task.input against required entry io.input fails as validate-shaped JSON", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-run-json-entry-input-"));
+    const pipelinePath = path.join(cwd, "entry-input.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: entry-input",
+        "model: anthropic/claude-sonnet-4-5",
+        "stages:",
+        "  - id: intake",
+        "    system_prompt: Collect input",
+        "    entry: true",
+        "    route:",
+        "      - to: follow",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "          required: [title]",
+        "          properties:",
+        "            title:",
+        "              type: string",
+        "      output:",
+        "        schema:",
+        "          type: object",
+        "  - id: follow",
+        "    system_prompt: Continue the work",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
+        "",
+      ].join("\n"),
+    );
+    const store = createRunStore({ rootDir: cwd });
+    const manager = new RunManager({
+      agent: gatedAgent(Promise.resolve()),
+      store,
+      cwd,
+      executionMode: "inprocess",
+    });
+    const cap = captureIo();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await runRunCommand(
+        ["--json", "--task", sampleTask, "--pipeline", pipelinePath],
+        {
+          cwd,
+          io: cap.io,
+          startRun: (input) => manager.startRun(input),
+        },
+      );
+      expect(code).toBe(1);
+      const parsed = JSON.parse(cap.stdoutText()) as {
+        ok: boolean;
+        outcome?: string;
+        findings: Array<{
+          severity: string;
+          code: string;
+          file: string;
+          path?: string;
+          message: string;
+          category: string;
+        }>;
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed).not.toHaveProperty("outcome");
+      expect(parsed).not.toHaveProperty("runId");
+      const mismatch = parsed.findings.find(
+        (finding) => finding.code === "task.invalid_shape",
+      );
+      expect(mismatch).toMatchObject({
+        severity: "error",
+        code: "task.invalid_shape",
+        category: "task",
+      });
+      expect(mismatch?.file).toMatch(/sample\.task\.yaml$/);
+      expect(mismatch).not.toHaveProperty("path");
+      expect(parsed.findings.some((f) => f.code === "task.entry_input_unmet")).toBe(
+        false,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("omits findings when task input satisfies entry io.input", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-run-json-entry-match-"));
+    const pipelinePath = path.join(cwd, "entry-input.pipeline.yaml");
+    const taskPath = path.join(cwd, "matched.task.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: entry-input",
+        "stages:",
+        "  - id: intake",
+        "    system_prompt: Collect input",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "          required: [title]",
+        "          properties:",
+        "            title:",
+        "              type: string",
+        "      output:",
+        "        schema:",
+        "          type: object",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      taskPath,
+      ["id: matched", "goal: Do the work", "input:", "  title: hello", ""].join("\n"),
+    );
+    const store = createRunStore({ rootDir: cwd });
+    const manager = new RunManager({
+      agent: gatedAgent(Promise.resolve()),
+      store,
+      cwd,
+      executionMode: "inprocess",
+    });
+    const cap = captureIo();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await runRunCommand(
+        ["--json", "--task", taskPath, "--pipeline", pipelinePath],
+        {
+          cwd,
+          io: cap.io,
+          startRun: (input) => manager.startRun(input),
+        },
+      );
+      expect(code).toBe(0);
+      const parsed = JSON.parse(cap.stdoutText()) as {
+        ok: boolean;
+        outcome: string;
+        findings?: unknown;
+      };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.outcome).toBe("succeeded");
+      expect(parsed.findings).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("start-run model inheritance warning appears as pipeline.model_applies in --json stdout", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-run-json-model-applies-"));
+    const pipelinePath = path.join(cwd, "model-applies.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: model-applies",
+        "model: anthropic/claude-sonnet-4-5",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
+        "",
+      ].join("\n"),
+    );
+    const store = createRunStore({ rootDir: cwd });
+    const manager = new RunManager({
+      agent: gatedAgent(Promise.resolve()),
+      store,
+      cwd,
+      executionMode: "inprocess",
+    });
+    const cap = captureIo();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await runRunCommand(
+        ["--json", "--task", sampleTask, "--pipeline", pipelinePath],
+        {
+          cwd,
+          io: cap.io,
+          startRun: (input) => manager.startRun(input),
+        },
+      );
+      expect(code).toBe(0);
+      const parsed = JSON.parse(cap.stdoutText()) as {
+        ok: boolean;
+        outcome: string;
+        findings: Array<{
+          severity: string;
+          code: string;
+          file: string;
+          message: string;
+          category: string;
+        }>;
+      };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.outcome).toBe("succeeded");
+      const applies = parsed.findings.find(
+        (finding) => finding.code === "pipeline.model_applies",
+      );
+      expect(applies).toMatchObject({
+        severity: "warning",
+        code: "pipeline.model_applies",
+        category: "pipeline",
+      });
+      expect(applies?.file).toMatch(/model-applies\.pipeline\.yaml$/);
+      expect(applies?.message).toMatch(/plan/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("HITL park prints waiting envelope and exits 2", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-run-json-wait-"));
+    const store = createRunStore({ rootDir: storeRoot });
+    const launch = vi.fn(async ({ runId, stageId }) => {
+      await store.appendStageEvent(runId, stageId, {
+        event: "waiting_for_input",
+      });
+      return { type: "waiting" as const };
+    });
+    const manager = new RunManager({
+      agent: { openStage: vi.fn(), runStage: vi.fn() },
+      store,
+      cwd: fixtures,
+      executionMode: "process",
+      stageProcessLauncher: { launch } as unknown as StageProcessLauncher,
+    });
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        cwd: fixtures,
+        io: cap.io,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(2);
+    const parsed = JSON.parse(cap.stdoutText()) as {
+      ok: boolean;
+      outcome: string;
+      runId: string;
+      runDir: string;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.outcome).toBe("waiting");
+    expect(parsed.runId).toBeTruthy();
+    expect(parsed.runDir).toContain(parsed.runId);
+    expect(cap.stdoutText()).not.toMatch(/Pipeline waiting|Pipeline succeeded|Pipeline failed/);
+    expect(cap.stderrText()).toBe("");
+  });
+
+  it("started stage failure prints failed envelope and exits 1", async () => {
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        io: cap.io,
+        startRun: async () =>
+          startedOk({
+            ok: false,
+            outcome: "failed",
+            runId: "run-fail",
+            runDir: "/tmp/runs/fail",
+            reason: "stage boom",
+          }),
+      },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
+    expect(parsed).toEqual({
+      ok: false,
+      outcome: "failed",
+      runId: "run-fail",
+      runDir: "/tmp/runs/fail",
+      reason: "stage boom",
+    });
+    expect(cap.stdoutText()).not.toMatch(/Pipeline failed/);
+    expect(cap.stderrText()).toBe("");
+  });
+
+  it("cancelled run prints cancelled envelope and exits 1", async () => {
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        io: cap.io,
+        startRun: async () =>
+          startedOk({
+            ok: false,
+            outcome: "cancelled",
+            runId: "run-cancel",
+            runDir: "/tmp/runs/cancel",
+            reason: "operator stop",
+          }),
+      },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
+    expect(parsed).toEqual({
+      ok: false,
+      outcome: "cancelled",
+      runId: "run-cancel",
+      runDir: "/tmp/runs/cancel",
+      reason: "operator stop",
+    });
+    expect(cap.stdoutText()).not.toMatch(/Pipeline cancelled|Pipeline failed/);
+    expect(cap.stderrText()).toBe("");
+  });
+
+  it("validation gate under --json prints validate-shaped JSON with no runId", async () => {
+    const validation = await validateCatalog({
+      scope: "pipeline",
+      cwd: fixtures,
+      pipeline: brokenPipeline,
+    });
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", brokenPipeline],
+      {
+        cwd: fixtures,
+        io: cap.io,
+        startRun: async () => {
+          throw new PipelineValidationError(validation);
+        },
+      },
+    );
+    expect(code).toBe(1);
+    expect(cap.stdoutText()).toBe(formatValidationJson(validation));
+    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
+    expect(parsed.ok).toBe(false);
+    expect(parsed).not.toHaveProperty("runId");
+    expect(parsed).not.toHaveProperty("outcome");
+    expect(Array.isArray(parsed.findings)).toBe(true);
+    expect(cap.stderrText()).toBe("");
+  });
+
+  it("unexpected throw produces no stdout JSON", async () => {
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        io: cap.io,
+        startRun: async () => {
+          throw new Error("unexpected boom");
+        },
+      },
+    );
+    expect(code).toBe(1);
+    expect(cap.stdoutText()).toBe("");
+    expect(() => JSON.parse(cap.stdoutText())).toThrow();
+    expect(cap.stderrText()).toBe("unexpected boom");
+  });
+});
+
+describe("sf run --json --include stages (U3)", () => {
+  it("--json --include stages succeeded run includes stages[] with stage_id and status", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-run-include-ok-"));
+    const store = createRunStore({ rootDir: storeRoot });
+    const manager = new RunManager({
+      agent: gatedAgent(Promise.resolve()),
+      store,
+      cwd: fixtures,
+      executionMode: "inprocess",
+    });
+    const cap = captureIo();
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--include",
+        "stages",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+      ],
+      {
+        cwd: fixtures,
+        projectRoot: storeRoot,
+        io: cap.io,
+        store,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdoutText()) as {
+      ok: boolean;
+      outcome: string;
+      runId: string;
+      runDir: string;
+      stages: Array<{ stage_id: string; status: string }>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.outcome).toBe("succeeded");
+    expect(parsed.stages).toHaveLength(1);
+    expect(parsed.stages[0]?.stage_id).toBe("clarify");
+    expect(parsed.stages[0]?.status).toBe("succeeded");
+    expect(cap.stderrText()).toBe("");
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["ok", "outcome", "runDir", "runId", "stages"].sort(),
+    );
+    expect(parsed).not.toHaveProperty("pipeline_track");
+    expect(parsed.stages[0]).not.toHaveProperty("priorEnvelopesByStage");
+    expect(parsed.stages[0]).not.toHaveProperty("needs");
+    expect(parsed.stages[0]).not.toHaveProperty("needsEdges");
+  });
+
+  it("--json --include stages failed run still includes stages with the failed stage", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-run-include-fail-"));
+    const store = createRunStore({ rootDir: storeRoot });
+    const failAgent = {
+      openStage(input: { stage: { id: string } }) {
+        return createCompletedOnlyStageHandle({
+          stageId: input.stage.id,
+          run: async () => ({ ok: false as const, reason: "stage boom" }),
+        });
+      },
+      async runStage() {
+        return { ok: false as const, reason: "stage boom" };
+      },
+    };
+    const manager = new RunManager({
+      agent: failAgent,
+      store,
+      cwd: fixtures,
+      executionMode: "inprocess",
+    });
+    const cap = captureIo();
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--include",
+        "stages",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+      ],
+      {
+        cwd: fixtures,
+        projectRoot: storeRoot,
+        io: cap.io,
+        store,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(cap.stdoutText()) as {
+      ok: boolean;
+      outcome: string;
+      stages: Array<{ stage_id: string; status: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.outcome).toBe("failed");
+    expect(parsed.stages).toHaveLength(1);
+    expect(parsed.stages[0]?.stage_id).toBe("clarify");
+    expect(parsed.stages[0]?.status).toBe("failed");
+  });
+
+  it("--json without --include has no stages key", async () => {
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        io: cap.io,
+        startRun: async () =>
+          startedOk({
+            ok: true,
+            outcome: "succeeded",
+            runId: "run-ok",
+            runDir: "/tmp/runs/ok",
+          }),
+      },
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
+    expect(parsed).toEqual({
+      ok: true,
+      outcome: "succeeded",
+      runId: "run-ok",
+      runDir: "/tmp/runs/ok",
+    });
+    expect(parsed).not.toHaveProperty("stages");
+  });
+
+  it("--include foo exits 1 with Unknown --include value: foo", async () => {
+    const cap = captureIo();
+    const startRun = vi.fn();
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--include",
+        "foo",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+      ],
+      { io: cap.io, startRun },
+    );
+    expect(code).toBe(1);
+    expect(startRun).not.toHaveBeenCalled();
+    expect(cap.stderrText()).toMatch(/Unknown --include value: foo/);
+    expect(cap.stdoutText()).toBe("");
+  });
+
+  it("--include stages without --json exits 1", async () => {
+    const cap = captureIo();
+    const startRun = vi.fn();
+    const code = await runRunCommand(
+      [
+        "--include",
+        "stages",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+      ],
+      { io: cap.io, startRun },
+    );
+    expect(code).toBe(1);
+    expect(startRun).not.toHaveBeenCalled();
+    expect(cap.stderrText()).toBe("error: --include stages requires --json");
+    expect(cap.stdoutText()).toBe("");
+  });
+
+  it("store read failure with --include stages exits non-zero without stdout JSON", async () => {
+    const cap = captureIo();
+    const brokenStore = {
+      readRun: vi.fn().mockRejectedValue(new Error("store locked")),
+    } as unknown as RunStore;
+    const code = await completeCliRun(
+      startedOk({
+        ok: true,
+        outcome: "succeeded",
+        runId: "run-ok",
+        runDir: "/tmp/runs/ok",
+      }),
+      cap.io,
+      { json: true, includeStages: true, store: brokenStore },
+    );
+    expect(code).toBe(1);
+    expect(cap.stdoutText()).toBe("");
+    expect(cap.stderrText()).toMatch(
+      /failed to read run for --include stages: store locked/,
+    );
+  });
+});
+
+describe("sf run repository binding overrides (U7)", () => {
+  it("mentions --repository and --ref on help", () => {
+    const result = runCli(["run", "--help"]);
+    expect(result.status).toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/--repository/);
+    expect(out).toMatch(/--ref/);
+  });
+
+  it("returns task.repository_ref_required for --repository without --ref", async () => {
+    const cap = captureIo();
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-u7-ref-"));
+    const store = createRunStore({ rootDir: root });
+    const manager = new RunManager({
+      agent: {
+        openStage() {
+          throw new Error("should not run");
+        },
+        async runStage() {
+          throw new Error("should not run");
+        },
+      },
+      store,
+      cwd: root,
+    });
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+        "--repository",
+        "acme/api",
+      ],
+      {
+        io: cap.io,
+        cwd: root,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(1);
+    const payload = JSON.parse(cap.stdoutText());
+    expect(payload).toMatchObject({
+      ok: false,
+      outcome: "failed",
+      code: "task.repository_ref_required",
+    });
+  });
+
+  it("returns task.binding_conflict when --repository/--ref combine with --checkout", async () => {
+    const cap = captureIo();
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-u7-conflict-"));
+    const store = createRunStore({ rootDir: root });
+    const manager = new RunManager({
+      agent: {
+        openStage() {
+          throw new Error("should not run");
+        },
+        async runStage() {
+          throw new Error("should not run");
+        },
+      },
+      store,
+      cwd: root,
+    });
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+        "--repository",
+        "acme/api",
+        "--ref",
+        "main",
+        "--checkout",
+        path.join(root, "checkout"),
+      ],
+      {
+        io: cap.io,
+        cwd: root,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(1);
+    const payload = JSON.parse(cap.stdoutText());
+    expect(payload.code).toBe("task.binding_conflict");
+  });
+});
+
+describe("sf run STAGEFLOW_NO_AUTOSTART (U7)", () => {
+  it("exits 1 with JSON code autostart_disabled when ensureService refuses", async () => {
+    const cap = captureIo();
+    const message =
+      "No Stageflow Host is answering at http://127.0.0.1:3847. Autostart is disabled (STAGEFLOW_NO_AUTOSTART). Start the Host with `sf mcp`, or in Docker check that the container's entrypoint is running.";
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        cwd: fixtures,
+        io: cap.io,
+        ensureService: async () => ({
+          ok: false,
+          reason: "autostart_disabled",
+          message,
+        }),
+      },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(cap.stdoutText()) as {
+      ok: boolean;
+      outcome: string;
+      code: string;
+      reason: string;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.outcome).toBe("failed");
+    expect(parsed.code).toBe("autostart_disabled");
+    expect(parsed.reason).toBe(message);
+    expect(parsed.reason).toContain("http://127.0.0.1:3847");
+    expect(parsed.reason.toLowerCase()).not.toMatch(/unset/);
+  });
+});
+
+describe("sf run --json exit drain (U8)", { timeout: 30_000 }, () => {
+  let service: TestGlobalService;
+  let isolatedHome: string;
+
+  beforeAll(async () => {
+    isolatedHome = await mkdtemp(path.join(tmpdir(), "sf-run-json-u8-home-"));
+    service = await spawnTestGlobalService({ cwd: fixtures, home: isolatedHome });
+  });
+
+  afterAll(async () => {
+    await service.stop();
+    await rm(isolatedHome, { recursive: true, force: true });
+  });
+
+  it("piped stdout yields complete parseable JSON repeatedly", () => {
+    for (let i = 0; i < 5; i++) {
+      const result = spawnSync(process.execPath, [tsxCli, cli, "run", "--json"], {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: service.env,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout.trim().length).toBe(0);
+      expect(result.stderr).toMatch(/Missing --task and\/or --pipeline/);
+    }
+  });
+
+  it("piped --json validation failure emits complete parseable JSON", () => {
+    for (let i = 0; i < 3; i++) {
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cli, "run", "--json", "--task", sampleTask, "--pipeline", brokenPipeline],
+        {
+          cwd: fixtures,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: service.env,
+        },
+      );
+      expect(result.status).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        ok: boolean;
+        findings?: unknown[];
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed).not.toHaveProperty("runId");
+      expect(Array.isArray(parsed.findings)).toBe(true);
+    }
+  });
+});

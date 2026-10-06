@@ -1,0 +1,8 @@
+id: generic-fan-in-accepted
+goal: |
+  Dummy walkthrough for an accepted-failure diamond. research may succeed or
+  fail. validation must succeed. synthesize still runs when research fails and
+  must copy that failure envelope under received.research.
+context: |
+  Manual operator-console test. Reply fail at research and ok citations at
+  validation, then open synthesize to see the keyed failure + success pair.

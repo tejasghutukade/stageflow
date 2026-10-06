@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { fetchRunArtifact } from "../api";
+import { authorizationHeaders } from "../api/controlToken";
 
 export type ArtifactReaderProps = {
   runId: string;
   path: string;
   readOnly?: boolean;
   onBackToTranscript: () => void;
+  onHide?: () => void;
 };
 
 type ViewMode = "rendered" | "raw" | "diff";
@@ -32,6 +34,11 @@ function isMarkdown(path: string): boolean {
   return lower.endsWith(".md") || lower.endsWith(".markdown");
 }
 
+export function isImageArtifactPath(path: string): boolean {
+  const name = path.split("/").pop() ?? path;
+  return /\.(png|jpe?g|gif|webp)$/i.test(name);
+}
+
 function sniffLanguage(path: string): string {
   const lower = path.toLowerCase();
   if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "markdown";
@@ -47,23 +54,72 @@ function sniffLanguage(path: string): string {
   return "plaintext";
 }
 
+function artifactUrl(runId: string, path: string): string {
+  return `/api/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(path)}`;
+}
+
 export function ArtifactReader({
   runId,
   path,
   readOnly,
   onBackToTranscript,
+  onHide,
 }: ArtifactReaderProps) {
   const markdown = isMarkdown(path);
-  const [mode, setMode] = useState<ViewMode>(markdown ? "rendered" : "raw");
+  const image = isImageArtifactPath(path);
+  const [mode, setMode] = useState<ViewMode>(
+    markdown || image ? "rendered" : "raw",
+  );
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
 
   useEffect(() => {
-    setMode(isMarkdown(path) ? "rendered" : "raw");
+    setMode(isMarkdown(path) || isImageArtifactPath(path) ? "rendered" : "raw");
   }, [path]);
 
   useEffect(() => {
+    if (isImageArtifactPath(path)) {
+      let cancelled = false;
+      let objectUrl: string | null = null;
+      setLoad({ status: "loading" });
+      setImageSrc(null);
+      void fetch(artifactUrl(runId, path), {
+        headers: { ...authorizationHeaders() },
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            throw new Error(body.error ?? `Request failed (${res.status})`);
+          }
+          return res.blob();
+        })
+        .then((blob) => {
+          const url = URL.createObjectURL(blob);
+          if (cancelled) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          objectUrl = url;
+          setImageSrc(url);
+          setLoad({ status: "ready", content: "" });
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setLoad({
+            status: "error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        });
+      return () => {
+        cancelled = true;
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+      };
+    }
     let cancelled = false;
     setLoad({ status: "loading" });
+    setImageSrc(null);
     void fetchRunArtifact(runId, path)
       .then((content) => {
         if (cancelled) return;
@@ -89,22 +145,31 @@ export function ArtifactReader({
           <span className="reader__path">{dirName(path)}</span>
         ) : null}
         {readOnly ? <span className="chip">read only</span> : null}
-        <button className="btn btn--ghost btn--sm" onClick={onBackToTranscript}>← Transcript</button>
-        <div className="seg">
+        <span className="topbar__spacer"></span>
+        <div className="stream__head-trail">
+          <button className="btn btn--ghost btn--sm" onClick={onBackToTranscript}>← Transcript</button>
+          {onHide ? (
+            <button type="button" className="btn btn--sm" onClick={onHide}>
+              Hide workspace
+            </button>
+          ) : null}
+          <div className="seg">
           <button
             data-active={mode === "rendered" ? "true" : undefined}
-            disabled={!markdown}
-            onClick={() => { if (markdown) setMode("rendered"); }}
+            disabled={!markdown && !image}
+            onClick={() => { if (markdown || image) setMode("rendered"); }}
           >
             Rendered
           </button>
           <button
             data-active={mode === "raw" ? "true" : undefined}
-            onClick={() => setMode("raw")}
+            disabled={image}
+            onClick={() => { if (!image) setMode("raw"); }}
           >
             Raw
           </button>
           <button disabled>Diff</button>
+          </div>
         </div>
       </div>
 
@@ -122,7 +187,19 @@ export function ArtifactReader({
         ) : null}
         {load.status === "ready" ? (
           <div className="page">
-            {mode === "rendered" && markdown ? (
+            {image ? (
+              imageSrc ? (
+                <img
+                  src={imageSrc}
+                  alt={fileName(path)}
+                  style={{
+                    maxWidth: "100%",
+                    height: "auto",
+                    display: "block",
+                  }}
+                />
+              ) : null
+            ) : mode === "rendered" && markdown ? (
               load.content.trim().length === 0 ? (
                 <p className="muted">Empty file.</p>
               ) : (

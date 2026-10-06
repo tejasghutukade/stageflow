@@ -1,0 +1,157 @@
+---
+layout: default
+title: Operator Console
+---
+
+# Operator console
+
+The operator console is a local web UI started by `sf ui`. Default URL: **`http://127.0.0.1:3847`**.
+
+It is the primary surface for triaging runs, connecting providers, answering HITL gates, and inspecting stage transcripts and envelopes. The same process also serves MCP at `/mcp`.
+
+The run store is **global**, not project-scoped — it lives under the durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) and is shared by every project on the machine, whichever directory you start `sf ui` from. Catalog browse (pipelines, tasks, skills, extensions) still resolves to the **project git root**: starting `sf ui` from a subdirectory uses `<git-root>/stageflow.yaml` and its declared catalog roots. See [Data directory](data-directory.md). `sf ui` is one of two ways to start the shared background service (`sf mcp` is the other, headless); `sf run` / `sf run-stage` / mutating `sf runs` commands auto-start the same service if neither is already running.
+
+## Starting the console
+
+```bash
+sf ui
+sf ui --port 9000
+```
+
+On start, Stageflow prints the console URL and MCP endpoint, then opens your default browser. The process runs until you stop it (Ctrl+C).
+
+## Navigation (app rail)
+
+Left rail items (`ui/src/components/AppRail.tsx`):
+
+| Rail id | Route | Purpose |
+|---------|-------|---------|
+| **Today** | `#/today` | Triage home — waiting, in flight, broken, finished. Eligible waiting cards can Accept from Today. |
+| **Runs** | `#/runs` | All runs, filterable All / Waiting / Running / Failed / Finished |
+| **Workshop** | `#/workshop` | Author pipelines interactively with the Workshop Author agent (Operator Agent Host) |
+| **Pipelines** | `#/pipelines` | Browse manifest-declared pipeline files; scaffold a new pipeline or stage into the catalog |
+| **Tasks** | `#/tasks` | Browse manifest-declared task files |
+| **Skills** | `#/skills` | Browse Pi skills for stages — not the [harness skills suite](skills-suite.md) |
+| **Extensions** | `#/extensions` | Browse Pi extensions for stages |
+| **Settings** | `#/settings` | Appearance, Providers, MCP how-to, Concurrency (session slots), waiting notifications, Workshop model default |
+
+**Start a run** — primary button in the rail → `#/new` (optional `?pipeline=` and `?task=` query params with filesystem paths).
+
+Brand click returns to Today.
+
+Waiting runs show a count badge on Today when gates need replies.
+
+Runs and Pipelines list rows stack identity above a full-width mini track so catalog paths stay readable.
+
+## Workshop
+
+Workshop (`#/workshop`) is the interactive authoring surface. Chat turns go to **`POST /api/workshop/chat`**, which uses an **Operator Agent Host** session with the Workshop Author profile (baked playbook, draft tools, docs retrieval) — distinct from stage-execution **AgentPort**.
+
+The Author clarifies intent, then creates and edits. Create and edit tools mutate the in-memory draft immediately, so the studio updates before Accept. Accept confirms. Reject soft-undos that mutation when the draft fingerprint is unchanged. Soft undo does not reverse a successful save. Disk writes happen only when you ask the agent to save (validate, then write).
+
+Click a stage on the map for a read-only summary: prompt, IO, verify, and HITL.
+
+Untitled drafts are builds under `$STAGEFLOW_HOME/workshop/builds/{id}.json`. Chat sessions (History / New) live under `$STAGEFLOW_HOME/workshop/sessions/` and store `activeBuildId`, the build that session was editing. The session blob does not embed the draft. The studio picker lists open builds and on-disk pipelines. History reopens the session and its pinned build. See [Workshop Author](workshop.md) and [Data directory](data-directory.md).
+
+The UI prefers an NDJSON stream (`Accept: application/x-ndjson`) for progressive assistant text; otherwise it uses a coherent JSON turn.
+
+A new chat selects its model from the project `stageflow.yaml` `model`, then the Workshop model saved in Settings, then `cursor/auto`. The composer can override that choice for the current session. See [Workshop Author — Model](workshop.md#model).
+
+### Manual path
+
+From the repo (or a consumer checkout with Stageflow):
+
+```bash
+STAGEFLOW_HOME=$PWD/.stageflow-home npm run dev -- ui
+```
+
+Open the console URL, then navigate to **`#/workshop`**. New starts a fresh greeting. Chat until the map matches the workflow, then ask the agent to save. A save that does not name a folder writes `workshop/<pipeline-id>/` and adds `workshop` to the catalog, so the pipeline and task show up under **Start a run**. History restores the session and the build it was editing.
+
+Dev without a global install uses the same entrypoint (`npm run dev -- ui`). Prefer an isolated `STAGEFLOW_HOME` so builds, sessions, and settings do not touch your real `~/.stageflow`. `sf ui` registers the directory it was started in, so that project's catalog is browsable. Start it from the project root.
+
+## Key routes
+
+Hash-based routing (`ui/src/routes.ts`):
+
+| Path | View |
+|------|------|
+| `#/today` | Triage dashboard (waiting / in flight / broken / finished) |
+| `#/runs` | Runs index (All / Waiting / Running / Failed / Finished) |
+| `#/runs/<runId>` | Run detail — spatial stage map; select a node for the workspace |
+| `#/runs/<runId>/stages/<stageId>` | Deep link — select that stage on the map and open its workspace |
+| `#/runs/<runId>/stages/<stageId>/envelope` | Envelope inspector for a stage |
+| `#/runs/<runId>/artifacts?path=…` | Artifact viewer |
+| `#/new` | Start run form |
+| `#/pipelines` | Pipeline catalog (manifest paths) |
+| `#/pipelines/<id>` | Single pipeline detail |
+| `#/tasks` | Task catalog |
+| `#/tasks/<id>` | Single task detail |
+| `#/skills`, `#/skills/<name>` | Skills browser |
+| `#/extensions` | Extensions index |
+| `#/extensions/packages/<scope>/<source>` | Extension package detail |
+| `#/extensions/files/<path>` | Extension file viewer |
+| `#/settings` | Settings (Appearance, Providers, MCP, Concurrency, waiting notifications, Workshop model) |
+| `#/workshop` | Workshop Author — draft + chat via Operator Agent Host |
+| `#/connect` | Provider connect flow |
+
+Recent runs show stored **`pipeline_path`** and **`task_path`** locators when present on the run record.
+
+## Run detail
+
+The live pane is a zoomable spatial stage map (`SpatialRunMap`). Selecting a stage opens a gated, resizable workspace for files, envelopes, and HITL. **Fit run** recenters the graph.
+
+The workspace center splits into two independently hideable panels: a conversational **transcript** (system dividers, prompt, thinking, assistant text, tool calls) and a step-by-step **log panel** (`LogPanel`) — a GitHub-Actions-style trace built from the same stage event stream, one collapsible row per step with a status icon and duration, the running or failed step expanded by default, and a pinned failure banner that jumps to the failing step. Toggle either with **Hide/Show transcript** and **Hide/Show logs**; **Hide workspace** returns to the map. Drag the splitter to resize.
+
+A created run shows status **not started**. The primary action is **Start run** until history exists; after that it is **Start fresh** (rerun).
+
+`#/runs/<runId>/stages/<stageId>` selects that stage on the map and opens the workspace.
+
+Failed stage nodes offer **Retry**. When a failed after-phase `verify` has
+`on_verify_fail.mode: manual` (API/runtime still expose this as `recovery.mode`),
+the selected stage instead shows its verification history and offers **Retry with
+guidance** or **Stop recovery**. Running stage nodes offer **Abandon**. A stage
+waiting on HITL uses the workspace reply surface (`answer_gate`), not retry.
+
+Use the envelope view to read `summary`, `payload`, and artifact paths without parsing logs.
+
+### Diamond fan-in {#diamond-fan-in}
+
+A [generic fan-in](yaml-catalog.md#generic-fan-in) join renders as a diamond: two (or more) incoming wires into the join node. While the join is blocked, `blocked_by` lists every unresolved parent — not only the first. After one parent reaches an accepted terminal, that parent drops off `blocked_by` and the remaining wires stay.
+
+Walkthrough: [`examples/generic-fan-in/`](../examples/generic-fan-in/). Fixture: [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml).
+
+When the selected stage has an envelope, the first Files row is **Handoff envelope** — it opens the envelope inspector. Artifact rows keep that same stage id.
+
+## Capacity indicator
+
+The rail footer can show active run count vs soft max (`get_health` semantics) — same data as MCP `get_health`.
+
+## Settings
+
+**Appearance** — theme for this machine.
+
+**Providers** — connect, disconnect, and inspect Pi model providers (`pi_home` vs `sf_owned`). See [Providers](providers.md).
+
+**MCP** — how to point a client at this console process (`/mcp` while `sf ui` is running).
+
+**Concurrency** — session slots (how many stage sessions may be alive at once). A stage waiting on you still holds its slot.
+
+**Held stages** — waiting notifications (system notification or off). A held stage is invisible if this window is closed.
+
+## MCP co-location
+
+MCP Streamable HTTP is available at `<console-origin>/mcp` while `sf ui` runs (sessions by default). For MCP without the console, use `sf mcp` instead — both bind the same well-known local port as the one shared global service, so don't run both at once. See [MCP](mcp.md).
+
+## Screenshots
+
+`docs/img/` holds brand assets (`stageflow-og.svg`, `stageflow-icon.svg`).
+
+## See also
+
+- [Quick start](quickstart.md) — first console session
+- [HITL](hitl.md) — answering gates from Today or the run workspace
+- [`examples/generic-fan-in/`](../examples/generic-fan-in/) — diamond join + envelope inspector
+- [Providers](providers.md) — Settings → Providers
+- [MCP](mcp.md) — automation alongside the UI
+- [CLI reference](cli-reference.md) — `sf ui --port`
+- [Harness skills suite](skills-suite.md) — operator harness jobs (not the Skills rail)

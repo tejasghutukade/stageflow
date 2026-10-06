@@ -113,9 +113,9 @@ describe("SMTP outcomes and stage configuration", () => {
     const previous = process.env.MAIL_SECRET; process.env.MAIL_SECRET = "fixture-secret";
     cleanups.push(() => releaseEmailHost(root));
     await mkdir(path.join(root, "pipelines")); await mkdir(path.join(root, "stages"));
-    await writeFile(path.join(root, "pipelines", "notify.yaml"), "id: notify\nstages: [notify]\n");
-    await writeFile(path.join(root, "stages", "notify.yaml"), `id: notify\nmodel: model\nsystem_prompt: notify\nemail:\n  - accountId: ${account.accountId}\n    operations: [send]\n`);
-    const loaded = await loadPipeline("notify", { cwd: root });
+    await writeFile(path.join(root, "pipelines", "notify.pipeline.yaml"), "id: notify\nstages:\n  - id: notify\n    uses: ../stages/notify.yaml\n    entry: true\n");
+    await writeFile(path.join(root, "stages", "notify.yaml"), `id: notify\nmodel: model\nsystem_prompt: notify\nemail:\n  - accountId: ${account.accountId}\n    operations: [send]\nio:\n  input:\n    schema: { type: object }\n  output:\n    schema: { type: object }\n`);
+    const loaded = await loadPipeline("pipelines/notify.pipeline.yaml", { cwd: root });
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({ pipelineId: "notify", taskYaml: "id: notification\ngoal: Notify\n" });
     let observed: StageRunInput | undefined;
@@ -169,9 +169,10 @@ describe("SMTP outcomes and stage configuration", () => {
   });
   it("validates stage account and operation permissions", async () => {
     const { root } = await setup("memory"); const file = path.join(root, "stage.yaml");
-    await writeFile(file, "id: notify\nmodel: model\nsystem_prompt: Notify\nemail:\n  - accountId: company\n    operations: [send]\n");
+    const io = "io:\n  input:\n    schema: { type: object }\n  output:\n    schema: { type: object }\n";
+    await writeFile(file, "id: notify\nmodel: model\nsystem_prompt: Notify\nemail:\n  - accountId: company\n    operations: [send]\n" + io);
     expect((await loadStage(file)).email).toEqual([{ accountId: "company", operations: ["send"] }]);
-    await writeFile(file, "id: notify\nmodel: model\nsystem_prompt: Notify\nemail:\n  - accountId: company\n    operations: [delete]\n");
+    await writeFile(file, "id: notify\nmodel: model\nsystem_prompt: Notify\nemail:\n  - accountId: company\n    operations: [delete]\n" + io);
     await expect(loadStage(file)).rejects.toThrow("invalid email permissions");
   });
 });

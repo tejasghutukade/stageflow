@@ -1,0 +1,4 @@
+id: missing-all-fail
+stages:
+  - id: bare
+    uses: ./bare.yaml

@@ -1,0 +1,62 @@
+id: clone-chain-illegal-two-ref-arrays
+schemas:
+  Issue:
+    type: object
+    required: [id]
+    properties:
+      id:
+        type: string
+  Note:
+    type: object
+    required: [id]
+    properties:
+      id:
+        type: string
+stages:
+  - id: emit-items
+    entry: true
+    clone_cap: 4
+    clone_mode: parallel
+    route:
+      - to: handle-item
+    system_prompt: Emit items.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [items, notes]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/schemas/Issue"
+            notes:
+              type: array
+              items:
+                $ref: "#/schemas/Note"
+  - id: handle-item
+    route:
+      - to: gather
+    system_prompt: Handle one.
+    model: test/model
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/Issue"
+      output:
+        schema:
+          type: object
+  - id: gather
+    system_prompt: Gather.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

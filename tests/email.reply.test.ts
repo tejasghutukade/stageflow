@@ -214,9 +214,9 @@ it("replies through in-process stage execution with a reply-only grant", async (
   const { root, account, input, smtp } = await setup("local"); cleanups.push(() => releaseEmailHost(root));
   const previous = process.env.MAIL_SECRET; process.env.MAIL_SECRET = "fixture-secret";
   await mkdir(path.join(root, "pipelines")); await mkdir(path.join(root, "stages"));
-  await writeFile(path.join(root, "pipelines", "reply.yaml"), "id: reply\nstages: [reply]\n");
-  await writeFile(path.join(root, "stages", "reply.yaml"), `id: reply\nmodel: test\nsystem_prompt: Reply\nemail:\n  - accountId: ${account.accountId}\n    operations: [reply]\n`);
-  const loaded = await loadPipeline("reply", { cwd: root }); const store = createRunStore({ rootDir: root });
+  await writeFile(path.join(root, "pipelines", "reply.pipeline.yaml"), "id: reply\nstages:\n  - id: reply\n    uses: ../stages/reply.yaml\n    entry: true\n");
+  await writeFile(path.join(root, "stages", "reply.yaml"), `id: reply\nmodel: test\nsystem_prompt: Reply\nemail:\n  - accountId: ${account.accountId}\n    operations: [reply]\nio:\n  input:\n    schema: { type: object }\n  output:\n    schema: { type: object }\n`);
+  const loaded = await loadPipeline("pipelines/reply.pipeline.yaml", { cwd: root }); const store = createRunStore({ rootDir: root });
   const run = await store.createRun({ pipelineId: "reply", taskYaml: "id: reply\ngoal: Reply\n" });
   const agent = { openStage(stageInput: StageRunInput) { return createCompletedOnlyStageHandle({ stageId: "reply", run: async () => {
     expect((await stageInput.email!.reply(input)).accepted).toEqual(["reply@example.com"]);

@@ -1,0 +1,4 @@
+id: context7-mcp
+goal: Look up how to register a GET route in Express, using current Context7 docs, then write a one-page brief.
+context: Three-stage Context7 MCP walkthrough. Resolve a library id, fetch docs, then write a brief without MCP. Each MCP stage is a fresh session.
+constraints: Use only the context7 server named on the stage. Do not call ask_operator. Do not invent APIs missing from the fetched docs.

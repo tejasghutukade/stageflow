@@ -1,3 +1,10 @@
 id: join-doc
 system_prompt: Join upstream branch outputs into a consolidated doc.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

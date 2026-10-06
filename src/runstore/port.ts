@@ -1,16 +1,33 @@
 import type { StageLogLine } from "../agent/activity.js";
+import type { ConfigOriginRecord } from "../config/configOrigin.js";
+import type { RunSubmission, RunSubmissionRecord } from "./submission.js";
+import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { AskOperatorPrompt } from "../tools/askOperator.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
+  FeedbackLoopConfig,
+  InlinePipelineDefinition,
   ResolvedPipelineDag,
 } from "../types/pipeline.js";
+import type { CompletionCheck } from "../types/completion.js";
 import type { StageGateKind } from "../types/stage.js";
+import type { StageUsage } from "../types/usage.js";
 
-export type RunStatus = "created" | "running" | "succeeded" | "failed";
+export type { ConfigOriginRecord };
+
+export type RunStatus =
+  | "created"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
 
 export type RunPipelineDagSnapshot = ResolvedPipelineDag & {
   stage_ids: string[];
   gate_kinds?: Record<string, StageGateKind[]>;
+  /** IR: per-stage clone assignment schema. YAML: `io.input.schema`. */
+  clone_input_schema?: Record<string, unknown>;
 };
 
 export type StageReadiness =
@@ -18,6 +35,7 @@ export type StageReadiness =
   | "ready"
   | "running"
   | "waiting"
+  | "interrupted"
   | "succeeded"
   | "failed"
   | "skipped";
@@ -31,6 +49,8 @@ export type PipelineTrackNode = {
   blocked_by?: string[];
   gate_kinds?: StageGateKind[];
   attempt_count?: number;
+  definition_id?: string;
+  feedback_loop?: { target: string };
 };
 
 export type PipelineTrackEdge = {
@@ -52,7 +72,34 @@ export type RunMeta = {
   task_id?: string;
   updated_at?: string;
   checkout_root?: string;
+  git_sha?: string;
+  ci_pr_url?: string;
+  ci_job_url?: string;
   pipeline_dag?: RunPipelineDagSnapshot;
+  pipeline_path?: string;
+  task_path?: string;
+  project_root?: string;
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+  run_branch?: string;
+  git_author_name?: string;
+  git_author_email?: string;
+  cancel_reason?: string;
+  finished_at?: string;
+  slimmed_at?: string;
+  disk_bytes?: number;
+  disk_measured_at?: string;
+  config_origins?: ConfigOriginRecord[];
+  pipeline_source?: "inline" | "path";
+  caller_id?: string;
+  run_manifest?: unknown;
+  skip_gates?: boolean;
+  /**
+   * Parsed inline pipeline body for stage-worker reload when there is no
+   * pipeline_path. Derived from stored pipeline_body.
+   */
+  inline_pipeline?: InlinePipelineDefinition;
 };
 
 export type CreatedRun = {
@@ -70,13 +117,23 @@ export type StageLogEvent = StageLogLine & {
 
 export type StageSnapshot = {
   stage_id: string;
-  status: "pending" | "running" | "waiting_for_input" | "succeeded" | "failed";
+  definition_id?: string;
+  status:
+    | "pending"
+    | "running"
+    | "waiting_for_input"
+    | "interrupted"
+    | "succeeded"
+    | "failed"
+    | "skipped";
   events: StageLogEvent[];
   envelope: StageEnvelope | null;
   artifacts: string[];
   last_at?: string;
   pending_prompt?: AskOperatorPrompt;
   attempt_count: number;
+  /** Total $ spent on this stage across every attempt; omitted when no attempt reported usage. */
+  cost_usd?: number;
 };
 
 export type StageExecution = {
@@ -84,31 +141,268 @@ export type StageExecution = {
   stage_id: string;
   attempt: number;
   status: StageSnapshot["status"];
+  verification_outcome: VerificationOutcome;
   started_at?: string;
   finished_at?: string;
   envelope: StageEnvelope | null;
+  cost_usd?: number;
+  usage?: StageUsage;
+  auto_resume_count: number;
 };
 
 export type StageExecutionPatch = {
   status?: StageSnapshot["status"];
+  verification_outcome?: VerificationOutcome;
   started_at?: string;
   finished_at?: string;
   envelope?: StageEnvelope | null;
+  cost_usd?: number;
+  usage?: StageUsage;
+  auto_resume_count?: number;
+};
+
+/** The durable disposition of completion verification for one stage attempt. */
+export type VerificationOutcome = "not_run" | "passed" | "failed" | "error";
+
+/** The lifecycle state of one independently-run completion check. */
+export type VerificationCheckStatus =
+  | "pending"
+  | "running"
+  | "passed"
+  | "failed"
+  | "skipped";
+
+/**
+ * Durable evidence for one check in one stage execution attempt.
+ *
+ * `evidence` is intentionally JSON-shaped: each checker owns its evidence
+ * schema (for example, command output metadata or an artifact digest), while
+ * the run store preserves it without privileging a particular checker.
+ */
+export type VerificationCheckResult = {
+  run_id: string;
+  stage_id: string;
+  attempt: number;
+  check_id: string;
+  check_type: CompletionCheck["type"];
+  status: VerificationCheckStatus;
+  started_at?: string;
+  finished_at?: string;
+  evidence?: Record<string, unknown>;
+};
+
+/** Input for creating or updating a verification-check lifecycle record. */
+export type VerificationCheckResultPatch = {
+  check_id: string;
+  check_type: CompletionCheck["type"];
+  status: VerificationCheckStatus;
+  started_at?: string;
+  finished_at?: string;
+  evidence?: Record<string, unknown>;
+};
+
+/** Durable lifecycle for one source-owned feedback-loop policy in a run. */
+export type FeedbackLoopState =
+  | "active"
+  | "waiting_for_human"
+  | "continued"
+  | "abandoned"
+  | "completed";
+
+/** Durable lifecycle for one accepted send-back through a feedback loop. */
+export type FeedbackReplayStatus =
+  | "scheduled"
+  | "active"
+  | "waiting_for_human"
+  | "completed"
+  | "failed"
+  | "superseded";
+
+/** Lifecycle for one persistent stage's pass within a feedback replay. */
+export type FeedbackReplayStagePassStatus =
+  | "pending"
+  | "running"
+  | "waiting"
+  | "succeeded"
+  | "failed"
+  | "superseded";
+
+/** Active/history state for a dynamic clone cohort created by a fork parent. */
+export type ForkGenerationStatus = "active" | "completed" | "superseded";
+
+/** Deferred over-limit send_back awaiting a human feedback-loop decision. */
+export type DeferredFeedbackSendBack = {
+  target: string;
+  feedback_envelope: StageEnvelope;
+  source_attempt: number;
+};
+
+export type FeedbackLoopRecord = {
+  run_id: string;
+  loop_id: string;
+  source_stage_id: string;
+  source_attempt: number;
+  policy: FeedbackLoopConfig;
+  state: FeedbackLoopState;
+  current_replay_id?: string;
+  current_replay_number?: number;
+  deferred_send_back?: DeferredFeedbackSendBack;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FeedbackReplayRecord = {
+  run_id: string;
+  replay_id: string;
+  loop_id: string;
+  source_stage_id: string;
+  source_attempt: number;
+  target_stage_id: string;
+  /** One-based accepted send-back count for this loop. */
+  replay_number: number;
+  max_replays: number;
+  replay_session: FeedbackLoopConfig["replay_session"];
+  route_stage_ids: string[];
+  feedback_envelope: StageEnvelope;
+  status: FeedbackReplayStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FeedbackReplayStagePassRecord = {
+  run_id: string;
+  replay_id: string;
+  stage_id: string;
+  /** Execution attempt whose session this pass resumes or newly creates. */
+  stage_attempt: number;
+  /** Immutable attempt whose Pi session resume targets; never rebound. */
+  session_origin_attempt?: number;
+  session_mode: FeedbackLoopConfig["replay_session"];
+  status: FeedbackReplayStagePassStatus;
+  started_at?: string;
+  finished_at?: string;
+  emitted_envelope?: StageEnvelope;
+};
+
+export type ForkGenerationRecord = {
+  run_id: string;
+  generation_id: string;
+  /** Undefined for an initial fan-out that is not part of a replay. */
+  replay_id?: string;
+  fork_parent_stage_id: string;
+  generation_number: number;
+  clone_stage_ids: string[];
+  status: ForkGenerationStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateFeedbackLoopInput = Omit<
+  FeedbackLoopRecord,
+  "run_id" | "state" | "current_replay_id" | "current_replay_number" | "created_at" | "updated_at"
+> & {
+  state?: FeedbackLoopState;
+};
+
+export type FeedbackLoopPatch = Partial<
+  Pick<
+    FeedbackLoopRecord,
+    | "state"
+    | "current_replay_id"
+    | "current_replay_number"
+    | "policy"
+  >
+> & {
+  /** Set to clear a previously deferred send_back. */
+  deferred_send_back?: DeferredFeedbackSendBack | null;
+};
+
+export type CreateFeedbackReplayInput = Omit<
+  FeedbackReplayRecord,
+  "run_id" | "status" | "created_at" | "updated_at"
+> & {
+  status?: FeedbackReplayStatus;
+};
+
+export type FeedbackReplayPatch = Partial<Pick<FeedbackReplayRecord, "status">>;
+
+export type CreateFeedbackReplayStagePassInput = Omit<
+  FeedbackReplayStagePassRecord,
+  "run_id" | "status" | "started_at" | "finished_at" | "emitted_envelope"
+> & {
+  status?: FeedbackReplayStagePassStatus;
+  started_at?: string;
+  finished_at?: string;
+  emitted_envelope?: StageEnvelope;
+};
+
+export type FeedbackReplayStagePassPatch = Partial<
+  Pick<FeedbackReplayStagePassRecord, "status" | "stage_attempt">
+> & {
+  started_at?: string | null;
+  finished_at?: string | null;
+  emitted_envelope?: StageEnvelope | null;
+};
+
+export type CreateForkGenerationInput = Omit<
+  ForkGenerationRecord,
+  "run_id" | "status" | "created_at" | "updated_at"
+> & {
+  status?: ForkGenerationStatus;
+};
+
+export type ForkGenerationPatch = Partial<Pick<ForkGenerationRecord, "status">>;
+
+/** Durable registration of a catalog-owned `*.trigger.yaml` definition. */
+export type TriggerRecord = {
+  id: string;
+  definition_ref: string;
+  enabled: boolean;
+  last_fired_at?: string;
+  last_run_id?: string;
+  next_run_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UpsertTriggerInput = {
+  id: string;
+  definitionRef: string;
+  enabled: boolean;
 };
 
 export type CompactStage = {
   id: string;
   status: StageSnapshot["status"];
   attempt_count: number;
+  definition_id?: string;
+  cost_usd?: number;
+};
+
+export type RunBindingCompact = {
+  kind: "repository" | "checkout" | "unbound";
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+};
+
+export type RunBindingDetail = RunBindingCompact & {
+  run_branch?: string;
+  checkout_root?: string;
 };
 
 export type RunSummary = {
   run_id: string;
   pipeline_id: string;
   task_id?: string;
+  pipeline_path?: string;
+  task_path?: string;
+  project_root?: string;
+  pipeline_source?: "inline" | "path";
   status: RunStatus;
   created_at: string;
   updated_at?: string;
+  binding: RunBindingCompact;
   stages: CompactStage[];
   /** Present when a stage is waiting_for_input (first such stage). */
   waiting_stage_id?: string;
@@ -116,27 +410,88 @@ export type RunSummary = {
   waiting_stage_ids?: string[];
   /** Short prompt text for Today triage; omitted when not waiting. */
   waiting_summary?: string;
-  waiting_kind?: AskOperatorPrompt["kind"];
+  waiting_kind?: AskOperatorPrompt["kind"] | "feedback_loop_decision";
   waiting_prompt_id?: string;
   waiting_artifacts?: string[];
   waiting_questions?: string[];
   failed_stage_id?: string;
   failed_reason?: string;
+  /** The active loop, when a run is currently replaying or awaiting a decision. */
+  active_feedback_loop?: FeedbackLoopRecord;
+  /** Sum of every stage's cost_usd; omitted when no stage reported usage. */
+  total_cost_usd?: number;
+  cancel_reason?: string;
+  finished_at?: string;
+  slimmed_at?: string;
+  disk_bytes?: number;
+  disk_measured_at?: string;
 };
 
-export type RunDetail = Omit<RunSummary, "stages"> & {
+export type RunDetail = Omit<RunSummary, "stages" | "binding"> & {
+  binding: RunBindingDetail;
   task_yaml: string;
   stages: StageSnapshot[];
   pipeline_track: PipelineTrackProjection;
+  /** Append-only feedback-loop and replay history, ordered by creation. */
+  feedback_loops: FeedbackLoopHistory[];
+  config_origins?: ConfigOriginRecord[];
+  caller_id?: string;
+  run_manifest?: unknown;
+};
+
+export type FeedbackLoopHistory = {
+  loop: FeedbackLoopRecord;
+  replays: Array<{
+    replay: FeedbackReplayRecord;
+    stage_passes: FeedbackReplayStagePassRecord[];
+    fork_generations: ForkGenerationRecord[];
+  }>;
+  /** Fork cohorts not associated with a replay, for example the first pass. */
+  fork_generations: ForkGenerationRecord[];
 };
 
 export type CreateRunInput = {
   dispatchKey?: string;
+  submission?: RunSubmission;
+  runId?: string;
   pipelineId: string;
   taskYaml: string;
   taskId?: string;
   checkoutRoot?: string;
+  gitSha?: string;
+  ciPrUrl?: string;
+  ciJobUrl?: string;
   pipelineDag?: RunPipelineDagSnapshot;
+  pipelinePath?: string;
+  taskPath?: string;
+  projectRoot?: string;
+  repository?: string;
+  ref?: string;
+  resolvedSha?: string;
+  runBranch?: string;
+  gitAuthorName?: string;
+  gitAuthorEmail?: string;
+  status?: RunStatus;
+  pipelineSource?: "inline" | "path";
+  /** Durable JSON string stored in pipeline_body. Prefer this for slots writers. */
+  pipelineBody?: string;
+  /**
+   * Convenience for callers/tests that have a parsed inline pipeline.
+   * Stored as pipeline_body JSON; surfaced back as meta.inline_pipeline on read.
+   */
+  inlinePipeline?: InlinePipelineDefinition;
+  callerId?: string;
+  runManifest?: unknown;
+  skipGates?: boolean;
+};
+
+export type ListRunsFilter = {
+  status?: RunStatus;
+  /** ISO timestamp; keep runs with created_at >= since */
+  since?: string;
+  /** Match pipeline_id or pipeline_path */
+  pipeline?: string;
+  caller_id?: string;
 };
 
 /**
@@ -146,11 +501,62 @@ export type CreateRunInput = {
  * run id is all you have (catalog / rehydrate).
  */
 export interface RunStore {
+  /** Checkpoint WAL (when applicable) and release the store connection. */
+  close(): Promise<void>;
+  /**
+   * Consistent compacted snapshot of the live DB via `VACUUM INTO`.
+   * Only SqliteRunStore implements this; callers must not open a second raw connection.
+   */
+  snapshotInto(destPath: string): Promise<{ userVersion: number }>;
+  getRunBySubmission(key: string): Promise<RunSubmissionRecord | null>;
   createRun(input: CreateRunInput): Promise<CreatedRun>;
   findRunByDispatchKey?(dispatchKey: string): Promise<CreatedRun | undefined>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;
+  /**
+   * Conditional status update (CAS): sets `status` only when the row currently
+   * has `expectedStatus`. Returns false when the run exists but status differs;
+   * throws when the run is missing.
+   */
+  tryUpdateRunStatus(
+    runId: string,
+    status: RunStatus,
+    expectedStatus: RunStatus,
+  ): Promise<boolean>;
+  /** Patch workspace-binding columns on an existing run (queued → materialize). */
+  patchRunWorkspaceBinding(
+    runId: string,
+    patch: {
+      checkoutRoot?: string;
+      repository?: string;
+      ref?: string;
+      resolvedSha?: string;
+      runBranch?: string;
+    },
+  ): Promise<void>;
+  /** Append resolved config origin records (MCP / skill / verify). Dedupes by name+origin+path. */
+  appendConfigOrigins(
+    runId: string,
+    origins: ConfigOriginRecord[],
+  ): Promise<void>;
+  setCancelReason(runId: string, reason: string): Promise<void>;
+  /** Persist cached disk usage for `listRuns` (never measured inside listRuns). */
+  setRunDiskUsage(
+    runId: string,
+    diskBytes: number,
+    measuredAt: string,
+  ): Promise<void>;
+  /** Record that SLIM reclaim completed for this run (R18 idempotency gate). */
+  setSlimmedAt(runId: string, slimmedAt: string): Promise<void>;
+  /** Hard-delete every run-scoped row. Throws `Run not found: …` when missing. */
+  deleteRun(runId: string): Promise<void>;
   readRunMeta(runId: string): Promise<RunMeta>;
   readTaskYaml(runId: string): Promise<string>;
+  readPipelineBody(runId: string): Promise<string | null>;
+  /**
+   * Atomic replace of the `run_manifest` JSON blob (build → redact → write).
+   * Pass `null` to clear.
+   */
+  updateRunManifest(runId: string, manifest: unknown): Promise<void>;
   /** Opaque run workspace root for agents and artifact tools. */
   getWorkspaceDir(runId: string): string;
   ensureStageWorkspace(runId: string, stageId: string): Promise<void>;
@@ -171,19 +577,41 @@ export interface RunStore {
     stageId: string,
     attempt: number,
   ): Promise<StageExecution>;
+  /** Latest attempt rows whose status is `interrupted` (targeted scan; not listRuns). */
+  listInterruptedStageExecutions(): Promise<StageExecution[]>;
   updateStageExecution(
     runId: string,
     stageId: string,
     attempt: number,
     patch: StageExecutionPatch,
   ): Promise<void>;
+  /** Create or update evidence for one check in a stage execution attempt. */
+  upsertVerificationCheckResult(
+    runId: string,
+    stageId: string,
+    result: VerificationCheckResultPatch,
+    options?: { attempt?: number },
+  ): Promise<void>;
+  /**
+   * List verification evidence in write order. Without an attempt, returns all
+   * attempts for the stage; callers may pass an attempt to inspect one retry.
+   */
+  listVerificationCheckResults(
+    runId: string,
+    stageId: string,
+    attempt?: number,
+  ): Promise<VerificationCheckResult[]>;
   writeEnvelope(
     runId: string,
     stageId: string,
     envelope: StageEnvelope,
     options?: { attempt?: number },
   ): Promise<void>;
-  readEnvelope(runId: string, stageId: string): Promise<StageEnvelope>;
+  readEnvelope(
+    runId: string,
+    stageId: string,
+    attempt?: number,
+  ): Promise<StageEnvelope>;
   appendStageEvent(
     runId: string,
     stageId: string,
@@ -195,8 +623,80 @@ export interface RunStore {
     stageId: string,
     attempt?: number,
   ): Promise<StageLogEvent[]>;
-  listRuns(): Promise<RunSummary[]>;
+  listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
+  /** Idempotent upsert; returns the realpath/resolve-normalized absolute key. */
+  ensureProject(absPath: string): Promise<string>;
+  /** Absolute roots from the durable projects registry. */
+  listRegisteredProjects(): Promise<string[]>;
+  /** Idempotent create-or-update of a trigger's catalog registration. */
+  upsertTrigger(input: UpsertTriggerInput): Promise<TriggerRecord>;
+  getTrigger(id: string): Promise<TriggerRecord | null>;
+  listTriggers(): Promise<TriggerRecord[]>;
+  /** Record a fire: stamps last_fired_at/last_run_id. Throws if the trigger is missing. */
+  recordTriggerFired(id: string, runId: string): Promise<void>;
+  /** Persist the next computed fire time for a schedule-kind trigger. Throws if the trigger is missing. */
+  setTriggerNextRun(id: string, nextRunAt: string): Promise<void>;
+  /** Read a single adapter-owned state value for a trigger, or null if unset. */
+  getTriggerAdapterState(triggerId: string, key: string): Promise<string | null>;
+  /** Upsert a single adapter-owned state value for a trigger. */
+  setTriggerAdapterState(triggerId: string, key: string, value: string): Promise<void>;
   readRun(runId: string): Promise<RunDetail>;
+  updatePipelineDag(runId: string, dag: RunPipelineDagSnapshot): Promise<void>;
+  createFeedbackLoop(
+    runId: string,
+    input: CreateFeedbackLoopInput,
+  ): Promise<FeedbackLoopRecord>;
+  getFeedbackLoop(runId: string, loopId: string): Promise<FeedbackLoopRecord>;
+  listFeedbackLoops(runId: string): Promise<FeedbackLoopRecord[]>;
+  /**
+   * Patch a feedback loop. When `expectedState` is set, the update is conditional
+   * (CAS): returns false if the row exists but state does not match.
+   * Throws if the loop is missing.
+   */
+  updateFeedbackLoop(
+    runId: string,
+    loopId: string,
+    patch: FeedbackLoopPatch,
+    options?: { expectedState?: FeedbackLoopState },
+  ): Promise<boolean>;
+  createFeedbackReplay(
+    runId: string,
+    input: CreateFeedbackReplayInput,
+  ): Promise<FeedbackReplayRecord>;
+  getFeedbackReplay(runId: string, replayId: string): Promise<FeedbackReplayRecord>;
+  listFeedbackReplays(runId: string, loopId: string): Promise<FeedbackReplayRecord[]>;
+  updateFeedbackReplay(
+    runId: string,
+    replayId: string,
+    patch: FeedbackReplayPatch,
+  ): Promise<void>;
+  createFeedbackReplayStagePass(
+    runId: string,
+    input: CreateFeedbackReplayStagePassInput,
+  ): Promise<FeedbackReplayStagePassRecord>;
+  listFeedbackReplayStagePasses(
+    runId: string,
+    replayId: string,
+  ): Promise<FeedbackReplayStagePassRecord[]>;
+  updateFeedbackReplayStagePass(
+    runId: string,
+    replayId: string,
+    stageId: string,
+    patch: FeedbackReplayStagePassPatch,
+  ): Promise<void>;
+  createForkGeneration(
+    runId: string,
+    input: CreateForkGenerationInput,
+  ): Promise<ForkGenerationRecord>;
+  listForkGenerations(
+    runId: string,
+    options?: { replayId?: string; forkParentStageId?: string },
+  ): Promise<ForkGenerationRecord[]>;
+  updateForkGeneration(
+    runId: string,
+    generationId: string,
+    patch: ForkGenerationPatch,
+  ): Promise<void>;
 }
 
 export function stageStatusFromEvents(
@@ -206,21 +706,89 @@ export function stageStatusFromEvents(
   for (const ev of events) {
     if (ev.event === "started" || ev.event === "resumed") status = "running";
     if (ev.event === "waiting_for_input") status = "waiting_for_input";
+    if (ev.event === "interrupted") status = "interrupted";
     if (ev.event === "succeeded") status = "succeeded";
     if (ev.event === "failed") status = "failed";
+    if (ev.event === "skipped") status = "skipped";
+    if (ev.event === "reopened") status = "pending";
   }
   return status;
 }
 
-export function deriveStatusFromStages(stages: StageSnapshot[]): RunStatus {
+function definitionIdForStage(
+  dag: Pick<RunPipelineDagSnapshot, "nodes">,
+  stageId: string,
+  snapshotsById: Map<string, StageSnapshot>,
+): string {
+  const snap = snapshotsById.get(stageId);
+  if (snap?.definition_id) return snap.definition_id;
+  const node = dag.nodes.find((n) => n.id === stageId);
+  return node?.definition_id ?? stageId;
+}
+
+function failureAcceptedByJoin(
+  dag: Pick<RunPipelineDagSnapshot, "nodes">,
+  failedId: string,
+  snapshotsById: Map<string, StageSnapshot>,
+): boolean {
+  const defId = definitionIdForStage(dag, failedId, snapshotsById);
+  for (const node of dag.nodes) {
+    const edge = predecessorEdges(node).find(
+      (item) => item.id === failedId || item.id === defId,
+    );
+    if (!edge?.on.includes("failed")) continue;
+    const join = snapshotsById.get(node.id);
+    if (join && join.status !== "skipped") return true;
+  }
+  return false;
+}
+
+export function findUnhandledFailedStage(
+  stages: StageSnapshot[],
+  dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
+): StageSnapshot | undefined {
+  const byId = new Map(stages.map((s) => [s.stage_id, s]));
+  return stages.find((stage) => {
+    if (stage.status !== "failed") return false;
+    if (!dag) return true;
+    return !failureAcceptedByJoin(dag, stage.stage_id, byId);
+  });
+}
+
+function stageResolvedForSuccess(
+  stage: StageSnapshot,
+  dag: Pick<RunPipelineDagSnapshot, "nodes"> | null | undefined,
+  byId: Map<string, StageSnapshot>,
+): boolean {
+  if (stage.status === "succeeded" || stage.status === "skipped") return true;
+  if (stage.status === "failed" && dag) {
+    return failureAcceptedByJoin(dag, stage.stage_id, byId);
+  }
+  return false;
+}
+
+const OPERATOR_TERMINAL_STATUSES = new Set<RunStatus>(["cancelled", "queued"]);
+
+export function deriveStatusFromStages(
+  stages: StageSnapshot[],
+  dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
+  currentStatus?: RunStatus,
+): RunStatus {
+  if (currentStatus !== undefined && OPERATOR_TERMINAL_STATUSES.has(currentStatus)) {
+    return currentStatus;
+  }
   if (stages.length === 0) return "created";
-  if (stages.some((s) => s.status === "failed")) return "failed";
-  if (stages.every((s) => s.status === "succeeded")) return "succeeded";
+  if (findUnhandledFailedStage(stages, dag)) return "failed";
+  const byId = new Map(stages.map((s) => [s.stage_id, s]));
+  if (stages.every((s) => stageResolvedForSuccess(s, dag, byId))) {
+    return "succeeded";
+  }
   if (
     stages.some(
       (s) =>
         s.status === "running" ||
         s.status === "waiting_for_input" ||
+        s.status === "interrupted" ||
         s.status === "succeeded",
     )
   ) {

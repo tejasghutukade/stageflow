@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -42,6 +42,9 @@ describe("sqlite run store", () => {
 
     const meta = await store.readRunMeta(run.runId);
     expect(meta.checkout_root).toBeUndefined();
+    expect(meta.git_sha).toBeUndefined();
+    expect(meta.ci_pr_url).toBeUndefined();
+    expect(meta.ci_job_url).toBeUndefined();
   });
 
   it("persists checkout_root on create and returns it from readRunMeta", async () => {
@@ -56,6 +59,103 @@ describe("sqlite run store", () => {
     });
     const meta = await store.readRunMeta(run.runId);
     expect(meta.checkout_root).toBe(checkout);
+  });
+
+  it("persists CI identity on create and returns it from readRunMeta", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-ci-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+      gitSha: "abc123def",
+      ciPrUrl: "https://github.com/acme/repo/pull/42",
+      ciJobUrl: "https://github.com/acme/repo/actions/runs/99",
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.git_sha).toBe("abc123def");
+    expect(meta.ci_pr_url).toBe("https://github.com/acme/repo/pull/42");
+    expect(meta.ci_job_url).toBe("https://github.com/acme/repo/actions/runs/99");
+  });
+
+  it("persists repository binding fields and preallocated runId", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-binding-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const runId = "2026-09-21T00-00-00-aabbcc";
+    const checkout = "/data/worktrees/" + runId;
+    const sha = "c".repeat(40);
+    const run = await store.createRun({
+      runId,
+      pipelineId: "docs-only",
+      taskYaml: "id: t\nrepository: acme/api\nref: main\n",
+      taskId: "t",
+      checkoutRoot: checkout,
+      repository: "acme/api",
+      ref: "main",
+      resolvedSha: sha,
+      runBranch: `stageflow/run-${runId}`,
+      gitAuthorName: "Stageflow",
+      gitAuthorEmail: "stageflow@localhost",
+    });
+    expect(run.runId).toBe(runId);
+
+    const meta = await store.readRunMeta(runId);
+    expect(meta.repository).toBe("acme/api");
+    expect(meta.ref).toBe("main");
+    expect(meta.resolved_sha).toBe(sha);
+    expect(meta.run_branch).toBe(`stageflow/run-${runId}`);
+    expect(meta.checkout_root).toBe(checkout);
+    expect(meta.git_author_name).toBe("Stageflow");
+    expect(meta.git_author_email).toBe("stageflow@localhost");
+
+    const detail = await store.readRun(runId);
+    expect(detail.binding).toEqual({
+      kind: "repository",
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: sha,
+      run_branch: `stageflow/run-${runId}`,
+      checkout_root: checkout,
+    });
+
+    const listed = await store.listRuns();
+    const summary = listed.find((r) => r.run_id === runId);
+    expect(summary?.binding).toEqual({
+      kind: "repository",
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: sha,
+    });
+    expect(summary?.binding).not.toHaveProperty("checkout_root");
+    expect(summary?.binding).not.toHaveProperty("run_branch");
+  });
+
+  it("omits CI identity from readRunMeta when createRun does not set it", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-ci-omit-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.git_sha).toBeUndefined();
+    expect(meta.ci_pr_url).toBeUndefined();
+    expect(meta.ci_job_url).toBeUndefined();
+  });
+
+  it("omits unset CI fields when only gitSha is set", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-ci-sha-only-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      gitSha: "deadbeef",
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.git_sha).toBe("deadbeef");
+    expect(meta.ci_pr_url).toBeUndefined();
+    expect(meta.ci_job_url).toBeUndefined();
   });
 
   it("adds stage_events.attempt via ALTER on legacy DB", async () => {
@@ -105,6 +205,114 @@ CREATE TABLE stage_events (
     }[];
     probe.close();
     expect(cols.some((c) => c.name === "attempt")).toBe(true);
+  });
+
+  it("adds verification evidence storage to an existing DB", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-verification-migrate-"));
+    const storeRoot = storeRootFor(root);
+    await mkdir(storeRoot, { recursive: true });
+    const dbPath = path.join(storeRoot, "state.db");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  task_id TEXT,
+  task_yaml TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE stages (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  status TEXT,
+  summary TEXT,
+  envelope_json TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  PRIMARY KEY (run_id, stage_id)
+);
+CREATE TABLE stage_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  event TEXT NOT NULL,
+  payload_json TEXT
+);
+`);
+    legacy.close();
+
+    createRunStore({ rootDir: root, kind: "sqlite" });
+
+    const probe = new Database(dbPath);
+    const table = probe
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'verification_check_results'`,
+      )
+      .get();
+    probe.close();
+    expect(table).toBeDefined();
+  });
+
+  it("adds and backfills verification dispositions on existing attempts", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-verification-outcome-"));
+    const storeRoot = storeRootFor(root);
+    await mkdir(storeRoot, { recursive: true });
+    const dbPath = path.join(storeRoot, "state.db");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  task_id TEXT,
+  task_yaml TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE stage_executions (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  envelope_json TEXT,
+  PRIMARY KEY (run_id, stage_id, attempt)
+);
+CREATE TABLE verification_check_results (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  check_id TEXT NOT NULL,
+  check_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  evidence_json TEXT,
+  PRIMARY KEY (run_id, stage_id, attempt, check_id)
+);
+INSERT INTO stage_executions (run_id, stage_id, attempt, status)
+  VALUES ('legacy-run', 'verify', 1, 'failed');
+INSERT INTO verification_check_results
+  (run_id, stage_id, attempt, check_id, check_type, status)
+  VALUES ('legacy-run', 'verify', 1, 'unit-tests', 'command', 'failed');
+`);
+    legacy.close();
+
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    await expect(
+      store.getStageExecution("legacy-run", "verify", 1),
+    ).resolves.toMatchObject({ verification_outcome: "failed" });
+
+    const probe = new Database(dbPath);
+    const cols = probe.prepare(`PRAGMA table_info(stage_executions)`).all() as {
+      name: string;
+    }[];
+    probe.close();
+    expect(cols.some((c) => c.name === "verification_outcome")).toBe(true);
   });
 
   it("adds checkout_root via ALTER on existing DB missing the column", async () => {
@@ -160,6 +368,66 @@ CREATE TABLE stage_events (
     const cols = probe.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
     probe.close();
     expect(cols.some((c) => c.name === "checkout_root")).toBe(true);
+  });
+
+  it("adds CI identity columns via ALTER on existing DB missing them", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-ci-alter-"));
+    const storeRoot = storeRootFor(root);
+    await mkdir(storeRoot, { recursive: true });
+    const dbPath = path.join(storeRoot, "state.db");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  task_id TEXT,
+  task_yaml TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE stages (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  status TEXT,
+  summary TEXT,
+  envelope_json TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  PRIMARY KEY (run_id, stage_id),
+  FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
+CREATE TABLE stage_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  event TEXT NOT NULL,
+  payload_json TEXT,
+  FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
+`);
+    legacy.close();
+
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      gitSha: "cafe1234",
+      ciPrUrl: "https://github.com/acme/repo/pull/7",
+      ciJobUrl: "https://github.com/acme/repo/actions/runs/11",
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.git_sha).toBe("cafe1234");
+    expect(meta.ci_pr_url).toBe("https://github.com/acme/repo/pull/7");
+    expect(meta.ci_job_url).toBe("https://github.com/acme/repo/actions/runs/11");
+
+    const probe = new Database(dbPath);
+    const cols = probe.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
+    probe.close();
+    expect(cols.some((c) => c.name === "git_sha")).toBe(true);
+    expect(cols.some((c) => c.name === "ci_pr_url")).toBe(true);
+    expect(cols.some((c) => c.name === "ci_job_url")).toBe(true);
   });
 
   it("rejects kind disk and SF_STORE=disk", async () => {
@@ -413,5 +681,220 @@ CREATE TABLE stage_events (
     expect(byStage["branch-a"]).toBe(11);
     expect(byStage["branch-b"]).toBe(11);
     expect(byStage["branch-c"]).toBe(11);
+  });
+
+  describe("listRuns filters", () => {
+    it("returns all runs newest-first with no filter", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-list-all-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const a = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      const b = await store.createRun({
+        pipelineId: "single",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+
+      const listed = await store.listRuns();
+      expect(listed.map((r) => r.run_id)).toEqual([b.runId, a.runId]);
+    });
+
+    it("filters by status", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-list-status-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const running = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const failed = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(failed.runId, "failed");
+
+      const listed = await store.listRuns({ status: "failed" });
+      expect(listed.map((r) => r.run_id)).toEqual([failed.runId]);
+      expect(listed.every((r) => r.status === "failed")).toBe(true);
+      expect(listed.some((r) => r.run_id === running.runId)).toBe(false);
+    });
+
+    it("filters by since (created_at lower bound)", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-list-since-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const older = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      const cutoff = new Date().toISOString();
+      await new Promise((r) => setTimeout(r, 5));
+      const newer = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+
+      const listed = await store.listRuns({ since: cutoff });
+      expect(listed.map((r) => r.run_id)).toEqual([newer.runId]);
+      expect(listed.some((r) => r.run_id === older.runId)).toBe(false);
+    });
+
+    it("filters by pipeline id or path", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-list-pipe-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const pipePath = path.join(root, "pipelines", "docs-only.pipeline.yaml");
+      const match = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+        pipelinePath: pipePath,
+      });
+      await store.createRun({
+        pipelineId: "single",
+        taskYaml: "id: t\ngoal: g\n",
+        pipelinePath: path.join(root, "pipelines", "single.pipeline.yaml"),
+      });
+
+      const byId = await store.listRuns({ pipeline: "docs-only" });
+      expect(byId.map((r) => r.run_id)).toEqual([match.runId]);
+
+      const byPath = await store.listRuns({ pipeline: pipePath });
+      expect(byPath.map((r) => r.run_id)).toEqual([match.runId]);
+    });
+
+    it("ANDs combined filters", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-list-and-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const keep = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(keep.runId, "succeeded");
+      const wrongStatus = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(wrongStatus.runId, "failed");
+      await store.createRun({
+        pipelineId: "single",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+
+      const listed = await store.listRuns({
+        status: "succeeded",
+        pipeline: "docs-only",
+      });
+      expect(listed.map((r) => r.run_id)).toEqual([keep.runId]);
+    });
+  });
+
+  it("createRun accepts optional status and defaults to running", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-status-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const running = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const queued = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      status: "queued",
+    });
+    expect((await store.readRunMeta(running.runId)).status).toBe("running");
+    expect((await store.readRunMeta(queued.runId)).status).toBe("queued");
+    const listedQueued = await store.listRuns({ status: "queued" });
+    expect(listedQueued.map((r) => r.run_id)).toEqual([queued.runId]);
+  });
+
+  it("sets finished_at once on first terminal transition", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-finished-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    expect((await store.readRunMeta(run.runId)).finished_at).toBeUndefined();
+
+    await store.updateRunStatus(run.runId, "succeeded");
+    const first = await store.readRunMeta(run.runId);
+    expect(first.finished_at).toBeDefined();
+    expect(first.status).toBe("succeeded");
+
+    await new Promise((r) => setTimeout(r, 5));
+    await store.updateRunStatus(run.runId, "failed");
+    const second = await store.readRunMeta(run.runId);
+    expect(second.status).toBe("failed");
+    expect(second.finished_at).toBe(first.finished_at);
+
+    const detail = await store.readRun(run.runId);
+    expect(detail.finished_at).toBe(first.finished_at);
+  });
+
+  it("threads lifecycle meta fields through readRun and listRuns", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-lifecycle-meta-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const dbPath = path.join(storeRootFor(root), "state.db");
+    const db = new Database(dbPath);
+    db.prepare(
+      `UPDATE runs SET cancel_reason = ?, finished_at = ?, slimmed_at = ?, disk_bytes = ?, disk_measured_at = ? WHERE run_id = ?`,
+    ).run(
+      "operator request",
+      "2026-09-01T00:00:00.000Z",
+      "2026-09-02T00:00:00.000Z",
+      4096,
+      "2026-09-02T01:00:00.000Z",
+      run.runId,
+    );
+    db.close();
+
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.cancel_reason).toBe("operator request");
+    expect(meta.finished_at).toBe("2026-09-01T00:00:00.000Z");
+    expect(meta.slimmed_at).toBe("2026-09-02T00:00:00.000Z");
+    expect(meta.disk_bytes).toBe(4096);
+    expect(meta.disk_measured_at).toBe("2026-09-02T01:00:00.000Z");
+
+    const detail = await store.readRun(run.runId);
+    expect(detail.cancel_reason).toBe("operator request");
+    expect(detail.disk_bytes).toBe(4096);
+
+    const listed = await store.listRuns();
+    const row = listed.find((r) => r.run_id === run.runId);
+    expect(row?.cancel_reason).toBe("operator request");
+    expect(row?.disk_bytes).toBe(4096);
+  });
+
+  it("close checkpoints WAL and allows reopen", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-close-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    for (let i = 0; i < 40; i++) {
+      await store.appendStageEvent(run.runId, "clarify", {
+        event: "started",
+      });
+      await store.updateRunStatus(run.runId, i % 2 === 0 ? "running" : "created");
+    }
+    await store.close();
+
+    const walPath = path.join(storeRootFor(root), "state.db-wal");
+    try {
+      const wal = await stat(walPath);
+      expect(wal.size).toBeLessThan(64 * 1024);
+    } catch (err) {
+      expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
+    }
+
+    const reopened = createRunStore({ rootDir: root, kind: "sqlite" });
+    const detail = await reopened.readRun(run.runId);
+    expect(detail.run_id).toBe(run.runId);
+    await reopened.close();
   });
 });

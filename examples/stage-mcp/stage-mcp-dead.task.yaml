@@ -1,0 +1,3 @@
+id: stage-mcp-dead
+goal: Exercise a passed MCP server that will not connect.
+context: The dead catalog entry uses a command that is not on PATH.

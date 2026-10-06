@@ -1,25 +1,106 @@
 import type { AgentPort } from "../agent/port.js";
-import type { RunStore, StageSnapshot } from "../runstore/port.js";
+import { normalizeForkChoice } from "../envelope/forkChoice.js";
+import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
+import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
+import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
+import {
+  defaultStageBrowserSupport,
+  resolveStageBrowserEnv,
+} from "../browser/stageBrowserEnv.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
+import {
+  teardownRunBrowsers,
+  teardownStageBrowser,
+} from "../browser/browserTeardown.js";
+import { isHumanLoginStage } from "../browser/humanLogin.js";
+import { createRunLiveness } from "../browser/runLiveness.js";
+import {
+  acquireStageProfile,
+  profileWaitingMessage,
+} from "../browser/stageProfileLock.js";
+import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
-import type { LoadedPipeline, ResolvedPipelineDag } from "../types/pipeline.js";
-import type { StageConfig } from "../types/stage.js";
+import type {
+  LoadedPipeline,
+  NeedTerminalState,
+  ResolvedPipelineDag,
+} from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import {
-  collectDownstreamClosure,
-  collectDownstreamStageIds,
-} from "./dagTraversal.js";
+  cloneFailureContinuesSchedule,
+  cloneRetryDownstream,
+  cloneFailFastSkipIds,
+  cloneScheduleAllowsRun,
+  failureIsAccepted,
+  isCloneInstance,
+  mint,
+  protectedClonableChildIds,
+  sequentialLaterCloneIds,
+  skipRejectedNeedDependents,
+} from "./cloneSchedule.js";
 import {
   buildCompletedEnvelopesFromRun,
   buildStageConfigById,
 } from "./envelopeRouting.js";
+import {
+  classifyInboundAfterSuccess,
+  isEagerSingleParentIfSkip,
+  joinAllowsRun,
+  pickStalledJoinSkips,
+} from "./joinReadiness.js";
+import { reopenRunnableSkippedStages, persistReopenedStages } from "./reopenSkipped.js";
+import type {
+  FeedbackLoopDecisionInput,
+  ResolveFeedbackLoopDecisionResult,
+} from "./feedbackLoopDecision.js";
+import {
+  forkChoicePreservesReplaySource,
+  forkCohortMapsFromStore,
+  mintCohortForFanout,
+} from "./forkGeneration.js";
+import {
+  activeReplayId,
+  activeSourceStageId,
+  applySendBack,
+  createReplaySchedule,
+  hydrateFromStore,
+  isHeld,
+  launchAttemptFor,
+  launchFor,
+  noteActiveCohort,
+  onContinued,
+  onRouteStageFailed,
+  onRouteStageRunning,
+  onRouteStageSucceeded,
+  rebindRouteAttempts,
+  resolveDecision,
+  type ReplayScheduleHandle,
+} from "./replayLifecycle.js";
 import { WAIT_WITHOUT_WORKER_DISPATCH } from "./answerResume.js";
 import type { PipelineRunResult } from "./pipelineRunner.js";
+import { reclaimWorkspaceOnRunSucceeded } from "./repositoryMaterialize.js";
+import { syncRunStatusFromStages } from "./stageRecovery.js";
 import type { StageProcessLauncher } from "./stageProcessLauncher.js";
 import type { StageExecutionMode } from "./stageConcurrency.js";
 import { runStage, isRunStageWaiting } from "./stageRunner.js";
 import type { StageHitlController } from "./stageHitl.js";
-import { attemptContext } from "./stageAttemptContext.js";
+import { attemptContext, resumeSessionFilePath } from "./stageAttemptContext.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import { stageBindingEnvFromRun } from "./stageRoots.js";
+import { attemptWorkspaceDir } from "../runstore/workspaceLayout.js";
+import {
+  cleanupCredentialsDir,
+  loadSecretRegistry,
+  resolveStageSecrets,
+  SecretUnavailableError,
+} from "./stageSecrets.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  logger as rootLogger,
+} from "../logging/logger.js";
+import { registerNamedSecrets, REDACTION_SECRETS_FILENAME } from "../logging/namedSecrets.js";
+import { finaliseStoredRunManifest } from "../runstore/runManifest.js";
 
 type SchedulerPreparedPipeline = {
   task: TaskFile;
@@ -28,9 +109,12 @@ type SchedulerPreparedPipeline = {
   agent: AgentPort;
   store: RunStore;
   cwd: string;
+  projectRoot?: string;
   checkoutRoot?: string;
   hitl?: StageHitlController;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
+  browser?: StageBrowserSupport;
 };
 
 export type { SchedulerPreparedPipeline };
@@ -58,7 +142,7 @@ type HasWorkOutsideBranchContext = {
   pendingDeltaStageIds?: ReadonlySet<string>;
 };
 
-type StageScheduleState =
+export type StageScheduleState =
   | "pending"
   | "active"
   | "waiting"
@@ -71,7 +155,21 @@ export type HydratedSchedule = {
   completedEnvelopes: Map<string, StageEnvelope>;
   schedulingHalted: boolean;
   firstFailureReason: string | undefined;
+  dag?: RunPipelineDagSnapshot;
 };
+
+function asDagSnapshot(dag: ResolvedPipelineDag): RunPipelineDagSnapshot {
+  const snapshot = dag as RunPipelineDagSnapshot;
+  if (Array.isArray(snapshot.stage_ids)) return snapshot;
+  return {
+    ...dag,
+    stage_ids: dag.nodes.map((n) => n.id),
+  };
+}
+
+function synthesizedFailureEnvelope(reason: string): StageEnvelope {
+  return { status: "failure", summary: reason, artifacts: [] };
+}
 
 export function snapshotToScheduleState(
   snap: { status: StageSnapshot["status"] },
@@ -90,6 +188,10 @@ export function snapshotToScheduleState(
       return "active";
     case "waiting_for_input":
       return executionMode === "process" ? "waiting" : "active";
+    case "interrupted":
+      return "waiting";
+    case "skipped":
+      return "skipped";
     default:
       return "pending";
   }
@@ -101,16 +203,20 @@ export async function hydrateScheduleFromStore(
   dag: ResolvedPipelineDag,
   executionMode: StageExecutionMode = "process",
 ): Promise<HydratedSchedule> {
+  const runDetail = await store.readRun(runId);
+  const meta = await store.readRunMeta(runId);
+  const resolvedDag = meta.pipeline_dag ?? asDagSnapshot(dag);
+
   const states = new Map<string, StageScheduleState>();
-  for (const node of dag.nodes) {
+  for (const node of resolvedDag.nodes) {
     states.set(node.id, "pending");
   }
 
-  const runDetail = await store.readRun(runId);
   const completedEnvelopes = await buildCompletedEnvelopesFromRun(
     store,
     runId,
     runDetail.stages,
+    resolvedDag,
   );
   let schedulingHalted = false;
   const overrides = new Map<string, StageScheduleState>();
@@ -123,16 +229,32 @@ export async function hydrateScheduleFromStore(
       executionMode,
     );
     states.set(snap.stage_id, state);
-    if (state === "failed") {
-      schedulingHalted = true;
-    }
   }
+  for (const [stageId, state] of states) {
+    if (state !== "failed") continue;
+    if (
+      cloneFailureContinuesSchedule(resolvedDag, stageId, completedEnvelopes)
+    ) {
+      continue;
+    }
+    if (failureIsAccepted(resolvedDag, stageId, states)) continue;
+    schedulingHalted = true;
+  }
+
+  await reopenRunnableSkippedStages(
+    store,
+    runId,
+    resolvedDag,
+    states,
+    completedEnvelopes,
+  );
 
   return {
     states,
     completedEnvelopes,
     schedulingHalted,
     firstFailureReason: undefined,
+    dag: resolvedDag,
   };
 }
 
@@ -143,24 +265,39 @@ export async function hydrateScheduleForRetryRoots(
   retryStageIds: string[],
 ): Promise<HydratedSchedule> {
   const runDetail = await store.readRun(runId);
-  const downstream = collectDownstreamClosure(dag, retryStageIds);
-  const retryRootSet = new Set(retryStageIds);
+  const meta = await store.readRunMeta(runId);
+  const resolvedDag = meta.pipeline_dag ?? asDagSnapshot(dag);
   const completedEnvelopes = await buildCompletedEnvelopesFromRun(
     store,
     runId,
     runDetail.stages,
+    resolvedDag,
   );
+  const downstream = cloneRetryDownstream(resolvedDag, retryStageIds);
+  for (const rootId of retryStageIds) {
+    for (const id of sequentialLaterCloneIds(
+      resolvedDag,
+      rootId,
+      completedEnvelopes,
+    )) {
+      downstream.add(id);
+    }
+  }
+  const retryRootSet = new Set(retryStageIds);
+  const { supersededCloneIds } = await forkCohortMapsFromStore(store, runId);
 
   const states = new Map<string, StageScheduleState>();
-  for (const node of dag.nodes) {
+  for (const node of resolvedDag.nodes) {
     states.set(node.id, "pending");
   }
 
   const overrides = new Map<string, StageScheduleState>();
   for (const rootId of retryStageIds) {
+    if (supersededCloneIds.has(rootId)) continue;
     overrides.set(rootId, "pending");
   }
   for (const id of downstream) {
+    if (supersededCloneIds.has(id)) continue;
     overrides.set(id, "pending");
   }
 
@@ -173,11 +310,24 @@ export async function hydrateScheduleForRetryRoots(
     }
   }
 
+  const skippedToReopen: string[] = [];
+  const skipStates = new Map<string, StageScheduleState>();
+  for (const snap of runDetail.stages) {
+    const id = snap.stage_id;
+    if (supersededCloneIds.has(id)) continue;
+    if (snap.status !== "skipped") continue;
+    if (!retryRootSet.has(id) && !downstream.has(id)) continue;
+    skippedToReopen.push(id);
+    skipStates.set(id, "skipped");
+  }
+  await persistReopenedStages(store, runId, skippedToReopen, skipStates);
+
   return {
     states,
     completedEnvelopes,
     schedulingHalted: false,
     firstFailureReason: undefined,
+    dag: resolvedDag,
   };
 }
 
@@ -197,13 +347,32 @@ export type ResumeRunOptions = {
   initialPrior?: StageEnvelope | null;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
+
+/** Refuses to overwrite a cancelled run (KTD7). */
+export async function writeTerminalRunStatus(
+  store: RunStore,
+  runId: string,
+  status: "succeeded" | "failed",
+): Promise<void> {
+  const meta = await store.readRunMeta(runId);
+  if (meta.status === "cancelled") return;
+  await store.updateRunStatus(runId, status);
+  await finaliseStoredRunManifest(store, runId).catch(() => undefined);
+  await refreshRunDiskUsage(store, runId).catch(() => undefined);
+  if (status === "succeeded") {
+    await reclaimWorkspaceOnRunSucceeded(store, runId);
+  }
+}
 
 export async function resumeRun(
   options: ResumeRunOptions,
 ): Promise<PipelineRunResult> {
   const { prepared, resumeFromStageId, initialPrior } = options;
-  const dag = prepared.loaded.dag;
+  const meta = await prepared.store.readRunMeta(prepared.run.runId);
+  const dag =
+    meta.pipeline_dag ?? buildPipelineDagSnapshotFromLoaded(prepared.loaded);
   const downstream = dag.childrenOf[resumeFromStageId];
   if (downstream?.length) {
     return runPipelineDag(options);
@@ -224,7 +393,8 @@ export async function resumeRun(
   const hasActive = [...hydrated.states.values()].some((s) => s === "active");
   if (hasActive) {
     return {
-      ok: true,
+      ok: false,
+      outcome: "waiting",
       runDir: prepared.run.workspaceDir,
       runId: prepared.run.runId,
     };
@@ -236,20 +406,20 @@ export async function resumeRun(
   });
 
   if (allTerminal) {
-    const allSucceeded = dag.nodes.every(
-      (node) => hydrated.states.get(node.id) === "succeeded",
-    );
-    await prepared.store.updateRunStatus(
+    const unhandledFailure = scheduleHasUnhandledFailure(dag, hydrated.states);
+    await writeTerminalRunStatus(
+      prepared.store,
       prepared.run.runId,
-      allSucceeded ? "succeeded" : "failed",
+      unhandledFailure ? "failed" : "succeeded",
     );
     return {
-      ok: allSucceeded,
+      ok: !unhandledFailure,
+      outcome: unhandledFailure ? "failed" : "succeeded",
       runDir: prepared.run.workspaceDir,
       runId: prepared.run.runId,
-      ...(allSucceeded
-        ? {}
-        : { reason: hydrated.firstFailureReason ?? "pipeline incomplete" }),
+      ...(unhandledFailure
+        ? { reason: hydrated.firstFailureReason ?? "pipeline incomplete" }
+        : {}),
     };
   }
 
@@ -270,6 +440,20 @@ export type RunPipelineDagOptions = {
   mutationQueue?: RetryMutationQueue;
   onLoopTick?: () => void | Promise<void>;
   onRetryRootTerminal?: OnRetryRootTerminal;
+  /**
+   * In-process park for feedback-loop exhausted-limit decisions. When omitted,
+   * the scheduler exits with outcome "waiting" and callers use
+   * resolveFeedbackLoopDecision + resume separately (Phase 6 surfaces).
+   */
+  onFeedbackLoopWaiting?: (ctx: {
+    loopId: string;
+    sourceStageId: string;
+    resolve: (
+      decision: FeedbackLoopDecisionInput,
+    ) => Promise<ResolveFeedbackLoopDecisionResult>;
+  }) => Promise<void>;
+  /** Live cancel flag — when set, launchStage/startStage stop. */
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
 
 export type RetryRunOptions = {
@@ -281,6 +465,7 @@ export type RetryRunOptions = {
   mutationQueue?: RetryMutationQueue;
   onLoopTick?: () => void | Promise<void>;
   onRetryRootTerminal?: OnRetryRootTerminal;
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
 
 export async function retryRun(
@@ -290,7 +475,7 @@ export async function retryRun(
   const hydrated = await hydrateScheduleForRetryRoots(
     prepared.store,
     prepared.run.runId,
-    prepared.loaded.dag,
+    buildPipelineDagSnapshotFromLoaded(prepared.loaded),
     [...retryRoots.keys()],
   );
   return runPipelineDag({
@@ -303,7 +488,75 @@ export async function retryRun(
     mutationQueue: options.mutationQueue,
     onLoopTick: options.onLoopTick,
     onRetryRootTerminal: options.onRetryRootTerminal,
+    schedulingHalt: options.schedulingHalt,
   });
+}
+
+function applyForkChoiceToSchedule(
+  dag: ResolvedPipelineDag,
+  forkStageId: string,
+  chosen: Set<string>,
+  states: Map<string, StageScheduleState>,
+  options?: {
+    onSkip?: (childId: string) => void;
+    protectedIds?: ReadonlySet<string>;
+  },
+): void {
+  const skipPending = (stageId: string) => {
+    if (states.get(stageId) === "pending") {
+      states.set(stageId, "skipped");
+      options?.onSkip?.(stageId);
+    }
+  };
+
+  for (const childId of dag.childrenOf[forkStageId] ?? []) {
+    if (options?.protectedIds?.has(childId)) continue;
+    if (!chosen.has(childId)) {
+      skipPending(childId);
+      skipRejectedNeedDependents(dag, childId, states, "skipped", skipPending);
+    }
+  }
+}
+
+export function applyForkSkipsFromEnvelopes(
+  dag: ResolvedPipelineDag,
+  states: Map<string, StageScheduleState>,
+  completedEnvelopes: Map<string, StageEnvelope>,
+): void {
+  for (const node of dag.nodes) {
+    if (!node.fork) continue;
+    const envelope = completedEnvelopes.get(node.id);
+    if (!envelope) continue;
+    const chosen = normalizeForkChoice(envelope.fork_choice, "stored");
+    applyForkChoiceToSchedule(dag, node.id, chosen, states);
+  }
+}
+
+async function applyEagerRouteIfSkipsFromEnvelopes(
+  dag: ResolvedPipelineDag,
+  states: Map<string, StageScheduleState>,
+  completedEnvelopes: Map<string, StageEnvelope>,
+  persistSkip: (id: string) => Promise<void>,
+): Promise<string | undefined> {
+  for (const [parentId, envelope] of completedEnvelopes) {
+    if (states.get(parentId) !== "succeeded") continue;
+    for (const childId of dag.childrenOf[parentId] ?? []) {
+      const child = dag.nodes.find((n) => n.id === childId);
+      if (!child) continue;
+      const result = classifyInboundAfterSuccess(
+        child,
+        parentId,
+        envelope.payload,
+      );
+      if (result === "missing_field") {
+        return parentId;
+      }
+      if (isEagerSingleParentIfSkip(child, parentId, envelope.payload)) {
+        await persistSkip(childId);
+      }
+    }
+  }
+  return undefined;
 }
 
 export function applyRetryRootDelta(
@@ -314,14 +567,26 @@ export function applyRetryRootDelta(
   stageId: string,
   attempt: number,
   clearSchedulingHalt?: () => void,
+  alreadyLaunchedIds?: ReadonlySet<string>,
 ): void {
   retryRoots.set(stageId, attempt);
-  const downstream = collectDownstreamClosure(dag, [stageId]);
+  const downstream = cloneRetryDownstream(dag, [stageId]);
   const resetIds = new Set<string>([stageId, ...downstream]);
+  for (const id of sequentialLaterCloneIds(dag, stageId, completedEnvelopes)) {
+    resetIds.add(id);
+  }
 
   for (const id of resetIds) {
     const state = states.get(id);
-    if (state === "active" || state === "succeeded") {
+    if (state === "active") {
+      completedEnvelopes.delete(id);
+      continue;
+    }
+    if (
+      id === stageId &&
+      state === "succeeded" &&
+      alreadyLaunchedIds?.has(id)
+    ) {
       completedEnvelopes.delete(id);
       continue;
     }
@@ -339,7 +604,7 @@ export function hasWorkOutsideBranch(
 ): boolean {
   const branchIds = new Set([
     branchRootId,
-    ...collectDownstreamStageIds(dag, branchRootId),
+    ...cloneRetryDownstream(dag, [branchRootId]),
   ]);
   for (const node of dag.nodes) {
     if (branchIds.has(node.id)) continue;
@@ -374,6 +639,18 @@ function terminalState(status: StageScheduleState): boolean {
   return status === "succeeded" || status === "failed" || status === "skipped";
 }
 
+function scheduleHasUnhandledFailure(
+  dag: ResolvedPipelineDag,
+  states: Map<string, StageScheduleState>,
+): boolean {
+  for (const [stageId, state] of states) {
+    if (state !== "failed") continue;
+    if (failureIsAccepted(dag, stageId, states)) continue;
+    return true;
+  }
+  return false;
+}
+
 function sortRunnableIds(
   dag: ResolvedPipelineDag,
   ids: string[],
@@ -391,14 +668,37 @@ function isRunnable(
   stageId: string,
   states: Map<string, StageScheduleState>,
   schedulingHalted: boolean,
+  completedEnvelopes: Map<string, StageEnvelope>,
+  feedback?: ReplayScheduleHandle,
 ): boolean {
   if (schedulingHalted) return false;
+  if (feedback !== undefined && isHeld(feedback, stageId)) return false;
   const state = states.get(stageId);
   if (state !== "pending") return false;
-  const node = dag.nodes.find((n) => n.id === stageId);
-  if (!node) return false;
-  if (node.needs === null) return true;
-  return states.get(node.needs) === "succeeded";
+  if (!joinAllowsRun(dag, stageId, states, completedEnvelopes)) return false;
+  return cloneScheduleAllowsRun(dag, stageId, states, completedEnvelopes);
+}
+
+export function hydratedScheduleHasRunnableWork(
+  hydrated: HydratedSchedule,
+): boolean {
+  if (hydrated.schedulingHalted) return false;
+  const dag = hydrated.dag;
+  if (dag === undefined) return false;
+  for (const node of dag.nodes) {
+    if (
+      isRunnable(
+        dag,
+        node.id,
+        hydrated.states,
+        hydrated.schedulingHalted,
+        hydrated.completedEnvelopes,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function runPipelineDag(
@@ -415,17 +715,69 @@ export async function runPipelineDag(
     checkoutRoot,
     hitl,
     cwd,
+    projectRoot,
   } = prepared;
-  const dag = loaded.dag;
-  const stageById = buildStageConfigById(loaded);
-
-  let { states, completedEnvelopes, schedulingHalted, firstFailureReason } =
+  const factoryCwd = projectRoot ?? cwd ?? process.cwd();
+  const fallbackDag = buildPipelineDagSnapshotFromLoaded(loaded);
+  let {
+    states,
+    completedEnvelopes,
+    schedulingHalted,
+    firstFailureReason,
+    dag: hydratedDag,
+  } =
     options.initialSchedule ??
-    (await hydrateScheduleFromStore(store, run.runId, dag, executionMode));
+    (await hydrateScheduleFromStore(store, run.runId, fallbackDag, executionMode));
+  let dag: RunPipelineDagSnapshot = hydratedDag ?? fallbackDag;
+  const runMeta = await store.readRunMeta(run.runId);
+  if (hydratedDag === undefined) {
+    dag = runMeta.pipeline_dag ?? fallbackDag;
+  }
+  const stageBinding = stageBindingEnvFromRun({
+    meta: runMeta,
+    task,
+    runWorkspaceDir: run.workspaceDir,
+    hostEnv: process.env,
+  });
+  const stageById = buildStageConfigById(loaded);
+  const runUsesBrowser = [...stageById.values()].some((s) => s.browser !== undefined);
 
   const retryContext = options.retryContext;
+  const feedbackSchedule = createReplaySchedule();
+  await hydrateFromStore(feedbackSchedule, store, run.runId, dag);
+  if (
+    retryContext !== undefined &&
+    activeReplayId(feedbackSchedule) !== undefined
+  ) {
+    const routeIds = new Set(
+      feedbackSchedule.feedback.contextsByStageId.keys(),
+    );
+    const cascade = cloneRetryDownstream(dag, [
+      ...retryContext.retryRoots.keys(),
+    ]);
+    const overrides = new Map<string, number>();
+    for (const [stageId, attempt] of retryContext.retryRoots) {
+      if (routeIds.has(stageId)) overrides.set(stageId, attempt);
+    }
+    for (const stageId of cascade) {
+      if (!routeIds.has(stageId)) continue;
+      if (overrides.has(stageId)) continue;
+      const exec = await store.createStageExecution(run.runId, stageId);
+      overrides.set(stageId, exec.attempt);
+    }
+    await rebindRouteAttempts(
+      feedbackSchedule,
+      store,
+      run.runId,
+      overrides,
+    );
+  }
 
   const resolveLaunchAttempt = async (stageId: string): Promise<number> => {
+    const feedbackAttempt = launchAttemptFor(feedbackSchedule, stageId);
+    if (feedbackAttempt !== undefined) {
+      return feedbackAttempt;
+    }
     if (retryContext) {
       const preCreatedAttempt = retryContext.retryRoots.get(stageId);
       if (preCreatedAttempt !== undefined) {
@@ -434,11 +786,9 @@ export async function runPipelineDag(
       const execution = await store.createStageExecution(run.runId, stageId);
       return execution.attempt;
     }
-    const attemptCount = await store.countStageAttempts(run.runId, stageId);
-    if (attemptCount === 0) {
-      await store.createStageExecution(run.runId, stageId);
-    }
-    return 1;
+    const latest = await store.getLatestStageExecution(run.runId, stageId);
+    if (latest !== null) return latest.attempt;
+    return (await store.createStageExecution(run.runId, stageId)).attempt;
   };
 
   if (options.resumeFromStageId !== undefined) {
@@ -473,8 +823,11 @@ export async function runPipelineDag(
     }
   }
 
+  applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
+
   let activeCount = 0;
   const inFlight = new Set<Promise<void>>();
+  const launchedIds = new Set<string>();
 
   const notifyRetryRootTerminal = (
     stageId: string,
@@ -486,6 +839,72 @@ export async function runPipelineDag(
     options.onRetryRootTerminal?.(stageId, attempt, outcome);
   };
 
+  const persistSkipRejected = async (
+    parentId: string,
+    observed: NeedTerminalState,
+  ) => {
+    const ids: string[] = [];
+    skipRejectedNeedDependents(dag, parentId, states, observed, (id) => {
+      if (states.get(id) !== "pending") return;
+      states.set(id, "skipped");
+      ids.push(id);
+    });
+    for (const id of ids) {
+      notifyRetryRootTerminal(id, "skipped");
+      await store.appendStageEvent(run.runId, id, { event: "skipped" });
+    }
+  };
+
+  const persistSkipPending = async (id: string) => {
+    if (states.get(id) !== "pending") return;
+    states.set(id, "skipped");
+    notifyRetryRootTerminal(id, "skipped");
+    await store.appendStageEvent(run.runId, id, { event: "skipped" });
+    await persistSkipRejected(id, "skipped");
+  };
+
+  /**
+   * Finalizes multi-parent (implicit-AND) join nodes that are permanently
+   * stuck in `pending`: every predecessor edge has reached a terminal state,
+   * but `joinAllowsRun` still can't be satisfied, and terminal
+   * states never change back. `shouldSkipForObservedNeed` deliberately
+   * refuses to decide these nodes from a single resolving parent (see its
+   * comment in cloneSchedule.ts), so this is the only place their fate gets
+   * sealed -- once we're sure every sibling has actually settled. Runs once
+   * per scheduler tick; loops until a pass finds nothing new, so a chain of
+   * stalled joins settles within a single tick rather than one per ~25ms
+   * poll.
+   */
+  const applyStalledJoinSkips = async (): Promise<void> => {
+    for (;;) {
+      const ids = pickStalledJoinSkips(dag, states, completedEnvelopes);
+      if (ids.length === 0) return;
+      for (const id of ids) {
+        await persistSkipPending(id);
+      }
+    }
+  };
+
+  for (const [stageId, state] of states) {
+    if (state !== "failed") continue;
+    for (const id of cloneFailFastSkipIds(dag, stageId, completedEnvelopes)) {
+      await persistSkipPending(id);
+    }
+  }
+
+  const missingRouteIfParent = await applyEagerRouteIfSkipsFromEnvelopes(
+    dag,
+    states,
+    completedEnvelopes,
+    persistSkipPending,
+  );
+  if (missingRouteIfParent !== undefined) {
+    schedulingHalted = true;
+    if (firstFailureReason === undefined) {
+      firstFailureReason = `stage "${missingRouteIfParent}": route if field missing from payload`;
+    }
+  }
+
   const markSkippedPending = () => {
     for (const node of dag.nodes) {
       if (states.get(node.id) === "pending") {
@@ -496,7 +915,7 @@ export async function runPipelineDag(
   };
 
   const markBranchDownstreamSkipped = (stageId: string) => {
-    for (const id of collectDownstreamStageIds(dag, stageId)) {
+    for (const id of cloneRetryDownstream(dag, [stageId])) {
       if (states.get(id) === "pending") {
         states.set(id, "skipped");
         notifyRetryRootTerminal(id, "skipped");
@@ -524,76 +943,546 @@ export async function runPipelineDag(
         () => {
           schedulingHalted = false;
         },
+        launchedIds,
       );
     });
   };
 
-  const onStageFailure = async (stageId: string, reason: string) => {
+  const recordCloneFailureEnvelope = async (
+    stageId: string,
+    reason: string,
+    envelope?: StageEnvelope,
+  ) => {
+    if (!isCloneInstance(dag, stageId)) {
+      if (envelope !== undefined) {
+        completedEnvelopes.set(stageId, envelope);
+      }
+      return;
+    }
+    const failureEnvelope =
+      envelope ??
+      completedEnvelopes.get(stageId) ??
+      synthesizedFailureEnvelope(reason);
+    completedEnvelopes.set(stageId, failureEnvelope);
+    if (envelope === undefined) {
+      try {
+        await store.writeEnvelope(run.runId, stageId, failureEnvelope);
+      } catch {
+      }
+    }
+  };
+
+  const scheduleAutomaticRepair = async (
+    stageId: string,
+  ): Promise<boolean> => {
+    const recovery = dag.nodes.find((node) => node.id === stageId)?.recovery;
+    if (recovery?.mode !== "repair") return false;
+    const latestAttempt = await store.getLatestStageExecution(run.runId, stageId);
+    if (latestAttempt?.verification_outcome !== "failed") return false;
+    const attempts = await store.countStageAttempts(run.runId, stageId);
+    if (attempts >= recovery.max_attempts) return false;
+
+    const nextAttempt = await store.createStageExecution(run.runId, stageId);
+    if (retryContext !== undefined) {
+      retryContext.retryRoots.set(stageId, nextAttempt.attempt);
+    }
+    if (activeReplayId(feedbackSchedule) !== undefined) {
+      await rebindRouteAttempts(
+        feedbackSchedule,
+        store,
+        run.runId,
+        new Map([[stageId, nextAttempt.attempt]]),
+      );
+    }
+    states.set(stageId, "pending");
+    completedEnvelopes.delete(stageId);
+    return true;
+  };
+
+  const onStageFailure = async (
+    stageId: string,
+    reason: string,
+    envelope?: StageEnvelope,
+  ) => {
+    if (await scheduleAutomaticRepair(stageId)) return;
+    if (activeReplayId(feedbackSchedule) !== undefined) {
+      await onRouteStageFailed({
+        store,
+        runId: run.runId,
+        schedule: feedbackSchedule,
+        stageId,
+      });
+    }
     states.set(stageId, "failed");
     notifyRetryRootTerminal(stageId, "failed");
+    await recordCloneFailureEnvelope(stageId, reason, envelope);
+    await persistSkipRejected(stageId, "failed");
+    if (cloneFailureContinuesSchedule(dag, stageId, completedEnvelopes)) {
+      if (firstFailureReason === undefined) {
+        firstFailureReason = reason;
+      }
+      for (const id of cloneFailFastSkipIds(
+        dag,
+        stageId,
+        completedEnvelopes,
+      )) {
+        await persistSkipPending(id);
+      }
+      if (retryContext) {
+        drainRetryMutations();
+      }
+      return;
+    }
     if (retryContext) {
-      markBranchDownstreamSkipped(stageId);
+      const accepted = failureIsAccepted(dag, stageId, states);
+      if (!accepted) {
+        markBranchDownstreamSkipped(stageId);
+      }
       drainRetryMutations();
-      if (!hasWorkOutsideBranch(dag, stageId, states, outsideWorkContext())) {
+      if (
+        !accepted &&
+        !hasWorkOutsideBranch(dag, stageId, states, outsideWorkContext())
+      ) {
         schedulingHalted = true;
       }
-      if (firstFailureReason === undefined) {
+      if (!accepted && firstFailureReason === undefined) {
         firstFailureReason = reason;
       }
       return;
     }
-    if (!schedulingHalted) {
-      schedulingHalted = true;
-      firstFailureReason = reason;
+    if (!failureIsAccepted(dag, stageId, states)) {
+      if (!schedulingHalted) {
+        schedulingHalted = true;
+        firstFailureReason = reason;
+      }
     }
   };
 
-  const onStageSuccess = (stageId: string, envelope: StageEnvelope) => {
+  const onStageSuccess = async (stageId: string, envelope: StageEnvelope) => {
     states.set(stageId, "succeeded");
     completedEnvelopes.set(stageId, envelope);
     notifyRetryRootTerminal(stageId, "succeeded");
+
+    const minted = mint(dag, stageId, envelope);
+    if (minted.kind === "error") {
+      await handlePostSuccessError(stageId, minted.reason);
+      return;
+    }
+    if (minted.kind === "minted") {
+      dag = minted.dag;
+      await store.updatePipelineDag(run.runId, dag);
+      states.delete(minted.catalogChildId);
+      for (const id of minted.instanceIds) {
+        states.set(id, "pending");
+      }
+      const replayId = activeReplayId(feedbackSchedule);
+      if (replayId !== undefined) {
+        noteActiveCohort(feedbackSchedule, stageId, minted.instanceIds);
+        await mintCohortForFanout({
+          store,
+          runId: run.runId,
+          replayId,
+          forkParent: stageId,
+          cloneStageIds: minted.instanceIds,
+        });
+      }
+    }
+
+    const feedbackAction = envelope.feedback_loop;
+    if (feedbackAction?.action === "send_back") {
+      const node = dag.nodes.find((n) => n.id === stageId);
+      if (node === undefined || node.feedback_loop === undefined) {
+        await handlePostSuccessError(
+          stageId,
+          `feedback_loop send_back from stage "${stageId}" without feedback_loop policy`,
+        );
+        return;
+      }
+      const latest = await store.getLatestStageExecution(run.runId, stageId);
+      const sourceAttempt = latest?.attempt ?? 1;
+      const applied = await applySendBack({
+        store,
+        runId: run.runId,
+        sourceNode: node,
+        sourceAttempt,
+        envelope,
+        schedule: feedbackSchedule,
+        projection: {
+          dag,
+          states,
+          completedEnvelopes,
+        },
+      });
+      if (applied.kind === "rejected") {
+        await handlePostSuccessError(stageId, applied.reason);
+        return;
+      }
+      if (applied.kind === "waiting_for_human") {
+        const waitAttempt = sourceAttempt;
+        await store.appendStageEvent(
+          run.runId,
+          stageId,
+          { event: "waiting_for_input" },
+          { attempt: waitAttempt },
+        );
+        try {
+          await store.updateStageExecution(run.runId, stageId, waitAttempt, {
+            status: "waiting_for_input",
+          });
+        } catch {
+          // execution row may be absent in unusual harnesses
+        }
+        states.set(stageId, "waiting");
+
+        if (options.onFeedbackLoopWaiting !== undefined) {
+          let decisionResult: ResolveFeedbackLoopDecisionResult | undefined;
+          await options.onFeedbackLoopWaiting({
+            loopId: applied.loop.loop_id,
+            sourceStageId: stageId,
+            resolve: async (decision) => {
+              decisionResult = await resolveDecision({
+                store,
+                runId: run.runId,
+                decision: decision.decision,
+                loopId: applied.loop.loop_id,
+                reason: decision.reason,
+                schedule: feedbackSchedule,
+                projection: {
+                  dag,
+                  states,
+                  completedEnvelopes,
+                },
+                sourceNode: node,
+              });
+              return decisionResult;
+            },
+          });
+          if (decisionResult === undefined) {
+            return;
+          }
+          if (!decisionResult.ok) {
+            await handlePostSuccessError(stageId, decisionResult.reason);
+            return;
+          }
+          if (decisionResult.effect === "abandoned") {
+            schedulingHalted = true;
+            if (firstFailureReason === undefined) {
+              firstFailureReason = decisionResult.reason;
+            }
+            return;
+          }
+          return;
+        }
+        return;
+      }
+      for (const id of applied.retiredSkippedStageIds) {
+        await store.appendStageEvent(run.runId, id, { event: "skipped" });
+      }
+      return;
+    }
+
+    if (feedbackAction?.action === "continue") {
+      await onContinued({
+        store,
+        runId: run.runId,
+        sourceStageId: stageId,
+        envelope,
+        schedule: feedbackSchedule,
+      });
+    } else if (activeReplayId(feedbackSchedule) !== undefined) {
+      await onRouteStageSucceeded({
+        store,
+        runId: run.runId,
+        schedule: feedbackSchedule,
+        stageId,
+        envelope,
+      });
+    }
+
+    const node = dag.nodes.find((n) => n.id === stageId);
+    const protectedIds = protectedClonableChildIds(dag, stageId, envelope);
+    if (node?.fork) {
+      const chosen = normalizeForkChoice(envelope.fork_choice, "stored");
+      const sourceId = activeSourceStageId(feedbackSchedule);
+      if (
+        activeReplayId(feedbackSchedule) !== undefined &&
+        sourceId !== undefined &&
+        !forkChoicePreservesReplaySource(dag, new Set(chosen), sourceId)
+      ) {
+        await handlePostSuccessError(
+          stageId,
+          `fork_choice during feedback replay must preserve a path to source "${sourceId}"`,
+        );
+        return;
+      }
+      const skippedIds: string[] = [];
+      // applyForkChoiceToSchedule (and everything it calls, including
+      // skipRejectedNeedDependents in cloneSchedule.ts) is fully synchronous
+      // -- no `await` anywhere in that call chain. So by the time this call
+      // returns, `states` already reflects every one of this stage's
+      // unchosen children as terminal, atomically, before the persistence
+      // loop below runs its first `await`. A downstream multi-parent join
+      // (see pickStalledJoinSkips) that depends on several of these children
+      // therefore always decides off fully-consistent in-memory state, even
+      // though its own `stage_events` row can end up persisted *between*
+      // two of these sequential appendStageEvent calls below (this loop) --
+      // that interleaving is only a SQLite write-ordering artifact, not a
+      // sign the join decided early.
+      applyForkChoiceToSchedule(dag, stageId, chosen, states, {
+        protectedIds,
+        onSkip: (id) => {
+          notifyRetryRootTerminal(id, "skipped");
+          skippedIds.push(id);
+        },
+      });
+      for (const id of skippedIds) {
+        await store.appendStageEvent(run.runId, id, { event: "skipped" });
+      }
+    }
+
+    const missingParent = await applyEagerRouteIfSkipsFromEnvelopes(
+      dag,
+      states,
+      new Map([[stageId, envelope]]),
+      persistSkipPending,
+    );
+    if (missingParent !== undefined) {
+      schedulingHalted = true;
+      if (firstFailureReason === undefined) {
+        firstFailureReason = `stage "${missingParent}": route if field missing from payload`;
+      }
+      return;
+    }
+
+    await reopenRunnableSkippedStages(
+      store,
+      run.runId,
+      dag,
+      states,
+      completedEnvelopes,
+    );
+  };
+
+  const handlePostSuccessError = async (stageId: string, reason: string) => {
+    if (states.get(stageId) === "succeeded") {
+      completedEnvelopes.delete(stageId);
+      await store.appendStageEvent(run.runId, stageId, {
+        event: "failed",
+        reason,
+      });
+    }
+    await onStageFailure(stageId, reason);
   };
 
   const launchStage = async (stageId: string): Promise<void> => {
-    const stage = stageById.get(stageId);
+    const definitionId = definitionIdForInstance(dag, stageId);
+    const stage = stageById.get(definitionId);
     if (!stage) {
       await onStageFailure(stageId, `stage config missing for "${stageId}"`);
       return;
     }
 
     const attempt = await resolveLaunchAttempt(stageId);
+    if (stage.browser?.profile !== undefined) {
+      const profile = stage.browser.profile;
+      // A stage queued behind another run's lease must not hold one of this
+      // run's active slots; it takes the slot back once it joins the lease.
+      let slotReleased = false;
+      let acquired: Awaited<ReturnType<typeof acquireStageProfile>>;
+      try {
+        acquired = await acquireStageProfile(
+          prepared.browser ?? defaultStageBrowserSupport(),
+          {
+            profile,
+            owner: { runId: run.runId, stageId },
+            isRunLive: createRunLiveness(store),
+            halted: () => options.schedulingHalt?.halted === true,
+            onWaiting: async (holder) => {
+              if (!slotReleased) {
+                slotReleased = true;
+                activeCount -= 1;
+              }
+              await store.appendStageEvent(
+                run.runId,
+                stageId,
+                {
+                  event: "message",
+                  role: "host",
+                  text: profileWaitingMessage(profile, holder),
+                },
+                { attempt },
+              );
+            },
+          },
+        );
+      } finally {
+        if (slotReleased) activeCount += 1;
+      }
+      if (acquired === "halted") {
+        states.set(stageId, "skipped");
+        return;
+      }
+    }
     const attemptCtx = attemptContext(attempt);
+    const prep = launchFor(feedbackSchedule, stageId);
+    const feedbackLoopContext = prep?.feedbackLoopContext;
+    const sessionMode = prep?.sessionMode;
+    const priorAttempt = prep?.priorAttempt;
+    const resumeToken =
+      sessionMode === "feedback_resume" && priorAttempt !== undefined
+        ? resumeSessionFilePath(run.workspaceDir, stageId, priorAttempt)
+        : undefined;
+
+    if (
+      activeReplayId(feedbackSchedule) !== undefined &&
+      feedbackLoopContext !== undefined
+    ) {
+      await onRouteStageRunning({
+        store,
+        runId: run.runId,
+        schedule: feedbackSchedule,
+        stageId,
+      });
+    }
+
+    const attemptDir = attemptWorkspaceDir(run.workspaceDir, stageId, attempt);
+    await mkdir(attemptDir, { recursive: true });
+    const attemptHome = path.join(attemptDir, "home");
+    await mkdir(attemptHome, { recursive: true });
+    let grants;
+    try {
+      const resolved = resolveStageSecrets({
+        decls: stage.secrets,
+        registry: loadSecretRegistry(process.env),
+        hostEnv: process.env,
+        attemptDir,
+      });
+      grants = resolved.grants;
+      registerNamedSecrets(resolved.knownValues);
+      await writeFile(
+        path.join(attemptDir, REDACTION_SECRETS_FILENAME),
+        `${JSON.stringify(resolved.knownValues)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      for (const warning of resolved.warnings) {
+        rootLogger.warn("stage.secrets", warning, {
+          run_id: run.runId,
+          stage_id: stageId,
+        });
+      }
+      await writeFile(
+        path.join(attemptDir, "declared-secrets.json"),
+        `${JSON.stringify({ names: grants.declaredSecretNames }, null, 2)}\n`,
+        "utf8",
+      );
+    } catch (err) {
+      const reason =
+        err instanceof SecretUnavailableError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      await onStageFailure(stageId, reason);
+      return;
+    }
+
+    const cleanupAttemptCredentials = () => {
+      try {
+        cleanupCredentialsDir(attemptDir);
+      } catch {
+        // best-effort Host cleanup
+      }
+    };
+
+    let browserEnv: Record<string, string> | undefined;
+    try {
+      browserEnv = await resolveStageBrowserEnv(
+        prepared.browser ?? defaultStageBrowserSupport(),
+        {
+          runId: run.runId,
+          stageId,
+          runDir: run.workspaceDir,
+          browser: stage.browser,
+          attempt,
+          humanLogin: isHumanLoginStage(dag, definitionId, stage.browser),
+        },
+      );
+    } catch (err) {
+      cleanupAttemptCredentials();
+      await onStageFailure(
+        stageId,
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
 
     if (executionMode === "process") {
       const launcher = options.stageProcessLauncher;
       if (!launcher) {
+        cleanupAttemptCredentials();
         await onStageFailure(stageId, "stage process launcher is not configured");
         return;
       }
-      const launchResult = await launcher.launch({
-        runId: run.runId,
-        stageId,
-        stage,
-        rootDir: cwd,
-        workspaceDir: run.workspaceDir,
-        attempt,
-        ...(prepared.operatorCatalog !== undefined
-          ? { operatorCatalog: prepared.operatorCatalog }
-          : {}),
-      });
-      if (launchResult.type === "succeeded") {
+      let launchResult;
+      try {
+        launchResult = await launcher.launch({
+          runId: run.runId,
+          stageId,
+          rootDir: factoryCwd,
+          stage,
+          factoryCwd,
+          workspaceDir: run.workspaceDir,
+          attempt,
+          env: stageBinding.env,
+          bindingKind: stageBinding.kind,
+          model: stage.model,
+          grants,
+          attemptHome,
+          ...(browserEnv !== undefined ? { browserEnv } : {}),
+          ...(sessionMode !== undefined
+            ? {
+                mode:
+                  sessionMode === "feedback_resume"
+                    ? "feedback_resume"
+                    : sessionMode === "new_session"
+                      ? "new_session"
+                      : "run",
+              }
+            : {}),
+          ...(resumeToken !== undefined ? { sessionFilePath: resumeToken } : {}),
+          ...(prepared.operatorCatalog !== undefined
+            ? { operatorCatalog: prepared.operatorCatalog }
+            : {}),
+          ...(prepared.skipGates ? { skipGates: true } : {}),
+        });
+      } finally {
+        cleanupAttemptCredentials();
+      }      if (launchResult.type === "succeeded") {
         try {
           const envelope = await store.readEnvelope(run.runId, stageId);
-          onStageSuccess(stageId, envelope);
-        } catch {
-          states.set(stageId, "succeeded");
-          notifyRetryRootTerminal(stageId, "succeeded");
+          await onStageSuccess(stageId, envelope);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          await handlePostSuccessError(stageId, reason);
         }
         return;
       }
       if (launchResult.type === "waiting") {
         states.set(stageId, "waiting");
         return;
+      }
+      if (options.schedulingHalt?.hostShutdown) {
+        states.set(stageId, "waiting");
+        return;
+      }
+      const recorded = await store.listStageEvents(run.runId, stageId, attempt);
+      if (!recorded.some((event) => event.event === "failed")) {
+        await store.appendStageEvent(
+          run.runId,
+          stageId,
+          { event: "failed", reason: launchResult.reason },
+          { attempt },
+        );
       }
       await onStageFailure(stageId, launchResult.reason);
       return;
@@ -604,16 +1493,29 @@ export async function runPipelineDag(
       store,
       runId: run.runId,
       stage,
+      stageId,
       task,
       dag,
       checkoutRoot,
       workspaceDir: run.workspaceDir,
       hitl,
       attemptCtx,
-      factoryCwd: cwd,
+      factoryCwd,
       operatorCatalog: prepared.operatorCatalog,
       completedEnvelopes,
+      skipGates: prepared.skipGates,
+      ...(prepared.browser !== undefined ? { browser: prepared.browser } : {}),
+      stageEnv: {
+        ...stageBinding.env,
+        ...grants.env,
+        ...browserEnv,
+        HOME: attemptHome,
+      },
+      ...(sessionMode !== undefined ? { sessionMode } : {}),
+      ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
+      ...(resumeToken !== undefined ? { resumeToken } : {}),
     });
+    cleanupAttemptCredentials();
 
     if (isRunStageWaiting(result)) {
       await onStageFailure(stageId, WAIT_WITHOUT_WORKER_DISPATCH);
@@ -621,11 +1523,24 @@ export async function runPipelineDag(
     }
 
     if (!result.ok) {
-      await onStageFailure(stageId, result.reason ?? "stage failed");
+      if (options.schedulingHalt?.hostShutdown) {
+        states.set(stageId, "waiting");
+        return;
+      }
+      await onStageFailure(
+        stageId,
+        result.reason ?? "stage failed",
+        result.envelope,
+      );
       return;
     }
     if (result.envelope) {
-      onStageSuccess(stageId, result.envelope);
+      try {
+        await onStageSuccess(stageId, result.envelope);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        await handlePostSuccessError(stageId, reason);
+      }
     } else {
       states.set(stageId, "succeeded");
       notifyRetryRootTerminal(stageId, "succeeded");
@@ -635,18 +1550,43 @@ export async function runPipelineDag(
   const startStage = (stageId: string) => {
     if (states.get(stageId) !== "pending") return;
     states.set(stageId, "active");
+    launchedIds.add(stageId);
     activeCount += 1;
-    const taskPromise = launchStage(stageId).finally(() => {
-      activeCount -= 1;
-      inFlight.delete(taskPromise);
-    });
+    const taskPromise = launchStage(stageId)
+      .then(async () => {
+        const state = states.get(stageId);
+        if (runUsesBrowser && (state === "succeeded" || state === "failed")) {
+          await teardownStageBrowser(
+            prepared.browser ?? defaultStageBrowserSupport(),
+            {
+              runId: run.runId,
+              runDir: run.workspaceDir,
+              stageId,
+              events: () => store.listStageEvents(run.runId, stageId),
+            },
+          ).catch(() => undefined);
+        }
+      })
+      .finally(() => {
+        activeCount -= 1;
+        inFlight.delete(taskPromise);
+      });
     inFlight.add(taskPromise);
   };
 
   const pickRunnable = (): string[] => {
     const ids: string[] = [];
     for (const node of dag.nodes) {
-      if (isRunnable(dag, node.id, states, schedulingHalted)) {
+      if (
+        isRunnable(
+          dag,
+          node.id,
+          states,
+          schedulingHalted,
+          completedEnvelopes,
+          feedbackSchedule,
+        )
+      ) {
         ids.push(node.id);
       }
     }
@@ -664,9 +1604,16 @@ export async function runPipelineDag(
   };
 
   while (!allTerminal()) {
+    if (options.schedulingHalt?.halted) {
+      schedulingHalted = true;
+    }
     drainRetryMutations();
+    await applyStalledJoinSkips();
     if (options.onLoopTick !== undefined) {
       await options.onLoopTick();
+    }
+    if (options.schedulingHalt?.halted) {
+      schedulingHalted = true;
     }
     if (!schedulingHalted) {
       const runnable = pickRunnable();
@@ -703,40 +1650,65 @@ export async function runPipelineDag(
   }
 
   const hasWaiting = [...states.values()].some((s) => s === "waiting");
+  if (
+    runUsesBrowser &&
+    !(hasWaiting && !schedulingHalted) &&
+    !options.schedulingHalt?.hostShutdown
+  ) {
+    await teardownRunBrowsers(
+      prepared.browser ?? defaultStageBrowserSupport(),
+      {
+        runId: run.runId,
+        runDir: run.workspaceDir,
+        events: (stageId) => store.listStageEvents(run.runId, stageId),
+      },
+    );
+  }
   if (hasWaiting && !schedulingHalted) {
-    return { ok: true, runDir: run.workspaceDir, runId: run.runId };
+    return {
+      ok: false,
+      outcome: "waiting",
+      runDir: run.workspaceDir,
+      runId: run.runId,
+    };
   }
 
   if (schedulingHalted) {
     markSkippedPending();
     if (retryContext === undefined) {
-      await store.updateRunStatus(run.runId, "failed");
+      if (options.schedulingHalt?.hostShutdown) {
+        await syncRunStatusFromStages(store, run.runId);
+      } else {
+        await writeTerminalRunStatus(store, run.runId, "failed");
+      }
     }
     return {
       ok: false,
+      outcome: options.schedulingHalt?.hostShutdown ? "waiting" : "failed",
       runDir: run.workspaceDir,
       runId: run.runId,
       reason: firstFailureReason,
     };
   }
 
-  const allSucceeded = dag.nodes.every(
-    (node) => states.get(node.id) === "succeeded",
-  );
-  if (!allSucceeded) {
+  if (scheduleHasUnhandledFailure(dag, states) || !allTerminal()) {
     if (retryContext === undefined) {
-      await store.updateRunStatus(run.runId, "failed");
+      await writeTerminalRunStatus(store, run.runId, "failed");
     }
     return {
       ok: false,
+      outcome: "failed",
       runDir: run.workspaceDir,
       runId: run.runId,
       reason: firstFailureReason ?? "pipeline incomplete",
     };
   }
 
-  if (retryContext === undefined) {
-    await store.updateRunStatus(run.runId, "succeeded");
-  }
-  return { ok: true, runDir: run.workspaceDir, runId: run.runId };
+  await writeTerminalRunStatus(store, run.runId, "succeeded");
+  return {
+    ok: true,
+    outcome: "succeeded",
+    runDir: run.workspaceDir,
+    runId: run.runId,
+  };
 }

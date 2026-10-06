@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -31,6 +32,7 @@ const successEnvelope = {
   status: "success" as const,
   summary: "done",
   artifacts: [] as string[],
+  payload: {},
 };
 
 const freeTextPrompt: AskOperatorPrompt = {
@@ -84,14 +86,13 @@ async function waitFor(
 }
 
 describe("ask_operator wiring (U3)", () => {
-  it("allowlist includes ask_operator beside emit (and artifact when registered)", () => {
+  it("omitted gate_kinds does not include ask_operator on the sealed-session allowlist", () => {
     expect(resolveStageToolNames("emit_stage_envelope")).toEqual([
       "read",
       "bash",
       "write",
       "edit",
       "emit_stage_envelope",
-      "ask_operator",
     ]);
     expect(
       resolveStageToolNames("emit_stage_envelope", "write_stage_artifact"),
@@ -101,9 +102,95 @@ describe("ask_operator wiring (U3)", () => {
       "write",
       "edit",
       "emit_stage_envelope",
+      "write_stage_artifact",
+    ]);
+  });
+
+  it("empty gate_kinds omits ask_operator from the sealed-session allowlist (AE5)", () => {
+    expect(
+      resolveStageToolNames(
+        "emit_stage_envelope",
+        undefined,
+        "ask_operator",
+        [],
+      ),
+    ).toEqual(["read", "bash", "write", "edit", "emit_stage_envelope"]);
+    expect(
+      resolveStageToolNames(
+        "emit_stage_envelope",
+        "write_stage_artifact",
+        "ask_operator",
+        [],
+      ),
+    ).toEqual([
+      "read",
+      "bash",
+      "write",
+      "edit",
+      "emit_stage_envelope",
+      "write_stage_artifact",
+    ]);
+    expect(
+      resolveStageToolNames(
+        "emit_stage_envelope",
+        undefined,
+        "ask_operator",
+        ["confirm"],
+      ),
+    ).toContain("ask_operator");
+    expect(
+      resolveStageToolNames(
+        "emit_stage_envelope",
+        "write_stage_artifact",
+        "ask_operator",
+        ["confirm"],
+      ),
+    ).toEqual([
+      "read",
+      "bash",
+      "write",
+      "edit",
+      "emit_stage_envelope",
       "ask_operator",
       "write_stage_artifact",
     ]);
+  });
+
+  it("non-empty gate_kinds allowlists kinds on the ask tool", async () => {
+    const channel = new AskOperatorWaitChannel();
+    channel.setWaitHandler(() => {});
+    const tool = createAskOperatorTool({
+      requestWait: (prompt) => channel.requestWait(prompt),
+      allowedKinds: ["confirm"],
+    });
+
+    const undeclared = await tool.execute("t-deny", {
+      kind: "free_text",
+      message: "Write a report only?",
+    });
+    expect(undeclared.isError).toBe(true);
+    expect(undeclared.details.error).toMatch(/free_text/);
+    expect(undeclared.details.prompt).toBeNull();
+
+    const exec = tool.execute("t-ok", {
+      kind: "confirm",
+      id: "prompt-ok",
+      message: "Proceed?",
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(channel.hasPending).toBe(true);
+    expect(
+      channel.deliverAnswer({
+        promptId: "prompt-ok",
+        kind: "confirm",
+        decision: "accept",
+      }),
+    ).toBe(true);
+    const declared = await exec;
+    expect(declared.isError).toBeUndefined();
+    expect(declared.details).toMatchObject({
+      prompt: { kind: "confirm", id: "prompt-ok" },
+    });
   });
 
   it("FakeAgent wait with T2 free_text opaque + deliverAnswer unblocks without success until emit", async () => {
@@ -188,8 +275,8 @@ describe("ask_operator wiring (U3)", () => {
     ]);
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "single",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: pipelinePath("single"),
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;

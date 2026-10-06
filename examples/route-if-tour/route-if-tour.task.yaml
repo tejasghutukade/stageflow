@@ -1,0 +1,4 @@
+id: route-if-tour
+goal: Follow each stage prompt and emit the exact JSON payload it names.
+context: Route-if tour — routing is decided by those payloads, not by picking a next stage.
+constraints: Docs only; no implementation code. One-sentence summaries. Use the prompt's payload verbatim. Never emit fork_choice.

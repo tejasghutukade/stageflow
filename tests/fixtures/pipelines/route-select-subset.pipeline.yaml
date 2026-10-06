@@ -1,0 +1,23 @@
+id: route-select-subset
+stages:
+  - id: clarify
+    entry: true
+    route:
+      - to: branch-a
+      - to: branch-b
+      - to: branch-c
+    uses: ../stages/clarify.yaml
+  - id: branch-a
+    route:
+      - to: join-doc
+    uses: ../stages/branch-a.yaml
+  - id: branch-b
+    route:
+      - to: join-doc
+    uses: ../stages/branch-b.yaml
+  - id: branch-c
+    route:
+      - to: join-doc
+    uses: ../stages/branch-c.yaml
+  - id: join-doc
+    uses: ../stages/join-doc.yaml

@@ -1,6 +1,18 @@
 import type { ValidationFindingCode } from "./validateCatalog.js";
 
-export type TaskLoadCode = "task.invalid_shape" | "task.load_error";
+export type TaskLoadCode =
+  | "task.invalid_shape"
+  | "task.load_error"
+  | "task.binding_conflict"
+  | "task.repository_ref_required"
+  | "task.ref_without_repository"
+  | "task.repository_invalid";
+
+export type TriggerLoadCode =
+  | "trigger.invalid_shape"
+  | "trigger.load_error"
+  | "trigger.unknown_pipeline"
+  | "trigger.unknown_task";
 
 export type LoadIssue =
   | {
@@ -8,6 +20,7 @@ export type LoadIssue =
       message: string;
       category: "pipeline";
       pipelineId?: string;
+      stageId?: string;
     }
   | {
       code: ValidationFindingCode;
@@ -20,16 +33,30 @@ export type LoadIssue =
       message: string;
       category: "task";
       taskId?: string;
+    }
+  | {
+      code: TriggerLoadCode;
+      message: string;
+      category: "trigger";
+      triggerId?: string;
+    }
+  | {
+      code: ValidationFindingCode | string;
+      message: string;
+      category: "catalog";
     };
 
 export type LoadOutcome<T> =
-  | { ok: true; value: T }
+  | { ok: true; value: T; issues?: LoadIssue[] }
   | { ok: false; issues: LoadIssue[] };
 
 export function loadFailure<T>(issues: LoadIssue[]): LoadOutcome<T> {
   return { ok: false, issues };
 }
 
-export function loadSuccess<T>(value: T): LoadOutcome<T> {
+export function loadSuccess<T>(value: T, issues?: LoadIssue[]): LoadOutcome<T> {
+  if (issues && issues.length > 0) {
+    return { ok: true, value, issues };
+  }
   return { ok: true, value };
 }

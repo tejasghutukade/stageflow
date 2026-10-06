@@ -1,3 +1,10 @@
 id: parallel-branch-e
 system_prompt: Parallel branch E.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

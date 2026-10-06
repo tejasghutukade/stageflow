@@ -1,0 +1,5 @@
+id: playwright-mcp
+stages:
+  - id: screenshot
+    uses: ./screenshot.yaml
+    mcp: [playwright]

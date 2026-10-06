@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { access, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
+import type { StageUsage } from "../src/types/usage.js";
 import { SqliteRunStore } from "../src/runstore/sqlite/SqliteRunStore.js";
 import {
   attemptAgentDir,
@@ -61,6 +63,14 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     expect(second.attempt).toBe(2);
     expect(third.attempt).toBe(3);
     expect(first.status).toBe("pending");
+    expect(first.verification_outcome).toBe("not_run");
+
+    await store.updateStageExecution(run.runId, "build", 1, {
+      verification_outcome: "failed",
+    });
+    await expect(
+      store.getStageExecution(run.runId, "build", 1),
+    ).resolves.toMatchObject({ verification_outcome: "failed" });
   });
 
   it("AE1: lists two attempts with distinct statuses", async () => {
@@ -128,6 +138,70 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     ).rejects.toThrow(/not found/);
   });
 
+  it("readEnvelope(attempt) returns that execution envelope; omit is latest", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-env-att-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await seedTwoAttempts(store, run.runId, "build");
+
+    await expect(store.readEnvelope(run.runId, "build", 1)).resolves.toEqual({
+      status: "failure",
+      summary: "fail",
+      artifacts: [],
+    });
+    await expect(store.readEnvelope(run.runId, "build")).resolves.toEqual({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+    });
+  });
+
+  it("readEnvelope(attempt) rejects when the execution is missing", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-env-miss-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await seedTwoAttempts(store, run.runId, "build");
+
+    await expect(store.readEnvelope(run.runId, "build", 99)).rejects.toThrow(
+      /not found/,
+    );
+  });
+
+  it("readEnvelope(attempt) rejects a null execution envelope instead of stages fallback", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-env-null-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.writeEnvelope(
+      run.runId,
+      "build",
+      { status: "success", summary: "latest-stages", artifacts: [] },
+      { attempt: 1 },
+    );
+    await store.createStageExecution(run.runId, "build");
+
+    await expect(store.readEnvelope(run.runId, "build", 2)).rejects.toThrow(
+      `Envelope not found: ${run.runId}/build`,
+    );
+    await expect(store.readEnvelope(run.runId, "build")).resolves.toEqual({
+      status: "success",
+      summary: "latest-stages",
+      artifacts: [],
+    });
+  });
+
   it("listStageEvents filters by attempt", async () => {
     const root = await mkdtemp(path.join(tmpdir(), `sf-exec-events-${kind}-`));
     const store = createRunStore({ rootDir: root, kind });
@@ -145,6 +219,91 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     expect(attempt1Events.some((e) => e.event === "succeeded")).toBe(false);
     expect(attempt2Events.some((e) => e.event === "succeeded")).toBe(true);
     expect(attempt2Events.some((e) => e.event === "failed")).toBe(false);
+  });
+
+  it("persists verification evidence independently for each attempt", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-verification-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\\ngoal: g\\n",
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.upsertVerificationCheckResult(run.runId, "build", {
+      check_id: "unit-tests",
+      check_type: "command",
+      status: "running",
+      started_at: "2026-09-03T10:00:00.000Z",
+    });
+    await store.upsertVerificationCheckResult(run.runId, "build", {
+      check_id: "unit-tests",
+      check_type: "command",
+      status: "failed",
+      finished_at: "2026-09-03T10:00:02.000Z",
+      evidence: { exit_code: 1, stderr: "expected true to be false" },
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.upsertVerificationCheckResult(run.runId, "build", {
+      check_id: "unit-tests",
+      check_type: "command",
+      status: "passed",
+      started_at: "2026-09-03T10:01:00.000Z",
+      finished_at: "2026-09-03T10:01:01.000Z",
+      evidence: { exit_code: 0, stdout: "all tests passed" },
+    }, { attempt: 2 });
+
+    await expect(
+      store.listVerificationCheckResults(run.runId, "build", 1),
+    ).resolves.toEqual([
+      {
+        run_id: run.runId,
+        stage_id: "build",
+        attempt: 1,
+        check_id: "unit-tests",
+        check_type: "command",
+        status: "failed",
+        started_at: "2026-09-03T10:00:00.000Z",
+        finished_at: "2026-09-03T10:00:02.000Z",
+        evidence: { exit_code: 1, stderr: "expected true to be false" },
+      },
+    ]);
+    await expect(
+      store.listVerificationCheckResults(run.runId, "build", 2),
+    ).resolves.toEqual([
+      {
+        run_id: run.runId,
+        stage_id: "build",
+        attempt: 2,
+        check_id: "unit-tests",
+        check_type: "command",
+        status: "passed",
+        started_at: "2026-09-03T10:01:00.000Z",
+        finished_at: "2026-09-03T10:01:01.000Z",
+        evidence: { exit_code: 0, stdout: "all tests passed" },
+      },
+    ]);
+    await expect(
+      store.listVerificationCheckResults(run.runId, "build"),
+    ).resolves.toHaveLength(2);
+  });
+
+  it("rejects verification evidence for an execution that does not exist", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-verification-missing-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\\ngoal: g\\n",
+    });
+
+    await expect(
+      store.upsertVerificationCheckResult(run.runId, "build", {
+        check_id: "unit-tests",
+        check_type: "command",
+        status: "passed",
+      }),
+    ).rejects.toThrow(/Stage execution not found/);
   });
 
   it("attempt workspace dirs exist after ensureAttemptWorkspace", async () => {
@@ -215,6 +374,88 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     expect(detail.stages).toHaveLength(1);
     expect(detail.stages[0]?.status).toBe("succeeded");
     expect(detail.stages[0]?.envelope?.summary).toBe("ok");
+  });
+
+  it("persists cost_usd/usage and aggregates them into readRun", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-cost-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const usage: StageUsage = {
+      costUsd: 0.0123,
+      models: { "claude-opus-4-7": {
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        costUsd: 0.0123,
+      } },
+    };
+
+    await store.createStageExecution(run.runId, "build");
+    await store.appendStageEvent(run.runId, "build", { event: "started" }, { attempt: 1 });
+    await store.appendStageEvent(run.runId, "build", { event: "succeeded" }, { attempt: 1 });
+    await store.updateStageExecution(run.runId, "build", 1, {
+      status: "succeeded",
+      cost_usd: usage.costUsd,
+      usage,
+    });
+
+    const execution = await store.getStageExecution(run.runId, "build", 1);
+    expect(execution.cost_usd).toBe(0.0123);
+    expect(execution.usage).toEqual(usage);
+
+    const detail = await store.readRun(run.runId);
+    const build = detail.stages.find((s) => s.stage_id === "build");
+    expect(build?.cost_usd).toBe(0.0123);
+    expect(detail.total_cost_usd).toBe(0.0123);
+  });
+
+  it("sums cost across retried attempts into the stage and run totals", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-cost-sum-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.appendStageEvent(run.runId, "build", { event: "started" }, { attempt: 1 });
+    await store.appendStageEvent(run.runId, "build", { event: "failed", reason: "x" }, { attempt: 1 });
+    await store.updateStageExecution(run.runId, "build", 1, {
+      status: "failed",
+      cost_usd: 0.01,
+    });
+    await store.createStageExecution(run.runId, "build");
+    await store.appendStageEvent(run.runId, "build", { event: "started" }, { attempt: 2 });
+    await store.appendStageEvent(run.runId, "build", { event: "succeeded" }, { attempt: 2 });
+    await store.updateStageExecution(run.runId, "build", 2, {
+      status: "succeeded",
+      cost_usd: 0.02,
+    });
+
+    const detail = await store.readRun(run.runId);
+    const build = detail.stages.find((s) => s.stage_id === "build");
+    expect(build?.cost_usd).toBeCloseTo(0.03, 10);
+    expect(detail.total_cost_usd).toBeCloseTo(0.03, 10);
+  });
+
+  it("omits cost_usd/total_cost_usd when no attempt reported usage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-cost-none-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await seedTwoAttempts(store, run.runId, "build");
+
+    const detail = await store.readRun(run.runId);
+    const build = detail.stages.find((s) => s.stage_id === "build");
+    expect(build?.cost_usd).toBeUndefined();
+    expect(detail.total_cost_usd).toBeUndefined();
   });
 });
 
@@ -311,5 +552,49 @@ describe("stage executions (sqlite import)", () => {
     expect(executions[0]?.attempt).toBe(1);
     expect(executions[0]?.status).toBe("succeeded");
     expect(executions[0]?.envelope?.summary).toBe("from disk");
+  });
+
+  it("migrates a pre-existing db missing cost_usd/usage_json columns", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-exec-migrate-cost-"));
+    const dbPath = path.join(root, "state.db");
+    const raw = new Database(dbPath);
+    raw.exec(`
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  task_id TEXT,
+  task_yaml TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE stage_executions (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  verification_outcome TEXT NOT NULL DEFAULT 'not_run',
+  started_at TEXT,
+  finished_at TEXT,
+  envelope_json TEXT,
+  PRIMARY KEY (run_id, stage_id, attempt)
+);
+`);
+    raw.close();
+
+    const store = new SqliteRunStore(root);
+    await store.ready();
+    const cols = new Database(dbPath)
+      .prepare(`PRAGMA table_info(stage_executions)`)
+      .all() as { name: string }[];
+    expect(cols.some((c) => c.name === "cost_usd")).toBe(true);
+    expect(cols.some((c) => c.name === "usage_json")).toBe(true);
+
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const execution = await store.createStageExecution(run.runId, "build");
+    expect(execution.cost_usd).toBeUndefined();
   });
 });
