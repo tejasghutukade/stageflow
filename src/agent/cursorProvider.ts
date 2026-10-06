@@ -5,6 +5,7 @@
  * module's prepare()/env sealing path.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
@@ -25,9 +26,10 @@ const CURSOR_SETTING_SOURCES_ENV = "PI_CURSOR_SETTING_SOURCES";
  * Resolution order:
  * 1. STAGEFLOW_CURSOR_EXTENSION (absolute path to the extension .ts/.js)
  * 2. Path package from the Pi agent settings.json (same source interactive pi uses)
- * 3. npm install under <stageflow-agent>/npm/node_modules/pi-cursor-sdk
+ * 3. npm dependency `pi-cursor-sdk` bundled with the Stageflow install (repo or global)
+ * 4. npm install under <stageflow-agent>/npm/node_modules/pi-cursor-sdk
  *    (`dist/index.js` for 0.3+, `src/index.ts` for older publishes)
- * 4. Sibling checkout at ../pi-cursor-sdk relative to this repo
+ * 5. Sibling checkout at ../pi-cursor-sdk relative to this repo
  *
  * A stage worker's HOME is an empty attempt directory; the agent dir comes from
  * STAGEFLOW_AGENT_AUTH_PATH when the Host set it.
@@ -51,6 +53,24 @@ export function cursorExtensionEntryInPackage(
   return undefined;
 }
 
+export function resolveBundledCursorExtensionPath(): string | undefined {
+  const require = createRequire(import.meta.url);
+  let packageRoot: string;
+  try {
+    packageRoot = path.dirname(require.resolve("pi-cursor-sdk/package.json"));
+  } catch {
+    return undefined;
+  }
+  return cursorExtensionEntryInPackage(packageRoot);
+}
+
+/** `$STAGEFLOW_HOME/agent/npm` install (Pi-style); after bundled dependency. */
+export function resolveAgentHomeCursorExtensionPath(): string | undefined {
+  return cursorExtensionEntryInPackage(
+    path.join(piAgentDir(), "npm", "node_modules", "pi-cursor-sdk"),
+  );
+}
+
 export function resolveCursorExtensionPath(): string | undefined {
   const fromEnv = process.env.STAGEFLOW_CURSOR_EXTENSION?.trim();
   if (fromEnv && existsSync(fromEnv)) {
@@ -62,9 +82,12 @@ export function resolveCursorExtensionPath(): string | undefined {
     return fromSettings;
   }
 
-  const npmEntry = cursorExtensionEntryInPackage(
-    path.join(piAgentDir(), "npm", "node_modules", "pi-cursor-sdk"),
-  );
+  const bundled = resolveBundledCursorExtensionPath();
+  if (bundled) {
+    return bundled;
+  }
+
+  const npmEntry = resolveAgentHomeCursorExtensionPath();
   if (npmEntry) {
     return npmEntry;
   }
@@ -95,7 +118,7 @@ function sealCursorSettingSources(): (() => void) | undefined {
 function missingExtensionReason(modelRef: string): string {
   return [
     `Model "${modelRef}" requires pi-cursor-sdk, but no extension entry was found.`,
-    "Install with `pi install npm:pi-cursor-sdk`, or set STAGEFLOW_CURSOR_EXTENSION",
+    `Install Stageflow with npm (includes pi-cursor-sdk), or set STAGEFLOW_CURSOR_EXTENSION`,
     "to the absolute path of pi-cursor-sdk/dist/index.js (or src/index.ts).",
     "Also ensure a Cursor SDK API key is available via Pi /login or CURSOR_API_KEY.",
   ].join(" ");

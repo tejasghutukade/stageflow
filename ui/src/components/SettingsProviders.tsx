@@ -159,9 +159,8 @@ export function SettingsProviders() {
               <strong>Cursor (SDK)</strong>
               <br />
               <span className="muted">
-                For <code>cursor/…</code> models (not a Pi provider login). Needs{" "}
-                <code>pi-cursor-sdk</code> under{" "}
-                <code>$STAGEFLOW_HOME/agent/npm</code> and{" "}
+                For <code>cursor/…</code> models (not a Pi provider login).{" "}
+                <code>pi-cursor-sdk</code> ships with the Stageflow npm package; set{" "}
                 <code>CURSOR_API_KEY</code> on the Host process.
               </span>
             </span>

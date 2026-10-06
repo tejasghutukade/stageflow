@@ -79,13 +79,6 @@ jobs:
         if: steps.gate.outputs.release == 'true' && inputs.install_from_checkout == true
         run: bash scripts/install-stageflow-from-checkout.sh
 
-      - name: Install pi-cursor-sdk
-        if: steps.gate.outputs.release == 'true'
-        run: |
-          AGENT_NPM="${STAGEFLOW_HOME:-$HOME/.stageflow}/agent/npm"
-          mkdir -p "$AGENT_NPM"
-          npm i --prefix "$AGENT_NPM" pi-cursor-sdk
-
       - name: Generate notes and publish GitHub Release via Stageflow
         if: steps.gate.outputs.release == 'true'
         env:

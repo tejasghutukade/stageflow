@@ -15,11 +15,6 @@ export STAGEFLOW_HOME="${STAGEFLOW_HOME:-$ROOT/.stageflow-dev}"
 export STAGEFLOW_STAGE_ENV_ALLOW="${STAGEFLOW_STAGE_ENV_ALLOW:-CURSOR_API_KEY}"
 unset STAGEFLOW_MIN_FREE_DISK_BYTES
 
-mkdir -p "$STAGEFLOW_HOME/agent/npm"
-if [[ ! -f "$STAGEFLOW_HOME/agent/npm/node_modules/pi-cursor-sdk/dist/index.js" ]]; then
-  npm i --prefix "$STAGEFLOW_HOME/agent/npm" pi-cursor-sdk
-fi
-
 if [[ -z "${CURSOR_API_KEY:-}" ]] && command -v zsh >/dev/null 2>&1; then
   from_login="$(zsh -lic 'printf %s "${CURSOR_API_KEY:-}"' 2>/dev/null || true)"
   if [[ -n "$from_login" ]]; then

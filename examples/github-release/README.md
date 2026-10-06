@@ -20,7 +20,7 @@ CI helpers: `scripts/release-range.mjs` resolves previous from published GitHub 
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow installed
-- **Cursor** (`cursor/composer-2-5`) — set `CURSOR_API_KEY` and install `pi-cursor-sdk` under `$STAGEFLOW_HOME/agent/npm` (`npm i --prefix "$STAGEFLOW_HOME/agent/npm" pi-cursor-sdk`), or set `STAGEFLOW_CURSOR_EXTENSION`
+- **Cursor** (`cursor/composer-2-5`) — set `CURSOR_API_KEY` (`pi-cursor-sdk` is included when you install Stageflow from npm or run `npm ci` in this repo). Optional: `STAGEFLOW_CURSOR_EXTENSION` for a custom extension path.
 - **`gh` CLI** and `GH_TOKEN` or `GITHUB_TOKEN` for publish stage
 - Git checkout of the Stageflow repo (stages read version/tags from the bound checkout)
 

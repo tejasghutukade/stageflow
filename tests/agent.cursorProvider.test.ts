@@ -6,6 +6,8 @@ import {
   cursorBridgePrompt,
   cursorExtensionEntryInPackage,
   isCursorModelRef,
+  resolveAgentHomeCursorExtensionPath,
+  resolveBundledCursorExtensionPath,
   resolveCursorExtensionPath,
   workshopCursorBridgeHint,
 } from "../src/agent/cursorProvider.js";
@@ -60,6 +62,14 @@ describe("cursor provider support", () => {
     expect(cursorExtensionEntryInPackage(root)).toBe(dist);
   });
 
+  it("resolves pi-cursor-sdk from stageflow npm dependencies", () => {
+    delete process.env.STAGEFLOW_CURSOR_EXTENSION;
+    const bundled = resolveBundledCursorExtensionPath();
+    expect(bundled).toBeDefined();
+    expect(bundled).toMatch(/pi-cursor-sdk/);
+    expect(resolveCursorExtensionPath()).toBe(bundled);
+  });
+
   it("finds the npm install via STAGEFLOW_AGENT_AUTH_PATH when HOME is the attempt dir", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-cursor-home-"));
     const attemptHome = path.join(root, "attempt");
@@ -83,7 +93,7 @@ describe("cursor provider support", () => {
     process.env.STAGEFLOW_AGENT_AUTH_PATH = path.join(agentDir, "auth.json");
     delete process.env.STAGEFLOW_CURSOR_EXTENSION;
     try {
-      expect(resolveCursorExtensionPath()).toBe(entry);
+      expect(resolveAgentHomeCursorExtensionPath()).toBe(entry);
     } finally {
       if (prevHome === undefined) delete process.env.HOME;
       else process.env.HOME = prevHome;

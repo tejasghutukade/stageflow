@@ -43,10 +43,6 @@ export STAGEFLOW_HOME="${STAGEFLOW_HOME:-$ROOT/.stageflow-github-release-local}"
 export STAGEFLOW_MIN_FREE_DISK_BYTES="${STAGEFLOW_MIN_FREE_DISK_BYTES:-0}"
 export GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 
-AGENT_NPM="${STAGEFLOW_HOME}/agent/npm"
-mkdir -p "$AGENT_NPM"
-npm i --prefix "$AGENT_NPM" pi-cursor-sdk >/dev/null 2>&1 || true
-
 echo "Using sf: $(command -v sf) ($(sf --version))"
 echo "STAGEFLOW_HOME=$STAGEFLOW_HOME"
 echo "Release ${TAG} (previous GitHub release: ${PREVIOUS:-none})"

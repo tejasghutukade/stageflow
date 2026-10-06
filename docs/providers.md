@@ -15,7 +15,7 @@ All provider credentials live in Stageflow’s global store:
 
 `$STAGEFLOW_HOME/agent/auth.json` (default `~/.stageflow/agent/auth.json`)
 
-Pi extensions such as `pi-cursor-sdk` install under `$STAGEFLOW_HOME/agent/npm/`. Stage workers receive the auth path through `STAGEFLOW_AGENT_AUTH_PATH` (Host passes `$STAGEFLOW_HOME/agent/auth.json`).
+**Cursor models** use the **`pi-cursor-sdk`** npm package shipped as a Stageflow dependency (`npm i stageflow` / `npm ci` in the repo). You can still install a copy under `$STAGEFLOW_HOME/agent/npm/` via `pi install npm:pi-cursor-sdk` if you override the default. Stage workers receive the auth path through `STAGEFLOW_AGENT_AUTH_PATH` (Host passes `$STAGEFLOW_HOME/agent/auth.json`).
 
 Check binding:
 
