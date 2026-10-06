@@ -26,31 +26,28 @@ describe("resolveCredentialBinding", () => {
     });
   });
 
-  it("provisional pi_home when unset and Pi-home auth is usable", async () => {
+  it("provisional sf_owned when unset even if a legacy Pi-home file exists elsewhere", async () => {
     await withIsolatedHome(async (home) => {
-      const piHome = path.join(home, "fake-pi-home", "auth.json");
-      await mkdir(path.dirname(piHome), { recursive: true });
+      const legacyPi = path.join(home, "fake-pi-home", "auth.json");
+      await mkdir(path.dirname(legacyPi), { recursive: true });
       await writeFile(
-        piHome,
+        legacyPi,
         JSON.stringify({ openai: { type: "api_key", key: "x" } }),
       );
 
-      const binding = resolveCredentialBinding(home, { piHomeAuthPath: piHome });
+      const binding = resolveCredentialBinding(home);
       expect(binding).toEqual({
-        source: "pi_home",
-        authPath: piHome,
+        source: "sf_owned",
+        authPath: sfOwnedAuthPath(),
         provisional: true,
       });
       expect(readCredentialSourceFromFile(home)).toBeUndefined();
     });
   });
 
-  it("provisional sf_owned when unset and Pi-home is missing", async () => {
+  it("provisional sf_owned when unset", async () => {
     await withIsolatedHome(async (home) => {
-      const missingPi = path.join(home, "missing-pi", "auth.json");
-      const binding = resolveCredentialBinding(home, {
-        piHomeAuthPath: missingPi,
-      });
+      const binding = resolveCredentialBinding(home);
       expect(binding.source).toBe("sf_owned");
       expect(binding.provisional).toBe(true);
       expect(binding.authPath).toBe(sfOwnedAuthPath());
@@ -67,26 +64,28 @@ describe("resolveCredentialBinding", () => {
       );
       writeCredentialSourceToFile(home, "sf_owned");
 
-      const binding = resolveCredentialBinding(home, { piHomeAuthPath: piHome });
+      const binding = resolveCredentialBinding(home);
       expect(binding.source).toBe("sf_owned");
       expect(binding.provisional).toBe(false);
       expect(binding.authPath).toBe(sfOwnedAuthPath());
     });
   });
 
-  it("persisted pi_home returns Pi-home path", async () => {
+  it("legacy pi_home on disk normalizes to sf_owned binding", async () => {
     await withIsolatedHome(async (home) => {
-      const piHome = path.join(home, "fake-pi-home", "auth.json");
-      await mkdir(path.dirname(piHome), { recursive: true });
-      await writeFile(piHome, "{}\n");
-      writeCredentialSourceToFile(home, "pi_home");
+      await mkdir(storeRootFor(home), { recursive: true });
+      await writeFile(
+        path.join(storeRootFor(home), "settings.json"),
+        `${JSON.stringify({ credentialSource: "pi_home" }, null, 2)}\n`,
+      );
 
-      const binding = resolveCredentialBinding(home, { piHomeAuthPath: piHome });
+      const binding = resolveCredentialBinding(home);
       expect(binding).toEqual({
-        source: "pi_home",
-        authPath: piHome,
+        source: "sf_owned",
+        authPath: sfOwnedAuthPath(),
         provisional: false,
       });
+      expect(readCredentialSourceFromFile(home)).toBe("sf_owned");
     });
   });
 

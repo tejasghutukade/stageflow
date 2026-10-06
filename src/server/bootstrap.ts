@@ -52,6 +52,7 @@ import {
   type HostConfig,
 } from "../config/hostConfig.js";
 import { bootProviderConfig } from "../agent/bootProviderConfig.js";
+import { readCursorApiKey } from "../agent/cursorProvider.js";
 import {
   applyPendingRestoreAtBoot,
   type BootRestoreOutcome,
@@ -188,6 +189,13 @@ export async function bootstrapStageflowHost(
   const ctx = await resolveStageflowContext(invocationCwd);
   const cwd = ctx.invocationCwd;
   ensureGlobalHome();
+  const cursorKey = readCursorApiKey(env);
+  if (
+    cursorKey !== undefined &&
+    (env.CURSOR_API_KEY === undefined || env.CURSOR_API_KEY.trim() === "")
+  ) {
+    process.env.CURSOR_API_KEY = cursorKey;
+  }
   assertTmpdirUsable(env);
   const hostConfig =
     options.hostConfig ??

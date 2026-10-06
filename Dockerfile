@@ -7,7 +7,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json .npmrc ./
 COPY ui/package.json ./ui/
 RUN npm ci
 COPY tsconfig.json ./

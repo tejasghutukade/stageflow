@@ -9,35 +9,30 @@ Stageflow runs stages on **Pi** (`@earendil-works/pi-coding-agent`). Model provi
 
 Provider management is via `sf providers` and the console **Settings → Providers** page.
 
-## Credential storage: `pi_home` vs `sf_owned`
+## Credential storage
 
-| Mode | Where credentials live |
-|------|------------------------|
-| `pi_home` | Pi's standard auth file under your Pi home directory (`~/.pi/agent/auth.json`) |
-| `sf_owned` | Stageflow global auth at `$STAGEFLOW_HOME/agent/auth.json` (default `~/.stageflow/agent/auth.json`) |
+All provider credentials live in Stageflow’s global store:
 
-Check current binding:
+`$STAGEFLOW_HOME/agent/auth.json` (default `~/.stageflow/agent/auth.json`)
+
+**Cursor models** use the **`pi-cursor-sdk`** npm package shipped as a Stageflow dependency (`npm i stageflow` / `npm ci` in the repo). You can still install a copy under `$STAGEFLOW_HOME/agent/npm/` via `pi install npm:pi-cursor-sdk` if you override the default. Stage workers receive the auth path through `STAGEFLOW_AGENT_AUTH_PATH` (Host passes `$STAGEFLOW_HOME/agent/auth.json`).
+
+Check binding:
 
 ```bash
 sf providers source get
 sf providers detect
 ```
 
-`detect` prints `piHomeUsable`, `credentialSource`, `provisional`, and `bindingSource`.
+`detect` prints `authConfigured`, `credentialSource`, `provisional`, and `bindingSource`. Until you connect at least one provider (console **Connect** or `sf providers login`), `credentialSource` may be unset and binding is **provisional**.
 
-If the credential source is unset, the binding is **provisional** — `pi_home` when that auth file is usable, otherwise `sf_owned`. Project `<git-root>/.stageflow/settings.json` can persist or override the source versus global `$STAGEFLOW_HOME/settings.json`.
-
-Set explicitly:
+Persist the store choice (always Stageflow-owned):
 
 ```bash
-sf providers source set pi_home
 sf providers source set sf_owned
 ```
 
-**When to use which:**
-
-- **`pi_home`** — you already use Pi CLI elsewhere; one login for Pi and Stageflow
-- **`sf_owned`** — isolate Stageflow credentials under the durable root without touching Pi home
+Legacy `pi_home` in `settings.json` is treated as `sf_owned` on read.
 
 ## Non-interactive Host boot credentials
 
@@ -64,7 +59,7 @@ The console **Connect** flow (`#/connect`) mirrors CLI login for browser-based s
 sf providers list
 sf providers status [--provider <id>]
 sf providers detect
-sf providers source [get | set <pi_home|sf_owned>]
+sf providers source [get | set sf_owned]
 sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
 sf providers logout <providerId>
 ```
@@ -117,7 +112,7 @@ Or omit it when a pipeline or manifest default fills the value. The provider mus
 
 Stageflow is a thin orchestration layer on Pi. You do **not** need Pi CLI `/login` as a hard prerequisite if you configure providers via `sf providers` or the console.
 
-Cursor models (`cursor/...`, including the Workshop chat default `cursor/auto`) load the `pi-cursor-sdk` extension. Install it with `pi install npm:pi-cursor-sdk`. A stage worker's `HOME` is an empty attempt directory, so the Host passes its Pi auth file in `STAGEFLOW_PI_HOME_AUTH_PATH` and the extension is resolved next to that file (`~/.pi/agent/npm/node_modules/pi-cursor-sdk`). Set `STAGEFLOW_CURSOR_EXTENSION` to the absolute path of `dist/index.js` (or `src/index.ts`) when the package lives somewhere else. That variable is copied into the stage environment. A Cursor API key comes from Pi login or `CURSOR_API_KEY`.
+**Cursor API key:** set `CURSOR_API_KEY` on the Host before `sf ui` / `sf mcp` starts, or put the key in `$STAGEFLOW_HOME/agent/cursor-api-key` (mode `0600`, no trailing newline). You can also use `CURSOR_API_KEY_FILE`. A key in `.zshrc` alone does not reach the Host if you start Stageflow from the IDE or another environment that never loads your shell profile.
 
 ## Console
 
