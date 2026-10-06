@@ -1,12 +1,20 @@
-import type { StageGateKind, StageSnapshot } from "../api";
+import type { StageGateKind, StageReadiness, StageSnapshot } from "../api";
 import { canAbandon, canRetry, isStageActionBusy } from "../stageAction";
 import { StatusLabel } from "../StatusLabel";
+import { useRedesign } from "../redesign/flag";
+import { StatusPill } from "../redesign/StatusPill";
+import {
+  stageStatusPillLabel,
+  statusSignalFromReadiness,
+  statusSignalFromStageStatus,
+} from "../redesign/statusSignal";
 import { AttemptCountBadge } from "./AttemptCountBadge";
 
 export type TrackDetailRow = {
   stageId: string;
   label?: string;
   status: StageSnapshot["status"];
+  readiness?: StageReadiness;
   attemptCount?: number;
   readinessLine?: string;
   gateKinds?: StageGateKind[];
@@ -47,6 +55,7 @@ export function TrackDetailList({
   abandoningStageId = null,
   onAbandonStage,
 }: TrackDetailListProps) {
+  const redesign = useRedesign();
   const retrying = retryingStageIds ?? new Set<string>();
   if (rows.length === 0) return null;
 
@@ -73,7 +82,29 @@ export function TrackDetailList({
           }
         >
           <span className="track-detail-row__id">{row.label ?? row.stageId}</span>
-          <StatusLabel status={row.status} />
+          {redesign ? (
+            <StatusPill
+              signal={
+                row.readiness === "blocked"
+                  ? statusSignalFromReadiness("blocked")
+                  : statusSignalFromStageStatus(row.status)
+              }
+              label={
+                row.readiness === "blocked"
+                  ? "Blocked"
+                  : row.isWaitingAttention
+                    ? "Needs you"
+                    : stageStatusPillLabel(row.status)
+              }
+              className={
+                row.readiness === "blocked"
+                  ? "border border-dashed border-[var(--sf-text-2)] bg-transparent"
+                  : undefined
+              }
+            />
+          ) : (
+            <StatusLabel status={row.status} />
+          )}
           <AttemptCountBadge count={row.attemptCount} />
           {row.readinessLine ? (
             <span className="track-detail-row__readiness">{row.readinessLine}</span>

@@ -864,7 +864,7 @@ describe("spatial track layout", () => {
     const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
       (c) => c.stageId === "report-b",
     );
-    expect(chrome?.readinessLine).toBe("Blocked on improve-b");
+    expect(chrome?.readinessLine).toBe("waits on improve-b");
   });
 
   it("passes attempt_count into node chrome", () => {
