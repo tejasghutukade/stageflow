@@ -12,7 +12,7 @@ import type {
   LoginSessionMutationResult,
   LoginSessionProjection,
   PipelineListing,
-  PiHomeDetectResult,
+  ProvidersDetectResult,
   ProviderAuthMutationResult,
   ProviderAuthStatus,
   ProvidersListResult,
@@ -252,7 +252,7 @@ export function fetchProviders(): Promise<ProvidersListResult> {
   return api("/api/providers");
 }
 
-export function fetchProvidersDetect(): Promise<PiHomeDetectResult> {
+export function fetchProvidersDetect(): Promise<ProvidersDetectResult> {
   return api("/api/providers/detect");
 }
 

@@ -1,5 +1,4 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { ensureGlobalHome } from "../project/globalHome.js";
 import {
@@ -26,7 +25,7 @@ export type CredentialBinding = {
 };
 
 export type ResolveCredentialBindingOptions = {
-  piHomeAuthPath?: string;
+  agentAuthPath?: string;
 };
 
 export function sfOwnedAgentDir(): string {
@@ -37,17 +36,27 @@ export function sfOwnedAuthPath(): string {
   return path.join(sfOwnedAgentDir(), "auth.json");
 }
 
-export const PI_HOME_AUTH_PATH_ENV = "STAGEFLOW_PI_HOME_AUTH_PATH";
+export const STAGEFLOW_AGENT_AUTH_PATH_ENV = "STAGEFLOW_AGENT_AUTH_PATH";
 
-/** A stage worker's HOME is an empty attempt dir, so the Host passes its own Pi auth path through the environment. */
-export function piHomeAuthPath(
-  override?: string,
-): string {
-  return (
-    override ??
-    (process.env[PI_HOME_AUTH_PATH_ENV] || undefined) ??
-    path.join(os.homedir(), ".pi", "agent", "auth.json")
-  );
+/** @deprecated Use STAGEFLOW_AGENT_AUTH_PATH_ENV. */
+export const PI_HOME_AUTH_PATH_ENV = STAGEFLOW_AGENT_AUTH_PATH_ENV;
+
+export function stageflowAgentAuthPath(override?: string): string {
+  if (override !== undefined) {
+    return path.resolve(override);
+  }
+  const fromEnv =
+    process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV]?.trim() ||
+    process.env.STAGEFLOW_PI_HOME_AUTH_PATH?.trim();
+  if (fromEnv) {
+    return path.resolve(fromEnv);
+  }
+  return sfOwnedAuthPath();
+}
+
+/** @deprecated Use stageflowAgentAuthPath */
+export function piHomeAuthPath(override?: string): string {
+  return stageflowAgentAuthPath(override);
 }
 
 export function isUsableAuthFile(authPath: string): boolean {
@@ -76,40 +85,16 @@ export function ensureSfOwnedAuthStore(): string {
 
 export function resolveCredentialBinding(
   ctx: ProjectContext | string,
-  options: ResolveCredentialBindingOptions = {},
+  _options: ResolveCredentialBindingOptions = {},
 ): CredentialBinding {
   const projectCtx =
     typeof ctx === "string" ? resolveProjectContext(ctx) : ctx;
-  const piHome = piHomeAuthPath(options.piHomeAuthPath);
   const persisted = readCredentialSourceFromContext(projectCtx);
-
-  if (persisted !== undefined) {
-    if (persisted === "sf_owned") {
-      return {
-        source: "sf_owned",
-        authPath: ensureSfOwnedAuthStore(),
-        provisional: false,
-      };
-    }
-    return {
-      source: "pi_home",
-      authPath: piHome,
-      provisional: false,
-    };
-  }
-
-  if (isUsableAuthFile(piHome)) {
-    return {
-      source: "pi_home",
-      authPath: piHome,
-      provisional: true,
-    };
-  }
-
+  const authPath = ensureSfOwnedAuthStore();
   return {
     source: "sf_owned",
-    authPath: ensureSfOwnedAuthStore(),
-    provisional: true,
+    authPath,
+    provisional: persisted === undefined,
   };
 }
 

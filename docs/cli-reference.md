@@ -946,7 +946,7 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `SF_STORE` | Must be `sqlite` (default) |
 | `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft max parallel **active** runs (full slots queue via `STAGEFLOW_MAX_QUEUED`; see [CI concurrency env vars](ci.md#concurrency-env-vars)) |
 | `STAGEFLOW_MAX_QUEUED` | Admission queue depth; when full, start returns `busy_capacity` |
-| `STAGEFLOW_MIN_FREE_DISK_BYTES` | Free-disk admission floor (bytes or `N%`) |
+| `STAGEFLOW_MIN_FREE_DISK_BYTES` | Optional free-disk admission floor (bytes or `N%`). Unset → disabled |
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN` | Stage concurrency per run |
 | `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap (also in [CI / headless](ci.md)) |
 | `STAGEFLOW_STAGE_EXECUTION` | Stage worker mode: `process` (default) or `inprocess` (mainly tests) |

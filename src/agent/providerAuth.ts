@@ -9,13 +9,14 @@ import type {
   Provider,
 } from "@earendil-works/pi-ai";
 import {
-  isUsableAuthFile,
+  ensureSfOwnedAuthStore,
   parseCredentialSource,
-  piHomeAuthPath,
   readCredentialSourceFromContext,
   resolveCredentialBinding,
   writeCredentialSourceToContext,
+  isUsableAuthFile,
 } from "../runtime/credentialBinding.js";
+import { getCursorHostStatus } from "./cursorProvider.js";
 import {
   readPersistedCredentialSourceFromContext,
 } from "../runtime/settingsFile.js";
@@ -51,12 +52,17 @@ export type ProvidersListResult = {
   providers: ProviderSummary[];
 };
 
-export type PiHomeDetectResult = {
-  piHomeUsable: boolean;
+export type ProvidersDetectResult = {
   credentialSource?: CredentialSource;
   provisional: boolean;
   source: CredentialSource;
+  authConfigured: boolean;
+  cursorSdkReady: boolean;
+  cursorApiKeyConfigured: boolean;
 };
+
+/** @deprecated Use ProvidersDetectResult */
+export type PiHomeDetectResult = ProvidersDetectResult;
 
 export type ProviderAuthRuntime = {
   getProviders(): readonly Provider[];
@@ -413,15 +419,16 @@ export async function logoutProvider(
   });
 }
 
-export function detectPiHome(cwd: string): PiHomeDetectResult {
+export function detectPiHome(cwd: string): ProvidersDetectResult {
   const projectCtx = resolveProjectContext(cwd);
   const binding = resolveCredentialBinding(projectCtx);
   const persisted = readPersistedCredentialSourceFromContext(projectCtx);
   return {
-    piHomeUsable: isUsableAuthFile(piHomeAuthPath()),
     ...(persisted !== undefined ? { credentialSource: persisted } : {}),
     provisional: binding.provisional,
     source: binding.source,
+    authConfigured: isUsableAuthFile(binding.authPath),
+    ...getCursorHostStatus(),
   };
 }
 
@@ -451,7 +458,7 @@ export function setCredentialSource(
   const parsed = parseCredentialSource(credentialSource);
   if (parsed === undefined) {
     throw new ProviderAuthError(
-      'credentialSource must be "pi_home" or "sf_owned"',
+      'credentialSource must be "sf_owned"',
       400,
     );
   }

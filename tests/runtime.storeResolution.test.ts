@@ -77,8 +77,12 @@ describe("runtime store resolution", () => {
           credentialSource: "sf_owned",
         });
         const projectCtx = resolveProjectContext(nested);
-        writeCredentialSourceToContext(projectCtx, "pi_home");
-        expect(readCredentialSourceFromContext(projectCtx)).toBe("pi_home");
+        await mkdir(storeRootFor(root), { recursive: true });
+        await writeFile(
+          path.join(storeRootFor(root), "settings.json"),
+          `${JSON.stringify({ credentialSource: "pi_home" }, null, 2)}\n`,
+        );
+        expect(readCredentialSourceFromContext(projectCtx)).toBe("sf_owned");
         expect(globalSettingsFilePath()).toBe(
           path.join(home, ".stageflow", "settings.json"),
         );

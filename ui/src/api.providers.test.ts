@@ -46,18 +46,17 @@ describe("provider api clients", () => {
     );
   });
 
-  it("GET /api/providers/detect returns usability without secrets", async () => {
+  it("GET /api/providers/detect returns binding without secrets", async () => {
     const body = {
-      piHomeUsable: true,
       provisional: true,
-      source: "pi_home" as const,
+      source: "sf_owned" as const,
     };
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => Response.json(body)),
     );
     const result = await fetchProvidersDetect();
-    expect(result.piHomeUsable).toBe(true);
+    expect(result.source).toBe("sf_owned");
     expect(JSON.stringify(result)).not.toMatch(/apiKey|token|sk-/i);
   });
 

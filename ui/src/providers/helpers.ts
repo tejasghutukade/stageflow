@@ -1,19 +1,27 @@
 import type {
   CredentialSource,
-  PiHomeDetectResult,
   ProviderAuthStatus,
   ProviderSummary,
+  ProvidersDetectResult,
 } from "../api";
 
 export const PROVIDERS_PI_COPY =
-  "Providers are connected through Pi. Stageflow binds the credential store you choose; it is not a standalone non-Pi LLM client.";
+  "Connect model providers here. Credentials are stored under your Stageflow home ($STAGEFLOW_HOME/agent/auth.json).";
 
-export function needsFirstRun(detect: PiHomeDetectResult): boolean {
-  return detect.credentialSource === undefined;
+export function cursorModelReady(detect: ProvidersDetectResult): boolean {
+  return (
+    detect.cursorSdkReady === true && detect.cursorApiKeyConfigured === true
+  );
 }
 
-export function defaultOfferChoice(piHomeUsable: boolean): CredentialSource {
-  return piHomeUsable ? "pi_home" : "sf_owned";
+export function needsFirstRun(
+  detect: ProvidersDetectResult,
+  configuredCount: number,
+): boolean {
+  if (configuredCount > 0) return false;
+  if (cursorModelReady(detect)) return false;
+  if (detect.credentialSource === undefined) return true;
+  return true;
 }
 
 export function providerAllowsApiKey(provider: ProviderSummary): boolean {
@@ -35,10 +43,12 @@ export function statusLabel(status: ProviderAuthStatus | undefined): string {
 export function isProviderAuthReady(input: {
   credentialSource?: CredentialSource;
   configuredCount: number;
+  detect?: ProvidersDetectResult;
 }): boolean {
+  if (input.configuredCount > 0) return true;
+  if (input.detect !== undefined && cursorModelReady(input.detect)) return true;
   if (input.credentialSource === undefined) return false;
-  if (input.credentialSource === "pi_home") return true;
-  return input.configuredCount > 0;
+  return false;
 }
 
 export function countConfigured(
