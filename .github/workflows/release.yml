@@ -19,6 +19,8 @@ jobs:
   release:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      STAGEFLOW_HOME: ${{ github.workspace }}/.stageflow
     steps:
       - uses: actions/checkout@v4
         with:
@@ -80,8 +82,9 @@ jobs:
       - name: Install pi-cursor-sdk
         if: steps.gate.outputs.release == 'true'
         run: |
-          mkdir -p "$HOME/.pi/agent/npm"
-          npm i --prefix "$HOME/.pi/agent/npm" pi-cursor-sdk
+          AGENT_NPM="${STAGEFLOW_HOME:-$HOME/.stageflow}/agent/npm"
+          mkdir -p "$AGENT_NPM"
+          npm i --prefix "$AGENT_NPM" pi-cursor-sdk
 
       - name: Generate notes and publish GitHub Release via Stageflow
         if: steps.gate.outputs.release == 'true'
@@ -94,6 +97,7 @@ jobs:
           RELEASE_TAG: ${{ steps.gate.outputs.tag }}
           RELEASE_PREVIOUS: ${{ steps.gate.outputs.previous }}
         run: |
+          export CURSOR_API_KEY="$(printf '%s' "${CURSOR_API_KEY}" | tr -d '\n\r')"
           SLICE="${GITHUB_WORKSPACE}/changelog-slice.md"
           if [ -n "${RELEASE_PREVIOUS}" ]; then
             node scripts/release-range.mjs changelog --after "${RELEASE_PREVIOUS}" --through "${RELEASE_VERSION}" --file CHANGELOG.md > "${SLICE}"

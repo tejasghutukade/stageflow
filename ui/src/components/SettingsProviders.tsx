@@ -3,12 +3,11 @@ import {
   fetchProviderAuth,
   fetchProviders,
   fetchProvidersDetect,
-  postCredentialSource,
   postProviderApiKey,
   postProviderLogout,
-  type CredentialSource,
   type ProviderAuthStatus,
   type ProviderSummary,
+  type ProvidersDetectResult,
 } from "../api";
 import { ProviderConnectRow } from "./ProviderConnectRow";
 import { PROVIDERS_PI_COPY } from "../providers/helpers";
@@ -18,18 +17,20 @@ type StatusMap = Record<string, ProviderAuthStatus | undefined>;
 export function SettingsProviders() {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [statuses, setStatuses] = useState<StatusMap>({});
-  const [credentialSource, setCredentialSource] = useState<
-    CredentialSource | undefined
-  >(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sourceSaving, setSourceSaving] = useState(false);
   const [connectId, setConnectId] = useState<string | null>(null);
   const [oauthId, setOauthId] = useState<string | null>(null);
   const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [rowWarning, setRowWarning] = useState<string | null>(null);
+  const [cursorDetect, setCursorDetect] = useState<
+    Pick<
+      ProvidersDetectResult,
+      "cursorSdkReady" | "cursorApiKeyConfigured"
+    > | null
+  >(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -37,8 +38,11 @@ export function SettingsProviders() {
       fetchProviders(),
       fetchProvidersDetect(),
     ]);
+    setCursorDetect({
+      cursorSdkReady: detect.cursorSdkReady,
+      cursorApiKeyConfigured: detect.cursorApiKeyConfigured,
+    });
     setProviders(listed.providers);
-    setCredentialSource(detect.credentialSource);
     const next: StatusMap = {};
     await Promise.all(
       listed.providers.map(async (provider) => {
@@ -65,21 +69,6 @@ export function SettingsProviders() {
       }
     })();
   }, [refresh]);
-
-  async function onSourceChange(value: string) {
-    if (value !== "pi_home" && value !== "sf_owned") return;
-    setSourceSaving(true);
-    setError(null);
-    try {
-      const result = await postCredentialSource(value);
-      setCredentialSource(result.credentialSource);
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSourceSaving(false);
-    }
-  }
 
   async function onConnectSubmit(providerId: string) {
     const key = apiKeyDraft.trim();
@@ -127,32 +116,6 @@ export function SettingsProviders() {
         {PROVIDERS_PI_COPY}
       </p>
 
-      <div className="setting">
-        <span>
-          <strong>Credential source</strong>
-          <p>
-            Use credentials already stored by Pi, or keep a Stageflow-owned
-            store for keys you paste here.
-          </p>
-        </span>
-        {loading ? (
-          <span className="muted">—</span>
-        ) : (
-          <select
-            className="select"
-            value={credentialSource ?? ""}
-            disabled={sourceSaving}
-            onChange={(e) => void onSourceChange(e.target.value)}
-          >
-            <option value="" disabled>
-              Not set
-            </option>
-            <option value="pi_home">Existing Pi login (~/.pi)</option>
-            <option value="sf_owned">Stageflow-owned store</option>
-          </select>
-        )}
-      </div>
-
       {error ? (
         <p
           style={{
@@ -189,10 +152,34 @@ export function SettingsProviders() {
 
       {loading ? (
         <p className="muted">Loading providers…</p>
-      ) : providers.length === 0 ? (
-        <p className="muted">No providers reported by Pi.</p>
       ) : (
-        providers.map((provider) => (
+        <>
+          <div className="setting">
+            <span>
+              <strong>Cursor (SDK)</strong>
+              <br />
+              <span className="muted">
+                For <code>cursor/…</code> models (not a Pi provider login). Needs{" "}
+                <code>pi-cursor-sdk</code> under{" "}
+                <code>$STAGEFLOW_HOME/agent/npm</code> and{" "}
+                <code>CURSOR_API_KEY</code> on the Host process.
+              </span>
+            </span>
+            <span className="muted">
+              {cursorDetect?.cursorSdkReady &&
+              cursorDetect?.cursorApiKeyConfigured
+                ? "Connected"
+                : cursorDetect?.cursorSdkReady
+                  ? "API key missing on Host"
+                  : cursorDetect?.cursorApiKeyConfigured
+                    ? "SDK not found"
+                    : "Not connected"}
+            </span>
+          </div>
+          {providers.length === 0 ? (
+            <p className="muted">No Pi providers reported.</p>
+          ) : (
+            providers.map((provider) => (
           <ProviderConnectRow
             key={provider.id}
             provider={provider}
@@ -228,7 +215,9 @@ export function SettingsProviders() {
               setRowError(null);
             }}
           />
-        ))
+            ))
+          )}
+        </>
       )}
     </section>
   );

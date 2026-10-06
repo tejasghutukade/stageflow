@@ -30,9 +30,21 @@ describe("settingsFile credentialSource", () => {
   it("preserves maxConcurrent when writing credentialSource", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-settings-preserve-mc-"));
     writeMaxConcurrentToFile(root, 4);
-    writeCredentialSourceToFile(root, "pi_home");
+    writeCredentialSourceToFile(root, "sf_owned");
     expect(readMaxConcurrentFromFile(root)).toBe(4);
-    expect(readCredentialSourceFromFile(root)).toBe("pi_home");
+    expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
+  });
+
+  it("maps legacy pi_home on disk to sf_owned when read", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-settings-legacy-pi-"));
+    await mkdir(storeRootFor(root), { recursive: true });
+    await writeFile(
+      path.join(storeRootFor(root), "settings.json"),
+      `${JSON.stringify({ credentialSource: "pi_home", maxConcurrent: 2 }, null, 2)}\n`,
+    );
+    expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
+    expect(readMaxConcurrentFromFile(root)).toBe(2);
+    expect(parseCredentialSource("pi_home")).toBe("sf_owned");
   });
 
   it("preserves credentialSource when writing maxConcurrent", async () => {
@@ -60,7 +72,7 @@ describe("settingsFile credentialSource", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-settings-reject-"));
     expect(() =>
       writeFactorySettings(root, {
-        credentialSource: "ambient_env" as "pi_home",
+        credentialSource: "ambient_env" as "sf_owned",
       }),
     ).toThrow(INVALID_CREDENTIAL_SOURCE_MESSAGE);
   });
@@ -89,9 +101,13 @@ describe("settingsFile credentialSource", () => {
         writeFactorySettingsForContext(resolveProjectContext(home), {
           credentialSource: "sf_owned",
         });
-        writeCredentialSourceToContext(resolveProjectContext(nested), "pi_home");
+        await mkdir(storeRootFor(root), { recursive: true });
+        await writeFile(
+          path.join(storeRootFor(root), "settings.json"),
+          `${JSON.stringify({ credentialSource: "pi_home" }, null, 2)}\n`,
+        );
         expect(readCredentialSourceFromContext(resolveProjectContext(nested))).toBe(
-          "pi_home",
+          "sf_owned",
         );
         await readFile(path.join(storeRootFor(root), "settings.json"), "utf8");
       } finally {

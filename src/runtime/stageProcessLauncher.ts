@@ -7,10 +7,10 @@ import {
   resolveLogMaxLineBytes,
   type Logger,
 } from "../logging/logger.js";
-import { isCursorModelRef } from "../agent/cursorProvider.js";
+import { isCursorModelRef, readCursorApiKey } from "../agent/cursorProvider.js";
 import { BROWSER_ENV_PREFIX } from "../browser/browserHost.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
-import { PI_HOME_AUTH_PATH_ENV, piHomeAuthPath } from "./credentialBinding.js";
+import { PI_HOME_AUTH_PATH_ENV, stageflowAgentAuthPath } from "./credentialBinding.js";
 import { redactString } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
 import {
@@ -470,9 +470,9 @@ export class StageProcessLauncher {
         : overlaid;
     const childEnv: Record<string, string> = {
       ...withBrowser,
-      [PI_HOME_AUTH_PATH_ENV]: piHomeAuthPath(),
+      [PI_HOME_AUTH_PATH_ENV]: stageflowAgentAuthPath(),
     };
-    const cursorApiKey = hostEnv.CURSOR_API_KEY;
+    const cursorApiKey = readCursorApiKey(hostEnv);
     if (
       isCursorModelRef(input.model ?? "") &&
       cursorApiKey !== undefined &&

@@ -12,12 +12,12 @@ export const INVALID_SLOT_COUNT_MESSAGE =
   "maxConcurrent must be an integer >= 1";
 
 export const INVALID_CREDENTIAL_SOURCE_MESSAGE =
-  'credentialSource must be "pi_home" or "sf_owned"';
+  'credentialSource must be "sf_owned"';
 
 export const INVALID_WORKSHOP_MODEL_MESSAGE =
   "workshopModel must be a non-empty string";
 
-export type CredentialSource = "pi_home" | "sf_owned";
+export type CredentialSource = "sf_owned";
 
 export type FactorySettings = {
   maxConcurrent?: number;
@@ -53,8 +53,11 @@ export function parseSlotCount(value: unknown): number | undefined {
 export function parseCredentialSource(
   value: unknown,
 ): CredentialSource | undefined {
-  if (value === "pi_home" || value === "sf_owned") {
+  if (value === "sf_owned") {
     return value;
+  }
+  if (value === "pi_home") {
+    return "sf_owned";
   }
   return undefined;
 }

@@ -60,7 +60,7 @@ describe("cursor provider support", () => {
     expect(cursorExtensionEntryInPackage(root)).toBe(dist);
   });
 
-  it("finds the npm install via STAGEFLOW_PI_HOME_AUTH_PATH when HOME is the attempt dir", async () => {
+  it("finds the npm install via STAGEFLOW_AGENT_AUTH_PATH when HOME is the attempt dir", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-cursor-home-"));
     const attemptHome = path.join(root, "attempt");
     const agentDir = path.join(root, "pi-agent");
@@ -77,18 +77,18 @@ describe("cursor provider support", () => {
     await writeFile(entry, "export {};\n");
 
     const prevHome = process.env.HOME;
-    const prevAuth = process.env.STAGEFLOW_PI_HOME_AUTH_PATH;
+    const prevAuth = process.env.STAGEFLOW_AGENT_AUTH_PATH;
     const prevExt = process.env.STAGEFLOW_CURSOR_EXTENSION;
     process.env.HOME = attemptHome;
-    process.env.STAGEFLOW_PI_HOME_AUTH_PATH = path.join(agentDir, "auth.json");
+    process.env.STAGEFLOW_AGENT_AUTH_PATH = path.join(agentDir, "auth.json");
     delete process.env.STAGEFLOW_CURSOR_EXTENSION;
     try {
       expect(resolveCursorExtensionPath()).toBe(entry);
     } finally {
       if (prevHome === undefined) delete process.env.HOME;
       else process.env.HOME = prevHome;
-      if (prevAuth === undefined) delete process.env.STAGEFLOW_PI_HOME_AUTH_PATH;
-      else process.env.STAGEFLOW_PI_HOME_AUTH_PATH = prevAuth;
+      if (prevAuth === undefined) delete process.env.STAGEFLOW_AGENT_AUTH_PATH;
+      else process.env.STAGEFLOW_AGENT_AUTH_PATH = prevAuth;
       if (prevExt === undefined) delete process.env.STAGEFLOW_CURSOR_EXTENSION;
       else process.env.STAGEFLOW_CURSOR_EXTENSION = prevExt;
     }

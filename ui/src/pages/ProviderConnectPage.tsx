@@ -5,16 +5,11 @@ import {
   fetchProvidersDetect,
   postCredentialSource,
   postProviderApiKey,
-  type CredentialSource,
   type ProviderAuthStatus,
   type ProviderSummary,
 } from "../api";
 import { ProviderConnectRow } from "../components/ProviderConnectRow";
-import {
-  PROVIDERS_PI_COPY,
-  defaultOfferChoice,
-  providerAllowsApiKey,
-} from "../providers/helpers";
+import { PROVIDERS_PI_COPY, providerAllowsApiKey } from "../providers/helpers";
 import { providerSupportsOauthConnect } from "../providers/oauthSession";
 
 export function ProviderConnectPage({
@@ -25,10 +20,6 @@ export function ProviderConnectPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
-  const [piHomeUsable, setPiHomeUsable] = useState(false);
-  const [choice, setChoice] = useState<CredentialSource>("sf_owned");
-  const [phase, setPhase] = useState<"offer" | "keys">("offer");
-  const [saving, setSaving] = useState(false);
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [statuses, setStatuses] = useState<
     Record<string, ProviderAuthStatus | undefined>
@@ -37,29 +28,6 @@ export function ProviderConnectPage({
   const [oauthId, setOauthId] = useState<string | null>(null);
   const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [rowBusy, setRowBusy] = useState<string | null>(null);
-
-  useEffect(() => {
-    void (async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const detect = await fetchProvidersDetect();
-        setPiHomeUsable(detect.piHomeUsable);
-        const initial = defaultOfferChoice(detect.piHomeUsable);
-        setChoice(initial);
-        if (detect.piHomeUsable) {
-          setPhase("offer");
-        } else {
-          setPhase("keys");
-          await loadConnectProviders();
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
 
   async function loadConnectProviders() {
     const listed = await fetchProviders();
@@ -81,23 +49,23 @@ export function ProviderConnectPage({
     setStatuses(next);
   }
 
-  async function onConfirmOffer() {
-    setSaving(true);
-    setError(null);
-    try {
-      await postCredentialSource(choice);
-      if (choice === "pi_home") {
-        onComplete();
-        return;
+  useEffect(() => {
+    void (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const detect = await fetchProvidersDetect();
+        if (detect.credentialSource === undefined) {
+          await postCredentialSource("sf_owned");
+        }
+        await loadConnectProviders();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLoading(false);
       }
-      await loadConnectProviders();
-      setPhase("keys");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  }
+    })();
+  }, []);
 
   async function onConnectSubmit(providerId: string) {
     const key = apiKeyDraft.trim();
@@ -137,7 +105,7 @@ export function ProviderConnectPage({
       </div>
 
       {loading ? (
-        <p className="muted">Checking for an existing Pi login…</p>
+        <p className="muted">Loading providers…</p>
       ) : null}
       {error ? (
         <p
@@ -160,61 +128,7 @@ export function ProviderConnectPage({
         </p>
       ) : null}
 
-      {!loading && phase === "offer" ? (
-        <section className="card">
-          <div className="card__head">
-            <h2>Credential source</h2>
-          </div>
-          <p
-            style={{
-              margin: 0,
-              color: "var(--color-text-secondary)",
-              fontSize: "var(--font-size-sm)",
-            }}
-          >
-            {piHomeUsable
-              ? "Usable Pi credentials were found on this machine. Reuse them, or set up keys inside Stageflow."
-              : "No usable Pi login was detected. Set up credentials in Stageflow."}
-          </p>
-          <div
-            className="theme-picks"
-            role="radiogroup"
-            aria-label="Credential source"
-          >
-            <button
-              type="button"
-              className="theme-pick"
-              aria-pressed={choice === "pi_home" ? "true" : "false"}
-              disabled={!piHomeUsable}
-              onClick={() => setChoice("pi_home")}
-            >
-              <strong>Use existing Pi login</strong>
-              <span>Reuse ~/.pi credentials without re-entering keys</span>
-            </button>
-            <button
-              type="button"
-              className="theme-pick"
-              aria-pressed={choice === "sf_owned" ? "true" : "false"}
-              onClick={() => setChoice("sf_owned")}
-            >
-              <strong>Set up in Stageflow</strong>
-              <span>Paste API keys or complete Pi OAuth in an SF-owned store</span>
-            </button>
-          </div>
-          <div className="form-actions" style={{ marginTop: "var(--spacing-4)" }}>
-            <button
-              type="button"
-              className="btn btn--primary"
-              disabled={saving || (!piHomeUsable && choice === "pi_home")}
-              onClick={() => void onConfirmOffer()}
-            >
-              {saving ? "Saving…" : "Continue"}
-            </button>
-          </div>
-        </section>
-      ) : null}
-
-      {!loading && phase === "keys" ? (
+      {!loading ? (
         <section className="card">
           <div className="card__head">
             <h2>Providers</h2>

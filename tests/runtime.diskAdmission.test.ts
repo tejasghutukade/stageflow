@@ -157,18 +157,15 @@ describe("runtime disk-floor admission (U9)", () => {
     }
   });
 
-  it("resolveMinFreeDiskFloor: bytes, percent, and default max(2GiB, 10%)", () => {
+  it("resolveMinFreeDiskFloor: bytes, percent, and disabled by default", () => {
     const tenGib = 10 * 1024 * 1024 * 1024;
     expect(resolveMinFreeDiskFloor("5000", tenGib)).toBe(5000);
     expect(resolveMinFreeDiskFloor("10%", tenGib)).toBe(
       Math.floor(tenGib * 0.1),
     );
-    expect(resolveMinFreeDiskFloor(undefined, tenGib)).toBe(
-      Math.max(2 * 1024 * 1024 * 1024, Math.floor(tenGib * 0.1)),
-    );
-    expect(resolveMinFreeDiskFloor("", 1000)).toBe(
-      Math.max(2 * 1024 * 1024 * 1024, 100),
-    );
+    expect(resolveMinFreeDiskFloor(undefined, tenGib)).toBe(0);
+    expect(resolveMinFreeDiskFloor("", 1000)).toBe(0);
+    expect(resolveMinFreeDiskFloor("0", tenGib)).toBe(0);
   });
 
   async function withHome(): Promise<string> {

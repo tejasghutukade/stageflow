@@ -20,7 +20,7 @@ CI helpers: `scripts/release-range.mjs` resolves previous from published GitHub 
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow installed
-- **Cursor** (`cursor/composer-2-5`) — set `CURSOR_API_KEY` and install `pi-cursor-sdk` (`pi install npm:pi-cursor-sdk`, or `npm i --prefix ~/.pi/agent/npm pi-cursor-sdk`)
+- **Cursor** (`cursor/composer-2-5`) — set `CURSOR_API_KEY` and install `pi-cursor-sdk` under `$STAGEFLOW_HOME/agent/npm` (`npm i --prefix "$STAGEFLOW_HOME/agent/npm" pi-cursor-sdk`), or set `STAGEFLOW_CURSOR_EXTENSION`
 - **`gh` CLI** and `GH_TOKEN` or `GITHUB_TOKEN` for publish stage
 - Git checkout of the Stageflow repo (stages read version/tags from the bound checkout)
 
@@ -30,11 +30,25 @@ Optional env vars (set by publish workflow): `RELEASE_VERSION`, `RELEASE_TAG`, `
 
 ## Commands
 
-From the **repository git root**:
+From the **repository git root** (same env model as `.github/workflows/publish.yml`):
+
+**Important:** `sf run` talks to the global Stageflow Host on port **3847**. If `sf ui` is already running, it was started with *that* process environment — not the variables you export in a second terminal. Either stop the Host and run the release in one shell (autostart picks up your env), or restart the Host with `STAGEFLOW_STAGE_ENV_ALLOW=CURSOR_API_KEY` and `CURSOR_API_KEY` set first.
+
+```bash
+bash scripts/run-github-release-local.sh
+```
+
+Optional dry run (skips `gh release create` in stage 2):
+
+```bash
+DRY_RUN=1 bash scripts/run-github-release-local.sh
+```
+
+Manual equivalent:
 
 ```bash
 sf validate --strict
-export CURSOR_API_KEY=…
+export CURSOR_API_KEY=…   # no trailing newline; or use repo-root .env
 export GH_TOKEN=…
 CURRENT="$(node -p "require('./package.json').version")"
 PREVIOUS="$(node scripts/release-range.mjs previous --current "$CURRENT")"

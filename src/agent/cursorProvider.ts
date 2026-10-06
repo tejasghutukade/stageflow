@@ -5,14 +5,16 @@
  * module's prepare()/env sealing path.
  */
 import { existsSync, readFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import {
   registerProviderSupport,
   type ProviderPrepareResult,
   type StageProviderSupport,
 } from "./providerSupport.js";
+import { stageflowAgentAuthPath } from "../runtime/credentialBinding.js";
 
 const CURSOR_SETTING_SOURCES_ENV = "PI_CURSOR_SETTING_SOURCES";
 
@@ -23,21 +25,18 @@ const CURSOR_SETTING_SOURCES_ENV = "PI_CURSOR_SETTING_SOURCES";
  * Resolution order:
  * 1. STAGEFLOW_CURSOR_EXTENSION (absolute path to the extension .ts/.js)
  * 2. Path package from the Pi agent settings.json (same source interactive pi uses)
- * 3. npm install under <pi-agent>/npm/node_modules/pi-cursor-sdk
+ * 3. npm install under <stageflow-agent>/npm/node_modules/pi-cursor-sdk
  *    (`dist/index.js` for 0.3+, `src/index.ts` for older publishes)
  * 4. Sibling checkout at ../pi-cursor-sdk relative to this repo
  *
- * A stage worker's HOME is an empty attempt directory, so the Pi agent dir is
- * the directory of STAGEFLOW_PI_HOME_AUTH_PATH when the Host set it, not
- * os.homedir().
+ * A stage worker's HOME is an empty attempt directory; the agent dir comes from
+ * STAGEFLOW_AGENT_AUTH_PATH when the Host set it.
  */
 const CURSOR_PACKAGE_ENTRIES = ["dist/index.js", "src/index.ts"] as const;
 
-/** Pi agent dir. Stage workers must not use os.homedir(): HOME is the attempt dir. */
+/** Stageflow agent dir ($STAGEFLOW_HOME/agent). Stage workers must not use os.homedir(): HOME is the attempt dir. */
 function piAgentDir(): string {
-  const auth = process.env.STAGEFLOW_PI_HOME_AUTH_PATH?.trim();
-  if (auth) return path.dirname(path.resolve(auth));
-  return path.join(os.homedir(), ".pi", "agent");
+  return path.dirname(stageflowAgentAuthPath());
 }
 
 export function cursorExtensionEntryInPackage(
@@ -150,6 +149,49 @@ export const cursorProviderSupport: StageProviderSupport = {
     ].join(" ");
   },
 };
+
+const CURSOR_API_KEY_FILE_NAME = "cursor-api-key";
+
+export function readCursorApiKey(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  let fromEnv: string | undefined;
+  try {
+    fromEnv = readSecretFromEnvOrFile(env, "CURSOR_API_KEY");
+  } catch {
+    return undefined;
+  }
+  if (fromEnv !== undefined && fromEnv.trim() !== "") {
+    return fromEnv.trim();
+  }
+  const filePath = path.join(
+    globalStageflowHome(),
+    "agent",
+    CURSOR_API_KEY_FILE_NAME,
+  );
+  if (!existsSync(filePath)) {
+    return undefined;
+  }
+  try {
+    const raw = readFileSync(filePath, "utf8").replace(/\r?\n$/, "").trim();
+    return raw.length > 0 ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function getCursorHostStatus(
+  env: NodeJS.ProcessEnv = process.env,
+): {
+  cursorSdkReady: boolean;
+  cursorApiKeyConfigured: boolean;
+} {
+  const key = readCursorApiKey(env);
+  return {
+    cursorSdkReady: resolveCursorExtensionPath() !== undefined,
+    cursorApiKeyConfigured: key !== undefined,
+  };
+}
 
 registerProviderSupport(cursorProviderSupport);
 
