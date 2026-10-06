@@ -45,12 +45,23 @@ async function setup(kind: "memory" | "local", records = [record()], options: Pa
 }
 
 for (const kind of ["memory", "local"] as const) describe(`${kind} reply contract`, () => {
+  it("blocks replies to automatic messages", async () => {
+    const s = await setup(kind, [record("From: sender@example.com\r\nAuto-Submitted: auto-replied\r\nSubject: Automatic response\r\n")]);
+    expect((await s.adapter.getMessage(s.ref)).automated).toBe(true);
+    await expect(s.adapter.reply(s.input)).rejects.toMatchObject({ code: "EMAIL_INVALID_INPUT" });
+    expect(s.smtp.messages).toHaveLength(0);
+  });
   it("retrieves and replies to Reply-To once with the original conversation headers", async () => {
     const { root, accounts, account, adapter, input, outgoing, smtp } = await setup(kind);
     const selected = (await adapter.search({ accountId: account.accountId })).messages[0];
     const original = await adapter.getMessage(selected.ref);
     expect(original.text).toContain("External source content");
     const [first, second] = await Promise.all([adapter.reply(input), adapter.reply({ ...input, replyAll: false })]);
+    if (kind === "local") {
+      const submitted = await simpleParser(smtp.messages[0].data);
+      expect(submitted.headers.get("auto-submitted")).toBe("auto-generated");
+      expect(submitted.headers.get("x-auto-response-suppress")).toBe("All");
+    }
     expect(first).toEqual(second); expect(first.accepted).toEqual(["reply@example.com"]);
     expect(await adapter.reply({ ...input, from: account.address, ref: { accountId: input.ref.accountId, id: input.ref.id } })).toEqual(first);
     expect(await outgoing()).toMatchObject({ from: "agent@example.com", to: [{ address: "reply@example.com" }], cc: [], subject: "Re: Work",

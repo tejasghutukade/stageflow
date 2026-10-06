@@ -25,7 +25,7 @@ export type PreparedEmailAttachment = { filename: string; content: Buffer };
 export type EmailMessageSummary = {
   ref: EmailMessageRef; messageId?: string; threadId?: string;
   from: EmailAddress[]; to: EmailAddress[]; subject?: string; receivedAt: string;
-  unread: boolean; flagged: boolean; hasAttachments?: boolean; preview?: string;
+  unread: boolean; flagged: boolean; hasAttachments?: boolean; preview?: string; automated?: boolean;
 };
 export type EmailMessage = EmailMessageSummary & {
   cc: EmailAddress[]; replyTo: EmailAddress[]; text: string; html?: string;

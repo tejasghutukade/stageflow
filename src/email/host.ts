@@ -67,7 +67,9 @@ export function stageEmail(mailbox: EmailMailbox, stage: StageConfig, runId: str
 }
 export function emailWorkerEnvironment(env: NodeJS.ProcessEnv, accounts: EmailAccounts): NodeJS.ProcessEnv {
   const result = { ...env };
-  for (const account of accounts.list()) for (const connection of [account.imap, account.smtp]) delete result[connection.auth.secretRef.slice(4)];
+  for (const account of accounts.list()) for (const connection of [account.imap, account.smtp]) {
+    if (connection.auth.secretRef.startsWith("env:")) delete result[connection.auth.secretRef.slice(4)];
+  }
   return result;
 }
 

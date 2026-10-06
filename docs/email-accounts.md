@@ -4,7 +4,7 @@ Stageflow connects existing mailboxes. It does not create addresses or host emai
 
 Account management, connection tests, send, reply, retrieval, bounded search, incoming detection, and pipeline triggers are available. Account capabilities report only implemented mailbox operations.
 
-Start the Stageflow host with your mailbox credentials in its environment. Use separate variables for receiving and sending if needed. Set an app password, or an OAuth access token obtained outside Stageflow. Do not put credentials in stage YAML, tasks, prompts, or model provider settings.
+Mailbox passwords can come from the host environment or the local `email.yaml` file. Use an app password when your provider requires one. OAuth tokens must come from the environment. Do not put credentials in stage YAML, tasks, prompts, or model provider settings.
 
 ## Configure accounts in email.yaml
 
@@ -30,7 +30,9 @@ accounts:
       auth: { type: password, secretRef: 'env:COMPANY_SMTP_PASSWORD' }
 ```
 
-Add more entries to `accounts` for other mailboxes. This format uses provider connection settings; it does not require a provider name. Every account accepts the same settings and defaults as the HTTP create body below, plus a required `accountId`. This includes separate credentials, OAuth expiry, TLS modes, receive folders, sender aliases, connection and search limits, attachment limits, and sent-copy policy. Secrets must use `env:VARIABLE_NAME` references. Inline passwords, tokens, unknown fields, and secret interpolation are rejected.
+Add more entries to `accounts` for other mailboxes. This format uses provider connection settings; it does not require a provider name. Every account accepts the same settings and defaults as the HTTP create body below, plus a required `accountId`. This includes separate credentials, OAuth expiry, TLS modes, receive folders, sender aliases, connection and search limits, attachment limits, and sent-copy policy.
+
+For local password authentication, `auth: { type: password, password: 'your app password' }` needs no environment variable. A literal password already placed in `secretRef` also works in this file, although `password` is the preferred field. Do not specify both fields. Inline passwords are replaced with opaque references before account state is saved or returned by the API. The secret stays in host memory and is reloaded from YAML on restart. The HTTP account API still uses secret references, not inline passwords. Keep `email.yaml` out of Git and restrict it to your user account. Gmail app passwords entered as four space-separated groups are normalized for authentication. OAuth inline tokens, unknown fields, and secret interpolation are rejected.
 
 Choose a fixed account ID for stage permissions, such as `company-inbox`. IDs are 1–200 characters, start with a letter or digit, and contain only letters, digits, periods, underscores, or hyphens. They are case-sensitive. A stage can reference this ID in its existing `email` permissions. The file does not add stage grants, pipelines, or trigger rules. Changing an ID creates another account identity. To rotate credentials, keep the ID and change its connection settings.
 
@@ -39,6 +41,12 @@ The file controls only its declared account IDs and the IDs it controlled on ear
 The complete file is validated before settings are saved. Duplicate account IDs, duplicate YAML keys, aliases, malformed input, and files larger than 256 KiB are rejected. The file can contain at most 100 accounts. A validation, conflict, or storage fault prevents startup synchronization and leaves the previous saved account state unchanged. Error messages use safe codes and exclude YAML excerpts and secret values. An unchanged file causes no account write and preserves health results. A changed account clears only its own saved health result.
 
 Restart the host after a file change. The host does not reload this file while active. CLI stage execution reads the same account configuration. Receiving watchers require the long running HTTP/UI host. Startup synchronizes configuration and starts those normal receiving watchers; it does not send mail or automatically test SMTP. SMTP connects when a stage requests a send or reply, or when the operator explicitly tests SMTP. Missing or invalid provider credentials use the existing connection health rules. Account changes can suspend pending trigger work under the existing account settings check.
+
+## View accounts in the console
+
+Open **Connections** in the sidebar to see configured email accounts. This read-only page shows the account name, account ID, address, enabled state, and folders. It does not display credentials or credential references. Enabled means the account is available for use, not that connectivity has been tested. Edit `email.yaml` and restart the Host to load configuration changes.
+
+Email is the only communication channel listed today; Slack, Telegram, and WhatsApp connectors are not implemented.
 
 ## Manage accounts through HTTP
 

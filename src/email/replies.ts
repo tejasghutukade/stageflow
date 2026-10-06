@@ -19,6 +19,7 @@ export function validateReply(input: unknown): ReplyToEmailInput {
 
 /** Only normalized source data can supply recipients and conversation headers. */
 export function replyMessage(account: EmailAccount, original: EmailMessage, input: ReplyToEmailInput): SendEmailInput {
+  if (original.automated) throw new EmailError("EMAIL_INVALID_INPUT");
   function usable(values: EmailAddress[]): EmailAddress[] {
     return values.filter(value => z.email().safeParse(value.address).success).map(value => ({
       address: value.address,

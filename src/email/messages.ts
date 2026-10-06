@@ -118,7 +118,12 @@ export async function parseMessage(account: EmailAccount, mailbox: string, gener
   if (Buffer.byteLength(text) > BODY_LIMIT || (html !== undefined && Buffer.byteLength(html) > BODY_LIMIT) || parsed.attachments.length > 100) throw new EmailError("EMAIL_RESOURCE_LIMIT");
   const references = parsed.references ? (Array.isArray(parsed.references) ? parsed.references : [parsed.references]) : [];
   if (references.length > 100 || references.some(value => value.length > 998)) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+  const autoSubmitted = parsed.headers.get("auto-submitted");
+  const precedence = parsed.headers.get("precedence");
+  const automated = (typeof autoSubmitted === "string" && autoSubmitted.trim().toLowerCase() !== "no")
+    || (typeof precedence === "string" && /^(bulk|list|junk)$/i.test(precedence.trim()));
   return { ref: messageRef(account, mailbox, generation, record.uid),
+    ...(automated ? { automated: true } : {}),
     ...(parsed.messageId ? { messageId: parsed.messageId.slice(0, 998) } : {}),
     ...(parsed.inReplyTo ? { inReplyTo: parsed.inReplyTo.slice(0, 998) } : {}),
     from: addresses(parsed.from), to: addresses(parsed.to), cc: addresses(parsed.cc), replyTo: addresses(parsed.replyTo),

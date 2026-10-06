@@ -2,13 +2,16 @@ import { useCallback, useEffect, useState } from "react";
 import {
   fetchTrigger,
   fetchTriggers,
+  fetchEmailTriggers,
   fireTrigger,
+  type EmailTriggerRule,
   type TriggerListItem,
 } from "../api";
 import { relativeTime } from "../catalogJoin";
 import { NewTriggerPanel } from "../components/NewTriggerPanel";
 import { runStreamPath, triggerPath } from "../routes";
 import { showToast } from "../toast";
+import { EmailTriggerDetail, EmailTriggerRow } from "./EmailTriggerView";
 
 export function triggerKindLabel(kind: TriggerListItem["kind"]): string {
   if (kind === "schedule") return "Schedule";
@@ -48,20 +51,22 @@ export function TriggersPage({
   triggerId?: string;
 }) {
   const [triggers, setTriggers] = useState<TriggerListItem[]>([]);
+  const [emailTriggers, setEmailTriggers] = useState<EmailTriggerRule[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [newTriggerPanelOpen, setNewTriggerPanelOpen] = useState(false);
 
   const load = useCallback(async () => {
-    try {
-      const t = await fetchTriggers();
-      setTriggers(t.triggers);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
+    const [catalog, email] = await Promise.allSettled([
+      fetchTriggers(), fetchEmailTriggers(),
+    ]);
+    setTriggers(catalog.status === "fulfilled" ? catalog.value.triggers : []);
+    setEmailTriggers(email.status === "fulfilled" ? email.value.triggers : []);
+    const errors: string[] = [];
+    if (catalog.status === "rejected") errors.push(`Catalog triggers: ${String(catalog.reason)}`);
+    if (email.status === "rejected") errors.push(`Email triggers: ${String(email.reason)}`);
+    setError(errors.length ? errors.join(" · ") : null);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -75,6 +80,9 @@ export function TriggersPage({
   }
 
   if (triggerId) {
+    if (triggerId.startsWith("email:")) {
+      return <EmailTriggerDetail key={triggerId} triggerId={triggerId.slice(6)} />;
+    }
     return <TriggerDetail triggerId={triggerId} onRefreshList={load} />;
   }
 
@@ -84,9 +92,8 @@ export function TriggersPage({
         <div>
           <h1>Triggers</h1>
           <p>
-            Manifest-declared triggers and what they fire. Schedule and event
-            triggers run automatically; every trigger can also be fired by
-            hand.
+            Catalog and email triggers and what they run. Email triggers run
+            automatically when a matching message arrives in a connected inbox.
           </p>
         </div>
         <button
@@ -102,7 +109,7 @@ export function TriggersPage({
         <p style={{ color: "var(--color-text-red)" }}>{error}</p>
       ) : null}
       {loading ? <p className="muted">Loading triggers…</p> : null}
-      {!loading && triggers.length === 0 ? (
+      {!loading && !error && triggers.length === 0 && emailTriggers.length === 0 ? (
         <div className="empty-hint">
           <p style={{ margin: "0 0 var(--spacing-3)" }}>
             No triggers yet. Add a <span className="mono">*.trigger.yaml</span>{" "}
@@ -118,7 +125,7 @@ export function TriggersPage({
         </div>
       ) : null}
 
-      {!loading && triggers.length > 0 ? (
+      {!loading && (triggers.length > 0 || emailTriggers.length > 0) ? (
         <table className="table">
           <thead>
             <tr>
@@ -161,6 +168,9 @@ export function TriggersPage({
                   </a>
                 </td>
               </tr>
+            ))}
+            {emailTriggers.map((trigger) => (
+              <EmailTriggerRow key={`email:${trigger.triggerId}`} trigger={trigger} />
             ))}
           </tbody>
         </table>

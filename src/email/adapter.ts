@@ -19,6 +19,8 @@ import {
   type EmailArtifactContext, type PreparedEmailAttachment, type DownloadEmailAttachmentInput, type DownloadEmailAttachmentResult,
 } from "./port.js";
 
+const automaticMessageHeaders = { "Auto-Submitted": "auto-generated", "X-Auto-Response-Suppress": "All" };
+
 function normalizedConnectionError(error: unknown): EmailError {
   if (error instanceof EmailError) return error;
   const fault = error as { code?: string; authenticationFailed?: boolean; responseCode?: number };
@@ -47,7 +49,7 @@ async function receiveOutcome(uid: number, normalize: () => Promise<EmailMessage
 async function submittedMime(account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[]): Promise<Buffer> {
   const message = new MailComposer({ from: input.from, to: input.to, cc: input.cc, subject: input.subject,
     text: input.text, html: input.html, inReplyTo: input.inReplyTo, references: input.references,
-    attachments, messageId: `<${operationId}@stageflow>`, date: new Date(), disableFileAccess: true, disableUrlAccess: true }).compile();
+    attachments, headers: automaticMessageHeaders, messageId: `<${operationId}@stageflow>`, date: new Date(), disableFileAccess: true, disableUrlAccess: true }).compile();
   const stream = message.createReadStream();
   const chunks: Buffer[] = [];
   let size = 0;
@@ -467,7 +469,7 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
     try {
       const receipt = await this.bounded(account, () => { socket?.destroy(); transport.close(); }, () => transport.sendMail(mime
         ? { raw: mime, messageId: `<${operationId}@stageflow>`, envelope: { from: input.from!, to: [...input.to, ...input.cc ?? [], ...input.bcc ?? []].map(value => value.address) } }
-        : { from: input.from, to: input.to, cc: input.cc, bcc: input.bcc,
+        : { from: input.from, to: input.to, cc: input.cc, bcc: input.bcc, headers: automaticMessageHeaders,
           subject: input.subject, text: input.text, html: input.html, inReplyTo: input.inReplyTo, references: input.references, attachments, messageId: `<${operationId}@stageflow>` }));
       return { operationId, messageId: receipt.messageId, accepted: receipt.accepted, rejected: receipt.rejected,
         submittedAt: new Date().toISOString() };

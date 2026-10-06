@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { stringify } from "yaml";
-import { EmailAccounts, type EmailAccountInput } from "../src/email/accounts.js";
+import { EmailAccounts, resolveEmailSecret, type EmailAccountInput } from "../src/email/accounts.js";
 import { InMemoryEmailAdapter } from "../src/email/adapter.js";
 import { emailHostFor, emailWorkerEnvironment, stageEmail, validateStageEmailAccounts } from "../src/email/host.js";
 import { startUiServer } from "../src/server/http.js";
@@ -29,6 +29,35 @@ async function configure(root: string, accounts: unknown[]): Promise<void> {
 function savedPath(root: string): string { return path.join(root, ".stageflow", "email-accounts.json"); }
 
 describe("email.yaml account startup", () => {
+  it("keeps inline passwords out of account responses and persisted state", async () => {
+    const root = await workspace();
+    const account = { ...input(), accountId: "personal" };
+    await configure(root, [{ ...account,
+      imap: { ...account.imap, auth: { type: "password", password: "inline-receive-secret" } },
+      smtp: { ...account.smtp, auth: { type: "password", secretRef: "inline-send-secret" } },
+    }]);
+    const accounts = new EmailAccounts(root);
+    const loaded = accounts.get("personal");
+    expect(resolveEmailSecret(loaded.imap, {})).toBe("inline-receive-secret");
+    expect(resolveEmailSecret(loaded.smtp, {})).toBe("inline-send-secret");
+    expect(JSON.stringify(accounts.list())).not.toContain("inline-receive-secret");
+    expect(JSON.stringify(accounts.list())).not.toContain("inline-send-secret");
+    const persisted = await readFile(savedPath(root), "utf8");
+    expect(persisted).not.toContain("inline-receive-secret");
+    expect(persisted).not.toContain("inline-send-secret");
+    expect(resolveEmailSecret(new EmailAccounts(root).get("personal").smtp, {})).toBe("inline-send-secret");
+  });
+  it("normalizes only grouped Gmail app passwords", async () => {
+    const root = await workspace();
+    const account = input();
+    await configure(root, [{ ...account, accountId: "personal",
+      smtp: { ...account.smtp, host: "smtp.gmail.com", auth: { type: "password", password: "abcd efgh ijkl mnop" } },
+      imap: { ...account.imap, auth: { type: "password", password: "abcd efgh ijkl mnop" } },
+    }]);
+    const loaded = new EmailAccounts(root).get("personal");
+    expect(resolveEmailSecret(loaded.smtp, {})).toBe("abcdefghijklmnop");
+    expect(resolveEmailSecret(loaded.imap, {})).toBe("abcd efgh ijkl mnop");
+  });
   it("loads multiple stable IDs, preserves defaults and all account settings", async () => {
     const root = await workspace();
     const full = { ...input(), accountId: "support-inbox", enabled: false, displayName: "Support", address: "support@example.com",
@@ -126,7 +155,7 @@ describe("email.yaml account startup", () => {
       stringify({ version: 2, accounts: [good] }),
       stringify({ version: 1, accounts: [good, good] }),
       stringify({ version: 1, accounts: [good, { ...good, accountId: "other", password: "PRIVATE_SECRET" }] }),
-      stringify({ version: 1, accounts: [{ ...good, imap: { ...good.imap, auth: { type: "password", secretRef: "PRIVATE_SECRET" } } }] }),
+      stringify({ version: 1, accounts: [{ ...good, imap: { ...good.imap, auth: { type: "password", secretRef: "env:SECRET", password: "PRIVATE_SECRET" } } }] }),
       stringify({ version: 1, accounts: [{ ...good, accountId: "../unsafe" }] }),
       stringify({ version: 1, accounts: [{ ...good, imap: { ...good.imap, tls: "none" } }] }),
       stringify({ version: 1, accounts: [{ ...good, imap: { ...good.imap, auth: { type: "oauth2", secretRef: "env:TOKEN" } } }] }),

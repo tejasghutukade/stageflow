@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseDocument } from "yaml";
@@ -7,9 +7,11 @@ import { storeRootFor } from "../runstore/paths.js";
 import { EmailError, type EmailAccountStatus } from "./port.js";
 import { attachmentLimitsSchema } from "./attachments.js";
 
+const localSecrets = new Map<string, string>();
+
 const authSchema = z.object({
   type: z.enum(["password", "oauth2"]),
-  secretRef: z.string().regex(/^env:[A-Za-z_][A-Za-z0-9_]*$/),
+  secretRef: z.string().regex(/^(env:[A-Za-z_][A-Za-z0-9_]*|local:[a-f0-9]{64})$/),
   expiresAt: z.iso.datetime().optional(),
 }).strict().refine(auth => auth.type !== "oauth2" || auth.expiresAt !== undefined);
 const connectionSchema = z.object({
@@ -83,11 +85,32 @@ function startupAccounts(file: string, scope: string): EmailAccount[] {
     const parsed = yamlFileSchema.safeParse(document.toJS({ maxAliasCount: 0 }));
     if (!parsed.success) throw new EmailError("EMAIL_INVALID_INPUT");
     const ids = new Set<string>();
-    return parsed.data.accounts.map(({ accountId, ...input }) => {
+    const pendingSecrets = new Map<string, string>();
+    const configured = parsed.data.accounts.map(({ accountId, ...input }) => {
       if (ids.has(accountId)) throw new EmailError("EMAIL_INVALID_INPUT");
       ids.add(accountId);
-      return { ...parseAccount(input), accountId, scope };
+      const normalized = structuredClone(input);
+      for (const protocol of ["imap", "smtp"] as const) {
+        const connection = normalized[protocol] as { host?: string; auth?: Record<string, unknown> } | undefined;
+        const auth = connection?.auth;
+        if (auth?.type !== "password") continue;
+        let password = auth.password;
+        if (password === undefined && typeof auth.secretRef === "string"
+          && !auth.secretRef.startsWith("env:") && !auth.secretRef.startsWith("local:")) {
+          password = auth.secretRef;
+        }
+        if (password === undefined) continue;
+        if (typeof password !== "string" || !password.length || (auth.password !== undefined && auth.secretRef !== undefined)) throw new EmailError("EMAIL_INVALID_INPUT");
+        const reference = `local:${createHash("sha256").update(JSON.stringify([scope, accountId, protocol])).digest("hex")}`;
+        const gmailAppPassword = connection?.host?.endsWith(".gmail.com") && /^[a-z]{4}( [a-z]{4}){3}$/.test(password);
+        pendingSecrets.set(reference, gmailAppPassword ? password.replaceAll(" ", "") : password);
+        delete auth.password;
+        auth.secretRef = reference;
+      }
+      return { ...parseAccount(normalized), accountId, scope };
     });
+    for (const [reference, secret] of pendingSecrets) localSecrets.set(reference, secret);
+    return configured;
   } catch (error) {
     if (error instanceof EmailError) throw error;
     throw new EmailError("EMAIL_INVALID_INPUT");
@@ -221,7 +244,9 @@ export class EmailAccounts {
 export function resolveEmailSecret(connection: EmailConnection, env: NodeJS.ProcessEnv = process.env): string {
   if (connection.auth.type === "oauth2" && connection.auth.expiresAt &&
     Date.parse(connection.auth.expiresAt) <= Date.now()) throw new EmailError("EMAIL_TOKEN_EXPIRED");
-  const secret = env[connection.auth.secretRef.slice(4)];
+  const secret = connection.auth.secretRef.startsWith("local:")
+    ? localSecrets.get(connection.auth.secretRef)
+    : env[connection.auth.secretRef.slice(4)];
   if (!secret) throw new EmailError("EMAIL_AUTH_FAILED");
   return secret;
 }
