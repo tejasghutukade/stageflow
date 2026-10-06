@@ -6,6 +6,42 @@ Account management, connection tests, send, reply, retrieval, bounded search, in
 
 Start the Stageflow host with your mailbox credentials in its environment. Use separate variables for receiving and sending if needed. Set an app password, or an OAuth access token obtained outside Stageflow. Do not put credentials in stage YAML, tasks, prompts, or model provider settings.
 
+## Configure accounts in email.yaml
+
+Put `email.yaml` in the Stageflow workspace root. The host reads it when its email module starts. The normal HTTP host and CLI email module use the same loader. Copy `email.example.yaml` to start. The example file is inactive until you name it `email.yaml`.
+
+```yaml
+version: 1
+accounts:
+  - accountId: company-inbox
+    displayName: Company inbox
+    address: agent@example.com
+    imap:
+      host: imap.example.com
+      port: 993
+      username: agent@example.com
+      tls: implicit
+      auth: { type: password, secretRef: 'env:COMPANY_IMAP_PASSWORD' }
+    smtp:
+      host: smtp.example.com
+      port: 587
+      username: agent@example.com
+      tls: starttls
+      auth: { type: password, secretRef: 'env:COMPANY_SMTP_PASSWORD' }
+```
+
+Add more entries to `accounts` for other mailboxes. This format uses provider connection settings; it does not require a provider name. Every account accepts the same settings and defaults as the HTTP create body below, plus a required `accountId`. This includes separate credentials, OAuth expiry, TLS modes, receive folders, sender aliases, connection and search limits, attachment limits, and sent-copy policy. Secrets must use `env:VARIABLE_NAME` references. Inline passwords, tokens, unknown fields, and secret interpolation are rejected.
+
+Choose a fixed account ID for stage permissions, such as `company-inbox`. IDs are 1–200 characters, start with a letter or digit, and contain only letters, digits, periods, underscores, or hyphens. They are case-sensitive. A stage can reference this ID in its existing `email` permissions. The file does not add stage grants, pipelines, or trigger rules. Changing an ID creates another account identity. To rotate credentials, keep the ID and change its connection settings.
+
+The file controls only its declared account IDs and the IDs it controlled on earlier starts. An absent file preserves unrelated accounts created through HTTP. Removing a file account, using `accounts: []`, or removing the file disables the saved file accounts on the next start. Their IDs, operation receipts, and other history remain. Reintroducing an ID restores its settings from the file. IDs remain file-managed and cannot transfer to HTTP management. An existing HTTP account with the same ID causes `EMAIL_OPERATION_CONFLICT`; choose a separate ID. HTTP PATCH and DELETE also return this error for file-managed IDs, including disabled entries. Read, health, and explicit connection-test requests remain available.
+
+The complete file is validated before settings are saved. Duplicate account IDs, duplicate YAML keys, aliases, malformed input, and files larger than 256 KiB are rejected. The file can contain at most 100 accounts. A validation, conflict, or storage fault prevents startup synchronization and leaves the previous saved account state unchanged. Error messages use safe codes and exclude YAML excerpts and secret values. An unchanged file causes no account write and preserves health results. A changed account clears only its own saved health result.
+
+Restart the host after a file change. The host does not reload this file while active. CLI stage execution reads the same account configuration. Receiving watchers require the long running HTTP/UI host. Startup synchronizes configuration and starts those normal receiving watchers; it does not send mail or automatically test SMTP. SMTP connects when a stage requests a send or reply, or when the operator explicitly tests SMTP. Missing or invalid provider credentials use the existing connection health rules. Account changes can suspend pending trigger work under the existing account settings check.
+
+## Manage accounts through HTTP
+
 The management interface uses these HTTP requests:
 
 | Request | Result |

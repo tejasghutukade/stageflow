@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { parseDocument } from "yaml";
 import { z } from "zod";
 import { storeRootFor } from "../runstore/paths.js";
 import { EmailError, type EmailAccountStatus } from "./port.js";
@@ -38,7 +39,12 @@ const accountSchema = z.object({
 export type EmailAccountInput = z.input<typeof accountSchema>;
 export type EmailConnection = z.output<typeof connectionSchema>;
 export type EmailAccount = z.output<typeof accountSchema> & { accountId: string; scope: string };
-type AccountState = { version: 1; scope: string; accounts: EmailAccount[]; health: Record<string, EmailAccountStatus> };
+type AccountState = { version: 1; scope: string; accounts: EmailAccount[]; health: Record<string, EmailAccountStatus>; yamlManagedAccountIds?: string[] };
+const yamlFileLimit = 262144;
+const yamlFileSchema = z.object({
+  version: z.literal(1),
+  accounts: z.array(z.object({ accountId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/) }).passthrough()).max(100),
+}).strict();
 
 function parseAccount(input: unknown): z.output<typeof accountSchema> {
   const parsed = accountSchema.safeParse(input);
@@ -51,6 +57,41 @@ function parseAccount(input: unknown): z.output<typeof accountSchema> {
     }
   }
   return parsed.data;
+}
+
+function startupAccounts(file: string, scope: string): EmailAccount[] {
+  let descriptor: number;
+  try { descriptor = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new EmailError("EMAIL_STORAGE_FAILED");
+  }
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile()) throw new EmailError("EMAIL_INVALID_INPUT");
+    if (stat.size > yamlFileLimit) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+    const bytes = Buffer.alloc(yamlFileLimit + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(descriptor, bytes, length, bytes.length - length, null);
+      if (!count) break;
+      length += count;
+    }
+    if (length > yamlFileLimit) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+    const document = parseDocument(bytes.toString("utf8", 0, length), { uniqueKeys: true, strict: true });
+    if (document.errors.length || document.warnings.length) throw new EmailError("EMAIL_INVALID_INPUT");
+    const parsed = yamlFileSchema.safeParse(document.toJS({ maxAliasCount: 0 }));
+    if (!parsed.success) throw new EmailError("EMAIL_INVALID_INPUT");
+    const ids = new Set<string>();
+    return parsed.data.accounts.map(({ accountId, ...input }) => {
+      if (ids.has(accountId)) throw new EmailError("EMAIL_INVALID_INPUT");
+      ids.add(accountId);
+      return { ...parseAccount(input), accountId, scope };
+    });
+  } catch (error) {
+    if (error instanceof EmailError) throw error;
+    throw new EmailError("EMAIL_INVALID_INPUT");
+  } finally { closeSync(descriptor); }
 }
 
 /** Host-owned configuration. Reads return copies; mutations replace the file atomically. */
@@ -74,10 +115,15 @@ export class EmailAccounts {
           if (typeof accountId !== "string" || scope !== this.scope) throw new Error();
           return { ...parseAccount(input), accountId, scope };
         }) };
+        const ids = this.state.accounts.map(account => account.accountId);
+        const managed = saved.yamlManagedAccountIds ?? [];
+        if (new Set(ids).size !== ids.length || !Array.isArray(managed) || new Set(managed).size !== managed.length
+          || managed.some(id => typeof id !== "string" || !ids.includes(id))) throw new Error();
       } catch {
         throw new EmailError("EMAIL_INVALID_INPUT");
       }
     }
+    this.syncStartupAccounts(startupAccounts(path.join(this.scope, "email.yaml"), this.scope));
   }
 
   list(): EmailAccount[] {
@@ -97,6 +143,7 @@ export class EmailAccounts {
     return structuredClone(account);
   }
   update(accountId: string, patch: unknown): EmailAccount {
+    this.requireHttpAccount(accountId);
     const { accountId: _id, scope: _scope, ...current } = this.get(accountId, false);
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new EmailError("EMAIL_INVALID_INPUT");
     const account = { ...parseAccount({ ...current, ...patch }), accountId, scope: this.scope };
@@ -107,6 +154,7 @@ export class EmailAccounts {
     return structuredClone(account);
   }
   remove(accountId: string): void {
+    this.requireHttpAccount(accountId);
     this.get(accountId, false);
     this.state.accounts = this.state.accounts.filter(a => a.accountId !== accountId);
     delete this.state.health[accountId];
@@ -129,11 +177,44 @@ export class EmailAccounts {
   private notify(accountId: string): void {
     for (const listener of this.listeners) listener(accountId);
   }
-  private persist(): void {
+  private requireHttpAccount(accountId: string): void {
+    if (this.state.yamlManagedAccountIds?.includes(accountId)) throw new EmailError("EMAIL_OPERATION_CONFLICT");
+  }
+  private syncStartupAccounts(configured: EmailAccount[]): void {
+    const managed = new Set(this.state.yamlManagedAccountIds ?? []);
+    for (const account of configured) {
+      if (!managed.has(account.accountId) && this.state.accounts.some(saved => saved.accountId === account.accountId)) {
+        throw new EmailError("EMAIL_OPERATION_CONFLICT");
+      }
+    }
+    const declared = new Map(configured.map(account => [account.accountId, account]));
+    const changed = new Set<string>();
+    const accounts = this.state.accounts.map(saved => {
+      const replacement = declared.get(saved.accountId);
+      declared.delete(saved.accountId);
+      const account = replacement ?? (managed.has(saved.accountId) ? { ...saved, enabled: false } : saved);
+      if (JSON.stringify(account) !== JSON.stringify(saved)) changed.add(saved.accountId);
+      return account;
+    });
+    for (const account of declared.values()) { accounts.push(account); changed.add(account.accountId); }
+    for (const account of configured) managed.add(account.accountId);
+    if (!changed.size) return;
+    const next = { ...this.state, accounts, health: { ...this.state.health }, yamlManagedAccountIds: [...managed] };
+    for (const accountId of changed) delete next.health[accountId];
+    try { this.persist(next); }
+    catch { throw new EmailError("EMAIL_STORAGE_FAILED"); }
+    this.state = next;
+  }
+  private persist(state = this.state): void {
     mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
     const temporary = `${this.file}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(this.state, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, this.file);
+    try {
+      writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+      renameSync(temporary, this.file);
+    } catch (error) {
+      try { unlinkSync(temporary); } catch { /* A failed write might not create a temporary file. */ }
+      throw error;
+    }
   }
 }
 
