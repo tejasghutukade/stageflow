@@ -68,17 +68,15 @@ import {
 import { resolveStreamRoute } from "../workspace/resolveStreamRoute";
 import { useRedesign } from "../redesign/flag";
 import { RunDetailPageRedesign } from "./runDetail/RunDetailPageRedesign";
+import {
+  clampWorkHeight,
+  MAP_MIN_H,
+  WORK_ARROW_STEP,
+  WORK_DEFAULT_H,
+  WORK_MIN_H,
+} from "./runDetail/runDetailWorkSplit";
 
-const WORK_DEFAULT_H = 300;
-const WORK_MIN_H = 200;
-const MAP_MIN_H = 140;
-const WORK_ARROW_STEP = 24;
-
-export function clampWorkHeight(requested: number, paneHeight: number): number {
-  const maxByMap = paneHeight - MAP_MIN_H;
-  if (paneHeight < 340) return Math.max(0, maxByMap);
-  return Math.max(WORK_MIN_H, Math.min(requested, maxByMap));
-}
+export { clampWorkHeight } from "./runDetail/runDetailWorkSplit";
 
 function sessionChipEl(kind: SessionChipKind) {
   if (kind === "alive") return <span className="chip">session alive</span>;

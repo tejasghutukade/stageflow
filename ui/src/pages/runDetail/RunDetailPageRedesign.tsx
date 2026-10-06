@@ -48,6 +48,8 @@ import { RunTimelineGantt } from "../../redesign/runs/RunTimelineGantt";
 import { RunDetailTranscriptBody } from "../../redesign/runs/RunDetailTranscriptBody";
 import { RunDetailTranscriptTurns } from "../../redesign/runs/RunDetailTranscriptTurns";
 import { buildRunTrackView } from "../../runs/buildRunTrackView";
+import { RunDetailWorkSplit } from "./RunDetailWorkSplit";
+import { useRunDetailWorkSplit } from "./runDetailWorkSplit";
 
 export function RunDetailPageRedesign({
   runId,
@@ -86,6 +88,16 @@ export function RunDetailPageRedesign({
   const [dismissedWaitKey, setDismissedWaitKey] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
   const wasWaitingArtifact = useRef(false);
+  const paneRef = useRef<HTMLDivElement>(null);
+  const {
+    workHeight,
+    splitDragging,
+    setSplitDragging,
+    splitGestureRef,
+    applyWorkHeight,
+    splitMin,
+    splitMax,
+  } = useRunDetailWorkSplit(paneRef);
   const onOpenStreamRef = useRef(onOpenStream);
   onOpenStreamRef.current = onOpenStream;
   const streamViewStageId = view.kind === "stream" ? view.stageId : undefined;
@@ -555,34 +567,53 @@ export function RunDetailPageRedesign({
       />
       {banner ? <div className="banner banner--error">{banner}</div> : null}
       <div
-        className={`flex w-full shrink-0 flex-col${
-          viewMode === "list" || viewMode === "timeline" || viewMode === "graph" ?
-            ""
-          : " border-b border-b-[#ffffff12] pt-3 pb-2"
+        ref={paneRef}
+        className={`pane flex min-h-0 flex-1 flex-col overflow-hidden${
+          splitDragging ? " is-resizing" : ""
         }`}
       >
-        {mainView}
-      </div>
-      <div className="flex min-h-0 w-full flex-1">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col border-r border-r-[#ffffff12]">
-          {center}
+        <div
+          className={`flex min-h-0 flex-1 flex-col overflow-hidden${
+            viewMode === "list" || viewMode === "timeline" || viewMode === "graph" ?
+              ""
+            : " border-b border-b-[#ffffff12] pt-3 pb-2"
+          }`}
+        >
+          {mainView}
         </div>
-        <RunStageInspector
-          run={run}
-          stage={stage}
-          health={health}
-          inboundSummary={inboundSummary}
-          actionBusy={actionBusy}
-          onRetry={retryAndSelect}
-          onResume={resumeAndSelect}
-          onAbandon={abandon}
-          onOpenArtifact={(path) => {
-            setCenterTab("artifacts");
-            onOpenArtifact(path);
-          }}
-          onOpenEnvelope={onOpenEnvelope}
-          artifactPath={stage?.artifacts?.[0] ?? null}
+        <RunDetailWorkSplit
+          workHeight={workHeight}
+          splitMin={splitMin}
+          splitMax={splitMax}
+          splitDragging={splitDragging}
+          setSplitDragging={setSplitDragging}
+          splitGestureRef={splitGestureRef}
+          applyWorkHeight={applyWorkHeight}
         />
+        <div
+          className="flex min-h-0 w-full shrink-0 overflow-hidden"
+          style={{ height: workHeight }}
+        >
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col border-r border-r-[#ffffff12]">
+            {center}
+          </div>
+          <RunStageInspector
+            run={run}
+            stage={stage}
+            health={health}
+            inboundSummary={inboundSummary}
+            actionBusy={actionBusy}
+            onRetry={retryAndSelect}
+            onResume={resumeAndSelect}
+            onAbandon={abandon}
+            onOpenArtifact={(path) => {
+              setCenterTab("artifacts");
+              onOpenArtifact(path);
+            }}
+            onOpenEnvelope={onOpenEnvelope}
+            artifactPath={stage?.artifacts?.[0] ?? null}
+          />
+        </div>
       </div>
       {workspace.drawer ? (
         <EnvelopeDrawer
