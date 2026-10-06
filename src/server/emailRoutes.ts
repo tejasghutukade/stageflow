@@ -31,6 +31,9 @@ export async function handleEmailRoutes(
   try {
     const method = req.method ?? "GET";
     if (triggers) {
+      if (["/api/email/replay/preview", "/api/email/replay/execute"].includes(pathname) && method === "POST") {
+        json(res, 200, await triggers.replay(await body(req), pathname.endsWith("execute"))); return;
+      }
       const triggerMatch = pathname.match(/^\/api\/email\/triggers\/([^/]+)$/);
       if (pathname === "/api/email/triggers" && method === "GET") { json(res, 200, { triggers: triggers.list() }); return; }
       if (pathname === "/api/email/triggers" && method === "POST") { json(res, 201, await triggers.create(await body(req))); return; }

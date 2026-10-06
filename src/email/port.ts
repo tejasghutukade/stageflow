@@ -63,6 +63,8 @@ export type EmailReceivedEvent = {
   message: EmailMessageSummary; receivedAt: string; detectedAt: string;
 };
 export interface EmailMailbox {
+  /** Host-only historical event retrieval. Validates current provider identity without changing watcher progress. */
+  getReceivedEvent?(ref: EmailMessageRef): Promise<EmailReceivedEvent>;
   testAccount(accountId: string, protocol?: "imap" | "smtp" | "both"): Promise<EmailAccountStatus>;
   send(input: SendEmailInput, context?: EmailArtifactContext): Promise<SendEmailResult>;
   reply(input: ReplyToEmailInput, context?: EmailArtifactContext): Promise<SendEmailResult>;

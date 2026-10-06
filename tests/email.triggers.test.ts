@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { request } from "node:http";
@@ -15,6 +15,7 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import { SqliteRunStore } from "../src/runstore/sqlite/SqliteRunStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import { startUiServer } from "../src/server/http.js";
+import { mailServer } from "./fixtures/mailServers.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); vi.useRealTimers(); });
@@ -74,6 +75,148 @@ async function setup(maxConcurrent = 8, queue?: ConstructorParameters<typeof Ema
 }
 
 describe("durable email triggers", () => {
+  function historical(uid: number, subject = "WORK request") {
+    return { uid, source: Buffer.from(`From: sender@example.com\r\nSubject: ${subject}\r\n\r\nPRIVATE HISTORICAL BODY`), flags: new Set<string>(), receivedAt: new Date("2020-01-01T00:00:00Z") };
+  }
+  async function replaySetup(queue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"]) {
+    const s = await setup(8, queue);
+    const rule = await s.triggers.create(s.rule);
+    s.mailbox.seedMailbox(s.account.accountId, [historical(7), historical(8), historical(9, "other")]);
+    const request = { accountId: s.account.accountId, folder: "INBOX", triggerId: rule.triggerId, ruleVersion: rule.version, maxCount: 2 };
+    const refs = (await s.mailbox.search({ accountId: s.account.accountId, sort: "oldest" })).messages.map(message => message.ref);
+    return { ...s, rule, request, refs };
+  }
+  it("replays a selected older message, keeps watcher progress, and starts later live mail", async () => {
+    const s = await replaySetup();
+    await s.mailbox.start(event => s.triggers.accept(event));
+    const before = await readFile(path.join(s.cwd, ".stageflow", "email-events.json"));
+    const preview = await s.triggers.replay({ ...s.request, refs: [s.refs[0]] });
+    expect(preview.outcomes[0].status).toBe("matched"); expect(s.triggers.history()).toEqual([]);
+    const admitted = await s.triggers.replay({ ...s.request, refs: preview.refs }, true);
+    expect(admitted.outcomes[0].status).toBe("pending");
+    expect(await readFile(path.join(s.cwd, ".stageflow", "email-events.json"))).toEqual(before);
+    await s.complete(); expect(s.executions()).toBe(1);
+    const repeated = await s.triggers.replay({ ...s.request, refs: preview.refs }, true);
+    expect(repeated.outcomes[0]).toMatchObject({ status: "alreadyHandled", runId: s.triggers.history()[0].runId });
+    s.mailbox.seedMailbox(s.account.accountId, [historical(7), historical(8), historical(9, "other"), historical(10)]);
+    await expect.poll(() => s.triggers.history().length).toBe(2);
+    await s.complete(); expect(s.executions()).toBe(2);
+  });
+  it.each(["replay-first", "live-first", "concurrent"])("deduplicates %s overlap without hiding a second live rule", async order => {
+    const s = await replaySetup();
+    const { triggerId: _id, version: _version, activeAfter: _after, ...secondRule } = s.rule;
+    await s.triggers.create(secondRule);
+    const event = await s.mailbox.getReceivedEvent(s.refs[0]);
+    const replay = () => s.triggers.replay({ ...s.request, refs: [s.refs[0]] }, true);
+    if (order === "replay-first") { await replay(); await s.triggers.accept(event); }
+    else if (order === "live-first") { await s.triggers.accept(event); await replay(); }
+    else await Promise.all([replay(), s.triggers.accept(event)]);
+    expect(s.triggers.history()).toHaveLength(2);
+    await s.complete(); expect(s.executions()).toBe(2);
+  });
+  it("previews one explicit page, skips no matches, and requires exact execution refs", async () => {
+    const s = await replaySetup();
+    const first = await s.triggers.replay({ ...s.request, maxCount: 1, search: { sort: "oldest" } });
+    expect(first.refs).toHaveLength(1); expect(first.nextCursor).toBeTypeOf("string");
+    expect(s.triggers.history()).toEqual([]);
+    await expect(s.triggers.replay({ ...s.request, search: {} }, true)).rejects.toMatchObject({ code: "EMAIL_INVALID_INPUT" });
+    const second = await s.triggers.replay({ ...s.request, maxCount: 1, search: { sort: "oldest", cursor: first.nextCursor } });
+    expect(second.refs[0].id).not.toBe(first.refs[0].id);
+    expect((await s.triggers.replay({ ...s.request, refs: [s.refs[2]] }, true)).outcomes[0].status).toBe("skipped");
+  });
+  it("reports missing and stale messages, and rejects access and selection faults", async () => {
+    const s = await replaySetup();
+    s.mailbox.seedMailbox(s.account.accountId, [historical(8)]);
+    expect((await s.triggers.replay({ ...s.request, refs: [s.refs[0], s.refs[1]] }, true)).outcomes.map(value => value.status)).toEqual(["failed", "pending"]);
+    s.mailbox.seedMailbox(s.account.accountId, [historical(8)], "INBOX", "2");
+    expect((await s.triggers.replay({ ...s.request, refs: [s.refs[1]] }, true)).outcomes[0]).toMatchObject({ status: "failed", code: "EMAIL_STALE_REFERENCE" });
+    for (const patch of [{ maxCount: 101 }, { ruleVersion: 2 }, { folder: "Archive" }, { refs: [{ ...s.refs[0], accountId: "other" }] }, { refs: [s.refs[0], s.refs[0]] }, { search: { to: "recipient@example.com" }, refs: undefined }]) {
+      await expect(s.triggers.replay({ ...s.request, refs: [s.refs[0]], ...patch }, true)).rejects.toBeInstanceOf(EmailError);
+    }
+    s.accounts.update(s.account.accountId, { enabled: false });
+    await expect(s.triggers.replay({ ...s.request, refs: [] }, true)).rejects.toMatchObject({ code: "EMAIL_ACCOUNT_DISABLED" });
+  });
+  it("replays a new rule version despite a previous live no-match receipt", async () => {
+    const s = await replaySetup();
+    const event = await s.mailbox.getReceivedEvent(s.refs[2]); await s.triggers.accept(event);
+    const rule = await s.triggers.update(s.rule.triggerId, { subjectContains: "other" });
+    await s.triggers.replay({ ...s.request, ruleVersion: rule.version, refs: [s.refs[2]] }, true);
+    await s.complete(); expect(s.executions()).toBe(1);
+  });
+  it("rejects a concurrent rule or account change before storing a batch", async () => {
+    for (const change of ["rule", "account"]) {
+      const s = await replaySetup();
+      const get = s.mailbox.getReceivedEvent.bind(s.mailbox);
+      vi.spyOn(s.mailbox, "getReceivedEvent").mockImplementationOnce(async ref => {
+        const event = await get(ref);
+        if (change === "rule") await s.triggers.update(s.rule.triggerId, { enabled: false });
+        else s.accounts.update(s.account.accountId, { displayName: "Changed" });
+        return event;
+      });
+      await expect(s.triggers.replay({ ...s.request, refs: [s.refs[0]] }, true)).rejects.toMatchObject({ code: "EMAIL_OPERATION_CONFLICT" });
+      expect(s.triggers.history()).toEqual([]);
+    }
+  });
+  it("admits batches atomically and keeps handled keys after history cleanup", async () => {
+    const s = await replaySetup({ maxPending: 1, maxCompleted: 0 });
+    await expect(s.triggers.replay({ ...s.request, refs: s.refs.slice(0, 2) }, true)).rejects.toMatchObject({ code: "EMAIL_RESOURCE_LIMIT" });
+    expect(s.triggers.history()).toEqual([]);
+    await s.triggers.replay({ ...s.request, refs: [s.refs[0]] }, true); await s.complete();
+    s.triggers.cleanup(); expect(s.triggers.history()).toEqual([]);
+    expect((await s.triggers.replay({ ...s.request, refs: [s.refs[0]] }, true)).outcomes[0].status).toBe("alreadyHandled");
+    await s.triggers.accept(await s.mailbox.getReceivedEvent(s.refs[0])); expect(s.triggers.history()).toEqual([]);
+  });
+  it("normalizes a storage fault and rolls back the complete replay batch", async () => {
+    const s = await replaySetup();
+    const db = new Database(path.join(s.cwd, ".stageflow", "email-triggers.db"));
+    db.exec("CREATE TRIGGER reject_replay BEFORE INSERT ON dispatches WHEN (SELECT COUNT(*) FROM dispatches) = 1 BEGIN SELECT RAISE(ABORT, 'fixture fault'); END");
+    await expect(s.triggers.replay({ ...s.request, refs: s.refs.slice(0, 2) }, true)).rejects.toMatchObject({ code: "EMAIL_STORAGE_FAILED", retryable: true });
+    expect(s.triggers.history()).toEqual([]); expect(s.triggers.health().code).toBe("EMAIL_STORAGE_FAILED");
+    db.exec("DROP TRIGGER reject_replay"); db.close();
+    await s.triggers.replay({ ...s.request, refs: [s.refs[0]] }, true); await s.complete(); expect(s.executions()).toBe(1);
+  });
+  it("does not count an existing replay intent twice when the live queue is full", async () => {
+    const s = await replaySetup({ maxPending: 1 });
+    const first = await s.mailbox.getReceivedEvent(s.refs[0]);
+    const second = await s.mailbox.getReceivedEvent(s.refs[1]);
+    vi.spyOn(s.mailbox, "getReceivedEvent").mockImplementation(async ref => ref.id === s.refs[0].id ? first : second);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await s.triggers.replay({ ...s.request, refs: [s.refs[0]] }, true);
+    await expect(s.triggers.accept(first)).resolves.toBeUndefined();
+    expect(s.triggers.history()).toHaveLength(1);
+    await expect(s.triggers.accept(second)).rejects.toMatchObject({ code: "EMAIL_RESOURCE_LIMIT" });
+    s.triggers.cancel(s.triggers.history()[0].dispatchKey);
+    await s.triggers.accept(second); expect(s.triggers.history()).toHaveLength(2);
+    vi.useRealTimers();
+  });
+  it("rejects duplicate normalized identities before queue admission", async () => {
+    const s = await replaySetup({ maxPending: 1 });
+    const alias = { ...s.refs[0], id: Buffer.from(JSON.stringify(JSON.parse(Buffer.from(s.refs[0].id, "base64url").toString()), null, 1)).toString("base64url") };
+    expect((await s.mailbox.getReceivedEvent(alias)).eventId).toBe((await s.mailbox.getReceivedEvent(s.refs[0])).eventId);
+    await expect(s.triggers.replay({ ...s.request, refs: [s.refs[0], alias] }, true)).rejects.toMatchObject({ code: "EMAIL_INVALID_INPUT" });
+    expect(s.triggers.history()).toEqual([]);
+  });
+  it("previews and executes through the real HTTP host with a controlled provider and access checks", async () => {
+    const s = await setup();
+    const provider = await mailServer("imap", { mailboxMessages: [historical(7)] }); cleanup.push(() => provider.close());
+    const connection = { host: "127.0.0.1", port: provider.port, username: "fixture", tls: "none", auth: { type: "password", secretRef: "env:REPLAY_FIXTURE_SECRET" } };
+    s.accounts.update(s.account.accountId, { imap: connection, smtp: connection, allowInsecureLocalDevelopment: true });
+    await s.triggers.stop();
+    const prior = process.env.REPLAY_FIXTURE_SECRET; process.env.REPLAY_FIXTURE_SECRET = "fixture-secret";
+    cleanup.push(async () => { if (prior === undefined) delete process.env.REPLAY_FIXTURE_SECRET; else process.env.REPLAY_FIXTURE_SECRET = prior; });
+    const host = await startUiServer({ cwd: s.cwd, rootDir: s.cwd, store: s.store, agent: s.agent, port: 0, uiDistDir: path.join(s.cwd, "missing-ui") });
+    cleanup.push(() => new Promise<void>((resolve, reject) => host.server.close(error => error ? reject(error) : resolve())));
+    const post = (route: string, input: unknown, origin = host.url) => fetch(`${host.url}/api/email/${route}`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    const rule = await (await post("triggers", s.rule)).json();
+    const selection = { accountId: s.account.accountId, folder: "INBOX", triggerId: rule.triggerId, ruleVersion: rule.version, maxCount: 1 };
+    expect((await post("replay/preview", { ...selection, search: {} }, "https://external.example")).status).toBe(403);
+    const response = await post("replay/preview", { ...selection, search: {} }); expect(response.status).toBe(200);
+    const preview = await response.json(); expect(preview.outcomes[0].status).toBe("matched");
+    const execute = await post("replay/execute", { ...selection, refs: preview.refs }); expect(execute.status).toBe(200);
+    expect((await execute.json()).outcomes[0].status).toBe("pending");
+    await expect.poll(async () => (await (await fetch(`${host.url}/api/email/dispatches`)).json()).dispatches[0]?.status, { timeout: 5000 }).toBe("started");
+    expect((await s.store.listRuns()).length).toBe(1);
+  });
   it("accepts new watcher events and starts one focused run without processing the initial mailbox", async () => {
     const s = await setup(); await s.triggers.create(s.rule);
     function record(uid: number) {

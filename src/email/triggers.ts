@@ -11,7 +11,21 @@ import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import { taskFileToYaml } from "../runtime/taskInput.js";
 import type { TaskFile } from "../types/task.js";
 import type { EmailAccounts } from "./accounts.js";
-import { EmailError, type EmailMailbox, type EmailReceivedEvent } from "./port.js";
+import { EmailError, type EmailMailbox, type EmailReceivedEvent, type EmailMessageRef } from "./port.js";
+
+const replayInput = z.object({
+  accountId: z.string().min(1), folder: z.string().min(1).max(200),
+  triggerId: z.string().min(1), ruleVersion: z.number().int().positive(),
+  maxCount: z.number().int().min(1).max(100),
+  refs: z.array(z.object({ accountId: z.string().min(1), id: z.string().min(1).max(4096), mailbox: z.string().min(1).max(200).optional() }).strict()).max(100).optional(),
+  search: z.object({ from: z.email().optional(), subject: z.string().max(4096).optional(), unread: z.boolean().optional(), flagged: z.boolean().optional(),
+    receivedAfter: z.string().optional(), receivedBefore: z.string().optional(), sort: z.enum(["newest", "oldest"]).optional(), cursor: z.string().max(8192).optional() }).strict().optional(),
+}).strict().refine(input => Boolean(input.refs) !== Boolean(input.search));
+export type EmailReplayOutcome = { ref: EmailMessageRef; status: "matched" | "skipped" | "alreadyHandled" | "pending" | "started" | "failed"; code?: string; dispatchKey?: string; runId?: string };
+export type EmailReplayResult = {
+  selected: number; matched: number; skipped: number; alreadyHandled: number; pending: number; failed: number; started: number;
+  outcomes: EmailReplayOutcome[]; refs: EmailMessageRef[]; ruleVersion: number; nextCursor?: string;
+};
 
 const ruleInput = z.object({
   enabled: z.boolean().default(true),
@@ -152,11 +166,11 @@ export class EmailTriggers {
     try {
       this.db.transaction(() => {
         if (this.db.prepare("SELECT 1 FROM evaluations WHERE event_id = ?").get(event.eventId)) return;
-        const matching = this.list().filter(rule => matches(rule, event));
+        const matching = this.list().filter(rule => matches(rule, event) && !this.hasDispatch(this.dispatchKey(event, rule)));
         const unresolved = this.records().filter(record => record.status === "pending" || record.status === "suspended").length;
         if (unresolved + matching.length > this.queue.maxPending) throw new EmailError("EMAIL_RESOURCE_LIMIT", true);
         for (const rule of matching) {
-          const dispatchKey = createHash("sha256").update(JSON.stringify([this.options.accounts.scope, event.eventId, rule.triggerId, rule.version])).digest("hex");
+          const dispatchKey = this.dispatchKey(event, rule);
           this.save({ dispatchKey, eventId: event.eventId, triggerId: rule.triggerId,
             ruleVersion: rule.version, accountId: event.accountId, status: "pending", attempts: 0,
             accountRevision: this.accountRevision(event.accountId), event, rule });
@@ -169,6 +183,87 @@ export class EmailTriggers {
       throw new EmailError("EMAIL_STORAGE_FAILED", true);
     }
     this.schedule(0);
+  }
+
+  /** Preview one search page, or admit an exact selection through the normal queue. */
+  async replay(input: unknown, execute = false): Promise<EmailReplayResult> {
+    this.assertAccepting();
+    const parsed = replayInput.safeParse(input);
+    if (!parsed.success) throw new EmailError("EMAIL_INVALID_INPUT");
+    const selection = parsed.data;
+    if ((execute && !selection.refs) || (selection.refs && selection.refs.length > selection.maxCount)) throw new EmailError("EMAIL_INVALID_INPUT");
+    const rule = this.get(selection.triggerId);
+    const revision = this.accountRevision(selection.accountId);
+    const check = (): void => {
+      this.assertAccepting();
+      const account = this.options.accounts.get(selection.accountId);
+      const current = this.get(rule.triggerId);
+      if (!account.folders.includes(selection.folder) || rule.accountId !== selection.accountId || rule.folder !== selection.folder) throw new EmailError("EMAIL_INVALID_INPUT");
+      if (!current.enabled || current.version !== selection.ruleVersion || revision !== this.accountRevision(selection.accountId)) throw new EmailError("EMAIL_OPERATION_CONFLICT");
+    };
+    check();
+    if (!this.options.mailbox.getReceivedEvent) throw new EmailError("EMAIL_UNSUPPORTED");
+    const page = selection.search ? await this.options.mailbox.search({ ...selection.search, accountId: selection.accountId, mailbox: selection.folder, limit: selection.maxCount }) : undefined;
+    check();
+    const refs = selection.refs ?? page!.messages.map(message => message.ref);
+    if (refs.some(ref => ref.accountId !== selection.accountId || (ref.mailbox ?? "INBOX") !== selection.folder) || new Set(refs.map(ref => ref.id)).size !== refs.length) throw new EmailError("EMAIL_INVALID_INPUT");
+    const outcomes: EmailReplayOutcome[] = [];
+    const candidates: EmailReceivedEvent[] = [];
+    for (const ref of refs) {
+      try {
+        const event = await this.options.mailbox.getReceivedEvent(ref);
+        check();
+        if (event.accountId !== selection.accountId || (event.message.ref.mailbox ?? "INBOX") !== selection.folder) throw new EmailError("EMAIL_INVALID_INPUT");
+        if (!matches(rule, event, true)) { outcomes.push({ ref, status: "skipped" }); continue; }
+        const dispatchKey = this.dispatchKey(event, rule);
+        outcomes.push({ ref, status: "matched", dispatchKey });
+        candidates.push(event);
+      } catch (error) {
+        check();
+        outcomes.push({ ref, status: "failed", code: error instanceof EmailError ? error.code : "EMAIL_CONNECTION_FAILED" });
+      }
+    }
+    check();
+    const matched = candidates.length;
+    if (new Set(candidates.map(event => this.dispatchKey(event, rule))).size !== candidates.length) throw new EmailError("EMAIL_INVALID_INPUT");
+    try {
+      this.db.transaction(() => {
+        check();
+        const records = this.records();
+        const fresh = candidates.filter(event => !this.hasDispatch(this.dispatchKey(event, rule)));
+        const unresolved = records.filter(record => record.status === "pending" || record.status === "suspended").length;
+        if (execute && unresolved + fresh.length > this.queue.maxPending) throw new EmailError("EMAIL_RESOURCE_LIMIT", true);
+        for (const event of candidates) {
+          const key = this.dispatchKey(event, rule);
+          const outcome = outcomes.find(value => value.dispatchKey === key)!;
+          if (this.hasDispatch(key)) {
+            outcome.status = "alreadyHandled";
+            outcome.runId = records.find(record => record.dispatchKey === key)?.runId;
+            continue;
+          }
+          if (!execute) continue;
+          this.save({ dispatchKey: key, eventId: event.eventId, triggerId: rule.triggerId, ruleVersion: rule.version,
+            accountId: event.accountId, status: "pending", attempts: 0, accountRevision: revision, event, rule });
+          outcome.status = "pending";
+        }
+      })();
+    } catch (error) {
+      if (error instanceof EmailError) throw error;
+      this.faultCode = "EMAIL_STORAGE_FAILED";
+      throw new EmailError("EMAIL_STORAGE_FAILED", true);
+    }
+    if (execute) this.schedule(0);
+    const count = (status: EmailReplayOutcome["status"]): number => outcomes.filter(outcome => outcome.status === status).length;
+    return { selected: refs.length, matched, skipped: count("skipped"), alreadyHandled: count("alreadyHandled"),
+      pending: count("pending"), failed: count("failed"), started: count("started"), outcomes, refs,
+      ruleVersion: rule.version, ...(page?.nextCursor ? { nextCursor: page.nextCursor } : {}) };
+  }
+
+  private dispatchKey(event: EmailReceivedEvent, rule: EmailTriggerRule): string {
+    return createHash("sha256").update(JSON.stringify([this.options.accounts.scope, event.eventId, rule.triggerId, rule.version])).digest("hex");
+  }
+  private hasDispatch(key: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM dispatches WHERE key = ?").get(key) || this.db.prepare("SELECT 1 FROM handled WHERE key = ?").get(key));
   }
 
   /** Run one due batch. The timer continues recovery without waiting for runs to finish. */
@@ -407,9 +502,9 @@ export class EmailTriggers {
   }
 }
 
-function matches(rule: EmailTriggerRule, event: EmailReceivedEvent): boolean {
+function matches(rule: EmailTriggerRule, event: EmailReceivedEvent, historical = false): boolean {
   return rule.enabled && rule.accountId === event.accountId && rule.folder === (event.message.ref.mailbox ?? "INBOX") &&
-    Date.parse(event.detectedAt) > Date.parse(rule.activeAfter) &&
+    (historical || Date.parse(event.detectedAt) > Date.parse(rule.activeAfter)) &&
     (!rule.from || event.message.from.some(sender => sender.address.toLowerCase() === rule.from!.toLowerCase())) &&
     (!rule.subjectContains || (event.message.subject ?? "").toLowerCase().includes(rule.subjectContains.toLowerCase()));
 }

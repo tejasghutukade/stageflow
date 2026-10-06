@@ -99,7 +99,7 @@ A consumer failure reports `EMAIL_EVENT_ACCEPTANCE_FAILED`. The event remains pe
 
 A malformed or resource-limited message has an explicit fault policy. The watcher stores account, folder, generation, UID, safe error code, and detection time. It then advances past that message so later valid messages can proceed. It stores no faulty headers, body, MIME, or attachment content. Fault metadata expires after 30 days, with a maximum of 1000 message fault records. This policy does not mean that the faulty message was accepted.
 
-A UIDVALIDITY change creates a durable reset notice and a new baseline without historical events. Old pending events become `faulted` with `EMAIL_STALE_REFERENCE`; they are not delivered in the new mailbox generation. Old references remain stale. Inspect the reset notice before you decide how to recover older work. Explicit bounded historical and mailbox-reset replay is deferred to ticket 11.
+A UIDVALIDITY change creates a durable reset notice and a new baseline without historical events. Old pending events become `faulted` with `EMAIL_STALE_REFERENCE`; they are not delivered in the new mailbox generation. Old references remain stale. Inspect the reset notice and obtain current references before you replay selected messages.
 
 `GET /api/email/watchers` reports `starting`, `watching`, `recovering`, or `failed`, with safe error codes, the next retry time, the last accepted generation and UID, reset notices, and message fault metadata. No provider response or credential value is included. Accepted and faulted event records expire after 30 days; at most the most recent 1000 completed records are kept. Unresolved pending events remain available. Folder progress protects duplicate detection after completed metadata is removed. At most 10000 pending events are admitted; saturation reports `EMAIL_RESOURCE_LIMIT` and requires operator action. Keep a single Stageflow host writer per workspace.
 
@@ -181,7 +181,7 @@ id: review-email
 stages: [review-request]
 ```
 
-New rules, enabled rules, and changed rules apply only to events detected strictly after the saved `activeAfter` time. Rule evaluation is stored once, including events with no match. Repeated delivery does not apply a later rule version to an old event. Historical replay is separate work.
+New rules, enabled rules, and changed rules apply only to events detected strictly after the saved `activeAfter` time. Rule evaluation is stored once, including events with no match. Repeated delivery does not apply a later rule version to an old event. Historical replay requires an explicit request.
 
 The task retains the operator goal and includes bounded event, account, message, sender, subject, and rule provenance. Email values are serialized as task data. They cannot supply executable YAML or increase stage permissions. Bodies are fetched only with `includeBody: true`. `bodyLimit` limits supplied text to 1–32768 characters, with 8192 as the default. The task records whether text was cut. Normal provider retrieval limits still apply. Bounded body text is retained only in the normal run task, not in the trigger database.
 
@@ -202,6 +202,33 @@ Send an empty JSON object to the resume or cancel request. Resume requires a ret
 Disabling an account or changing a rule during a body read prevents that dispatch from requesting a run. Once the queue calls RunManager, admission is in progress. A rule or account change cannot retract that request. If it creates a durable run, history records `started`; use normal run controls to stop it. Shutdown cancels retry timers immediately and waits for active attempts to finish their writes. A body read that finishes after shutdown starts cannot request a new run. Accepted intents remain durable for the next host start.
 
 Completed `started` and `failed` history expires after 30 days. At most 1000 completed records remain. Cleanup runs during queue recovery. Pending and suspended work is retained until resolved. Failed work can resume only while its full record remains; cancellation makes it terminal. Cleanup retains a compact dispatch key and every event evaluation receipt, including no-match receipts. These keys prevent duplicate delivery from recreating old work after history cleanup. Receipt and key counts can therefore grow with total event volume. They contain no body or attachment data. Keep one host writer per workspace.
+
+## Replay selected historical messages
+
+Send `POST /api/email/replay/preview` to inspect a selection. Send `POST /api/email/replay/execute` with exact references to queue that selection. Both requests require the same loopback Host and Origin as other changes. Replay is an operator action. It adds no stage permission or model tool.
+
+Both bodies require `accountId`, `folder`, `triggerId`, `ruleVersion`, and `maxCount` from 1 through 100. The enabled trigger must have that current version, account, and configured receive folder. Select either `refs` or `search`. Execution requires `refs`; it cannot execute a search directly. Reference objects use the existing opaque message reference. Duplicate references and references for another account or folder are rejected.
+
+Example preview body:
+
+```json
+{
+  "accountId": "company-account-id",
+  "folder": "INBOX",
+  "triggerId": "saved-trigger-id",
+  "ruleVersion": 1,
+  "maxCount": 20,
+  "search": { "subject": "review", "sort": "oldest" }
+}
+```
+
+Search accepts `from`, `subject`, `unread`, `flagged`, complete `receivedAfter` and `receivedBefore` timestamps, `sort`, and `cursor`. It uses the existing bounded search operation with `maxCount` as its page limit. It returns at most one page. Submit a new preview request with the same criteria and limit plus `nextCursor` to inspect another page. No request follows a cursor automatically. Recipient fields, sender overrides, and sending instructions are rejected.
+
+The result contains counts for `selected`, `matched`, `skipped`, `alreadyHandled`, `pending`, `failed`, and `started`, the current `ruleVersion`, exact `refs`, and per-message `outcomes`. Preview reports `matched`, `skipped`, `alreadyHandled`, or `failed`. Execute reports new matching intent as `pending`. An existing dispatch is `alreadyHandled`, with its run identifier when retained. Immediate `started` is zero because replay only queues work. `GET /api/email/dispatches` reports later `pending`, `failed`, or `started` outcomes. Missing or stale messages get individual safe error codes; other valid selected messages can still queue. A rule or account change during selection rejects the entire unrecorded batch.
+
+The adapters retrieve each selected source through bounded `getMessage`, even when the trigger does not include body context. The 1 MiB source and existing parse limits apply to preview and execution. No body is retained in replay results or the trigger database. Only `includeBody: true` supplies body text to the normal run task. Replay reads preserve message flags and do not change the live watcher generation, high water mark, or event ledger.
+
+Replay uses the normal trigger filters, catalog validation, task construction, queue, retries, and durable run key. It ignores the live `activeAfter` restriction for the explicitly selected rule. The same event and rule version cannot create another run, including after completed history cleanup. A deliberate replay under a new rule version can process a previously unmatched message. Replay does not record a live evaluation receipt, so other matching live rules can still run. Queue admission is atomic: saturation records no part of the new batch and returns `EMAIL_RESOURCE_LIMIT` with `retryable: true`.
 
 ## Attachments
 

@@ -1,5 +1,5 @@
 import { ImapFlow } from "imapflow";
-import { EmailEvents, type ReceiveMailbox, type ReceiveOutcome } from "./events.js";
+import { EmailEvents, receivedEventId, type ReceiveMailbox, type ReceiveOutcome } from "./events.js";
 import { randomBytes } from "node:crypto";
 import nodemailer from "nodemailer";
 import { connect as connectTcp, type Socket } from "node:net";
@@ -54,6 +54,17 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
     this.events = new EmailEvents(accounts, (account, folder, signal) => this.openReceiver(account, folder, signal));
   }
   abstract testAccount(accountId: string, protocol?: "imap" | "smtp" | "both"): Promise<EmailAccountStatus>;
+  async getReceivedEvent(ref: EmailMessageRef): Promise<EmailReceivedEvent> {
+    const account = this.account(ref?.accountId);
+    // getMessage checks the current provider generation and message existence.
+    const message = summarize(await this.getMessage(ref));
+    if (JSON.stringify(account) !== JSON.stringify(this.account(account.accountId))) throw new EmailError("EMAIL_OPERATION_CONFLICT");
+    const identity = decodeRef(account, message.ref);
+    const eventId = receivedEventId(this.accounts.scope, account.accountId, identity.mailbox, identity.generation, identity.uid);
+    delete message.preview;
+    return { type: "email.received", version: 1, eventId, accountId: account.accountId, message,
+      receivedAt: message.receivedAt, detectedAt: new Date().toISOString() };
+  }
   protected account(accountId: string): EmailAccount {
     if (this.stopped) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
     return this.accounts.get(accountId);

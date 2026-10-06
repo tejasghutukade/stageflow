@@ -5,6 +5,11 @@ import { EmailAccounts, type EmailAccount } from "./accounts.js";
 import { decodeRef } from "./messages.js";
 import { EmailError, type EmailErrorCode, type EmailMessageSummary, type EmailReceivedEvent } from "./port.js";
 
+/** Adapter-owned identity shared by live delivery and explicit historical retrieval. */
+export function receivedEventId(scope: string, accountId: string, folder: string, generation: string, uid: number): string {
+  return createHash("sha256").update(JSON.stringify([scope, accountId, folder, generation, uid])).digest("hex");
+}
+
 /** Internal provider seam. Each bounded metadata read isolates normalization faults by UID. */
 export type ReceiveOutcome = { uid: number } & ({ message: EmailMessageSummary; fault?: never } | { fault: "EMAIL_INVALID_INPUT" | "EMAIL_RESOURCE_LIMIT"; message?: never });
 export interface ReceiveMailbox {
@@ -206,7 +211,7 @@ export class EmailEvents {
             this.persist();
           }
         } else {
-          const eventId = createHash("sha256").update(JSON.stringify([this.accounts.scope, watcher.account.accountId, watcher.folder, snapshot.generation, uid])).digest("hex");
+          const eventId = receivedEventId(this.accounts.scope, watcher.account.accountId, watcher.folder, snapshot.generation, uid);
           let record = this.saved.records.find(value => value.event.eventId === eventId);
           if (!record) {
             if (this.saved.records.filter(value => value.state === "pending").length >= 10000) throw new EmailError("EMAIL_RESOURCE_LIMIT");

@@ -31,6 +31,27 @@ async function setup(kind: "memory" | "local", idle = true, faults: { stallSelec
   return { root, server, accounts, account, adapter, arrive };
 }
 for (const kind of ["memory", "local"] as const) describe(`${kind} incoming event contract`, () => {
+  it("uses the same historical and live identity and rejects removed or reset references without progress changes", async () => {
+    const s = await setup(kind);
+    const received: EmailReceivedEvent[] = [];
+    await s.adapter.start(async event => { received.push(event); });
+    s.arrive(8);
+    await expect.poll(() => received.length).toBe(1);
+    const before = await readFile(path.join(s.root, ".stageflow", "email-events.json"));
+    const event = await s.adapter.getReceivedEvent(received[0].message.ref);
+    expect(event.eventId).toBe(received[0].eventId);
+    expect(JSON.stringify(event)).not.toContain("PRIVATE BODY");
+    expect(await readFile(path.join(s.root, ".stageflow", "email-events.json"))).toEqual(before);
+    await expect(s.adapter.getReceivedEvent({ ...event.message.ref, accountId: "missing" })).rejects.toMatchObject({ code: "EMAIL_ACCOUNT_NOT_FOUND" });
+    const otherScope = { ...event.message.ref, id: Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(event.message.ref.id, "base64url").toString()), scope: "other-workspace" })).toString("base64url") };
+    await expect(s.adapter.getReceivedEvent(otherScope)).rejects.toMatchObject({ code: "EMAIL_UNAUTHORIZED" });
+    s.server.mailbox.messages = [record(7)];
+    if (s.adapter instanceof InMemoryEmailAdapter) s.adapter.seedMailbox(s.account.accountId, s.server.mailbox.messages);
+    await expect(s.adapter.getReceivedEvent(event.message.ref)).rejects.toMatchObject({ code: "EMAIL_MESSAGE_NOT_FOUND" });
+    s.server.mailbox.generation = "2";
+    if (s.adapter instanceof InMemoryEmailAdapter) s.adapter.seedMailbox(s.account.accountId, [record(7)], "INBOX", "2");
+    await expect(s.adapter.getReceivedEvent(event.message.ref)).rejects.toMatchObject({ code: "EMAIL_STALE_REFERENCE" });
+  });
   it("baselines without history, finds all arrivals, and starts once", async () => {
     const { root, adapter, arrive, server } = await setup(kind);
     const received: EmailReceivedEvent[] = [];
