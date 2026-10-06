@@ -3,6 +3,7 @@ import {
   catalogPath,
   extensionFilePath,
   extensionPackagePath,
+  inboxPath,
   newRunPath,
   parseHash,
   pipelinePath,
@@ -60,6 +61,22 @@ describe("parseHash", () => {
 
   it("parses the inbox route", () => {
     expect(parseHash("#/inbox")).toEqual({ name: "inbox" });
+  });
+
+  it("parses inbox tab query", () => {
+    expect(parseHash("#/inbox?tab=failed")).toEqual({
+      name: "inbox",
+      tab: "failed",
+    });
+    expect(parseHash("#/inbox?tab=done_today")).toEqual({
+      name: "inbox",
+      tab: "done_today",
+    });
+    expect(parseHash(`#${inboxPath("failed")}`)).toEqual({
+      name: "inbox",
+      tab: "failed",
+    });
+    expect(parseHash("#/inbox?tab=needs")).toEqual({ name: "inbox" });
   });
 
   it("parses pipeline detail with optional project_root query", () => {

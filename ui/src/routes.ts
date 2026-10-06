@@ -1,3 +1,6 @@
+import type { InboxTabId } from "./redesign/inbox/inboxTab";
+import { inboxPath as inboxPathWithTab } from "./redesign/inbox/inboxTab";
+
 export type DetailView =
   | { kind: "stream"; stageId?: string }
   | { kind: "envelope"; stageId: string }
@@ -5,7 +8,7 @@ export type DetailView =
 
 export type Route =
   | { name: "today" }
-  | { name: "inbox" }
+  | { name: "inbox"; tab?: InboxTabId }
   | { name: "runs" }
   | { name: "new"; pipelineId?: string; taskPath?: string }
   | { name: "detail"; runId: string; view: DetailView }
@@ -125,8 +128,8 @@ export function connectPath(): string {
   return "/connect";
 }
 
-export function inboxPath(): string {
-  return "/inbox";
+export function inboxPath(tab?: InboxTabId): string {
+  return inboxPathWithTab(tab ?? "needs");
 }
 
 export function newRunPath(opts?: {
@@ -159,7 +162,12 @@ function firstSegment(rest: string): string {
 export function parseHash(hash = window.location.hash): Route {
   const { path, params } = splitHash(hash);
   if (!path || path === "today") return { name: "today" };
-  if (path === "inbox") return { name: "inbox" };
+  if (path === "inbox") {
+    const tabRaw = params.get("tab");
+    const tab: InboxTabId | undefined =
+      tabRaw === "failed" || tabRaw === "done_today" ? tabRaw : undefined;
+    return tab ? { name: "inbox", tab } : { name: "inbox" };
+  }
   if (path === "runs") return { name: "runs" };
   if (path === "new") {
     const pipelineId = params.get("pipeline") ?? undefined;

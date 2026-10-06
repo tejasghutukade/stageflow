@@ -1,10 +1,6 @@
 import type { RunSummary } from "../../api";
 import { runTaskLabel } from "../../catalog/displayCatalogPath";
-import {
-  formatRunShortTimestamp,
-  runAnsweredGateLabel,
-  runShortId,
-} from "../../catalogJoin";
+import { runShortId } from "../../catalogJoin";
 import { Keycap } from "../Keycap";
 import { readNotifyPreference } from "../../useWaitingNotifications";
 import { FilterTabs } from "../shell/FilterTabs";
@@ -20,10 +16,10 @@ export type InboxZeroProps = {
   brokenCount: number;
   doneCount: number;
   inFlight: RunSummary[];
-  recentlyAnswered: RunSummary[];
   onStartRun: () => void;
   onOpenRuns: () => void;
   onOpenRun: (runId: string) => void;
+  onGoToDoneToday?: () => void;
 };
 
 function inFlightBodyCopy(count: number): string {
@@ -43,10 +39,10 @@ export function InboxZero({
   brokenCount,
   doneCount,
   inFlight,
-  recentlyAnswered,
   onStartRun,
   onOpenRuns,
   onOpenRun,
+  onGoToDoneToday,
 }: InboxZeroProps) {
   const notify = readNotifyPreference();
 
@@ -69,8 +65,8 @@ export function InboxZero({
           onChange={(id) => onTabChange(id as InboxTab)}
           tabs={[
             { id: "needs", label: "Needs you", count: waitingCount },
-            { id: "broken", label: "Broken", count: brokenCount },
-            { id: "done", label: "Done today", count: doneCount },
+            { id: "failed", label: "Failed", count: brokenCount },
+            { id: "done_today", label: "Done today", count: doneCount },
           ]}
         />
       </div>
@@ -119,14 +115,25 @@ export function InboxZero({
               <span className="text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]">
                 In flight
               </span>
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 text-xs text-[var(--sf-text-2)]"
-                onClick={onOpenRuns}
-              >
-                View runs
-                <LuChevronRight className="size-3.5" aria-hidden="true" />
-              </button>
+              <div className="flex items-center gap-3">
+                {onGoToDoneToday && doneCount > 0 ? (
+                  <button
+                    type="button"
+                    className="text-xs text-[var(--sf-text-2)] underline-offset-2 hover:underline"
+                    onClick={onGoToDoneToday}
+                  >
+                    Done today
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-xs text-[var(--sf-text-2)]"
+                  onClick={onOpenRuns}
+                >
+                  View runs
+                  <LuChevronRight className="size-3.5" aria-hidden="true" />
+                </button>
+              </div>
             </div>
             <div className="flex flex-col overflow-hidden rounded-xl border border-[#ffffff12] bg-[var(--sf-panel)]">
               {inFlight.slice(0, 4).map((run, index) => (
@@ -146,40 +153,6 @@ export function InboxZero({
                   </span>
                   <span className="text-right font-['Geist_Mono',monospace] text-xs text-[var(--sf-running)]">
                     {runDisplayStatus(run) === "running" ? "running" : run.status}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {recentlyAnswered.length > 0 ? (
-          <div className="flex w-[720px] max-w-full flex-col gap-2.5 px-4">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]">
-                Recently answered
-              </span>
-            </div>
-            <div className="flex flex-col overflow-hidden rounded-xl border border-[#ffffff12] bg-[var(--sf-panel)]">
-              {recentlyAnswered.slice(0, 3).map((run, index) => (
-                <button
-                  key={run.run_id}
-                  type="button"
-                  className={`grid h-[52px] grid-cols-[100px_1fr_64px] items-center gap-3.5 px-3.5 text-left${
-                    index < Math.min(recentlyAnswered.length, 3) - 1
-                      ? " border-b border-b-[#ffffff12]"
-                      : ""
-                  }`}
-                  onClick={() => onOpenRun(run.run_id)}
-                >
-                  <span className="truncate font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-3)]">
-                    {runAnsweredGateLabel(run)}
-                  </span>
-                  <span className="truncate text-[13px] text-[var(--sf-text-1)]">
-                    {runTaskLabel(run)}
-                  </span>
-                  <span className="text-right font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-3)]">
-                    {run.updated_at ? formatRunShortTimestamp(run.updated_at) : "—"}
                   </span>
                 </button>
               ))}

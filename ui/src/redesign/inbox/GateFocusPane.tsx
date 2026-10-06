@@ -11,12 +11,23 @@ function cacheKey(runId: string, stageId: string): string {
   return `${runId}:${stageId}`;
 }
 
+export function clearGateDetailCache(runId: string, stageId?: string): void {
+  if (stageId) {
+    detailCache.delete(cacheKey(runId, stageId));
+    return;
+  }
+  for (const key of detailCache.keys()) {
+    if (key.startsWith(`${runId}:`)) detailCache.delete(key);
+  }
+}
+
 export type GateFocusPaneProps = {
   run: RunSummary | null;
   index: number;
   total: number;
   onOpenRun: (runId: string) => void;
   onRegisterHotkeys?: (actions: GateFocusHotkeys | null) => void;
+  onAnswered?: () => void;
 };
 
 export type GateFocusHotkeys = {
@@ -34,6 +45,7 @@ export function GateFocusPane({
   total,
   onOpenRun,
   onRegisterHotkeys,
+  onAnswered,
 }: GateFocusPaneProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
@@ -133,6 +145,10 @@ export function GateFocusPane({
           pendingPrompt={pendingPrompt}
           showOpenRunOnly={isFeedback}
           onOpenRun={() => onOpenRun(run.run_id)}
+          onAnswered={() => {
+            clearGateDetailCache(run.run_id, stageId);
+            onAnswered?.();
+          }}
           note={note}
           onRegisterActions={setPanelActions}
           rationale={rationale}
