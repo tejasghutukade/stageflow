@@ -104,6 +104,8 @@ export type RunMeta = {
 
 export type CreatedRun = {
   runId: string;
+  /** False when a durable dispatch key already belongs to this run. */
+  created?: boolean;
   /** Opaque agent workspace path (artifacts live under this tree). */
   workspaceDir: string;
 };
@@ -449,6 +451,7 @@ export type FeedbackLoopHistory = {
 };
 
 export type CreateRunInput = {
+  dispatchKey?: string;
   submission?: RunSubmission;
   runId?: string;
   pipelineId: string;
@@ -507,6 +510,7 @@ export interface RunStore {
   snapshotInto(destPath: string): Promise<{ userVersion: number }>;
   getRunBySubmission(key: string): Promise<RunSubmissionRecord | null>;
   createRun(input: CreateRunInput): Promise<CreatedRun>;
+  findRunByDispatchKey?(dispatchKey: string): Promise<CreatedRun | undefined>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;
   /**
    * Conditional status update (CAS): sets `status` only when the row currently

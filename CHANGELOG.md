@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-06
+
+### Added
+
+- Host-owned email connections to existing IMAP/SMTP mailboxes, configured through workspace `email.yaml`, with scoped stage tools for sending, replying, retrieving, searching, and handling bounded attachments.
+- Durable incoming-email detection and filtered pipeline triggers, with bounded retry queues, historical-message replay, and optional Sent-folder copies.
+- A read-only Connections page listing configured email accounts without credentials, and email-rule list and detail views on the Triggers page.
+- Single-stage email-send and conversational threaded-reply examples, including automatic-reply safeguards.
+
+### Changed
+
+- Inline mailbox passwords from local YAML stay in Host memory; persisted account configuration contains opaque credential references.
+- Email list-limit tests use a small mailbox instead of bulk network fetches. The clock-sensitive schedule catch-up test is temporarily skipped pending a deterministic timing check.
+
 ## [0.30.0] - 2026-10-04
 
 ### Added
