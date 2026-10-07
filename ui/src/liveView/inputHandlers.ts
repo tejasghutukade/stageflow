@@ -9,7 +9,7 @@ export type EventTargetLike = {
   removeEventListener(type: string, listener: Listener, options?: boolean | EventListenerOptions): void;
 };
 
-export type TextareaLike = EventTargetLike & { value: string; focus(): void };
+export type TextareaLike = EventTargetLike & { value: string; focus(options?: FocusOptions): void };
 
 export type RegisterInputOptions = {
   mode: LiveViewMode;
@@ -61,7 +61,7 @@ export function registerInput(options: RegisterInputOptions): () => void {
     const p = point(e);
     if (p === null) return;
     e.preventDefault();
-    textarea?.focus();
+    textarea?.focus({ preventScroll: true });
     flushMove();
     pressed.add(e.button);
     send({

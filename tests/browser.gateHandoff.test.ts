@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  hostGateContextFor,
   parseHostGateContext,
   stampGateRequest,
 } from "../src/browser/gateHandoff.js";
+import { hostGateContextFor, stageGateHandoff, stageGateContext, persistStageHandoff } from "../src/browser/stageHandoff.js";
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { humanLoginPromptBlock } from "../src/browser/humanLogin.js";
 import { tryParsePendingPrompt } from "../src/runtime/stageHitl.js";
 
@@ -88,5 +91,20 @@ describe("gate handoff", () => {
     expect(hostGateContextFor({ allow_domains: ["*.corp.test", "b.test"] }, desktop)?.site).toBe("corp.test");
     expect(hostGateContextFor(undefined, desktop)).toBeUndefined();
     expect(stampGateRequest({ kind: "confirm", handoff: { kind: "x" }, site: "evil" }, undefined)).toEqual({ kind: "confirm" });
+  });
+});
+
+describe("stage handoff persistence", () => {
+  it("reads back what was persisted and treats a missing record as a local window", async () => {
+    const runDir = await mkdtemp(path.join(os.tmpdir(), "sf-handoff-"));
+    const base = { runDir, runId: "r1", stageId: "s" };
+    expect(await stageGateHandoff(base)).toEqual({ kind: "local_window" });
+    await persistStageHandoff(base, { display: "headless_only", liveView: "relay" });
+    expect(await stageGateHandoff(base)).toEqual({
+      kind: "live_view",
+      url: "/api/runs/r1/stages/s/live-view",
+    });
+    expect((await stageGateContext({ ...base, browser: { profile: "p" } }))?.profile).toBe("p");
+    expect(await stageGateContext({ ...base, browser: undefined })).toBeUndefined();
   });
 });

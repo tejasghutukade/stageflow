@@ -1,24 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
-import {
-  createLiveViewConnection,
-  initialLiveViewState,
-  type LiveViewConnection,
-  type LiveViewState,
-} from "./connection";
+import { initialLiveViewState, type LiveViewState } from "./connection";
 import { postLiveViewDialog, postLiveViewInput, requestLiveViewTicket } from "./client";
 import { DialogOverlay } from "./DialogOverlay";
-import { dialogOutcome, DIALOG_FAILED_NOTICE, type DialogAnswerBody } from "./dialogState";
-import { createFrameRenderer, type FrameRenderer } from "./frameRenderer";
+import { createFrameRenderer } from "./frameRenderer";
 import { LIVE_VIEW_HELP, LIVE_VIEW_INSTRUCTION } from "./helpText";
-import { registerInput } from "./inputHandlers";
-import { createInputQueue, type InputQueue, type QueueNotice } from "./inputQueue";
 import type { LiveViewMode } from "./types";
+import { createViewerSession, type ViewerSession, type ViewerSnapshot } from "./viewerSession";
 
-const NOTICE_TEXT: Record<QueueNotice, string> = {
-  rejected: "Some input was rejected.",
-  overflow: "Too much input at once; some was dropped.",
-  network: "Some input could not be sent.",
+const INITIAL_SNAPSHOT: ViewerSnapshot = {
+  connection: initialLiveViewState,
+  inputStopped: false,
+  inputNotice: null,
+  dialog: null,
+  answering: false,
+  answerFailed: null,
 };
 
 function statusLine(state: LiveViewState, inputStopped: boolean): string | null {
@@ -29,100 +25,69 @@ function statusLine(state: LiveViewState, inputStopped: boolean): string | null 
   return null;
 }
 
-export function LiveView({ handoffUrl, mode = "control" }: { handoffUrl: string; mode?: LiveViewMode }) {
+export function LiveView({
+  handoffUrl,
+  mode = "control",
+  reopenKey,
+}: {
+  handoffUrl: string;
+  mode?: LiveViewMode;
+  /** Change to force a fresh connection and input restart for the same handoff URL (e.g. a gate re-asked). */
+  reopenKey?: unknown;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const connectionRef = useRef<LiveViewConnection | null>(null);
-  const rendererRef = useRef<FrameRenderer | null>(null);
-  const queueRef = useRef<InputQueue | null>(null);
-  const [state, setState] = useState<LiveViewState>(initialLiveViewState);
-  const [inputNotice, setInputNotice] = useState<string | null>(null);
-  const [inputStopped, setInputStopped] = useState(false);
-  const [answered, setAnswered] = useState<string | null>(null);
-  const [answering, setAnswering] = useState(false);
-  const [answerFailed, setAnswerFailed] = useState<string | null>(null);
-
-  const answerDialog = (body: DialogAnswerBody) => {
-    setAnswering(true);
-    setAnswerFailed(null);
-    postLiveViewDialog(handoffUrl, body)
-      .then((status) => {
-        const outcome = dialogOutcome(status);
-        if (outcome === "failed") setAnswerFailed(DIALOG_FAILED_NOTICE);
-        else setAnswered(body.id);
-      })
-      .catch(() => setAnswerFailed(DIALOG_FAILED_NOTICE))
-      .finally(() => setAnswering(false));
-  };
+  const sessionRef = useRef<ViewerSession | null>(null);
+  const seenReopenKey = useRef(reopenKey);
+  const [snapshot, setSnapshot] = useState<ViewerSnapshot>(INITIAL_SNAPSHOT);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null) return;
     const renderer = createFrameRenderer(canvas);
-    rendererRef.current = renderer;
-    const connection = createLiveViewConnection({
+    const session = createViewerSession({
       mode,
       baseUrl: handoffUrl,
-      requestTicket: (m) => requestLiveViewTicket(handoffUrl, m),
+      surface: {
+        canvas,
+        textarea: textareaRef.current,
+        win: window,
+        getRect: () => canvas.getBoundingClientRect(),
+        getImageSize: () => renderer.size(),
+        drawFrame: (data) => renderer.draw(data),
+      },
+      requestTicket: requestLiveViewTicket,
+      postInput: postLiveViewInput,
+      postDialog: postLiveViewDialog,
       openEventSource: (url) => new EventSource(url),
       setTimer: (fn, ms) => {
         const handle = setTimeout(fn, ms);
         return () => clearTimeout(handle);
       },
-      onState: setState,
-      onFrame: (frame) => renderer.draw(frame.data),
+      now: () => performance.now(),
     });
-    connectionRef.current = connection;
-    setState(initialLiveViewState);
-    connection.start();
+    sessionRef.current = session;
+    setSnapshot(session.getState());
+    const unsubscribe = session.subscribe(() => setSnapshot(session.getState()));
+    session.start();
     return () => {
-      connection.dispose();
+      unsubscribe();
+      session.dispose();
       renderer.dispose();
-      connectionRef.current = null;
-      rendererRef.current = null;
+      sessionRef.current = null;
     };
   }, [handoffUrl, mode]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (mode !== "control" || canvas === null) return;
-    setInputStopped(false);
-    setInputNotice(null);
-    const queue = createInputQueue({
-      post: (batch) => postLiveViewInput(handoffUrl, batch),
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      now: () => performance.now(),
-      refreshSession: () => connectionRef.current?.refresh() ?? Promise.resolve(false),
-      onNotice: (n) => setInputNotice(NOTICE_TEXT[n]),
-      onStopped: () => setInputStopped(true),
-    });
-    queueRef.current = queue;
-    const detach = registerInput({
-      mode,
-      canvas,
-      textarea: textareaRef.current,
-      win: window,
-      getRect: () => canvas.getBoundingClientRect(),
-      getImageSize: () => rendererRef.current?.size() ?? null,
-      send: queue.push,
-      now: () => performance.now(),
-      setTimer: (fn, ms) => {
-        const handle = setTimeout(fn, ms);
-        return () => clearTimeout(handle);
-      },
-    });
-    return () => {
-      detach();
-      queue.stop();
-      queueRef.current = null;
-    };
-  }, [handoffUrl, mode]);
+    if (Object.is(seenReopenKey.current, reopenKey)) return;
+    seenReopenKey.current = reopenKey;
+    sessionRef.current?.reopen();
+  }, [reopenKey]);
 
-  useEffect(() => {
-    if (state.phase === "closed") queueRef.current?.stop();
-  }, [state.phase]);
+  const state = snapshot.connection;
+  const { inputNotice, dialog } = snapshot;
 
-  const line = statusLine(state, inputStopped);
+  const line = statusLine(state, snapshot.inputStopped);
   const closed = state.phase === "closed";
 
   return (
@@ -140,13 +105,13 @@ export function LiveView({ handoffUrl, mode = "control" }: { handoffUrl: string;
           width={1280}
           height={720}
         />
-        {state.dialog !== null && state.dialog.id !== answered ? (
+        {dialog !== null ? (
           <DialogOverlay
-            dialog={state.dialog}
+            dialog={dialog}
             mode={mode}
-            busy={answering}
-            failed={answerFailed}
-            onAnswer={answerDialog}
+            busy={snapshot.answering}
+            failed={snapshot.answerFailed}
+            onAnswer={(body) => sessionRef.current?.answerDialog(body)}
           />
         ) : null}
         {line !== null ? (

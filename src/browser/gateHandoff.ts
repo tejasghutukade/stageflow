@@ -1,5 +1,4 @@
 import type { StageBrowserConfig } from "../types/stage.js";
-import type { BrowserHostCapabilities } from "./hostCapabilities.js";
 
 export type GateHandoff =
   | { kind: "local_window" }
@@ -73,41 +72,6 @@ export function browserSite(browser: StageBrowserConfig): string | undefined {
   if (first !== undefined) return first.replace(/^\*\./, "");
   if (browser.login_url !== undefined) return hostOf(browser.login_url);
   return undefined;
-}
-
-export function gateHandoffFor(context: {
-  runId: string;
-  stageId: string;
-  capabilities: Pick<BrowserHostCapabilities, "display" | "liveView">;
-}): GateHandoff | undefined {
-  const { capabilities } = context;
-  if (capabilities.display === "local_window") return { kind: "local_window" };
-  if (capabilities.liveView !== "none") {
-    return {
-      kind: "live_view",
-      url: `/api/runs/${encodeURIComponent(context.runId)}/stages/${encodeURIComponent(context.stageId)}/live-view`,
-    };
-  }
-  return undefined;
-}
-
-/** What the Host stamps on every gate of a browser stage; the agent cannot supply it. */
-export function hostGateContextFor(
-  browser: StageBrowserConfig | undefined,
-  context: {
-    runId: string;
-    stageId: string;
-    capabilities: Pick<BrowserHostCapabilities, "display" | "liveView">;
-  },
-): HostGateContext | undefined {
-  if (browser === undefined) return undefined;
-  const site = browserSite(browser);
-  const handoff = gateHandoffFor(context);
-  return {
-    ...(handoff !== undefined ? { handoff } : {}),
-    ...(site !== undefined ? { site } : {}),
-    ...(browser.profile !== undefined ? { profile: browser.profile } : {}),
-  };
 }
 
 /**

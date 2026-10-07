@@ -122,6 +122,7 @@ Who closes what, and when
 | `runLiveness.ts` | "Is this run still able to use its browser?" from run status. Understands `cli-<pid>-` owner ids. | `createRunLiveness`, `cliRunLive` |
 | `loginCheck.ts` | Glob match, check run, persisted result, prompt block, emit validation. | `matchLoginState`, `runLoginCheck`, `ensureStageLoginCheck`, `readStageLoginCheck`, `loginCheckPromptBlock`, `loginCheckIssue`, `BROWSER_LOGIN_CHECK_FILENAME` |
 | `humanLogin.ts` | Human login stage detection, display probe, no-screen error, prompt block. | `isHumanLoginStage`, `defaultDisplayProbe`, `noScreenError`, `humanLoginPromptBlock`, `loginPageUrl` |
+| `stageHandoff.ts` | Resolves, persists, reads back a stage's handoff capabilities (display probe, `browser-capabilities.json`); builds the gate handoff and Host gate context. Callers never see the file path. A missing record reads as `local_window` (older runs). | `resolveStageHandoffCapabilities`, `persistStageHandoff`, `readStageHandoff`, `stageGateHandoff`, `stageGateContext` |
 | `gateHandoff.ts` | Host-owned gate fields. Stamps and strips them. | `GateHandoff`, `HostGateContext`, `hostGateContextFor`, `stampGateRequest`, `parseHostGateContext`, `parseGateHandoff`, `browserSite` |
 | `sitePolicy.ts` | Host `blocked_sites` check. | `assertBrowserSitesAllowed`, `BlockedSiteError`, `isBlockedHost`, `hostOf`, `normalizeDomain` |
 | `navigationAudit.ts` | Soft allowlist audit from tool activity. Called from `teardownStageBrowser` (limitation 1). | `auditStageNavigations` |

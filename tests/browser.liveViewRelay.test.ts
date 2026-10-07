@@ -660,6 +660,22 @@ describe("agent-browser live view relay: popup re-targeting", () => {
     expect(h.retargets()[1]).toEqual({ tab: "t1", url: "http://a/", reason: "tab_closed" });
   });
 
+  it("publishes the opener's current address after re-targeting when it navigated while the popup was open", async () => {
+    const h = await setup();
+    h.tabs.push({ tabId: "t1", targetId: "o1", url: "http://a/" }, { tabId: "t2", targetId: "p1", url: "http://a/p" });
+    h.created("o1", "http://a/");
+    h.created("p1", "http://a/p", "o1");
+    await until(() => h.retargets().length === 1, "popup retarget");
+    h.changed("o1", "http://a/home");
+    h.tabs.splice(1, 1);
+    h.destroyed("p1");
+    await until(() => h.retargets().length === 2, "back retarget");
+    await until(() => h.got.filter((m) => m.type === "url").at(-1)?.data.url === "http://a/home", "fresh url");
+    const late: LiveViewMessage[] = [];
+    h.session.subscribe((m) => late.push(m));
+    expect(late.find((m) => m.type === "url")?.data).toEqual({ url: "http://a/home" });
+  });
+
   it("falls back to the most recent remaining page when the opener is gone", async () => {
     const h = await setup();
     h.tabs.push({ tabId: "t1", targetId: "o1", url: "http://a/" }, { tabId: "t2", targetId: "x", url: "http://x/" }, { tabId: "t3", targetId: "p1", url: "http://a/p" });

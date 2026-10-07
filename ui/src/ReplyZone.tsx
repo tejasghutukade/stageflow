@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type Decision, type PendingPrompt } from "./api";
 import {
   emptyMultiDraft,
@@ -32,6 +32,13 @@ export function ReplyZone({
     stageId,
     { promptId: prompt.id, kind: prompt.kind },
   );
+
+  const [askCount, setAskCount] = useState(0);
+  const wasSubmitting = useRef(false);
+  useEffect(() => {
+    if (wasSubmitting.current && !submitting) setAskCount((n) => n + 1);
+    wasSubmitting.current = submitting;
+  }, [submitting]);
 
   useEffect(() => {
     setText("");
@@ -71,7 +78,7 @@ export function ReplyZone({
         <p className="muted" style={{ margin: 0, fontSize: "var(--font-size-sm)" }}>{promptBody}</p>
       </div>
       {liveViewUrl !== null ? (
-        <LiveView key={`${prompt.id}:${liveViewUrl}`} handoffUrl={liveViewUrl} mode="control" />
+        <LiveView handoffUrl={liveViewUrl} mode="control" reopenKey={`${prompt.id}:${askCount}`} />
       ) : null}
       {error ? (
         <div className="gate" style={{ padding: "var(--spacing-3)", borderColor: "var(--color-border-red)", borderLeftColor: "var(--color-error)", background: "var(--color-background-red)", color: "var(--color-text-red)" }}>

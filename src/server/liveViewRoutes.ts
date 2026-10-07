@@ -25,7 +25,9 @@ import {
 } from "../browser/liveViewTickets.js";
 import { LOCAL_BROWSER_SCOPE } from "../browser/profileStore.js";
 import { readStagePersistedBrowserEnv } from "../browser/stageBrowserEnv.js";
+import type { RunManager } from "../runtime/runManager.js";
 import type { RunStore } from "../runstore/port.js";
+import { matchLiveViewRoute } from "./liveViewPath.js";
 import { enforceBearerAuth, type ControlTokens } from "./controlToken.js";
 
 export const LIVE_VIEW_COOKIE = "sf_live_view";
@@ -35,7 +37,6 @@ export const LIVE_VIEW_MAX_DIALOG_BYTES = 8 * 1024;
 export const LIVE_VIEW_HEARTBEAT_MS = 15_000;
 
 const MAX_TICKET_BODY_BYTES = 1024;
-const LIVE_VIEW_ROUTE = /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/live-view\/(ticket|events|input|dialog)$/;
 
 const STREAMED = new Set<LiveViewMessage["type"]>(["frame", "status", "tabs", "url", "retarget", "dialog", "dialog_closed"]);
 
@@ -49,11 +50,11 @@ const INPUT_STATUS: Record<LiveViewInputRejection, number> = {
 };
 
 export function isLiveViewPath(pathname: string): boolean {
-  return LIVE_VIEW_ROUTE.test(pathname);
+  return matchLiveViewRoute(pathname) !== null;
 }
 
 export function isLiveViewInputPath(method: string, pathname: string): boolean {
-  return method === "POST" && /\/live-view\/input$/.test(pathname) && isLiveViewPath(pathname);
+  return method === "POST" && matchLiveViewRoute(pathname)?.kind === "input";
 }
 
 const DIALOG_STATUS: Record<LiveViewDialogRejection, number> = {
@@ -64,7 +65,7 @@ const DIALOG_STATUS: Record<LiveViewDialogRejection, number> = {
 };
 
 export function isLiveViewDialogPath(method: string, pathname: string): boolean {
-  return method === "POST" && /\/live-view\/dialog$/.test(pathname) && isLiveViewPath(pathname);
+  return method === "POST" && matchLiveViewRoute(pathname)?.kind === "dialog";
 }
 
 export function applyLiveViewHeaders(res: ServerResponse): void {
@@ -101,7 +102,11 @@ export type LiveViewRoutes = {
   revokeRun(runId: string): Promise<void>;
   /** Ends every stream, revokes every credential and closes every session; the Host keeps running. */
   dispose(): Promise<void>;
+  /** Wires revoke-on-gate-close, revoke-before-browser-teardown and dispose-on-shutdown; returns an unsubscribe. */
+  attach(manager: LiveViewManagerHooks): () => void;
 };
+
+export type LiveViewManagerHooks = Pick<RunManager, "onGateClosed" | "beforeBrowserTeardown" | "onShutdown">;
 
 function send(res: ServerResponse, status: number, body: Record<string, unknown>): void {
   const payload = JSON.stringify(body);
@@ -487,13 +492,28 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
     send(res, INPUT_STATUS[result.reason], { error: result.reason, code: result.reason });
   }
 
-  return {
+  const routes: LiveViewRoutes = {
+    attach(manager) {
+      const offs = [
+        manager.onGateClosed((runId, stageId) => {
+          if (stageId === undefined) void routes.revokeRun(runId);
+          else void routes.revokeStage(runId, stageId);
+        }),
+        manager.beforeBrowserTeardown(({ runId, stageId }) =>
+          stageId === undefined ? routes.revokeRun(runId) : routes.revokeStage(runId, stageId),
+        ),
+        manager.onShutdown(() => void routes.dispose()),
+      ];
+      return () => {
+        for (const off of offs) off();
+      };
+    },
     async handle(req, res) {
       const method = req.method ?? "GET";
       const url = new URL(req.url ?? "/", "http://localhost");
-      const match = LIVE_VIEW_ROUTE.exec(url.pathname);
+      const match = matchLiveViewRoute(url.pathname);
       if (match === null) return false;
-      const [, rawRun = "", rawStage = "", action] = match;
+      const { rawRunId: rawRun, rawStageId: rawStage, kind: action } = match;
       let target: LiveViewTarget;
       try {
         target = {
@@ -537,4 +557,5 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
       return sessions.dispose();
     },
   };
+  return routes;
 }

@@ -18,14 +18,8 @@ import {
   loginCheckPromptBlock,
   readStageLoginCheck,
 } from "../browser/loginCheck.js";
-import path from "node:path";
-import { gateHandoffFor } from "../browser/gateHandoff.js";
+import { stageGateHandoff } from "../browser/stageHandoff.js";
 import { humanLoginPromptBlock, isHumanLoginStage } from "../browser/humanLogin.js";
-import {
-  BROWSER_CAPABILITIES_FILENAME,
-  readPersistedBrowserCapabilities,
-} from "../browser/persistedEnv.js";
-import { stageDir } from "../runstore/paths.js";
 import {
   BROWSER_SKILL_NAME,
   resolveBuiltinSkillFile,
@@ -466,15 +460,11 @@ async function openStageWithOperatorCatalog(
     }
   }
   const humanLoginHandoff = humanLogin
-    ? gateHandoffFor({
+    ? await stageGateHandoff({
+        runDir: resolveOptions.workspaceDir,
         runId: resolveOptions.runId,
         stageId: input.stage.id,
-        capabilities: await readPersistedBrowserCapabilities(
-          path.join(
-            stageDir(resolveOptions.workspaceDir, stageIdForManifest),
-            BROWSER_CAPABILITIES_FILENAME,
-          ),
-        ),
+        dirStageId: stageIdForManifest,
       })
     : undefined;
   try {

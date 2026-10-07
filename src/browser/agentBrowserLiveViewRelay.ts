@@ -151,7 +151,7 @@ function validTouch(e: Record<string, unknown>): boolean {
   );
 }
 
-function validEvent(event: unknown): boolean {
+export function validEvent(event: unknown): boolean {
   if (!isPlainObject(event)) return false;
   switch (event.type) {
     case "input_mouse":
@@ -561,6 +561,12 @@ export function createAgentBrowserLiveViewRelay(
         armNudge();
         const message: LiveViewMessage = { type: "retarget", data: { tab: tab.tabId, url: tab.url, reason } };
         for (const subscriber of [...subscribers]) subscriber(message);
+        const fresh = pages.get(target)?.url ?? "";
+        if (fresh !== "") {
+          const urlMessage: LiveViewMessage = { type: "url", data: { url: fresh } };
+          latest.set("url", urlMessage);
+          if (fresh !== tab.url) for (const subscriber of [...subscribers]) subscriber(urlMessage);
+        }
         return true;
       };
 

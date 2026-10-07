@@ -23,8 +23,10 @@ class FakeTarget implements EventTargetLike {
 class FakeTextarea extends FakeTarget implements TextareaLike {
   value = "";
   focused = false;
-  focus() {
+  focusOptions: FocusOptions | undefined;
+  focus(options?: FocusOptions) {
     this.focused = true;
+    this.focusOptions = options;
   }
 }
 
@@ -65,6 +67,7 @@ describe("registerInput", () => {
     const e = h.canvas.fire("mousedown", { clientX: 100, clientY: 50, button: 0, detail: 2 });
     expect(e.prevented).toBe(true);
     expect(h.textarea.focused).toBe(true);
+    expect(h.textarea.focusOptions).toEqual({ preventScroll: true });
     expect(h.sent[0]).toMatchObject({ eventType: "mousePressed", x: 200, y: 100, button: "left", clickCount: 2 });
     h.win.fire("mouseup", { clientX: 100, clientY: 50, button: 0, detail: 2 });
     expect(h.sent[1]).toMatchObject({ eventType: "mouseReleased", button: "left" });

@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
 import { isLoopbackHostname } from "./allowedHosts.js";
+import { matchLiveViewRoute } from "./liveViewPath.js";
 
 export type ControlScope = "read" | "drive";
 
@@ -228,7 +229,7 @@ function isTriggerWebhookRoute(method: string, pathname: string): boolean {
  * carry a ticket-derived cookie instead of a bearer token.
  */
 function isLiveViewRoute(pathname: string): boolean {
-  return /^\/api\/runs\/[^/]+\/stages\/[^/]+\/live-view\/(ticket|events|input|dialog)$/.test(pathname);
+  return matchLiveViewRoute(pathname) !== null;
 }
 
 export function requiredScopeFor(

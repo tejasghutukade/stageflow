@@ -411,14 +411,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
   const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = deps.controlTokens ?? loadControlTokens();
   const liveView = createLiveViewRoutes({ ...deps.liveView, store, controlTokens });
-  manager.onGateClosed((runId, stageId) => {
-    if (stageId === undefined) void liveView.revokeRun(runId);
-    else void liveView.revokeStage(runId, stageId);
-  });
-  manager.beforeBrowserTeardown(({ runId, stageId }) =>
-    stageId === undefined ? liveView.revokeRun(runId) : liveView.revokeStage(runId, stageId),
-  );
-  manager.onShutdown(() => void liveView.dispose());
+  liveView.attach(manager);
   const handler = async ({ req, res, url, pathname, method, boot }: HttpHostRouteContext) => {
       if (isLiveViewPath(pathname)) applyLiveViewHeaders(res);
       if (boot.serveBlocked !== undefined && pathname.startsWith("/api/")) {

@@ -18,10 +18,10 @@ import {
   defaultBrowserRunner,
   writeSessionOwner,
 } from "./browserTeardown.js";
-import { defaultDisplayProbe, loginPageUrl, noScreenError } from "./humanLogin.js";
+import { defaultDisplayProbe, loginPageUrl } from "./humanLogin.js";
+import { persistStageHandoff, resolveStageHandoffCapabilities } from "./stageHandoff.js";
 import { ensureStageLoginCheck, OPEN_COMMAND_TIMEOUT_MS } from "./loginCheck.js";
-import { resolveBrowserHostCapabilities } from "./hostCapabilities.js";
-import { BROWSER_CAPABILITIES_FILENAME, readPersistedBrowserEnv } from "./persistedEnv.js";
+import { readPersistedBrowserEnv } from "./persistedEnv.js";
 import { createLocalBrowserHost } from "./localBrowserHost.js";
 import { createLocalProfileStore } from "./localProfileStore.js";
 import { LOCAL_BROWSER_SCOPE } from "./profileStore.js";
@@ -89,25 +89,9 @@ export async function resolveStageBrowserEnv(
   const { browser } = input;
   if (browser === undefined) return undefined;
 
-  const capabilities = resolveBrowserHostCapabilities(support.host.capabilities);
-  if (support.host.capabilities === undefined) {
-    capabilities.display = (support.display ?? defaultDisplayProbe)().hasDisplay
-      ? "local_window"
-      : "headless_only";
-  } else if (
-    capabilities.display === "local_window" &&
-    support.display !== undefined &&
-    !support.display().hasDisplay
-  ) {
-    capabilities.display = "headless_only";
-  }
-  if (
-    input.humanLogin === true &&
-    capabilities.display === "headless_only" &&
-    capabilities.liveView === "none"
-  ) {
-    throw noScreenError((support.display ?? defaultDisplayProbe)().docker);
-  }
+  const capabilities = resolveStageHandoffCapabilities(support, {
+    ...(input.humanLogin === true ? { humanLogin: true } : {}),
+  });
 
   if (
     (browser.allow_domains?.length ?? 0) > 0 ||
@@ -124,11 +108,7 @@ export async function resolveStageBrowserEnv(
   const dir = stageDir(input.runDir, input.stageId);
   const file = path.join(dir, BROWSER_ENV_FILENAME);
   await mkdir(dir, { recursive: true });
-  await writeFile(
-    path.join(dir, BROWSER_CAPABILITIES_FILENAME),
-    `${JSON.stringify({ display: capabilities.display, liveView: capabilities.liveView })}\n`,
-    { mode: 0o600 },
-  );
+  await persistStageHandoff({ runDir: input.runDir, stageId: input.stageId }, capabilities);
 
   // TODO(multi-tenant): open the profile in the run owner's scope, not the fixed local scope.
   const profile =
