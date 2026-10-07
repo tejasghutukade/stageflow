@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-07
+
+### Added
+
+- Public hosted runtime for embedding one repository-free pipeline. `createHostedRuntime` accepts the existing Pi `AgentPort` from `createPiAgentPort()`, a local run store, and a `HostedEventSink`, then runs inline and returns a structured result and execution receipt. `configurePiProviderApiKey` stores a managed OpenRouter key in the Pi auth file that adapter already reads. Package skills at `.pi/skills/<name>/` are materialized for that run; operator-home skills are not loaded. See [Hosted runtime](docs/hosted.md).
+- Package-root `exports` so consumers can `import { createHostedRuntime } from "stageflow"`.
+
+### Changed
+
+- A hosted run does not create the operator home. Stage credentials resolve from `STAGEFLOW_AGENT_AUTH_PATH` when set, otherwise from a path next to the local store.
+
 ## [0.32.0] - 2026-10-06
 
 ### Added
