@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createPiAgentPort,
   globalAgentBackendFromManifest,
   resolveAgentBackend,
   resolveAgentPort,
@@ -41,6 +42,7 @@ describe("resolveAgentPort — constructs the matching adapter", () => {
   it('"pi" (or unset) constructs a PiAgentAdapter', () => {
     expect(resolveAgentPort()).toBeInstanceOf(PiAgentAdapter);
     expect(resolveAgentPort({ global: "pi" })).toBeInstanceOf(PiAgentAdapter);
+    expect(createPiAgentPort()).toBeInstanceOf(PiAgentAdapter);
   });
 
   it('"claude" constructs a ClaudeAgentAdapter', () => {

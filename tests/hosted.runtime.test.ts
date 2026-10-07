@@ -713,9 +713,11 @@ describe("packed stageflow package", () => {
         );
         await execFileAsync("npm", ["install", tarball], { cwd: consumer });
         const script = `
-          import { createHostedRuntime, HostedRuntimeError } from "stageflow";
+          import { configurePiProviderApiKey, createHostedRuntime, createPiAgentPort, HostedRuntimeError } from "stageflow";
           if (typeof createHostedRuntime !== "function") process.exit(1);
           if (typeof HostedRuntimeError !== "function") process.exit(2);
+          if (typeof createPiAgentPort !== "function") process.exit(3);
+          if (typeof configurePiProviderApiKey !== "function") process.exit(4);
         `;
         await execFileAsync("node", ["--input-type=module", "-e", script], {
           cwd: consumer,

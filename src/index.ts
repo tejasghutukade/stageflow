@@ -30,6 +30,8 @@ export type {
   StageRunInput,
   StageRunResult,
 } from "./agent/port.js";
+export { createPiAgentPort } from "./agent/resolveAgentPort.js";
+export { configurePiProviderApiKey } from "./agent/providerAuth.js";
 export type { StageActivityEvent, StageLogLine } from "./agent/activity.js";
 export type { StageRoots } from "./runtime/stageRoots.js";
 export { runPipeline, startPipeline } from "./runtime/pipelineRunner.js";
