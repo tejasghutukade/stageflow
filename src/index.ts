@@ -23,10 +23,37 @@ export {
   assertRequiredEnvelope,
   isAdvancingEnvelope,
 } from "./envelope/check.js";
-export type { AgentPort } from "./agent/port.js";
+export type {
+  AgentPort,
+  StageHandle,
+  StageHandleEvent,
+  StageRunInput,
+  StageRunResult,
+} from "./agent/port.js";
 export type { StageActivityEvent, StageLogLine } from "./agent/activity.js";
 export type { StageRoots } from "./runtime/stageRoots.js";
 export { runPipeline, startPipeline } from "./runtime/pipelineRunner.js";
+export {
+  createHostedRuntime,
+  type HostedRuntime,
+} from "./hosted/runtime.js";
+export { HostedRuntimeError, HOSTED_ERROR_CODES } from "./hosted/errors.js";
+export type { HostedErrorCode } from "./hosted/errors.js";
+export {
+  HOSTED_EVENT_SCHEMA_VERSION,
+  HOSTED_DELIVERY_ATTEMPTS,
+  DEFAULT_EVENT_DELIVERY_TIMEOUT_MS,
+  HOSTED_CANCEL_GRACE_MS,
+} from "./hosted/types.js";
+export type {
+  HostedRunContext,
+  HostedPipelineInput,
+  HostedPipelineResult,
+  HostedExecutionReceipt,
+  HostedEventEnvelope,
+  HostedRunEvent,
+  HostedEventSink,
+} from "./hosted/types.js";
 export { createRunStore } from "./runstore/createStore.js";
 export type { RunStoreConfig, RunStoreKind } from "./runstore/createStore.js";
 export type {

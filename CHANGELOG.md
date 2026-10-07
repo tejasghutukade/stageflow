@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-07
+
+### Added
+
+- Public hosted runtime for embedding one repository-free pipeline. `createHostedRuntime` accepts an agent, a local run store, and a `HostedEventSink`, then runs inline and returns a structured result and execution receipt. See [Hosted runtime](docs/hosted.md).
+- Package-root `exports` so consumers can `import { createHostedRuntime } from "stageflow"`.
+
+### Changed
+
+- A hosted run does not create the operator home. Stage credentials resolve from `STAGEFLOW_AGENT_AUTH_PATH` when set, otherwise from a path next to the local store.
+
 ## [0.32.0] - 2026-10-06
 
 ### Added
