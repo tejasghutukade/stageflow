@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  browserHostForOwner,
   HostConfigError,
   loadHostConfig,
   redactHostConfig,
@@ -225,6 +226,53 @@ describe("loadHostConfig", () => {
       ["string", "'60'"],
     ])("rejects a %s dialog_timeout_seconds", (_name, value) => {
       expect(() => load(`browser:\n  dialog_timeout_seconds: ${value}\n`)).toThrow(HostConfigError);
+    });
+
+    it("defaults to the local host and accepts a container host with limits", () => {
+      const defaults = loadHostConfig({ env: {}, homeDir: tempHome() });
+      expect(defaults.browserHost).toBe("local");
+      expect(defaults.browserContainer).toEqual({
+        image: "stageflow-browser-sandbox:local",
+        shmSize: "1g",
+        memory: "1g",
+        pidsLimit: 512,
+      });
+      const c = load(
+        "browser:\n  host: container\n  container:\n    image: registry.example/sf-browser:1.2\n    shm_size: 512m\n    memory: 2g\n    pids_limit: 256\n",
+      );
+      expect(c.browserHost).toBe("container");
+      expect(c.browserContainer).toEqual({
+        image: "registry.example/sf-browser:1.2",
+        shmSize: "512m",
+        memory: "2g",
+        pidsLimit: 256,
+      });
+    });
+
+    it("selects the adapter per owner scope with the global host as the default", () => {
+      expect(load("browser: {}\n").browserOwnerHosts).toEqual({});
+      const c = load("browser:\n  host: local\n  owner_hosts:\n    tenant-2: container\n");
+      expect(browserHostForOwner(c, "tenant-2")).toBe("container");
+      expect(browserHostForOwner(c, "local")).toBe("local");
+      expect(browserHostForOwner(c, "tenant-3")).toBe("local");
+    });
+
+    it.each([
+      ["bad owner host", "browser:\n  owner_hosts:\n    tenant-2: cloud\n"],
+      ["bad owner scope", "browser:\n  owner_hosts:\n    ../x: container\n"],
+      ["owner hosts not a map", "browser:\n  owner_hosts: [container]\n"],
+    ])("rejects %s", (_name, yaml) => {
+      expect(() => load(yaml)).toThrow(HostConfigError);
+    });
+
+    it.each([
+      ["unknown host", "browser:\n  host: cloud\n"],
+      ["unknown container key", "browser:\n  container:\n    privileged: true\n"],
+      ["bad image", "browser:\n  container:\n    image: 'a b'\n"],
+      ["bad memory", "browser:\n  container:\n    memory: lots\n"],
+      ["zero pids", "browser:\n  container:\n    pids_limit: 0\n"],
+    ])("rejects %s", (_name, yaml) => {
+      expect(() => load(yaml)).toThrow(HostConfigError);
     });
 
     it("accepts an empty list and an empty browser block", () => {

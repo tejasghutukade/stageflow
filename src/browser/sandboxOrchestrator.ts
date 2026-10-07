@@ -12,9 +12,21 @@ export type SandboxRef = {
   adapter: { id: string; version: number; data?: unknown };
 };
 
+/**
+ * Reserved seam for restricting what a sandbox may reach. No implementation
+ * enforces it yet; adapters that cannot enforce a policy must reject it with
+ * `not_supported` rather than ignore it. A hard `allow_domains` guarantee
+ * (private network plus filtering proxy) lands here later.
+ */
+export type SandboxEgressPolicy = {
+  allowDomains?: string[];
+  adapter?: { id: string; version: number; data?: unknown };
+};
+
 export type SandboxStartRequest = {
   labels: SandboxLabels;
   profile?: { scope: string; name: string };
+  egress?: SandboxEgressPolicy;
 };
 
 export type SandboxStatus = "running" | "stopped" | "dead";

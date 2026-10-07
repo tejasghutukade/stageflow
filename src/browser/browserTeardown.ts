@@ -13,6 +13,7 @@ import {
   type BrowserRunner,
   type StageBrowserSupport,
 } from "./browserHost.js";
+import { runOwnerScope } from "./ownerScope.js";
 import { stageProfileLock } from "./stageProfileLock.js";
 import {
   BROWSER_ANCHOR_FILENAME,
@@ -283,11 +284,22 @@ async function closeRunAnchorsOnce(
   for (const name of names) {
     const anchor = await readPersistedAnchor(run.runDir, name);
     if (anchor === undefined) continue;
-    const { gone } = await closeBrowserSession(
+    const { gone: sessionGone } = await closeBrowserSession(
       anchor.anchorEnv,
       closeOptions(support),
     ).catch(() => ({ gone: false }));
-    if (gone) {
+    // Anchors written before the scope was persisted fall back to the run owner's scope.
+    const released =
+      support.host.releaseProfileBrowser === undefined ||
+      (await support.host
+        .releaseProfileBrowser({
+          scope: anchor.scope ?? runOwnerScope(support, { runId: anchor.runId }),
+          runId: anchor.runId,
+          profile: name,
+        })
+        .then(() => true)
+        .catch(() => false));
+    if (sessionGone && released) {
       await rm(path.join(anchorDir(run.runDir, name), BROWSER_ANCHOR_FILENAME), {
         force: true,
       }).catch(() => undefined);

@@ -72,9 +72,12 @@ export function ReplyZone({
       : prompt.message;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-3)" }}>
+    <div
+      className={`reply-zone${liveViewUrl !== null ? " reply-zone--liveview" : ""}`}
+      style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-3)" }}
+    >
       <div>
-        <h4 style={{ margin: "0 0 var(--spacing-1)", fontSize: "var(--font-size-base)", fontWeight: 600 }}>Operator reply</h4>
+        <h4 className="reply-zone__title" style={{ margin: "0 0 var(--spacing-1)", fontSize: "var(--font-size-base)", fontWeight: 600 }}>Operator reply</h4>
         <p className="muted" style={{ margin: 0, fontSize: "var(--font-size-sm)" }}>{promptBody}</p>
       </div>
       {liveViewUrl !== null ? (
@@ -118,16 +121,16 @@ export function ReplyZone({
               Review side by side
             </button>
           ) : null}
+          <div className="reply-zone__confirm">
           <textarea
-            className="select"
+            className="select reply-zone__notes"
             value={optionalText}
             onChange={(e) => setOptionalText(e.target.value)}
             rows={3}
             disabled={locked}
             placeholder="Optional notes"
-            style={{ minHeight: 62, resize: "vertical" }}
           ></textarea>
-          <div style={{ display: "flex", gap: "var(--spacing-2)" }}>
+          <div className="reply-zone__decide" style={{ display: "flex", gap: "var(--spacing-2)" }}>
             <button
               className="btn btn--accept"
               disabled={locked}
@@ -142,6 +145,7 @@ export function ReplyZone({
             >
               Reject
             </button>
+          </div>
           </div>
         </>
       ) : null}

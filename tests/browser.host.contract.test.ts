@@ -9,6 +9,11 @@ import {
 } from "../src/browser/browserHost.js";
 import { resolveBrowserHostCapabilities } from "../src/browser/hostCapabilities.js";
 import { createFakeRemoteBrowserHost } from "../src/browser/fakeRemoteBrowserHost.js";
+import { createContainerBrowserHost } from "../src/browser/containerBrowserHost.js";
+import { createVolumeProfileStore } from "../src/browser/volumeProfileStore.js";
+import { createFakeContainerBrowsers } from "./helpers/fakeContainerBrowsers.js";
+import { createFakeProviderSession } from "./helpers/fakeProviderSession.js";
+import { createSessionApiSandboxOrchestrator } from "../src/browser/sessionApiSandboxOrchestrator.js";
 import { createLocalBrowserHost } from "../src/browser/localBrowserHost.js";
 import { createLocalProfileStore } from "../src/browser/localProfileStore.js";
 import { createInMemoryProfileStore } from "../src/browser/memoryProfileStore.js";
@@ -40,6 +45,8 @@ const implementations: Array<{
   name: string;
   make: () => { host: BrowserHost; profiles: ProfileStore };
   remote: boolean;
+  /** Where a remote host sends stages, when it is fixed ahead of time. */
+  remoteAddress?: string;
 }> = [
   {
     name: "local",
@@ -56,6 +63,41 @@ const implementations: Array<{
       profiles: createInMemoryProfileStore(),
     }),
     remote: true,
+    remoteAddress: "wss://browsers.example/session-1",
+  },
+  {
+    name: "container (fake orchestrator)",
+    make: () => {
+      const fake = createFakeContainerBrowsers();
+      return {
+        host: createContainerBrowserHost({
+          orchestrator: fake.orchestrator,
+          endpoint: fake.endpoint,
+          local: { platform: "darwin", hostEnv: {}, socketRoot: sockRoot },
+          pollMs: 1,
+        }),
+        profiles: createVolumeProfileStore(),
+      };
+    },
+    remote: true,
+    remoteAddress: "ws://10.0.0.1:9222/devtools/browser/b1",
+  },
+  {
+    name: "container host over a provider-style session API adapter",
+    make: () => {
+      const provider = createFakeProviderSession();
+      return {
+        host: createContainerBrowserHost({
+          orchestrator: createSessionApiSandboxOrchestrator({ client: provider.api }),
+          endpoint: provider.endpoint,
+          local: { platform: "darwin", hostEnv: {}, socketRoot: sockRoot },
+          pollMs: 1,
+        }),
+        profiles: createVolumeProfileStore(),
+      };
+    },
+    remote: true,
+    remoteAddress: "ws://10.1.0.1:9222/devtools/browser/p1",
   },
 ];
 
@@ -98,7 +140,7 @@ async function stageEnvOf(host: BrowserHost, req: BrowserStageRequest) {
   return host.stageEnv({ ...req, cdpAddress: shared.cdpAddress });
 }
 
-describe.each(implementations)("BrowserHost contract: $name", ({ make, remote }) => {
+describe.each(implementations)("BrowserHost contract: $name", ({ make, remote, remoteAddress }) => {
   it("reports a complete capability record that never claims an unwired relay", () => {
     const { host } = make();
     const caps = resolveBrowserHostCapabilities(host.capabilities);
@@ -187,10 +229,10 @@ describe.each(implementations)("BrowserHost contract: $name", ({ make, remote })
       const { host, profiles } = make();
       const req = await request(profiles, { profileName: "acct" });
       const env = await stageEnvOf(host, req);
-      expect(env.AGENT_BROWSER_CDP).toBe("wss://browsers.example/session-1");
+      expect(env.AGENT_BROWSER_CDP).toBe(remoteAddress);
       expect(env.AGENT_BROWSER_PIN_TAB).toBe("1");
       expect(env).not.toHaveProperty("AGENT_BROWSER_PROFILE");
-      expect(JSON.stringify(env)).not.toContain(req.profile!.profileDir);
+      expect(JSON.stringify(env)).not.toContain(req.profile!.profileDir ?? "\0");
     });
   } else {
     it("attaches the stage to the local anchor address and keeps the profile dir off the stage", async () => {
@@ -199,7 +241,7 @@ describe.each(implementations)("BrowserHost contract: $name", ({ make, remote })
       const env = await stageEnvOf(host, req);
       expect(env.AGENT_BROWSER_CDP).toBe(CDP);
       expect(env).not.toHaveProperty("AGENT_BROWSER_PROFILE");
-      expect(JSON.stringify(env)).not.toContain(req.profile!.profileDir);
+      expect(JSON.stringify(env)).not.toContain(req.profile!.profileDir!);
       const owning = await host.profileBrowserEnv({
         runId: req.runId,
         browser: req.browser,

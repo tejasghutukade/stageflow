@@ -99,4 +99,16 @@ describe("live view ticket service", () => {
     expect(a).not.toBe(b);
     expect(a.length).toBeGreaterThanOrEqual(32);
   });
+
+  it("revoking one mode leaves the other mode's credentials and reports remaining credentials", () => {
+    const { svc } = service();
+    const control = svc.redeem(svc.issue({ ...target, mode: "control" }).ticket, target)!;
+    const view = svc.redeem(svc.issue({ ...target, mode: "view" }).ticket, target)!;
+    svc.revoke("run-1", "login", "control");
+    expect(svc.resolve(control.credential, target)).toBeUndefined();
+    expect(svc.resolve(view.credential, target)).toMatchObject({ mode: "view" });
+    expect(svc.hasCredentials("run-1", "login")).toBe(true);
+    svc.revoke("run-1", "login");
+    expect(svc.hasCredentials("run-1", "login")).toBe(false);
+  });
 });

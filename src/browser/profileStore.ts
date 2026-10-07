@@ -1,8 +1,6 @@
-// TODO(multi-tenant): this fixed scope is the single local owner. Callers import it instead of
-// receiving a scope from the run, so profiles, locks and CLI commands always use "local".
-// A hosted service must give every run an owner scope (set by the Host from the authenticated
-// user, never from YAML) and pass it down. Find every call site with: grep -rn "LOCAL_BROWSER_SCOPE" src
-// See docs/browser-internals.md, "Known limitations" item 3.
+// TODO(multi-tenant): this fixed scope is the single local owner. Only ownerScope.ts (`localOwnerScope`) and
+// tests read it; everything else takes a scope as input. A hosted service supplies an OwnerScopeResolver
+// from the authenticated user, never from YAML. See docs/browser-internals.md, "Multi-tenant to-do list".
 export const LOCAL_BROWSER_SCOPE = "local";
 
 export interface ProfileKey {
@@ -12,8 +10,11 @@ export interface ProfileKey {
 
 export interface ProfileHandle {
   key: ProfileKey;
-  profileDir: string;
-  stateDir: string;
+  /** Folder of a Host-local profile; absent for a volume or provider profile. */
+  profileDir?: string;
+  stateDir?: string;
+  /** Provider-neutral reference of a volume profile; the orchestrator maps it to real storage. */
+  volumeRef?: string;
 }
 
 export interface ProfileStore {

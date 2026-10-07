@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeAudit, type AuditSink } from "../browser/auditSink.js";
 import { parseHostGateContext } from "../browser/gateHandoff.js";
 import { readLiveViewSessionRequest } from "../browser/liveViewPersisted.js";
+import type { LiveViewSource, SandboxIdResolver } from "../browser/liveViewSource.js";
+import { readStageHandoff } from "../browser/stageHandoff.js";
 import type {
   LiveViewDialogRejection,
   LiveViewInputEvent,
@@ -24,7 +26,7 @@ import {
   type LiveViewTarget,
   type LiveViewTicketService,
 } from "../browser/liveViewTickets.js";
-import { LOCAL_BROWSER_SCOPE } from "../browser/profileStore.js";
+import { localOwnerScope } from "../browser/ownerScope.js";
 import { readStagePersistedBrowserEnv } from "../browser/stageBrowserEnv.js";
 import type { RunManager } from "../runtime/runManager.js";
 import type { RunStore } from "../runstore/port.js";
@@ -93,6 +95,8 @@ export type LiveViewRoutesOptions = {
   store: RunStore;
   controlTokens: ControlTokens;
   relay?: LiveViewRelay;
+  /** Serves the `viewer` route for stages whose host reports `live_view: provider_view`. */
+  viewer?: { source: LiveViewSource; sandboxIdOf: SandboxIdResolver };
   audit?: AuditSink;
   tickets?: LiveViewTicketService;
   sessions?: LiveViewSessionManager;
@@ -114,6 +118,8 @@ export type LiveViewRoutes = {
   /** Revokes the stage's credentials, then resolves once its relay session is closed. */
   revokeStage(runId: string, stageId: string): Promise<void>;
   revokeRun(runId: string): Promise<void>;
+  /** A gate stopped taking input: revokes control only, so read-only watchers keep watching the running stage. */
+  revokeStageControl(runId: string, stageId: string): Promise<void>;
   /** Ends every stream, revokes every credential and closes every session; the Host keeps running. */
   dispose(): Promise<void>;
   /** Wires revoke-on-gate-close, revoke-before-browser-teardown and dispose-on-shutdown; returns an unsubscribe. */
@@ -182,7 +188,7 @@ function configuredDialogTimeoutMs(): number | undefined {
 export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRoutes {
   const { store, controlTokens } = options;
   const tickets = options.tickets ?? createLiveViewTicketService({ now: options.now });
-  const resolveScope = options.resolveScope ?? (() => LOCAL_BROWSER_SCOPE);
+  const resolveScope = options.resolveScope ?? (() => localOwnerScope());
   const heartbeatMs = options.heartbeatMs ?? LIVE_VIEW_HEARTBEAT_MS;
   const setHeartbeat =
     options.setHeartbeat ??
@@ -388,6 +394,71 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
     if (ended) unsubscribe();
   }
 
+  async function openViewer(
+    req: IncomingMessage,
+    res: ServerResponse,
+    target: LiveViewTarget,
+    pathPrefix: string,
+    ticket: string | null,
+  ): Promise<void> {
+    let grant = ticket !== null ? tickets.redeem(ticket, target) : undefined;
+    const redeemed = grant !== undefined;
+    if (grant === undefined) {
+      const cookie = readCookie(req, LIVE_VIEW_COOKIE);
+      grant = cookie !== undefined ? tickets.resolve(cookie, target) : undefined;
+    }
+    if (grant === undefined) {
+      send(res, 401, { error: "Invalid or expired live view ticket", code: "ticket_invalid" });
+      return;
+    }
+    const runDir = store.getWorkspaceDir(target.runId);
+    const handoff = await readStageHandoff({ runDir, stageId: target.stageId }).catch(() => undefined);
+    if (handoff?.liveView !== "provider_view" || options.viewer === undefined) {
+      send(res, 409, { error: "This stage's browser has no provider viewer", code: "no_provider_view" });
+      return;
+    }
+    let address;
+    try {
+      const detail = await store.readRun(target.runId);
+      const stage = detail.stages.find((s) => s.stage_id === target.stageId);
+      const sandboxId = await options.viewer.sandboxIdOf({
+        scope: target.scope,
+        runId: target.runId,
+        stageId: target.stageId,
+        profile: parseHostGateContext(stage?.pending_prompt).profile,
+      });
+      if (sandboxId === undefined) {
+        send(res, 409, { error: "Stage has no browser to show", code: "no_browser" });
+        return;
+      }
+      address = await options.viewer.source.viewerAddress({
+        runId: target.runId,
+        stageId: target.stageId,
+        sandboxId,
+      });
+    } catch {
+      send(res, 409, { error: "Live view is unavailable", code: "live_view_unavailable" });
+      return;
+    }
+    if (tickets.resolve(grant.credential, target) === undefined) {
+      send(res, 401, { error: "Live view session ended", code: "session_ended" });
+      return;
+    }
+    if (redeemed) {
+      res.setHeader(
+        "Set-Cookie",
+        `${LIVE_VIEW_COOKIE}=${grant.credential}; Path=${pathPrefix}; HttpOnly; SameSite=Strict${isSecureRequest(req) ? "; Secure" : ""}`,
+      );
+    }
+    audit("live_view_opened", grant);
+    send(res, 200, {
+      url: address.url,
+      embed_origin: address.embedOrigin,
+      expires_at: new Date(address.expiresAt).toISOString(),
+      mode: grant.mode,
+    });
+  }
+
   /** Cookie credential, anti-forgery header, control mode, then a size-limited JSON body. */
   async function readControlBody(
     req: IncomingMessage,
@@ -541,7 +612,7 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
       const offs = [
         manager.onGateClosed((runId, stageId) => {
           if (stageId === undefined) void routes.revokeRun(runId);
-          else void routes.revokeStage(runId, stageId);
+          else void routes.revokeStageControl(runId, stageId);
         }),
         manager.beforeBrowserTeardown(({ runId, stageId }) =>
           stageId === undefined ? routes.revokeRun(runId) : routes.revokeStage(runId, stageId),
@@ -575,6 +646,8 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
           await issueTicket(req, res, target);
         } else if (action === "events" && method === "GET") {
           await openStream(req, res, target, pathPrefix, url.searchParams.get("ticket"));
+        } else if (action === "viewer" && method === "GET") {
+          await openViewer(req, res, target, pathPrefix, url.searchParams.get("ticket"));
         } else if (action === "input" && method === "POST") {
           await postInput(req, res, target);
         } else if (action === "dialog" && method === "POST") {
@@ -592,6 +665,11 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
     },
     revokeStage(runId, stageId) {
       tickets.revoke(runId, stageId);
+      return sessions.closeStage(runId, stageId);
+    },
+    revokeStageControl(runId, stageId) {
+      tickets.revoke(runId, stageId, "control");
+      if (tickets.hasCredentials(runId, stageId)) return Promise.resolve();
       return sessions.closeStage(runId, stageId);
     },
     revokeRun(runId) {

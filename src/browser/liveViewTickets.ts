@@ -24,8 +24,10 @@ export interface LiveViewTicketService {
   redeem(ticket: string, target: LiveViewTarget): LiveViewCredential | undefined;
   /** Looks up a live-view credential for the same target; undefined when unknown, expired or revoked. */
   resolve(credential: string, target: LiveViewTarget): LiveViewCredential | undefined;
-  /** Invalidates tickets and credentials of one stage. */
-  revoke(runId: string, stageId: string): void;
+  /** Invalidates tickets and credentials of one stage; `mode` limits it to that mode. */
+  revoke(runId: string, stageId: string, mode?: LiveViewMode): void;
+  /** Whether a live credential of the stage exists. */
+  hasCredentials(runId: string, stageId: string): boolean;
   /** Invalidates tickets and credentials of every stage of a run. */
   revokeRun(runId: string): void;
   /** Invalidates every ticket and credential. */
@@ -133,8 +135,18 @@ export function createLiveViewTicketService(
         callerId: entry.callerId,
       };
     },
-    revoke(runId, stageId) {
-      revokeWhere((entry) => entry.runId === runId && entry.stageId === stageId);
+    revoke(runId, stageId, mode) {
+      revokeWhere(
+        (entry) =>
+          entry.runId === runId && entry.stageId === stageId && (mode === undefined || entry.mode === mode),
+      );
+    },
+    hasCredentials(runId, stageId) {
+      sweep();
+      for (const entry of credentials.values()) {
+        if (entry.runId === runId && entry.stageId === stageId) return true;
+      }
+      return false;
     },
     revokeRun(runId) {
       revokeWhere((entry) => entry.runId === runId);

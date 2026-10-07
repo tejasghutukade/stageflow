@@ -165,13 +165,17 @@ export function createLocalBrowserHost(
     },
   ): Promise<BrowserEnv> {
     const { profile } = request;
+    const profileDir = profile.profileDir;
+    if (profileDir === undefined) {
+      throw new Error(`profile "${profile.key.name}" has no folder; the local browser host needs one`);
+    }
     return build({
-      identity: `profile:${profile.key.scope}/${profile.key.name}:${profile.profileDir}`,
+      identity: `profile:${profile.key.scope}/${profile.key.name}:${profileDir}`,
       session: sessionNameForProfile(profile.key.scope, profile.key.name),
       headed: headedFor(request),
       launches: true,
       set: (env) => {
-        env.AGENT_BROWSER_PROFILE = profile.profileDir;
+        env.AGENT_BROWSER_PROFILE = profileDir;
       },
     });
   }

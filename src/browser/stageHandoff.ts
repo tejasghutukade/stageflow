@@ -43,6 +43,15 @@ export function resolveStageHandoffCapabilities(
   ) {
     throw noScreenError(probe().docker);
   }
+  if (
+    options.humanLogin === true &&
+    capabilities.display !== "local_window" &&
+    capabilities.viewerInput === "view_only"
+  ) {
+    throw new Error(
+      "A human login stage needs an interactive live view, but this browser host offers a view-only one (missing capability viewer_input: interactive).",
+    );
+  }
   return { display: capabilities.display, liveView: capabilities.liveView };
 }
 

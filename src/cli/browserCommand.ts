@@ -17,11 +17,9 @@ import { createLocalProfileLock } from "../browser/localProfileLock.js";
 import { createLocalProfileStore } from "../browser/localProfileStore.js";
 import { matchLoginState, runLoginCheck } from "../browser/loginCheck.js";
 import type { ProfileLock, ProfileLockOwner, RunLiveness } from "../browser/profileLock.js";
-// TODO(multi-tenant): every `sf browser` command below uses the fixed local scope.
-// In a hosted service the scope must come from the signed-in user. Search for LOCAL_BROWSER_SCOPE in this file.
+import { localOwnerScope } from "../browser/ownerScope.js";
 import {
   InvalidProfileKeyError,
-  LOCAL_BROWSER_SCOPE,
   type ProfileHandle,
   type ProfileStore,
   validateProfileName,
@@ -62,6 +60,8 @@ const STAGE_ID = "browser-cli";
 export type BrowserCommandDeps = {
   log: (line: string) => void;
   error: (line: string) => void;
+  /** Owner scope of the command; the CLI runs as the local owner when unset. */
+  scope?: string;
   store: ProfileStore;
   host: BrowserHost;
   locks: ProfileLock;
@@ -75,7 +75,7 @@ export type BrowserCommandDeps = {
   /** True when a daemon session for this env is open. */
   sessionOpen: (env: BrowserEnv) => boolean;
   /** profile name -> ISO time of last recorded use (from the audit log). */
-  auditLastUsed: () => Promise<Record<string, string>>;
+  auditLastUsed: (scope: string) => Promise<Record<string, string>>;
   confirm: (question: string) => Promise<boolean>;
   interactive: boolean;
   signal?: AbortSignal;
@@ -84,6 +84,10 @@ export type BrowserCommandDeps = {
   loginCheck?: { waitMs?: number; settleMs?: number };
   loginPollMs?: number;
 };
+
+function scopeOf(deps: { scope?: string }): string {
+  return deps.scope ?? localOwnerScope();
+}
 
 class CliError extends Error {
   constructor(
@@ -130,7 +134,7 @@ function defaultSessionOpen(env: BrowserEnv): boolean {
   }
 }
 
-async function defaultAuditLastUsed(): Promise<Record<string, string>> {
+async function defaultAuditLastUsed(scope: string): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   let text: string;
   try {
@@ -144,7 +148,7 @@ async function defaultAuditLastUsed(): Promise<Record<string, string>> {
       const rec = JSON.parse(line) as { at?: string; event?: string; scope?: string; profile?: string };
       if (
         rec.event === "profile_used" &&
-        rec.scope === LOCAL_BROWSER_SCOPE &&
+        rec.scope === scope &&
         typeof rec.profile === "string" &&
         typeof rec.at === "string" &&
         (out[rec.profile] === undefined || rec.at > out[rec.profile]!)
@@ -252,12 +256,12 @@ async function withProfile(
   fn: (handle: ProfileHandle) => Promise<number>,
   options: { create: boolean },
 ): Promise<number> {
-  const names = await deps.store.list(LOCAL_BROWSER_SCOPE);
+  const names = await deps.store.list(scopeOf(deps));
   if (!options.create && !names.includes(name)) {
     throw new CliError(`Profile "${name}" does not exist. Create it with sf browser login.`, "not_found", BROWSER_EXIT.error);
   }
   const owner = newOwner();
-  const got = await deps.locks.acquire({ scope: LOCAL_BROWSER_SCOPE, name }, owner);
+  const got = await deps.locks.acquire({ scope: scopeOf(deps), name }, owner);
   if (got.status === "queued") {
     throw new CliError(
       `Profile "${name}" is in use by run ${got.holder.runId}${got.holder.stageId !== undefined ? ` stage ${got.holder.stageId}` : ""}. Try again when it finishes.`,
@@ -266,7 +270,7 @@ async function withProfile(
     );
   }
   try {
-    const handle = await deps.store.open({ scope: LOCAL_BROWSER_SCOPE, name });
+    const handle = await deps.store.open({ scope: scopeOf(deps), name });
     return await fn(handle);
   } finally {
     await got.release().catch(() => undefined);
@@ -300,15 +304,17 @@ function closeOpts(deps: BrowserCommandDeps) {
 }
 
 async function profilesCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
-  const names = await deps.store.list(LOCAL_BROWSER_SCOPE);
-  const audited = await deps.auditLastUsed().catch(() => ({}) as Record<string, string>);
+  const names = await deps.store.list(scopeOf(deps));
+  const audited = await deps.auditLastUsed(scopeOf(deps)).catch(() => ({}) as Record<string, string>);
   const profiles: { name: string; last_used: string | null }[] = [];
   for (const name of names) {
     let last = audited[name];
     try {
-      const handle = await deps.store.open({ scope: LOCAL_BROWSER_SCOPE, name });
-      const iso = (await stat(handle.profileDir)).mtime.toISOString();
-      if (last === undefined || iso > last) last = iso;
+      const handle = await deps.store.open({ scope: scopeOf(deps), name });
+      if (handle.profileDir !== undefined) {
+        const iso = (await stat(handle.profileDir)).mtime.toISOString();
+        if (last === undefined || iso > last) last = iso;
+      }
     } catch {
       // store without a real folder
     }
@@ -322,9 +328,9 @@ async function profilesCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number>
 
 async function statusCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
   const name = requireName(p);
-  const exists = (await deps.store.list(LOCAL_BROWSER_SCOPE)).includes(name);
+  const exists = (await deps.store.list(scopeOf(deps))).includes(name);
   let lock: { run_id: string; stage_id: string | null; live: boolean } | null = null;
-  const holder = await deps.locks.holder({ scope: LOCAL_BROWSER_SCOPE, name });
+  const holder = await deps.locks.holder({ scope: scopeOf(deps), name });
   if (holder !== undefined) {
     lock = {
       run_id: holder.runId,
@@ -334,7 +340,7 @@ async function statusCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
   }
   let sessionOpen = false;
   if (exists) {
-    const handle = await deps.store.open({ scope: LOCAL_BROWSER_SCOPE, name });
+    const handle = await deps.store.open({ scope: scopeOf(deps), name });
     sessionOpen = deps.sessionOpen(await envFor(deps, handle, { profile: name }));
   }
   const doc = { name, exists, locked: lock !== null, lock, session_open: sessionOpen };
@@ -461,7 +467,7 @@ async function loginCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
 
 async function clearCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
   const name = requireName(p);
-  if (!(await deps.store.list(LOCAL_BROWSER_SCOPE)).includes(name)) {
+  if (!(await deps.store.list(scopeOf(deps))).includes(name)) {
     throw new CliError(`Profile "${name}" does not exist.`, "not_found", BROWSER_EXIT.error);
   }
   if (!p.yes) {
@@ -480,7 +486,7 @@ async function clearCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
   return withProfile(deps, name, async (handle) => {
     const env = await envFor(deps, handle, { profile: name });
     await closeBrowserSession(env, closeOpts(deps)).catch(() => undefined);
-    await deps.store.delete({ scope: LOCAL_BROWSER_SCOPE, name });
+    await deps.store.delete({ scope: scopeOf(deps), name });
     emit(deps, p.json, { cleared: true, name }, [`Cleared profile "${name}".`]);
     return BROWSER_EXIT.ok;
   }, { create: false });

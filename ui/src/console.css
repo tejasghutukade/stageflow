@@ -2841,17 +2841,84 @@ a.topbar__back { text-decoration: none; }
 .liveview {
   position: relative;
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: var(--spacing-2);
-  margin-bottom: var(--spacing-3);
+  margin-bottom: var(--spacing-2);
 }
 
 .composer:has(.liveview) {
-  max-height: 85vh;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
+  container: composer / inline-size;
+}
+
+.composer:has(.liveview) > .composer__inner {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: none;
+}
+
+.work-row:has(.liveview) > .aside { display: none; }
+
+.stream:has(.liveview) > .stream__body {
+  flex: 0 1 auto;
+  max-height: 3.5rem;
+  padding-top: var(--spacing-2);
+  padding-bottom: var(--spacing-2);
+}
+
+.reply-zone--liveview {
+  flex: 1 1 auto;
+  gap: var(--spacing-2);
+}
+
+.reply-zone--liveview .reply-zone__title { display: none; }
+
+.reply-zone__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.reply-zone__notes {
+  min-height: 3.9rem;
+  resize: vertical;
+}
+
+.reply-zone--liveview .reply-zone__confirm {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  flex-direction: row;
+  align-items: stretch;
+  padding-bottom: var(--spacing-1);
+  background: var(--color-background-surface);
+}
+
+.reply-zone--liveview .reply-zone__notes {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: var(--spacing-10);
+  resize: none;
+}
+
+.reply-zone--liveview .reply-zone__decide { flex: none; }
+
+.liveview__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
 }
 
 .liveview__instruction {
+  flex: none;
   margin: 0;
   font-size: var(--font-size-sm);
   font-weight: 600;
@@ -2859,6 +2926,8 @@ a.topbar__back { text-decoration: none; }
 }
 
 .liveview__address {
+  flex: 1 1 12rem;
+  min-width: 0;
   overflow: hidden;
   padding: var(--spacing-1) var(--spacing-2);
   border: 1px solid var(--color-border);
@@ -2879,6 +2948,12 @@ a.topbar__back { text-decoration: none; }
 
 .liveview__stage {
   position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 12rem;
+  container-type: size;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-container);
   background: var(--color-background-surface);
@@ -2889,8 +2964,11 @@ a.topbar__back { text-decoration: none; }
 
 .liveview__canvas {
   display: block;
-  width: 100%;
+  flex: none;
+  width: auto;
   height: auto;
+  max-width: 100cqw;
+  max-height: 100cqh;
 }
 
 .liveview__canvas--control { cursor: pointer; }
@@ -2906,6 +2984,27 @@ a.topbar__back { text-decoration: none; }
   font-size: var(--font-size-sm);
   opacity: 0.92;
 }
+
+.watch-browser {
+  position: fixed;
+  right: var(--spacing-4);
+  bottom: var(--spacing-4);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  width: min(32rem, calc(100vw - var(--spacing-8)));
+  max-height: calc(100vh - var(--spacing-8));
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  background: var(--color-background-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.watch-browser .liveview { margin-bottom: 0; }
+
+.watch-browser__close { align-self: flex-end; }
 
 /* ------------------------------------------------------------------ workshop */
 .pane.workshop {

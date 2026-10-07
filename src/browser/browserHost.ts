@@ -4,6 +4,7 @@ import type { ProfileLock } from "./profileLock.js";
 import type { AuditSink } from "./auditSink.js";
 import type { ProfileHandle, ProfileStore } from "./profileStore.js";
 import type { BrowserHostCapabilityRecord } from "./hostCapabilities.js";
+import type { OwnerScopeResolver } from "./ownerScope.js";
 
 export type BrowserEnv = Record<string, string>;
 
@@ -39,6 +40,12 @@ export type ProfileBrowserResult = ProfileBrowser & {
   restarted: boolean;
 };
 
+export type ProfileBrowserRelease = {
+  scope: string;
+  runId: string;
+  profile: string;
+};
+
 export interface BrowserHost {
   /** What this host can do; read through `resolveBrowserHostCapabilities` so unset fields get safe defaults. */
   readonly capabilities?: BrowserHostCapabilityRecord;
@@ -47,6 +54,13 @@ export interface BrowserHost {
    * address. Callers serialize per (run, profile) and persist the result.
    */
   ensureProfileBrowser(request: ProfileBrowserRequest): Promise<ProfileBrowserResult>;
+  /**
+   * Closes the run's shared browser for a profile gracefully (bounded) and releases
+   * what hosts it. Only hosts whose browser lives outside the Host's own sockets implement it.
+   */
+  releaseProfileBrowser?(request: ProfileBrowserRelease): Promise<void>;
+  /** At Host start: releases browsers of runs that are no longer live; returns what it released. */
+  sweepOrphans?(input: { isRunLive: (runId: string) => Promise<boolean> }): Promise<{ released: string[] }>;
   /** Env of one stage's agent-browser session; with a profile it attaches to `cdpAddress` in its own tab. */
   stageEnv(request: BrowserStageRequest): Promise<BrowserEnv>;
   /** Env of the session that owns the profile's browser (anchor, or `sf browser login`). */
@@ -81,6 +95,8 @@ export type StageBrowserSupport = {
   socketRoot?: string;
   /** Defaults to the local audit log in the Stageflow home. */
   audit?: AuditSink;
+  /** Owner scope of a run; defaults to the fixed local owner. Chosen by the Host, never by YAML. */
+  ownerScope?: OwnerScopeResolver;
   /** Host-blocked sites; defaults to `browser.blocked_sites` from Host config. */
   blockedSites?: readonly string[];
   /** Screen detection for human login stages; defaults to the real Host. */

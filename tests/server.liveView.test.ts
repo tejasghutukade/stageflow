@@ -786,20 +786,37 @@ describe("live view page dialogs", () => {
 });
 
 describe("live view revocation and audit", () => {
-  it("answering or abandoning a gate ends the stream with closed and rejects input", async () => {
+  it("answering or abandoning a gate ends the control stream with closed and rejects input", async () => {
     const h = await startHarness();
     const { cookie, stream } = await h.openControl();
-    const watcher = await h.stream(`${BASE}/events?ticket=${(await h.ticket("view")).body.ticket}`);
     const pendingTicket = (await h.ticket("control")).body.ticket as string;
 
     h.fire("run-1", "login");
     await stream.waitFor("closed");
-    await watcher.waitFor("closed");
     expect(JSON.parse(stream.events.at(-1)!.data)).toEqual({ reason: "revoked" });
     expect((await h.post(`${BASE}/input`, [click], h.inputHeaders(cookie))).status).toBe(401);
     expect((await h.stream(`${BASE}/events?ticket=${pendingTicket}`)).status).toBe(401);
     expect((await h.stream(`${BASE}/events`, { cookie })).status).toBe(401);
     await vi.waitFor(() => expect(h.fake.sessions[0]!.closed).toBe(true));
+  });
+
+  it("closing a gate leaves a read-only watcher of the running stage watching until the stage ends", async () => {
+    const h = await startHarness();
+    const { stream } = await h.openControl();
+    const watcher = await h.stream(`${BASE}/events?ticket=${(await h.ticket("view")).body.ticket}`);
+    const watcherCookie = String(watcher.headers["set-cookie"]).split(";")[0]!;
+
+    h.fire("run-1", "login");
+    await stream.waitFor("closed");
+    await flush();
+    expect(h.fake.sessions[0]!.closed).toBe(false);
+    expect((await h.stream(`${BASE}/events`, { cookie: watcherCookie })).status).toBe(200);
+    h.fake.sessions[0]!.emit({ type: "retarget", data: { tab: "t2", url: "https://popup.example/" } } as never);
+    await vi.waitFor(() => expect(watcher.events.some((e) => e.event === "retarget")).toBe(true));
+
+    await h.teardown("run-1", "login");
+    await watcher.waitFor("closed");
+    expect(h.fake.sessions[0]!.closed).toBe(true);
   });
 
   it("cancelling the run revokes every stage", async () => {

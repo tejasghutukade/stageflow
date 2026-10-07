@@ -54,6 +54,7 @@ try {
     const env = await resolveStageBrowserEnv(support, {
       runId,
       stageId,
+      scope: "local",
       runDir,
       browser: { profile: "probe", login_url: url },
       humanLogin: true,

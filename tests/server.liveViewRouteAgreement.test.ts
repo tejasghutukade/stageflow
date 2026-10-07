@@ -12,6 +12,8 @@ const cases: Array<[string, string]> = [
   ["POST", `${base}/dialog`],
   ["POST", `${base}/reopen-tab`],
   ["GET", `${base}/reopen-tab`],
+  ["GET", `${base}/viewer`],
+  ["POST", `${base}/viewer`],
   ["GET", `${base}/ticket`],
   ["POST", `${base}/events`],
   ["GET", `${base}/input`],
@@ -56,7 +58,8 @@ describe("live-view route / bearer exemption agreement", () => {
     expect(isLiveViewReopenTabPath(method, pathname)).toBe(method === "POST" && kind === "reopen-tab");
 
     const wrongMethod =
-      (kind === "events" && method !== "GET") || (kind !== "events" && method !== "POST");
+      ((kind === "events" || kind === "viewer") && method !== "GET") ||
+      (kind !== "events" && kind !== "viewer" && method !== "POST");
     const bad = /%zz/.test(path);
     if (matched && (wrongMethod || bad)) {
       const res = fakeRes();

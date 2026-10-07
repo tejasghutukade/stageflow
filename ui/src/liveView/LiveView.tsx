@@ -4,7 +4,7 @@ import { initialLiveViewState, type LiveViewState } from "./connection";
 import { postLiveViewDialog, postLiveViewInput, postLiveViewReopenTab, requestLiveViewTicket } from "./client";
 import { DialogOverlay } from "./DialogOverlay";
 import { createFrameRenderer } from "./frameRenderer";
-import { LIVE_VIEW_HELP, LIVE_VIEW_INSTRUCTION, REOPEN_TAB_LABEL } from "./helpText";
+import { LIVE_VIEW_HELP, LIVE_VIEW_INSTRUCTION, REOPEN_TAB_LABEL, WATCH_INSTRUCTION } from "./helpText";
 import type { LiveViewMode } from "./types";
 import { createViewerSession, type ViewerSession, type ViewerSnapshot } from "./viewerSession";
 
@@ -95,9 +95,11 @@ export function LiveView({
 
   return (
     <section className="liveview" aria-label="Browser view">
-      <p className="liveview__instruction">{LIVE_VIEW_INSTRUCTION}</p>
+      <div className="liveview__bar">
+      <p className="liveview__instruction">{mode === "view" ? WATCH_INSTRUCTION : LIVE_VIEW_INSTRUCTION}</p>
       <div className="liveview__address" title={state.url}>
         {state.url || " "}
+      </div>
       </div>
       {state.notice !== null ? <p className="liveview__notice">{state.notice}</p> : null}
       {inputNotice !== null ? <p className="liveview__notice">{inputNotice}</p> : null}
@@ -134,26 +136,26 @@ export function LiveView({
           tabIndex={-1}
         />
       ) : null}
-      <Collapsible trigger={<span className="liveview__help-trigger">Page seems stuck?</span>}>
+      {mode === "control" ? (
+      <Collapsible defaultIsOpen={false} trigger={<span className="liveview__help-trigger">Page seems stuck?</span>}>
         <p className="liveview__help">{LIVE_VIEW_HELP}</p>
-        {mode === "control" ? (
-          <div className="liveview__help-actions">
-            <button
-              type="button"
-              className="btn btn--ghost"
-              disabled={snapshot.reopeningTab || closed}
-              onClick={() => sessionRef.current?.reopenTab()}
-            >
-              {snapshot.reopeningTab ? "Reopening…" : REOPEN_TAB_LABEL}
-            </button>
-            {snapshot.reopenTabFailed !== null ? (
-              <p className="liveview__notice" role="status">
-                {snapshot.reopenTabFailed}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="liveview__help-actions">
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={snapshot.reopeningTab || closed}
+            onClick={() => sessionRef.current?.reopenTab()}
+          >
+            {snapshot.reopeningTab ? "Reopening…" : REOPEN_TAB_LABEL}
+          </button>
+          {snapshot.reopenTabFailed !== null ? (
+            <p className="liveview__notice" role="status">
+              {snapshot.reopenTabFailed}
+            </p>
+          ) : null}
+        </div>
       </Collapsible>
+      ) : null}
     </section>
   );
 }

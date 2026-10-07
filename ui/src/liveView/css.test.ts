@@ -24,7 +24,7 @@ describe("console.css live view rules", () => {
     expect((css.match(/{/g) ?? []).length).toBe((css.match(/}/g) ?? []).length);
   });
 
-  it.each([".liveview__kb", ".liveview__dialog", ".liveview__status", ".workshop__bubble"])(
+  it.each([".liveview__kb", ".liveview__dialog", ".liveview__status", ".workshop__bubble", ".watch-browser"])(
     "%s is a top-level rule, not nested in another block",
     (selector) => {
       expect(topLevelSelectors()).toContain(selector);

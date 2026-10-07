@@ -1,3 +1,5 @@
+import type { BrowserSandboxOrchestrator } from "./sandboxOrchestrator.js";
+
 export type LiveViewSourceRequest = {
   runId: string;
   stageId: string;
@@ -15,4 +17,21 @@ export type LiveViewAddress = {
 
 export interface LiveViewSource {
   viewerAddress(request: LiveViewSourceRequest): Promise<LiveViewAddress>;
+}
+
+export type SandboxIdResolver = (input: {
+  scope: string;
+  runId: string;
+  stageId: string;
+  profile?: string;
+}) => Promise<string | undefined>;
+
+/** Finds the stage's sandbox by the labels every orchestrator stamps on it. */
+export function sandboxIdFromLabels(
+  orchestrator: Pick<BrowserSandboxOrchestrator, "listByLabel">,
+): SandboxIdResolver {
+  return async ({ scope, runId, profile }) => {
+    const found = await orchestrator.listByLabel({ scope, runId, ...(profile !== undefined ? { profile } : {}) });
+    return found.find((info) => info.status === "running")?.ref.id;
+  };
 }

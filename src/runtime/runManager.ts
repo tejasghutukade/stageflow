@@ -79,6 +79,7 @@ import {
   type StageExecutionMode,
 } from "./stageConcurrency.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
+import { runOwnerScope } from "../browser/ownerScope.js";
 import { isHumanLoginStage } from "../browser/humanLogin.js";
 import {
   defaultStageBrowserSupport,
@@ -962,7 +963,7 @@ export class RunManager {
       .some((entry) => entry.runId === runId && entry.stageId === stageId);
   }
 
-  async sweepBrowserSessions(): Promise<{ closed: string[] }> {
+  async sweepBrowserSessions(): Promise<{ closed: string[]; released: string[] }> {
     const support = this.browserSupport();
     const isRunLive = createRunLiveness(this.options.store);
     await stageProfileLock(support)
@@ -970,6 +971,7 @@ export class RunManager {
       .catch(() => 0);
     return sweepOrphanBrowserSessions({
       isRunLive,
+      host: support.host,
       ...(support.runner !== undefined ? { runner: support.runner } : {}),
       ...(support.closeWaitMs !== undefined
         ? { closeWaitMs: support.closeWaitMs }
@@ -2740,6 +2742,7 @@ export class RunManager {
         await acquireStageProfile(
           this.browserSupport(),
           {
+            scope: runOwnerScope(this.browserSupport(), { runId }),
             profile: resumedStage.browser.profile,
             owner: { runId, stageId },
             isRunLive: createRunLiveness(store),
@@ -2758,6 +2761,7 @@ export class RunManager {
         {
           runId,
           stageId,
+          scope: runOwnerScope(this.browserSupport(), { runId }),
           runDir: workspaceDir,
           browser: resumedStage?.browser,
           attempt,
