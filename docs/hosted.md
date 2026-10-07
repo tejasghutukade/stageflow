@@ -87,7 +87,7 @@ Terminal events are `run.succeeded`, `run.failed`, and `run.cancelled`. There is
 
 ## Cancellation
 
-Aborting `signal` stops new stages, closes stage handles Core opened, and returns `cancelled` unless a terminal outcome was already chosen. `timeoutMs` uses the same stop path and returns `failed` / `timed_out`.
+Aborting `signal` stops new stages, closes stage handles Core opened, and returns `cancelled` unless a terminal outcome was already chosen. An abort during package, store, or skill validation is the same outcome: one `run.cancelled` event, no local run, and no stage start. `timeoutMs` uses the same stop path and returns `failed` / `timed_out`.
 
 After the stop signal, Core waits up to `HOSTED_CANCEL_GRACE_MS` (5 seconds) for the local run to finish. `close()` on a stage handle must stop that agent’s work. Returning from the hosted call does not by itself cancel an agent that ignores `close()`.
 
@@ -98,6 +98,8 @@ After the stop signal, Core waits up to `HOSTED_CANCEL_GRACE_MS` (5 seconds) for
 Core does not create `~/.stageflow` for a hosted run. Without `STAGEFLOW_AGENT_AUTH_PATH`, stage roots point at `hosted-agent-auth.json` next to the local store. Tests can pass any other `AgentPort`; production hosted runs use the Pi one.
 
 The package directory is read-only input. The local store and run workspace must be outside that directory. Cloud downloads the package, checks its integrity, and passes `packageRevision`. Stageflow does not.
+
+Custom skills ship inside the package at `.pi/skills/<name>/SKILL.md`. Core copies those files into the run workspace and passes that copy to the existing Pi skill resolver. The catalog for the run is an empty directory next to the local store, so skills installed in the operator home are not visible. A skill symlink whose real path leaves the package is `package_invalid`.
 
 ## Inline execution only
 

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { realpath } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import type { StageLogLine } from "../agent/activity.js";
 import type { AgentPort, StageHandle, StageHandleEvent } from "../agent/port.js";
 import { loadPipelineValidated } from "../config/validateCatalog.js";
@@ -15,6 +15,9 @@ import {
   type PipelineRunResult,
 } from "../runtime/pipelineRunner.js";
 import { runWithExplicitAuthPath } from "../runtime/credentialBinding.js";
+import type { OperatorCatalog } from "../runtime/stageAttemptBootstrap.js";
+import type { SkillsPayload } from "../runtime/runSkills.js";
+import { loadPackageSkills } from "./packageSkills.js";
 import {
   containedRealPath,
   isContained,
@@ -65,10 +68,49 @@ export function createHostedRuntime(dependencies: {
         return cancelledBeforeStart(dependencies.eventSink, context, timeoutMs);
       }
 
-      const packageRoot = await readPackageRoot(input.packageRoot, context);
-      validateTask(input.taskYaml, context);
-      await validatePackage(packageRoot, input.pipeline, context);
-      await assertStoreOutsidePackage(dependencies.localStore, packageRoot, context);
+      let preflightAborted = false;
+      const onPreflightAbort = () => {
+        preflightAborted = true;
+      };
+      input.signal?.addEventListener("abort", onPreflightAbort, { once: true });
+      const disarmPreflight = () => {
+        input.signal?.removeEventListener("abort", onPreflightAbort);
+      };
+
+      let packageRoot: string;
+      let skills: SkillsPayload | undefined;
+      let operatorCatalog: OperatorCatalog;
+      try {
+        packageRoot = await readPackageRoot(input.packageRoot, context);
+        validateTask(input.taskYaml, context);
+        await validatePackage(packageRoot, input.pipeline, context);
+        await assertStoreOutsidePackage(dependencies.localStore, packageRoot, context);
+        try {
+          skills = await loadPackageSkills(packageRoot);
+        } catch (error) {
+          throw hostedError(
+            errorMessage(error),
+            "package_invalid",
+            context.externalRunId,
+            context.externalAttemptId,
+          );
+        }
+        operatorCatalog = await hostedOperatorCatalog(
+          dependencies.localStore,
+          packageRoot,
+        );
+        if (preflightAborted || input.signal?.aborted) {
+          disarmPreflight();
+          return cancelledBeforeStart(dependencies.eventSink, context, timeoutMs);
+        }
+        disarmPreflight();
+        if (input.signal?.aborted) {
+          return cancelledBeforeStart(dependencies.eventSink, context, timeoutMs);
+        }
+      } catch (error) {
+        disarmPreflight();
+        throw error;
+      }
 
       const sequencer = new HostedEventSequencer(
         dependencies.eventSink,
@@ -134,6 +176,9 @@ export function createHostedRuntime(dependencies: {
       }
 
       try {
+        if (input.signal?.aborted) {
+          return cancelledBeforeStart(dependencies.eventSink, context, timeoutMs);
+        }
         const started = await startPipeline({
           agent,
           store,
@@ -144,6 +189,8 @@ export function createHostedRuntime(dependencies: {
           executionMode: HOSTED_EXECUTION_MODE,
           maxActiveStagesPerRun: input.maxActiveStagesPerRun,
           schedulingHalt: halt,
+          operatorCatalog,
+          ...(skills !== undefined ? { skills } : {}),
         });
         runId = started.runId;
         workspaceDir = started.runDir;
@@ -455,6 +502,19 @@ async function assertWorkspaceOutside(
       runId,
     );
   }
+}
+
+async function hostedOperatorCatalog(
+  store: RunStore,
+  packageRoot: string,
+): Promise<OperatorCatalog> {
+  const dbPath = sqlitePath(store);
+  const agentDir =
+    dbPath !== undefined
+      ? path.join(path.dirname(dbPath), "hosted-skill-catalog")
+      : path.join(tmpdir(), "stageflow-hosted-skill-catalog");
+  await mkdir(agentDir, { recursive: true });
+  return { cwd: packageRoot, agentDir };
 }
 
 function hostedAuthPath(store: RunStore): string {

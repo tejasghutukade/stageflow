@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -687,6 +687,179 @@ stages:
     }).catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "invalid_input" });
     if (error instanceof Error) expect(error.message).not.toContain(SECRET);
+  });
+
+  it("cancels when the signal aborts during package validation", async () => {
+    const { packageRoot, store } = await layout();
+    const controller = new AbortController();
+    let reads = 0;
+    const wrappedStore = new Proxy(store, {
+      get(target, prop) {
+        if (prop === "connection" && ++reads === 2) controller.abort();
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const agent = scriptedFakeAgent([SUCCESS]);
+    let starts = 0;
+    const counting: AgentPort = {
+      openStage(input) {
+        starts += 1;
+        return agent.openStage(input);
+      },
+      runStage(input) {
+        starts += 1;
+        return agent.runStage(input);
+      },
+    };
+    const sink = new MemorySink();
+    const result = await createHostedRuntime({
+      agent: counting,
+      localStore: wrappedStore,
+      eventSink: sink,
+    }).run({
+      packageRoot,
+      pipeline: "smoke.pipeline.yaml",
+      taskYaml: TASK,
+      context: context(),
+      signal: controller.signal,
+    });
+    expect(result).toMatchObject({ status: "cancelled", code: "cancelled", runId: null });
+    expect(starts).toBe(0);
+    expect(sink.events.filter((event) => event.type === "run.cancelled")).toHaveLength(1);
+    expect(sink.events.filter((event) => event.type.startsWith("run.") && event.type !== "run.cancelled")).toHaveLength(0);
+  });
+
+  it("runs a packaged custom skill and passes its file to the agent", async () => {
+    const skillBody = "---\nname: review-skill\ndescription: A package skill\n---\nDo research.\n";
+    const { packageRoot, store } = await layout(
+      PIPELINE.replace("model:", "skill: review-skill\n    model:"),
+    );
+    const skillDir = path.join(packageRoot, ".pi", "skills", "review-skill");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(path.join(skillDir, "SKILL.md"), skillBody);
+    await writeFile(path.join(skillDir, "notes.txt"), "package-only-note");
+    const operatorSkills = await mkdtemp(path.join(tmpdir(), "sf-hosted-operator-skills-"));
+    await mkdir(path.join(operatorSkills, "skills", "review-skill"), { recursive: true });
+    await writeFile(
+      path.join(operatorSkills, "skills", "review-skill", "SKILL.md"),
+      "operator home skill that must not be loaded",
+    );
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = operatorSkills;
+    cleanups.push(async () => {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      await rm(operatorSkills, { recursive: true, force: true });
+    });
+
+    let skillFilePath: string | undefined;
+    const agent = scriptedFakeAgent([SUCCESS]);
+    const recording: AgentPort = {
+      openStage(input) {
+        skillFilePath = input.skillFilePath;
+        return agent.openStage(input);
+      },
+      runStage(input) {
+        skillFilePath = input.skillFilePath;
+        return agent.runStage(input);
+      },
+    };
+    const result = await createHostedRuntime({
+      agent: recording,
+      localStore: store,
+      eventSink: new MemorySink(),
+    }).run({
+      packageRoot,
+      pipeline: "smoke.pipeline.yaml",
+      taskYaml: TASK,
+      context: context(),
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(skillFilePath).toBeDefined();
+    expect(skillFilePath).toContain(`${path.sep}skills${path.sep}review-skill${path.sep}SKILL.md`);
+    expect(skillFilePath?.startsWith(packageRoot)).toBe(false);
+    expect(skillFilePath?.startsWith(operatorSkills)).toBe(false);
+    expect(await readFile(skillFilePath ?? "", "utf8")).toBe(skillBody);
+    expect(await readFile(path.join(path.dirname(skillFilePath ?? ""), "notes.txt"), "utf8")).toBe(
+      "package-only-note",
+    );
+  });
+
+  it("does not load an operator-home skill that is absent from the package", async () => {
+    const { packageRoot, store } = await layout(
+      PIPELINE.replace("model:", "skill: operator-only\n    model:"),
+    );
+    const operatorSkills = await mkdtemp(path.join(tmpdir(), "sf-hosted-operator-only-"));
+    await mkdir(path.join(operatorSkills, "skills", "operator-only"), { recursive: true });
+    await writeFile(
+      path.join(operatorSkills, "skills", "operator-only", "SKILL.md"),
+      "---\nname: operator-only\ndescription: home\n---\nnope\n",
+    );
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = operatorSkills;
+    cleanups.push(async () => {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      await rm(operatorSkills, { recursive: true, force: true });
+    });
+    const agent = scriptedFakeAgent([SUCCESS]);
+    let starts = 0;
+    const counting: AgentPort = {
+      openStage(input) {
+        starts += 1;
+        return agent.openStage(input);
+      },
+      runStage(input) {
+        starts += 1;
+        return agent.runStage(input);
+      },
+    };
+    const result = await createHostedRuntime({
+      agent: counting,
+      localStore: store,
+      eventSink: new MemorySink(),
+    }).run({
+      packageRoot,
+      pipeline: "smoke.pipeline.yaml",
+      taskYaml: TASK,
+      context: context(),
+    });
+    expect(result).toMatchObject({ status: "failed", code: "agent_failed" });
+    expect(result.reason).toContain('Skill "operator-only" is not installed');
+    expect(starts).toBe(0);
+  });
+
+  it("rejects a package skill whose real path leaves the package", async () => {
+    const { packageRoot, store } = await layout(
+      PIPELINE.replace("model:", "skill: review-skill\n    model:"),
+    );
+    const outside = await mkdtemp(path.join(tmpdir(), "sf-hosted-skill-outside-"));
+    await mkdir(path.join(outside, "review-skill"), { recursive: true });
+    await writeFile(
+      path.join(outside, "review-skill", "SKILL.md"),
+      "---\nname: review-skill\ndescription: escaped\n---\nnope\n",
+    );
+    await mkdir(path.join(packageRoot, ".pi", "skills"), { recursive: true });
+    await symlink(
+      path.join(outside, "review-skill"),
+      path.join(packageRoot, ".pi", "skills", "review-skill"),
+    );
+    cleanups.push(async () => {
+      await rm(outside, { recursive: true, force: true });
+    });
+    const error = await createHostedRuntime({
+      agent: scriptedFakeAgent([SUCCESS]),
+      localStore: store,
+      eventSink: new MemorySink(),
+    }).run({
+      packageRoot,
+      pipeline: "smoke.pipeline.yaml",
+      taskYaml: TASK,
+      context: context(),
+    }).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "package_invalid" });
   });
 });
 
