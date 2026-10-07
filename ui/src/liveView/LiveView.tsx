@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { initialLiveViewState, type LiveViewState } from "./connection";
-import { postLiveViewDialog, postLiveViewInput, requestLiveViewTicket } from "./client";
+import { postLiveViewDialog, postLiveViewInput, postLiveViewReopenTab, requestLiveViewTicket } from "./client";
 import { DialogOverlay } from "./DialogOverlay";
 import { createFrameRenderer } from "./frameRenderer";
-import { LIVE_VIEW_HELP, LIVE_VIEW_INSTRUCTION } from "./helpText";
+import { LIVE_VIEW_HELP, LIVE_VIEW_INSTRUCTION, REOPEN_TAB_LABEL } from "./helpText";
 import type { LiveViewMode } from "./types";
 import { createViewerSession, type ViewerSession, type ViewerSnapshot } from "./viewerSession";
 
@@ -15,6 +15,8 @@ const INITIAL_SNAPSHOT: ViewerSnapshot = {
   dialog: null,
   answering: false,
   answerFailed: null,
+  reopeningTab: false,
+  reopenTabFailed: null,
 };
 
 function statusLine(state: LiveViewState, inputStopped: boolean): string | null {
@@ -59,6 +61,7 @@ export function LiveView({
       requestTicket: requestLiveViewTicket,
       postInput: postLiveViewInput,
       postDialog: postLiveViewDialog,
+      postReopenTab: postLiveViewReopenTab,
       openEventSource: (url) => new EventSource(url),
       setTimer: (fn, ms) => {
         const handle = setTimeout(fn, ms);
@@ -133,6 +136,23 @@ export function LiveView({
       ) : null}
       <Collapsible trigger={<span className="liveview__help-trigger">Page seems stuck?</span>}>
         <p className="liveview__help">{LIVE_VIEW_HELP}</p>
+        {mode === "control" ? (
+          <div className="liveview__help-actions">
+            <button
+              type="button"
+              className="btn btn--ghost"
+              disabled={snapshot.reopeningTab || closed}
+              onClick={() => sessionRef.current?.reopenTab()}
+            >
+              {snapshot.reopeningTab ? "Reopening…" : REOPEN_TAB_LABEL}
+            </button>
+            {snapshot.reopenTabFailed !== null ? (
+              <p className="liveview__notice" role="status">
+                {snapshot.reopenTabFailed}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </Collapsible>
     </section>
   );

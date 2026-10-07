@@ -10,6 +10,7 @@ import type {
   LiveViewInputResult,
   LiveViewMessage,
   LiveViewRelay,
+  LiveViewReopenResult,
   LiveViewSession,
   LiveViewSessionRequest,
   LiveViewSubscriber,
@@ -28,6 +29,8 @@ const TAB_LIST_TRIES = 5;
 const RECONNECT_TRIES = 3;
 const RETARGET_ATTEMPTS = 2;
 const DEFAULT_FIRST_FRAME_TIMEOUT_MS = 1500;
+export const DEFAULT_REOPEN_MIN_INTERVAL_MS = 2000;
+const REOPEN_WAIT_TRIES = 50;
 const FORWARDED = new Set(["frame", "status", "tabs", "url"]);
 const DEFAULT_DIALOG_TIMEOUT_MS = 60_000;
 const MAX_DIALOG_TEXT = 2000;
@@ -70,6 +73,8 @@ export type AgentBrowserLiveViewRelayOptions = {
   firstFrameTimeoutMs?: number;
   /** An open confirm or prompt nobody answers is dismissed after this long. */
   dialogTimeoutMs?: number;
+  /** Minimum gap between two reopenTab() calls on one session. */
+  reopenMinIntervalMs?: number;
   /** Timer seam for the first-frame nudge and the dialog time-out; returns a cancel function. */
   schedule?: (fn: () => void, ms: number) => () => void;
 };
@@ -268,7 +273,7 @@ type OpenDialog = {
 const clip = (value: unknown): string =>
   typeof value === "string" ? value.slice(0, MAX_DIALOG_TEXT) : "";
 
-type RetargetReason = "popup_opened" | "tab_closed";
+type RetargetReason = "popup_opened" | "tab_closed" | "reopened";
 type PageInfo = { opener?: string; url: string };
 
 export function createAgentBrowserLiveViewRelay(
@@ -279,6 +284,7 @@ export function createAgentBrowserLiveViewRelay(
   const maxPerSecond = options.maxEventsPerSecond ?? DEFAULT_MAX_INPUT_EVENTS_PER_SECOND;
   const now = options.now ?? Date.now;
   const retryDelayMs = options.retryDelayMs ?? 100;
+  const reopenMinIntervalMs = options.reopenMinIntervalMs ?? DEFAULT_REOPEN_MIN_INTERVAL_MS;
   const dialogTimeoutMs = options.dialogTimeoutMs ?? DEFAULT_DIALOG_TIMEOUT_MS;
   const firstFrameTimeoutMs = options.firstFrameTimeoutMs ?? DEFAULT_FIRST_FRAME_TIMEOUT_MS;
   const schedule =
@@ -314,6 +320,8 @@ export function createAgentBrowserLiveViewRelay(
       const sessionTargets = new Map<string, string>();
       const openDialogs = new Map<string, OpenDialog>();
       const cdpPending = new Map<number, (reply: CdpReply) => void>();
+      let reopening = false;
+      let lastReopenAt: number | undefined;
       let dialogSeq = 0;
       let cdpSeq = 0;
       let windowStart = now();
@@ -382,7 +390,7 @@ export function createAgentBrowserLiveViewRelay(
         return id;
       };
 
-      const cdpCall = (method: string, params: Record<string, unknown>, sessionId: string): Promise<CdpReply> =>
+      const cdpCall = (method: string, params: Record<string, unknown>, sessionId?: string): Promise<CdpReply> =>
         new Promise((resolve) => {
           const id = cdpSend(method, params, sessionId);
           if (id === undefined) {
@@ -706,6 +714,49 @@ export function createAgentBrowserLiveViewRelay(
 
       armNudge();
 
+      const waitFor = async (ready: () => boolean): Promise<boolean> => {
+        for (let i = 0; i < REOPEN_WAIT_TRIES && !closed; i++) {
+          if (ready()) return true;
+          await pause();
+        }
+        return !closed && ready();
+      };
+
+      const reopenTab = async (): Promise<LiveViewReopenResult> => {
+        if (closed) return { ok: false, reason: "closed" };
+        if (cdp === undefined || cdp.readyState !== WS_OPEN) return { ok: false, reason: "upstream_unavailable" };
+        const old = current;
+        const url = old === undefined ? "" : (pages.get(old)?.url ?? "");
+        if (old === undefined || url === "") return { ok: false, reason: "no_tab" };
+        const at = now();
+        if (reopening || (lastReopenAt !== undefined && at >= lastReopenAt && at - lastReopenAt < reopenMinIntervalMs)) {
+          return { ok: false, reason: "rate_limited" };
+        }
+        reopening = true;
+        lastReopenAt = at;
+        try {
+          const created = await cdpCall("Target.createTarget", { url });
+          const fresh = isPlainObject(created?.result) ? created.result.targetId : undefined;
+          if (typeof fresh !== "string") return { ok: false, reason: closed ? "closed" : "failed" };
+          const closeTarget = (targetId: string) => void cdpSend("Target.closeTarget", { targetId });
+          if (!(await waitFor(() => pages.has(fresh)))) {
+            closeTarget(fresh);
+            return { ok: false, reason: closed ? "closed" : "failed" };
+          }
+          want(fresh, "reopened");
+          const streaming = await waitFor(() => current === fresh && !retargeting && frameSeen);
+          if (closed) return { ok: false, reason: "closed" };
+          if (!streaming) {
+            closeTarget(fresh);
+            return { ok: false, reason: "failed" };
+          }
+          closeTarget(old);
+          return { ok: true };
+        } finally {
+          reopening = false;
+        }
+      };
+
       const reject = (reason: LiveViewInputRejection): LiveViewInputResult => ({ ok: false, reason });
 
       return {
@@ -777,6 +828,7 @@ export function createAgentBrowserLiveViewRelay(
           }
           return { ok: true };
         },
+        reopenTab,
         clearFrame() {
           latest.delete("frame");
         },

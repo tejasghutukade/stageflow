@@ -6,6 +6,7 @@ import {
   type LiveViewState,
   type TicketResult,
 } from "./connection";
+import { REOPEN_TAB_FAILED_NOTICE } from "./helpText";
 import { dialogOutcome, DIALOG_FAILED_NOTICE, type DialogAnswerBody, type ViewerDialog } from "./dialogState";
 import { registerInput, type EventTargetLike, type TextareaLike } from "./inputHandlers";
 import { createInputQueue, type InputQueue, type QueueNotice } from "./inputQueue";
@@ -33,6 +34,7 @@ export type ViewerSessionDeps = {
   requestTicket(baseUrl: string, mode: LiveViewMode): Promise<TicketResult>;
   postInput(baseUrl: string, batch: LiveViewInput[]): Promise<number>;
   postDialog(baseUrl: string, body: DialogAnswerBody): Promise<number>;
+  postReopenTab(baseUrl: string): Promise<number>;
   openEventSource: ConnectionDeps["openEventSource"];
   setTimer(fn: () => void, ms: number): () => void;
   now(): number;
@@ -47,6 +49,8 @@ export type ViewerSnapshot = {
   dialog: ViewerDialog | null;
   answering: boolean;
   answerFailed: string | null;
+  reopeningTab: boolean;
+  reopenTabFailed: string | null;
 };
 
 export type ViewerSession = {
@@ -56,6 +60,8 @@ export type ViewerSession = {
   /** Tear down and restart connection and input from scratch (same target). */
   reopen(): void;
   answerDialog(body: DialogAnswerBody): void;
+  /** Asks the Host to replace the stage's browser tab; the stream and input keep running through the re-target. */
+  reopenTab(): void;
   dispose(): void;
 };
 
@@ -68,6 +74,8 @@ export function createViewerSession(deps: ViewerSessionDeps): ViewerSession {
   let answeredId: string | null = null;
   let answering = false;
   let answerFailed: string | null = null;
+  let reopeningTab = false;
+  let reopenTabFailed: string | null = null;
   let snapshot = compute();
   let connection: LiveViewConnection | undefined;
   let queue: InputQueue | undefined;
@@ -85,6 +93,8 @@ export function createViewerSession(deps: ViewerSessionDeps): ViewerSession {
       dialog: d !== null && d.id !== answeredId ? d : null,
       answering,
       answerFailed,
+      reopeningTab,
+      reopenTabFailed,
     };
   }
 
@@ -191,6 +201,8 @@ export function createViewerSession(deps: ViewerSessionDeps): ViewerSession {
     answeredId = null;
     answering = false;
     answerFailed = null;
+    reopeningTab = false;
+    reopenTabFailed = null;
   }
 
   return {
@@ -238,6 +250,26 @@ export function createViewerSession(deps: ViewerSessionDeps): ViewerSession {
         .finally(() => {
           if (epoch !== mine) return;
           answering = false;
+          emit();
+        });
+    },
+    reopenTab() {
+      if (disposed || !control || reopeningTab) return;
+      reopeningTab = true;
+      reopenTabFailed = null;
+      emit();
+      const mine = epoch;
+      deps
+        .postReopenTab(deps.baseUrl)
+        .then((status) => {
+          if (epoch === mine && status !== 200) reopenTabFailed = REOPEN_TAB_FAILED_NOTICE;
+        })
+        .catch(() => {
+          if (epoch === mine) reopenTabFailed = REOPEN_TAB_FAILED_NOTICE;
+        })
+        .finally(() => {
+          if (epoch !== mine) return;
+          reopeningTab = false;
           emit();
         });
     },

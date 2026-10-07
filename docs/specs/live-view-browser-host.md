@@ -675,6 +675,10 @@ Environment: agent-browser 0.38.2, Chrome 154, macOS arm64 Host; containers were
 
 **Where do I look to see how a thing was proven?** The findings file in the spike folder lists each experiment, its commands, and its numbers.
 
+### F8. Known limitation / workaround: dead stage tab after a login submit
+
+Headless=new Chrome 154: after a login form is submitted by real input and the next page loads, the pinned stage tab can stop accepting any input from every client (viewer, agent-browser CLI, raw CDP). Reload, navigate, `bringToFront` and `activateTarget` do not revive it. A fresh tab in the same Chrome works. Root cause unknown; the state cannot be detected. Workaround: the viewer's "Reopen browser tab" (`reopenTab`, see `docs/browser-internals.md`, limitation 18).
+
 ### F7. Open questions
 
 1. **Real-site acceptance.** Needs a manual run by the account owner against real services. It decides whether stealth options, a residential proxy, or a managed provider behind the browser host interface is the hosted default.

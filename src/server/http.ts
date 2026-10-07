@@ -19,6 +19,7 @@ import {
   isLiveViewDialogPath,
   isLiveViewInputPath,
   isLiveViewPath,
+  isLiveViewReopenTabPath,
   type LiveViewRoutesOptions,
 } from "./liveViewRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
@@ -330,6 +331,7 @@ function isCredentialMutatingApi(method: string, pathname: string): boolean {
   return (
     isLiveViewInputPath(method, pathname) ||
     isLiveViewDialogPath(method, pathname) ||
+    isLiveViewReopenTabPath(method, pathname) ||
     /^\/api\/providers\/[^/]+\/login$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/answer$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/cancel$/.test(pathname) ||

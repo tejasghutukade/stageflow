@@ -43,6 +43,15 @@ export type LiveViewDialogRejection = "no_dialog" | "not_answerable" | "invalid"
 
 export type LiveViewDialogResult = { ok: true } | { ok: false; reason: LiveViewDialogRejection };
 
+export type LiveViewReopenRejection =
+  | "closed"
+  | "no_tab"
+  | "upstream_unavailable"
+  | "rate_limited"
+  | "failed";
+
+export type LiveViewReopenResult = { ok: true } | { ok: false; reason: LiveViewReopenRejection };
+
 export type LiveViewSessionRequest = {
   runId: string;
   stageId: string;
@@ -61,6 +70,8 @@ export interface LiveViewSession {
   sendInput(events: readonly LiveViewInputEvent[]): Promise<LiveViewInputResult>;
   /** Answers the open confirm or prompt with that id; one answer per dialog. */
   answerDialog(answer: LiveViewDialogAnswer): Promise<LiveViewDialogResult>;
+  /** Replaces the stage's current tab with a fresh one at the same URL (same browser context); the old tab closes only after the new one streams. */
+  reopenTab(): Promise<LiveViewReopenResult>;
   /** Drops the cached frame so a re-target does not replay a stale page. */
   clearFrame(): void;
   /** Idempotent; subscribers receive a `closed` message. */

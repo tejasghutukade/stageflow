@@ -4,6 +4,11 @@ import { LIVE_VIEW_HELP } from "./helpText";
 describe("LIVE_VIEW_HELP", () => {
   const text = LIVE_VIEW_HELP.toLowerCase();
 
+  it("names the reopen button first", () => {
+    expect(text).toMatch(/reopen browser tab/);
+    expect(text.indexOf("reopen browser tab")).toBeLessThan(text.indexOf("passkey"));
+  });
+
   it.each([
     ["passkeys and security keys", /passkey/, /security key/],
     ["permission requests", /permission request/],

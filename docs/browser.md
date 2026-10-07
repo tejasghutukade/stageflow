@@ -99,6 +99,8 @@ The live view needs the process that serves the console routes: `sf ui`, or the 
 4. When the page shows you are logged in, press Accept. The Host then re-checks the login itself (`verify: browser_login`). If it still sees a logged-out page, the stage runs again with a new gate, and the live view works there too.
 5. Accepting, rejecting, cancelling or ending the run closes the live view and revokes its ticket. Input sent after that is refused.
 
+If typing and clicking do nothing (a known issue after submitting some login forms), open "Page seems stuck?" under the picture and press **Reopen browser tab**. The Host opens the same address in a fresh tab of the same browser (you stay signed in; page state held only in the old tab is lost), moves the view to it and closes the old tab. It can be pressed once every couple of seconds.
+
 The live view is interactive by default. The Host can also issue a view-only ticket (read access) that shows the page but refuses input. The console gate always asks for the interactive one.
 
 ### Page dialogs {#page-dialogs}

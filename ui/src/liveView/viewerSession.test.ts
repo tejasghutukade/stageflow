@@ -46,6 +46,10 @@ function setup(opts: { tickets?: TicketResult[]; inputStatuses?: number[]; mode?
   const posts: LiveViewInput[][] = [];
   const dialogPosts: { id: string }[] = [];
   const dialogStatuses: number[] = [];
+  const reopenStatuses: number[] = [];
+  let reopenPosts = 0;
+  let releaseReopen: (() => void) | undefined;
+  let holdReopen = false;
   const frames: string[] = [];
   const canvas = new FakeTarget();
   const win = new FakeTarget();
@@ -73,6 +77,11 @@ function setup(opts: { tickets?: TicketResult[]; inputStatuses?: number[]; mode?
       dialogPosts.push(body);
       return dialogStatuses.shift() ?? 200;
     },
+    postReopenTab: async () => {
+      reopenPosts += 1;
+      if (holdReopen) await new Promise<void>((resolve) => (releaseReopen = resolve));
+      return reopenStatuses.shift() ?? 200;
+    },
     openEventSource: (url) => {
       const s = new FakeSource(url);
       sources.push(s);
@@ -97,7 +106,12 @@ function setup(opts: { tickets?: TicketResult[]; inputStatuses?: number[]; mode?
     for (const t of timers.splice(0)) if (!t.cancelled) t.fn();
     await tick();
   };
-  return { session, sources, posts, dialogPosts, dialogStatuses, frames, canvas, win, tick, click, last, runTimers, timers };
+  return {
+    reopenStatuses,
+    reopenPostCount: () => reopenPosts,
+    hold: () => (holdReopen = true),
+    release: () => ((holdReopen = false), releaseReopen?.()),
+    session, sources, posts, dialogPosts, dialogStatuses, frames, canvas, win, tick, click, last, runTimers, timers };
 }
 
 async function openLive(h: ReturnType<typeof setup>) {
@@ -240,6 +254,45 @@ describe("viewer session", () => {
     h.session.reopen();
     await h.tick();
     expect(h.sources).toHaveLength(1);
+  });
+
+  it("reopenTab flags progress, keeps the stream and input working, and reports failures", async () => {
+    const h = setup();
+    await openLive(h);
+    const src = h.last();
+    h.hold();
+    h.session.reopenTab();
+    h.session.reopenTab();
+    await h.tick();
+    expect(h.session.getState().reopeningTab).toBe(true);
+    expect(h.reopenPostCount()).toBe(1);
+    src.emit("retarget", { tab: "t2", url: "https://example.test/2fa", reason: "reopened" });
+    src.emit("frame", { data: "NEW" });
+    h.release();
+    await h.tick();
+    expect(h.session.getState().reopeningTab).toBe(false);
+    expect(h.session.getState().reopenTabFailed).toBeNull();
+    expect(h.sources).toHaveLength(1);
+    expect(h.frames).toContain("NEW");
+    h.click();
+    await h.tick();
+    expect(h.posts.flat()[0]).toMatchObject({ type: "input_mouse" });
+
+    h.reopenStatuses.push(502);
+    h.session.reopenTab();
+    await h.tick();
+    expect(h.session.getState().reopenTabFailed).not.toBeNull();
+    h.session.reopenTab();
+    await h.tick();
+    expect(h.session.getState().reopenTabFailed).toBeNull();
+  });
+
+  it("view mode never reopens the tab", async () => {
+    const h = setup({ mode: "view" });
+    await openLive(h);
+    h.session.reopenTab();
+    await h.tick();
+    expect(h.reopenPostCount()).toBe(0);
   });
 
   it("view mode registers no input and never posts", async () => {

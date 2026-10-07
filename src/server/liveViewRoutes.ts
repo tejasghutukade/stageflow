@@ -8,6 +8,7 @@ import type {
   LiveViewInputRejection,
   LiveViewMessage,
   LiveViewRelay,
+  LiveViewReopenRejection,
 } from "../browser/liveViewRelay.js";
 import { loadHostConfig } from "../config/hostConfig.js";
 import { createAgentBrowserLiveViewRelay } from "../browser/agentBrowserLiveViewRelay.js";
@@ -34,6 +35,7 @@ export const LIVE_VIEW_COOKIE = "sf_live_view";
 export const LIVE_VIEW_CSRF_HEADER = "x-stageflow-live-view";
 export const LIVE_VIEW_MAX_INPUT_BYTES = 64 * 1024;
 export const LIVE_VIEW_MAX_DIALOG_BYTES = 8 * 1024;
+export const LIVE_VIEW_MAX_REOPEN_BYTES = 256;
 export const LIVE_VIEW_HEARTBEAT_MS = 15_000;
 
 const MAX_TICKET_BODY_BYTES = 1024;
@@ -63,6 +65,18 @@ const DIALOG_STATUS: Record<LiveViewDialogRejection, number> = {
   invalid: 400,
   closed: 409,
 };
+
+const REOPEN_STATUS: Record<LiveViewReopenRejection, number> = {
+  closed: 409,
+  no_tab: 409,
+  upstream_unavailable: 409,
+  rate_limited: 429,
+  failed: 502,
+};
+
+export function isLiveViewReopenTabPath(method: string, pathname: string): boolean {
+  return method === "POST" && matchLiveViewRoute(pathname)?.kind === "reopen-tab";
+}
 
 export function isLiveViewDialogPath(method: string, pathname: string): boolean {
   return method === "POST" && matchLiveViewRoute(pathname)?.kind === "dialog";
@@ -382,6 +396,7 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
     max: number,
     viewOnlyError: string,
     tooLargeError: string,
+    allowEmpty = false,
   ): Promise<{ body: unknown } | undefined> {
     const cookie = readCookie(req, LIVE_VIEW_COOKIE);
     const grant = cookie !== undefined ? tickets.resolve(cookie, target) : undefined;
@@ -411,6 +426,7 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
       send(res, 413, { error: tooLargeError, code: "batch_too_large" });
       return undefined;
     }
+    if (allowEmpty && raw.length === 0) return { body: undefined };
     try {
       return { body: JSON.parse(raw.toString("utf8")) };
     } catch {
@@ -462,6 +478,34 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
       return;
     }
     send(res, DIALOG_STATUS[result.reason], { error: result.reason, code: result.reason });
+  }
+
+  async function postReopenTab(
+    req: IncomingMessage,
+    res: ServerResponse,
+    target: LiveViewTarget,
+  ): Promise<void> {
+    const read = await readControlBody(
+      req,
+      res,
+      target,
+      LIVE_VIEW_MAX_REOPEN_BYTES,
+      "This live view session cannot reopen the tab",
+      "Request too large",
+      true,
+    );
+    if (read === undefined) return;
+    const session = sessions.peek(target.runId, target.stageId);
+    if (session === undefined) {
+      send(res, 409, { error: "Live view is closed", code: "closed" });
+      return;
+    }
+    const result = await session.reopenTab();
+    if (result.ok) {
+      send(res, 200, { ok: true });
+      return;
+    }
+    send(res, REOPEN_STATUS[result.reason], { error: result.reason, code: result.reason });
   }
 
   async function postInput(
@@ -535,6 +579,8 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
           await postInput(req, res, target);
         } else if (action === "dialog" && method === "POST") {
           await postDialog(req, res, target);
+        } else if (action === "reopen-tab" && method === "POST") {
+          await postReopenTab(req, res, target);
         } else {
           send(res, 405, { error: "Method not allowed" });
         }

@@ -3087,6 +3087,14 @@ a.topbar__back { text-decoration: none; }
   font-size: var(--font-size-xs);
 }
 
+.liveview__help-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+}
+
 .liveview__help {
   margin: var(--spacing-1) 0 0;
   color: var(--color-text-secondary);

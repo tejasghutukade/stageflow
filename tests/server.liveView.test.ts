@@ -599,6 +599,64 @@ describe("live view input", () => {
   });
 });
 
+describe("live view reopen tab", () => {
+  it("requires the cookie, the anti-forgery header and an allowed Origin", async () => {
+    const h = await startHarness();
+    const { cookie } = await h.openControl();
+    const url = `${BASE}/reopen-tab`;
+    expect((await h.post(url, "", { origin: h.origin, [LIVE_VIEW_CSRF_HEADER]: "1" }, true)).status).toBe(401);
+    expect((await h.post(url, "", { cookie: "sf_live_view=forged", origin: h.origin, [LIVE_VIEW_CSRF_HEADER]: "1" }, true)).status).toBe(401);
+    expect((await h.post(url, "", { cookie, origin: h.origin }, true)).status).toBe(403);
+    expect((await h.post(url, "", { cookie, [LIVE_VIEW_CSRF_HEADER]: "1" }, true)).status).toBe(403);
+    expect((await h.post(url, "", { cookie, origin: "https://evil.example", [LIVE_VIEW_CSRF_HEADER]: "1" }, true)).status).toBe(403);
+    expect(h.fake.sessions[0]!.reopens).toBe(0);
+    const ok = await h.post(url, "", h.inputHeaders(cookie), true);
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ ok: true });
+    expect(h.fake.sessions[0]!.reopens).toBe(1);
+  });
+
+  it("forbids reopening for view sessions", async () => {
+    const h = await startHarness();
+    const s = await h.stream(`${BASE}/events?ticket=${(await h.ticket("view")).body.ticket}`);
+    const cookie = String(s.headers["set-cookie"]).split(";")[0]!;
+    expect((await h.post(`${BASE}/reopen-tab`, "", h.inputHeaders(cookie), true)).status).toBe(403);
+    expect(h.fake.sessions[0]!.reopens).toBe(0);
+    s.close();
+  });
+
+  it("maps relay results to statuses and rejects oversized bodies", async () => {
+    const h = await startHarness();
+    const { cookie } = await h.openControl();
+    const headers = h.inputHeaders(cookie);
+    const session = h.fake.sessions[0]!;
+    const expected = {
+      closed: 409,
+      no_tab: 409,
+      upstream_unavailable: 409,
+      rate_limited: 429,
+      failed: 502,
+    } as const;
+    for (const [reason, status] of Object.entries(expected)) {
+      session.reopenResult = { ok: false, reason: reason as keyof typeof expected };
+      const res = await h.post(`${BASE}/reopen-tab`, "", headers, true);
+      expect(res.status, reason).toBe(status);
+      expect(res.body.code).toBe(reason);
+    }
+    const big = await h.post(`${BASE}/reopen-tab`, "x".repeat(4096), headers, true);
+    expect(big.status).toBe(413);
+    expect((await h.post(`${BASE}/reopen-tab`, "{nope", headers, true)).status).toBe(400);
+  });
+
+  it("returns closed when the relay session is gone", async () => {
+    const h = await startHarness();
+    const { cookie, stream } = await h.openControl();
+    await h.fake.sessions[0]!.close();
+    await stream.waitFor("closed");
+    expect((await h.post(`${BASE}/reopen-tab`, "", h.inputHeaders(cookie), true)).status).toBe(409);
+  });
+});
+
 describe("live view page dialogs", () => {
   const confirmDialog = { id: "d1", kind: "confirm", message: "Sure?", defaultPrompt: "", targetId: "t1", answerable: true };
   const alertDialog = { id: "d2", kind: "alert", message: "Hi", defaultPrompt: "", targetId: "t1", answerable: false };

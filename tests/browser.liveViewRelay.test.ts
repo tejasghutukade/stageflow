@@ -502,6 +502,7 @@ async function setupRelay(
     env?: Record<string, string>;
     cdpAddress?: string | null;
     dialogTimeoutMs?: number;
+    reopenMinIntervalMs?: number;
   } = {},
 ) {
   const stream = await startFakeStreamServer();
@@ -542,6 +543,7 @@ async function setupRelay(
     runner,
     retryDelayMs: options.retryDelayMs ?? 5,
     schedule,
+    ...(options.reopenMinIntervalMs === undefined ? {} : { reopenMinIntervalMs: options.reopenMinIntervalMs }),
     ...(options.dialogTimeoutMs === undefined ? {} : { dialogTimeoutMs: options.dialogTimeoutMs }),
   });
   const cdpAddress = options.cdpAddress === null ? undefined : (options.cdpAddress ?? `ws://127.0.0.1:${cdp.port}`);
@@ -935,6 +937,106 @@ describe("agent-browser live view relay: popup re-targeting", () => {
   });
 });
 
+describe("agent-browser live view relay: reopen tab", () => {
+  const sent = (h: Awaited<ReturnType<typeof setupRelay>>, method: string) =>
+    h.cdp.received.map((r) => JSON.parse(r) as { id: number; method: string; params: Record<string, unknown> }).filter((m) => m.method === method);
+
+  async function ready(options: Parameters<typeof setupRelay>[0] = {}) {
+    const h = await setupRelay({ reopenMinIntervalMs: 0, ...options });
+    h.tabs.push({ tabId: "t1", targetId: "o1", url: "http://a/2fa" });
+    h.created("o1", "http://a/2fa");
+    await until(() => h.got.some((m) => m.type === "url"), "url");
+    return h;
+  }
+
+  async function answerCreate(h: Awaited<ReturnType<typeof setupRelay>>, targetId: string) {
+    await until(() => sent(h, "Target.createTarget").length > 0, "createTarget");
+    const create = sent(h, "Target.createTarget").at(-1)!;
+    h.cdp.emit({ id: create.id, result: { targetId } });
+    return create;
+  }
+
+  it("opens the same URL in a fresh tab, re-targets, and closes the old tab only after a frame", async () => {
+    const h = await ready();
+    const pending = h.session.reopenTab();
+    const create = await answerCreate(h, "n1");
+    expect(create.params).toEqual({ url: "http://a/2fa" });
+    h.tabs.push({ tabId: "t2", targetId: "n1", url: "http://a/2fa" });
+    h.created("n1", "http://a/2fa");
+    await until(() => h.retargets().length === 1, "retarget");
+    expect(h.retargets()).toEqual([{ tab: "t2", url: "http://a/2fa", reason: "reopened" }]);
+    expect(h.calls.filter((c) => c[0] === "tab" && c[1] !== "--json")).toEqual([["tab", "t2"]]);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(sent(h, "Target.closeTarget")).toEqual([]);
+    h.stream.emit({ type: "frame", data: "f" });
+    await until(() => sent(h, "Target.closeTarget").length === 1, "closeTarget");
+    expect(sent(h, "Target.closeTarget")[0]!.params).toEqual({ targetId: "o1" });
+    await expect(pending).resolves.toEqual({ ok: true });
+    h.destroyed("o1");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(h.retargets()).toHaveLength(1);
+  });
+
+  it("keeps the input path working after the re-target", async () => {
+    const h = await ready();
+    const pending = h.session.reopenTab();
+    await answerCreate(h, "n1");
+    h.tabs.push({ tabId: "t2", targetId: "n1", url: "http://a/2fa" });
+    h.created("n1", "http://a/2fa");
+    await until(() => h.retargets().length === 1, "retarget");
+    h.stream.emit({ type: "frame", data: "f" });
+    await pending;
+    const before = h.stream.received.length;
+    await expect(
+      h.session.sendInput([{ type: "input_mouse", eventType: "mouseMoved", x: 1, y: 2 }]),
+    ).resolves.toEqual({ ok: true, accepted: 1 });
+    await until(() => h.stream.received.length > before, "input forwarded");
+  });
+
+  it("rejects when closed, with no CDP, with no known tab, and while rate limited or already reopening", async () => {
+    const noCdp = await ready();
+    noCdp.cdp.dropClients();
+    await new Promise((r) => setTimeout(r, 40));
+    await expect(noCdp.session.reopenTab()).resolves.toEqual({ ok: false, reason: "upstream_unavailable" });
+
+    const empty = await setupRelay();
+    await expect(empty.session.reopenTab()).resolves.toEqual({ ok: false, reason: "no_tab" });
+
+    const h = await ready({ reopenMinIntervalMs: 60_000 });
+    const first = h.session.reopenTab();
+    await expect(h.session.reopenTab()).resolves.toEqual({ ok: false, reason: "rate_limited" });
+    await until(() => sent(h, "Target.createTarget").length === 1, "createTarget");
+    const create = sent(h, "Target.createTarget")[0]!;
+    h.cdp.emit({ id: create.id, error: { code: -32000, message: "boom" } });
+    await expect(first).resolves.toEqual({ ok: false, reason: "failed" });
+    await expect(h.session.reopenTab()).resolves.toEqual({ ok: false, reason: "rate_limited" });
+    expect(sent(h, "Target.createTarget")).toHaveLength(1);
+
+    await h.session.close();
+    await expect(h.session.reopenTab()).resolves.toEqual({ ok: false, reason: "closed" });
+  });
+
+  it("fails and closes the new tab when it never produces a frame", async () => {
+    const h = await ready();
+    const pending = h.session.reopenTab();
+    await answerCreate(h, "n1");
+    h.tabs.push({ tabId: "t2", targetId: "n1", url: "http://a/2fa" });
+    h.created("n1", "http://a/2fa");
+    await expect(pending).resolves.toEqual({ ok: false, reason: "failed" });
+    await until(() => sent(h, "Target.closeTarget").length > 0, "closeTarget");
+    const closes = sent(h, "Target.closeTarget");
+    expect(closes.map((c) => c.params)).toEqual([{ targetId: "n1" }]);
+  });
+
+  it("reports closed when the session closes mid-reopen", async () => {
+    const h = await ready();
+    const pending = h.session.reopenTab();
+    await until(() => sent(h, "Target.createTarget").length === 1, "createTarget");
+    await h.session.close();
+    await expect(pending).resolves.toEqual({ ok: false, reason: "closed" });
+  });
+});
+
 describe("agent-browser live view relay: page dialogs", () => {
   type Cmd = { id: number; method: string; params?: Record<string, any>; sessionId?: string };
 
@@ -1309,6 +1411,19 @@ describe("agent-browser live view relay: page dialogs", () => {
     } finally {
       for (const spy of spies) spy.mockRestore();
     }
+  });
+});
+
+describe("fake live view relay: reopen tab", () => {
+  it("counts reopens, returns the configured result and refuses after close", async () => {
+    const relay = createFakeLiveViewRelay();
+    const session = await relay.open(request);
+    await expect(session.reopenTab()).resolves.toEqual({ ok: true });
+    session.reopenResult = { ok: false, reason: "failed" };
+    await expect(session.reopenTab()).resolves.toEqual({ ok: false, reason: "failed" });
+    expect(session.reopens).toBe(2);
+    await session.close();
+    await expect(session.reopenTab()).resolves.toEqual({ ok: false, reason: "closed" });
   });
 });
 

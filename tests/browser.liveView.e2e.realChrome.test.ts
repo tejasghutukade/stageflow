@@ -60,7 +60,10 @@ function startFixtureSite(): Promise<{ server: Server; origin: string }> {
       req.on("end", () => {
         const form = new URLSearchParams(body);
         if (url.pathname === "/login") {
-          return redirect(form.get("user") === "alice" && form.get("pass") === "s3cret" ? "/2fa" : "/login?error=1");
+          const good = form.get("user") === "alice" && form.get("pass") === "s3cret";
+          return good
+            ? redirect("/2fa", { "Set-Cookie": "fixture_pre=1; Path=/; Max-Age=86400" })
+            : redirect("/login?error=1");
         }
         if (url.pathname === "/2fa") {
           return form.get("code") === "123456"
@@ -602,6 +605,77 @@ describe.skipIf(!enabled)("live view end to end, real Chrome (STAGEFLOW_BROWSER_
       return text.includes("token:T123") ? text : undefined;
     }, "token in opener");
     expect(out).toContain("token:T123");
+  }, 300_000);
+
+  it("reopen-tab replaces a stuck tab: same URL and cookies, stage session follows, old tab closed, input works", async () => {
+    const run = await startRun("/login");
+    const gate = await waitGate(run.runId, 1);
+    const handoff = (gate.handoff as { url: string }).url;
+    const stream = await openStream(handoff);
+    await until(() => frames(stream).length > 0 || undefined, "first frame");
+    const env = await stageEnv(run.runId);
+    const input = inputClient(handoff, stream);
+
+    await until(async () => (await pathname(env)) === "/login", "login page");
+    const user = await center(env, "#user");
+    const pass = await center(env, "#pass");
+    expect(await input.send(click(user.x, user.y))).toBe(200);
+    expect(await input.send(typeText("alice"))).toBe(200);
+    expect(await input.send(click(pass.x, pass.y))).toBe(200);
+    expect(await input.send(typeText("s3cret"))).toBe(200);
+    const submitButton = await center(env, "button");
+    expect(await input.send(click(submitButton.x, submitButton.y))).toBe(200);
+    await until(async () => (await pathname(env)) === "/2fa", "2fa page");
+
+    interface TabInfo { tabId: string; targetId: string; url: string; active?: boolean }
+    const tabs = async (): Promise<TabInfo[]> =>
+      (JSON.parse((await ab(["tab", "--json"], env)).stdout) as { data?: { tabs?: TabInfo[] } }).data?.tabs ?? [];
+    const stageTabs = async () => (await tabs()).filter((t) => t.url.endsWith("/2fa"));
+    const before = await stageTabs();
+    expect(before).toHaveLength(1);
+    const oldTarget = before[0]!.targetId;
+    const otherTabs = (await tabs()).length - 1;
+
+    const code = await center(env, "#code");
+    await input.send(click(code.x, code.y));
+    await input.send(typeText("1"));
+    await sleep(500);
+    const value = await evalJson<string>(env, "JSON.stringify(document.getElementById('code').value)");
+    const stuck = value !== "1";
+    if (!stuck) console.warn("dead-tab state not reproduced in this run; asserting the reopen path only");
+
+    const reopen = (cookie = stream.cookie) =>
+      fetch(`${base}${handoff}/reopen-tab`, {
+        method: "POST",
+        headers: { "x-stageflow-live-view": "1", Origin: base, Cookie: cookie },
+      });
+    const res = await reopen();
+    expect(res.status).toBe(200);
+    expect((await reopen()).status).toBe(429);
+    expect(retargets(stream)).toContain("reopened");
+
+    const after = await until(async () => {
+      const list = await stageTabs();
+      return list.length === 1 && list[0]!.targetId !== oldTarget ? list : undefined;
+    }, "single new tab");
+    expect((await tabs()).some((t) => t.targetId === oldTarget)).toBe(false);
+    expect((await tabs()).length - 1).toBe(otherTabs);
+    expect(after[0]!.url).toBe(`${site.origin}/2fa`);
+    expect(after[0]!.active).toBe(true);
+    expect(await pathname(env)).toBe("/2fa");
+    expect((await ab(["get", "url"], env)).stdout.trim()).toBe(`${site.origin}/2fa`);
+    expect((await ab(["eval", "document.cookie"], env)).stdout).toContain("fixture_pre=1");
+
+    const lastRetarget = stream.events.map((e) => e.event).lastIndexOf("retarget");
+    await until(() => stream.events.slice(lastRetarget).some((e) => e.event === "frame") || undefined, "frame from the new tab");
+    const code2 = await center(env, "#code");
+    expect(await input.send(click(code2.x, code2.y))).toBe(200);
+    expect(await input.send(typeText("123456"))).toBe(200);
+    expect(await input.send(namedKey("Enter"))).toBe(200);
+    await until(async () => (await pathname(env)) === "/home", "home page after reopen");
+
+    expect((await confirm(run.runId, gate)).status).toBe(202);
+    await until(async () => (await runDetail(run.runId)).status === "succeeded", "run success", 120_000);
   }, 300_000);
 
   it("verifies wheel, right click, modifier mask, char events, backspace and paste-sized input", async () => {

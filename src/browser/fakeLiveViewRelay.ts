@@ -4,6 +4,7 @@ import type {
   LiveViewInputEvent,
   LiveViewMessage,
   LiveViewRelay,
+  LiveViewReopenResult,
   LiveViewSession,
   LiveViewSessionRequest,
   LiveViewSubscriber,
@@ -15,6 +16,9 @@ export type FakeLiveViewSession = LiveViewSession & {
   readonly input: readonly LiveViewInputEvent[];
   readonly answers: readonly LiveViewDialogAnswer[];
   readonly closed: boolean;
+  readonly reopens: number;
+  /** Result the next reopenTab() returns; defaults to ok. */
+  reopenResult: LiveViewReopenResult;
 };
 
 export type FakeLiveViewRelay = LiveViewRelay & {
@@ -38,6 +42,8 @@ export function createFakeLiveViewRelay(): FakeLiveViewRelay {
         input,
         answers,
         closed: false,
+        reopens: 0,
+        reopenResult: { ok: true },
         emit(message) {
           if (message.type === "dialog") {
             const dialog = message.data as LiveViewDialog;
@@ -82,6 +88,11 @@ export function createFakeLiveViewRelay(): FakeLiveViewRelay {
           open.answered = true;
           answers.push(answer);
           return { ok: true };
+        },
+        async reopenTab() {
+          if (session.closed) return { ok: false, reason: "closed" };
+          (session as { reopens: number }).reopens += 1;
+          return session.reopenResult;
         },
         clearFrame() {
           latest.delete("frame");

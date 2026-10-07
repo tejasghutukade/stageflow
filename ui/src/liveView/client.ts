@@ -35,3 +35,12 @@ export async function postLiveViewDialog(baseUrl: string, body: DialogAnswerBody
   });
   return res.status;
 }
+
+export async function postLiveViewReopenTab(baseUrl: string): Promise<number> {
+  const res = await fetch(`${baseUrl}/reopen-tab`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { [LIVE_VIEW_CSRF_HEADER]: "1" },
+  });
+  return res.status;
+}

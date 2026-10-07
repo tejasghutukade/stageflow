@@ -1,4 +1,4 @@
-export type LiveViewRouteKind = "ticket" | "events" | "input" | "dialog";
+export type LiveViewRouteKind = "ticket" | "events" | "input" | "dialog" | "reopen-tab";
 
 export type LiveViewRouteMatch = {
   kind: LiveViewRouteKind;
@@ -7,7 +7,7 @@ export type LiveViewRouteMatch = {
   rawStageId: string;
 };
 
-const LIVE_VIEW_ROUTE = /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/live-view\/(ticket|events|input|dialog)$/;
+const LIVE_VIEW_ROUTE = /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/live-view\/(ticket|events|input|dialog|reopen-tab)$/;
 
 /** Sole definition of the live-view path shape; path-only, method is checked by each consumer. */
 export function matchLiveViewRoute(pathname: string): LiveViewRouteMatch | null {
