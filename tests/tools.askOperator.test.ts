@@ -20,7 +20,7 @@ describe("ask_operator tool", () => {
     const bridge = deferred<AskOperatorAnswer>();
     const requestWait = vi.fn((prompt: AskOperatorPrompt) => {
       expect(prompt.kind).toBe("free_text");
-      expect(prompt.id).toBeTruthy();
+      expect(prompt.id).toBe("q-module");
       return bridge.promise;
     });
     const tool = createAskOperatorTool({ requestWait });
@@ -234,7 +234,7 @@ describe("ask_operator tool", () => {
     expect(out.isError).toBeUndefined();
     expect(requestWait).toHaveBeenCalledTimes(1);
     const seen = requestWait.mock.calls[0]![0] as AskOperatorPrompt;
-    expect(seen.id).toBeTruthy();
+    expect(seen.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(seen).toMatchObject({ kind: "multi_question" });
   });
 

@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import {
@@ -13,72 +11,22 @@ import {
   hydrateScheduleForRetryRoots,
   resumeRun,
   runPipelineDag,
+  type StageScheduleState,
 } from "../src/runtime/pipelineScheduler.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import type { ResolvedPipelineDag, ResolvedPipelineStageNode } from "../src/types/pipeline.js";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
+import { failEnvelope, okEnvelope } from "./helpers/envelopes.js";
+import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
+import { stageKeyedAgent } from "./helpers/stageKeyedAgent.js";
+import { waitFor } from "./helpers/waitFor.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
 );
-
-function okEnvelope(summary: string, extra?: Partial<StageEnvelope>): StageEnvelope {
-  return { status: "success", summary, artifacts: [], payload: {}, ...extra };
-}
-
-function failEnvelope(summary: string): StageEnvelope {
-  return { status: "failure", summary, artifacts: [] };
-}
-
-async function waitFor(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 8000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  throw new Error("timeout waiting for condition");
-}
-
-type FakeAgentBehavior =
-  | { type: "emit"; envelope: StageEnvelope }
-  | { type: "never_emit" }
-  | { type: "throw"; message: string };
-
-function stageKeyedAgent(
-  behaviorsByStage: Record<string, FakeAgentBehavior[]>,
-): AgentPort & { openCounts: Map<string, number> } {
-  const openCounts = new Map<string, number>();
-  const stageIndex = new Map<string, number>();
-  return {
-    openCounts,
-    openStage(input: StageRunInput) {
-      const stageId = input.stage.id;
-      openCounts.set(stageId, (openCounts.get(stageId) ?? 0) + 1);
-      const index = stageIndex.get(stageId) ?? 0;
-      stageIndex.set(stageId, index + 1);
-      const behaviors = behaviorsByStage[stageId] ?? [];
-      const behavior = behaviors[index] ?? { type: "never_emit" as const };
-      const scripted = scriptedFakeAgent([behavior]);
-      return scripted.openStage(input);
-    },
-    async runStage(input) {
-      const handle = this.openStage(input);
-      const event = await handle.next();
-      await handle.close();
-      if (event.status === "waiting_for_input") {
-        return { ok: false, reason: "unexpected wait" };
-      }
-      return event.result;
-    },
-  };
-}
 
 function buildDag(
   entries: Array<{ id: string; needs?: string; fork?: ResolvedPipelineStageNode["fork"] }>,
@@ -104,178 +52,132 @@ function buildDag(
 
 // ─── Section 1: applyForkSkipsFromEnvelopes unit tests ─────────────────────
 
+type DagEntry = Parameters<typeof buildDag>[0][number];
+type ScheduleState = StageScheduleState;
+
+const oneFork = { select: "one", allow_none: false } as const;
+const fanOut: DagEntry[] = [
+  { id: "design-doc", needs: "clarify" },
+  { id: "implementation-plan", needs: "clarify" },
+];
+const fanOutWithJoin: DagEntry[] = [
+  ...fanOut,
+  { id: "join-doc", needs: "implementation-plan" },
+];
+
 describe("applyForkSkipsFromEnvelopes", () => {
-  it("unchosen child skipped, chosen child untouched", () => {
-    const dag = buildDag([
-      { id: "clarify", fork: { select: "one", allow_none: false } },
-      { id: "design-doc", needs: "clarify" },
-      { id: "implementation-plan", needs: "clarify" },
+  it.each<{
+    name: string;
+    entries: DagEntry[];
+    states: Record<string, ScheduleState>;
+    envelope?: StageEnvelope;
+    passes?: number;
+    expected: Record<string, ScheduleState>;
+  }>([
+    {
+      name: "unchosen child skipped, chosen child untouched",
+      entries: [{ id: "clarify", fork: oneFork }, ...fanOut],
+      states: { "design-doc": "pending", "implementation-plan": "pending" },
+      envelope: okEnvelope("ok", { fork_choice: ["design-doc"] }),
+      expected: { "design-doc": "pending", "implementation-plan": "skipped" },
+    },
+    {
+      name: "cascade: unchosen child pending descendants also skipped",
+      entries: [{ id: "clarify", fork: oneFork }, ...fanOutWithJoin],
+      states: {
+        "design-doc": "pending",
+        "implementation-plan": "pending",
+        "join-doc": "pending",
+      },
+      envelope: okEnvelope("ok", { fork_choice: ["design-doc"] }),
+      expected: {
+        "design-doc": "pending",
+        "implementation-plan": "skipped",
+        "join-doc": "skipped",
+      },
+    },
+    {
+      name: "unchosen child already succeeded: child stays succeeded, pending descendants skipped",
+      entries: [{ id: "clarify", fork: oneFork }, ...fanOutWithJoin],
+      states: {
+        "design-doc": "pending",
+        "implementation-plan": "succeeded",
+        "join-doc": "pending",
+      },
+      envelope: okEnvelope("ok", { fork_choice: ["design-doc"] }),
+      expected: {
+        "design-doc": "pending",
+        "implementation-plan": "succeeded",
+        "join-doc": "skipped",
+      },
+    },
+    {
+      name: "fork stage has no envelope: no state change",
+      entries: [{ id: "clarify", fork: oneFork }, ...fanOut],
+      states: { "design-doc": "pending", "implementation-plan": "pending" },
+      expected: { "design-doc": "pending", "implementation-plan": "pending" },
+    },
+    {
+      name: "non-fork stage with envelope: no state change",
+      entries: [{ id: "clarify" }, ...fanOut],
+      states: { "design-doc": "pending", "implementation-plan": "pending" },
+      envelope: okEnvelope("ok", { fork_choice: ["design-doc"] }),
+      expected: { "design-doc": "pending", "implementation-plan": "pending" },
+    },
+    {
+      name: "empty fork_choice: all children skipped",
+      entries: [
+        { id: "clarify", fork: { select: "subset", allow_none: true } },
+        ...fanOut,
+      ],
+      states: { "design-doc": "pending", "implementation-plan": "pending" },
+      envelope: okEnvelope("ok", { fork_choice: [] }),
+      expected: { "design-doc": "skipped", "implementation-plan": "skipped" },
+    },
+    {
+      name: "undefined fork_choice treated as empty: all children skipped",
+      entries: [
+        { id: "clarify", fork: { select: "subset", allow_none: false } },
+        ...fanOut,
+      ],
+      states: { "design-doc": "pending", "implementation-plan": "pending" },
+      envelope: okEnvelope("ok"),
+      expected: { "design-doc": "skipped", "implementation-plan": "skipped" },
+    },
+    {
+      name: "idempotent: calling twice produces same result",
+      entries: [{ id: "clarify", fork: oneFork }, ...fanOutWithJoin],
+      states: {
+        "design-doc": "pending",
+        "implementation-plan": "pending",
+        "join-doc": "pending",
+      },
+      envelope: okEnvelope("ok", { fork_choice: ["design-doc"] }),
+      passes: 2,
+      expected: {
+        "design-doc": "pending",
+        "implementation-plan": "skipped",
+        "join-doc": "skipped",
+      },
+    },
+  ])("$name", ({ entries, states, envelope, passes = 1, expected }) => {
+    const dag = buildDag(entries);
+    const stateMap = new Map<string, ScheduleState>([
+      ["clarify", "succeeded"],
+      ...Object.entries(states),
     ]);
-    const states = new Map([
-      ["clarify", "succeeded" as const],
-      ["design-doc", "pending" as const],
-      ["implementation-plan", "pending" as const],
-    ]);
-    const completedEnvelopes = new Map([
-      ["clarify", okEnvelope("ok", { fork_choice: ["design-doc"] })],
-    ]);
+    const completed = new Map<string, StageEnvelope>(
+      envelope ? [["clarify", envelope]] : [],
+    );
 
-    applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
+    for (let i = 0; i < passes; i += 1) {
+      applyForkSkipsFromEnvelopes(dag, stateMap, completed);
+    }
 
-    expect(states.get("design-doc")).toBe("pending");
-    expect(states.get("implementation-plan")).toBe("skipped");
-  });
-
-  it("cascade: unchosen child pending descendants also skipped", () => {
-    const dag = buildDag([
-      { id: "clarify", fork: { select: "one", allow_none: false } },
-      { id: "design-doc", needs: "clarify" },
-      { id: "implementation-plan", needs: "clarify" },
-      { id: "join-doc", needs: "implementation-plan" },
-    ]);
-    const states = new Map([
-      ["clarify", "succeeded" as const],
-      ["design-doc", "pending" as const],
-      ["implementation-plan", "pending" as const],
-      ["join-doc", "pending" as const],
-    ]);
-    const completedEnvelopes = new Map([
-      ["clarify", okEnvelope("ok", { fork_choice: ["design-doc"] })],
-    ]);
-
-    applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
-
-    expect(states.get("design-doc")).toBe("pending");
-    expect(states.get("implementation-plan")).toBe("skipped");
-    expect(states.get("join-doc")).toBe("skipped");
-  });
-
-  it("unchosen child already succeeded: child stays succeeded, pending descendants skipped", () => {
-    const dag = buildDag([
-      { id: "clarify", fork: { select: "one", allow_none: false } },
-      { id: "design-doc", needs: "clarify" },
-      { id: "implementation-plan", needs: "clarify" },
-      { id: "join-doc", needs: "implementation-plan" },
-    ]);
-    const states = new Map([
-      ["clarify", "succeeded" as const],
-      ["design-doc", "pending" as const],
-      ["implementation-plan", "succeeded" as const],
-      ["join-doc", "pending" as const],
-    ]);
-    const completedEnvelopes = new Map([
-      ["clarify", okEnvelope("ok", { fork_choice: ["design-doc"] })],
-    ]);
-
-    applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
-
-    expect(states.get("implementation-plan")).toBe("succeeded");
-    expect(states.get("join-doc")).toBe("skipped");
-  });
-
-  it("fork stage has no envelope: no state change", () => {
-    const dag = buildDag([
-      { id: "clarify", fork: { select: "one", allow_none: false } },
-      { id: "design-doc", needs: "clarify" },
-      { id: "implementation-plan", needs: "clarify" },
-    ]);
-    const states = new Map([
-      ["clarify", "succeeded" as const],
-      ["design-doc", "pending" as const],
-      ["implementation-plan", "pending" as const],
-    ]);
-    const completedEnvelopes = new Map<string, StageEnvelope>();
-
-    applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
-
-    expect(states.get("design-doc")).toBe("pending");
-    expect(states.get("implementation-plan")).toBe("pending");
-  });
-
-  it("non-fork stage with envelope: no state change", () => {
-    const dag = buildDag([
-      { id: "clarify" },
-      { id: "design-doc", needs: "clarify" },
-      { id: "implementation-plan", needs: "clarify" },
-    ]);
-    const states = new Map([
-      ["clarify", "succeeded" as const],
-      ["design-doc", "pending" as const],
-      ["implementation-plan", "pending" as const],
-    ]);
-    const completedEnvelopes = new Map([
-      ["clarify", okEnvelope("ok", { fork_choice: ["design-doc"] })],
-    ]);
-
-    applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
-
-    expect(states.get("design-doc")).toBe("pending");
-    expect(states.get("implementation-plan")).toBe("pending");
-  });
-
-  it("empty fork_choice: all children skipped", () => {
-    const dag = buildDag([
-      { id: "clarify", fork: { select: "subset", allow_none: true } },
-      { id: "design-doc", needs: "clarify" },
-      { id: "implementation-plan", needs: "clarify" },
-    ]);
-    const states = new Map([
-      ["clarify", "succeeded" as const],
-      ["design-doc", "pending" as const],
-      ["implementation-plan", "pending" as const],
-    ]);
-    const completedEnvelopes = new Map([
-      ["clarify", okEnvelope("ok", { fork_choice: [] })],
-    ]);
-
-    applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
-
-    expect(states.get("design-doc")).toBe("skipped");
-    expect(states.get("implementation-plan")).toBe("skipped");
-  });
-
-  it("undefined fork_choice treated as empty: all children skipped", () => {
-    const dag = buildDag([
-      { id: "clarify", fork: { select: "subset", allow_none: false } },
-      { id: "design-doc", needs: "clarify" },
-      { id: "implementation-plan", needs: "clarify" },
-    ]);
-    const states = new Map([
-      ["clarify", "succeeded" as const],
-      ["design-doc", "pending" as const],
-      ["implementation-plan", "pending" as const],
-    ]);
-    const completedEnvelopes = new Map([["clarify", okEnvelope("ok")]]);
-
-    applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
-
-    expect(states.get("design-doc")).toBe("skipped");
-    expect(states.get("implementation-plan")).toBe("skipped");
-  });
-
-  it("idempotent: calling twice produces same result", () => {
-    const dag = buildDag([
-      { id: "clarify", fork: { select: "one", allow_none: false } },
-      { id: "design-doc", needs: "clarify" },
-      { id: "implementation-plan", needs: "clarify" },
-      { id: "join-doc", needs: "implementation-plan" },
-    ]);
-    const states = new Map([
-      ["clarify", "succeeded" as const],
-      ["design-doc", "pending" as const],
-      ["implementation-plan", "pending" as const],
-      ["join-doc", "pending" as const],
-    ]);
-    const completedEnvelopes = new Map([
-      ["clarify", okEnvelope("ok", { fork_choice: ["design-doc"] })],
-    ]);
-
-    applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
-    applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
-
-    expect(states.get("design-doc")).toBe("pending");
-    expect(states.get("implementation-plan")).toBe("skipped");
-    expect(states.get("join-doc")).toBe("skipped");
+    expect(Object.fromEntries(stateMap)).toEqual({
+      clarify: "succeeded",
+      ...expected,
+    });
   });
 
   it("stored fork_choice skip and if-skip do not clobber each other on a legacy forked snapshot", () => {
@@ -341,106 +243,66 @@ describe("applyForkSkipsFromEnvelopes", () => {
 // ─── Section 2: Integration tests ──────────────────────────────────────────
 
 describe("fork routing integration", () => {
-  it("AE1: exclusive catalog fan-out — all listed successors run", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae1-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = stageKeyedAgent({
-      clarify: [
-        { type: "emit", envelope: okEnvelope("clarify-ok") },
-      ],
-      "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
-      "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
-      "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
-    });
+  it.each([
+    {
+      name: "route chain through a join",
+      pipeline: "fork-route-cascade",
+      clarifyExtra: {},
+      opened: ["design-doc", "implementation-plan", "join-doc"],
+    },
+    {
+      name: "route listing three successors",
+      pipeline: "fork-route-subset",
+      clarifyExtra: {},
+      opened: ["design-doc", "implementation-plan", "join-doc"],
+    },
+    {
+      name: "route ignores an empty fork_choice",
+      pipeline: "fork-route-allow-none",
+      clarifyExtra: { fork_choice: [] },
+      opened: ["design-doc", "implementation-plan"],
+    },
+  ])(
+    "catalog fan-out runs every listed successor: $name",
+    async ({ pipeline, clarifyExtra, opened }) => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-fork-fanout-"));
+      const store = createRunStore({ rootDir: root });
+      const agent = stageKeyedAgent({
+        clarify: [
+          { type: "emit", envelope: okEnvelope("clarify-ok", clarifyExtra) },
+        ],
+        "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
+        "implementation-plan": [
+          { type: "emit", envelope: okEnvelope("impl-ok") },
+        ],
+        "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
+      });
 
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("fork-route-cascade"),
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
+      const manager = new RunManager({ agent, store, cwd: fixtures });
+      const started = await manager.startRun({
+        task: SAMPLE_TASK,
+        pipeline: pipelinePath(pipeline),
+      });
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
 
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "succeeded";
-    });
+      await waitFor(async () => {
+        const meta = await store.readRunMeta(started.runId);
+        return meta.status === "succeeded";
+      });
 
-    expect(agent.openCounts.get("clarify")).toBe(1);
-    expect(agent.openCounts.get("design-doc")).toBe(1);
-    expect(agent.openCounts.get("implementation-plan")).toBe(1);
-    expect(agent.openCounts.get("join-doc")).toBe(1);
+      expect(agent.openCounts.get("clarify")).toBe(1);
+      for (const stageId of opened) {
+        expect(agent.openCounts.get(stageId)).toBe(1);
+      }
+      expect(agent.openCounts.get("join-doc") ?? 0).toBe(
+        opened.includes("join-doc") ? 1 : 0,
+      );
 
-    const detail = await store.readRun(started.runId);
-    expect(detail.status).toBe("succeeded");
-  });
-
-  it("AE2: subset catalog fan-out — all listed successors run", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae2-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = stageKeyedAgent({
-      clarify: [
-        {
-          type: "emit",
-          envelope: okEnvelope("clarify-ok"),
-        },
-      ],
-      "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
-      "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
-      "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
-    });
-
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("fork-route-subset"),
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "succeeded";
-    });
-
-    expect(agent.openCounts.get("design-doc")).toBe(1);
-    expect(agent.openCounts.get("implementation-plan")).toBe(1);
-    expect(agent.openCounts.get("join-doc")).toBe(1);
-
-    const detail = await store.readRun(started.runId);
-    expect(detail.status).toBe("succeeded");
-  });
-
-  it("AE3: catalog fan-out ignores empty fork_choice — all listed successors run", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae3-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = stageKeyedAgent({
-      clarify: [
-        { type: "emit", envelope: okEnvelope("clarify-ok", { fork_choice: [] }) },
-      ],
-      "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
-      "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
-    });
-
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("fork-route-allow-none"),
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "succeeded";
-    });
-
-    expect(agent.openCounts.get("design-doc")).toBe(1);
-    expect(agent.openCounts.get("implementation-plan")).toBe(1);
-
-    const detail = await store.readRun(started.runId);
-    expect(detail.status).toBe("succeeded");
-  });
+      const detail = await store.readRun(started.runId);
+      expect(detail.status).toBe("succeeded");
+    },
+  );
 
   it("AE8: retry after failure then fans out all listed successors", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae8-"));
@@ -629,80 +491,6 @@ describe("fork routing integration", () => {
 });
 
 describe("forward route if eq scheduling", () => {
-  it("matching payload runs the gated target", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-match-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = stageKeyedAgent({
-      triage: [
-        {
-          type: "emit",
-          envelope: okEnvelope("triage-ok", { payload: { severity: "high" } }),
-        },
-      ],
-      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
-      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
-    });
-
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("route-if-eq"),
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "succeeded";
-    });
-
-    const detail = await store.readRun(started.runId);
-    expect(detail.status).toBe("succeeded");
-    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("succeeded");
-    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
-      "succeeded",
-    );
-    expect(agent.openCounts.get("page")).toBe(1);
-    expect(agent.openCounts.get("notify")).toBe(1);
-  });
-
-  it("non-matching payload skips the gated target and still runs the always-run sibling", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-miss-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = stageKeyedAgent({
-      triage: [
-        {
-          type: "emit",
-          envelope: okEnvelope("triage-ok", { payload: { severity: "low" } }),
-        },
-      ],
-      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
-      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
-    });
-
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("route-if-eq"),
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "succeeded" || meta.status === "failed";
-    });
-
-    const detail = await store.readRun(started.runId);
-    expect(detail.status).toBe("succeeded");
-    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("skipped");
-    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
-      "succeeded",
-    );
-    expect(agent.openCounts.get("page")).toBeUndefined();
-    expect(agent.openCounts.get("notify")).toBe(1);
-  });
-
   it("missing_field halts with today's reason string", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-missing-"));
     const store = createRunStore({ rootDir: root });
@@ -768,79 +556,43 @@ describe("forward route if eq scheduling", () => {
     expect(agent.openCounts.get("notify") ?? 0).toBe(0);
   });
 
-  it("stored fork_choice skip and if-skip do not clobber each other", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-fork-"));
-    const store = createRunStore({ rootDir: root });
-    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
-    const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
-    const loaded = await loadPipeline(pipelinePath("route-if-eq"), {
-      cwd: fixtures,
-    });
-    loaded.dag = {
-      ...loaded.dag,
-      nodes: loaded.dag.nodes.map((node) =>
-        node.id === "triage"
-          ? { ...node, fork: { select: "one", allow_none: false } }
-          : node,
-      ),
-    };
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml,
-      taskId: task.id,
-      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
-    });
-    const agent = stageKeyedAgent({
-      triage: [
-        {
-          type: "emit",
-          envelope: okEnvelope("triage-ok", {
-            fork_choice: ["page"],
-            payload: { severity: "low" },
-          }),
-        },
-      ],
-      page: [{ type: "throw", message: "page must not run" }],
-      notify: [{ type: "throw", message: "notify must not run" }],
-    });
-
-    const result = await runPipelineDag({
-      prepared: {
-        task,
-        loaded,
-        run: { runId: run.runId, workspaceDir: run.workspaceDir },
-        agent,
-        store,
-        cwd: fixtures,
-      },
-      maxActiveStagesPerRun: 4,
-      executionMode: "inprocess",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.outcome).toBe("succeeded");
-    const detail = await store.readRun(run.runId);
-    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe(
-      "skipped",
-    );
-    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
-      "skipped",
-    );
-    expect(agent.openCounts.get("page") ?? 0).toBe(0);
-    expect(agent.openCounts.get("notify") ?? 0).toBe(0);
-  });
-
-  it("two matching ifs on different targets both run", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-two-match-"));
+  it.each([
+    {
+      name: "matching payload runs the gated target",
+      pipeline: "route-if-eq",
+      payload: { severity: "high" },
+      page: "succeeded",
+    },
+    {
+      name: "non-matching payload skips the gated target and still runs the always-run sibling",
+      pipeline: "route-if-eq",
+      payload: { severity: "low" },
+      page: "skipped",
+    },
+    {
+      name: "two matching ifs on different targets both run",
+      pipeline: "route-if-two-match",
+      payload: { severity: "high", escalate: true },
+      page: "succeeded",
+    },
+    {
+      name: "composition miss skips the gated target and the run succeeds",
+      pipeline: "route-if-composition",
+      payload: { severity: "low", source: "web" },
+      page: "skipped",
+    },
+    {
+      name: "composition match runs the gated target",
+      pipeline: "route-if-composition",
+      payload: { severity: "high", source: "web" },
+      page: "succeeded",
+    },
+  ] as const)("$name", async ({ pipeline, payload, page }) => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-"));
     const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
       triage: [
-        {
-          type: "emit",
-          envelope: okEnvelope("triage-ok", {
-            payload: { severity: "high", escalate: true },
-          }),
-        },
+        { type: "emit", envelope: okEnvelope("triage-ok", { payload }) },
       ],
       page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
       notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
@@ -849,46 +601,7 @@ describe("forward route if eq scheduling", () => {
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
       task: SAMPLE_TASK,
-      pipeline: pipelinePath("route-if-two-match"),
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "succeeded";
-    });
-
-    const detail = await store.readRun(started.runId);
-    expect(detail.status).toBe("succeeded");
-    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("succeeded");
-    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
-      "succeeded",
-    );
-    expect(agent.openCounts.get("page")).toBe(1);
-    expect(agent.openCounts.get("notify")).toBe(1);
-  });
-
-  it("composition miss skips the gated target and the run succeeds", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-composition-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = stageKeyedAgent({
-      triage: [
-        {
-          type: "emit",
-          envelope: okEnvelope("triage-ok", {
-            payload: { severity: "low", source: "web" },
-          }),
-        },
-      ],
-      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
-      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
-    });
-
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("route-if-composition"),
+      pipeline: pipelinePath(pipeline),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -900,50 +613,11 @@ describe("forward route if eq scheduling", () => {
 
     const detail = await store.readRun(started.runId);
     expect(detail.status).toBe("succeeded");
-    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("skipped");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe(page);
     expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
       "succeeded",
     );
-    expect(agent.openCounts.get("page")).toBeUndefined();
-    expect(agent.openCounts.get("notify")).toBe(1);
-  });
-
-  it("composition match runs the gated target", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-comp-match-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = stageKeyedAgent({
-      triage: [
-        {
-          type: "emit",
-          envelope: okEnvelope("triage-ok", {
-            payload: { severity: "high", source: "web" },
-          }),
-        },
-      ],
-      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
-      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
-    });
-
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("route-if-composition"),
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "succeeded";
-    });
-
-    const detail = await store.readRun(started.runId);
-    expect(detail.status).toBe("succeeded");
-    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("succeeded");
-    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
-      "succeeded",
-    );
-    expect(agent.openCounts.get("page")).toBe(1);
+    expect(agent.openCounts.get("page")).toBe(page === "succeeded" ? 1 : undefined);
     expect(agent.openCounts.get("notify")).toBe(1);
   });
 });

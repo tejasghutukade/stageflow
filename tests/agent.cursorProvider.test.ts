@@ -3,9 +3,13 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  cursorBridgePrompt,
   cursorExtensionEntryInPackage,
   isCursorModelRef,
+  resolveAgentHomeCursorExtensionPath,
+  resolveBundledCursorExtensionPath,
   resolveCursorExtensionPath,
+  workshopCursorBridgeHint,
 } from "../src/agent/cursorProvider.js";
 import { findProviderSupport } from "../src/agent/providerSupport.js";
 
@@ -58,6 +62,48 @@ describe("cursor provider support", () => {
     expect(cursorExtensionEntryInPackage(root)).toBe(dist);
   });
 
+  it("resolves pi-cursor-sdk from stageflow npm dependencies", () => {
+    delete process.env.STAGEFLOW_CURSOR_EXTENSION;
+    const bundled = resolveBundledCursorExtensionPath();
+    expect(bundled).toBeDefined();
+    expect(bundled).toMatch(/pi-cursor-sdk/);
+    expect(resolveCursorExtensionPath()).toBe(bundled);
+  });
+
+  it("finds the npm install via STAGEFLOW_AGENT_AUTH_PATH when HOME is the attempt dir", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cursor-home-"));
+    const attemptHome = path.join(root, "attempt");
+    const agentDir = path.join(root, "pi-agent");
+    const entry = path.join(
+      agentDir,
+      "npm",
+      "node_modules",
+      "pi-cursor-sdk",
+      "dist",
+      "index.js",
+    );
+    await mkdir(path.dirname(entry), { recursive: true });
+    await mkdir(attemptHome, { recursive: true });
+    await writeFile(entry, "export {};\n");
+
+    const prevHome = process.env.HOME;
+    const prevAuth = process.env.STAGEFLOW_AGENT_AUTH_PATH;
+    const prevExt = process.env.STAGEFLOW_CURSOR_EXTENSION;
+    process.env.HOME = attemptHome;
+    process.env.STAGEFLOW_AGENT_AUTH_PATH = path.join(agentDir, "auth.json");
+    delete process.env.STAGEFLOW_CURSOR_EXTENSION;
+    try {
+      expect(resolveAgentHomeCursorExtensionPath()).toBe(entry);
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevAuth === undefined) delete process.env.STAGEFLOW_AGENT_AUTH_PATH;
+      else process.env.STAGEFLOW_AGENT_AUTH_PATH = prevAuth;
+      if (prevExt === undefined) delete process.env.STAGEFLOW_CURSOR_EXTENSION;
+      else process.env.STAGEFLOW_CURSOR_EXTENSION = prevExt;
+    }
+  });
+
   it("falls back to src/index.ts when dist is absent", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-cursor-src-"));
     await mkdir(path.join(root, "src"), { recursive: true });
@@ -69,5 +115,17 @@ describe("cursor provider support", () => {
   it("is registered as StageProviderSupport only for cursor models", () => {
     expect(findProviderSupport("cursor/composer-2-5")?.id).toBe("cursor");
     expect(findProviderSupport("anthropic/claude-sonnet-4-5")).toBeUndefined();
+  });
+
+  it("names workshop tools as pi__ MCP tools for cursor models", () => {
+    const hint = workshopCursorBridgeHint(["create_stage", "read_draft"]);
+    expect(hint).toContain("pi__create_stage");
+    expect(hint).toContain("pi__read_draft");
+    expect(cursorBridgePrompt("make a research stage", "cursor/auto", ["create_stage"])).toContain(
+      "pi__create_stage",
+    );
+    expect(
+      cursorBridgePrompt("make a research stage", "anthropic/claude-sonnet-4-5", ["create_stage"]),
+    ).toBe("make a research stage");
   });
 });

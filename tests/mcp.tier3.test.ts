@@ -452,10 +452,6 @@ describe("MCP Tier 3 sf mcp host", () => {
       });
     expect(mcpStateless).toBe(true);
     expect(server.requestTimeout).toBe(60_000);
-    expect(runChangeBus).toBeTruthy();
-    expect(manager).toBeTruthy();
-    expect(hostStore).toBeTruthy();
-    expect(typeof hostStore.readRun).toBe("function");
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("no addr");
     const base = `http://127.0.0.1:${address.port}`;

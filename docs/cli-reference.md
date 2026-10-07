@@ -11,7 +11,7 @@ The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for 
 
 | Path | Purpose |
 |------|---------|
-| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`, including the projects registry), run workspaces (`runs/`), `sf_owned` auth (`agent/auth.json`), global `settings.json`, `service.log` |
+| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`, including the projects registry), run workspaces (`runs/`), `sf_owned` auth (`agent/auth.json`), global `settings.json`, `service.log`, Workshop builds (`workshop/builds/`) and chat sessions (`workshop/sessions/`) |
 | `<git-root>/.stageflow/settings.json` | Per-project settings (`maxConcurrent`, `credentialSource`) when run from inside a git repo; not the run store |
 
 Override the durable root with `STAGEFLOW_HOME`. See [Data directory](data-directory.md) for the full tree (keep vs disposable), image user, and version support.
@@ -40,7 +40,7 @@ Creates (skipping files that already exist):
 
 | File | Purpose |
 |------|---------|
-| `stageflow.yaml` | Manifest with `pipelines/` and `tasks/` roots |
+| `stageflow.yaml` | Manifest with `pipelines/`, `tasks/`, and `workshop` scan roots |
 | `pipelines/hello.pipeline.yaml` | Inline single-stage pipeline |
 | `tasks/hello.task.yaml` | Sample task |
 
@@ -868,7 +868,7 @@ Prints:
 
 Opens the default browser unless `--no-open` / `STAGEFLOW_NO_OPEN` is set. Prefer **`sf mcp`** as the headless / container entrypoint; `--no-open` only makes `sf ui` usable without a browser.
 
-Process runs until interrupted (SIGTERM/SIGINT). Catalog browse uses **seeded ∪ registered** roots under the global durable store (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — Host boot cwd is not a catalog root. See [Data directory](data-directory.md) and [MCP — catalog roots](mcp.md#catalog-roots-and-project_root).
+Process runs until interrupted (SIGTERM/SIGINT). Catalog browse uses **seeded ∪ registered** roots under the global durable store (`$STAGEFLOW_HOME`, default `~/.stageflow/`). `sf ui` registers the directory it was started in, so that project's `stageflow.yaml` (including `workshop`) is browsable. `sf mcp` does not register its start directory. See [Data directory](data-directory.md), [Workshop Author](workshop.md), and [MCP — catalog roots](mcp.md#catalog-roots-and-project_root).
 
 On first SIGTERM/SIGINT the Host drains: stop accepting new starts, signal active stage process groups, mark remaining stages `interrupted`, checkpoint and close SQLite, then exit. Default grace is `STAGEFLOW_SHUTDOWN_GRACE_MS=8000` (pair with compose `stop_grace_period`). Host exit codes and related env vars: [CI Host lifecycle](ci.md#host-lifecycle-sf-ui--sf-mcp).
 
@@ -946,7 +946,7 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `SF_STORE` | Must be `sqlite` (default) |
 | `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft max parallel **active** runs (full slots queue via `STAGEFLOW_MAX_QUEUED`; see [CI concurrency env vars](ci.md#concurrency-env-vars)) |
 | `STAGEFLOW_MAX_QUEUED` | Admission queue depth; when full, start returns `busy_capacity` |
-| `STAGEFLOW_MIN_FREE_DISK_BYTES` | Free-disk admission floor (bytes or `N%`) |
+| `STAGEFLOW_MIN_FREE_DISK_BYTES` | Optional free-disk admission floor (bytes or `N%`). Unset → disabled |
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN` | Stage concurrency per run |
 | `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap (also in [CI / headless](ci.md)) |
 | `STAGEFLOW_STAGE_EXECUTION` | Stage worker mode: `process` (default) or `inprocess` (mainly tests) |

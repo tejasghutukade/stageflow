@@ -94,7 +94,7 @@ const USAGE = `Usage:
   sf providers list
   sf providers status [--provider <id>]
   sf providers detect
-  sf providers source [get | set <pi_home|sf_owned>]
+  sf providers source [get | set sf_owned]
   sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
   sf providers logout <providerId>
   sf skills list
@@ -595,6 +595,13 @@ async function main(argv: string[]): Promise<number> {
         mcpStateless,
         controlTokens: tokens,
       });
+      if (host.store) {
+        try {
+          await host.store.ensureProject(ctx.projectRoot);
+        } catch {
+          // The console still serves seeded catalogs when this project cannot be registered.
+        }
+      }
       console.log(`Operator console: ${host.url}`);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
       if (!isNoOpenEnabled(parsed.noOpen)) {

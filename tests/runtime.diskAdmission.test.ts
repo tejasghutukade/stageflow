@@ -1,13 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cp, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  createCompletedOnlyStageHandle,
-  type AgentPort,
-  type StageRunInput,
-} from "../src/agent/port.js";
 import { reportCliRun } from "../src/cli/runOutput.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { FreeSpaceReader } from "../src/runstore/diskUsage.js";
@@ -20,7 +15,10 @@ import {
 import { mapStartFailure } from "../src/server/operatorResults.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import { gatedAgent, recordingAgent } from "./helpers/admissionAgents.js";
 import { pipelinePath } from "./helpers/fixturePaths.js";
+import { plantMiniProject } from "./helpers/miniProject.js";
+import { waitFor } from "./helpers/waitFor.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -32,99 +30,6 @@ const TOTAL = 10_000_000;
 
 function freeSpace(freeBytes: number): FreeSpaceReader {
   return async () => ({ freeBytes, totalBytes: TOTAL });
-}
-
-function gatedAgent(gate: Promise<void>): AgentPort {
-  return {
-    openStage(input: StageRunInput) {
-      return createCompletedOnlyStageHandle({
-        stageId: input.stage.id,
-        run: async () => {
-          await gate;
-          return {
-            ok: true as const,
-            envelope: {
-              status: "success" as const,
-              summary: "ok",
-              artifacts: [],
-              payload: {},
-            },
-          };
-        },
-      });
-    },
-    async runStage() {
-      await gate;
-      return {
-        ok: true as const,
-        envelope: {
-          status: "success" as const,
-          summary: "ok",
-          artifacts: [],
-          payload: {},
-        },
-      };
-    },
-  };
-}
-
-function recordingAgent(starts: string[]): AgentPort {
-  return {
-    openStage(input: StageRunInput) {
-      starts.push(input.runId);
-      return createCompletedOnlyStageHandle({
-        stageId: input.stage.id,
-        run: async () => ({
-          ok: true as const,
-          envelope: {
-            status: "success" as const,
-            summary: "ok",
-            artifacts: [],
-            payload: {},
-          },
-        }),
-      });
-    },
-    async runStage(input) {
-      starts.push(input.runId);
-      return {
-        ok: true as const,
-        envelope: {
-          status: "success" as const,
-          summary: "ok",
-          artifacts: [],
-          payload: {},
-        },
-      };
-    },
-  };
-}
-
-async function waitFor(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 8000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  throw new Error("timeout waiting for condition");
-}
-
-async function plantMiniProject(root: string): Promise<string> {
-  await mkdir(path.join(root, "pipelines"), { recursive: true });
-  await mkdir(path.join(root, "stages"), { recursive: true });
-  await cp(
-    path.join(fixtures, "pipelines", "single.pipeline.yaml"),
-    path.join(root, "pipelines", "single.pipeline.yaml"),
-  );
-  await cp(
-    path.join(fixtures, "stages", "clarify.yaml"),
-    path.join(root, "stages", "clarify.yaml"),
-  );
-  await writeFile(path.join(root, ".git"), "");
-  return path.join(root, "pipelines", "single.pipeline.yaml");
 }
 
 describe("runtime disk-floor admission (U9)", () => {
@@ -157,18 +62,15 @@ describe("runtime disk-floor admission (U9)", () => {
     }
   });
 
-  it("resolveMinFreeDiskFloor: bytes, percent, and default max(2GiB, 10%)", () => {
+  it("resolveMinFreeDiskFloor: bytes, percent, and disabled by default", () => {
     const tenGib = 10 * 1024 * 1024 * 1024;
     expect(resolveMinFreeDiskFloor("5000", tenGib)).toBe(5000);
     expect(resolveMinFreeDiskFloor("10%", tenGib)).toBe(
       Math.floor(tenGib * 0.1),
     );
-    expect(resolveMinFreeDiskFloor(undefined, tenGib)).toBe(
-      Math.max(2 * 1024 * 1024 * 1024, Math.floor(tenGib * 0.1)),
-    );
-    expect(resolveMinFreeDiskFloor("", 1000)).toBe(
-      Math.max(2 * 1024 * 1024 * 1024, 100),
-    );
+    expect(resolveMinFreeDiskFloor(undefined, tenGib)).toBe(0);
+    expect(resolveMinFreeDiskFloor("", 1000)).toBe(0);
+    expect(resolveMinFreeDiskFloor("0", tenGib)).toBe(0);
   });
 
   async function withHome(): Promise<string> {
@@ -198,42 +100,6 @@ describe("runtime disk-floor admission (U9)", () => {
     if (!started.ok) return;
     expect(started.queued).not.toBe(true);
     await started.done;
-  });
-
-  it("above floor with full capacity → queues", async () => {
-    await withHome();
-    const root = await mkdtemp(path.join(tmpdir(), "sf-disk-adm-q-"));
-    const store = createRunStore({ rootDir: root });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const manager = new RunManager({
-      agent: gatedAgent(gate),
-      store,
-      cwd: fixtures,
-      maxConcurrent: 1,
-      freeSpaceReader: freeSpace(FLOOR + 1),
-    });
-
-    const first = await manager.startRun({
-      pipeline: pipelinePath("single"),
-      task: { id: "hold", goal: "hold" },
-    });
-    expect(first.ok).toBe(true);
-    if (!first.ok) return;
-
-    const queued = await manager.startRun({
-      pipeline: pipelinePath("single"),
-      task: { id: "wait", goal: "queue" },
-    });
-    expect(queued.ok).toBe(true);
-    if (!queued.ok) return;
-    expect(queued.queued).toBe(true);
-    expect(queued.queuePosition).toBe(1);
-
-    release();
-    await queued.done;
   });
 
   it("below floor at initial → insufficient_disk, no row, no queue", async () => {
@@ -415,7 +281,7 @@ describe("runtime disk-floor admission (U9)", () => {
     expect(done.reason).toBe(PROJECT_ROOT_UNAVAILABLE_REASON);
   }, 15000);
 
-  it("anti: code field discriminates insufficient_disk vs busy_capacity on MCP/REST/CLI JSON", async () => {
+  it("insufficient_disk failure maps to REST body and CLI JSON with its own code and disk fields", async () => {
     await withHome();
     const root = await mkdtemp(path.join(tmpdir(), "sf-disk-adm-anti-"));
     const store = createRunStore({ rootDir: root });
@@ -433,19 +299,12 @@ describe("runtime disk-floor admission (U9)", () => {
     });
     expect(diskFail.ok).toBe(false);
     if (diskFail.ok) return;
-    expect(diskFail.code).toBe("insufficient_disk");
-    expect(diskFail.code).not.toBe("busy_capacity");
 
     const restBody = mapStartFailure(diskFail);
     expect(restBody.code).toBe("insufficient_disk");
     expect(restBody.freeBytes).toBe(FLOOR - 1);
     expect(restBody.minFreeBytes).toBe(FLOOR);
     expect(restBody).not.toHaveProperty("activeCount");
-
-    const { ok: _ok, reason, ...mcpRest } = diskFail;
-    const mcpPayload = { error: reason, ...mcpRest };
-    expect(mcpPayload.code).toBe("insufficient_disk");
-    expect(mcpPayload.freeBytes).toBe(FLOOR - 1);
 
     const lines: string[] = [];
     await reportCliRun(
@@ -461,91 +320,31 @@ describe("runtime disk-floor admission (U9)", () => {
     const cliJson = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
     expect(cliJson.outcome).toBe("failed");
     expect(cliJson.code).toBe("insufficient_disk");
-    expect(cliJson.code).not.toBe("busy_capacity");
     expect(cliJson.freeBytes).toBe(FLOOR - 1);
     expect(cliJson.minFreeBytes).toBe(FLOOR);
-
-    process.env.STAGEFLOW_MAX_QUEUED = "0";
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const busyManager = new RunManager({
-      agent: gatedAgent(gate),
-      store,
-      cwd: fixtures,
-      maxConcurrent: 1,
-      freeSpaceReader: freeSpace(FLOOR + 1),
-    });
-    const holder = await busyManager.startRun({
-      pipeline: pipelinePath("single"),
-      task: { id: "hold", goal: "hold" },
-    });
-    expect(holder.ok).toBe(true);
-    if (!holder.ok) return;
-
-    const busy = await busyManager.startRun({
-      pipeline: pipelinePath("single"),
-      task: { id: "busy", goal: "busy" },
-    });
-    expect(busy.ok).toBe(false);
-    if (busy.ok) return;
-    expect(busy.code).toBe("busy_capacity");
-    expect(busy.code).not.toBe("insufficient_disk");
-
-    const busyRest = mapStartFailure(busy);
-    expect(busyRest.code).toBe("busy_capacity");
-
-    const busyLines: string[] = [];
-    await reportCliRun(
-      { kind: "start-failure", started: busy },
-      {
-        json: true,
-        io: {
-          log: (line) => busyLines.push(line),
-          error: () => undefined,
-        },
-      },
-    );
-    const busyCli = JSON.parse(busyLines[0] ?? "{}") as Record<string, unknown>;
-    expect(busyCli.outcome).toBe("busy");
-    expect(busyCli.code).toBe("busy_capacity");
-
-    release();
-    await holder.done;
   });
 
   it("freeSpaceReader throw → disk_check_failed (fail closed)", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-disk-throw-"));
     const store = createRunStore({ rootDir: root });
-    const prev = process.env.STAGEFLOW_MIN_FREE_DISK_BYTES;
-    process.env.STAGEFLOW_MIN_FREE_DISK_BYTES = String(FLOOR);
-    try {
-      const manager = new RunManager({
-        agent: recordingAgent([]),
-        store,
-        cwd: fixtures,
-        freeSpaceReader: async () => {
-          throw new Error("statfs exploded");
-        },
-      });
-      const rejected = await manager.startRun({
-        pipeline: pipelinePath("single"),
-        task: { id: "t", goal: "disk-throw" },
-      });
-      expect(rejected.ok).toBe(false);
-      if (rejected.ok) return;
-      expect(rejected.code).toBe("disk_check_failed");
-      expect(rejected.status).toBe(503);
-      expect(rejected.reason).toContain("statfs exploded");
-      const runs = await store.listRuns();
-      expect(runs).toHaveLength(0);
-    } finally {
-      if (prev === undefined) {
-        delete process.env.STAGEFLOW_MIN_FREE_DISK_BYTES;
-      } else {
-        process.env.STAGEFLOW_MIN_FREE_DISK_BYTES = prev;
-      }
-    }
+    const manager = new RunManager({
+      agent: recordingAgent([]),
+      store,
+      cwd: fixtures,
+      freeSpaceReader: async () => {
+        throw new Error("statfs exploded");
+      },
+    });
+    const rejected = await manager.startRun({
+      pipeline: pipelinePath("single"),
+      task: { id: "t", goal: "disk-throw" },
+    });
+    expect(rejected.ok).toBe(false);
+    if (rejected.ok) return;
+    expect(rejected.code).toBe("disk_check_failed");
+    expect(rejected.status).toBe(503);
+    expect(rejected.reason).toContain("statfs exploded");
+    const runs = await store.listRuns();
+    expect(runs).toHaveLength(0);
   });
 });

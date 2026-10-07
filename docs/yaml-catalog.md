@@ -19,6 +19,7 @@ my-project/
     hello.pipeline.yaml       # inline or uses: stage entries
   tasks/
     hello.task.yaml
+  workshop/                   # Workshop Author saves (scan root; created on the first save)
   .stageflow/                 # per-project settings only
 ```
 
@@ -26,7 +27,7 @@ Run state (SQLite and workspaces) lives under the global durable root (`$STAGEFL
 
 **Flat layout** — pipeline and task files may also live at the repo root (e.g. `hello.pipeline.yaml`, `my-task.task.yaml`) beside `stageflow.yaml`; validation and CLI accept any filesystem path. This repo uses a flat root for some pipelines under `tests/fixtures/`.
 
-Runnable examples live under [`examples/`](../examples/). This repo's manifest is [`stageflow.yaml`](../stageflow.yaml) (examples only; `tests/fixtures` excluded from browse).
+Runnable examples live under [`examples/`](../examples/). This repo's manifest is [`stageflow.yaml`](../stageflow.yaml): the examples plus a `workshop` scan root (`tests/fixtures` excluded from browse). Workshop Author writes saved packages under `workshop/<pipeline-id>/` and adds that root when it is missing. See [Workshop Author](workshop.md).
 
 ## Filename patterns
 
@@ -1179,7 +1180,7 @@ catalog:
 - **`patterns`**: glob for directory scans (defaults shown above).
 - **`triggers`**: catalog roots scanned for `*.trigger.yaml` — see [Triggers](#triggers-trigger-yaml).
 
-Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (with an inline stage in `hello.pipeline.yaml`), and `tasks/` — not a global `stages/` pool.
+Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (with an inline stage in `hello.pipeline.yaml`), and `tasks/`. The manifest lists `pipelines`, `tasks`, and `workshop` as scan roots. `workshop/` is created on the first Workshop save. There is no global `stages/` pool.
 
 ## Validation
 

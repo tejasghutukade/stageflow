@@ -1,4 +1,3 @@
-import type { StageGateKind } from "../types/stage.js";
 import type { LoadedManifest } from "../types/stageflowManifest.js";
 import {
   listModelsForContext,
@@ -12,23 +11,6 @@ import { resolveStageflowContext, type StageflowContext } from "../project/resol
 import { catalogContextFromStageflow, type CatalogContext } from "./resolveCatalogContext.js";
 
 export type { PipelineListing, PipelineStageListing, TaskListing } from "./browseCatalog.js";
-
-export type ValidStageListing = {
-  path: string;
-  id: string;
-  used_by_pipeline_ids: string[];
-  gate_kinds?: StageGateKind[];
-};
-
-export type BrokenStageListing = {
-  path: string;
-  error: string;
-  id?: string;
-  model?: string;
-  gate_kinds?: StageGateKind[];
-};
-
-export type StageListing = ValidStageListing | BrokenStageListing;
 
 export type CatalogListOptions = {
   projectRoot: string;
@@ -51,10 +33,6 @@ export async function listPipelines(options: CatalogListOptions): Promise<Pipeli
     manifestStatus: "ok",
     issues: [],
   });
-}
-
-export async function listStages(_options?: unknown): Promise<StageListing[]> {
-  return [];
 }
 
 export async function listModels(

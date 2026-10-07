@@ -179,13 +179,6 @@ export class FakeAgent implements AgentPort {
       }
     }
 
-    if (sessionMode === "feedback_resume" && behavior.type === "wait_then_emit") {
-      behavior = {
-        type: "emit",
-        envelope: behavior.envelope,
-      };
-    }
-
     const emitStartActivity = () => {
       if (started) return;
       started = true;

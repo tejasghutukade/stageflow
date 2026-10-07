@@ -1,5 +1,4 @@
 import { readFileSync, existsSync } from "node:fs";
-import os from "node:os";
 
 const HOST_RESERVE_MIB = 512;
 const WORKER_BUDGET_MIB = 512;
@@ -93,9 +92,4 @@ export function getContainerLimits(): ContainerLimits {
 
 export function resetContainerLimitsForTests(): void {
   cached = undefined;
-}
-
-/** Test hook: prove sizing never consults os.totalmem. */
-export function assertNoOsTotalmemInSizing(): typeof os.totalmem {
-  return os.totalmem;
 }

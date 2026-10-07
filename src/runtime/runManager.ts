@@ -1709,6 +1709,7 @@ export class RunManager {
       pipeline: string | InlinePipelineDefinition;
       task?: string | TaskFile;
       checkoutOverride?: string;
+      dispatchKey?: string;
       skipGates?: boolean;
       gitSha?: string;
       ciPrUrl?: string;
@@ -1748,6 +1749,15 @@ export class RunManager {
           ) ?? this.projectRoot)
         : this.projectRoot);
     const cwd = wireRoot ?? hostCwd;
+
+    if (input.dispatchKey) {
+      if (!this.options.store.findRunByDispatchKey) throw new Error("Run store does not support durable dispatch");
+      const existing = await this.options.store.findRunByDispatchKey(input.dispatchKey);
+      if (existing) {
+        const meta = await this.options.store.readRunMeta(existing.runId);
+        return { ok: true, runId: existing.runId, done: Promise.resolve({ ok: meta.status === "succeeded", outcome: meta.status === "succeeded" ? "succeeded" : "failed", runId: existing.runId, runDir: existing.workspaceDir, reason: "Recovered existing dispatch; execution was not restarted" }) };
+      }
+    }
 
     let resolved;
     try {
@@ -1796,6 +1806,7 @@ export class RunManager {
       undefined,
       input.callerId,
       input.skills,
+      input.dispatchKey,
     );
   }
 
@@ -2762,6 +2773,9 @@ export class RunManager {
         runId,
         stageId,
         rootDir: runProjectRoot,
+        factoryCwd: runProjectRoot,
+        stage: resumedStage,
+        workspaceDir,
         ...(browserEnv !== undefined ? { browserEnv } : {}),
         mode: "resume",
         resumeAnswer: opaqueAnswer,
@@ -2769,6 +2783,7 @@ export class RunManager {
         sessionFilePath,
         env: stageBinding.env,
         bindingKind: stageBinding.kind,
+        ...(resumedStage !== undefined ? { model: resumedStage.model } : {}),
         ...(this.options.operatorCatalog !== undefined
           ? { operatorCatalog: this.options.operatorCatalog }
           : {}),
@@ -2969,6 +2984,7 @@ export class RunManager {
     pinned?: { ref: string; resolvedSha: string },
     callerId?: string | null,
     skills?: SkillsPayload,
+    dispatchKey?: string,
   ): Promise<StartRunResult> {
     const persistence = pipelinePersistenceForStart(pipeline);
     if (!persistence.ok) {
@@ -3165,6 +3181,7 @@ export class RunManager {
         namedSecrets,
       });
       const created = await this.options.store.createRun({
+        dispatchKey,
         submission,
         runId,
         pipelineId,
@@ -3192,6 +3209,10 @@ export class RunManager {
         runManifest,
         skipGates,
       });
+      if (created.created === false) {
+        const existing = await this.options.store.readRunMeta(created.runId);
+        return { ok: true, runId: created.runId, done: Promise.resolve({ ok: existing.status === "succeeded", outcome: existing.status === "succeeded" ? "succeeded" : "failed", runId: created.runId, runDir: created.workspaceDir, reason: "Recovered existing dispatch; execution was not restarted" }) };
+      }
       if (hasSkills) {
         await materializeRunSkills(created.workspaceDir, validatedSkills);
       }
@@ -3247,6 +3268,7 @@ export class RunManager {
 
       const schedulingHalt = this.ensureSchedulingHalt(materialized.runId);
       const started = await startPipeline({
+        dispatchKey,
         submission,
         ...this.browserOption(),
         agent: this.options.agent,
@@ -3276,7 +3298,8 @@ export class RunManager {
         callerId,
         ...(hasSkills ? { skills: validatedSkills } : {}),
       });
-      this.track(admitted.provisionalId, started.runId, started.done);
+      if (started.created === false) this.clearReservation(admitted.provisionalId);
+      else this.track(admitted.provisionalId, started.runId, started.done);
       return { ok: true, runId: started.runId, done: started.done };
     } catch (err) {
       await rollback().catch(() => undefined);
@@ -3384,20 +3407,26 @@ export class RunManager {
   private async checkDiskFloorAdmission(): Promise<
     Extract<StartRunResult, { ok: false }> | undefined
   > {
+    const raw = process.env.STAGEFLOW_MIN_FREE_DISK_BYTES;
+    if (raw === undefined || raw.trim() === "") {
+      return undefined;
+    }
     try {
       const readFree =
         this.options.freeSpaceReader ?? readFilesystemSize;
       const size = await readFree(globalStageflowHome());
-      const minFreeBytes = resolveMinFreeDiskFloor(
-        process.env.STAGEFLOW_MIN_FREE_DISK_BYTES,
-        size.totalBytes,
-      );
+      const minFreeBytes = resolveMinFreeDiskFloor(raw, size.totalBytes);
+      if (minFreeBytes === 0) {
+        return undefined;
+      }
       if (size.freeBytes < minFreeBytes) {
         return this.insufficientDiskFailure(size.freeBytes, minFreeBytes);
       }
       return undefined;
     } catch (err) {
-      // Default floor is always active via resolveMinFreeDiskFloor — fail closed.
+      if (resolveMinFreeDiskFloor(raw, 0) === 0 && !raw.trim().endsWith("%")) {
+        return undefined;
+      }
       return {
         ok: false,
         reason: `Disk free-space check failed: ${

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   PROVIDERS_PI_COPY,
   countConfigured,
-  defaultOfferChoice,
   isProviderAuthReady,
   needsFirstRun,
   providerAllowsApiKey,
@@ -11,27 +10,38 @@ import {
 } from "./helpers";
 
 describe("provider helpers", () => {
-  it("needsFirstRun when credentialSource is unset", () => {
+  it("needsFirstRun when credential source is unset or no provider is configured", () => {
     expect(
-      needsFirstRun({
-        piHomeUsable: true,
-        provisional: true,
-        source: "pi_home",
-      }),
+      needsFirstRun(
+        {
+          provisional: true,
+          source: "sf_owned",
+        },
+        1,
+      ),
+    ).toBe(false);
+    expect(
+      needsFirstRun(
+        {
+          credentialSource: "sf_owned",
+          provisional: false,
+          source: "sf_owned",
+        },
+        0,
+      ),
     ).toBe(true);
     expect(
-      needsFirstRun({
-        piHomeUsable: true,
-        credentialSource: "pi_home",
-        provisional: false,
-        source: "pi_home",
-      }),
+      needsFirstRun(
+        {
+          credentialSource: "sf_owned",
+          provisional: false,
+          source: "sf_owned",
+          cursorSdkReady: true,
+          cursorApiKeyConfigured: true,
+        },
+        0,
+      ),
     ).toBe(false);
-  });
-
-  it("preselects pi_home when usable (AE-S3-2)", () => {
-    expect(defaultOfferChoice(true)).toBe("pi_home");
-    expect(defaultOfferChoice(false)).toBe("sf_owned");
   });
 
   it("classifies api-key vs oauth-only rows", () => {
@@ -53,18 +63,28 @@ describe("provider helpers", () => {
     ).toBe(true);
   });
 
-  it("readiness requires sf_owned configured providers", () => {
+  it("readiness requires at least one configured provider", () => {
     expect(
       isProviderAuthReady({ credentialSource: undefined, configuredCount: 0 }),
     ).toBe(false);
-    expect(
-      isProviderAuthReady({ credentialSource: "pi_home", configuredCount: 0 }),
-    ).toBe(true);
     expect(
       isProviderAuthReady({ credentialSource: "sf_owned", configuredCount: 0 }),
     ).toBe(false);
     expect(
       isProviderAuthReady({ credentialSource: "sf_owned", configuredCount: 1 }),
+    ).toBe(true);
+    expect(
+      isProviderAuthReady({
+        credentialSource: "sf_owned",
+        configuredCount: 0,
+        detect: {
+          credentialSource: "sf_owned",
+          provisional: false,
+          source: "sf_owned",
+          cursorSdkReady: true,
+          cursorApiKeyConfigured: true,
+        },
+      }),
     ).toBe(true);
   });
 
@@ -79,7 +99,6 @@ describe("provider helpers", () => {
     expect(
       countConfigured([undefined, { providerId: "x", configured: true }]),
     ).toBe(1);
-    expect(PROVIDERS_PI_COPY).toMatch(/Pi/);
     expect(PROVIDERS_PI_COPY).toMatch(/Stageflow/);
     expect(PROVIDERS_PI_COPY).not.toMatch(/Software Factory/);
     expect(PROVIDERS_PI_COPY).not.toMatch(/software-factory/);

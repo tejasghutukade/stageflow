@@ -1429,9 +1429,13 @@ export async function runPipelineDag(
           runId: run.runId,
           stageId,
           rootDir: factoryCwd,
+          stage,
+          factoryCwd,
+          workspaceDir: run.workspaceDir,
           attempt,
           env: stageBinding.env,
           bindingKind: stageBinding.kind,
+          model: stage.model,
           grants,
           attemptHome,
           ...(browserEnv !== undefined ? { browserEnv } : {}),
@@ -1470,6 +1474,15 @@ export async function runPipelineDag(
       if (options.schedulingHalt?.hostShutdown) {
         states.set(stageId, "waiting");
         return;
+      }
+      const recorded = await store.listStageEvents(run.runId, stageId, attempt);
+      if (!recorded.some((event) => event.event === "failed")) {
+        await store.appendStageEvent(
+          run.runId,
+          stageId,
+          { event: "failed", reason: launchResult.reason },
+          { attempt },
+        );
       }
       await onStageFailure(stageId, launchResult.reason);
       return;

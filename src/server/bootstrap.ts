@@ -33,6 +33,8 @@ import {
   githubPollIntervalMsFromEnv,
 } from "../runtime/githubPollSource.js";
 import { EmailSource } from "../runtime/emailSource.js";
+import { emailHostFor, releaseEmailHost } from "../email/host.js";
+import { EmailTriggers } from "../email/triggers.js";
 import { fireTrigger } from "../runtime/triggerRunner.js";
 import type { TriggerFireEvent } from "../runtime/triggerPort.js";
 import {
@@ -52,6 +54,7 @@ import {
   type HostConfig,
 } from "../config/hostConfig.js";
 import { bootProviderConfig } from "../agent/bootProviderConfig.js";
+import { readCursorApiKey } from "../agent/cursorProvider.js";
 import {
   applyPendingRestoreAtBoot,
   type BootRestoreOutcome,
@@ -78,6 +81,7 @@ export type StageflowHostOptions = {
   skipHostConfig?: boolean;
   /** Browser support for the runs this Host executes; defaults to the local host with the live view relay. */
   browser?: StageBrowserSupport;
+  emailTriggerQueue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"];
 };
 
 export type StageflowHostBootstrap = {
@@ -105,6 +109,7 @@ export type StageflowHostBootstrap = {
   stopGithubPollSource: () => void;
   /** Stops the email-trigger IMAP/IDLE listeners started at boot. */
   stopEmailSource: () => void;
+  email?: ReturnType<typeof emailHostFor> & { triggers: EmailTriggers; stop: () => Promise<void> };
   /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
   storeFilesystem?: StoreFilesystemClassification;
   /**
@@ -188,6 +193,13 @@ export async function bootstrapStageflowHost(
   const ctx = await resolveStageflowContext(invocationCwd);
   const cwd = ctx.invocationCwd;
   ensureGlobalHome();
+  const cursorKey = readCursorApiKey(env);
+  if (
+    cursorKey !== undefined &&
+    (env.CURSOR_API_KEY === undefined || env.CURSOR_API_KEY.trim() === "")
+  ) {
+    process.env.CURSOR_API_KEY = cursorKey;
+  }
   assertTmpdirUsable(env);
   const hostConfig =
     options.hostConfig ??
@@ -215,6 +227,8 @@ export async function bootstrapStageflowHost(
   process.env[PI_CODING_AGENT_DIR_ENV] = path.join(ctx.globalHome, "agent");
   const agentDir = options.agentDir ?? getAgentDir();
   const rootDir = options.rootDir ?? ctx.projectRoot;
+  // Validate project account configuration before starting host resources.
+  const emailHost = emailHostFor(rootDir);
   const isGitProject =
     options.rootDir !== undefined
       ? findProjectRoot(rootDir) !== null
@@ -438,8 +452,19 @@ export async function bootstrapStageflowHost(
     logError: (message) => bootLog.error("trigger.email_source_failed", message),
   });
   await emailSource.start(onTriggerFire);
+  const emailTriggers = new EmailTriggers({ cwd: rootDir, accounts: emailHost.accounts, mailbox: emailHost.mailbox, manager, store, queue: options.emailTriggerQueue });
+  let stoppingEmail: Promise<void> | undefined;
+  const stopAccountEmail = (): Promise<void> => stoppingEmail ??= Promise.all([emailTriggers.stop(), releaseEmailHost(rootDir)]).then(() => undefined);
+  void emailTriggers.recover().catch(() => undefined);
+  try {
+    await emailHost.mailbox.start(event => emailTriggers.accept(event));
+  } catch (error) {
+    await Promise.all([stopAccountEmail(), emailSource.stop(), scheduleSource.stop(), githubPollSource.stop()]);
+    throw error;
+  }
   const stopEmailSource = () => {
     void emailSource.stop();
+    void stopAccountEmail();
   };
 
   const mcpStateless = resolveMcpStateless({
@@ -486,6 +511,7 @@ export async function bootstrapStageflowHost(
     stopScheduleSource,
     stopGithubPollSource,
     stopEmailSource,
+    email: { ...emailHost, triggers: emailTriggers, stop: stopAccountEmail },
     storeFilesystem,
   };
 }

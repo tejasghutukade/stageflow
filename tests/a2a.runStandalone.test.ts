@@ -213,7 +213,7 @@ describe("run_stage (A2A standalone stage/pipeline operation, ADR-0001)", () => 
           "m-8",
         ),
       ),
-    ).rejects.toBeTruthy();
+    ).rejects.toMatchObject({ category: "invalid-input", message: expect.stringContaining("Exactly one of stage or pipeline") });
     expect(manager.getActiveCount()).toBe(0);
   });
 

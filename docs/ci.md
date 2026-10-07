@@ -303,7 +303,7 @@ Adjust task, pipeline, and secrets for your project. Dogfood release automation 
 |----------|--------|
 | `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft cap on parallel **active** runs; when full, new starts enter the admission queue instead of failing immediately |
 | `STAGEFLOW_MAX_QUEUED` | Cap on persisted `queued` runs (default `32`). When this queue is also full, start returns `busy_capacity` |
-| `STAGEFLOW_MIN_FREE_DISK_BYTES` | Free-space floor for start and dequeue (integer bytes or `N%` of the durable-root filesystem). Below the floor → `insufficient_disk` (not queued) |
+| `STAGEFLOW_MIN_FREE_DISK_BYTES` | Optional free-space floor for start and dequeue (integer bytes or `N%` of the durable-root filesystem). Unset → admission check **off**. Below the floor when set → `insufficient_disk` (not queued) |
 | `STAGEFLOW_DISK_WARN_BYTES` | Boot warn threshold for free space (bytes or `N%`); one-shot log at Host start, not an admission gate |
 | `STAGEFLOW_GC_INTERVAL_MS` | Periodic retention sweep interval (default 1h); `0` disables. First sweep fires one interval after boot |
 | `STAGEFLOW_SLIM_ARTIFACT_MAX_BYTES` | Artifact size above which SLIM may reclaim (default 1 MiB) |

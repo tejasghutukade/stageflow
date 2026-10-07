@@ -75,124 +75,94 @@ function cannedResult(overrides: Partial<ValidationResult> = {}): ValidationResu
 }
 
 describe("runValidateCommand", () => {
-  it("calls validateCatalog with full scope by default", async () => {
-    const validateCatalog = vi.fn(async () => cannedResult());
-    const cwd = "/tmp/project";
-    const code = await runValidateCommand([], {
-      cwd,
-      validateCatalog,
-      io: { log: () => undefined, error: () => undefined },
-    });
-    expect(code).toBe(0);
-    expect(validateCatalog).toHaveBeenCalledWith({
-      scope: "full",
-      cwd,
-      projectRoot: cwd,
-      pipeline: undefined,
-      task: undefined,
-      strict: false,
-    });
-  });
+  const silentIo = { log: () => undefined, error: () => undefined };
 
-  it("passes pipeline scope for --pipeline docs-only", async () => {
-    const validateCatalog = vi.fn(async () => cannedResult({ scope: "pipeline" }));
-    const cwd = "/tmp/project";
-    const code = await runValidateCommand(["--pipeline", demoPipeline], {
-      cwd,
-      validateCatalog,
-      io: { log: () => undefined, error: () => undefined },
-    });
-    expect(code).toBe(0);
-    expect(validateCatalog).toHaveBeenCalledWith({
-      scope: "pipeline",
-      cwd,
-      projectRoot: cwd,
-      pipeline: demoPipeline,
-      task: undefined,
-      strict: false,
-    });
-  });
-
-  it("passes strict: true when --strict is set", async () => {
-    const validateCatalog = vi.fn(async () => cannedResult());
-    const cwd = "/tmp/project";
-    await runValidateCommand(["--strict"], {
-      cwd,
-      validateCatalog,
-      io: { log: () => undefined, error: () => undefined },
-    });
-    expect(validateCatalog).toHaveBeenCalledWith({
-      scope: "full",
-      cwd,
-      projectRoot: cwd,
-      pipeline: undefined,
-      task: undefined,
-      strict: true,
-    });
-  });
-
-  it("passes task scope for --task", async () => {
-    const validateCatalog = vi.fn(async () => cannedResult({ scope: "task" }));
-    const cwd = "/tmp/project";
-    const taskPath = "/tmp/project/tasks/hello.task.yaml";
-    const code = await runValidateCommand(["--task", taskPath], {
-      cwd,
-      validateCatalog,
-      io: { log: () => undefined, error: () => undefined },
-    });
-    expect(code).toBe(0);
-    expect(validateCatalog).toHaveBeenCalledWith({
-      scope: "task",
-      cwd,
-      projectRoot: cwd,
-      pipeline: undefined,
-      task: taskPath,
-      strict: false,
-    });
-  });
-
-  it("forwards explicit projectRoot when it differs from cwd", async () => {
-    const validateCatalog = vi.fn(async () => cannedResult());
-    const cwd = "/tmp/nested";
-    const projectRoot = "/tmp/project";
-    const code = await runValidateCommand([], {
-      cwd,
-      projectRoot,
-      validateCatalog,
-      io: { log: () => undefined, error: () => undefined },
-    });
-    expect(code).toBe(0);
-    expect(validateCatalog).toHaveBeenCalledWith({
-      scope: "full",
-      cwd,
-      projectRoot,
-      pipeline: undefined,
-      task: undefined,
-      strict: false,
-    });
-  });
-
-  it("AE5: rejects both --pipeline and --task", async () => {
-    const errors: string[] = [];
-    const code = await runValidateCommand(
-      ["--pipeline", "a.yaml", "--task", "b.yaml"],
-      {
-        cwd: fixtures,
-        io: { log: () => undefined, error: (line) => errors.push(line) },
+  it.each([
+    {
+      name: "full scope by default",
+      argv: [] as string[],
+      cwd: "/tmp/project",
+      projectRoot: undefined as string | undefined,
+      result: cannedResult(),
+      expected: { scope: "full", pipeline: undefined, task: undefined, strict: false },
+      expectedProjectRoot: "/tmp/project",
+    },
+    {
+      name: "pipeline scope for --pipeline",
+      argv: ["--pipeline", demoPipeline],
+      cwd: "/tmp/project",
+      projectRoot: undefined,
+      result: cannedResult({ scope: "pipeline" }),
+      expected: { scope: "pipeline", pipeline: demoPipeline, task: undefined, strict: false },
+      expectedProjectRoot: "/tmp/project",
+    },
+    {
+      name: "strict: true when --strict is set",
+      argv: ["--strict"],
+      cwd: "/tmp/project",
+      projectRoot: undefined,
+      result: cannedResult(),
+      expected: { scope: "full", pipeline: undefined, task: undefined, strict: true },
+      expectedProjectRoot: "/tmp/project",
+    },
+    {
+      name: "task scope for --task",
+      argv: ["--task", "/tmp/project/tasks/hello.task.yaml"],
+      cwd: "/tmp/project",
+      projectRoot: undefined,
+      result: cannedResult({ scope: "task" }),
+      expected: {
+        scope: "task",
+        pipeline: undefined,
+        task: "/tmp/project/tasks/hello.task.yaml",
+        strict: false,
       },
-    );
-    expect(code).toBe(1);
-    expect(errors.join("\n")).toMatch(/at most one/i);
+      expectedProjectRoot: "/tmp/project",
+    },
+    {
+      name: "explicit projectRoot when it differs from cwd",
+      argv: [],
+      cwd: "/tmp/nested",
+      projectRoot: "/tmp/project",
+      result: cannedResult(),
+      expected: { scope: "full", pipeline: undefined, task: undefined, strict: false },
+      expectedProjectRoot: "/tmp/project",
+    },
+  ])("forwards $name to validateCatalog", async (c) => {
+    const validateCatalog = vi.fn(async () => c.result);
+    const code = await runValidateCommand(c.argv, {
+      cwd: c.cwd,
+      projectRoot: c.projectRoot,
+      validateCatalog,
+      io: silentIo,
+    });
+    expect(code).toBe(0);
+    expect(validateCatalog).toHaveBeenCalledWith({
+      ...c.expected,
+      cwd: c.cwd,
+      projectRoot: c.expectedProjectRoot,
+    });
   });
 
-  it("--task without value exits non-zero", async () => {
+  it.each([
+    {
+      name: "AE5: rejects both --pipeline and --task",
+      argv: ["--pipeline", "a.yaml", "--task", "b.yaml"],
+      stderr: /at most one/i,
+    },
+    {
+      name: "--task without value exits non-zero",
+      argv: ["--task"],
+      stderr: /Missing value for --task/,
+    },
+  ])("$name", async ({ argv, stderr }) => {
     const errors: string[] = [];
-    const code = await runValidateCommand(["--task"], {
+    const code = await runValidateCommand(argv, {
       cwd: fixtures,
       io: { log: () => undefined, error: (line) => errors.push(line) },
     });
     expect(code).toBe(1);
-    expect(errors.join("\n")).toMatch(/Missing value for --task/);
+    expect(errors.join("\n")).toMatch(stderr);
   });
 
   it("prints JSON only to stdout in --json mode", async () => {
@@ -346,17 +316,24 @@ describe("formatValidationJson and exitCodeForValidation", () => {
 });
 
 describe("sf validate integration", { timeout: 30_000 }, () => {
-  it("AE-S2-2: manifest-all reports broken pipeline in catalog", async () => {
+  it("AE-S2-2/5: manifest-all --json reports the broken pipeline and duplicate pipeline id", async () => {
     const { root, cleanup } = await initTempGitRepo();
     try {
       await cp(manifestCatalog, root, { recursive: true });
       clearFindProjectRootCacheForTests();
-      const result = runCli(["validate"], root);
+      const result = runCli(["validate", "--json"], root);
       expect(result.status).toBe(1);
-      const out = result.stdout + result.stderr;
-      expect(out).toMatch(/invalid|error/i);
-      expect(out).toMatch(/broken/);
-      expect(out).not.toMatch(/at Object/);
+      expect(result.stderr).toBe("");
+      const parsed = JSON.parse(result.stdout) as {
+        ok: boolean;
+        findings: Array<{ severity: string; file: string; message: string; code: string }>;
+      };
+      expect(parsed.ok).toBe(false);
+      const errors = parsed.findings.filter((finding) => finding.severity === "error");
+      expect(errors.some((finding) => /broken/.test(finding.file))).toBe(true);
+      expect(
+        errors.some((finding) => finding.code === "catalog.duplicate_pipeline_id"),
+      ).toBe(true);
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
@@ -374,32 +351,6 @@ describe("sf validate integration", { timeout: 30_000 }, () => {
       const out = result.stdout + result.stderr;
       expect(out).toMatch(/Validation passed/);
       expect(out).not.toMatch(/broken\.pipeline\.yaml/);
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
-
-  it("AE-S2-5: JSON output reports duplicate pipeline id failure", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await cp(manifestCatalog, root, { recursive: true });
-      clearFindProjectRootCacheForTests();
-      const result = runCli(["validate", "--json"], root);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toBe("");
-      const parsed = JSON.parse(result.stdout) as {
-        ok: boolean;
-        findings: Array<{ severity: string; file: string; message: string; code: string }>;
-      };
-      expect(parsed.ok).toBe(false);
-      expect(
-        parsed.findings.some(
-          (finding) =>
-            finding.severity === "error" &&
-            finding.code === "catalog.duplicate_pipeline_id",
-        ),
-      ).toBe(true);
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
@@ -599,54 +550,18 @@ describe("catalog.legacy_yaml findings", () => {
 });
 
 describe("sequential io compatibility via sf validate", { timeout: 30_000 }, () => {
-  it("validate --pipeline sequential io handoff --strict exits 0", () => {
+  it.each([
+    "11-sequential-io-handoff",
+    "12-complex-io-schemas",
+    "13-ref-io-handoff",
+    "14-if-eq-gating",
+    "16-if-composition",
+  ])("validate --pipeline %s --strict exits 0", (name) => {
     const result = runCli(
       [
         "validate",
         "--pipeline",
-        "examples/route-wiring-smoke-test/11-sequential-io-handoff.pipeline.yaml",
-        "--strict",
-      ],
-      root,
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
-  });
-
-  it("validate --pipeline complex io schemas --strict exits 0", () => {
-    const result = runCli(
-      [
-        "validate",
-        "--pipeline",
-        "examples/route-wiring-smoke-test/12-complex-io-schemas.pipeline.yaml",
-        "--strict",
-      ],
-      root,
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
-  });
-
-  it("validate --pipeline ref io handoff --strict exits 0", () => {
-    const result = runCli(
-      [
-        "validate",
-        "--pipeline",
-        "examples/route-wiring-smoke-test/13-ref-io-handoff.pipeline.yaml",
-        "--strict",
-      ],
-      root,
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
-  });
-
-  it("validate --pipeline if eq gating --strict exits 0", () => {
-    const result = runCli(
-      [
-        "validate",
-        "--pipeline",
-        "examples/route-wiring-smoke-test/14-if-eq-gating.pipeline.yaml",
+        `examples/route-wiring-smoke-test/${name}.pipeline.yaml`,
         "--strict",
       ],
       root,
@@ -682,20 +597,6 @@ describe("sequential io compatibility via sf validate", { timeout: 30_000 }, () 
     ).toBe(true);
   });
 
-  it("validate --pipeline if composition --strict exits 0", () => {
-    const result = runCli(
-      [
-        "validate",
-        "--pipeline",
-        "examples/route-wiring-smoke-test/16-if-composition.pipeline.yaml",
-        "--strict",
-      ],
-      root,
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
-  });
-
   it.each([
     "22-reject-if-unknown-field.pipeline.yaml",
     "23-reject-if-optional-field.pipeline.yaml",
@@ -728,37 +629,13 @@ describe("sequential io compatibility via sf validate", { timeout: 30_000 }, () 
     ).toBe(false);
   });
 
-  it("validate --pipeline incompatible io --json reports pipeline.io_incompatible", () => {
-    const result = runCli(
-      [
-        "validate",
-        "--pipeline",
-        "examples/route-wiring-smoke-test/rejected/17-reject-io-incompatible.pipeline.yaml",
-        "--json",
-      ],
-      root,
-    );
-    expect(result.status).toBe(1);
-    const parsed = JSON.parse(result.stdout) as {
-      ok: boolean;
-      findings: Array<{ code: string; message: string }>;
-    };
-    expect(parsed.ok).toBe(false);
-    expect(
-      parsed.findings.some(
-        (finding) =>
-          finding.code === "pipeline.io_incompatible" &&
-          /structural subset/.test(finding.message),
-      ),
-    ).toBe(true);
-  });
-
   it.each([
-    "18-reject-nested-io.pipeline.yaml",
-    "19-reject-array-item-io.pipeline.yaml",
-    "20-reject-closed-io.pipeline.yaml",
-    "21-reject-ref-io.pipeline.yaml",
-  ])("validate --pipeline %s --json reports pipeline.io_incompatible", (file) => {
+    { file: "17-reject-io-incompatible.pipeline.yaml", message: /structural subset/ },
+    { file: "18-reject-nested-io.pipeline.yaml", message: /./ },
+    { file: "19-reject-array-item-io.pipeline.yaml", message: /./ },
+    { file: "20-reject-closed-io.pipeline.yaml", message: /./ },
+    { file: "21-reject-ref-io.pipeline.yaml", message: /./ },
+  ])("validate --pipeline $file --json reports pipeline.io_incompatible", ({ file, message }) => {
     const result = runCli(
       [
         "validate",
@@ -775,7 +652,10 @@ describe("sequential io compatibility via sf validate", { timeout: 30_000 }, () 
     };
     expect(parsed.ok).toBe(false);
     expect(
-      parsed.findings.some((finding) => finding.code === "pipeline.io_incompatible"),
+      parsed.findings.some(
+        (finding) =>
+          finding.code === "pipeline.io_incompatible" && message.test(finding.message),
+      ),
     ).toBe(true);
   });
 });

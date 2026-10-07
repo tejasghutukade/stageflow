@@ -1,3 +1,5 @@
+import { emailHostFor, stageEmail, workerStageEmail, validateStageEmailAccounts } from "../email/host.js";
+import { EmailError } from "../email/port.js";
 import type {
   AgentPort,
   FeedbackLoopContext,
@@ -735,6 +737,13 @@ export async function openStageAttempt(
     input.trustWorkspaceConfig,
   );
 
+  if (process.env.SF_STAGE_WORKER !== "1" && input.stage.email?.length) {
+    try { validateStageEmailAccounts(emailHostFor(input.factoryCwd ?? process.cwd()).accounts, input.stage); }
+    catch (error) {
+      if (error instanceof EmailError) return { ok: false, reason: error.code };
+      throw error;
+    }
+  }
   const opened = await openStageWithOperatorCatalog(
     input.agent,
     {
@@ -750,6 +759,8 @@ export async function openStageAttempt(
         ? { priorEnvelopesByStage: priorResult.priorEnvelopesByStage }
         : {}),
       resumeToken,
+      email: input.stage.email?.length ? (process.env.SF_STAGE_WORKER === "1" ? workerStageEmail()
+        : stageEmail(emailHostFor(input.factoryCwd ?? process.cwd()).mailbox, input.stage, input.runId, { workspaceDir: input.workspaceDir, attempt })) : undefined,
       ...(input.sessionMode !== undefined ? { sessionMode: input.sessionMode } : {}),
       onActivity: (event) => {
         input.onActivity?.(

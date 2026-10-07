@@ -4,11 +4,9 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listPipelines } from "../src/config/listConfig.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadStage, loadStageOutcome } from "../src/config/loadStage.js";
 import { loadTask, loadTaskFromYaml } from "../src/config/loadTask.js";
-import { areResolvedDagsEquivalent } from "../src/config/resolvePipelineDag.js";
 import {
   resolveAndValidateCheckout,
   resolveCheckoutPath,
@@ -34,20 +32,6 @@ const FILE_IR = [
 ];
 
 describe("YAML loaders", () => {
-  it.skip("legacy three-dir pipeline load — migrated in S7", async () => {
-    const loaded = await loadPipeline(pipelinePath("docs-only"), { cwd: fixtures });
-    expect(loaded.pipeline.stages).toEqual([
-      "clarify",
-      "design-doc",
-      "implementation-plan",
-    ]);
-  });
-
-  it.skip("legacy broken pipeline missing stage — migrated in S7", async () => {
-    await expect(loadPipeline(pipelinePath("broken"), { cwd: fixtures })).rejects.toThrow(
-      /missing stage/,
-    );
-  });
 
   it("loads the diamond fan-in fixture with two inbound synthesize edges", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), { cwd: fixtures });
@@ -90,37 +74,6 @@ goal: Something
 checkout: 42
 `);
     expect(task.checkout).toBeUndefined();
-  });
-
-  it.skip("legacy valid fixture pipelines — migrated in S7", async () => {
-    const validPipelineIds = [
-      "docs-only",
-      "single",
-      "plan-review-proving",
-      "hitl-four-kinds-proving",
-      "parallel-after-clarify",
-      "linear-explicit",
-    ];
-    for (const pipelineId of validPipelineIds) {
-      const loaded = await loadPipeline(pipelineId, { cwd: fixtures });
-      expect(loaded.dag.nodes.length).toBe(loaded.pipeline.stages.length);
-    }
-  });
-
-  it.skip("legacy fan-out fixture — migrated in S7", async () => {
-    const loaded = await loadPipeline(pipelinePath("parallel-after-clarify"), { cwd: fixtures });
-    expect(loaded.dag.roots).toEqual(["clarify"]);
-  });
-
-  it.skip("legacy explicit linear fixture — migrated in S7", async () => {
-    const docsOnly = await loadPipeline(pipelinePath("docs-only"), { cwd: fixtures });
-    const linearExplicit = await loadPipeline(pipelinePath("linear-explicit"), { cwd: fixtures });
-    expect(areResolvedDagsEquivalent(docsOnly.dag, linearExplicit.dag)).toBe(true);
-  });
-
-  it.skip("legacy single-stage pipeline — migrated in S7", async () => {
-    const loaded = await loadPipeline(pipelinePath("single"), { cwd: fixtures });
-    expect(loaded.stages).toHaveLength(1);
   });
 
   it("loads declared gate_kinds from HITL stage YAML", async () => {
@@ -494,30 +447,6 @@ checkout: 42
     await expect(loadStage(notInt)).rejects.toThrow(/timeout_ms/);
   });
 
-  it.skip("lists pipelines with per-stage gate_kinds objects — legacy fixtures S7", async () => {
-    const pipelines = await listPipelines(fixtures);
-    const proving = pipelines.find((p) => p.id === "plan-review-proving");
-    expect(proving?.stages).toEqual([
-      { id: "plan-review", gate_kinds: ["artifact_backed"] },
-      { id: "plan-review-followup" },
-    ]);
-
-    const fourKinds = pipelines.find((p) => p.id === "hitl-four-kinds-proving");
-    expect(fourKinds?.stages).toEqual([
-      {
-        id: "hitl-four-kinds",
-        gate_kinds: [
-          "free_text",
-          "confirm",
-          "multi_question",
-          "artifact_backed",
-        ],
-      },
-    ]);
-
-    const docsOnly = pipelines.find((p) => p.id === "docs-only");
-    expect(docsOnly?.stages.every((s) => s.gate_kinds === undefined)).toBe(true);
-  });
 });
 
 

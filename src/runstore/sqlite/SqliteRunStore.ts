@@ -413,9 +413,11 @@ export class SqliteRunStore implements RunStore {
 
   async createRun(input: CreateRunInput): Promise<CreatedRun> {
     await this.ready();
+    const existing = input.dispatchKey ? await this.findRunByDispatchKey(input.dispatchKey) : undefined;
+    if (existing) return existing;
     const runId = input.runId ?? newRunId();
     const workspaceDir = this.getWorkspaceDir(runId);
-    await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
+    if (!input.dispatchKey) await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
 
     const now = new Date().toISOString();
     const pipelinePath = input.pipelinePath
@@ -441,15 +443,17 @@ export class SqliteRunStore implements RunStore {
         const existing = this.readSubmission(input.submission.key);
         if (existing) throw new RunSubmissionExistsError(existing);
       }
-      this.db
+      const inserted = this.db
       .prepare(
         `INSERT INTO runs
-          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates)
+          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates, dispatch_key)
          VALUES
-          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root, @repository, @ref, @resolved_sha, @run_branch, @git_author_name, @git_author_email, @pipeline_source, @pipeline_body, @caller_id, @run_manifest, @skip_gates)`,
+          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root, @repository, @ref, @resolved_sha, @run_branch, @git_author_name, @git_author_email, @pipeline_source, @pipeline_body, @caller_id, @run_manifest, @skip_gates, @dispatch_key)
+          ON CONFLICT(dispatch_key) DO NOTHING`,
       )
       .run({
         run_id: runId,
+        dispatch_key: input.dispatchKey ?? null,
         pipeline_id: input.pipelineId,
         task_id: input.taskId ?? null,
         task_yaml: input.taskYaml,
@@ -482,14 +486,25 @@ export class SqliteRunStore implements RunStore {
         skip_gates:
           input.skipGates === undefined ? null : input.skipGates ? 1 : 0,
       });
-
+      if (!inserted.changes) return;
       if (input.submission) {
         this.db.prepare("INSERT INTO run_submissions (submission_key, request_hash, run_id) VALUES (?, ?, ?)")
           .run(input.submission.key, input.submission.requestHash, runId);
       }
     })();
 
-    return { runId, workspaceDir };
+    if (input.dispatchKey) {
+      const selected = await this.findRunByDispatchKey(input.dispatchKey);
+      if (selected && selected.runId !== runId) return selected;
+      await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
+    }
+    return { runId, workspaceDir, ...(input.dispatchKey ? { created: true } : {}) };
+  }
+
+  async findRunByDispatchKey(dispatchKey: string): Promise<CreatedRun | undefined> {
+    await this.ready();
+    const row = this.db.prepare("SELECT run_id FROM runs WHERE dispatch_key = ?").get(dispatchKey) as { run_id: string } | undefined;
+    return row ? { runId: row.run_id, workspaceDir: this.getWorkspaceDir(row.run_id), created: false } : undefined;
   }
 
   private readSubmission(key: string): RunSubmissionRecord | null {

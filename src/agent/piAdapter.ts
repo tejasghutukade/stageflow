@@ -35,10 +35,8 @@ import path from "node:path";
 import { BROWSER_SKILL_NAME } from "../config/builtinSkills.js";
 import {
   type AgentSession,
-  type EventBus,
   type ExtensionFactory,
   type InlineExtension,
-  createAgentSession,
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
@@ -51,6 +49,10 @@ import {
   attachIsolatedMcp,
   STAGEFLOW_PI_MCP_EXTENSION_NAME,
 } from "./piIsolatedMcp.js";
+import {
+  createPiAgentSession,
+  createSealedResourceLoader,
+} from "./piSessionFactory.js";
 import { isAdvancingEnvelope } from "../envelope/check.js";
 import { formatFeedbackLoopContext } from "../prompt/feedbackLoopContext.js";
 import { formatPriorEnvelope } from "../prompt/priorEnvelope.js";
@@ -69,6 +71,9 @@ import {
   type AskOperatorWaitBridge,
 } from "../tools/askOperator.js";
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
+import { createSendEmailTool } from "../tools/sendEmail.js";
+import { createReplyEmailTool } from "../tools/replyEmail.js";
+import { createGetEmailTool, createSearchEmailTool, createDownloadEmailAttachmentTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
 import { findProviderSupport } from "./providerSupport.js";
 import { mapSessionEventToActivity, readActivityVerbose, type StageActivityEvent } from "./activity.js";
@@ -101,6 +106,7 @@ import {
 } from "../runstore/workspaceLayout.js";
 
 export { STAGEFLOW_PATH_DENIED };
+export { createSealedResourceLoader } from "./piSessionFactory.js";
 
 export const STAGEFLOW_PATH_DENY_EXTENSION_NAME = "stageflow-path-deny";
 
@@ -636,6 +642,9 @@ function buildUserPrompt(
         : `Create factory stage artifacts under ${attemptArtifactsPath} relative to the run folder.`;
 
   return [
+    ...(input.stage.email?.length ? [
+      `Stageflow email permissions: ${JSON.stringify(input.stage.email)}. Use only declared accounts and operations. Use a stable operationKey for each intended message. Provider acceptance does not prove delivery. Never resend an unknown submission automatically.`,
+    ] : []),
     `Task id: ${input.task.id}`,
     `Stage id: ${runtimeStageId(input)}`,
     `Goal: ${input.task.goal}`,
@@ -718,48 +727,6 @@ export function composeFeedbackResumePrompt(input: StageRunInput): string {
       input.sessionMode ?? "feedback_resume",
     ),
   ].join("\n\n");
-}
-
-/**
- * DefaultResourceLoader with host/global discovery turned off.
- *
- * Without these flags the loader walks up from the run folder and would pick
- * up the consumer project's AGENTS.md, `.agents/skills/`, `.pi/extensions`,
- * and APPEND_SYSTEM.md. Stages must not inherit that context.
- *
- * `additionalExtensionPaths` is the Cursor/provider seam. `extensionFactories`
- * is the isolated MCP seam. With `noExtensions: true`, discovered
- * global/project packages stay out; only those allowlists load.
- * `additionalSkillPaths` is the matching allowlist for one named skill.
- */
-export function createSealedResourceLoader(options: {
-  cwd: string;
-  agentDir: string;
-  settingsManager: SettingsManager;
-  systemPrompt: string;
-  additionalExtensionPaths?: string[];
-  additionalSkillPaths?: string[];
-  extensionFactories?: InlineExtension[];
-  eventBus?: EventBus;
-}): DefaultResourceLoader {
-  return new DefaultResourceLoader({
-    cwd: options.cwd,
-    agentDir: options.agentDir,
-    settingsManager: options.settingsManager,
-    systemPromptOverride: () => options.systemPrompt,
-    appendSystemPromptOverride: () => [],
-    additionalExtensionPaths: options.additionalExtensionPaths,
-    additionalSkillPaths: options.additionalSkillPaths,
-    ...(options.extensionFactories !== undefined
-      ? { extensionFactories: options.extensionFactories }
-      : {}),
-    ...(options.eventBus !== undefined ? { eventBus: options.eventBus } : {}),
-    noContextFiles: true,
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-  });
 }
 
 function collectMcpExtensionToolNames(loader: DefaultResourceLoader): string[] {
@@ -1249,7 +1216,7 @@ async function prepareStageSessionWiring(
       return failAfterAttach(`Skill "${input.stage.skill}" is not installed`);
     }
 
-    const customTools = askTool
+    const customTools: StageSessionWiring["customTools"] = askTool
       ? [emitTool, askTool, artifactTool]
       : [emitTool, artifactTool];
     const tools = resolveStageToolNames(
@@ -1260,6 +1227,20 @@ async function prepareStageSessionWiring(
     );
     if (attached.extensionFactories !== undefined) {
       tools.push(...collectMcpExtensionToolNames(loader));
+    }
+    if (input.email) {
+      const permitted = new Set(input.stage.email?.flatMap(permission => permission.operations));
+      const definitions = [
+        permitted.has("send") ? createSendEmailTool(input.email) : undefined,
+        permitted.has("reply") ? createReplyEmailTool(input.email) : undefined,
+        permitted.has("search") ? createSearchEmailTool(input.email) : undefined,
+        permitted.has("getMessage") ? createGetEmailTool(input.email) : undefined,
+        permitted.has("downloadAttachment") ? createDownloadEmailAttachmentTool(input.email) : undefined,
+      ];
+      for (const definition of definitions) if (definition) {
+        customTools.push(defineTool(definition));
+        tools.push(definition.name);
+      }
     }
 
     return {
@@ -1331,7 +1312,7 @@ export async function reconstructStageSessionForAnswer(
 
   let session: AgentSession | undefined;
   try {
-    const created = await createAgentSession({
+    const created = await createPiAgentSession({
       cwd: input.roots.cwd,
       agentDir: input.roots.agentDir,
       modelRuntime: wiring.modelRuntime,
@@ -1403,7 +1384,7 @@ async function bindStageSession(
   wiring: StageSessionWiring,
 ): Promise<AgentSession | StageRunResult> {
   const { roots } = input;
-  const created = await createAgentSession({
+  const created = await createPiAgentSession({
     cwd: roots.cwd,
     agentDir: roots.agentDir,
     modelRuntime: wiring.modelRuntime,

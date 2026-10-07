@@ -21,7 +21,7 @@ export const PROVIDERS_USAGE = `Usage:
   sf providers list
   sf providers status [--provider <id>]
   sf providers detect
-  sf providers source [get | set <pi_home|sf_owned>]
+  sf providers source [get | set sf_owned]
   sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
   sf providers logout <providerId>`;
 
@@ -208,7 +208,7 @@ export async function runProvidersCommand(
             : "credentialSource=(unset)";
         out.log(
           [
-            `piHomeUsable=${detected.piHomeUsable}`,
+            `authConfigured=${detected.authConfigured}`,
             sourceLine,
             `provisional=${detected.provisional}`,
             `bindingSource=${detected.source}`,
@@ -231,8 +231,8 @@ export async function runProvidersCommand(
         }
         if (action === "set") {
           const value = parsed.positionals[1];
-          if (value !== "pi_home" && value !== "sf_owned") {
-            out.error('source set requires pi_home or sf_owned');
+          if (value !== "sf_owned") {
+            out.error('source set requires sf_owned');
             out.error(PROVIDERS_USAGE);
             return 1;
           }

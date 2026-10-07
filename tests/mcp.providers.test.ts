@@ -12,7 +12,7 @@ import { inspectProviderReadiness } from "../src/agent/providerInspect.js";
 import { startUiServer } from "../src/server/http.js";
 import { writeCredentialSourceToFile } from "../src/runtime/settingsFile.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
-import { initTempGitRepo } from "./helpers/projectContext.js";
+import { initTempGitRepo, withIsolatedHome } from "./helpers/projectContext.js";
 import { mcpCall } from "./helpers/mcpCall.js";
 
 const SECRET_RE =
@@ -160,30 +160,32 @@ async function withProvidersMcp(
   runtime: ProviderAuthRuntime,
   fn: (base: string, cwd: string) => Promise<void>,
 ): Promise<void> {
-  const { root, cleanup } = await initTempGitRepo();
-  writeCredentialSourceToFile(root, "sf_owned");
-  clearFindProjectRootCacheForTests();
-  const { server } = await startUiServer({
-    agent: scriptedFakeAgent([]),
-    cwd: root,
-    port: 0,
-    uiDistDir: path.join(root, "missing-ui"),
-    mcpStateless: true,
-    providerAuthContext: makeTestContext(runtime),
-  });
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP address");
-    }
-    await fn(`http://127.0.0.1:${address.port}`, root);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((err) => (err ? reject(err) : resolve()));
-    });
+  await withIsolatedHome(async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    writeCredentialSourceToFile(root, "sf_owned");
     clearFindProjectRootCacheForTests();
-    await cleanup();
-  }
+    const { server } = await startUiServer({
+      agent: scriptedFakeAgent([]),
+      cwd: root,
+      port: 0,
+      uiDistDir: path.join(root, "missing-ui"),
+      mcpStateless: true,
+      providerAuthContext: makeTestContext(runtime),
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP address");
+      }
+      await fn(`http://127.0.0.1:${address.port}`, root);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
 }
 
 afterEach(() => {
@@ -245,8 +247,8 @@ describe("MCP list_providers", () => {
       const result = await mcpCall(base, "list_providers");
       expect(result.isError).toBe(false);
       expect(result.payload).toEqual(expected);
-      expect(typeof result.payload.detect.piHomeUsable).toBe("boolean");
-      expect(result.payload.detect.source).toMatch(/^(pi_home|sf_owned)$/);
+      expect(typeof result.payload.detect.authConfigured).toBe("boolean");
+      expect(result.payload.detect.source).toBe("sf_owned");
       expect(result.payload.detect.authPath).toBeUndefined();
       expect(result.payload).not.toHaveProperty("authPath");
     });

@@ -17,6 +17,7 @@ import {
 } from "./legacyYaml.js";
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
+import { z } from "zod";
 import { parseStageSecrets } from "../runtime/stageSecretDecl.js";
 import { parseToolRequires } from "./toolRequires.js";
 import { parseStageBrowser } from "./stageBrowser.js";
@@ -181,6 +182,15 @@ function parseStageFields(
     id: entryId,
     system_prompt: raw.system_prompt,
   };
+  if (raw.email !== undefined) {
+    const permissions = z.array(z.object({ accountId: z.string().min(1).max(200),
+      operations: z.array(z.enum(["send", "reply", "getMessage", "search", "downloadAttachment"])).min(1).max(5),
+    }).strict()).max(20).safeParse(raw.email);
+    if (!permissions.success || new Set(permissions.data.map(permission => permission.accountId)).size !== permissions.data.length) {
+      return loadFailure([{ code: "stage.invalid_shape", message: `Invalid stage ${label}: invalid email permissions`, category: "stage", stageId: entryId }]);
+    }
+    stage.email = permissions.data;
+  }
 
   if (raw.clone_actions !== undefined) {
     return loadFailure([

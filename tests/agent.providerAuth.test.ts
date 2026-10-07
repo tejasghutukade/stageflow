@@ -302,7 +302,7 @@ describe("inspectProviderReadiness", () => {
         supportsOauth: true,
         configured: false,
       });
-      expect(typeof inspect.detect.piHomeUsable).toBe("boolean");
+      expect(typeof inspect.detect.authConfigured).toBe("boolean");
       expect(inspect.detect.source).toBe("sf_owned");
       expect(inspect.detect).not.toHaveProperty("authPath");
       expect(inspect).not.toHaveProperty("authPath");

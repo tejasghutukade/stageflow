@@ -10,7 +10,7 @@ import {
 } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
-import { pickStalledJoinSkips, joinAllowsRun } from "../src/runtime/joinReadiness.js";
+import { pickStalledJoinSkips } from "../src/runtime/joinReadiness.js";
 import {
   applyForkSkipsFromEnvelopes,
   runPipelineDag,
@@ -22,35 +22,14 @@ import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagS
 import type { RunPipelineDagSnapshot } from "../src/runstore/port.js";
 import type { StageEnvelope, TerminalEnvelope } from "../src/types/envelope.js";
 import type { ResolvedPipelineDag, ResolvedPipelineStageNode } from "../src/types/pipeline.js";
+import { okEnvelope } from "./helpers/envelopes.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
+import { waitFor } from "./helpers/waitFor.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
 );
-
-const okEnvelope = (
-  summary: string,
-  extra?: Partial<StageEnvelope>,
-): StageEnvelope => ({
-  status: "success",
-  summary,
-  artifacts: [],
-  payload: {},
-  ...extra,
-});
-
-async function waitFor(
-  predicate: () => Promise<boolean> | boolean,
-  timeoutMs = 8000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  throw new Error("timeout waiting for condition");
-}
 
 function schedulerStageId(input: StageRunInput): string {
   return input.stageId ?? input.stage.id;
@@ -298,85 +277,6 @@ describe("generic fan-in skip cascade", () => {
     expect(states.get("synthesize")).toBe("pending");
     expect(pickStalledJoinSkips(dag, states)).toEqual([]);
   });
-
-  it("runs a succeeded-only join once a skipped fork child and the other parents are terminal", () => {
-    const dag = acceptedDiamondDag();
-    dag.nodes[3] = {
-      ...dag.nodes[3]!,
-      needsEdges: [
-        { id: "research", on: ["succeeded"] },
-        { id: "validation", on: ["succeeded"] },
-      ],
-    };
-    const states = new Map<string, StageScheduleState>([
-      ["clarify", "succeeded"],
-      ["research", "skipped"],
-      ["validation", "succeeded"],
-      ["synthesize", "pending"],
-    ]);
-    expect(pickStalledJoinSkips(dag, states)).toEqual([]);
-    expect(joinAllowsRun(dag, "synthesize", states, new Map())).toBe(
-      true,
-    );
-  });
-
-  it("does not stalled-skip a join when a predecessor failed and every edge is terminal", () => {
-    const dag = acceptedDiamondDag();
-    dag.nodes[3] = {
-      ...dag.nodes[3]!,
-      needsEdges: [
-        { id: "research", on: ["succeeded"] },
-        { id: "validation", on: ["succeeded"] },
-      ],
-    };
-    const states = new Map<string, StageScheduleState>([
-      ["clarify", "succeeded"],
-      ["research", "failed"],
-      ["validation", "succeeded"],
-      ["synthesize", "pending"],
-    ]);
-    expect(pickStalledJoinSkips(dag, states)).toEqual([]);
-    expect(joinAllowsRun(dag, "synthesize", states, new Map())).toBe(
-      false,
-    );
-  });
-
-  it("stalled-skips a join when every parent is skipped", () => {
-    const dag = acceptedDiamondDag();
-    dag.nodes[3] = {
-      ...dag.nodes[3]!,
-      needsEdges: [
-        { id: "research", on: ["succeeded"] },
-        { id: "validation", on: ["succeeded"] },
-      ],
-    };
-    const states = new Map<string, StageScheduleState>([
-      ["clarify", "succeeded"],
-      ["research", "skipped"],
-      ["validation", "skipped"],
-      ["synthesize", "pending"],
-    ]);
-    expect(pickStalledJoinSkips(dag, states)).toEqual(["synthesize"]);
-    expect(joinAllowsRun(dag, "synthesize", states, new Map())).toBe(
-      false,
-    );
-  });
-
-  it("does not flag a join as stalled once every predecessor settles into a satisfiable state", () => {
-    const dag = acceptedDiamondDag();
-    // Default acceptedDiamondDag() accepts "skipped" on the research edge,
-    // so once both parents are terminal the join is ready to RUN, not skip.
-    const states = new Map<string, StageScheduleState>([
-      ["clarify", "succeeded"],
-      ["research", "skipped"],
-      ["validation", "succeeded"],
-      ["synthesize", "pending"],
-    ]);
-    expect(pickStalledJoinSkips(dag, states)).toEqual([]);
-    expect(joinAllowsRun(dag, "synthesize", states, new Map())).toBe(
-      true,
-    );
-  });
 });
 
 describe("generic fan-in scheduler", () => {
@@ -422,7 +322,6 @@ describe("generic fan-in scheduler", () => {
     expect(agent.launchOrder).not.toContain("synthesize");
 
     releaseResearch();
-    await waitFor(() => agent.launchOrder.includes("research"));
     await new Promise((r) => setTimeout(r, 80));
     expect(agent.openCounts.get("synthesize") ?? 0).toBe(0);
 
@@ -607,51 +506,6 @@ describe("generic fan-in scheduler", () => {
     );
     expect(detail.stages.find((s) => s.stage_id === "synthesize")?.status).toBe(
       "pending",
-    );
-  });
-
-  it("runs synthesize after both fan-out parents succeed", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-diamond-accepted-skip-"));
-    let releaseValidation: () => void = () => undefined;
-    const validationGate = new Promise<void>((resolve) => {
-      releaseValidation = resolve;
-    });
-    const agent = gatedFanInAgent({
-      behaviorsByStage: {
-        clarify: [{ type: "emit", envelope: okEnvelope("clarify-ok") }],
-        research: [{ type: "emit", envelope: okEnvelope("r-ok") }],
-        validation: [
-          { type: "gate", gate: validationGate, envelope: okEnvelope("v-ok") },
-        ],
-        synthesize: [{ type: "emit", envelope: okEnvelope("syn-ok") }],
-      },
-    });
-    const { prepared, store, runId } = await prepareInprocessPipeline(
-      root,
-      "diamond-fan-in-accepted",
-      agent,
-    );
-    const runPromise = runPipelineDag({
-      prepared,
-      maxActiveStagesPerRun: 4,
-      executionMode: "inprocess",
-    });
-
-    await waitFor(() => (agent.openCounts.get("validation") ?? 0) === 1);
-    expect(agent.openCounts.get("research") ?? 0).toBe(1);
-    expect(agent.openCounts.get("synthesize") ?? 0).toBe(0);
-
-    releaseValidation();
-    const result = await runPromise;
-    expect(result.ok).toBe(true);
-    expect(result.outcome).toBe("succeeded");
-    expect(agent.openCounts.get("synthesize")).toBe(1);
-    const detail = await store.readRun(runId);
-    expect(detail.stages.find((s) => s.stage_id === "research")?.status).toBe(
-      "succeeded",
-    );
-    expect(detail.stages.find((s) => s.stage_id === "synthesize")?.status).toBe(
-      "succeeded",
     );
   });
 

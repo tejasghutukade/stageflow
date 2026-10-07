@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ChildProcess } from "node:child_process";
+import * as childProcess from "node:child_process";
 import { createLogger } from "../src/logging/logger.js";
 import { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 
@@ -11,6 +14,40 @@ const mockWorker = fileURLToPath(
 );
 
 describe("StageProcessLauncher", () => {
+  it("loads a TypeScript cli entry with the tsx loader", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-tsx-"));
+    const calls: Array<{ modulePath: string; execArgv?: string[] }> = [];
+    const launcher = new StageProcessLauncher({
+      cliEntry: path.join(rootDir, "cli.ts"),
+      forkFn: ((modulePath, _args, options) => {
+        calls.push({ modulePath, execArgv: options?.execArgv });
+        const child = new EventEmitter() as ChildProcess;
+        child.stdout = null;
+        child.stderr = null;
+        child.pid = 42;
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      }) as typeof childProcess.fork,
+    });
+
+    await expect(
+      launcher.launch({ runId: "r-tsx", stageId: "s", rootDir }),
+    ).resolves.toEqual({ type: "succeeded" });
+
+    expect(calls).toEqual([
+      {
+        modulePath: path.join(rootDir, "cli.ts"),
+        execArgv: [
+          expect.stringMatching(/^--max-old-space-size=/),
+          "--require",
+          fileURLToPath(import.meta.resolve("tsx/preflight")),
+          "--import",
+          import.meta.resolve("tsx"),
+        ],
+      },
+    ]);
+  });
+
   it("cap of 2 blocks third until one completes", async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-launcher-"));
     const launcher = new StageProcessLauncher({
@@ -237,5 +274,58 @@ describe("StageProcessLauncher", () => {
       rootDir,
     });
     expect(after).toEqual({ type: "succeeded" });
+  });
+
+  it("gives host CURSOR_API_KEY only to a cursor stage", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-cursor-key-"));
+    const envs: Array<NodeJS.ProcessEnv | undefined> = [];
+    const previous = {
+      key: process.env.CURSOR_API_KEY,
+      allow: process.env.STAGEFLOW_STAGE_ENV_ALLOW,
+      passthrough: process.env.STAGEFLOW_STAGE_ENV_PASSTHROUGH,
+    };
+    process.env.CURSOR_API_KEY = "test-cursor-key";
+    delete process.env.STAGEFLOW_STAGE_ENV_ALLOW;
+    delete process.env.STAGEFLOW_STAGE_ENV_PASSTHROUGH;
+    const launcher = new StageProcessLauncher({
+      cliEntry: mockWorker,
+      forkFn: ((...args: Parameters<typeof childProcess.fork>) => {
+        envs.push(args[2]?.env);
+        const child = new EventEmitter() as ChildProcess;
+        child.stdout = null;
+        child.stderr = null;
+        child.pid = 42;
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      }) as typeof childProcess.fork,
+    });
+
+    try {
+      await launcher.launch({
+        runId: "r-cursor",
+        stageId: "draft",
+        rootDir,
+        model: "cursor/composer-2-5",
+      });
+      await launcher.launch({
+        runId: "r-other",
+        stageId: "other",
+        rootDir,
+        model: "anthropic/claude-sonnet-4-5",
+      });
+    } finally {
+      if (previous.key === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previous.key;
+      if (previous.allow === undefined) delete process.env.STAGEFLOW_STAGE_ENV_ALLOW;
+      else process.env.STAGEFLOW_STAGE_ENV_ALLOW = previous.allow;
+      if (previous.passthrough === undefined) {
+        delete process.env.STAGEFLOW_STAGE_ENV_PASSTHROUGH;
+      } else {
+        process.env.STAGEFLOW_STAGE_ENV_PASSTHROUGH = previous.passthrough;
+      }
+    }
+
+    expect(envs[0]?.CURSOR_API_KEY).toBe("test-cursor-key");
+    expect(envs[1]?.CURSOR_API_KEY).toBeUndefined();
   });
 });

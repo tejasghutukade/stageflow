@@ -5,6 +5,7 @@ import {
   type TaskListing,
 } from "../api";
 import { useRunCatalog } from "../catalog/useRunCatalog";
+import { displayCatalogPath } from "../catalog/displayCatalogPath";
 import { bucketViews, runsForTaskView } from "../catalog/views";
 import { relativeTime } from "../catalogJoin";
 import {
@@ -12,6 +13,7 @@ import {
   pipelinePath,
   runStreamPath,
   taskPath,
+  workshopPath,
 } from "../routes";
 import { StatusDot } from "../StatusLabel";
 import { runDisplayStatus } from "../status/runStatus";
@@ -166,6 +168,12 @@ function TaskDetail({
   onNew: (path: string) => void;
 }) {
   const last = runs[0];
+  const workshopPipeline =
+    last?.pipeline_path && last.project_root
+      ? displayCatalogPath(last.pipeline_path, last.project_root)
+      : last?.pipeline_path && !last.pipeline_path.startsWith("/")
+        ? last.pipeline_path
+        : undefined;
 
   const buckets = bucketViews({ runs, health: null });
   const inFlight = buckets.waiting.length + buckets.inFlight.length;
@@ -187,19 +195,39 @@ function TaskDetail({
           <p className="mono">{subtitle}</p>
         </div>
           {task ? (
-            <button
-              className="btn btn--primary"
-              onClick={() =>
-                onNew(
-                  newRunPath({
-                    task: task.path,
-                    pipeline: last?.pipeline_id,
-                  }),
-                )
-              }
-            >
-              Run it again
-            </button>
+            <div className="page-head__actions">
+              {workshopPipeline ? (
+                <a
+                  className="btn"
+                  href={`#${workshopPath({ pipeline: workshopPipeline })}`}
+                  title="Opens the bound pipeline; task stays unattached until you attach it"
+                >
+                  Open in Workshop
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled
+                  title="Run this task once so Workshop can resolve its pipeline path"
+                >
+                  Open in Workshop
+                </button>
+              )}
+              <button
+                className="btn btn--primary"
+                onClick={() =>
+                  onNew(
+                    newRunPath({
+                      task: task.path,
+                      pipeline: last?.pipeline_id,
+                    }),
+                  )
+                }
+              >
+                Run it again
+              </button>
+            </div>
           ) : null}
         </div>
 

@@ -463,7 +463,7 @@ Goal: run `examples/browser-session` without touching your own Host (default por
    ```bash
    export STAGEFLOW_HOME="$(mktemp -d)"
    export STAGEFLOW_SERVICE_PORT=3999     # any free port, not 3847
-   export STAGEFLOW_MIN_FREE_DISK_BYTES=0 # only if the free-disk floor blocks a small disk
+   export STAGEFLOW_MIN_FREE_DISK_BYTES=1073741824 # optional: enable free-disk admission (bytes or N%)
    ```
    `sf run` and `sf runs` auto-start a Host on that port when none answers, so the Host and the run state live in the temp home.
 2. Credentials. A new home has no provider auth. Either point the credential source at the Pi home (`sf providers source set pi_home`, uses `~/.pi/agent/auth.json`, and workers get it through `STAGEFLOW_PI_HOME_AUTH_PATH`), or give Host-boot provider env such as `STAGEFLOW_PROVIDER_<ID>_API_KEY` (see [Providers](providers.md)). Never paste keys into pipeline files or logs.

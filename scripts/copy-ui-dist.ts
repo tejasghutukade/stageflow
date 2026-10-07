@@ -3,7 +3,7 @@ import { access, cp, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = process.env.STAGEFLOW_PACK_ROOT ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiDist = path.join(root, "ui", "dist");
 const outDir = path.join(root, "dist", "ui");
 

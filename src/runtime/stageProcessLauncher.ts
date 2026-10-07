@@ -7,9 +7,10 @@ import {
   resolveLogMaxLineBytes,
   type Logger,
 } from "../logging/logger.js";
+import { isCursorModelRef, readCursorApiKey } from "../agent/cursorProvider.js";
 import { BROWSER_ENV_PREFIX } from "../browser/browserHost.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
-import { PI_HOME_AUTH_PATH_ENV, piHomeAuthPath } from "./credentialBinding.js";
+import { PI_HOME_AUTH_PATH_ENV, stageflowAgentAuthPath } from "./credentialBinding.js";
 import { redactString } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
 import {
@@ -29,6 +30,9 @@ import {
   type StageWorkerResult,
 } from "./stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import { emailHostFor, emailWorkerEnvironment, stageEmail, validateStageEmailAccounts } from "../email/host.js";
+import { EmailError, type SendEmailInput, type ReplyToEmailInput, type SearchEmailsInput, type EmailMessageRef, type DownloadEmailAttachmentInput } from "../email/port.js";
+import type { StageConfig } from "../types/stage.js";
 import {
   overlayStageBindingEnv,
   type DerivedBindingKind,
@@ -38,17 +42,21 @@ export type StageLaunchInput = {
   runId: string;
   stageId: string;
   rootDir: string;
+  workspaceDir?: string;
   mode?: "run" | "resume" | "feedback_resume" | "new_session";
   resumeAnswer?: unknown;
   attempt?: number;
   sessionFilePath?: string;
   operatorCatalog?: OperatorCatalog;
+  factoryCwd?: string;
+  stage?: StageConfig;
   skipGates?: boolean;
   env?: Record<string, string>;
   bindingKind?: DerivedBindingKind;
   grants?: ResolvedStageGrants;
   attemptHome?: string;
   browserEnv?: Record<string, string>;
+  model?: string;
 };
 
 export type StageLaunchResult =
@@ -80,6 +88,32 @@ export type StageProcessLauncherOptions = {
   /** Test seam: override child_process.fork. */
   forkFn?: typeof childProcess.fork;
 };
+
+function defaultStageCliEntry(): string {
+  const source = import.meta.url.split("?")[0]?.endsWith(".ts") === true;
+  return fileURLToPath(
+    new URL(source ? "../cli.ts" : "../cli.js", import.meta.url),
+  );
+}
+
+function isTypeScriptEntry(entry: string): boolean {
+  return /\.(?:m|c)?ts$/.test(entry);
+}
+
+/**
+ * A compiled `dist/cli.js` child is plain node. `npm run dev` is TypeScript,
+ * and this launcher sets execArgv explicitly so the parent's tsx loader is
+ * not inherited. Load that entry with the same tsx hooks the dev CLI uses.
+ */
+function tsxLoaderExecArgv(): string[] {
+  try {
+    const preflight = fileURLToPath(import.meta.resolve("tsx/preflight"));
+    const loader = import.meta.resolve("tsx");
+    return ["--require", preflight, "--import", loader];
+  } catch {
+    return [];
+  }
+}
 
 function flushCappedPartial(
   log: Logger,
@@ -201,6 +235,7 @@ export class StageProcessLauncher {
   private readonly env: Record<string, string | undefined>;
   private readonly explicitChildExtras: Record<string, string> | undefined;
   private readonly cliEntry: string;
+  private readonly workerExecArgv: string[];
   private readonly logger: Logger;
   private readonly forkFn: typeof childProcess.fork;
   private readonly active = new Map<string, TrackedChild>();
@@ -227,9 +262,11 @@ export class StageProcessLauncher {
       options.maxActiveStageProcesses,
     );
     this.heapMb = getContainerLimits().maxOldSpaceSizeMb;
-    this.cliEntry =
-      options.cliEntry ??
-      fileURLToPath(new URL("../cli.js", import.meta.url));
+    this.cliEntry = options.cliEntry ?? defaultStageCliEntry();
+    this.workerExecArgv = [
+      `--max-old-space-size=${this.heapMb}`,
+      ...(isTypeScriptEntry(this.cliEntry) ? tsxLoaderExecArgv() : []),
+    ];
     this.logger =
       options.logger ?? rootLogger.child({ component: "runtime" });
     this.forkFn = options.forkFn ?? childProcess.fork;
@@ -255,6 +292,13 @@ export class StageProcessLauncher {
   }
 
   async launch(input: StageLaunchInput): Promise<StageLaunchResult> {
+    try {
+      if (input.stage?.email?.length) validateStageEmailAccounts(emailHostFor(input.factoryCwd ?? input.operatorCatalog?.cwd ?? input.rootDir).accounts, input.stage);
+    } catch (error) {
+      if (error instanceof EmailError) return { type: "failed", reason: error.code };
+      throw error;
+    }
+    input = { ...input, stage: input.stage ? structuredClone(input.stage) : undefined };
     const acquired = await this.waitForCapacity(input.runId);
     if (!acquired) {
       return { type: "failed", reason: "cancelled" };
@@ -366,6 +410,7 @@ export class StageProcessLauncher {
   }
 
   private spawnAndWait(input: StageLaunchInput): Promise<StageLaunchResult> {
+    const factoryCwd = input.factoryCwd ?? input.operatorCatalog?.cwd ?? input.rootDir;
     const mode =
       input.mode ?? (input.resumeAnswer !== undefined ? "resume" : "run");
     const args = [
@@ -437,18 +482,28 @@ export class StageProcessLauncher {
             ...input.browserEnv,
           }
         : overlaid;
-    const childEnv = {
+    const childEnv: Record<string, string> = {
       ...withBrowser,
-      [PI_HOME_AUTH_PATH_ENV]: piHomeAuthPath(),
+      [PI_HOME_AUTH_PATH_ENV]: stageflowAgentAuthPath(),
     };
+    const cursorApiKey = readCursorApiKey(hostEnv);
+    if (
+      isCursorModelRef(input.model ?? "") &&
+      cursorApiKey !== undefined &&
+      cursorApiKey !== "" &&
+      childEnv.CURSOR_API_KEY === undefined
+    ) {
+      childEnv.CURSOR_API_KEY = cursorApiKey;
+    }
 
     const child = this.forkFn(this.cliEntry, args, {
       cwd: input.rootDir,
-      env: { ...childEnv, [SF_STAGE_WORKER]: "1" },
+      env: emailWorkerEnvironment({ ...childEnv, [SF_STAGE_WORKER]: "1" }, emailHostFor(factoryCwd).accounts),
       stdio: ["pipe", "pipe", "pipe", "ipc"],
       detached: true,
       // Explicit: do not inherit Host execArgv; set heap from cgroup budget.
-      execArgv: [`--max-old-space-size=${this.heapMb}`],
+      // TypeScript entries also get the tsx loader, since that inheritance is off.
+      execArgv: this.workerExecArgv,
     });
 
     const key = activeKey(input.runId, input.stageId);
@@ -486,6 +541,28 @@ export class StageProcessLauncher {
       };
 
       child.on("message", (message: unknown) => {
+        const request = message as { type?: string; requestId?: unknown; input?: unknown };
+        if (!settled && ["email.send", "email.reply", "email.search", "email.getMessage", "email.downloadAttachment"].includes(request?.type ?? "")) {
+          void (async () => {
+            if (typeof request.requestId !== "string" || request.requestId.length > 100) return;
+            let response: object;
+            try {
+              const stage = input.stage;
+              if (!stage || settled) throw new EmailError("EMAIL_UNAUTHORIZED");
+              const email = stageEmail(emailHostFor(factoryCwd).mailbox, stage, input.runId, input.workspaceDir ? { workspaceDir: input.workspaceDir, attempt: input.attempt ?? 1 } : undefined);
+              if (request.type === "email.send") response = { receipt: await email.send(request.input as SendEmailInput) };
+              else if (request.type === "email.reply") response = { receipt: await email.reply(request.input as ReplyToEmailInput) };
+              else if (request.type === "email.search") response = { result: await email.search(request.input as SearchEmailsInput) };
+              else if (request.type === "email.getMessage") response = { result: await email.getMessage(request.input as EmailMessageRef) };
+              else response = { result: await email.downloadAttachment(request.input as DownloadEmailAttachmentInput) };
+            } catch (error) {
+              const fault = error instanceof EmailError ? error : new EmailError("EMAIL_UNAUTHORIZED");
+              response = { error: { code: fault.code, retryable: fault.retryable, ...(fault.unsupportedFields ? { unsupportedFields: fault.unsupportedFields } : {}) } };
+            }
+            if (child.connected && !settled) child.send({ type: "email.response", requestId: request.requestId, ...response });
+          })();
+          return;
+        }
         if (!isStageWorkerResult(message)) return;
         finish(resultFromWorkerMessage(message));
       });

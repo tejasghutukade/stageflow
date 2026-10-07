@@ -1,6 +1,9 @@
 version: 1
+model: cursor/auto
 catalog:
   pipelines:
+    - examples/hello-email
+    - workshop
     - examples/generic-fan-in
     - examples/stage-mcp
     - examples/playwright-mcp
@@ -23,6 +26,8 @@ catalog:
     - examples/feature-loop
     - examples/ship-feature
   tasks:
+    - examples/hello-email
+    - workshop
     - examples/generic-fan-in
     - examples/stage-mcp
     - examples/playwright-mcp

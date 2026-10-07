@@ -268,6 +268,13 @@ async function freeDiskCheck(
       size.totalBytes,
     );
     const freeGiB = (size.freeBytes / (1024 * 1024 * 1024)).toFixed(2);
+    if (floor === 0) {
+      return {
+        id: "free_disk",
+        status: "pass",
+        message: `${home} has ${freeGiB} GiB free (free-disk admission disabled)`,
+      };
+    }
     if (size.freeBytes < floor) {
       return {
         id: "free_disk",

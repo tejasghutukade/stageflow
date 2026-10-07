@@ -7,6 +7,7 @@ import type { TaskFile } from "../types/task.js";
 import type { StageActivityEvent } from "./activity.js";
 import type { ResolvedMcpServers } from "../config/resolveStageMcpServers.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
+import type { StageEmail } from "../email/host.js";
 import type { QaExchange } from "../hitl/qaTrail.js";
 import type { StageUsage } from "../types/usage.js";
 
@@ -73,6 +74,7 @@ export type StageRunInput = {
   /** Optional raw assistant-text-delta sink, fired alongside onActivity, not instead of it. */
   onAssistantTextDelta?: (delta: string) => void;
   skillFilePath?: string;
+  email?: StageEmail;
   /** Bundled browser skill; set by the runtime when the stage has `browser`. */
   browserSkillFilePath?: string;
   forkEmitContext?: ForkEmitContext;

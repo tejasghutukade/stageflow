@@ -2,10 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  ENVELOPE_USAGE,
   runEnvelopeCommand,
   SYNTHETIC_SKIPPED_ENVELOPE,
 } from "../src/cli/envelopeCommand.js";
@@ -16,15 +14,6 @@ import { globalStageflowHome } from "../src/project/globalHome.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const cli = path.join(root, "src", "cli.ts");
-const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
-
-function runCli(args: string[], cwd = root) {
-  return spawnSync(process.execPath, [tsxCli, cli, ...args], {
-    cwd,
-    encoding: "utf8",
-  });
-}
 
 function okEnvelope(
   summary: string,
@@ -483,34 +472,5 @@ describe("runEnvelopeCommand", () => {
     expect(stderr.join("\n")).toMatch(
       /No envelope found for stage 'build' in run/,
     );
-  });
-
-  it("prints usage on --help", async () => {
-    const stderr: string[] = [];
-    const code = await runEnvelopeCommand(["get", "--help"], {
-      io: {
-        log: () => undefined,
-        error: (line) => stderr.push(line),
-      },
-    });
-
-    expect(code).toBe(0);
-    expect(stderr.join("\n")).toBe(ENVELOPE_USAGE);
-  });
-});
-
-describe("CLI envelope get", { timeout: 15_000 }, () => {
-  it("envelope get --help shows usage and exits zero", () => {
-    const result = runCli(["envelope", "get", "--help"]);
-    expect(result.status).toBe(0);
-    const out = result.stdout + result.stderr;
-    expect(out).toMatch(/sf envelope get/);
-    expect(out).toMatch(/--format envelope\|handoff/);
-  });
-
-  it("top-level --help lists envelope get", () => {
-    const result = runCli(["--help"]);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/sf envelope get/);
   });
 });

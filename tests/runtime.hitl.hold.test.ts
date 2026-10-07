@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { FIXTURES_ROOT, pipelinePath, catalogLocators, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { pipelinePath, catalogLocators, SAMPLE_TASK, LINEAR_EXPLICIT_PIPELINE } from "./helpers/fixturePaths.js";
+import { waitFor } from "./helpers/waitFor.js";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -26,16 +27,53 @@ const successEnvelope = {
   payload: {},
 };
 
-async function waitFor(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 5000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 20));
+async function seedWaitingClarify(opts: {
+  resume: string | object;
+  prompt?: AskOperatorPrompt;
+  markRunning?: boolean;
+}) {
+  const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-"));
+  const store = createRunStore({ rootDir: root });
+  const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+  const run = await store.createRun({
+    ...catalogLocators("single"),
+    taskYaml,
+    taskId: "sample",
+  });
+  await store.ensureStageWorkspace(run.runId, "clarify");
+  await store.appendStageEvent(run.runId, "clarify", { event: "started" });
+  if (opts.prompt) {
+    await appendOperatorPrompt(store, run.runId, "clarify", opts.prompt);
   }
-  throw new Error("timeout waiting for condition");
+  const resumePath = fakeHitlResumePath(
+    buildStageRoots(run.workspaceDir, "clarify"),
+    "clarify",
+  );
+  await writeFile(
+    resumePath,
+    typeof opts.resume === "string"
+      ? opts.resume
+      : `${JSON.stringify(opts.resume)}\n`,
+    "utf8",
+  );
+  await store.appendStageEvent(run.runId, "clarify", {
+    event: "waiting_for_input",
+  });
+  if (opts.markRunning) await store.updateRunStatus(run.runId, "running");
+  return { root, run };
+}
+
+function restartManager(root: string, waitRequests: unknown[] = ["need-input"]) {
+  const store2 = createRunStore({ rootDir: root });
+  const agent2 = scriptedFakeAgent([
+    {
+      type: "wait_then_emit",
+      waitRequests: waitRequests as never,
+      envelope: successEnvelope,
+    },
+  ]);
+  const manager2 = new RunManager({ agent: agent2, store: store2, cwd: fixtures });
+  return { store2, manager2 };
 }
 
 describe("runtime HITL hold/resume (U4)", () => {
@@ -247,63 +285,27 @@ describe("runtime HITL hold/resume (U4)", () => {
     const afterFirst = await store.readRun(started.runId);
     const clarify = afterFirst.stages.find((s) => s.stage_id === "clarify")!;
     expect(clarify.status).not.toBe("succeeded");
-    expect(clarify.events.some((e) => e.event === "resumed")).toBe(true);
-    expect(clarify.status === "running" || clarify.status === "waiting_for_input").toBe(
-      true,
-    );
+    const trail = clarify.events
+      .map((e) => e.event)
+      .filter((e) => e === "waiting_for_input" || e === "resumed");
+    expect(trail.slice(0, 2)).toEqual(["waiting_for_input", "resumed"]);
 
-    await manager.deliverAnswer(started.runId, "clarify", "second");
+    const second = await manager.deliverAnswer(started.runId, "clarify", "second");
+    expect(second.ok).toBe(true);
     await waitFor(async () => {
       const detail = await store.readRun(started.runId);
       return detail.status === "succeeded";
     });
   });
 
-  it("AE3: restart attach keeps waiting; deliverAnswer reconstructs and completes", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-"));
-    const store = createRunStore({ rootDir: root });
-    const taskYaml = await readFile(
-      SAMPLE_TASK,
-      "utf8",
-    );
-    const run = await store.createRun({
-      ...catalogLocators("single"),
-      taskYaml,
-      taskId: "sample",
+  it("AE3: restart attach + reconcile keeps waiting; deliverAnswer reconstructs and completes", async () => {
+    const { root, run } = await seedWaitingClarify({
+      resume: { waitRequests: ["need-input"], envelope: successEnvelope, waitIndex: 1 },
+      markRunning: true,
     });
-    await store.ensureStageWorkspace(run.runId, "clarify");
-    await store.appendStageEvent(run.runId, "clarify", { event: "started" });
-    const resumePath = fakeHitlResumePath(
-      buildStageRoots(run.workspaceDir, "clarify"),
-      "clarify",
-    );
-    await writeFile(
-      resumePath,
-      `${JSON.stringify({
-        waitRequests: ["need-input"],
-        envelope: successEnvelope,
-        waitIndex: 1,
-      })}\n`,
-      "utf8",
-    );
-    await store.appendStageEvent(run.runId, "clarify", {
-      event: "waiting_for_input",
-    });
-
-    const store2 = createRunStore({ rootDir: root });
-    const agent2 = scriptedFakeAgent([
-      {
-        type: "wait_then_emit",
-        waitRequests: ["need-input"],
-        envelope: successEnvelope,
-      },
-    ]);
-    const manager2 = new RunManager({
-      agent: agent2,
-      store: store2,
-      cwd: fixtures,
-    });
+    const { store2, manager2 } = restartManager(root);
     const attached = await manager2.attachWaitingStages();
+    await manager2.reconcileOrphanedStages();
     expect(attached).toEqual([{ runId: run.runId, stageId: "clarify" }]);
 
     const stillWaiting = await store2.readRun(run.runId);
@@ -363,41 +365,8 @@ describe("runtime HITL hold/resume (U4)", () => {
   });
 
   it("error: corrupt resume context fails stage and run (KTD7)", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-"));
-    const store = createRunStore({ rootDir: root });
-    const taskYaml = await readFile(
-      SAMPLE_TASK,
-      "utf8",
-    );
-    const run = await store.createRun({
-      ...catalogLocators("single"),
-      taskYaml,
-      taskId: "sample",
-    });
-    await store.ensureStageWorkspace(run.runId, "clarify");
-    await store.appendStageEvent(run.runId, "clarify", { event: "started" });
-    const resumePath = fakeHitlResumePath(
-      buildStageRoots(run.workspaceDir, "clarify"),
-      "clarify",
-    );
-    await writeFile(resumePath, "{not-json", "utf8");
-    await store.appendStageEvent(run.runId, "clarify", {
-      event: "waiting_for_input",
-    });
-
-    const store2 = createRunStore({ rootDir: root });
-    const agent2 = scriptedFakeAgent([
-      {
-        type: "wait_then_emit",
-        waitRequests: ["need-input"],
-        envelope: successEnvelope,
-      },
-    ]);
-    const manager2 = new RunManager({
-      agent: agent2,
-      store: store2,
-      cwd: fixtures,
-    });
+    const { root, run } = await seedWaitingClarify({ resume: "{not-json" });
+    const { store2, manager2 } = restartManager(root);
     await manager2.attachWaitingStages();
 
     const delivered = await manager2.deliverAnswer(
@@ -422,57 +391,16 @@ describe("runtime HITL hold/resume (U4)", () => {
   });
 
   it("AE2: restart mismatch rejects via trail pending (no live park)", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-ae2-"));
-    const store = createRunStore({ rootDir: root });
-    const taskYaml = await readFile(
-      SAMPLE_TASK,
-      "utf8",
-    );
-    const run = await store.createRun({
-      ...catalogLocators("single"),
-      taskYaml,
-      taskId: "sample",
-    });
-    await store.ensureStageWorkspace(run.runId, "clarify");
-    await store.appendStageEvent(run.runId, "clarify", { event: "started" });
-
     const freeTextPrompt: AskOperatorPrompt = {
       kind: "free_text",
       id: "prompt-1",
       message: "What should the module name be?",
     };
-    await appendOperatorPrompt(store, run.runId, "clarify", freeTextPrompt);
-
-    const resumePath = fakeHitlResumePath(
-      buildStageRoots(run.workspaceDir, "clarify"),
-      "clarify",
-    );
-    await writeFile(
-      resumePath,
-      `${JSON.stringify({
-        waitRequests: [freeTextPrompt],
-        envelope: successEnvelope,
-        waitIndex: 1,
-      })}\n`,
-      "utf8",
-    );
-    await store.appendStageEvent(run.runId, "clarify", {
-      event: "waiting_for_input",
+    const { root, run } = await seedWaitingClarify({
+      resume: { waitRequests: [freeTextPrompt], envelope: successEnvelope, waitIndex: 1 },
+      prompt: freeTextPrompt,
     });
-
-    const store2 = createRunStore({ rootDir: root });
-    const agent2 = scriptedFakeAgent([
-      {
-        type: "wait_then_emit",
-        waitRequests: [freeTextPrompt],
-        envelope: successEnvelope,
-      },
-    ]);
-    const manager2 = new RunManager({
-      agent: agent2,
-      store: store2,
-      cwd: fixtures,
-    });
+    const { store2, manager2 } = restartManager(root, [freeTextPrompt]);
     await manager2.attachWaitingStages();
     expect(manager2.getHitlController().hasLiveWait(run.runId, "clarify")).toBe(
       false,
@@ -496,95 +424,6 @@ describe("runtime HITL hold/resume (U4)", () => {
     const events = await store2.listStageEvents(run.runId, "clarify");
     expect(events.some((e) => e.event === "operator_answer")).toBe(false);
     expect(events.some((e) => e.event === "resumed")).toBe(false);
-  });
-
-  it("regression: non-HITL pipeline still succeeds", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = scriptedFakeAgent([
-      { type: "emit", envelope: successEnvelope },
-    ]);
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      pipeline: pipelinePath("single"),
-      task: SAMPLE_TASK,
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => {
-      const detail = await store.readRun(started.runId);
-      return detail.status === "succeeded";
-    });
-  });
-
-  it("AE2: attach then reconcile preserves waiter; deliverAnswer succeeds", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-reconcile-"));
-    const store = createRunStore({ rootDir: root });
-    const taskYaml = await readFile(
-      SAMPLE_TASK,
-      "utf8",
-    );
-    const run = await store.createRun({
-      ...catalogLocators("single"),
-      taskYaml,
-      taskId: "sample",
-    });
-    await store.ensureStageWorkspace(run.runId, "clarify");
-    await store.appendStageEvent(run.runId, "clarify", { event: "started" });
-    const resumePath = fakeHitlResumePath(
-      buildStageRoots(run.workspaceDir, "clarify"),
-      "clarify",
-    );
-    await writeFile(
-      resumePath,
-      `${JSON.stringify({
-        waitRequests: ["need-input"],
-        envelope: successEnvelope,
-        waitIndex: 1,
-      })}\n`,
-      "utf8",
-    );
-    await store.appendStageEvent(run.runId, "clarify", {
-      event: "waiting_for_input",
-    });
-    await store.updateRunStatus(run.runId, "running");
-
-    const store2 = createRunStore({ rootDir: root });
-    const agent2 = scriptedFakeAgent([
-      {
-        type: "wait_then_emit",
-        waitRequests: ["need-input"],
-        envelope: successEnvelope,
-      },
-    ]);
-    const manager2 = new RunManager({
-      agent: agent2,
-      store: store2,
-      cwd: fixtures,
-    });
-    const attached = await manager2.attachWaitingStages();
-    await manager2.reconcileOrphanedStages();
-
-    expect(attached).toEqual([{ runId: run.runId, stageId: "clarify" }]);
-
-    const stillWaiting = await store2.readRun(run.runId);
-    expect(
-      stillWaiting.stages.find((s) => s.stage_id === "clarify")?.status,
-    ).toBe("waiting_for_input");
-
-    const delivered = await manager2.deliverAnswer(
-      run.runId,
-      "clarify",
-      "after-attach-reconcile",
-    );
-    expect(delivered.ok).toBe(true);
-
-    const done = await store2.readRun(run.runId);
-    expect(done.status).toBe("succeeded");
-    expect(done.stages.find((s) => s.stage_id === "clarify")?.status).toBe(
-      "succeeded",
-    );
   });
 
   it("parallel waiter + reconciled orphan sibling: deliverAnswer completes waiter", async () => {
@@ -667,9 +506,7 @@ describe("runtime HITL hold/resume (U4)", () => {
       "design-doc",
       "approved",
     );
-    if (!delivered.ok) {
-      expect(delivered.status).not.toBe(409);
-    }
+    expect(delivered.ok).toBe(true);
 
     await waitFor(async () => {
       const detail = await store2.readRun(run.runId);

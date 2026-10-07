@@ -2,15 +2,19 @@ import { EventEmitter } from "node:events";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { piHomeAuthPath } from "../src/runtime/credentialBinding.js";
+import {
+  STAGEFLOW_AGENT_AUTH_PATH_ENV,
+  sfOwnedAuthPath,
+  stageflowAgentAuthPath,
+} from "../src/runtime/credentialBinding.js";
 import { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
+import { withIsolatedHome } from "./helpers/projectContext.js";
 
-const ENV_NAME = "STAGEFLOW_PI_HOME_AUTH_PATH";
-const saved = process.env[ENV_NAME];
+const saved = process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV];
 
 afterEach(() => {
-  if (saved === undefined) delete process.env[ENV_NAME];
-  else process.env[ENV_NAME] = saved;
+  if (saved === undefined) delete process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV];
+  else process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV] = saved;
 });
 
 function launchCapturingChildEnv(): Promise<Record<string, string>> {
@@ -30,20 +34,17 @@ function launchCapturingChildEnv(): Promise<Record<string, string>> {
     .then(() => captured);
 }
 
-describe("Pi-home credentials in a stage worker", () => {
-  it("gives the worker the Host's Pi auth path, because the worker HOME is an empty attempt dir", async () => {
-    delete process.env[ENV_NAME];
-    const childEnv = await launchCapturingChildEnv();
-    expect(childEnv[ENV_NAME]).toBe(path.join(os.homedir(), ".pi", "agent", "auth.json"));
-  });
-
-  it("resolves the Pi auth path from that variable when the worker HOME differs", () => {
-    process.env[ENV_NAME] = "/real/home/.pi/agent/auth.json";
-    expect(piHomeAuthPath()).toBe("/real/home/.pi/agent/auth.json");
+describe("Stageflow agent auth path in a stage worker", () => {
+  it("gives the worker the Host SF-owned auth path when HOME is an empty attempt dir", async () => {
+    await withIsolatedHome(async () => {
+      delete process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV];
+      const childEnv = await launchCapturingChildEnv();
+      expect(childEnv[STAGEFLOW_AGENT_AUTH_PATH_ENV]).toBe(sfOwnedAuthPath());
+    });
   });
 
   it("still lets an explicit override win", () => {
-    process.env[ENV_NAME] = "/real/home/.pi/agent/auth.json";
-    expect(piHomeAuthPath("/custom/auth.json")).toBe("/custom/auth.json");
+    process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV] = "/real/home/.stageflow/agent/auth.json";
+    expect(stageflowAgentAuthPath("/custom/auth.json")).toBe("/custom/auth.json");
   });
 });

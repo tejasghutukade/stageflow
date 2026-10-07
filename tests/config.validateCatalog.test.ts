@@ -71,10 +71,6 @@ const validStageYaml = (id: string) =>
     "",
   ].join("\n");
 
-function findingCodes(findings: ValidationFinding[]): string[] {
-  return findings.map((f) => f.code);
-}
-
 function findingsForPath(findings: ValidationFinding[], relPath: string): ValidationFinding[] {
   return findings.filter((f) => f.path === relPath || f.path.endsWith(relPath));
 }
@@ -264,9 +260,9 @@ describe("validateCatalog manifest-all", () => {
       await cp(manifestCatalog, root, { recursive: true });
       clearFindProjectRootCacheForTests();
       const result = await validateCatalog({ scope: "full", cwd: root });
-      expect(
-        findingsForPath(result.findings, "pipelines/broken.pipeline.yaml").length,
-      ).toBeGreaterThan(0);
+      const broken = findingsForPath(result.findings, "pipelines/broken.pipeline.yaml");
+      expect(broken.map((f) => f.code)).toEqual(["pipeline.invalid_shape"]);
+      expect(broken[0]?.message).toMatch(/id is required/);
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
@@ -275,30 +271,6 @@ describe("validateCatalog manifest-all", () => {
 });
 
 describe("validateCatalog pipeline scope", () => {
-  it.skip("AE-S1-2: targeted docs-only passes — legacy fixtures S7", async () => {
-    const result = await validateCatalog({
-      scope: "pipeline",
-      pipeline: pipelinePath("docs-only"),
-      cwd: fixtures,
-    });
-    expect(result.ok).toBe(true);
-    expect(result.findings.some((f) => f.path.includes("broken.pipeline.yaml"))).toBe(false);
-  });
-
-  it.skip("AE-S5-3: targeted validate agrees with loadPipelineValidated — legacy S7", async () => {
-    const validateResult = await validateCatalog({
-      scope: "pipeline",
-      pipeline: pipelinePath("docs-only"),
-      cwd: fixtures,
-    });
-    const loadResult = await loadPipelineValidated(pipelinePath("docs-only"), {
-      cwd: fixtures,
-    });
-    expect(validateResult.ok).toBe(true);
-    expect(loadResult.ok).toBe(true);
-    expect(validateResult.findings.some((f) => f.path.includes("broken.pipeline.yaml"))).toBe(false);
-  });
-
   it("AE-S1-4: stage id must match filename stem", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-validate-id-mismatch-"));
     await writeManifest(
@@ -404,16 +376,6 @@ describe("validateCatalog task scope", () => {
 });
 
 describe("validateCatalog legacy fixtures", () => {
-  it.skip("full fixtures catalog cwd scan — legacy S7", async () => {
-    const result = await validateCatalog({
-      scope: "full",
-      cwd: fixtures,
-    });
-    expect(result.ok).toBe(false);
-    expect(findingCodes(result.findings)).toContain("pipeline.missing_stage");
-    expect(findingCodes(result.findings)).toContain("pipeline.dag_error");
-  });
-
   it("full scope on project without manifest emits manifest_missing", async () => {
     clearFindProjectRootCacheForTests();
     const { root, cleanup } = await initTempGitRepo();
@@ -549,7 +511,9 @@ describe("validateCatalog stage MCP catalog inspect", () => {
       clearFindProjectRootCacheForTests();
       const result = await validatePipeline(pipelinePath, { cwd: root });
       expect(result.ok).toBe(false);
-      expect(catalogFindings(result.findings).length).toBeGreaterThan(0);
+      expect(catalogFindings(result.findings).map((f) => f.message)).toEqual([
+        expect.stringMatching(/not valid JSON/),
+      ]);
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
@@ -567,7 +531,9 @@ describe("validateCatalog stage MCP catalog inspect", () => {
       clearFindProjectRootCacheForTests();
       const result = await validatePipeline(pipelinePath, { cwd: root });
       expect(result.ok).toBe(false);
-      expect(catalogFindings(result.findings).length).toBeGreaterThan(0);
+      expect(catalogFindings(result.findings).map((f) => f.message)).toEqual([
+        expect.stringMatching(/mcpServers must be an object/),
+      ]);
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
@@ -639,7 +605,9 @@ describe("validateCatalog stage MCP catalog inspect", () => {
       clearFindProjectRootCacheForTests();
       const result = await validatePipeline(pipelinePath, { cwd: root });
       expect(result.ok).toBe(false);
-      expect(catalogFindings(result.findings).length).toBeGreaterThan(0);
+      expect(catalogFindings(result.findings).map((f) => f.message)).toEqual([
+        expect.stringMatching(/is missing/),
+      ]);
     } finally {
       clearFindProjectRootCacheForTests();
     }

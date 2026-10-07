@@ -6,7 +6,6 @@ import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoo
 import { loadStageflowManifestOutcome } from "../src/config/loadStageflowManifest.js";
 import {
   listPipelines,
-  listStages,
   listTasks,
 } from "../src/config/listConfig.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
@@ -98,10 +97,6 @@ describe("listConfig manifest-driven", () => {
     } finally {
       await cleanup();
     }
-  });
-
-  it("listStages returns empty array", async () => {
-    expect(await listStages()).toEqual([]);
   });
 
   it("lists pipeline stages with uses_path and inline metadata", async () => {
