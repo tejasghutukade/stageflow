@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-07
+
 ### Added
 
 - **Live view for human login gates.** When a Host has no window an operator can see, the console shows the stage's browser inside the login gate and forwards mouse, keyboard, paste and touch input to it, so a person can log in (password, two-factor code, popup sign-ins) from the console. It uses agent-browser's built-in stream relayed by the Host; no new dependency. See `docs/browser.md` (Live view) and `docs/browser-internals.md`.
@@ -23,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Browser permission prompts (camera, microphone, location, notifications, clipboard) are denied by default for every browser session the Host launches (`--deny-permission-prompts`).
 - Browser teardown first closes any live view for the stage or run (bounded wait), then runs the existing tab, session and anchor order.
+
+## [0.33.0] - 2026-10-07
+
+### Added
+
+- Public hosted runtime for embedding one repository-free pipeline. `createHostedRuntime` accepts the existing Pi `AgentPort` from `createPiAgentPort()`, a local run store, and a `HostedEventSink`, then runs inline and returns a structured result and execution receipt. `configurePiProviderApiKey` stores a managed OpenRouter key in the Pi auth file that adapter already reads. Package skills at `.pi/skills/<name>/` are materialized for that run; operator-home skills are not loaded. See [Hosted runtime](docs/hosted.md).
+- Package-root `exports` so consumers can `import { createHostedRuntime } from "stageflow"`.
+
+### Changed
+
+- A hosted run does not create the operator home. Stage credentials resolve from `STAGEFLOW_AGENT_AUTH_PATH` when set, otherwise from a path next to the local store.
 
 ## [0.32.0] - 2026-10-06
 

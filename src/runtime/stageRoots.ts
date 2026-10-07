@@ -6,7 +6,7 @@ import type { RunMeta } from "../runstore/port.js";
 import { attemptContext, noAttemptContext } from "./stageAttemptContext.js";
 import type { StageAttemptContext } from "./stageAttemptContext.js";
 import type { TaskFile, TaskGitIdentity } from "../types/task.js";
-import { resolveCredentialBinding } from "./credentialBinding.js";
+import { resolveCredentialBinding, currentExplicitAuthPath } from "./credentialBinding.js";
 
 export type DerivedBindingKind = "repository" | "checkout" | "unbound";
 
@@ -198,6 +198,10 @@ export function withResolvedAuthPath(
   factoryCwd: string,
 ): StageRoots {
   if (roots.authPath) return roots;
+  const explicit = currentExplicitAuthPath();
+  if (explicit !== undefined) {
+    return { ...roots, authPath: explicit };
+  }
   const binding = resolveCredentialBinding(factoryCwd);
   return { ...roots, authPath: binding.authPath };
 }

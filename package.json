@@ -1,8 +1,16 @@
 {
   "name": "stageflow",
-  "version": "0.32.0",
+  "version": "0.34.0",
   "description": "Stageflow — CLI pipeline runtime for configurable stages on Pi",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "bin": {
     "sf": "./dist/cli.js",
     "stageflow": "./dist/cli.js"

@@ -24,6 +24,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | Doc | What you'll learn |
 |-----|-------------------|
 | [Architecture](architecture.md) | Runtime boundaries, execution flow, persistence, recovery, and design tradeoffs |
+| [Hosted runtime](hosted.md) | Public library contract for embedding one inline pipeline run |
 | [Envelopes](envelopes.md) | Stage handoff contract (`emit_stage_envelope`, artifacts) |
 | [Verified Stage Execution](verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
