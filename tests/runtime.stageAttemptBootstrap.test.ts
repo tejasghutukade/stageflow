@@ -16,18 +16,10 @@ import {
   appendOperatorPrompt,
 } from "../src/hitl/qaTrail.js";
 import { createRunStore } from "../src/runstore/createStore.js";
-import {
-  appendCloneInstances,
-  buildPipelineDagSnapshotFromLoaded,
-} from "../src/runstore/pipelineDagSnapshot.js";
-import {
-  buildCompletedEnvelopesFromRun,
-  resolvePriorEnvelope,
-} from "../src/runtime/envelopeRouting.js";
+import type { RunStore } from "../src/runstore/port.js";
 import { attemptContext } from "../src/runtime/stageAttemptContext.js";
 import { openStageAttempt } from "../src/runtime/stageAttemptBootstrap.js";
 import type { AskOperatorAnswer, AskOperatorPrompt } from "../src/tools/askOperator.js";
-import type { RunPipelineDagSnapshot } from "../src/runstore/port.js";
 import type { ResolvedPipelineDag } from "../src/types/pipeline.js";
 import type { StageConfig } from "../src/types/stage.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
@@ -102,6 +94,70 @@ function recordingAgent() {
   };
 }
 
+function envelopeOf(summary: string, payload?: Record<string, unknown>): StageEnvelope {
+  return {
+    status: "success",
+    summary,
+    artifacts: [],
+    ...(payload !== undefined ? { payload } : {}),
+  };
+}
+
+async function seedSucceeded(
+  store: RunStore,
+  runId: string,
+  stageId: string,
+  envelope: StageEnvelope,
+): Promise<void> {
+  await store.ensureStageWorkspace(runId, stageId);
+  await store.createStageExecution(runId, stageId);
+  await store.appendStageEvent(runId, stageId, { event: "started" });
+  await store.appendStageEvent(runId, stageId, { event: "succeeded" });
+  await store.writeEnvelope(runId, stageId, envelope);
+  await store.updateStageExecution(runId, stageId, 1, {
+    status: "succeeded",
+    envelope,
+  });
+}
+
+type OpenOverrides = Omit<
+  Parameters<typeof openStageAttempt>[0],
+  "agent" | "store" | "runId" | "task" | "workspaceDir" | "dag"
+> & { dag?: ResolvedPipelineDag };
+
+/** A fresh store + run with a recording agent; `open` calls openStageAttempt with defaults filled in. */
+async function bootHarness(
+  prefix: string,
+  factoryCwd: string | undefined,
+  runArgs: Record<string, unknown> = {},
+  taskOverride: TaskFile = task,
+) {
+  const root = await mkdtemp(path.join(tmpdir(), prefix));
+  const store = createRunStore({ rootDir: root });
+  const run = await store.createRun({
+    pipelineId: "docs-only",
+    taskYaml: "id: t\ngoal: g\n",
+    ...runArgs,
+  } as Parameters<typeof store.createRun>[0]);
+  const { agent, opened } = recordingAgent();
+  return {
+    store,
+    run,
+    opened,
+    open: (overrides: OpenOverrides) =>
+      openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        task: taskOverride,
+        workspaceDir: run.workspaceDir,
+        ...(factoryCwd !== undefined ? { factoryCwd } : {}),
+        ...overrides,
+        dag: overrides.dag ?? rootDag(overrides.stageId ?? overrides.stage.id),
+      }),
+  };
+}
+
 async function writeSkill(
   dir: string,
   name: string,
@@ -152,23 +208,10 @@ describe("openStageAttempt", () => {
       "operator-fixture",
       "---\nname: operator-fixture\ndescription: Operator catalog fixture.\n---\n# Operator\n",
     );
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-skill-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
+    const { open, opened } = await bootHarness("sf-boot-skill-", factoryCwd);
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
+    const result = await open({
       stage: stage("clarify", "operator-fixture"),
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
       operatorCatalog: { cwd: factoryCwd, agentDir: operatorAgentDir },
     });
 
@@ -178,30 +221,21 @@ describe("openStageAttempt", () => {
   });
 
   it("resolves run-scoped skill under repository binding without trust_workspace_config", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-run-skill-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-      repository: "https://github.com/example/repo.git",
-    });
-    const { materializeRunSkills } = await import("../src/runtime/runSkills.js");
-    const skillBody =
-      "---\nname: run-fixture\ndescription: Run-scoped fixture.\n---\n# Run\n";
-    await materializeRunSkills(run.workspaceDir, {
-      "run-fixture": { "SKILL.md": skillBody },
-    });
-    const { agent, opened } = recordingAgent();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: stage("clarify", "run-fixture"),
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
+    const { open, opened, run } = await bootHarness(
+      "sf-boot-run-skill-",
       factoryCwd,
+      { repository: "https://github.com/example/repo.git" },
+    );
+    const { materializeRunSkills } = await import("../src/runtime/runSkills.js");
+    await materializeRunSkills(run.workspaceDir, {
+      "run-fixture": {
+        "SKILL.md":
+          "---\nname: run-fixture\ndescription: Run-scoped fixture.\n---\n# Run\n",
+      },
+    });
+
+    const result = await open({
+      stage: stage("clarify", "run-fixture"),
       checkoutRoot: await mkdtemp(path.join(tmpdir(), "sf-boot-co-")),
       bindingKind: "repository",
       trustWorkspaceConfig: [],
@@ -215,60 +249,18 @@ describe("openStageAttempt", () => {
     );
   });
 
-  it("forwards stage.timeout_ms as timeoutMs to openStage", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-timeout-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
+  it("forwards stage.timeout_ms and sessionMode with feedback context to openStage", async () => {
+    const { open, opened } = await bootHarness("sf-boot-forward-", factoryCwd);
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: { ...stage("approve"), timeout_ms: 3600000 },
-      task,
-      dag: rootDag("approve"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(opened).toHaveLength(1);
-    expect(opened[0]?.timeoutMs).toBe(3600000);
-  });
-
-  it("forwards sessionMode into openStage", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-session-mode-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: stage("clarify"),
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
+    const result = await open({
+      stage: { ...stage("clarify"), timeout_ms: 3600000 },
       sessionMode: "feedback_resume",
       feedbackLoopContext: {
         loop_id: "loop-1",
         replay_id: "replay-1",
         source_stage_id: "review",
         target_stage_id: "clarify",
-        feedback_envelope: {
-          status: "success",
-          summary: "revise",
-          artifacts: [],
-        },
+        feedback_envelope: envelopeOf("revise"),
         replay_number: 1,
         max_replays: 2,
         remaining_replays: 1,
@@ -280,191 +272,106 @@ describe("openStageAttempt", () => {
 
     expect(result.ok).toBe(true);
     expect(opened).toHaveLength(1);
+    expect(opened[0]?.timeoutMs).toBe(3600000);
     expect(opened[0]?.sessionMode).toBe("feedback_resume");
     expect(opened[0]?.feedbackLoopContext?.loop_id).toBe("loop-1");
   });
 
-  it("fails closed without openStage when the named skill is missing", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-miss-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
+  it.each([
+    {
+      name: "the named skill is missing from the catalog",
+      skill: "missing-skill",
+      withCatalog: true,
+    },
+    {
+      name: "the Operator catalog has no agentDir",
+      skill: "operator-fixture",
+      withCatalog: false,
+    },
+  ])("fails closed without openStage when $name", async ({ skill, withCatalog }) => {
+    const { open, opened } = await bootHarness("sf-boot-skill-miss-", factoryCwd);
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: stage("clarify", "missing-skill"),
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-      operatorCatalog: { cwd: factoryCwd, agentDir: operatorAgentDir },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      reason: expect.stringMatching(/Skill ".*" is not installed/),
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toMatch(/Skill "missing-skill" is not installed/);
-    }
-    expect(opened).toHaveLength(0);
-  });
-
-  it("fails closed without openStage when Operator catalog has no agentDir", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-nodir-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: stage("clarify", "operator-fixture"),
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
+    const result = await open({
+      stage: stage("clarify", skill),
+      ...(withCatalog
+        ? { operatorCatalog: { cwd: factoryCwd, agentDir: operatorAgentDir } }
+        : {}),
     });
 
     expect(result).toEqual({
       ok: false,
-      reason: expect.stringMatching(/Skill ".*" is not installed/),
+      reason: expect.stringMatching(new RegExp(`Skill "${skill}" is not installed`)),
     });
     expect(opened).toHaveLength(0);
   });
 
-  it("passes prior StageEnvelope matching envelopeRouting for a needs Stage", async () => {
+  it("passes the stored upstream StageEnvelope as prior for a needs Stage", async () => {
     const loaded = await loadPipeline(LINEAR_EXPLICIT_PIPELINE, { cwd: fixtures });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-prior-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      ...catalogLocators("linear-explicit"),
-      taskYaml: "id: t\ngoal: g\n",
-    });
+    const { open, opened, store, run } = await bootHarness(
+      "sf-boot-prior-",
+      factoryCwd,
+      catalogLocators("linear-explicit"),
+    );
     const parent: StageEnvelope = {
-      status: "success",
-      summary: "from-clarify",
+      ...envelopeOf("from-clarify", {}),
       artifacts: ["stages/clarify/attempts/1/artifacts/a.md"],
-      payload: {},
     };
     await store.createStageExecution(run.runId, "clarify");
     await store.writeEnvelope(run.runId, "clarify", parent);
-    const { agent, opened } = recordingAgent();
-    const designDoc = loaded.stages.find((s) => s.id === "design-doc");
-    expect(designDoc).toBeDefined();
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: designDoc!,
-      task,
+    const result = await open({
+      stage: loaded.stages.find((s) => s.id === "design-doc")!,
       dag: loaded.dag,
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-    });
-
-    const completedEnvelopes = await buildCompletedEnvelopesFromRun(
-      store,
-      run.runId,
-    );
-    const routed = await resolvePriorEnvelope({
-      dag: loaded.dag,
-      stageId: "design-doc",
-      completedEnvelopes,
-      store,
-      runId: run.runId,
     });
 
     expect(result.ok).toBe(true);
-    expect(routed.ok).toBe(true);
-    if (!result.ok || !routed.ok) return;
+    if (!result.ok) return;
     expect(opened).toHaveLength(1);
-    expect(opened[0]?.priorEnvelope).toEqual(routed.prior);
-    expect(result.prior).toEqual(routed.prior);
-    expect(opened[0]?.priorEnvelope?.summary).toBe("from-clarify");
+    expect(opened[0]?.priorEnvelope).toEqual(parent);
+    expect(result.prior).toEqual(parent);
     expect(opened[0]?.priorEnvelopes).toBeUndefined();
     expect(opened[0]?.priorEnvelopesByStage).toBeUndefined();
   });
 
   it("fails closed without openStage when the upstream envelope is missing", async () => {
     const loaded = await loadPipeline(LINEAR_EXPLICIT_PIPELINE, { cwd: fixtures });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-no-prior-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      ...catalogLocators("linear-explicit"),
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-    const designDoc = loaded.stages.find((s) => s.id === "design-doc");
-    expect(designDoc).toBeDefined();
-
-    const routed = await resolvePriorEnvelope({
-      dag: loaded.dag,
-      stageId: "design-doc",
-      completedEnvelopes: new Map(),
-      store,
-      runId: run.runId,
-    });
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: designDoc!,
-      task,
-      dag: loaded.dag,
-      workspaceDir: run.workspaceDir,
+    const { open, opened } = await bootHarness(
+      "sf-boot-no-prior-",
       factoryCwd,
+      catalogLocators("linear-explicit"),
+    );
+
+    const result = await open({
+      stage: loaded.stages.find((s) => s.id === "design-doc")!,
+      dag: loaded.dag,
     });
 
-    expect(routed.ok).toBe(false);
-    expect(result).toEqual(routed);
+    expect(result).toEqual({
+      ok: false,
+      reason: 'missing envelope for upstream stage "clarify"',
+    });
     expect(opened).toHaveLength(0);
   });
 
   it("forwards instance stageId into AgentPort input", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-clone-id-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-    const dag: ResolvedPipelineDag = {
-      nodes: [
-        {
-          id: "work~2",
-          definition_id: "work",
-          needs: null,
-          ancestors: [],
-          stageIndex: 0,
-        },
-      ],
-      roots: ["work~2"],
-      childrenOf: {},
-    };
+    const { open, opened } = await bootHarness("sf-boot-clone-id-", factoryCwd);
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
+    const result = await open({
       stage: stage("work"),
       stageId: "work~2",
-      task,
-      dag,
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
+      dag: {
+        nodes: [
+          {
+            id: "work~2",
+            definition_id: "work",
+            needs: null,
+            ancestors: [],
+            stageIndex: 0,
+          },
+        ],
+        roots: ["work~2"],
+        childrenOf: {},
+      },
     });
 
     expect(result.ok).toBe(true);
@@ -477,102 +384,68 @@ describe("openStageAttempt", () => {
     expect(opened[0]?.feedbackLoopEmitContext).toBeUndefined();
   });
 
-  it("does not expose feedback-loop decisions to dynamic clone instances", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-feedback-clone-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-    const dag: ResolvedPipelineDag = {
-      nodes: [
-        {
-          id: "review~1",
-          definition_id: "review",
-          needs: null,
-          ancestors: [],
-          stageIndex: 0,
-          feedback_loop: {
-            target: "implement",
-            max_replays: 1,
-            on_max_replays: "require_continue",
-            replay_session: "resume",
-          },
-        },
-      ],
-      roots: ["review~1"],
-      childrenOf: {},
-    };
+  const feedbackLoop = {
+    target: "implement",
+    max_replays: 1,
+    on_max_replays: "require_continue" as const,
+    replay_session: "resume" as const,
+  };
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: stage("review"),
+  it.each([
+    {
+      name: "is not exposed to dynamic clone instances",
+      node: {
+        id: "review~1",
+        definition_id: "review",
+        needs: null,
+        ancestors: [],
+        stageIndex: 0,
+        feedback_loop: feedbackLoop,
+      },
       stageId: "review~1",
-      task,
-      dag,
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-    });
+      stageName: "review",
+      expected: undefined,
+    },
+    {
+      name: "stays available to persistent fork parents",
+      node: {
+        id: "review-work",
+        definition_id: "review-work",
+        needs: null,
+        ancestors: [],
+        stageIndex: 0,
+        fork: { select: "subset", allow_none: false },
+        feedback_loop: feedbackLoop,
+      },
+      stageId: undefined,
+      stageName: "review-work",
+      expected: feedbackLoop,
+    },
+  ] as const)(
+    "feedback-loop decision context $name",
+    async ({ node, stageId, stageName, expected }) => {
+      const { open, opened } = await bootHarness("sf-boot-feedback-", factoryCwd);
 
-    expect(result.ok).toBe(true);
-    expect(opened[0]?.feedbackLoopEmitContext).toBeUndefined();
-  });
+      const result = await open({
+        stage: stage(stageName),
+        ...(stageId !== undefined ? { stageId } : {}),
+        dag: {
+          nodes: [node],
+          roots: [node.id],
+          childrenOf: { [node.id]: [] },
+        } as ResolvedPipelineDag,
+      });
 
-  it("keeps feedback-loop decisions available to persistent fork parents", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-feedback-fork-parent-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-    const feedback_loop = {
-      target: "implement",
-      max_replays: 1,
-      on_max_replays: "require_continue" as const,
-      replay_session: "resume" as const,
-    };
-    const dag: ResolvedPipelineDag = {
-      nodes: [
-        {
-          id: "review-work",
-          definition_id: "review-work",
-          needs: null,
-          ancestors: [],
-          stageIndex: 0,
-          fork: { select: "subset", allow_none: false },
-          feedback_loop,
-        },
-      ],
-      roots: ["review-work"],
-      childrenOf: { "review-work": [] },
-    };
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: stage("review-work"),
-      task,
-      dag,
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(opened[0]?.feedbackLoopEmitContext).toEqual(feedback_loop);
-  });
+      expect(result.ok).toBe(true);
+      expect(opened[0]?.feedbackLoopEmitContext).toEqual(expected);
+    },
+  );
 
   it("passes a live attempt-scoped QA trail reader into openStage", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-trail-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
+    const { open, opened, store, run } = await bootHarness(
+      "sf-boot-trail-",
+      factoryCwd,
+    );
     await store.ensureStageWorkspace(run.runId, "clarify");
     const prompt: AskOperatorPrompt = {
       kind: "artifact_backed",
@@ -591,17 +464,9 @@ describe("openStageAttempt", () => {
     await appendOperatorAnswer(store, run.runId, "clarify", accept, {
       attempt: 1,
     });
-    const { agent, opened } = recordingAgent();
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
+    const result = await open({
       stage: stage("clarify"),
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
       attemptCtx: attemptContext(2),
     });
 
@@ -621,177 +486,48 @@ describe("openStageAttempt", () => {
     expect(await reader?.()).toEqual([{ prompt, answer: accept }]);
   });
 
-  it("diamond synthesize passes priorEnvelopesByStage and omits priorEnvelopes", async () => {
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
-      cwd: fixtures,
-    });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-diamond-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      ...catalogLocators("diamond-fan-in"),
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const research: StageEnvelope = {
-      status: "success",
-      summary: "from-research",
-      artifacts: [],
-      payload: {},
-    };
-    const validation: StageEnvelope = {
-      status: "success",
-      summary: "from-validation",
-      artifacts: [],
-      payload: {},
-    };
-    for (const [stageId, envelope] of [
-      ["validation", validation],
-      ["research", research],
-    ] as const) {
-      await store.ensureStageWorkspace(run.runId, stageId);
-      await store.createStageExecution(run.runId, stageId);
-      await store.appendStageEvent(run.runId, stageId, { event: "started" });
-      await store.appendStageEvent(run.runId, stageId, { event: "succeeded" });
-      await store.writeEnvelope(run.runId, stageId, envelope);
-      await store.updateStageExecution(run.runId, stageId, 1, {
-        status: "succeeded",
-        envelope,
+  it.each([
+    { fixture: "diamond-fan-in", order: ["research", "validation"] },
+    { fixture: "diamond-fan-in-reversed", order: ["validation", "research"] },
+  ])(
+    "synthesize in $fixture passes priorEnvelopesByStage keyed in declaration order and omits priorEnvelopes",
+    async ({ fixture, order }) => {
+      const loaded = await loadPipeline(pipelinePath(fixture), { cwd: fixtures });
+      const { open, opened, store, run } = await bootHarness(
+        "sf-boot-diamond-",
+        factoryCwd,
+        catalogLocators(fixture),
+      );
+      const research = envelopeOf("from-research", {});
+      const validation = envelopeOf("from-validation", {});
+      await seedSucceeded(store, run.runId, "validation", validation);
+      await seedSucceeded(store, run.runId, "research", research);
+
+      const result = await open({
+        stage: loaded.stages.find((s) => s.id === "synthesize")!,
+        dag: loaded.dag,
       });
-    }
-    const { agent, opened } = recordingAgent();
-    const synthesize = loaded.stages.find((s) => s.id === "synthesize");
-    expect(synthesize).toBeDefined();
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: synthesize!,
-      task,
-      dag: loaded.dag,
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-    });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(opened).toHaveLength(1);
+      expect(opened[0]?.priorEnvelope).toBeNull();
+      expect(opened[0]?.priorEnvelopes).toBeUndefined();
+      expect(Object.keys(opened[0]?.priorEnvelopesByStage ?? {})).toEqual(order);
+      expect(opened[0]?.priorEnvelopesByStage?.research).toEqual(research);
+      expect(opened[0]?.priorEnvelopesByStage?.validation).toEqual(validation);
+      expect(result.prior).toBeNull();
+    },
+  );
 
-    expect(result.ok).toBe(true);
-    expect(opened).toHaveLength(1);
-    expect(opened[0]?.priorEnvelope).toBeNull();
-    expect(opened[0]?.priorEnvelopes).toBeUndefined();
-    expect(Object.keys(opened[0]?.priorEnvelopesByStage ?? {})).toEqual([
-      "research",
-      "validation",
-    ]);
-    expect(opened[0]?.priorEnvelopesByStage?.research).toEqual(research);
-    expect(opened[0]?.priorEnvelopesByStage?.validation).toEqual(validation);
-    expect(result.prior).toBeNull();
-  });
+  it.each([
+    { name: "stage.mcp is omitted", mcp: undefined },
+    { name: "stage.mcp is empty", mcp: [] },
+  ])("omits resolvedMcpServers when $name", async ({ mcp }) => {
+    const { open, opened } = await bootHarness("sf-boot-mcp-omit-", factoryCwd);
 
-  it("diamond synthesize keys priors in reversed YAML declaration order", async () => {
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in-reversed"), {
-      cwd: fixtures,
-    });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-diamond-rev-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      ...catalogLocators("diamond-fan-in-reversed"),
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const research: StageEnvelope = {
-      status: "success",
-      summary: "from-research",
-      artifacts: [],
-      payload: {},
-    };
-    const validation: StageEnvelope = {
-      status: "success",
-      summary: "from-validation",
-      artifacts: [],
-      payload: {},
-    };
-    for (const [stageId, envelope] of [
-      ["research", research],
-      ["validation", validation],
-    ] as const) {
-      await store.ensureStageWorkspace(run.runId, stageId);
-      await store.createStageExecution(run.runId, stageId);
-      await store.appendStageEvent(run.runId, stageId, { event: "started" });
-      await store.appendStageEvent(run.runId, stageId, { event: "succeeded" });
-      await store.writeEnvelope(run.runId, stageId, envelope);
-      await store.updateStageExecution(run.runId, stageId, 1, {
-        status: "succeeded",
-        envelope,
-      });
-    }
-    const { agent, opened } = recordingAgent();
-    const synthesize = loaded.stages.find((s) => s.id === "synthesize");
-    expect(synthesize).toBeDefined();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: synthesize!,
-      task,
-      dag: loaded.dag,
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(opened).toHaveLength(1);
-    expect(opened[0]?.priorEnvelope).toBeNull();
-    expect(opened[0]?.priorEnvelopes).toBeUndefined();
-    expect(Object.keys(opened[0]?.priorEnvelopesByStage ?? {})).toEqual([
-      "validation",
-      "research",
-    ]);
-    expect(opened[0]?.priorEnvelopesByStage?.validation).toEqual(validation);
-    expect(opened[0]?.priorEnvelopesByStage?.research).toEqual(research);
-    expect(result.prior).toBeNull();
-  });
-
-  it("omits resolvedMcpServers when stage.mcp is omitted", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-omit-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: stage("clarify"),
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(opened).toHaveLength(1);
-    expect(opened[0]?.resolvedMcpServers).toBeUndefined();
-  });
-
-  it("omits resolvedMcpServers when stage.mcp is empty", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-empty-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: { ...stage("clarify"), mcp: [] },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
+    const result = await open({
+      stage: { ...stage("clarify"), ...(mcp !== undefined ? { mcp } : {}) },
     });
 
     expect(result.ok).toBe(true);
@@ -810,24 +546,12 @@ describe("openStageAttempt", () => {
         args: ["-y", "@modelcontextprotocol/server-notion"],
       },
     });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-ok-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: { ...stage("clarify"), mcp: ["github"] },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
+    const { open, opened, store, run } = await bootHarness(
+      "sf-boot-mcp-ok-",
       factoryCwd,
-    });
+    );
+
+    const result = await open({ stage: { ...stage("clarify"), mcp: ["github"] } });
 
     expect(result.ok).toBe(true);
     expect(opened).toHaveLength(1);
@@ -848,7 +572,29 @@ describe("openStageAttempt", () => {
     ]);
   });
 
-  it("AE5: refuses checkout-only .mcp.json for repository binding", async () => {
+  it.each([
+    {
+      name: "refuses checkout-only .mcp.json for repository binding",
+      repository: true,
+      bindingKind: "repository",
+      trust: [],
+      allowed: false,
+    },
+    {
+      name: "allows checkout-only .mcp.json for checkout binding and records workspace origin",
+      repository: false,
+      bindingKind: "checkout",
+      trust: [],
+      allowed: true,
+    },
+    {
+      name: "trust_workspace_config allowlists checkout .mcp.json for repository binding",
+      repository: true,
+      bindingKind: "repository",
+      trust: "factoryCwd",
+      allowed: true,
+    },
+  ] as const)("checkout .mcp.json trust: $name", async (row) => {
     const checkout = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-co-"));
     await writeMcpCatalog(checkout, {
       github: {
@@ -856,70 +602,30 @@ describe("openStageAttempt", () => {
         args: ["-y", "@modelcontextprotocol/server-github"],
       },
     });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-ae5-repo-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-      projectRoot: factoryCwd,
-      checkoutRoot: checkout,
-      repository: "https://github.com/example/repo.git",
-    });
-    const { agent, opened } = recordingAgent();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: { ...stage("clarify"), mcp: ["github"] },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
+    const { open, opened, store, run } = await bootHarness(
+      "sf-boot-mcp-trust-",
       factoryCwd,
-      checkoutRoot: checkout,
-      bindingKind: "repository",
-      trustWorkspaceConfig: [],
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.reason).toBe("untrusted_config_origin");
-    expect(opened).toHaveLength(0);
-  });
-
-  it("AE5: allows checkout-only .mcp.json for checkout binding and records workspace origin", async () => {
-    const checkout = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-co-ok-"));
-    await writeMcpCatalog(checkout, {
-      github: {
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-github"],
+      {
+        projectRoot: factoryCwd,
+        checkoutRoot: checkout,
+        ...(row.repository ? { repository: "https://github.com/example/repo.git" } : {}),
       },
-    });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-ae5-co-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-      projectRoot: factoryCwd,
-      checkoutRoot: checkout,
-    });
-    const { agent, opened } = recordingAgent();
+    );
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
+    const result = await open({
       stage: { ...stage("clarify"), mcp: ["github"] },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
       checkoutRoot: checkout,
-      bindingKind: "checkout",
-      trustWorkspaceConfig: [],
+      bindingKind: row.bindingKind,
+      trustWorkspaceConfig: row.trust === "factoryCwd" ? [factoryCwd] : [],
     });
 
+    if (!row.allowed) {
+      expect(result).toEqual({ ok: false, reason: "untrusted_config_origin" });
+      expect(opened).toHaveLength(0);
+      return;
+    }
     expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
     expect(opened[0]?.resolvedMcpServers?.github).toMatchObject({
       command: "npx",
       cwd: path.resolve(checkout),
@@ -934,45 +640,6 @@ describe("openStageAttempt", () => {
     ]);
   });
 
-  it("AE5: trust_workspace_config allowlists checkout .mcp.json for repository binding", async () => {
-    const checkout = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-trust-"));
-    await writeMcpCatalog(checkout, {
-      github: {
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-github"],
-      },
-    });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-ae5-trust-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-      projectRoot: factoryCwd,
-      checkoutRoot: checkout,
-      repository: "https://github.com/example/repo.git",
-    });
-    const { agent, opened } = recordingAgent();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: { ...stage("clarify"), mcp: ["github"] },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-      checkoutRoot: checkout,
-      bindingKind: "repository",
-      trustWorkspaceConfig: [factoryCwd],
-    });
-
-    expect(result.ok).toBe(true);
-    expect(opened).toHaveLength(1);
-    const detail = await store.readRun(run.runId);
-    expect(detail.config_origins?.[0]?.origin).toBe("workspace");
-  });
-
   it("stamps STAGEFLOW_STAGE_ARTIFACTS_DIR onto resolved MCP args", async () => {
     await writeMcpCatalog(factoryCwd, {
       playwright: {
@@ -985,24 +652,9 @@ describe("openStageAttempt", () => {
         ],
       },
     });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-art-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
+    const { open, opened, run } = await bootHarness("sf-boot-mcp-art-", factoryCwd);
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: { ...stage("clarify"), mcp: ["playwright"] },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-    });
+    const result = await open({ stage: { ...stage("clarify"), mcp: ["playwright"] } });
 
     const artifactsDir = attemptArtifactsDir(run.workspaceDir, "clarify", 1);
     expect(result.ok).toBe(true);
@@ -1016,26 +668,13 @@ describe("openStageAttempt", () => {
   });
 
   it("stamps STAGEFLOW_STAGE_ARTIFACTS_DIR into the stage system_prompt", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-prompt-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
+    const { open, opened, run } = await bootHarness("sf-boot-mcp-prompt-", factoryCwd);
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
+    const result = await open({
       stage: {
         ...stage("clarify"),
         system_prompt: `filename \${${STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV}}/page.png`,
       },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
     });
 
     const artifactsDir = attemptArtifactsDir(run.workspaceDir, "clarify", 1);
@@ -1053,25 +692,12 @@ describe("openStageAttempt", () => {
         headers: { Authorization: `Bearer \${${envKey}}` },
       },
     });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-var-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
+    const { open, opened } = await bootHarness("sf-boot-mcp-var-", factoryCwd);
 
     try {
-      const result = await openStageAttempt({
-        agent,
-        store,
-        runId: run.runId,
+      const result = await open({
         stage: { ...stage("clarify"), mcp: ["github"] },
         stageId: "clarify",
-        task,
-        dag: rootDag("clarify"),
-        workspaceDir: run.workspaceDir,
-        factoryCwd,
       });
 
       expect(result.ok).toBe(false);
@@ -1096,23 +722,10 @@ describe("openStageAttempt", () => {
         headers: { Authorization: `Bearer \${${envKey}}` },
       },
     });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-grant-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
+    const { open, opened } = await bootHarness("sf-boot-mcp-grant-", factoryCwd);
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
+    const result = await open({
       stage: { ...stage("clarify"), mcp: ["github"] },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
       stageEnv: { [envKey]: "grant-token-value-xx" },
     });
 
@@ -1122,421 +735,195 @@ describe("openStageAttempt", () => {
     });
   });
 
-  it("fails closed without openStage when the allowlisted server is unknown", async () => {
-    await writeMcpCatalog(factoryCwd, {
-      github: { command: "npx" },
-    });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-unknown-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
+  it.each([
+    {
+      name: "the allowlisted server is unknown",
+      catalog: { github: { command: "npx" } },
+      mcp: ["notion"],
+      withFactoryCwd: true,
+      reason: /notion/,
+    },
+    {
+      name: "the catalog uses a reserved name",
+      catalog: { stageflow: { command: "npx" } },
+      mcp: ["stageflow"],
+      withFactoryCwd: true,
+      reason: /reserved name "stageflow"/,
+    },
+    {
+      name: "mcp is set and factoryCwd is missing",
+      catalog: undefined,
+      mcp: ["github"],
+      withFactoryCwd: false,
+      reason: /MCP catalog.*missing/i,
+    },
+  ])("fails closed without openStage when $name", async (row) => {
+    if (row.catalog) await writeMcpCatalog(factoryCwd, row.catalog);
+    const { open, opened } = await bootHarness(
+      "sf-boot-mcp-fail-",
+      row.withFactoryCwd ? factoryCwd : undefined,
+    );
 
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: { ...stage("clarify"), mcp: ["notion"] },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      reason: expect.stringContaining("notion"),
-    });
-    expect(opened).toHaveLength(0);
-  });
-
-  it("fails closed without openStage when the catalog uses a reserved name", async () => {
-    await writeMcpCatalog(factoryCwd, {
-      stageflow: { command: "npx" },
-    });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-reserved-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: { ...stage("clarify"), mcp: ["stageflow"] },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-      factoryCwd,
-    });
+    const result = await open({ stage: { ...stage("clarify"), mcp: row.mcp } });
 
     expect(result).toEqual({
       ok: false,
-      reason: expect.stringMatching(/reserved name "stageflow"/),
-    });
-    expect(opened).toHaveLength(0);
-  });
-
-  it("fails closed without openStage when mcp is set and factoryCwd is missing", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-nocwd-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    const { agent, opened } = recordingAgent();
-
-    const result = await openStageAttempt({
-      agent,
-      store,
-      runId: run.runId,
-      stage: { ...stage("clarify"), mcp: ["github"] },
-      task,
-      dag: rootDag("clarify"),
-      workspaceDir: run.workspaceDir,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      reason: expect.stringMatching(/MCP catalog.*missing/i),
+      reason: expect.stringMatching(row.reason),
     });
     expect(opened).toHaveLength(0);
   });
 
   describe("clone_input_schema prior validation", () => {
-    it("opens when a single predecessor payload matches", async () => {
-      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-prior-ok-"));
-      const store = createRunStore({ rootDir: root });
-      const run = await store.createRun({
-        pipelineId: "docs-only",
-        taskYaml: "id: t\ngoal: g\n",
-      });
-      const parent: StageEnvelope = {
-        status: "success",
-        summary: "from-parent",
-        artifacts: [],
+    it.each([
+      {
+        name: "opens when a single predecessor payload matches",
         payload: { title: "Calendar" },
-      };
-      await store.createStageExecution(run.runId, "clarify");
-      await store.writeEnvelope(run.runId, "clarify", parent);
-      const { agent, opened } = recordingAgent();
-
-      const result = await openStageAttempt({
-        agent,
-        store,
-        runId: run.runId,
-        stage: { ...stage("design-doc"), clone_input_schema: titleInputSchema },
-        task,
-        dag: linearDag("clarify", "design-doc"),
-        workspaceDir: run.workspaceDir,
-        factoryCwd,
-      });
-
-      expect(result.ok).toBe(true);
-      expect(opened).toHaveLength(1);
-    });
-
-    it("fails closed when a single predecessor payload is missing", async () => {
-      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-prior-miss-"));
-      const store = createRunStore({ rootDir: root });
-      const run = await store.createRun({
-        pipelineId: "docs-only",
-        taskYaml: "id: t\ngoal: g\n",
-      });
-      const parent: StageEnvelope = {
-        status: "success",
-        summary: "from-parent",
-        artifacts: [],
-      };
-      await store.createStageExecution(run.runId, "clarify");
-      await store.writeEnvelope(run.runId, "clarify", parent);
-      const { agent, opened } = recordingAgent();
-
-      const result = await openStageAttempt({
-        agent,
-        store,
-        runId: run.runId,
-        stage: { ...stage("design-doc"), clone_input_schema: titleInputSchema },
-        task,
-        dag: linearDag("clarify", "design-doc"),
-        workspaceDir: run.workspaceDir,
-        factoryCwd,
-      });
-
-      expect(result).toEqual({
-        ok: false,
+        schema: titleInputSchema,
+        reason: undefined,
+      },
+      {
+        name: "fails closed when a single predecessor payload is missing",
+        payload: undefined,
+        schema: titleInputSchema,
         reason: "prior payload is required by io.input.schema for design-doc",
-      });
-      expect(opened).toHaveLength(0);
-    });
-
-    it("fails closed when a single predecessor payload does not match", async () => {
-      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-prior-bad-"));
-      const store = createRunStore({ rootDir: root });
-      const run = await store.createRun({
-        pipelineId: "docs-only",
-        taskYaml: "id: t\ngoal: g\n",
-      });
-      const parent: StageEnvelope = {
-        status: "success",
-        summary: "from-parent",
-        artifacts: [],
+      },
+      {
+        name: "fails closed when a single predecessor payload does not match",
         payload: { title: 12 },
-      };
-      await store.createStageExecution(run.runId, "clarify");
-      await store.writeEnvelope(run.runId, "clarify", parent);
-      const { agent, opened } = recordingAgent();
-
-      const result = await openStageAttempt({
-        agent,
-        store,
-        runId: run.runId,
-        stage: { ...stage("design-doc"), clone_input_schema: titleInputSchema },
-        task,
-        dag: linearDag("clarify", "design-doc"),
-        workspaceDir: run.workspaceDir,
+        schema: titleInputSchema,
+        reason: /^prior payload does not match io\.input\.schema for design-doc:/,
+      },
+      {
+        name: "skips the check when clone_input_schema is omitted",
+        payload: undefined,
+        schema: undefined,
+        reason: undefined,
+      },
+    ])("$name", async ({ payload, schema, reason }) => {
+      const { open, opened, store, run } = await bootHarness(
+        "sf-boot-prior-",
         factoryCwd,
-      });
-
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.reason).toMatch(
-        /^prior payload does not match io\.input\.schema for design-doc:/,
       );
-      expect(opened).toHaveLength(0);
-    });
-
-    it("skips the check when clone_input_schema is omitted", async () => {
-      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-prior-skip-"));
-      const store = createRunStore({ rootDir: root });
-      const run = await store.createRun({
-        pipelineId: "docs-only",
-        taskYaml: "id: t\ngoal: g\n",
-      });
-      const parent: StageEnvelope = {
-        status: "success",
-        summary: "from-parent",
-        artifacts: [],
-      };
       await store.createStageExecution(run.runId, "clarify");
-      await store.writeEnvelope(run.runId, "clarify", parent);
-      const { agent, opened } = recordingAgent();
-
-      const result = await openStageAttempt({
-        agent,
-        store,
-        runId: run.runId,
-        stage: stage("design-doc"),
-        task,
-        dag: linearDag("clarify", "design-doc"),
-        workspaceDir: run.workspaceDir,
-        factoryCwd,
-      });
-
-      expect(result.ok).toBe(true);
-      expect(opened).toHaveLength(1);
-    });
-
-    it("fails closed when a fan-in prior payload does not match", async () => {
-      const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
-        cwd: fixtures,
-      });
-      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-fanin-bad-"));
-      const store = createRunStore({ rootDir: root });
-      const run = await store.createRun({
-        ...catalogLocators("diamond-fan-in"),
-        taskYaml: "id: t\ngoal: g\n",
-      });
-      const research: StageEnvelope = {
-        status: "success",
-        summary: "from-research",
-        artifacts: [],
-        payload: { title: "ok" },
-      };
-      const validation: StageEnvelope = {
-        status: "success",
-        summary: "from-validation",
-        artifacts: [],
-        payload: { title: 1 },
-      };
-      for (const [stageId, envelope] of [
-        ["validation", validation],
-        ["research", research],
-      ] as const) {
-        await store.ensureStageWorkspace(run.runId, stageId);
-        await store.createStageExecution(run.runId, stageId);
-        await store.appendStageEvent(run.runId, stageId, { event: "started" });
-        await store.appendStageEvent(run.runId, stageId, { event: "succeeded" });
-        await store.writeEnvelope(run.runId, stageId, envelope);
-        await store.updateStageExecution(run.runId, stageId, 1, {
-          status: "succeeded",
-          envelope,
-        });
-      }
-      const synthesize = loaded.stages.find((s) => s.id === "synthesize");
-      expect(synthesize).toBeDefined();
-      const { agent, opened } = recordingAgent();
-
-      const result = await openStageAttempt({
-        agent,
-        store,
-        runId: run.runId,
-        stage: { ...synthesize!, clone_input_schema: titleInputSchema },
-        task,
-        dag: loaded.dag,
-        workspaceDir: run.workspaceDir,
-        factoryCwd,
-      });
-
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.reason).toMatch(
-        /^prior payload does not match io\.input\.schema for synthesize:/,
+      await store.writeEnvelope(
+        run.runId,
+        "clarify",
+        envelopeOf("from-parent", payload),
       );
-      expect(opened).toHaveLength(0);
-    });
 
-    it("opens when every fan-in prior payload matches", async () => {
-      const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
-        cwd: fixtures,
-      });
-      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-fanin-ok-"));
-      const store = createRunStore({ rootDir: root });
-      const run = await store.createRun({
-        ...catalogLocators("diamond-fan-in"),
-        taskYaml: "id: t\ngoal: g\n",
-      });
-      const research: StageEnvelope = {
-        status: "success",
-        summary: "from-research",
-        artifacts: [],
-        payload: { title: "r" },
-      };
-      const validation: StageEnvelope = {
-        status: "success",
-        summary: "from-validation",
-        artifacts: [],
-        payload: { title: "v" },
-      };
-      for (const [stageId, envelope] of [
-        ["validation", validation],
-        ["research", research],
-      ] as const) {
-        await store.ensureStageWorkspace(run.runId, stageId);
-        await store.createStageExecution(run.runId, stageId);
-        await store.appendStageEvent(run.runId, stageId, { event: "started" });
-        await store.appendStageEvent(run.runId, stageId, { event: "succeeded" });
-        await store.writeEnvelope(run.runId, stageId, envelope);
-        await store.updateStageExecution(run.runId, stageId, 1, {
-          status: "succeeded",
-          envelope,
-        });
-      }
-      const synthesize = loaded.stages.find((s) => s.id === "synthesize");
-      expect(synthesize).toBeDefined();
-      const { agent, opened } = recordingAgent();
-
-      const result = await openStageAttempt({
-        agent,
-        store,
-        runId: run.runId,
-        stage: { ...synthesize!, clone_input_schema: titleInputSchema },
-        task,
-        dag: loaded.dag,
-        workspaceDir: run.workspaceDir,
-        factoryCwd,
-      });
-
-      expect(result.ok).toBe(true);
-      expect(opened).toHaveLength(1);
-    });
-
-    it("treats omitted task.input as {} on entry and opens when it matches", async () => {
-      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-entry-empty-"));
-      const store = createRunStore({ rootDir: root });
-      const run = await store.createRun({
-        pipelineId: "docs-only",
-        taskYaml: "id: t\ngoal: g\n",
-      });
-      const { agent, opened } = recordingAgent();
-
-      const result = await openStageAttempt({
-        agent,
-        store,
-        runId: run.runId,
+      const result = await open({
         stage: {
-          ...stage("clarify"),
-          clone_input_schema: unconstrainedObjectSchema,
+          ...stage("design-doc"),
+          ...(schema !== undefined ? { clone_input_schema: schema } : {}),
         },
-        task,
-        dag: rootDag("clarify"),
-        workspaceDir: run.workspaceDir,
-        factoryCwd,
+        dag: linearDag("clarify", "design-doc"),
       });
 
-      expect(result.ok).toBe(true);
-      expect(opened).toHaveLength(1);
+      if (reason === undefined) {
+        expect(result.ok).toBe(true);
+        expect(opened).toHaveLength(1);
+      } else {
+        expect(result).toEqual({
+          ok: false,
+          reason: typeof reason === "string" ? reason : expect.stringMatching(reason),
+        });
+        expect(opened).toHaveLength(0);
+      }
     });
 
-    it("fails closed when omitted task.input does not match entry io.input.schema", async () => {
-      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-entry-unmet-"));
-      const store = createRunStore({ rootDir: root });
-      const run = await store.createRun({
-        pipelineId: "docs-only",
-        taskYaml: "id: t\ngoal: g\n",
+    it.each([
+      {
+        name: "fails closed when a fan-in prior payload does not match",
+        validationTitle: 1,
+        reason: /^prior payload does not match io\.input\.schema for synthesize:/,
+      },
+      {
+        name: "opens when every fan-in prior payload matches",
+        validationTitle: "v",
+        reason: undefined,
+      },
+    ])("$name", async ({ validationTitle, reason }) => {
+      const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
+        cwd: fixtures,
       });
-      const { agent, opened } = recordingAgent();
-
-      const result = await openStageAttempt({
-        agent,
-        store,
-        runId: run.runId,
-        stage: { ...stage("clarify"), clone_input_schema: titleInputSchema },
-        task,
-        dag: rootDag("clarify"),
-        workspaceDir: run.workspaceDir,
+      const { open, opened, store, run } = await bootHarness(
+        "sf-boot-fanin-",
         factoryCwd,
+        catalogLocators("diamond-fan-in"),
+      );
+      await seedSucceeded(
+        store,
+        run.runId,
+        "validation",
+        envelopeOf("from-validation", { title: validationTitle }),
+      );
+      await seedSucceeded(
+        store,
+        run.runId,
+        "research",
+        envelopeOf("from-research", { title: "r" }),
+      );
+
+      const result = await open({
+        stage: {
+          ...loaded.stages.find((s) => s.id === "synthesize")!,
+          clone_input_schema: titleInputSchema,
+        },
+        dag: loaded.dag,
       });
 
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.reason).toMatch(
-        /^task input does not match io\.input\.schema for clarify:/,
-      );
-      expect(opened).toHaveLength(0);
+      if (reason === undefined) {
+        expect(result.ok).toBe(true);
+        expect(opened).toHaveLength(1);
+      } else {
+        expect(result).toEqual({ ok: false, reason: expect.stringMatching(reason) });
+        expect(opened).toHaveLength(0);
+      }
     });
 
-    it("fails closed when task.input does not match entry io.input.schema", async () => {
-      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-entry-bad-"));
-      const store = createRunStore({ rootDir: root });
-      const run = await store.createRun({
-        pipelineId: "docs-only",
-        taskYaml: "id: t\ngoal: g\n",
-      });
-      const { agent, opened } = recordingAgent();
-
-      const result = await openStageAttempt({
-        agent,
-        store,
-        runId: run.runId,
-        stage: { ...stage("clarify"), clone_input_schema: titleInputSchema },
-        task: { ...task, input: { title: 9 } },
-        dag: rootDag("clarify"),
-        workspaceDir: run.workspaceDir,
+    it.each([
+      {
+        name: "treats omitted task.input as {} on entry and opens when it matches",
+        schema: unconstrainedObjectSchema,
+        input: undefined,
+        ok: true,
+      },
+      {
+        name: "fails closed when omitted task.input does not match entry io.input.schema",
+        schema: titleInputSchema,
+        input: undefined,
+        ok: false,
+      },
+      {
+        name: "fails closed when task.input does not match entry io.input.schema",
+        schema: titleInputSchema,
+        input: { title: 9 },
+        ok: false,
+      },
+    ])("$name", async ({ schema, input, ok }) => {
+      const { open, opened } = await bootHarness(
+        "sf-boot-entry-",
         factoryCwd,
+        {},
+        input !== undefined ? { ...task, input } : task,
+      );
+
+      const result = await open({
+        stage: { ...stage("clarify"), clone_input_schema: schema },
       });
 
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.reason).toMatch(
-        /^task input does not match io\.input\.schema for clarify:/,
-      );
-      expect(opened).toHaveLength(0);
+      if (ok) {
+        expect(result.ok).toBe(true);
+        expect(opened).toHaveLength(1);
+      } else {
+        expect(result).toEqual({
+          ok: false,
+          reason: expect.stringMatching(
+            /^task input does not match io\.input\.schema for clarify:/,
+          ),
+        });
+        expect(opened).toHaveLength(0);
+      }
     });
   });
 });

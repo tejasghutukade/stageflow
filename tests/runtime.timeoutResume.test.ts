@@ -22,29 +22,15 @@ import {
   STAGEFLOW_MAX_AUTO_RESUMES,
 } from "../src/runtime/runManager.js";
 import { markStageInterrupted } from "../src/runtime/stageRecovery.js";
-import type { StageEnvelope } from "../src/types/envelope.js";
+import { okEnvelope } from "./helpers/envelopes.js";
 import { SAMPLE_TASK, SINGLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { waitFor } from "./helpers/waitFor.js";
+import { withEnv } from "./helpers/withEnv.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
 );
-
-function okEnvelope(summary: string): StageEnvelope {
-  return { status: "success", summary, artifacts: [], payload: {} };
-}
-
-async function waitFor(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 8000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  throw new Error("timeout waiting for condition");
-}
 
 function countingAgent(
   behaviorsByOpen: FakeAgentBehavior[],
@@ -94,7 +80,8 @@ async function seedSessionFile(
 
 describe("stageTimeout helpers", () => {
   it("recognizes timeout fail reasons", () => {
-    expect(isStageTimeoutReason(stageTimeoutReason(3600000))).toBe(true);
+    expect(stageTimeoutReason(3600000)).toBe("stage timed out after 3600000ms");
+    expect(isStageTimeoutReason("stage timed out after 3600000ms")).toBe(true);
     expect(isStageTimeoutReason("missing emit_stage_envelope")).toBe(false);
     expect(isStageTimeoutReason(undefined)).toBe(false);
     expect(
@@ -102,7 +89,7 @@ describe("stageTimeout helpers", () => {
         { event: "failed", reason: "earlier" },
         { event: "failed", reason: stageTimeoutReason(1000) },
       ]),
-    ).toBe(stageTimeoutReason(1000));
+    ).toBe("stage timed out after 1000ms");
   });
 
   it("assertResumableStage allows interrupted and failed timeout stages", () => {
@@ -187,74 +174,100 @@ describe("timeout resume", () => {
     expect(agent.sessionModes).toEqual(["fresh", "timeout_resume"]);
   });
 
-  it("rejects resume when the session file is missing without overwriting the timeout", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-timeout-resume-missing-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = countingAgent([
-      { type: "throw", message: stageTimeoutReason(1000) },
-      { type: "emit", envelope: okEnvelope("should-not-run") },
-    ]);
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: SINGLE_PIPELINE,
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
+  it.each([
+    {
+      name: "the session file is missing, without overwriting the timeout",
+      behaviors: [
+        { type: "throw", message: stageTimeoutReason(1000) },
+        { type: "emit", envelope: okEnvelope("should-not-run") },
+      ] as FakeAgentBehavior[],
+      interrupt: false,
+      seedSession: false,
+      reason: /missing session to resume/,
+      stageStatus: "failed",
+      timeoutPreserved: true,
+    },
+    {
+      name: "the stage failed for a non-timeout reason",
+      behaviors: [
+        { type: "never_emit" },
+        { type: "emit", envelope: okEnvelope("should-not-run") },
+      ] as FakeAgentBehavior[],
+      interrupt: false,
+      seedSession: true,
+      reason: /did not fail due to timeout/,
+      stageStatus: "failed",
+      timeoutPreserved: false,
+    },
+    {
+      name: "an interrupted stage has no session file",
+      behaviors: [{ type: "never_emit" }] as FakeAgentBehavior[],
+      interrupt: true,
+      seedSession: false,
+      reason: /missing session to resume/,
+      stageStatus: "interrupted",
+      timeoutPreserved: false,
+    },
+  ])(
+    "rejects resume when $name",
+    async ({
+      behaviors,
+      interrupt,
+      seedSession,
+      reason,
+      stageStatus,
+      timeoutPreserved,
+    }) => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-timeout-resume-reject-"));
+      const store = createRunStore({ rootDir: root });
+      const agent = countingAgent(behaviors);
+      const manager = new RunManager({ agent, store, cwd: fixtures });
+      const started = await manager.startRun({
+        task: SAMPLE_TASK,
+        pipeline: SINGLE_PIPELINE,
+      });
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
 
-    await waitFor(async () => {
-      const detail = await store.readRun(started.runId);
-      return (
-        detail.stages.find((s) => s.stage_id === "clarify")?.status === "failed"
-      );
-    });
+      await waitFor(async () => {
+        const detail = await store.readRun(started.runId);
+        return (
+          detail.stages.find((s) => s.stage_id === "clarify")?.status ===
+          "failed"
+        );
+      });
 
-    const result = await manager.resumeTimedOutStage(started.runId, "clarify");
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.status).toBe(409);
-    expect(result.reason).toMatch(/missing session to resume/);
+      if (interrupt) {
+        await markStageInterrupted({
+          store,
+          runId: started.runId,
+          stageId: "clarify",
+          reason: "orphaned_no_worker",
+          status: "interrupted",
+        });
+      }
+      if (seedSession) {
+        await seedSessionFile(store, started.runId, "clarify");
+      }
 
-    const after = await store.readRun(started.runId);
-    const clarify = after.stages.find((s) => s.stage_id === "clarify");
-    expect(clarify?.status).toBe("failed");
-    expect(isStageTimeoutReason(lastFailedReason(clarify?.events ?? []))).toBe(
-      true,
-    );
-    expect(clarify?.events.some((e) => e.event === "resumed")).toBe(false);
-    expect(agent.openCounts.get("clarify")).toBe(1);
-  });
+      const result = await manager.resumeTimedOutStage(started.runId, "clarify");
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.status).toBe(409);
+      expect(result.reason).toMatch(reason);
 
-  it("rejects resume on a non-timeout failure", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-timeout-resume-not-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = countingAgent([
-      { type: "never_emit" },
-      { type: "emit", envelope: okEnvelope("should-not-run") },
-    ]);
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: SINGLE_PIPELINE,
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => {
-      const detail = await store.readRun(started.runId);
-      return (
-        detail.stages.find((s) => s.stage_id === "clarify")?.status === "failed"
-      );
-    });
-
-    await seedSessionFile(store, started.runId, "clarify");
-    const result = await manager.resumeTimedOutStage(started.runId, "clarify");
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.status).toBe(409);
-    expect(result.reason).toMatch(/did not fail due to timeout/);
-    expect(agent.openCounts.get("clarify")).toBe(1);
-  });
+      const after = await store.readRun(started.runId);
+      const clarify = after.stages.find((s) => s.stage_id === "clarify");
+      expect(clarify?.status).toBe(stageStatus);
+      expect(clarify?.events.some((e) => e.event === "resumed")).toBe(false);
+      if (timeoutPreserved) {
+        expect(
+          isStageTimeoutReason(lastFailedReason(clarify?.events ?? [])),
+        ).toBe(true);
+      }
+      expect(agent.openCounts.get("clarify")).toBe(1);
+    },
+  );
 
   it("AE9: resumes an interrupted stage on the same attempt when session exists", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-interrupted-resume-"));
@@ -311,255 +324,200 @@ describe("timeout resume", () => {
     const execution = await store.getStageExecution(started.runId, "clarify", 1);
     expect(execution.auto_resume_count).toBe(0);
   });
-
-  it("refuses interrupted resume when the session file is missing", async () => {
-    const root = await mkdtemp(
-      path.join(tmpdir(), "sf-interrupted-resume-missing-"),
-    );
-    const store = createRunStore({ rootDir: root });
-    const agent = countingAgent([{ type: "never_emit" }]);
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: SINGLE_PIPELINE,
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => {
-      const detail = await store.readRun(started.runId);
-      return (
-        detail.stages.find((s) => s.stage_id === "clarify")?.status === "failed"
-      );
-    });
-
-    await markStageInterrupted({
-      store,
-      runId: started.runId,
-      stageId: "clarify",
-      reason: "orphaned_no_worker",
-      status: "interrupted",
-    });
-
-    const result = await manager.resumeTimedOutStage(started.runId, "clarify");
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.status).toBe(409);
-    expect(result.reason).toMatch(/missing session to resume/);
-    const after = await store.readRun(started.runId);
-    expect(
-      after.stages.find((s) => s.stage_id === "clarify")?.status,
-    ).toBe("interrupted");
-  });
 });
 
 describe("boot auto-resume cap", () => {
   it("AE25: caps automatic resumes then allows explicit resume to reset count", async () => {
-    const previousAuto = process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED];
-    const previousMax = process.env[STAGEFLOW_MAX_AUTO_RESUMES];
-    process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED] = "1";
-    process.env[STAGEFLOW_MAX_AUTO_RESUMES] = "2";
-    try {
-      const root = await mkdtemp(path.join(tmpdir(), "sf-auto-resume-cap-"));
-      const store = createRunStore({ rootDir: root });
-      const agent = countingAgent([
-        { type: "never_emit" },
-        { type: "emit", envelope: okEnvelope("clarify-resumed") },
-      ]);
-      const manager = new RunManager({ agent, store, cwd: fixtures });
-      const started = await manager.startRun({
-        task: SAMPLE_TASK,
-        pipeline: SINGLE_PIPELINE,
-      });
-      expect(started.ok).toBe(true);
-      if (!started.ok) return;
+    await withEnv(
+      {
+        [STAGEFLOW_AUTO_RESUME_INTERRUPTED]: "1",
+        [STAGEFLOW_MAX_AUTO_RESUMES]: "2",
+      },
+      async () => {
+        const root = await mkdtemp(path.join(tmpdir(), "sf-auto-resume-cap-"));
+        const store = createRunStore({ rootDir: root });
+        const agent = countingAgent([
+          { type: "never_emit" },
+          { type: "emit", envelope: okEnvelope("clarify-resumed") },
+        ]);
+        const manager = new RunManager({ agent, store, cwd: fixtures });
+        const started = await manager.startRun({
+          task: SAMPLE_TASK,
+          pipeline: SINGLE_PIPELINE,
+        });
+        expect(started.ok).toBe(true);
+        if (!started.ok) return;
 
-      await waitFor(async () => {
-        const detail = await store.readRun(started.runId);
-        return (
-          detail.stages.find((s) => s.stage_id === "clarify")?.status ===
-          "failed"
+        await waitFor(async () => {
+          const detail = await store.readRun(started.runId);
+          return (
+            detail.stages.find((s) => s.stage_id === "clarify")?.status ===
+            "failed"
+          );
+        });
+
+        await markStageInterrupted({
+          store,
+          runId: started.runId,
+          stageId: "clarify",
+          reason: "orphaned_no_worker",
+          status: "interrupted",
+        });
+        await store.updateRunStatus(started.runId, "running");
+        const execution = await store.getLatestStageExecution(
+          started.runId,
+          "clarify",
         );
-      });
+        expect(execution).not.toBeNull();
+        await store.updateStageExecution(
+          started.runId,
+          "clarify",
+          execution!.attempt,
+          { auto_resume_count: 2 },
+        );
 
-      await markStageInterrupted({
-        store,
-        runId: started.runId,
-        stageId: "clarify",
-        reason: "orphaned_no_worker",
-        status: "interrupted",
-      });
-      await store.updateRunStatus(started.runId, "running");
-      const execution = await store.getLatestStageExecution(
-        started.runId,
-        "clarify",
-      );
-      expect(execution).not.toBeNull();
-      await store.updateStageExecution(
-        started.runId,
-        "clarify",
-        execution!.attempt,
-        { auto_resume_count: 2 },
-      );
+        const auto = await manager.autoResumeInterruptedStages();
+        expect(auto.capped).toEqual([
+          { runId: started.runId, stageId: "clarify" },
+        ]);
+        expect(auto.resumed).toEqual([]);
 
-      const auto = await manager.autoResumeInterruptedStages();
-      expect(auto.capped).toEqual([
-        { runId: started.runId, stageId: "clarify" },
-      ]);
-      expect(auto.resumed).toEqual([]);
+        const cappedDetail = await store.readRun(started.runId);
+        const clarify = cappedDetail.stages.find((s) => s.stage_id === "clarify");
+        expect(clarify?.status).toBe("interrupted");
+        expect(
+          clarify?.events.some(
+            (e) =>
+              e.event === "interrupted" && e.reason === "auto_resume_capped",
+          ),
+        ).toBe(true);
+        const cappedExec = await store.getStageExecution(
+          started.runId,
+          "clarify",
+          1,
+        );
+        expect(cappedExec.auto_resume_count).toBe(2);
 
-      const cappedDetail = await store.readRun(started.runId);
-      const clarify = cappedDetail.stages.find((s) => s.stage_id === "clarify");
-      expect(clarify?.status).toBe("interrupted");
-      expect(
-        clarify?.events.some(
-          (e) =>
-            e.event === "interrupted" && e.reason === "auto_resume_capped",
-        ),
-      ).toBe(true);
-      const cappedExec = await store.getStageExecution(
-        started.runId,
-        "clarify",
-        1,
-      );
-      expect(cappedExec.auto_resume_count).toBe(2);
+        await seedSessionFile(store, started.runId, "clarify");
+        const resumed = await manager.resumeTimedOutStage(
+          started.runId,
+          "clarify",
+        );
+        expect(resumed.ok).toBe(true);
+        const reset = await store.getStageExecution(started.runId, "clarify", 1);
+        expect(reset.auto_resume_count).toBe(0);
 
-      await seedSessionFile(store, started.runId, "clarify");
-      const resumed = await manager.resumeTimedOutStage(
-        started.runId,
-        "clarify",
-      );
-      expect(resumed.ok).toBe(true);
-      const reset = await store.getStageExecution(started.runId, "clarify", 1);
-      expect(reset.auto_resume_count).toBe(0);
-
-      await waitFor(async () => {
-        const meta = await store.readRunMeta(started.runId);
-        return meta.status === "succeeded";
-      });
-    } finally {
-      if (previousAuto === undefined) {
-        delete process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED];
-      } else {
-        process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED] = previousAuto;
-      }
-      if (previousMax === undefined) {
-        delete process.env[STAGEFLOW_MAX_AUTO_RESUMES];
-      } else {
-        process.env[STAGEFLOW_MAX_AUTO_RESUMES] = previousMax;
-      }
-    }
+        await waitFor(async () => {
+          const meta = await store.readRunMeta(started.runId);
+          return meta.status === "succeeded";
+        });
+      },
+    );
   });
 
   it("leaves interrupted stages alone when auto-resume env is unset", async () => {
-    const previousAuto = process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED];
-    delete process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED];
-    try {
-      const root = await mkdtemp(path.join(tmpdir(), "sf-auto-resume-off-"));
-      const store = createRunStore({ rootDir: root });
-      const agent = countingAgent([{ type: "never_emit" }]);
-      const manager = new RunManager({ agent, store, cwd: fixtures });
-      const started = await manager.startRun({
-        task: SAMPLE_TASK,
-        pipeline: SINGLE_PIPELINE,
-      });
-      expect(started.ok).toBe(true);
-      if (!started.ok) return;
+    await withEnv(
+      {
+        [STAGEFLOW_AUTO_RESUME_INTERRUPTED]: undefined,
+      },
+      async () => {
+        const root = await mkdtemp(path.join(tmpdir(), "sf-auto-resume-off-"));
+        const store = createRunStore({ rootDir: root });
+        const agent = countingAgent([{ type: "never_emit" }]);
+        const manager = new RunManager({ agent, store, cwd: fixtures });
+        const started = await manager.startRun({
+          task: SAMPLE_TASK,
+          pipeline: SINGLE_PIPELINE,
+        });
+        expect(started.ok).toBe(true);
+        if (!started.ok) return;
 
-      await waitFor(async () => {
-        const detail = await store.readRun(started.runId);
-        return (
-          detail.stages.find((s) => s.stage_id === "clarify")?.status ===
-          "failed"
-        );
-      });
+        await waitFor(async () => {
+          const detail = await store.readRun(started.runId);
+          return (
+            detail.stages.find((s) => s.stage_id === "clarify")?.status ===
+            "failed"
+          );
+        });
 
-      await markStageInterrupted({
-        store,
-        runId: started.runId,
-        stageId: "clarify",
-        reason: "orphaned_no_worker",
-        status: "interrupted",
-      });
-      await store.updateRunStatus(started.runId, "running");
-      await seedSessionFile(store, started.runId, "clarify");
+        await markStageInterrupted({
+          store,
+          runId: started.runId,
+          stageId: "clarify",
+          reason: "orphaned_no_worker",
+          status: "interrupted",
+        });
+        await store.updateRunStatus(started.runId, "running");
+        await seedSessionFile(store, started.runId, "clarify");
 
-      const auto = await manager.autoResumeInterruptedStages();
-      expect(auto).toEqual({ resumed: [], capped: [], skipped: [] });
+        const auto = await manager.autoResumeInterruptedStages();
+        expect(auto).toEqual({ resumed: [], capped: [], skipped: [] });
 
-      const after = await store.readRun(started.runId);
-      expect(
-        after.stages.find((s) => s.stage_id === "clarify")?.status,
-      ).toBe("interrupted");
-      expect(agent.openCounts.get("clarify")).toBe(1);
-    } finally {
-      if (previousAuto === undefined) {
-        delete process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED];
-      } else {
-        process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED] = previousAuto;
-      }
-    }
+        const after = await store.readRun(started.runId);
+        expect(
+          after.stages.find((s) => s.stage_id === "clarify")?.status,
+        ).toBe("interrupted");
+        expect(agent.openCounts.get("clarify")).toBe(1);
+      },
+    );
   });
 
   it("auto-resumes interrupted stages under the cap when enabled", async () => {
-    const previousAuto = process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED];
-    process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED] = "true";
-    try {
-      const root = await mkdtemp(path.join(tmpdir(), "sf-auto-resume-on-"));
-      const store = createRunStore({ rootDir: root });
-      const agent = countingAgent([
-        { type: "never_emit" },
-        { type: "emit", envelope: okEnvelope("clarify-auto") },
-      ]);
-      const manager = new RunManager({ agent, store, cwd: fixtures });
-      const started = await manager.startRun({
-        task: SAMPLE_TASK,
-        pipeline: SINGLE_PIPELINE,
-      });
-      expect(started.ok).toBe(true);
-      if (!started.ok) return;
+    await withEnv(
+      {
+        [STAGEFLOW_AUTO_RESUME_INTERRUPTED]: "true",
+      },
+      async () => {
+        const root = await mkdtemp(path.join(tmpdir(), "sf-auto-resume-on-"));
+        const store = createRunStore({ rootDir: root });
+        const agent = countingAgent([
+          { type: "never_emit" },
+          { type: "emit", envelope: okEnvelope("clarify-auto") },
+        ]);
+        const manager = new RunManager({ agent, store, cwd: fixtures });
+        const started = await manager.startRun({
+          task: SAMPLE_TASK,
+          pipeline: SINGLE_PIPELINE,
+        });
+        expect(started.ok).toBe(true);
+        if (!started.ok) return;
 
-      await waitFor(async () => {
-        const detail = await store.readRun(started.runId);
-        return (
-          detail.stages.find((s) => s.stage_id === "clarify")?.status ===
-          "failed"
+        await waitFor(async () => {
+          const detail = await store.readRun(started.runId);
+          return (
+            detail.stages.find((s) => s.stage_id === "clarify")?.status ===
+            "failed"
+          );
+        });
+
+        await markStageInterrupted({
+          store,
+          runId: started.runId,
+          stageId: "clarify",
+          reason: "orphaned_no_worker",
+          status: "interrupted",
+        });
+        await store.updateRunStatus(started.runId, "running");
+        await seedSessionFile(store, started.runId, "clarify");
+
+        const auto = await manager.autoResumeInterruptedStages();
+        expect(auto.resumed).toEqual([
+          { runId: started.runId, stageId: "clarify" },
+        ]);
+        expect(auto.capped).toEqual([]);
+
+        await waitFor(async () => {
+          const meta = await store.readRunMeta(started.runId);
+          return meta.status === "succeeded";
+        });
+
+        const execution = await store.getStageExecution(
+          started.runId,
+          "clarify",
+          1,
         );
-      });
-
-      await markStageInterrupted({
-        store,
-        runId: started.runId,
-        stageId: "clarify",
-        reason: "orphaned_no_worker",
-        status: "interrupted",
-      });
-      await store.updateRunStatus(started.runId, "running");
-      await seedSessionFile(store, started.runId, "clarify");
-
-      const auto = await manager.autoResumeInterruptedStages();
-      expect(auto.resumed).toEqual([
-        { runId: started.runId, stageId: "clarify" },
-      ]);
-      expect(auto.capped).toEqual([]);
-
-      await waitFor(async () => {
-        const meta = await store.readRunMeta(started.runId);
-        return meta.status === "succeeded";
-      });
-
-      const execution = await store.getStageExecution(
-        started.runId,
-        "clarify",
-        1,
-      );
-      expect(execution.auto_resume_count).toBe(1);
-    } finally {
-      if (previousAuto === undefined) {
-        delete process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED];
-      } else {
-        process.env[STAGEFLOW_AUTO_RESUME_INTERRUPTED] = previousAuto;
-      }
-    }
+        expect(execution.auto_resume_count).toBe(1);
+      },
+    );
   });
 });

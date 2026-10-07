@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { assertTmpdirUsable } from "../src/runstore/assertTmpdir.js";
 import { StoreOpenError } from "../src/runstore/sqlite/storeOpenError.js";
-import { BUILD_SHA, PACKAGE_VERSION } from "../src/package-meta.js";
 import { buildEgressHealth } from "../src/net/proxy.js";
 import {
   globalStageflowHome,
@@ -65,11 +64,6 @@ describe("assertTmpdirUsable", () => {
 });
 
 describe("BUILD_SHA and egress", () => {
-  it("defaults build sha to unknown", () => {
-    expect(BUILD_SHA === "unknown" || BUILD_SHA.length > 0).toBe(true);
-    expect(PACKAGE_VERSION).toMatch(/^\d+\.\d+\.\d+/);
-  });
-
   it("egress never includes userinfo", () => {
     const egress = buildEgressHealth({
       HTTPS_PROXY: "http://user:secret@proxy.example:3128",

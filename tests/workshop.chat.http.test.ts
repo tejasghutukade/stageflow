@@ -21,6 +21,7 @@ import {
   resolveWorkshopSessionStoreRoot,
   updateWorkshopSessionActiveBuildId,
 } from "../src/workshop/sessionStore.js";
+import { closeServer } from "./helpers/closeServer.js";
 import {
   initTempGitRepo,
   withIsolatedHome,
@@ -86,12 +87,7 @@ describe("POST /api/workshop/chat", () => {
       const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
       writeFactorySettings(repo.root, { workshopModel: "openai/gpt-5" });
       const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       const created = await createSession(base, "http-sess-1");
       expect(created.status).toBe(201);
 
@@ -106,6 +102,7 @@ describe("POST /api/workshop/chat", () => {
         }),
       });
       expect(result.status).toBe(200);
+      expect(result.headers.get("content-type")).toMatch(/json/);
       expect(result.body.sessionId).toBe("http-sess-1");
       expect(result.body.model).toBe("openai/gpt-5");
       expect(result.body.pending?.summary).toMatch(/Add stage/i);
@@ -124,12 +121,7 @@ describe("POST /api/workshop/chat", () => {
       const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
       writeFactorySettings(repo.root, { workshopModel: "openai/gpt-5" });
       const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       await createSession(base, "http-sess-model");
       const result = await jsonFetch(`${base}/api/workshop/chat`, {
         method: "POST",
@@ -152,12 +144,7 @@ describe("POST /api/workshop/chat", () => {
       cleanups.push(repo.cleanup);
       const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
       const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       await createSession(base, "http-sess-stream");
       const res = await fetch(`${base}/api/workshop/chat`, {
         method: "POST",
@@ -177,84 +164,22 @@ describe("POST /api/workshop/chat", () => {
       const frames = text
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as { type: string; sessionId?: string });
-      expect(frames.some((f) => f.type === "delta" || f.type === "event")).toBe(
-        true,
-      );
-      expect(frames.at(-1)?.type).toBe("done");
-      expect(frames.at(-1)?.sessionId).toBe("http-sess-stream");
-    });
-  });
-
-  it("characterization: fake host still post-hoc chunks after the turn (no mid-turn onDelta)", async () => {
-    await withIsolatedHome(async () => {
-      const repo = await initTempGitRepo();
-      cleanups.push(repo.cleanup);
-      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
-      let release!: () => void;
-      const gate = new Promise<void>((r) => {
-        release = r;
-      });
-      let completeEntered = false;
-      const model: OperatorAgentModel = {
-        async complete() {
-          completeEntered = true;
-          await gate;
-          return {
-            events: [
-              {
-                type: "message",
-                role: "assistant",
-                text: "abcdefghijklmnopqrstuvwxyz0123",
-              },
-            ],
-          };
-        },
-      };
-      const { server, base } = await withServer(
-        repo.root,
-        storeRoot,
-        createWorkshopOperatorHost({ model }),
-      );
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
-      await createSession(base, "http-sess-posthoc");
-      const resPromise = fetch(`${base}/api/workshop/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/x-ndjson",
-        },
-        body: JSON.stringify({
-          sessionId: "http-sess-posthoc",
-          message: "hello",
-          draft: { pipeline: { id: "demo", stages: [] } },
-          stream: true,
-        }),
-      });
-      for (let i = 0; i < 40 && !completeEntered; i += 1) {
-        await new Promise((r) => setTimeout(r, 5));
-      }
-      expect(completeEntered).toBe(true);
-      // Headers open early; body stays empty until the turn finishes (no onDelta).
-      release();
-      const res = await resPromise;
-      expect(res.status).toBe(200);
-      const text = await res.text();
-      const frames = text
-        .trim()
-        .split("\n")
         .map(
           (line) =>
-            JSON.parse(line) as { type: string; text?: string; sessionId?: string },
+            JSON.parse(line) as {
+              type: string;
+              sessionId?: string;
+              event?: { type: string };
+              draft?: { pipeline: { stages: unknown[] } };
+            },
         );
-      const deltas = frames.filter((f) => f.type === "delta");
-      expect(deltas.length).toBeGreaterThanOrEqual(1);
+      expect(
+        frames.some((f) => f.type === "event" && f.event?.type === "proposal"),
+      ).toBe(true);
+      expect(frames.filter((f) => f.type === "done")).toHaveLength(1);
       expect(frames.at(-1)?.type).toBe("done");
+      expect(frames.at(-1)?.draft?.pipeline.stages).toHaveLength(1);
+      expect(frames.at(-1)?.sessionId).toBe("http-sess-stream");
     });
   });
 
@@ -287,12 +212,7 @@ describe("POST /api/workshop/chat", () => {
         storeRoot,
         createWorkshopOperatorHost({ model }),
       );
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       await createSession(base, "http-sess-stop");
       const idle = await jsonFetch(`${base}/api/workshop/chat/stop`, {
         method: "POST",
@@ -357,12 +277,7 @@ describe("POST /api/workshop/chat", () => {
         storeRoot,
         createWorkshopOperatorHost({ model }),
       );
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       await createSession(base, "http-sess-mid");
       const res = await fetch(`${base}/api/workshop/chat`, {
         method: "POST",
@@ -430,12 +345,7 @@ describe("POST /api/workshop/chat", () => {
         storeRoot,
         createWorkshopOperatorHost({ model }),
       );
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       await createSession(base, "http-sess-err");
       const res = await fetch(`${base}/api/workshop/chat`, {
         method: "POST",
@@ -501,47 +411,13 @@ describe("POST /api/workshop/chat", () => {
     });
   });
 
-  it("non-stream JSON clients still receive a coherent turn payload", async () => {
-    await withIsolatedHome(async () => {
-      const repo = await initTempGitRepo();
-      cleanups.push(repo.cleanup);
-      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
-      const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
-      await createSession(base, "http-sess-json");
-      const result = await jsonFetch(`${base}/api/workshop/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: "http-sess-json",
-          message: "hello",
-          draft: { pipeline: { id: "demo", stages: [] } },
-        }),
-      });
-      expect(result.status).toBe(200);
-      expect(result.headers.get("content-type")).toMatch(/json/);
-      expect(result.body.sessionId).toBe("http-sess-json");
-      expect(Array.isArray(result.body.events)).toBe(true);
-    });
-  });
-
   it("posts draft each turn and keeps durable session across messages", async () => {
     await withIsolatedHome(async () => {
       const repo = await initTempGitRepo();
       cleanups.push(repo.cleanup);
       const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
       const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       await createSession(base, "http-sess-multi");
 
       const first = await jsonFetch(`${base}/api/workshop/chat`, {
@@ -584,54 +460,27 @@ describe("POST /api/workshop/chat", () => {
     });
   });
 
-  it("rejects missing message", async () => {
+  it.each([
+    { missing: "message", body: { sessionId: "http-sess-missing" }, error: /message/i },
+    { missing: "sessionId", body: { message: "hello" }, error: /sessionId/i },
+  ])("rejects a body missing $missing", async ({ body, error }) => {
     await withIsolatedHome(async () => {
       const repo = await initTempGitRepo();
       cleanups.push(repo.cleanup);
       const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
       const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
-      await createSession(base, "http-sess-msg");
+      cleanups.push(() => closeServer(server));
+      await createSession(base, "http-sess-missing");
       const result = await jsonFetch(`${base}/api/workshop/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId: "http-sess-msg",
+          ...body,
           draft: { pipeline: { id: "demo", stages: [] } },
         }),
       });
       expect(result.status).toBe(400);
-      expect(result.body.error).toMatch(/message/i);
-    });
-  });
-
-  it("rejects missing sessionId", async () => {
-    await withIsolatedHome(async () => {
-      const repo = await initTempGitRepo();
-      cleanups.push(repo.cleanup);
-      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
-      const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
-      const result = await jsonFetch(`${base}/api/workshop/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: "hello",
-          draft: { pipeline: { id: "demo", stages: [] } },
-        }),
-      });
-      expect(result.status).toBe(400);
-      expect(result.body.error).toMatch(/sessionId/i);
+      expect(result.body.error).toMatch(error);
     });
   });
 
@@ -641,12 +490,7 @@ describe("POST /api/workshop/chat", () => {
       cleanups.push(repo.cleanup);
       const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
       const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       const result = await jsonFetch(`${base}/api/workshop/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -668,12 +512,7 @@ describe("POST /api/workshop/chat", () => {
       const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
       const home = resolveWorkshopSessionStoreRoot();
       const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       await createSession(base, "http-pin-a");
       createWorkshopBuild(home, {
         id: "build-a",
@@ -726,12 +565,7 @@ describe("POST /api/workshop/chat", () => {
         storeRoot,
         createWorkshopOperatorHost({ model }),
       );
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       await createSession(base, "http-pin-activity");
       createWorkshopBuild(home, {
         id: "build-act",
@@ -813,12 +647,7 @@ describe("POST /api/workshop/chat", () => {
         storeRoot,
         createWorkshopOperatorHost({ model }),
       );
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
       await createSession(base, "http-pin-wait");
       createWorkshopBuild(home, {
         id: "build-a",
@@ -885,12 +714,7 @@ describe("Workshop sessions HTTP API", () => {
       cleanups.push(repo.cleanup);
       const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-sess-"));
       const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
 
       const emptyList = await jsonFetch(`${base}/api/workshop/sessions`);
       expect(emptyList.status).toBe(200);
@@ -928,12 +752,7 @@ describe("Workshop sessions HTTP API", () => {
       cleanups.push(repo.cleanup);
       const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-undo-"));
       const { server, base } = await withServer(repo.root, storeRoot);
-      cleanups.push(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((err) => (err ? reject(err) : resolve()));
-          }),
-      );
+      cleanups.push(() => closeServer(server));
 
       const created = await createSession(base, "http-sess-undo");
       expect(created.status).toBe(201);

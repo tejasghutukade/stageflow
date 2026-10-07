@@ -115,34 +115,24 @@ function successPayload(items: unknown[]): StageEnvelope {
 }
 
 describe("Clone Chain clone cap emit validation", () => {
-  it("rejects an empty Clone Array against the compiled emitter schema", async () => {
-    const loaded = await loadPipeline(pipelinePath("clone-chain-smallest"), {
-      cwd: fixtures,
-    });
+  const overCap = [issue0, issue1, issue0, issue1, issue0];
+  it.each([
+    { name: "an empty Clone Array", fixture: "clone-chain-smallest", items: [] },
+    { name: "a Clone Array longer than clone_cap", fixture: "clone-chain-smallest", items: overCap },
+    {
+      name: "an element that does not match the named $ref",
+      fixture: "clone-chain-smallest",
+      items: [{ id: "i-1" }],
+    },
+    {
+      name: "two items when clone_cap is 1",
+      fixture: "clone-chain-cap-1",
+      items: [issue0, issue1],
+    },
+  ])("rejects $name against the compiled emitter schema", async ({ fixture, items }) => {
+    const loaded = await loadPipeline(pipelinePath(fixture), { cwd: fixtures });
     expect(() =>
-      assertEnvelopePayload(successPayload([]), emitterSchemaOf(loaded)),
-    ).toThrow(EnvelopeError);
-  });
-
-  it("rejects a Clone Array longer than clone_cap", async () => {
-    const loaded = await loadPipeline(pipelinePath("clone-chain-smallest"), {
-      cwd: fixtures,
-    });
-    const overCap = [issue0, issue1, issue0, issue1, issue0];
-    expect(() =>
-      assertEnvelopePayload(successPayload(overCap), emitterSchemaOf(loaded)),
-    ).toThrow(EnvelopeError);
-  });
-
-  it("rejects an element that does not match the named $ref", async () => {
-    const loaded = await loadPipeline(pipelinePath("clone-chain-smallest"), {
-      cwd: fixtures,
-    });
-    expect(() =>
-      assertEnvelopePayload(
-        successPayload([{ id: "i-1" }]),
-        emitterSchemaOf(loaded),
-      ),
+      assertEnvelopePayload(successPayload(items), emitterSchemaOf(loaded)),
     ).toThrow(EnvelopeError);
   });
 
@@ -153,9 +143,6 @@ describe("Clone Chain clone cap emit validation", () => {
     expect(() =>
       assertEnvelopePayload(successPayload([issue0]), emitterSchemaOf(loaded)),
     ).not.toThrow();
-    expect(() =>
-      assertEnvelopePayload(successPayload([issue0, issue1]), emitterSchemaOf(loaded)),
-    ).toThrow(EnvelopeError);
   });
 });
 

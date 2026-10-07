@@ -57,6 +57,15 @@ describe("catalog surface parity", () => {
       expect(mcpPipelines.payload.pipelines).toEqual(
         httpPipelines.body.pipelines,
       );
+      expect(httpPipelines.body.pipelines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "demo",
+            path: "pipelines/demo.pipeline.yaml",
+            project_root: expect.any(String),
+          }),
+        ]),
+      );
 
       const httpTasks = await jsonFetch(`${base}/api/tasks`);
       const mcpTasks = await mcpCall(base, "list_tasks");

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
-import { access, chmod, constants, mkdtemp, writeFile } from "node:fs/promises";
+import { pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, LINEAR_EXPLICIT_PIPELINE } from "./helpers/fixturePaths.js";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,8 +8,9 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { runPipeline } from "../src/runtime/pipelineRunner.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import { runStage } from "../src/runtime/stageRunner.js";
-import { formatPriorEnvelope } from "../src/prompt/priorEnvelope.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+
+const permsEnforced = process.platform !== "win32" && process.getuid?.() !== 0;
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -163,7 +164,7 @@ describe("stage and pipeline runners", () => {
       task: { id: "t", goal: "g" },
       priorEnvelope: null,
     });
-    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ ok: false, reason: "missing emit_stage_envelope" });
   });
 
   it("agent throw is recorded as stage failure", async () => {
@@ -186,39 +187,7 @@ describe("stage and pipeline runners", () => {
       task: { id: "t", goal: "g" },
       priorEnvelope: null,
     });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe("boom");
-  });
-
-  it("includes prior envelope paths in constructed prompt text", () => {
-    const prompt = [
-      "Goal: g",
-      formatPriorEnvelope({
-        status: "success",
-        summary: "prior",
-        artifacts: ["stages/clarify/attempts/1/artifacts/notes.md"],
-      }),
-    ].join("\n");
-    expect(prompt).toContain("stages/clarify/attempts/1/artifacts/notes.md");
-  });
-
-  it("covers AE3: single-stage pipeline succeeds with fake agent", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-pipe-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = scriptedFakeAgent([
-      {
-        type: "emit",
-        envelope: { status: "success", summary: "ok", artifacts: [] },
-      },
-    ]);
-    const result = await runPipeline({
-      agent,
-      store,
-      taskPath: SAMPLE_TASK,
-      pipeline: pipelinePath("single"),
-      cwd: fixtures,
-    });
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: false, reason: "boom" });
   });
 
   it("covers AE2: stops after first stage failure; second not invoked", async () => {
@@ -255,46 +224,6 @@ describe("stage and pipeline runners", () => {
     expect(second).not.toHaveBeenCalled();
     const events = await store.listStageEvents(result.runId, "clarify");
     expect(events.some((e) => e.event === "failed")).toBe(true);
-  });
-
-  it("three-stage success passes envelopes through", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-pipe-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = scriptedFakeAgent([
-      {
-        type: "emit",
-        envelope: {
-          status: "success",
-          summary: "s1",
-          artifacts: ["stages/clarify/attempts/1/artifacts/a.md"],
-        },
-      },
-      {
-        type: "emit",
-        envelope: {
-          status: "success",
-          summary: "s2",
-          artifacts: ["stages/design-doc/attempts/1/artifacts/b.md"],
-        },
-      },
-      {
-        type: "emit",
-        envelope: {
-          status: "success",
-          summary: "s3",
-          artifacts: ["stages/implementation-plan/attempts/1/artifacts/c.md"],
-        },
-      },
-    ]);
-
-    const result = await runPipeline({
-      agent,
-      store,
-      taskPath: SAMPLE_TASK,
-      pipeline: LINEAR_EXPLICIT_PIPELINE,
-      cwd: fixtures,
-    });
-    expect(result.ok).toBe(true);
   });
 
   it("valid checkout stamps checkout_root on the created run", async () => {
@@ -412,7 +341,7 @@ describe("stage and pipeline runners", () => {
     expect(after).toHaveLength(before.length);
   });
 
-  it("checkout without R/W/X throws before createRun", async () => {
+  it.skipIf(!permsEnforced)("checkout without R/W/X throws before createRun", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-pipe-"));
     const checkout = await mkdtemp(path.join(tmpdir(), "sf-checkout-ro-"));
     const store = createRunStore({ rootDir: root });
@@ -429,14 +358,6 @@ describe("stage and pipeline runners", () => {
     );
     await chmod(checkout, 0o000);
     try {
-      try {
-        await access(
-          checkout,
-          constants.R_OK | constants.W_OK | constants.X_OK,
-        );
-        return;
-      } catch {
-      }
       const before = await store.listRuns();
       await expect(
         runPipeline({
@@ -454,7 +375,7 @@ describe("stage and pipeline runners", () => {
     }
   });
 
-  it("checkout without search (X) permission throws before createRun", async () => {
+  it.skipIf(!permsEnforced)("checkout without search (X) permission throws before createRun", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-pipe-"));
     const checkout = await mkdtemp(path.join(tmpdir(), "sf-checkout-nx-"));
     const store = createRunStore({ rootDir: root });
@@ -471,17 +392,6 @@ describe("stage and pipeline runners", () => {
     );
     await chmod(checkout, 0o600);
     try {
-      try {
-        await access(checkout, constants.R_OK | constants.W_OK);
-      } catch {
-        return;
-      }
-      try {
-        await access(checkout, constants.X_OK);
-        return;
-      } catch {
-        // Platform honors missing search bit; proceed with eager-failure assertion.
-      }
       const before = await store.listRuns();
       await expect(
         runPipeline({

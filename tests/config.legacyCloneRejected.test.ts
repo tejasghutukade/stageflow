@@ -50,30 +50,64 @@ const STAGE_BODY = [
   "      output:",
   "        schema:",
   "          type: object",
-].join("\n");
+];
 
-describe("legacy clonable/clone_cap fields are hard-rejected: raw-ref path", () => {
-  it('rejects "clonable" at normalize with a message naming the field and pointing at Clone Chain', () => {
+function yamlPipeline(stages: Array<{ id: string; extra: string[] }>): string {
+  return [
+    "id: demo",
+    "stages:",
+    ...stages.flatMap((s) => [`  - id: ${s.id}`, ...STAGE_BODY, ...s.extra]),
+    "",
+  ].join("\n");
+}
+
+const CHAIN_YAML = (field: string[]) => [
+  { id: "triage", extra: ["    entry: true", "    route:", "      - to: implement"] },
+  { id: "implement", extra: [...field, "    route:", "      - to: join-doc"] },
+  { id: "join-doc", extra: [] },
+];
+
+const CHAIN_RAW = (extra: Record<string, unknown>): PipelineStageRef[] => [
+  { id: "triage", entry: true, route: [{ to: "implement" }] },
+  { id: "implement", ...extra, route: [{ to: "join-doc" }] },
+  { id: "join-doc" },
+];
+
+const MSG = (stage: string, field: string) =>
+  new RegExp(
+    `stage "${stage}": "${field}" is no longer supported — use a Clone Chain instead`,
+  );
+
+describe("legacy clonable is hard-rejected", () => {
+  it("raw-ref path names the field and points at Clone Chain", () => {
     expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "triage", entry: true, route: [{ to: "implement" }] },
-          { id: "implement", clonable: true, route: [{ to: "join-doc" }] },
-          { id: "join-doc" },
-        ],
-        ctx("legacy-clonable"),
-      ),
-    ).toThrow(
-      /stage "implement": "clonable" is no longer supported — use a Clone Chain instead/,
-    );
+      resolvePipelineDag(CHAIN_RAW({ clonable: true }), ctx("legacy-clonable")),
+    ).toThrow(MSG("implement", "clonable"));
   });
 
-  it('rejects child "clone_cap" without clonable at apply', () => {
-    const refs: PipelineStageRef[] = [
-      { id: "triage", entry: true, route: [{ to: "implement" }] },
-      { id: "implement", clone_cap: 4, route: [{ to: "join-doc" }] },
-      { id: "join-doc" },
-    ];
+  it("raw-ref path names clonable first when clone_cap is also present", () => {
+    expect(() =>
+      resolvePipelineDag(
+        CHAIN_RAW({ clonable: true, clone_cap: 4 }),
+        ctx("legacy-clone-cap-with-clonable"),
+      ),
+    ).toThrow(MSG("implement", "clonable"));
+  });
+
+  it("YAML path names the field and points at Clone Chain", async () => {
+    const root = await writeTempCatalog({
+      "demo.pipeline.yaml": yamlPipeline(CHAIN_YAML(["    clonable: true"])),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.message).toMatch(MSG("implement", "clonable"));
+  });
+});
+
+describe("legacy child clone_cap is hard-rejected", () => {
+  it("raw-ref path rejects at apply", () => {
+    const refs = CHAIN_RAW({ clone_cap: 4 });
     const { dag } = resolvePipelineDagFromRefs(refs, ctx("legacy-clone-cap"));
     const stages: StageConfig[] = refs.map((ref) => ({
       id: ref.id,
@@ -82,32 +116,22 @@ describe("legacy clonable/clone_cap fields are hard-rejected: raw-ref path", () 
     const outcome = applyCloneChains(stages, refs, dag, "legacy-clone-cap");
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.issues[0]?.message).toMatch(
-      /stage "implement": "clone_cap" is no longer supported — use a Clone Chain instead/,
-    );
+    expect(outcome.issues[0]?.message).toMatch(MSG("implement", "clone_cap"));
   });
 
-  it('rejects child "clone_cap" with clonable (clonable is named first)', () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "triage", entry: true, route: [{ to: "implement" }] },
-          {
-            id: "implement",
-            clonable: true,
-            clone_cap: 4,
-            route: [{ to: "join-doc" }],
-          },
-          { id: "join-doc" },
-        ],
-        ctx("legacy-clone-cap-with-clonable"),
-      ),
-    ).toThrow(
-      /stage "implement": "clonable" is no longer supported — use a Clone Chain instead/,
-    );
+  it("YAML path names the field and points at Clone Chain", async () => {
+    const root = await writeTempCatalog({
+      "demo.pipeline.yaml": yamlPipeline(CHAIN_YAML(["    clone_cap: 4"])),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.message).toMatch(MSG("implement", "clone_cap"));
   });
+});
 
-  it('rejects "clone_actions" with a message naming the field and pointing at Clone Chain', () => {
+describe("legacy clone_actions is hard-rejected", () => {
+  it("raw-ref path names the field and points at Clone Chain", () => {
     expect(() =>
       resolvePipelineDag(
         [
@@ -124,95 +148,25 @@ describe("legacy clonable/clone_cap fields are hard-rejected: raw-ref path", () 
         ],
         ctx("legacy-clone-actions"),
       ),
-    ).toThrow(
-      /stage "work": "clone_actions" is no longer supported — use a Clone Chain instead/,
-    );
+    ).toThrow(MSG("work", "clone_actions"));
   });
-});
 
-describe("legacy clonable/clone_cap/clone_actions fields are hard-rejected: YAML path (loadPipeline)", () => {
-  it('rejects "clonable" in YAML with a message naming the field and pointing at Clone Chain', async () => {
+  it("YAML path names the field and points at Clone Chain", async () => {
     const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: triage",
-        STAGE_BODY,
-        "    entry: true",
-        "    route:",
-        "      - to: implement",
-        "  - id: implement",
-        STAGE_BODY,
-        "    clonable: true",
-        "    route:",
-        "      - to: join-doc",
-        "  - id: join-doc",
-        STAGE_BODY,
-        "",
-      ].join("\n"),
+      "demo.pipeline.yaml": yamlPipeline([
+        {
+          id: "work",
+          extra: ["    clone_actions:", "      - skip", "      - once", "      - fanout", "    entry: true"],
+        },
+      ]),
     });
     const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.issues[0]?.message).toMatch(
-      /stage "implement": "clonable" is no longer supported — use a Clone Chain instead/,
-    );
+    expect(outcome.issues[0]?.message).toMatch(MSG("work", "clone_actions"));
   });
 
-  it('rejects child "clone_cap" in YAML with a message naming the field and pointing at Clone Chain', async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: triage",
-        STAGE_BODY,
-        "    entry: true",
-        "    route:",
-        "      - to: implement",
-        "  - id: implement",
-        STAGE_BODY,
-        "    clone_cap: 4",
-        "    route:",
-        "      - to: join-doc",
-        "  - id: join-doc",
-        STAGE_BODY,
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.message).toMatch(
-      /stage "implement": "clone_cap" is no longer supported — use a Clone Chain instead/,
-    );
-  });
-
-  it('rejects "clone_actions" in YAML with a message naming the field and pointing at Clone Chain', async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: work",
-        STAGE_BODY,
-        "    clone_actions:",
-        "      - skip",
-        "      - once",
-        "      - fanout",
-        "    entry: true",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.message).toMatch(
-      /stage "work": "clone_actions" is no longer supported — use a Clone Chain instead/,
-    );
-  });
-});
-
-describe("legacy clone_actions is hard-rejected: stage file (loadStage)", () => {
-  it('rejects "clone_actions" on a stage file with a message naming the field and pointing at Clone Chain', async () => {
+  it("stage-file path names the field and points at Clone Chain", async () => {
     const root = await writeTempCatalog({
       "work.yaml": [
         "id: work",

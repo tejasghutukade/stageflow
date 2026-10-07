@@ -6,6 +6,11 @@ import { loadPipeline, loadPipelineOutcome } from "../src/config/loadPipeline.js
 import { loadStageOutcome } from "../src/config/loadStage.js";
 import { compileTargetContract } from "../src/config/yamlDialect.js";
 
+const ACTION_MODEL = [
+  "    system_prompt: Do work",
+  "    model: anthropic/claude-sonnet-4-5",
+];
+
 const INLINE_IO = [
   "    io:",
   "      input:",
@@ -35,6 +40,29 @@ async function writeTempCatalog(files: Record<string, string>): Promise<string> 
   }
   return root;
 }
+
+function inlinePipeline(id: string, bodyLines: string[]): string {
+  return ["id: " + id, "stages:", "  - id: plan", ...ACTION_MODEL, ...bodyLines, ""].join("\n");
+}
+
+async function loadInline(bodyLines: string[], id = "demo") {
+  const root = await writeTempCatalog({
+    "demo.pipeline.yaml": inlinePipeline(id, bodyLines),
+  });
+  return loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+}
+
+function issuesOf(outcome: { ok: boolean; issues?: { code: string; message: string }[] }) {
+  expect(outcome.ok).toBe(false);
+  return outcome.issues ?? [];
+}
+
+const REPAIR_ENTRY = [
+  "    on_verify_fail:",
+  "      mode: repair",
+  "      max_attempts: 2",
+  "      retry_safety: idempotent",
+];
 
 describe("YAML dual-read dialect", () => {
   it("compileTargetContract returns typed emit/after/recovery without stamping the source record", () => {
@@ -90,59 +118,6 @@ describe("YAML dual-read dialect", () => {
     expect(raw.pre_emit_checks).toBeUndefined();
     expect(raw.completion).toBeUndefined();
     expect(raw.recovery).toBeUndefined();
-    expect(raw.io).toBeDefined();
-    expect(raw.verify).toBeDefined();
-    expect(raw.on_verify_fail).toBeDefined();
-  });
-
-  it("loads an inline target entry with io and verify onto IR fields", async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    gate_kinds: [confirm]",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          properties:",
-        "            verdict:",
-        "              type: string",
-        "          required: [verdict]",
-        "    verify:",
-        "      - id: approved",
-        "        type: gate",
-        "        kind: confirm",
-        "        when: [emit]",
-        "      - id: report",
-        "        type: artifact",
-        "        path: report.md",
-        "        when: [after]",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(outcome.value.stages[0]?.payload_schema).toEqual({
-      type: "object",
-      properties: { verdict: { type: "string" } },
-      required: ["verdict"],
-    });
-    expect(outcome.value.stages[0]?.pre_emit_checks).toEqual([
-      { id: "approved", type: "gate", kind: "confirm" },
-    ]);
-    expect(outcome.value.dag.nodes[0]?.completion).toEqual({
-      mode: "all",
-      checks: [{ id: "report", type: "artifact", path: "report.md" }],
-    });
-    expect(outcome.issues?.some((issue) => issue.code === "catalog.legacy_yaml")).toBeFalsy();
   });
 
   it("loads uses plus on_verify_fail and rejects uses plus io", async () => {
@@ -164,10 +139,7 @@ describe("YAML dual-read dialect", () => {
         "stages:",
         "  - id: worker",
         "    uses: ./worker.yaml",
-        "    on_verify_fail:",
-        "      mode: repair",
-        "      max_attempts: 2",
-        "      retry_safety: idempotent",
+        ...REPAIR_ENTRY,
         "",
       ].join("\n"),
       "conflict.pipeline.yaml": [
@@ -175,13 +147,7 @@ describe("YAML dual-read dialect", () => {
         "stages:",
         "  - id: worker",
         "    uses: ./worker.yaml",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
+        ...INLINE_IO,
         "",
       ].join("\n"),
     });
@@ -200,124 +166,98 @@ describe("YAML dual-read dialect", () => {
     });
 
     const conflict = await loadPipelineOutcome("conflict.pipeline.yaml", { cwd: root });
-    expect(conflict.ok).toBe(false);
-    if (conflict.ok) return;
-    expect(conflict.issues[0]?.code).toBe("pipeline.stage_uses_inline_conflict");
+    expect(issuesOf(conflict)[0]?.code).toBe("pipeline.stage_uses_inline_conflict");
   });
 
-  it("rejects on_verify_fail when resolved after-phase checks are missing", async () => {
-    const root = await writeTempCatalog({
-      "worker.yaml": [
-        "id: worker",
-        "system_prompt: Do work",
-        "model: anthropic/claude-sonnet-4-5",
-        "gate_kinds: [confirm]",
-        ...FILE_IO,
-        "verify:",
-        "  - id: approved",
-        "    type: gate",
-        "    kind: confirm",
-        "    when: [emit]",
-        "",
-      ].join("\n"),
-      "emit-only.pipeline.yaml": [
-        "id: emit-only",
-        "stages:",
-        "  - id: worker",
-        "    uses: ./worker.yaml",
-        "    on_verify_fail:",
-        "      mode: repair",
-        "      max_attempts: 2",
-        "      retry_safety: idempotent",
-        "",
-      ].join("\n"),
-      "bare.pipeline.yaml": [
-        "id: bare",
-        "stages:",
-        "  - id: worker",
-        "    uses: ./worker.yaml",
-        "    on_verify_fail:",
-        "      mode: repair",
-        "      max_attempts: 2",
-        "      retry_safety: idempotent",
-        "",
-      ].join("\n"),
+  describe("on_verify_fail without resolved after-phase checks", () => {
+    const WORKER_HEAD = [
+      "id: worker",
+      "system_prompt: Do work",
+      "model: anthropic/claude-sonnet-4-5",
+    ];
+    const USES_PIPELINE = [
+      "id: demo",
+      "stages:",
+      "  - id: worker",
+      "    uses: ./worker.yaml",
+      ...REPAIR_ENTRY,
+      "",
+    ].join("\n");
+
+    it.each([
+      {
+        name: "uses a stage file with only emit-phase verify",
+        worker: [
+          ...WORKER_HEAD,
+          "gate_kinds: [confirm]",
+          ...FILE_IO,
+          "verify:",
+          "  - id: approved",
+          "    type: gate",
+          "    kind: confirm",
+          "    when: [emit]",
+          "",
+        ],
+      },
+      { name: "uses a stage file with no verify", worker: [...WORKER_HEAD, ...FILE_IO, ""] },
+    ])("rejects when the entry $name", async ({ worker }) => {
+      const root = await writeTempCatalog({
+        "worker.yaml": worker.join("\n"),
+        "demo.pipeline.yaml": USES_PIPELINE,
+      });
+      const issues = issuesOf(await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root }));
+      expect(issues[0]?.code).toBe("pipeline.invalid_recovery");
+      expect(issues[0]?.message).toMatch(/requires a completion contract/);
     });
-    const emitOnly = await loadPipelineOutcome("emit-only.pipeline.yaml", { cwd: root });
-    expect(emitOnly.ok).toBe(false);
-    if (emitOnly.ok) return;
-    expect(emitOnly.issues[0]?.code).toBe("pipeline.invalid_recovery");
-    expect(emitOnly.issues[0]?.message).toMatch(/requires a completion contract/);
 
-    await writeFile(
-      path.join(root, "worker.yaml"),
-      [
-        "id: worker",
-        "system_prompt: Do work",
-        "model: anthropic/claude-sonnet-4-5",
-        ...FILE_IO,
-        "",
-      ].join("\n"),
-    );
-    const bare = await loadPipelineOutcome("bare.pipeline.yaml", { cwd: root });
-    expect(bare.ok).toBe(false);
-    if (bare.ok) return;
-    expect(bare.issues[0]?.code).toBe("pipeline.invalid_recovery");
-    expect(bare.issues[0]?.message).toMatch(/requires a completion contract/);
-  });
-
-  it("rejects inline on_verify_fail when verify is emit-phase only", async () => {
-    const root = await writeTempCatalog({
-      "emit-only.pipeline.yaml": [
-        "id: emit-only",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    gate_kinds: [confirm]",
-        ...INLINE_IO,
-        "    verify:",
-        "      - id: approved",
-        "        type: gate",
-        "        kind: confirm",
-        "        when: [emit]",
-        "    on_verify_fail:",
-        "      mode: repair",
-        "      max_attempts: 2",
-        "      retry_safety: idempotent",
-        "",
-      ].join("\n"),
+    it("rejects inline on_verify_fail when verify is emit-phase only", async () => {
+      const issues = issuesOf(
+        await loadInline([
+          "    gate_kinds: [confirm]",
+          ...INLINE_IO,
+          "    verify:",
+          "      - id: approved",
+          "        type: gate",
+          "        kind: confirm",
+          "        when: [emit]",
+          ...REPAIR_ENTRY,
+        ]),
+      );
+      expect(issues[0]?.code).toBe("pipeline.invalid_recovery");
+      expect(issues[0]?.message).toMatch(/requires a completion contract/);
     });
-    const outcome = await loadPipelineOutcome("emit-only.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("pipeline.invalid_recovery");
-    expect(outcome.issues[0]?.message).toMatch(/requires a completion contract/);
   });
 
-  it("rejects mixed payload_schema and io.output on one entry", async () => {
-    const root = await writeTempCatalog({
-      "mixed.pipeline.yaml": [
-        "id: mixed",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
+  it.each([
+    {
+      name: "payload_schema and io.output on one entry",
+      body: [
         "    payload_schema:",
         "      type: object",
         "    io:",
         "      output:",
         "        schema:",
         "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("mixed.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "catalog.mixed_yaml_dialect")).toBe(
-      true,
-    );
+      ],
+    },
+    {
+      name: "completion and verify in one file",
+      body: [
+        ...INLINE_IO,
+        "    verify:",
+        "      - id: tests",
+        "        type: command",
+        "        run: npm test",
+        "    completion:",
+        "      checks:",
+        "        - id: tests",
+        "          type: command",
+        "          run: npm test",
+      ],
+    },
+  ])("rejects mixed $name with catalog.mixed_yaml_dialect", async ({ body }) => {
+    const issues = issuesOf(await loadInline(body, "mixed"));
+    expect(issues.some((issue) => issue.code === "catalog.mixed_yaml_dialect")).toBe(true);
   });
 
   it("loads a target pipeline that uses a legacy stage file", async () => {
@@ -386,100 +326,10 @@ describe("YAML dual-read dialect", () => {
     expect(outcome.issues?.some((issue) => issue.code === "catalog.legacy_yaml")).toBeFalsy();
   });
 
-  it("loads route: [{ to: single-child }] on a target inline predecessor", async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: clarify",
-        "    system_prompt: Clarify",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    entry: true",
-        "    route:",
-        "      - to: design-doc",
-        ...INLINE_IO,
-        "  - id: design-doc",
-        "    system_prompt: Design",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    const design = outcome.value.dag.nodes.find((node) => node.id === "design-doc");
-    expect(design).toMatchObject({
-      needs: "clarify",
-      needsEdges: [{ id: "clarify", on: ["succeeded"] }],
-    });
-  });
-
-  it("rejects mixed completion and verify in one file", async () => {
-    const root = await writeTempCatalog({
-      "mixed.pipeline.yaml": [
-        "id: mixed",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "    verify:",
-        "      - id: tests",
-        "        type: command",
-        "        run: npm test",
-        "    completion:",
-        "      checks:",
-        "        - id: tests",
-        "          type: command",
-        "          run: npm test",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("mixed.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "catalog.mixed_yaml_dialect")).toBe(
-      true,
-    );
-  });
-
   it("rejects unknown pipeline-entry keys", async () => {
-    const root = await writeTempCatalog({
-      "unknown.pipeline.yaml": [
-        "id: unknown",
-        "stages:",
-        "  - id: plan",
-        "    label: bad",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("unknown.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("pipeline.invalid_shape");
-    expect(outcome.issues[0]?.message).toMatch(/unknown key "label"/);
+    const issues = issuesOf(await loadInline(["    label: bad", ...INLINE_IO], "unknown"));
+    expect(issues[0]?.code).toBe("pipeline.invalid_shape");
+    expect(issues[0]?.message).toMatch(/unknown key "label"/);
   });
 
   it("rejects wiring keys on a new-dialect stage file and ignores them on legacy files", async () => {
@@ -505,10 +355,9 @@ describe("YAML dual-read dialect", () => {
       ].join("\n"),
     });
     const target = await loadStageOutcome(path.join(root, "target.yaml"));
-    expect(target.ok).toBe(false);
-    if (target.ok) return;
-    expect(target.issues[0]?.code).toBe("stage.invalid_shape");
-    expect(target.issues[0]?.message).toMatch(/needs/);
+    const targetIssues = issuesOf(target);
+    expect(targetIssues[0]?.code).toBe("stage.invalid_shape");
+    expect(targetIssues[0]?.message).toMatch(/needs/);
 
     const legacy = await loadStageOutcome(path.join(root, "legacy.yaml"));
     expect(legacy.ok).toBe(true);
@@ -516,107 +365,88 @@ describe("YAML dual-read dialect", () => {
     expect(legacy.value.payload_schema).toMatchObject({ type: "object" });
   });
 
-  it("rejects type: command with when: [emit]", async () => {
-    const root = await writeTempCatalog({
-      "bad.pipeline.yaml": [
-        "id: bad",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
+  it.each([
+    {
+      name: "type: command with when: [emit]",
+      body: [
         ...INLINE_IO,
         "    verify:",
         "      - id: tests",
         "        type: command",
         "        run: npm test",
         "        when: [emit]",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("bad.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.invalid_verify")).toBe(
-      true,
-    );
-    expect(outcome.issues[0]?.message).toMatch(/cannot use when: emit/);
-  });
-
-  it("rejects new-dialect type: artifact with omitted when", async () => {
-    const root = await writeTempCatalog({
-      "bad.pipeline.yaml": [
-        "id: bad",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
+      ],
+      code: "pipeline.invalid_verify",
+      message: /cannot use when: emit/,
+    },
+    {
+      name: "type: artifact with omitted when",
+      body: [
         ...INLINE_IO,
         "    verify:",
         "      - id: report",
         "        type: artifact",
         "        path: report.md",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("bad.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.invalid_verify")).toBe(
-      true,
-    );
-    expect(outcome.issues[0]?.message).toMatch(/type artifact requires when/);
-  });
-
-  it("defaults omitted when: gate to emit and command to after", async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    gate_kinds: [confirm]",
+      ],
+      code: "pipeline.invalid_verify",
+      message: /type artifact requires when/,
+    },
+    {
+      name: "an emit-default gate whose kind is missing from gate_kinds",
+      body: [
         ...INLINE_IO,
         "    verify:",
         "      - id: approved",
         "        type: gate",
         "        kind: confirm",
-        "      - id: tests",
-        "        type: command",
-        "        run: npm test",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(outcome.value.stages[0]?.pre_emit_checks).toEqual([
-      { id: "approved", type: "gate", kind: "confirm" },
-    ]);
-    expect(outcome.value.dag.nodes[0]?.completion).toEqual({
-      mode: "all",
-      checks: [{ id: "tests", type: "command", run: "npm test" }],
-    });
+      ],
+      message: /gate check "approved" requires gate_kinds to include "confirm"/,
+    },
+    {
+      name: "omitted io on an inline stage",
+      body: [],
+      code: "stage.invalid_io",
+      message: /io is required/,
+    },
+    {
+      name: "omitted io.input.schema",
+      body: ["    io:", "      output:", "        schema:", "          type: object"],
+      code: "stage.invalid_io",
+      message: /io\.input\.schema is required/,
+    },
+    {
+      name: "omitted io.output.schema",
+      body: ["    io:", "      input:", "        schema:", "          type: object"],
+      code: "stage.invalid_io",
+      message: /io\.output\.schema is required/,
+    },
+    {
+      name: "an io side without schema",
+      body: [
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output: {}",
+      ],
+      code: "stage.invalid_io",
+      message: /io\.output\.schema is required/,
+    },
+  ])("rejects $name", async ({ body, code, message }) => {
+    const issues = issuesOf(await loadInline(body, "bad"));
+    if (code) expect(issues[0]?.code).toBe(code);
+    expect(issues[0]?.message).toMatch(message);
   });
 
   it("maps type: artifact when: [emit, after] onto emit basename and after nonempty path", async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        ...INLINE_IO,
-        "    verify:",
-        "      - id: report",
-        "        type: artifact",
-        "        basename: report.md",
-        "        when: [emit, after]",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    const outcome = await loadInline([
+      ...INLINE_IO,
+      "    verify:",
+      "      - id: report",
+      "        type: artifact",
+      "        basename: report.md",
+      "        when: [emit, after]",
+    ]);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.value.stages[0]?.pre_emit_checks).toEqual([
@@ -629,38 +459,16 @@ describe("YAML dual-read dialect", () => {
   });
 
   it("keeps after-artifact nonempty only when the YAML boolean is present", async () => {
-    const root = await writeTempCatalog({
-      "omit.pipeline.yaml": [
-        "id: omit",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        ...INLINE_IO,
-        "    verify:",
-        "      - id: report",
-        "        type: artifact",
-        "        path: report.md",
-        "        when: [after]",
-        "",
-      ].join("\n"),
-      "false.pipeline.yaml": [
-        "id: nonempty-false",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        ...INLINE_IO,
-        "    verify:",
-        "      - id: report",
-        "        type: artifact",
-        "        path: report.md",
-        "        nonempty: false",
-        "        when: [after]",
-        "",
-      ].join("\n"),
-    });
-    const omitted = await loadPipelineOutcome("omit.pipeline.yaml", { cwd: root });
+    const afterArtifact = (extra: string[]) => [
+      ...INLINE_IO,
+      "    verify:",
+      "      - id: report",
+      "        type: artifact",
+      "        path: report.md",
+      ...extra,
+      "        when: [after]",
+    ];
+    const omitted = await loadInline(afterArtifact([]));
     expect(omitted.ok).toBe(true);
     if (!omitted.ok) return;
     expect(omitted.value.dag.nodes[0]?.completion?.checks[0]).toEqual({
@@ -668,7 +476,7 @@ describe("YAML dual-read dialect", () => {
       type: "artifact",
       path: "report.md",
     });
-    const explicit = await loadPipelineOutcome("false.pipeline.yaml", { cwd: root });
+    const explicit = await loadInline(afterArtifact(["        nonempty: false"]));
     expect(explicit.ok).toBe(true);
     if (!explicit.ok) return;
     expect(explicit.value.dag.nodes[0]?.completion?.checks[0]).toEqual({
@@ -679,70 +487,40 @@ describe("YAML dual-read dialect", () => {
     });
   });
 
-  it("fails load when emit-default verify gate kind is missing from gate_kinds", async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        ...INLINE_IO,
-        "    verify:",
-        "      - id: approved",
-        "        type: gate",
-        "        kind: confirm",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.message).toMatch(
-      /gate check "approved" requires gate_kinds to include "confirm"/,
-    );
-  });
-
-  it("does not put after-only checks into pre_emit_checks", async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    gate_kinds: [confirm]",
-        ...INLINE_IO,
-        "    verify:",
-        "      - id: approved",
-        "        type: gate",
-        "        kind: confirm",
-        "        when: [emit]",
-        "      - id: tests",
-        "        type: command",
-        "        run: npm test",
-        "        when: [after]",
-        "      - id: files",
-        "        type: checkout_changes",
-        "        when: [after]",
-        "      - id: list",
-        "        type: checklist",
-        "        items: [done]",
-        "        when: [after]",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+  it("maps verify phases: omitted when defaults gate to emit and command to after; after-only checks stay out of pre_emit_checks", async () => {
+    const outcome = await loadInline([
+      "    gate_kinds: [confirm]",
+      ...INLINE_IO,
+      "    verify:",
+      "      - id: approved",
+      "        type: gate",
+      "        kind: confirm",
+      "      - id: tests",
+      "        type: command",
+      "        run: npm test",
+      "      - id: files",
+      "        type: checkout_changes",
+      "        when: [after]",
+      "      - id: list",
+      "        type: checklist",
+      "        items: [done]",
+      "        when: [after]",
+    ]);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
+    expect(outcome.value.stages[0]?.payload_schema).toEqual({ type: "object" });
     expect(outcome.value.stages[0]?.pre_emit_checks).toEqual([
       { id: "approved", type: "gate", kind: "confirm" },
     ]);
-    expect(outcome.value.dag.nodes[0]?.completion?.checks.map((check) => check.type)).toEqual([
-      "command",
-      "checkout_changes",
-      "checklist",
-    ]);
+    expect(outcome.value.dag.nodes[0]?.completion).toEqual({
+      mode: "all",
+      checks: [
+        { id: "tests", type: "command", run: "npm test" },
+        { id: "files", type: "checkout_changes" },
+        { id: "list", type: "checklist", items: ["done"] },
+      ],
+    });
+    expect(outcome.issues?.some((issue) => issue.code === "catalog.legacy_yaml")).toBeFalsy();
   });
 
   it("loads equivalent runner inputs from legacy pre_emit_checks + completion and a verify list", async () => {
@@ -816,90 +594,5 @@ describe("YAML dual-read dialect", () => {
     expect(target.value.dag.nodes[0]?.completion).toEqual(
       legacy.value.dag.nodes[0]?.completion,
     );
-  });
-
-  it("rejects omitted io on an inline stage", async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
-    expect(outcome.issues[0]?.message).toMatch(/io is required/);
-  });
-
-  it("rejects omitted io.input.schema", async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
-    expect(outcome.issues[0]?.message).toMatch(/io\.input\.schema is required/);
-  });
-
-  it("rejects omitted io.output.schema", async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
-    expect(outcome.issues[0]?.message).toMatch(/io\.output\.schema is required/);
-  });
-
-  it("rejects a side without schema", async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Do work",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output: {}",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
-    expect(outcome.issues[0]?.message).toMatch(/io\.output\.schema is required/);
   });
 });

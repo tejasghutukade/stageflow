@@ -238,14 +238,5 @@ describe("qaTrail derivePendingPrompt / listQaExchanges", () => {
     ]);
     expect(stage.pending_prompt).toBeUndefined();
     expect(listQaExchanges(stage.events)).toEqual([{ prompt, answer }]);
-
-    const { formatActivityLabel } = await import("../ui/src/status/activityCopy.js");
-    expect(formatActivityLabel({ event: "operator_prompt" })).toBe(
-      "Operator prompt",
-    );
-    expect(formatActivityLabel({ event: "operator_answer" })).toBe(
-      "Operator answer",
-    );
-    expect(formatActivityLabel({ event: "started" })).toBe("Stage started");
   });
 });

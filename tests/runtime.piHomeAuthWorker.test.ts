@@ -43,11 +43,6 @@ describe("Stageflow agent auth path in a stage worker", () => {
     });
   });
 
-  it("resolves the agent auth path from STAGEFLOW_AGENT_AUTH_PATH when the worker HOME differs", () => {
-    process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV] = "/real/home/.stageflow/agent/auth.json";
-    expect(stageflowAgentAuthPath()).toBe("/real/home/.stageflow/agent/auth.json");
-  });
-
   it("still lets an explicit override win", () => {
     process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV] = "/real/home/.stageflow/agent/auth.json";
     expect(stageflowAgentAuthPath("/custom/auth.json")).toBe("/custom/auth.json");

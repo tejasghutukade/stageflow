@@ -4,72 +4,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { STAGEFLOW_MCP_SERVER_NAME } from "../src/agent/claudeTools.js";
 import {
-  StageMcpError,
-  assertMcpAllowlistKnown,
   listProjectMcpCatalog,
   loadMcpCatalog,
   mcpCatalogPath,
   parseMcpCatalog,
   resolveStageMcpServers,
   stampStagePromptArtifactsDir,
-  type ResolvedMcpServerConfig,
-  type ResolvedMcpServers,
 } from "../src/config/resolveStageMcpServers.js";
-import type { StageConfig } from "../src/types/stage.js";
-
-const STAGE_MCP_ERROR_CODES = [
-  "missing_catalog",
-  "unknown_server",
-  "reserved_name",
-  "unresolved_var",
-  "invalid_config",
-  "untrusted_config_origin",
-  "connect_failed",
-] as const;
-
-describe("StageMcpError", () => {
-  it.each(STAGE_MCP_ERROR_CODES)(
-    "constructs with name StageMcpError and code %s",
-    (code) => {
-      const error = new StageMcpError(`stage mcp: ${code}`, code);
-      expect(error).toBeInstanceOf(Error);
-      expect(error).toBeInstanceOf(StageMcpError);
-      expect(error.name).toBe("StageMcpError");
-      expect(error.code).toBe(code);
-      expect(error.message).toBe(`stage mcp: ${code}`);
-    },
-  );
-});
-
-describe("stage MCP snapshot types", () => {
-  it("accepts StageConfig.mcp as a string list and keeps skill valid", () => {
-    const stage: StageConfig = {
-      id: "implement",
-      system_prompt: "Implement the change",
-      model: "anthropic/claude-sonnet-4-5",
-      skill: "ship",
-      mcp: ["github"],
-    };
-    expect(stage.mcp).toEqual(["github"]);
-    expect(stage.skill).toBe("ship");
-  });
-
-  it("imports ResolvedMcpServerConfig and ResolvedMcpServers", () => {
-    const github: ResolvedMcpServerConfig = {
-      type: "http",
-      url: "https://api.github.com/mcp",
-    };
-    const resolved: ResolvedMcpServers = { github };
-    expect(resolved.github).toEqual(github);
-    expect(Object.keys(resolved)).toEqual(["github"]);
-  });
-});
 
 describe("MCP catalog reader", () => {
-  it("joins projectRoot with .mcp.json", () => {
-    expect(mcpCatalogPath("/tmp/project")).toBe(path.join("/tmp/project", ".mcp.json"));
-  });
-
   it("throws missing_catalog when the file is absent", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-cat-missing-"));
     await expect(loadMcpCatalog(root)).rejects.toMatchObject({
@@ -78,55 +21,38 @@ describe("MCP catalog reader", () => {
     });
   });
 
-  it("throws invalid_config for invalid JSON", () => {
-    expect(() => parseMcpCatalog("{ not json", ".mcp.json")).toThrow(StageMcpError);
-    try {
-      parseMcpCatalog("{ not json", ".mcp.json");
-    } catch (err) {
-      expect(err).toBeInstanceOf(StageMcpError);
-      expect((err as StageMcpError).code).toBe("invalid_config");
-    }
-  });
-
-  it("throws invalid_config when mcpServers is an array", () => {
-    expect(() =>
-      parseMcpCatalog(JSON.stringify({ mcpServers: [] }), ".mcp.json"),
-    ).toThrow(StageMcpError);
-    try {
-      parseMcpCatalog(JSON.stringify({ mcpServers: [] }), ".mcp.json");
-    } catch (err) {
-      expect((err as StageMcpError).code).toBe("invalid_config");
-    }
-  });
-
-  it("throws invalid_config when mcpServers is missing or a server entry is not an object", () => {
-    expect(() => parseMcpCatalog(JSON.stringify({}), ".mcp.json")).toThrow(StageMcpError);
-    try {
-      parseMcpCatalog(JSON.stringify({}), ".mcp.json");
-    } catch (err) {
-      expect((err as StageMcpError).code).toBe("invalid_config");
-      expect((err as StageMcpError).message).toMatch(/mcpServers/);
-    }
-    try {
-      parseMcpCatalog(JSON.stringify({ mcpServers: { github: "npx" } }), ".mcp.json");
-    } catch (err) {
-      expect((err as StageMcpError).code).toBe("invalid_config");
-      expect((err as StageMcpError).message).toContain("github");
-    }
+  it.each([
+    { name: "invalid JSON", text: "{ not json", message: /./ },
+    { name: "mcpServers is an array", text: JSON.stringify({ mcpServers: [] }), message: /./ },
+    { name: "mcpServers is missing", text: JSON.stringify({}), message: /mcpServers/ },
+    {
+      name: "a server entry is not an object",
+      text: JSON.stringify({ mcpServers: { github: "npx" } }),
+      message: /github/,
+    },
+  ])("throws invalid_config when $name", ({ text, message }) => {
+    expect(() => parseMcpCatalog(text, ".mcp.json")).toThrowError(
+      expect.objectContaining({
+        name: "StageMcpError",
+        code: "invalid_config",
+        message: expect.stringMatching(message),
+      }),
+    );
   });
 
   it("throws reserved_name when a catalog key is stageflow", () => {
-    try {
+    expect(() =>
       parseMcpCatalog(
         JSON.stringify({ mcpServers: { [STAGEFLOW_MCP_SERVER_NAME]: { command: "npx" } } }),
         ".mcp.json",
-      );
-      expect.fail("expected StageMcpError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(StageMcpError);
-      expect((err as StageMcpError).code).toBe("reserved_name");
-      expect((err as StageMcpError).message).toContain(STAGEFLOW_MCP_SERVER_NAME);
-    }
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        name: "StageMcpError",
+        code: "reserved_name",
+        message: expect.stringContaining(STAGEFLOW_MCP_SERVER_NAME),
+      }),
+    );
   });
 
   it("returns plain-object entries without interpolating env tokens", async () => {
@@ -151,39 +77,14 @@ describe("MCP catalog reader", () => {
       headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
     });
   });
-
-  it("throws unknown_server when an allowlist name is absent", () => {
-    try {
-      assertMcpAllowlistKnown({ github: { command: "npx" } }, ["notion"]);
-      expect.fail("expected StageMcpError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(StageMcpError);
-      expect((err as StageMcpError).code).toBe("unknown_server");
-      expect((err as StageMcpError).message).toContain("notion");
-    }
-  });
-
-  it("accepts allowlist names that exist as catalog keys", () => {
-    expect(() =>
-      assertMcpAllowlistKnown({ github: { command: "npx" } }, ["github"]),
-    ).not.toThrow();
-  });
 });
 
 describe("stampStagePromptArtifactsDir", () => {
-  it("substitutes STAGEFLOW_STAGE_ARTIFACTS_DIR in the prompt", () => {
-    expect(
-      stampStagePromptArtifactsDir(
-        "save ${STAGEFLOW_STAGE_ARTIFACTS_DIR}/page.png",
-        "/tmp/run/artifacts",
-      ),
-    ).toBe("save /tmp/run/artifacts/page.png");
-  });
-
-  it("leaves prompts without the token unchanged", () => {
-    expect(stampStagePromptArtifactsDir("no token here", "/tmp/run/artifacts")).toBe(
-      "no token here",
-    );
+  it.each([
+    ["save ${STAGEFLOW_STAGE_ARTIFACTS_DIR}/page.png", "save /tmp/run/artifacts/page.png"],
+    ["no token here", "no token here"],
+  ])("stamps %j", (prompt, expected) => {
+    expect(stampStagePromptArtifactsDir(prompt, "/tmp/run/artifacts")).toBe(expected);
   });
 });
 
@@ -193,6 +94,15 @@ async function writeCatalog(
   const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-resolve-"));
   await writeFile(path.join(root, ".mcp.json"), JSON.stringify({ mcpServers: servers }));
   return root;
+}
+
+async function resolveOne(
+  server: Record<string, unknown>,
+  env: Record<string, string> = {},
+  extra: { stageId?: string } = {},
+) {
+  const root = await writeCatalog({ srv: server });
+  return resolveStageMcpServers({ projectRoot: root, allowlist: ["srv"], env, ...extra });
 }
 
 describe("resolveStageMcpServers", () => {
@@ -220,124 +130,94 @@ describe("resolveStageMcpServers", () => {
       url: "https://api.github.com/mcp",
       headers: { Authorization: "Bearer ghs_test_token" },
     });
-    expect(resolved).not.toHaveProperty("notion");
   });
 
-  it("throws unresolved_var when a required variable is unset (AE2)", async () => {
+  it("throws unresolved_var without echoing other env values (AE2)", async () => {
     const root = await writeCatalog({
       github: {
         url: "https://api.github.com/mcp",
         headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
       },
     });
-    try {
-      await resolveStageMcpServers({
-        projectRoot: root,
-        allowlist: ["github"],
-        env: { OTHER_SECRET: "s3cret-value-do-not-print" },
-      });
-      expect.fail("expected StageMcpError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(StageMcpError);
-      expect((err as StageMcpError).code).toBe("unresolved_var");
-      expect((err as StageMcpError).message).toContain("GITHUB_TOKEN");
-      expect((err as StageMcpError).message).not.toContain("s3cret-value-do-not-print");
-    }
+    const rejection = resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["github"],
+      env: { OTHER_SECRET: "s3cret-value-do-not-print" },
+    });
+    await expect(rejection).rejects.toMatchObject({
+      name: "StageMcpError",
+      code: "unresolved_var",
+      message: expect.stringContaining("GITHUB_TOKEN"),
+    });
+    await expect(rejection).rejects.toSatisfy(
+      (err: Error) => !err.message.includes("s3cret-value-do-not-print"),
+    );
   });
 
   it("unresolved_var names the stage when stageId is provided", async () => {
-    const root = await writeCatalog({
-      github: {
-        url: "https://api.github.com/mcp",
-        headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
-      },
+    await expect(
+      resolveOne(
+        { url: "${GITHUB_TOKEN}" },
+        {},
+        { stageId: "publish-github-release" },
+      ),
+    ).rejects.toMatchObject({
+      code: "unresolved_var",
+      message: expect.stringContaining('stage "publish-github-release"'),
     });
-    try {
-      await resolveStageMcpServers({
-        projectRoot: root,
-        allowlist: ["github"],
-        env: {},
-        stageId: "publish-github-release",
-      });
-      expect.fail("expected StageMcpError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(StageMcpError);
-      expect((err as StageMcpError).code).toBe("unresolved_var");
-      expect((err as StageMcpError).message).toContain(
-        'stage "publish-github-release"',
-      );
-    }
   });
 
-  it("uses ${VAR:-default} when the variable is unset (AE10)", async () => {
-    const root = await writeCatalog({
-      github: {
-        type: "http",
-        url: "${API_BASE_URL:-https://api.example.com}/mcp",
-      },
-    });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: root,
-      allowlist: ["github"],
+  it.each([
+    {
+      name: "${VAR:-default} when the variable is unset (AE10)",
+      server: { type: "http", url: "${API_BASE_URL:-https://api.example.com}/mcp" },
       env: {},
-    });
-    expect(resolved.github.url).toBe("https://api.example.com/mcp");
-  });
-
-  it("interpolates a token inside a larger headers value", async () => {
-    const root = await writeCatalog({
-      github: {
+      expected: { type: "http", url: "https://api.example.com/mcp" },
+    },
+    {
+      name: "a token inside a larger headers value",
+      server: {
         type: "http",
         url: "https://api.github.com/mcp",
         headers: { Authorization: "Bearer ${TOKEN}" },
       },
-    });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: root,
-      allowlist: ["github"],
       env: { TOKEN: "abc123" },
-    });
-    expect(resolved.github.headers).toEqual({ Authorization: "Bearer abc123" });
-    expect(resolved.github.type).toBe("http");
-  });
-
-  it("interpolates args entries and leaves type unchanged", async () => {
-    const root = await writeCatalog({
-      local: {
+      expected: {
         type: "http",
-        command: "node",
-        args: ["${HOME}/bin"],
+        url: "https://api.github.com/mcp",
+        headers: { Authorization: "Bearer abc123" },
       },
-    });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: root,
-      allowlist: ["local"],
+    },
+    {
+      name: "args entries without changing type or command",
+      server: { type: "http", command: "node", args: ["${HOME}/bin"] },
       env: { HOME: "/Users/me" },
-    });
-    expect(resolved.local.args).toEqual(["/Users/me/bin"]);
-    expect(resolved.local.type).toBe("http");
-    expect(resolved.local.command).toBe("node");
-  });
-
-  it("interpolates env values with defaults and set vars", async () => {
-    const root = await writeCatalog({
-      local: {
+      expected: { type: "http", command: "node", args: ["/Users/me/bin"] },
+    },
+    {
+      name: "env values with defaults and set vars",
+      server: {
         command: "npx",
-        env: {
-          UNSET_ONE: "${MISSING:-x}",
-          SET_ONE: "${PRESENT:-x}",
-        },
+        env: { UNSET_ONE: "${MISSING:-x}", SET_ONE: "${PRESENT:-x}" },
       },
-    });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: root,
-      allowlist: ["local"],
       env: { PRESENT: "y" },
-    });
-    expect(resolved.local.env).toEqual({
-      UNSET_ONE: "x",
-      SET_ONE: "y",
-    });
+      expected: { command: "npx", env: { UNSET_ONE: "x", SET_ONE: "y" } },
+    },
+    {
+      name: "multiple tokens in one string",
+      server: { url: "${HOST}/v1/${PATH}" },
+      env: { HOST: "https://api.example.com", PATH: "mcp" },
+      expected: { url: "https://api.example.com/v1/mcp" },
+    },
+    {
+      name: "an empty-string env value as set",
+      server: { url: "https://example.com/${EMPTY_VAR:-fallback}" },
+      env: { EMPTY_VAR: "" },
+      expected: { url: "https://example.com/" },
+    },
+  ])("interpolates $name", async ({ server, env, expected }) => {
+    const resolved = await resolveOne(server, env);
+    expect(resolved.srv).toMatchObject(expected);
   });
 
   it("returns {} for an empty allowlist without reading a missing catalog", async () => {
@@ -350,63 +230,18 @@ describe("resolveStageMcpServers", () => {
     ).resolves.toEqual({});
   });
 
-  it("treats connect_failed as a valid code and never throws it", async () => {
-    expect(new StageMcpError("later", "connect_failed").code).toBe("connect_failed");
-    const missingRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-no-cat-"));
+  it("throws missing_catalog when an allowlist is set but .mcp.json is absent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-no-cat-"));
     await expect(
-      resolveStageMcpServers({
-        projectRoot: missingRoot,
-        allowlist: ["github"],
-        env: {},
-      }),
+      resolveStageMcpServers({ projectRoot: root, allowlist: ["github"], env: {} }),
     ).rejects.toMatchObject({ name: "StageMcpError", code: "missing_catalog" });
-
-    const root = await writeCatalog({
-      github: { url: "${GITHUB_TOKEN}" },
-    });
-    try {
-      await resolveStageMcpServers({
-        projectRoot: root,
-        allowlist: ["github"],
-        env: {},
-      });
-      expect.fail("expected StageMcpError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(StageMcpError);
-      expect((err as StageMcpError).code).not.toBe("connect_failed");
-      expect((err as StageMcpError).code).toBe("unresolved_var");
-    }
-  });
-
-  it("interpolates multiple tokens in one string", async () => {
-    const root = await writeCatalog({
-      github: {
-        url: "${HOST}/v1/${PATH}",
-      },
-    });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: root,
-      allowlist: ["github"],
-      env: { HOST: "https://api.example.com", PATH: "mcp" },
-    });
-    expect(resolved.github.url).toBe("https://api.example.com/v1/mcp");
   });
 
   it("throws invalid_config for unrecognized interpolation forms", async () => {
-    const root = await writeCatalog({
-      github: { url: "${FOO:bar}" },
+    await expect(resolveOne({ url: "${FOO:bar}" }, { FOO: "x" })).rejects.toMatchObject({
+      name: "StageMcpError",
+      code: "invalid_config",
     });
-    try {
-      await resolveStageMcpServers({
-        projectRoot: root,
-        allowlist: ["github"],
-        env: { FOO: "x" },
-      });
-      expect.fail("expected StageMcpError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(StageMcpError);
-      expect((err as StageMcpError).code).toBe("invalid_config");
-    }
   });
 
   it("does not mutate catalog objects when interpolating", async () => {
@@ -439,197 +274,112 @@ describe("resolveStageMcpServers", () => {
   });
 
   it("throws unknown_server for allowlist names missing from the catalog", async () => {
-    const root = await writeCatalog({
-      github: { command: "npx" },
-    });
+    const root = await writeCatalog({ github: { command: "npx" } });
     await expect(
-      resolveStageMcpServers({
+      resolveStageMcpServers({ projectRoot: root, allowlist: ["notion"], env: {} }),
+    ).rejects.toMatchObject({
+      name: "StageMcpError",
+      code: "unknown_server",
+      message: expect.stringContaining("notion"),
+    });
+  });
+
+  describe("cwd stamping", () => {
+    it("stamps stdio cwd to projectRoot and resolves relative command/args against it", async () => {
+      const root = await writeCatalog({
+        echo: {
+          command: "bin/echo-mcp",
+          args: ["examples/stage-mcp/echo-mcp.mjs", "-y", "@modelcontextprotocol/server-github"],
+        },
+      });
+      const resolved = await resolveStageMcpServers({
         projectRoot: root,
-        allowlist: ["notion"],
+        allowlist: ["echo"],
         env: {},
-      }),
-    ).rejects.toMatchObject({ name: "StageMcpError", code: "unknown_server" });
-  });
+      });
+      expect(resolved.echo.cwd).toBe(path.resolve(root));
+      expect(resolved.echo.command).toBe(path.resolve(root, "bin/echo-mcp"));
+      expect(resolved.echo.args).toEqual([
+        path.resolve(root, "examples/stage-mcp/echo-mcp.mjs"),
+        "-y",
+        "@modelcontextprotocol/server-github",
+      ]);
+    });
 
-  it("treats an empty-string env value as set", async () => {
-    const root = await writeCatalog({
-      github: { url: "https://example.com/${EMPTY_VAR:-fallback}" },
+    it("keeps bare commands on PATH and still stamps spawn cwd to projectRoot", async () => {
+      const root = await writeCatalog({
+        local: { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] },
+      });
+      const resolved = await resolveStageMcpServers({
+        projectRoot: root,
+        allowlist: ["local"],
+        env: {},
+      });
+      expect(resolved.local.command).toBe("npx");
+      expect(resolved.local.args).toEqual(["-y", "@modelcontextprotocol/server-github"]);
+      expect(resolved.local.cwd).toBe(path.resolve(root));
     });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: root,
-      allowlist: ["github"],
-      env: { EMPTY_VAR: "" },
-    });
-    expect(resolved.github.url).toBe("https://example.com/");
-  });
 
-  it("stamps stdio cwd to projectRoot and resolves relative command/args against it", async () => {
-    const root = await writeCatalog({
-      echo: {
-        command: "bin/echo-mcp",
-        args: ["examples/stage-mcp/echo-mcp.mjs", "-y", "@modelcontextprotocol/server-github"],
-      },
-    });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: root,
-      allowlist: ["echo"],
-      env: {},
-    });
-    expect(resolved.echo.cwd).toBe(path.resolve(root));
-    expect(resolved.echo.command).toBe(path.resolve(root, "bin/echo-mcp"));
-    expect(resolved.echo.args).toEqual([
-      path.resolve(root, "examples/stage-mcp/echo-mcp.mjs"),
-      "-y",
-      "@modelcontextprotocol/server-github",
-    ]);
-  });
-
-  it("keeps bare commands on PATH and still stamps spawn cwd to projectRoot", async () => {
-    const root = await writeCatalog({
-      local: {
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-github"],
-      },
-    });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: root,
-      allowlist: ["local"],
-      env: {},
-    });
-    expect(resolved.local.command).toBe("npx");
-    expect(resolved.local.args).toEqual(["-y", "@modelcontextprotocol/server-github"]);
-    expect(resolved.local.cwd).toBe(path.resolve(root));
-  });
-
-  it("does not stamp cwd on url-only HTTP servers", async () => {
-    const root = await writeCatalog({
-      github: {
+    it("does not stamp cwd on url-only HTTP servers", async () => {
+      const resolved = await resolveOne({
         type: "http",
         url: "https://api.github.com/mcp",
-      },
+      });
+      expect(resolved.srv).toEqual({ type: "http", url: "https://api.github.com/mcp" });
+      expect(resolved.srv).not.toHaveProperty("cwd");
     });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: root,
-      allowlist: ["github"],
-      env: {},
-    });
-    expect(resolved.github).toEqual({
-      type: "http",
-      url: "https://api.github.com/mcp",
-    });
-    expect(resolved.github).not.toHaveProperty("cwd");
-  });
 
-  it("keeps an absolute cwd that canonicalizes inside projectRoot", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-resolve-"));
-    await writeFile(
-      path.join(root, ".mcp.json"),
-      JSON.stringify({
-        mcpServers: {
-          local: {
-            command: "node",
-            args: ["server.mjs"],
-            cwd: path.join(root, "tools", "mcp"),
+    it("keeps an absolute cwd that canonicalizes inside projectRoot", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-resolve-"));
+      await writeFile(
+        path.join(root, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            local: {
+              command: "node",
+              args: ["server.mjs"],
+              cwd: path.join(root, "tools", "mcp"),
+            },
           },
-        },
-      }),
-    );
-    const resolved = await resolveStageMcpServers({
-      projectRoot: root,
-      allowlist: ["local"],
-      env: {},
-    });
-    expect(resolved.local.cwd).toBe(path.resolve(root, "tools", "mcp"));
-    expect(resolved.local.command).toBe("node");
-    expect(resolved.local.args).toEqual(["server.mjs"]);
-  });
-
-  it("fails closed when catalog cwd is relative", async () => {
-    const root = await writeCatalog({
-      local: {
-        command: "node",
-        cwd: "tools/mcp",
-      },
-    });
-    try {
-      await resolveStageMcpServers({
+        }),
+      );
+      const resolved = await resolveStageMcpServers({
         projectRoot: root,
         allowlist: ["local"],
         env: {},
       });
-      expect.fail("expected StageMcpError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(StageMcpError);
-      expect((err as StageMcpError).code).toBe("invalid_config");
-      expect((err as StageMcpError).message).toMatch(/cwd/);
-    }
-  });
+      expect(resolved.local.cwd).toBe(path.resolve(root, "tools", "mcp"));
+      expect(resolved.local.command).toBe("node");
+      expect(resolved.local.args).toEqual(["server.mjs"]);
+    });
 
-  it("fails closed when catalog cwd canonicalizes outside projectRoot", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-resolve-"));
-    await writeFile(
-      path.join(root, ".mcp.json"),
-      JSON.stringify({
-        mcpServers: {
-          local: {
-            command: "node",
-            cwd: path.resolve(root, "..", "outside-mcp"),
-          },
-        },
-      }),
-    );
-    try {
-      await resolveStageMcpServers({
-        projectRoot: root,
-        allowlist: ["local"],
-        env: {},
+    it.each([
+      { name: "is relative", cwd: () => "tools/mcp" },
+      {
+        name: "canonicalizes outside projectRoot",
+        cwd: (root: string) => path.resolve(root, "..", "outside-mcp"),
+      },
+    ])("fails closed when catalog cwd $name", async ({ cwd }) => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-resolve-"));
+      await writeFile(
+        path.join(root, ".mcp.json"),
+        JSON.stringify({ mcpServers: { local: { command: "node", cwd: cwd(root) } } }),
+      );
+      await expect(
+        resolveStageMcpServers({ projectRoot: root, allowlist: ["local"], env: {} }),
+      ).rejects.toMatchObject({
+        name: "StageMcpError",
+        code: "invalid_config",
+        message: expect.stringMatching(/cwd/),
       });
-      expect.fail("expected StageMcpError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(StageMcpError);
-      expect((err as StageMcpError).code).toBe("invalid_config");
-      expect((err as StageMcpError).message).toMatch(/cwd/);
-    }
+    });
   });
 });
 
 describe("listProjectMcpCatalog", () => {
   const secret = "u1-secret-mcp-token-9f3c2b1a";
 
-  it("lists two servers as names plus stdio/http only", async () => {
-    const root = await writeCatalog({
-      local: {
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-github"],
-        env: { GITHUB_TOKEN: secret },
-      },
-      github: {
-        url: `https://secret-host.example/\${API_BASE}/mcp`,
-        headers: { Authorization: `Bearer ${secret}` },
-      },
-    });
-    const listed = await listProjectMcpCatalog(root);
-    expect(listed).toEqual({
-      status: "ok",
-      servers: [
-        { name: "local", transport: "stdio" },
-        { name: "github", transport: "http" },
-      ],
-    });
-    for (const row of listed.servers) {
-      expect(Object.keys(row).sort()).toEqual(["name", "transport"]);
-    }
-  });
-
-  it("returns an empty list for empty mcpServers", async () => {
-    const root = await writeCatalog({});
-    await expect(listProjectMcpCatalog(root)).resolves.toEqual({
-      status: "ok",
-      servers: [],
-    });
-  });
-
-  it("omits env, headers, args, command, URLs, and fixture secrets", async () => {
+  it("lists names plus stdio/http only and omits env, headers, args, command, URLs, secrets", async () => {
     const root = await writeCatalog({
       local: {
         command: "npx",
@@ -642,17 +392,28 @@ describe("listProjectMcpCatalog", () => {
       },
     });
     const listed = await listProjectMcpCatalog(root);
+    expect(listed).toEqual({
+      status: "ok",
+      servers: [
+        { name: "local", transport: "stdio" },
+        { name: "github", transport: "http" },
+      ],
+    });
     const payload = JSON.stringify(listed);
-    expect(payload).not.toContain(secret);
-    expect(payload).not.toContain("secret-host.example");
-    expect(payload).not.toContain("API_BASE");
-    expect(payload).not.toContain("Authorization");
-    expect(payload).not.toContain("secret-bin");
-    expect(payload).not.toMatch(/"env"/);
-    expect(payload).not.toMatch(/"headers"/);
-    expect(payload).not.toMatch(/"args"/);
-    expect(payload).not.toMatch(/"command"/);
-    expect(payload).not.toMatch(/"url"/);
+    for (const leaked of [secret, "secret-host.example", "API_BASE", "Authorization", "secret-bin"]) {
+      expect(payload).not.toContain(leaked);
+    }
+    for (const key of ["env", "headers", "args", "command", "url"]) {
+      expect(payload).not.toContain(`"${key}"`);
+    }
+  });
+
+  it("returns an empty list for empty mcpServers", async () => {
+    const root = await writeCatalog({});
+    await expect(listProjectMcpCatalog(root)).resolves.toEqual({
+      status: "ok",
+      servers: [],
+    });
   });
 
   it("does not interpolate catalog tokens", async () => {
@@ -687,27 +448,21 @@ describe("listProjectMcpCatalog", () => {
     });
   });
 
-  it("returns invalid_config for invalid JSON or missing mcpServers", async () => {
-    const invalidJson = await mkdtemp(path.join(tmpdir(), "sf-mcp-list-badjson-"));
-    await writeFile(path.join(invalidJson, ".mcp.json"), "{ not json");
-    await expect(listProjectMcpCatalog(invalidJson)).resolves.toEqual({
-      status: "invalid_config",
-      servers: [],
-    });
-
-    const missingKey = await mkdtemp(path.join(tmpdir(), "sf-mcp-list-nokey-"));
-    await writeFile(path.join(missingKey, ".mcp.json"), JSON.stringify({}));
-    await expect(listProjectMcpCatalog(missingKey)).resolves.toEqual({
-      status: "invalid_config",
-      servers: [],
-    });
-  });
-
-  it("fails the whole catalog with no rows when stageflow is reserved", async () => {
-    const root = await writeCatalog({
-      [STAGEFLOW_MCP_SERVER_NAME]: { command: "npx" },
-      github: { url: "https://secret-host.example/mcp" },
-    });
+  it.each([
+    { name: "invalid JSON", file: "{ not json" },
+    { name: "missing mcpServers", file: JSON.stringify({}) },
+    {
+      name: "the reserved stageflow name (whole catalog fails, no rows)",
+      file: JSON.stringify({
+        mcpServers: {
+          [STAGEFLOW_MCP_SERVER_NAME]: { command: "npx" },
+          github: { url: "https://secret-host.example/mcp" },
+        },
+      }),
+    },
+  ])("returns invalid_config for $name", async ({ file }) => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-list-bad-"));
+    await writeFile(path.join(root, ".mcp.json"), file);
     await expect(listProjectMcpCatalog(root)).resolves.toEqual({
       status: "invalid_config",
       servers: [],

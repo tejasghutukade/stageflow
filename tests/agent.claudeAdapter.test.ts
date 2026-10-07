@@ -104,39 +104,54 @@ function userToolResultMessage(toolCallId: string, content: unknown) {
   };
 }
 
+async function newAdapter() {
+  const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+  return new ClaudeAgentAdapter();
+}
+
+function modelUsageResult(cost: number, inputTokens: number, outputTokens: number) {
+  return {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result: "ok",
+    total_cost_usd: cost,
+    modelUsage: {
+      "claude-sonnet-4-5": {
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        costUSD: cost,
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+      },
+    },
+  };
+}
+
+
 describe("ClaudeAgentAdapter — preflight", () => {
-  it("rejects a stage that declares a skill", async () => {
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const input = baseInput({ skill: "reviewer" });
-    const result = await adapter.runStage(input);
+  it.each([
+    { name: "a stage that declares a skill", stage: { skill: "reviewer" }, reason: /skill/ },
+    { name: "a non-anthropic model", stage: { model: "openai/gpt-5" }, reason: /anthropic/ },
+    {
+      name: "a malformed model string with no provider prefix",
+      stage: { model: "claude-sonnet-4-5" },
+      reason: /must be "anthropic\/<model>"/,
+    },
+  ])("rejects $name", async ({ stage, reason }) => {
+    const adapter = await newAdapter();
+    const result = await adapter.runStage(baseInput(stage));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toMatch(/skill/);
-  });
-
-  it("rejects a non-anthropic model", async () => {
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const input = baseInput({ model: "openai/gpt-5" });
-    const result = await adapter.runStage(input);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toMatch(/anthropic/);
-  });
-
-  it("rejects a malformed model string with no provider prefix", async () => {
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const input = baseInput({ model: "claude-sonnet-4-5" });
-    const result = await adapter.runStage(input);
-    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(reason);
   });
 });
 
 describe("ClaudeAgentAdapter — run loop", () => {
   it("passes the derived model and a sealed, custom system prompt to query()", async () => {
     queryImpl = emptyStream;
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     await adapter.runStage(baseInput());
     expect(lastQueryOptions?.model).toBe("claude-sonnet-4-5");
     expect(lastQueryOptions?.systemPrompt).toEqual({
@@ -148,38 +163,68 @@ describe("ClaudeAgentAdapter — run loop", () => {
     expect(lastQueryOptions?.strictMcpConfig).toBe(true);
     expect(lastQueryOptions?.tools).toEqual(["Read", "Write", "Edit", "Bash"]);
     expect(Object.keys((lastQueryOptions?.mcpServers as object) ?? {})).toEqual(["stageflow"]);
-  });
+    const registered = (
+      lastQueryOptions?.mcpServers as Record<string, { instance: { tools: MockToolDef[] } }>
+    ).stageflow.instance.tools.map((t) => t.name);
+    expect(registered).toEqual(
+      expect.arrayContaining(["emit_stage_envelope", "write_stage_artifact"]),
+    );
+    expect(registered).not.toContain("ask_operator");
 
-  it("empty resolvedMcpServers snapshot still yields only the in-process stageflow server", async () => {
-    queryImpl = emptyStream;
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
     await adapter.runStage({ ...baseInput(), resolvedMcpServers: {} });
     expect(Object.keys((lastQueryOptions?.mcpServers as object) ?? {})).toEqual(["stageflow"]);
     expect(lastQueryOptions?.settingSources).toEqual([]);
     expect(lastQueryOptions?.strictMcpConfig).toBe(true);
   });
 
-  it("merges a github snapshot beside stageflow without mutating the input", async () => {
+  it.each([
+    {
+      name: "a stdio github server",
+      snapshot: { github: { command: "npx", args: ["-y", "pkg"] } } as Record<
+        string,
+        Record<string, unknown>
+      >,
+      expected: { github: { command: "npx", args: ["-y", "pkg"], alwaysLoad: true } },
+    },
+    {
+      name: "two stdio servers in snapshot order",
+      snapshot: {
+        github: { command: "npx", args: ["-y", "pkg"] },
+        slack: { command: "npx", args: ["-y", "slack"] },
+      } as Record<string, Record<string, unknown>>,
+      expected: {
+        github: { command: "npx", args: ["-y", "pkg"], alwaysLoad: true },
+        slack: { command: "npx", args: ["-y", "slack"], alwaysLoad: true },
+      },
+    },
+    {
+      name: "an HTTP server",
+      snapshot: { remote: { type: "http", url: "https://example.invalid/mcp" } } as Record<
+        string,
+        Record<string, unknown>
+      >,
+      expected: {
+        remote: { type: "http", url: "https://example.invalid/mcp", alwaysLoad: true },
+      },
+    },
+  ])("merges $name beside stageflow with alwaysLoad, without mutating the input", async ({ snapshot, expected }) => {
     queryImpl = emptyStream;
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const snapshot = { github: { command: "npx", args: ["-y", "pkg"] } };
+    const adapter = await newAdapter();
     await adapter.runStage({ ...baseInput(), resolvedMcpServers: snapshot });
     const mcpServers = lastQueryOptions?.mcpServers as Record<string, Record<string, unknown>>;
-    expect(Object.keys(mcpServers)).toEqual(["stageflow", "github"]);
-    expect(mcpServers.github.alwaysLoad).toBe(true);
-    expect(mcpServers.github.command).toBe("npx");
-    expect(mcpServers).not.toHaveProperty("notion");
-    expect(snapshot.github).not.toHaveProperty("alwaysLoad");
+    expect(Object.keys(mcpServers)).toEqual(["stageflow", ...Object.keys(expected)]);
+    for (const [name, entry] of Object.entries(expected)) {
+      expect(mcpServers[name]).toMatchObject(entry);
+      expect(snapshot[name]).not.toHaveProperty("alwaysLoad");
+    }
     expect(lastQueryOptions?.settingSources).toEqual([]);
     expect(lastQueryOptions?.strictMcpConfig).toBe(true);
   });
 
+
   it("keeps query() cwd as the agent workspace and passes stamped per-server cwd", async () => {
     queryImpl = emptyStream;
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const input = baseInput();
     const projectRoot = "/factory/catalog-root";
     await adapter.runStage({
@@ -203,56 +248,6 @@ describe("ClaudeAgentAdapter — run loop", () => {
     });
   });
 
-  it("keeps the in-process stageflow SDK server when two passed servers are merged", async () => {
-    queryImpl = emptyStream;
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    await adapter.runStage({
-      ...baseInput(),
-      resolvedMcpServers: {
-        github: { command: "npx", args: ["-y", "pkg"] },
-        slack: { command: "npx", args: ["-y", "slack"] },
-      },
-    });
-    const mcpServers = lastQueryOptions?.mcpServers as Record<string, Record<string, unknown>>;
-    expect(Object.keys(mcpServers)).toEqual(["stageflow", "github", "slack"]);
-    expect(mcpServers.stageflow.type).toBe("sdk");
-    expect(mcpServers.github.alwaysLoad).toBe(true);
-    expect(mcpServers.slack.alwaysLoad).toBe(true);
-  });
-
-  it("merges an HTTP snapshot beside stageflow with alwaysLoad at query time", async () => {
-    queryImpl = emptyStream;
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const snapshot = { remote: { type: "http", url: "https://example.invalid/mcp" } };
-    await adapter.runStage({ ...baseInput(), resolvedMcpServers: snapshot });
-    const mcpServers = lastQueryOptions?.mcpServers as Record<string, Record<string, unknown>>;
-    expect(Object.keys(mcpServers)).toEqual(["stageflow", "remote"]);
-    expect(mcpServers.remote).toMatchObject({
-      type: "http",
-      url: "https://example.invalid/mcp",
-      alwaysLoad: true,
-    });
-    expect(snapshot.remote).not.toHaveProperty("alwaysLoad");
-  });
-
-  it("emit_stage_envelope still succeeds when a github snapshot is passed", async () => {
-    queryImpl = async function* (options) {
-      const emitTool = findTool(options, "emit_stage_envelope");
-      await emitTool.handler({ status: "success", summary: "done with github", artifacts: [] }, undefined);
-      yield { type: "result", subtype: "success", is_error: false, result: "ok" };
-    };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const result = await adapter.runStage({
-      ...baseInput(),
-      resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.envelope.summary).toBe("done with github");
-  });
-
   it("returns ok:true when emit_stage_envelope is called with status=success", async () => {
     queryImpl = async function* (options) {
       const emitTool = findTool(options, "emit_stage_envelope");
@@ -262,133 +257,52 @@ describe("ClaudeAgentAdapter — run loop", () => {
       );
       yield { type: "result", subtype: "success", is_error: false, result: "ok" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const result = await adapter.runStage(baseInput());
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.envelope.summary).toBe("done");
   });
 
-  it("captures cost/tokens from the result message's modelUsage onto the completed result", async () => {
-    queryImpl = async function* (options) {
-      const emitTool = findTool(options, "emit_stage_envelope");
-      await emitTool.handler(
-        { status: "success", summary: "done", artifacts: [] },
-        undefined,
-      );
-      yield {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        result: "ok",
-        total_cost_usd: 0.0042,
-        modelUsage: {
-          "claude-sonnet-4-5": {
-            inputTokens: 120,
-            outputTokens: 30,
-            cacheReadInputTokens: 5,
-            cacheCreationInputTokens: 0,
-            costUSD: 0.0042,
-            contextWindow: 200000,
-            maxOutputTokens: 8192,
-          },
-        },
-      };
-    };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const result = await adapter.runStage(baseInput());
-    expect(result.ok).toBe(true);
-    expect(result.usage?.costUsd).toBeCloseTo(0.0042, 10);
-    expect(result.usage?.models["claude-sonnet-4-5"]).toMatchObject({
-      inputTokens: 120,
-      outputTokens: 30,
-      cacheReadInputTokens: 5,
-      costUsd: 0.0042,
-    });
-  });
-
-  it("still captures cost when the tool_result 'user' frame (the real SDK order) precedes 'result'", async () => {
+  it.each([
+    { name: "the result message directly follows the emit", userFrames: 0, cost: 0.0042, input: 120, output: 30 },
+    {
+      name: "the tool_result 'user' frame (the real SDK order) precedes 'result'",
+      userFrames: 1,
+      cost: 0.0099,
+      input: 200,
+      output: 60,
+    },
+    {
+      name: "an extra trailing 'user' frame lands between the tool-result and 'result'",
+      userFrames: 2,
+      cost: 0.0055,
+      input: 90,
+      output: 20,
+    },
+  ])("captures cost/tokens from modelUsage onto the completed result when $name", async ({ userFrames, cost, input, output }) => {
     // Real query() sequence: emit_stage_envelope's tool_result lands on a
-    // "user" message BEFORE the turn-summary "result" message. The adapter
-    // interrupts and breaks as soon as it sees that "user" frame — this
-    // reproduces that ordering to prove usage still gets captured despite
-    // the early break (regression: it previously never reached "result").
+    // "user" message BEFORE the turn-summary "result" message, and after
+    // interrupt() the stream can emit further "user" frames. The adapter must
+    // keep draining (within budget) until "result" so usage is not lost.
     queryImpl = async function* (options) {
       const emitTool = findTool(options, "emit_stage_envelope");
-      await emitTool.handler(
-        { status: "success", summary: "done", artifacts: [] },
-        undefined,
-      );
-      yield userToolResultMessage("tool-1", "ok");
-      yield {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        result: "ok",
-        total_cost_usd: 0.0099,
-        modelUsage: {
-          "claude-sonnet-4-5": {
-            inputTokens: 200,
-            outputTokens: 60,
-            cacheReadInputTokens: 0,
-            cacheCreationInputTokens: 0,
-            costUSD: 0.0099,
-            contextWindow: 200000,
-            maxOutputTokens: 8192,
-          },
-        },
-      };
+      await emitTool.handler({ status: "success", summary: "done", artifacts: [] }, undefined);
+      for (let i = 0; i < userFrames; i++) {
+        yield userToolResultMessage(`tool-${i + 1}`, "ok");
+      }
+      yield modelUsageResult(cost, input, output);
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const result = await adapter.runStage(baseInput());
     expect(result.ok).toBe(true);
-    expect(result.usage?.costUsd).toBeCloseTo(0.0099, 10);
+    expect(result.usage?.costUsd).toBeCloseTo(cost, 10);
     expect(result.usage?.models["claude-sonnet-4-5"]).toMatchObject({
-      inputTokens: 200,
-      outputTokens: 60,
-      costUsd: 0.0099,
+      inputTokens: input,
+      outputTokens: output,
+      costUsd: cost,
     });
   });
 
-  it("still captures cost when an extra trailing 'user' frame lands between the tool-result and 'result'", async () => {
-    // Observed in production: after interrupt(), the stream can emit
-    // *another* "user" frame before the turn-summary "result" arrives —
-    // a single bounded peek isn't enough; draining must loop within budget.
-    queryImpl = async function* (options) {
-      const emitTool = findTool(options, "emit_stage_envelope");
-      await emitTool.handler(
-        { status: "success", summary: "done", artifacts: [] },
-        undefined,
-      );
-      yield userToolResultMessage("tool-1", "ok");
-      yield userToolResultMessage("tool-2", "also ok");
-      yield {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        result: "ok",
-        total_cost_usd: 0.0055,
-        modelUsage: {
-          "claude-sonnet-4-5": {
-            inputTokens: 90,
-            outputTokens: 20,
-            cacheReadInputTokens: 0,
-            cacheCreationInputTokens: 0,
-            costUSD: 0.0055,
-            contextWindow: 200000,
-            maxOutputTokens: 8192,
-          },
-        },
-      };
-    };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const result = await adapter.runStage(baseInput());
-    expect(result.ok).toBe(true);
-    expect(result.usage?.costUsd).toBeCloseTo(0.0055, 10);
-  });
 
   it("returns ok:false status:failure envelope when emit_stage_envelope is called with status=failure", async () => {
     queryImpl = async function* (options) {
@@ -399,8 +313,7 @@ describe("ClaudeAgentAdapter — run loop", () => {
       );
       yield { type: "result", subtype: "success", is_error: false, result: "ok" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const result = await adapter.runStage(baseInput());
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -413,44 +326,21 @@ describe("ClaudeAgentAdapter — run loop", () => {
     queryImpl = async function* () {
       yield { type: "result", subtype: "success", is_error: false, result: "done talking" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const result = await adapter.runStage(baseInput());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("missing emit_stage_envelope");
   });
 
-  it("write_stage_artifact tool is registered alongside emit_stage_envelope", async () => {
-    queryImpl = async function* (options) {
-      const artifactTool = findTool(options, "write_stage_artifact");
-      expect(artifactTool).toBeDefined();
-    };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    await adapter.runStage(baseInput());
-  });
-
-  it("surfaces a thrown query() error as ok:false with the error message", async () => {
+  it.each([
+    { name: "no snapshot", snapshot: undefined },
+    { name: "a snapshot", snapshot: { github: { command: "npx", args: ["-y", "pkg"] } } },
+  ])("surfaces a thrown query() error as ok:false with the error message ($name), not as connect_failed", async ({ snapshot }) => {
     queryImpl = async function* () {
       throw new Error("subprocess spawn failed");
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const result = await adapter.runStage(baseInput());
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe("subprocess spawn failed");
-  });
-
-  it("surfaces a thrown query() error even when a snapshot is passed, not as connect_failed", async () => {
-    queryImpl = async function* () {
-      throw new Error("subprocess spawn failed");
-    };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const result = await adapter.runStage({
-      ...baseInput(),
-      resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
-    });
+    const adapter = await newAdapter();
+    const result = await adapter.runStage({ ...baseInput(), resolvedMcpServers: snapshot });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("subprocess spawn failed");
@@ -458,14 +348,14 @@ describe("ClaudeAgentAdapter — run loop", () => {
     }
   });
 
+
   it("openStage never waits — completes directly via next()", async () => {
     queryImpl = async function* (options) {
       const emitTool = findTool(options, "emit_stage_envelope");
       await emitTool.handler({ status: "success", summary: "ok", artifacts: [] }, undefined);
       yield { type: "result", subtype: "success", is_error: false, result: "ok" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const handle = adapter.openStage(baseInput());
     const event = await handle.next();
     expect(event.status).toBe("completed");
@@ -505,8 +395,7 @@ describe("ClaudeAgentAdapter — run loop", () => {
       };
       yield { type: "result", subtype: "success", is_error: false, result: "ok" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const events: string[] = [];
     await adapter.runStage({
       ...baseInput(),
@@ -556,8 +445,7 @@ describe("ClaudeAgentAdapter — run loop", () => {
       await emitTool.handler({ status: "success", summary: "ok", artifacts: [] }, undefined);
       yield { type: "result", subtype: "success", is_error: false, result: "ok" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const events: Array<{ event: string; toolName?: string }> = [];
     await adapter.runStage({
       ...baseInput(),
@@ -590,67 +478,48 @@ describe("ClaudeAgentAdapter — MCP connect-fail", () => {
     await rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("AE3: failed init status for a passed server fails the stage as connect_failed and interrupts", async () => {
+  it.each([
+    {
+      name: "failed init status for a passed stdio server",
+      status: "failed",
+      server: { github: { command: "npx", args: ["-y", "pkg"] } } as Record<string, Record<string, unknown>>,
+      serverName: "github",
+    },
+    {
+      name: "needs-auth for a passed HTTP server",
+      status: "needs-auth",
+      server: { remote: { type: "http", url: "https://example.invalid/mcp" } } as Record<
+        string,
+        Record<string, unknown>
+      >,
+      serverName: "remote",
+    },
+    {
+      name: "pending init status for a passed server",
+      status: "pending",
+      server: { github: { command: "npx", args: ["-y", "pkg"] } } as Record<string, Record<string, unknown>>,
+      serverName: "github",
+    },
+  ])("$name fails the stage as connect_failed and interrupts before emit can win", async ({ status, server, serverName }) => {
     let emitHandlerRan = false;
     queryImpl = async function* (options) {
-      yield initMessage("session-connect-fail", [{ name: "github", status: "failed" }]);
+      yield initMessage(`session-${status}`, [{ name: serverName, status }]);
       const emitTool = findTool(options, "emit_stage_envelope");
       emitHandlerRan = true;
       await emitTool.handler({ status: "success", summary: "should not win", artifacts: [] }, undefined);
       yield { type: "result", subtype: "success", is_error: false, result: "ok" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const result = await adapter.runStage({
-      ...baseInput(),
-      resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
-    });
+    const adapter = await newAdapter();
+    const result = await adapter.runStage({ ...baseInput(), resolvedMcpServers: server });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toMatch(/connect_failed|failed to connect/i);
-      expect(result.reason).toMatch(/github/);
+      expect(result.reason).toContain(serverName);
     }
     expect(lastInterruptSpy).toHaveBeenCalled();
     expect(emitHandlerRan).toBe(false);
   });
 
-  it("treats needs-auth for a passed HTTP server as connect_failed", async () => {
-    queryImpl = async function* () {
-      yield initMessage("session-needs-auth", [{ name: "remote", status: "needs-auth" }]);
-      yield { type: "result", subtype: "success", is_error: false, result: "ok" };
-    };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const result = await adapter.runStage({
-      ...baseInput(),
-      resolvedMcpServers: { remote: { type: "http", url: "https://example.invalid/mcp" } },
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toMatch(/connect_failed|failed to connect/i);
-      expect(result.reason).toMatch(/remote/);
-    }
-    expect(lastInterruptSpy).toHaveBeenCalled();
-  });
-
-  it("treats pending init status for a passed server as connect_failed", async () => {
-    queryImpl = async function* () {
-      yield initMessage("session-pending", [{ name: "github", status: "pending" }]);
-      yield { type: "result", subtype: "success", is_error: false, result: "ok" };
-    };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const result = await adapter.runStage({
-      ...baseInput(),
-      resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toMatch(/connect_failed|failed to connect/i);
-      expect(result.reason).toMatch(/github/);
-    }
-    expect(lastInterruptSpy).toHaveBeenCalled();
-  });
 
   it("continues the turn when a passed server is connected and emit still succeeds", async () => {
     queryImpl = async function* (options) {
@@ -660,8 +529,7 @@ describe("ClaudeAgentAdapter — MCP connect-fail", () => {
       yield userToolResultMessage("c1", "ok");
       yield { type: "result", subtype: "success", is_error: false, result: "ok" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const result = await adapter.runStage({
       ...baseInput(),
       resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
@@ -670,14 +538,16 @@ describe("ClaudeAgentAdapter — MCP connect-fail", () => {
     if (result.ok) expect(result.envelope.summary).toBe("done with github");
   });
 
-  it("empty snapshot and init mcp_servers: [] does not connect_fail; missing emit still applies", async () => {
+  it.each([
+    { name: "no snapshot", snapshot: undefined },
+    { name: "an empty resolvedMcpServers snapshot", snapshot: {} },
+  ])("init mcp_servers: [] with $name does not connect_fail; missing emit still applies", async ({ snapshot }) => {
     queryImpl = async function* () {
       yield initMessage("session-empty");
       yield { type: "result", subtype: "success", is_error: false, result: "done talking" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const result = await adapter.runStage(baseInput());
+    const adapter = await newAdapter();
+    const result = await adapter.runStage({ ...baseInput(), resolvedMcpServers: snapshot });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("missing emit_stage_envelope");
@@ -685,20 +555,6 @@ describe("ClaudeAgentAdapter — MCP connect-fail", () => {
     }
   });
 
-  it("empty resolvedMcpServers plus default init mcp_servers: [] does not connect_fail", async () => {
-    queryImpl = async function* () {
-      yield initMessage("session-empty-snapshot");
-      yield { type: "result", subtype: "success", is_error: false, result: "done talking" };
-    };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const result = await adapter.runStage({ ...baseInput(), resolvedMcpServers: {} });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("missing emit_stage_envelope");
-      expect(result.reason).not.toMatch(/connect_failed/i);
-    }
-  });
 
   it("resume turn with a failed passed server is connect_failed and does not complete the parked prompt as success", async () => {
     queryImpl = async function* (options) {
@@ -720,8 +576,7 @@ describe("ClaudeAgentAdapter — MCP connect-fail", () => {
       );
       yield userToolResultMessage("c1", result.content);
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const input: StageRunInput = {
       ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
@@ -755,26 +610,18 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
   afterEach(async () => {
     await rm(workspaceDir, { recursive: true, force: true });
   });
-
-  it("does not register ask_operator when gate_kinds is an explicit empty array", async () => {
-    queryImpl = async function* (options) {
-      expect(() => findTool(options, "ask_operator")).toThrow();
+  it.each([
+    { name: "an explicit empty array", gate_kinds: [] as string[] },
+    { name: "omitted", gate_kinds: undefined },
+  ])("does not register ask_operator when gate_kinds is $name", async ({ gate_kinds }) => {
+    queryImpl = async function* () {
       yield { type: "result", subtype: "success", is_error: false, result: "ok" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    await adapter.runStage(baseInput({ gate_kinds: [] }));
+    const adapter = await newAdapter();
+    await adapter.runStage(baseInput({ gate_kinds: gate_kinds as [] }));
+    expect(() => findTool(lastQueryOptions!, "ask_operator")).toThrow(/not registered/);
   });
 
-  it("does not register ask_operator when gate_kinds is omitted", async () => {
-    queryImpl = async function* (options) {
-      expect(() => findTool(options, "ask_operator")).toThrow();
-      yield { type: "result", subtype: "success", is_error: false, result: "ok" };
-    };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    await adapter.runStage(baseInput({ gate_kinds: undefined }));
-  });
 
   it("openStage → next() returns waiting_for_input when the model calls ask_operator, and calls interrupt()", async () => {
     queryImpl = async function* (options) {
@@ -787,8 +634,7 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
       yield userToolResultMessage("c1", result.content);
       yield { type: "result", subtype: "success", is_error: false, result: "ok" };
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const input: StageRunInput = {
       ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
@@ -804,23 +650,6 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
     await handle.close({ park: true });
   });
 
-  it("close({park:true}) after waiting does not throw and does not try to kill anything", async () => {
-    queryImpl = async function* (options) {
-      yield initMessage("session-xyz");
-      const askTool = findTool(options, "ask_operator");
-      const result = await askTool.handler({ kind: "confirm", message: "Proceed?" }, undefined);
-      yield userToolResultMessage("c1", result.content);
-    };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
-    const input: StageRunInput = {
-      ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
-      roots: buildStageRoots(workspaceDir, "review"),
-    };
-    const handle = adapter.openStage(input);
-    await handle.next();
-    await expect(handle.close({ park: true })).resolves.toBeUndefined();
-  });
 
   it("deliverAnswer + next() resumes the same session and completes on emit_stage_envelope", async () => {
     let resumeSeen: string | undefined;
@@ -840,8 +669,7 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
       );
       yield userToolResultMessage("c1", result.content);
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const input: StageRunInput = {
       ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
@@ -877,8 +705,7 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
       );
       yield userToolResultMessage("c1", result.content);
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const input: StageRunInput = {
       ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
@@ -958,8 +785,7 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
       );
       yield userToolResultMessage("c1", result.content);
     };
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const input: StageRunInput = {
       ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
@@ -1021,8 +847,7 @@ describe("ClaudeAgentAdapter — never-let-it-go-dangling regression guard", () 
       };
       const callsBefore = queryMock.mock.calls.length;
 
-      const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-      const adapter = new ClaudeAgentAdapter();
+      const adapter = await newAdapter();
       const input: StageRunInput = {
         ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
         roots: buildStageRoots(dir, "review"),
@@ -1052,8 +877,7 @@ describe("ClaudeAgentAdapter — never-let-it-go-dangling regression guard", () 
         );
         yield userToolResultMessage("c1", result.content);
       };
-      const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-      const adapter = new ClaudeAgentAdapter();
+      const adapter = await newAdapter();
       const input: StageRunInput = {
         ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
         roots: buildStageRoots(dir, "review"),
@@ -1140,8 +964,7 @@ describe("ClaudeAgentAdapter — message-ordering invariant", () => {
       };
     };
 
-    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
-    const adapter = new ClaudeAgentAdapter();
+    const adapter = await newAdapter();
     const result = await adapter.runStage(baseInput());
 
     expect(result.ok).toBe(true);

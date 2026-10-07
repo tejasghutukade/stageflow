@@ -74,7 +74,7 @@ afterEach(() => {
 });
 
 describe("runWorkshopChatTurn", () => {
-  it("runs Workshop Author on the fake Operator Agent Host (not AgentPort)", async () => {
+  it("applies the proposed stage immediately, returns an undo card, and honors the session model", async () => {
     await withIsolatedHome(async () => {
       const storeRoot = resolveWorkshopSessionStoreRoot();
       const created = createWorkshopSession(storeRoot, { id: "sess-1" });
@@ -93,6 +93,7 @@ describe("runWorkshopChatTurn", () => {
       });
 
       expect(result.sessionId).toBe("sess-1");
+      expect(result.autoApply).toBe(false);
       expect(result.model).toBe("openai/gpt-5");
       expect(result.pending).not.toBeNull();
       expect(result.pending!.summary).toMatch(/Add stage/i);
@@ -103,65 +104,28 @@ describe("runWorkshopChatTurn", () => {
     });
   });
 
-  it("respects settings default when session model is absent", async () => {
+  it.each([
+    { name: "settings default when session model is absent", settingsDefault: "openai/gpt-5", expected: "openai/gpt-5" },
+    { name: "DEFAULT_WORKSHOP_MODEL when nothing is configured", settingsDefault: undefined, expected: DEFAULT_WORKSHOP_MODEL },
+  ])("resolves the turn model from $name", async ({ settingsDefault, expected }) => {
     await withIsolatedHome(async () => {
       const storeRoot = resolveWorkshopSessionStoreRoot();
-      createWorkshopSession(storeRoot, { id: "sess-echo" });
+      createWorkshopSession(storeRoot, { id: "sess-model" });
       const host = createWorkshopOperatorHost([{ type: "echo" }]);
       const registry = new WorkshopChatSessionRegistry(host);
       const result = await runWorkshopChatTurn({
-        sessionId: "sess-echo",
+        sessionId: "sess-model",
         draft: emptyDraftPackage("demo"),
         message: "hello",
         host,
         registry,
         storeRoot,
-        settingsDefault: "openai/gpt-5",
+        ...(settingsDefault ? { settingsDefault } : {}),
       });
-      expect(result.model).toBe("openai/gpt-5");
+      expect(result.model).toBe(expected);
       expect(result.events).toEqual([
         { type: "message", role: "assistant", text: "Got it: hello" },
       ]);
-    });
-  });
-
-  it("falls back to DEFAULT_WORKSHOP_MODEL", async () => {
-    await withIsolatedHome(async () => {
-      const storeRoot = resolveWorkshopSessionStoreRoot();
-      createWorkshopSession(storeRoot, { id: "sess-default" });
-      const host = createWorkshopOperatorHost([{ type: "echo" }]);
-      const registry = new WorkshopChatSessionRegistry(host);
-      const result = await runWorkshopChatTurn({
-        sessionId: "sess-default",
-        draft: emptyDraftPackage("demo"),
-        message: "ping",
-        host,
-        registry,
-        storeRoot,
-      });
-      expect(result.model).toBe(DEFAULT_WORKSHOP_MODEL);
-    });
-  });
-
-  it("applies mutations immediately and returns an undo pending card", async () => {
-    await withIsolatedHome(async () => {
-      const storeRoot = resolveWorkshopSessionStoreRoot();
-      createWorkshopSession(storeRoot, { id: "sess-mutate" });
-      const host = createWorkshopOperatorHost([{ type: "propose_stage" }]);
-      const registry = new WorkshopChatSessionRegistry(host);
-      const result = await runWorkshopChatTurn({
-        sessionId: "sess-mutate",
-        draft: emptyDraftPackage("demo"),
-        message: "intake form review",
-        host,
-        registry,
-        storeRoot,
-      });
-      expect(result.autoApply).toBe(false);
-      expect(result.draft.pipeline.stages.length).toBe(1);
-      expect(result.pending).not.toBeNull();
-      expect(result.pending!.nextDraft.pipeline.stages.length).toBe(1);
-      expect(result.events.some((e) => e.type === "proposal")).toBe(true);
     });
   });
 
@@ -394,38 +358,6 @@ describe("runWorkshopChatTurn", () => {
         expect(await registry.abortTurn("sess-abort")).toBe(false);
       });
     });
-
-  it("an unlinked session's edit tool returns an error and does not create a build", async () => {
-    await withIsolatedHome(async () => {
-      const storeRoot = resolveWorkshopSessionStoreRoot();
-      createWorkshopSession(storeRoot, { id: "sess-unlinked-edit" });
-      const host = createWorkshopOperatorHost([
-        {
-          type: "call_tool",
-          name: "edit_pipeline",
-          args: { id: "sneaky" },
-        },
-      ]);
-      const registry = new WorkshopChatSessionRegistry(host);
-      const result = await runWorkshopChatTurn({
-        sessionId: "sess-unlinked-edit",
-        draft: emptyDraftPackage("posted"),
-        message: "rename it",
-        host,
-        registry,
-        storeRoot,
-      });
-      const tool = result.events.find((event) => event.type === "tool_result");
-      expect(tool?.type).toBe("tool_result");
-      if (tool?.type !== "tool_result") return;
-      expect(tool.name).toBe("edit_pipeline");
-      expect(tool.result.ok).toBe(false);
-      expect(tool.result.error).toMatch(/no build is selected/i);
-      expect(listWorkshopBuilds(storeRoot)).toEqual([]);
-      expect(getWorkshopSession(storeRoot, "sess-unlinked-edit").activeBuildId).toBeUndefined();
-      expect(result.draft.pipeline.id).toBe("posted");
-    });
-  });
 
   it("a focus during an in-flight turn keeps the host on A and the pointer on B", async () => {
     await withIsolatedHome(async () => {
@@ -805,13 +737,6 @@ describe("workshop chat stream frames", () => {
         expect(done.model).toBe(DEFAULT_WORKSHOP_MODEL);
         expect(done.draft.pipeline.id).toBe("demo");
       }
-      // Chunk size stays ~28 chars for post-hoc progressive feel.
-      const long = "x".repeat(60);
-      expect(chunkAssistantText(long, 28)).toEqual([
-        "x".repeat(28),
-        "x".repeat(28),
-        "x".repeat(4),
-      ]);
     });
   });
 

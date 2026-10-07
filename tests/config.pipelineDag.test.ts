@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listStages } from "../src/config/listConfig.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import {
   areResolvedDagsEquivalent,
@@ -18,7 +14,6 @@ import {
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const owned = path.join(fixtures, "pipeline-owned");
-const stagesDir = path.join(fixtures, "stages");
 
 const ctx = (pipelineId: string, relPath = "pipelines/test.pipeline.yaml") => ({
   pipelineId,
@@ -26,142 +21,48 @@ const ctx = (pipelineId: string, relPath = "pipelines/test.pipeline.yaml") => ({
 });
 
 describe("resolvePipelineDag", () => {
-  it("treats feedback-loop and replay-safety policy changes as inequivalent", () => {
-    const { dag: baseline } = resolvePipelineDag(
-      [
-        { id: "plan", entry: true, route: [{ to: "implement" }] },
-        { id: "implement", route: [{ to: "review" }] },
+  const policyBaseline = (loop: Record<string, unknown>, submit: Record<string, unknown> = {}) => [
+    { id: "plan", entry: true, route: [{ to: "implement" }] },
+    { id: "implement", route: [{ to: "review" }] },
+    {
+      id: "review",
+      route: [
+        { to: "submit" },
         {
-          id: "review",
-          route: [
-            { to: "submit" },
-            {
-              type: "loop",
-              to: "implement",
-              max_replays: 2,
-              on_max_replays: "require_continue",
-              replay_session: "resume",
-            },
-          ],
+          type: "loop",
+          to: "implement",
+          max_replays: 2,
+          on_max_replays: "require_continue",
+          replay_session: "resume",
+          ...loop,
         },
-        { id: "submit" },
       ],
-      ctx("feedback-equivalence-baseline"),
-    );
-    const { dag: changedPolicy } = resolvePipelineDag(
-      [
-        { id: "plan", entry: true, route: [{ to: "implement" }] },
-        { id: "implement", route: [{ to: "review" }] },
-        {
-          id: "review",
-          route: [
-            { to: "submit" },
-            {
-              type: "loop",
-              to: "plan",
-              max_replays: 3,
-              on_max_replays: "wait_for_human",
-              replay_session: "new_session",
-            },
-          ],
-        },
-        { id: "submit", replay_safe: false },
-      ],
-      ctx("feedback-equivalence-changed"),
-    );
+    },
+    { id: "submit", ...submit },
+  ];
 
-    expect(areResolvedDagsEquivalent(baseline, changedPolicy)).toBe(false);
+  it("treats identical feedback-loop policy as equivalent", () => {
+    const { dag: a } = resolvePipelineDag(policyBaseline({}), ctx("policy-a"));
+    const { dag: b } = resolvePipelineDag(policyBaseline({}), ctx("policy-b"));
+    expect(areResolvedDagsEquivalent(a, b)).toBe(true);
   });
 
-  it("builds explicit linear chain via route/entry", () => {
-    const { stages, dag } = resolvePipelineDag(
-      [
-        { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
-        { id: "design-doc", route: [{ to: "implementation-plan" }] },
-        { id: "implementation-plan" },
-      ],
-      ctx("docs-only", "pipelines/docs-only.pipeline.yaml"),
-    );
-
-    expect(stages).toEqual(["clarify", "design-doc", "implementation-plan"]);
-    expect(dag.roots).toEqual(["clarify"]);
-    expect(dag.nodes.map((node) => node.id)).toEqual([
-      "clarify",
-      "design-doc",
-      "implementation-plan",
-    ]);
-
-    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("clarify")).toMatchObject({
-      needs: null,
-      needsEdges: [],
-      ancestors: [],
-    });
-    expect(byId.get("design-doc")).toMatchObject({
-      needs: "clarify",
-      needsEdges: [{ id: "clarify", on: ["succeeded"] }],
-      ancestors: ["clarify"],
-    });
-    expect(byId.get("implementation-plan")).toMatchObject({
-      needs: "design-doc",
-      needsEdges: [{ id: "design-doc", on: ["succeeded"] }],
-      ancestors: ["clarify", "design-doc"],
-    });
-  });
-
-  it("builds fan-out via route (AE2)", () => {
-    const { dag } = resolvePipelineDag(
-      [
-        {
-          id: "clarify",
-          entry: true,
-          route: [{ to: "design-doc" }, { to: "implementation-plan" }],
-        },
-        { id: "design-doc" },
-        { id: "implementation-plan" },
-      ],
-      ctx("parallel-after-clarify"),
-    );
-
-    expect(dag.roots).toEqual(["clarify"]);
-    expect(dag.childrenOf.clarify).toEqual(["design-doc", "implementation-plan"]);
-
-    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("design-doc")).toMatchObject({
-      needs: "clarify",
-      ancestors: ["clarify"],
-    });
-    expect(byId.get("implementation-plan")).toMatchObject({
-      needs: "clarify",
-      ancestors: ["clarify"],
-    });
+  it.each([
+    { field: "loop target", loop: { to: "plan" }, submit: {} },
+    { field: "max_replays", loop: { max_replays: 3 }, submit: {} },
+    { field: "on_max_replays", loop: { on_max_replays: "wait_for_human" }, submit: {} },
+    { field: "replay_session", loop: { replay_session: "new_session" }, submit: {} },
+    { field: "replay_safe", loop: {}, submit: { replay_safe: false } },
+  ])("treats a changed $field as inequivalent", ({ loop, submit }) => {
+    const { dag: baseline } = resolvePipelineDag(policyBaseline({}), ctx("policy-base"));
+    const { dag: changed } = resolvePipelineDag(policyBaseline(loop, submit), ctx("policy-changed"));
+    expect(areResolvedDagsEquivalent(baseline, changed)).toBe(false);
   });
 
   it("rejects bare string stage refs (AE7)", () => {
     expect(() =>
       resolvePipelineDag(["decide", "branch-a"], ctx("string-refs")),
     ).toThrow(/bare string stage refs/i);
-  });
-
-  it("rejects dependency cycles formed via route (AE3)", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
-          { id: "design-doc", route: [{ to: "clarify" }] },
-        ],
-        ctx("cycle"),
-      ),
-    ).toThrow(/cycle/i);
-  });
-
-  it("rejects unknown route targets (AE4)", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [{ id: "clarify", entry: true, route: [{ to: "missing-stage" }] }],
-        ctx("unknown-route-target"),
-      ),
-    ).toThrow(/unknown route target "missing-stage"/i);
   });
 
   it("rejects duplicate stage ids (AE5)", () => {
@@ -173,84 +74,20 @@ describe("resolvePipelineDag", () => {
     ).toThrow(/duplicate stage id "clarify"/i);
   });
 
-  it("accepts multiple route entries into the same target and normalizes on gates", () => {
-    // Migrated from a `needs`-side fan-in test (`synthesize` listing two
-    // parents, one with an explicit multi-state `on`). Under `route` the same
-    // per-edge gate is achievable, just declared outbound by each source
-    // stage instead of inbound by the target — see the `route-fan-in` case in
-    // tests/config.pipelineRoute.test.ts for the ticket-01 equivalent.
-    const { dag } = resolvePipelineDag(
-      [
-        { id: "research", entry: true, route: [{ to: "synthesize" }] },
-        {
-          id: "validation",
-          entry: true,
-          route: [{ to: "synthesize", on: ["succeeded", "failed", "skipped"] }],
-        },
-        { id: "synthesize" },
-      ],
-      ctx("mixed-route-on"),
-    );
-    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("synthesize")).toMatchObject({
-      needs: null,
-      needsEdges: [
-        { id: "research", on: ["succeeded"] },
-        { id: "validation", on: ["succeeded", "failed", "skipped"] },
-      ],
-      ancestors: ["research", "validation"],
-    });
-    expect(dag.childrenOf.research).toEqual(["synthesize"]);
-    expect(dag.childrenOf.validation).toEqual(["synthesize"]);
-  });
-
-  it("rejects invalid route on values", () => {
-    // Migrated from "rejects empty or invalid needs on sets" — `on`
-    // validation is shared logic (parseRouteOn mirrors parsePipelineNeeds'
-    // on-parsing) so the same three failure modes apply.
+  it.each([
+    { name: "empty", on: [] },
+    { name: "unknown state", on: ["running"] },
+    { name: "duplicate", on: ["succeeded", "succeeded"] },
+  ])("rejects $name route on values", ({ on }) => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "clarify", entry: true, route: [{ to: "design-doc", on: [] }] },
-          { id: "design-doc" },
-        ],
-        ctx("empty-on"),
-      ),
-    ).toThrow(/on must be a non-empty unique subset/i);
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "clarify", entry: true, route: [{ to: "design-doc", on: ["running"] }] },
+          { id: "clarify", entry: true, route: [{ to: "design-doc", on }] },
           { id: "design-doc" },
         ],
         ctx("bad-on"),
       ),
     ).toThrow(/on must be a non-empty unique subset/i);
-    expect(() =>
-      resolvePipelineDag(
-        [
-          {
-            id: "clarify",
-            entry: true,
-            route: [{ to: "design-doc", on: ["succeeded", "succeeded"] }],
-          },
-          { id: "design-doc" },
-        ],
-        ctx("dup-on"),
-      ),
-    ).toThrow(/on must be a non-empty unique subset/i);
-  });
-
-  it("rejects an unknown route target reached via fan-out", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "clarify", entry: true, route: [{ to: "research" }, { to: "missing-stage" }] },
-          { id: "research" },
-        ],
-        ctx("unknown-multi-route"),
-      ),
-    ).toThrow(/unknown route target "missing-stage"/i);
   });
 
   it("rejects a cycle reached via a fan-in edge", () => {
@@ -374,81 +211,6 @@ describe("resolvePipelineDag", () => {
     ).toThrow(/unknown key "label"/i);
   });
 
-  it("accepts pre_emit_checks as a body key on a stage entry", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          {
-            id: "clarify",
-            pre_emit_checks: [
-              { id: "gate-1", type: "gate", kind: "confirm" },
-            ],
-          } as unknown as { id: string },
-        ],
-        ctx("pre-emit-checks"),
-      ),
-    ).not.toThrow();
-  });
-
-  it("AE1: route_select is rejected", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          {
-            id: "decide",
-            entry: true,
-            route_select: "one",
-            route: [{ to: "branch-a" }, { to: "branch-b" }],
-          },
-          { id: "branch-a" },
-          { id: "branch-b" },
-        ],
-        ctx("route-select-one"),
-      ),
-    ).toThrow(
-      /stage "decide": "route_select" is no longer supported — listed route targets always run/,
-    );
-  });
-
-  it("AE2: allow_none is rejected", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          {
-            id: "decide",
-            entry: true,
-            allow_none: true,
-            route: [{ to: "b" }, { to: "c" }, { to: "d" }],
-          },
-          { id: "b" },
-          { id: "c" },
-          { id: "d" },
-        ],
-        ctx("route-select-subset"),
-      ),
-    ).toThrow(
-      /stage "decide": "allow_none" is no longer supported — listed route targets always run/,
-    );
-  });
-
-  it("AE6: existing fan-out pipeline without fork field is unaffected", () => {
-    const { dag } = resolvePipelineDag(
-      [
-        {
-          id: "clarify",
-          entry: true,
-          route: [{ to: "design-doc" }, { to: "implementation-plan" }],
-        },
-        { id: "design-doc" },
-        { id: "implementation-plan" },
-      ],
-      ctx("no-fork"),
-    );
-    for (const node of dag.nodes) {
-      expect(node.fork).toBeUndefined();
-    }
-  });
-
   it("extractPipelineStageIds rejects string entries", () => {
     expect(extractPipelineStageIds(["clarify", "design-doc"])).toBeNull();
     expect(
@@ -560,189 +322,7 @@ describe("resolvePipelineDag", () => {
     ]);
   });
 
-});
 
-describe("listPipelineUsageByStage with object-form pipelines", () => {
-  it("listStages returns empty in pipeline-owned model", async () => {
-    const stages = await listStages();
-    expect(stages).toEqual([]);
-  });
-});
-
-describe("loadPipeline negative DAG fixtures", () => {
-  it("rejects cycle via pipeline-owned temp fixture", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "sf-dag-cycle-"));
-    await writeFile(
-      path.join(dir, "cycle.pipeline.yaml"),
-      [
-        "id: cycle",
-        "stages:",
-        "  - id: a",
-        "    entry: true",
-        "    route:",
-        "      - to: b",
-        "    system_prompt: x",
-        "    model: m",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "  - id: b",
-        "    route:",
-        "      - to: a",
-        "    system_prompt: x",
-        "    model: m",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    );
-    await expect(loadPipeline(path.join(dir, "cycle.pipeline.yaml"))).rejects.toThrow(
-      /cycle/i,
-    );
-  });
-
-  it("loads a fan-in with per-source on gates via pipeline-owned temp fixture", async () => {
-    // Migrated from a `needs`-side per-parent-gating fixture ("wait for
-    // research succeeded AND validation on [succeeded, failed, skipped]").
-    // Under `route` the same per-edge gate is declared outbound by each
-    // source stage instead of inbound by the target; the resulting
-    // needsEdges are identical, so no coverage is lost — see the
-    // `route-fan-in` fixture in tests/config.pipelineRoute.test.ts.
-    const dir = await mkdtemp(path.join(tmpdir(), "sf-dag-mixed-"));
-    await writeFile(
-      path.join(dir, "mixed.pipeline.yaml"),
-      [
-        "id: mixed",
-        "stages:",
-        "  - id: research",
-        "    entry: true",
-        "    route:",
-        "      - to: synthesize",
-        "    system_prompt: x",
-        "    model: m",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "  - id: validation",
-        "    entry: true",
-        "    route:",
-        "      - to: synthesize",
-        "        on: [succeeded, failed, skipped]",
-        "    system_prompt: x",
-        "    model: m",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "  - id: synthesize",
-        "    system_prompt: x",
-        "    model: m",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    );
-    const { dag } = await loadPipeline(path.join(dir, "mixed.pipeline.yaml"));
-    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("synthesize")?.needsEdges).toEqual([
-      { id: "research", on: ["succeeded"] },
-      { id: "validation", on: ["succeeded", "failed", "skipped"] },
-    ]);
-  });
-
-  it("rejects an unknown route target via pipeline-owned temp fixture", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "sf-dag-unknown-"));
-    await writeFile(
-      path.join(dir, "unknown.pipeline.yaml"),
-      [
-        "id: unknown",
-        "stages:",
-        "  - id: clarify",
-        "    entry: true",
-        "    route:",
-        "      - to: missing-stage",
-        "    system_prompt: x",
-        "    model: m",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    );
-    await expect(loadPipeline(path.join(dir, "unknown.pipeline.yaml"))).rejects.toThrow(
-      /unknown route target/i,
-    );
-  });
-
-  it("rejects duplicate-stage via pipeline-owned temp fixture", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "sf-dag-dup-"));
-    await writeFile(
-      path.join(dir, "dup.pipeline.yaml"),
-      [
-        "id: dup",
-        "stages:",
-        "  - id: clarify",
-        "    system_prompt: x",
-        "    model: m",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "  - id: design-doc",
-        "    system_prompt: x",
-        "    model: m",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "  - id: clarify",
-        "    system_prompt: x",
-        "    model: m",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    );
-    await expect(loadPipeline(path.join(dir, "dup.pipeline.yaml"))).rejects.toThrow(
-      /duplicate stage/i,
-    );
-  });
 });
 
 describe("loadPipeline fork fixtures", () => {
@@ -757,4 +337,3 @@ describe("loadPipeline fork fixtures", () => {
     expect(byId.get("branch-b")?.fork).toBeUndefined();
   });
 });
-

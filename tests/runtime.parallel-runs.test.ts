@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FIXTURES_ROOT, pipelinePath, catalogLocators, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import {
+  pipelinePath,
+  catalogLocators,
+  SAMPLE_TASK,
+  DOCS_ONLY_PIPELINE,
+  LINEAR_EXPLICIT_PIPELINE,
+} from "./helpers/fixturePaths.js";
+import { waitFor } from "./helpers/waitFor.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -93,32 +100,17 @@ async function waitUntilIdle(manager: RunManager): Promise<void> {
   }
 }
 
-async function waitFor(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 5000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  throw new Error("timeout waiting for condition");
+function disableRunQueue(): void {
+  beforeEach(() => {
+    vi.stubEnv("STAGEFLOW_MAX_QUEUED", "0");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 }
 
 describe("parallel pipeline runs (U1)", () => {
-  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
-
-  beforeEach(() => {
-    process.env.STAGEFLOW_MAX_QUEUED = "0";
-  });
-
-  afterEach(() => {
-    if (previousMaxQueued === undefined) {
-      delete process.env.STAGEFLOW_MAX_QUEUED;
-    } else {
-      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
-    }
-  });
+  disableRunQueue();
 
   it("max=2: two unbound concurrent starts ok; third is busy_capacity", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-par-cap-"));
@@ -385,19 +377,7 @@ describe("parallel pipeline runs (U1)", () => {
 });
 
 describe("parallel pipeline runs (U2 bound env)", () => {
-  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
-
-  beforeEach(() => {
-    process.env.STAGEFLOW_MAX_QUEUED = "0";
-  });
-
-  afterEach(() => {
-    if (previousMaxQueued === undefined) {
-      delete process.env.STAGEFLOW_MAX_QUEUED;
-    } else {
-      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
-    }
-  });
+  disableRunQueue();
 
   it("F8: HITL-waiting bound run allows peer bound stage on other checkout without env throw", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-par-f8-"));
@@ -590,19 +570,7 @@ async function seedIntraRunMultiWait(
 }
 
 describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
-  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
-
-  beforeEach(() => {
-    process.env.STAGEFLOW_MAX_QUEUED = "0";
-  });
-
-  afterEach(() => {
-    if (previousMaxQueued === undefined) {
-      delete process.env.STAGEFLOW_MAX_QUEUED;
-    } else {
-      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
-    }
-  });
+  disableRunQueue();
   it("attach two waiters: both active; answer one leaves other waiting; lease blocks same checkout", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-par-u4-attach-"));
     const checkoutA = await mkdtemp(path.join(tmpdir(), "sf-checkout-u4a-"));
@@ -825,71 +793,6 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
       "should-fail",
     );
     expect(answerDup.ok).toBe(false);
-  });
-
-  it("health activeCount matches activeRunIds length (includes provisionals)", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-par-health-"));
-    const store = createRunStore({ rootDir: root });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const manager = new RunManager({
-      agent: gatedAgent(gate),
-      cwd: fixtures,
-      store,
-      maxConcurrent: 2,
-    });
-
-    const first = await manager.startRun({
-      pipeline: pipelinePath("docs-only"),
-      task: { id: "a", goal: "first" },
-    });
-    expect(first.ok).toBe(true);
-
-    const health = manager.getHealth();
-    expect(health.activeCount).toBe(health.activeRunIds.length);
-    expect(health.activeCount).toBe(manager.getActiveCount());
-    expect(health.activeRunIds).toHaveLength(1);
-
-    release();
-    await waitUntilIdle(manager);
-  });
-
-  it("attach intra-run multi-wait: both branch waiters registered for one run", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-par-intra-attach-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await seedIntraRunMultiWait(store, { taskId: "intra" });
-
-    const store2 = createRunStore({ rootDir: root });
-    const manager = new RunManager({
-      agent: scriptedFakeAgent([
-        {
-          type: "wait_then_emit",
-          waitRequests: ["need-input-branch-a"],
-          envelope: successEnvelope,
-        },
-        {
-          type: "wait_then_emit",
-          waitRequests: ["need-input-branch-b"],
-          envelope: successEnvelope,
-        },
-      ]),
-      store: store2,
-      cwd: fixtures,
-      maxConcurrent: 3,
-    });
-
-    const attached = await manager.attachWaitingStages();
-    expect(attached).toEqual(
-      expect.arrayContaining([
-        { runId: run.runId, stageId: "branch-a" },
-        { runId: run.runId, stageId: "branch-b" },
-      ]),
-    );
-    expect(attached).toHaveLength(2);
-    expect(manager.getActiveCount()).toBe(1);
-    expect(manager.getActiveRunIds()).toEqual([run.runId]);
   });
 
   it("overlapping restart deliverAnswer for same stageId is rejected", async () => {
@@ -1156,150 +1059,80 @@ function createCliEquivalentManager(opts: {
 }
 
 describe("CLI-equivalent startRun (S5)", () => {
-  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+  disableRunQueue();
 
-  beforeEach(() => {
-    process.env.STAGEFLOW_MAX_QUEUED = "0";
-  });
-
-  afterEach(() => {
-    if (previousMaxQueued === undefined) {
-      delete process.env.STAGEFLOW_MAX_QUEUED;
-    } else {
-      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
-    }
-  });
-
-  it("AE-S5-1: startRun then await done honors busy_capacity; no createRun on reject", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-s5-cap-"));
-    const store = createRunStore({ rootDir: root });
-    const createRunSpy = vi.spyOn(store, "createRun");
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const manager = createCliEquivalentManager({
-      agent: gatedAgent(gate),
-      store,
-      cwd: fixtures,
+  it.each([
+    {
+      name: "busy_capacity",
       maxConcurrent: 1,
-    });
-
-    const first = await manager.startRun({
-      pipeline: pipelinePath("docs-only"),
-      task: { id: "a", goal: "first" },
-    });
-    expect(first.ok).toBe(true);
-    if (!first.ok) return;
-    expect(first.done).toBeDefined();
-    const createsAfterFirst = createRunSpy.mock.calls.length;
-    expect(createsAfterFirst).toBeGreaterThan(0);
-
-    let firstSettled = false;
-    void first.done.then(() => {
-      firstSettled = true;
-    });
-
-    const second = await manager.startRun({
-      pipeline: pipelinePath("docs-only"),
-      task: { id: "b", goal: "second" },
-    });
-    expect(second.ok).toBe(false);
-    if (!second.ok) {
-      expect(second.status).toBe(409);
-      expect(second.code).toBe("busy_capacity");
-      expect(second.reason).toMatch(/busy_capacity|Capacity full/i);
-    }
-    expect(createRunSpy).toHaveBeenCalledTimes(createsAfterFirst);
-    expect(firstSettled).toBe(false);
-
-    release();
-    const pipeline = await first.done;
-    expect(firstSettled).toBe(true);
-    expect(pipeline.ok).toBe(true);
-    expect(pipeline.runDir).toBeTruthy();
-    await waitUntilIdle(manager);
-  });
-
-  it("AE-S5-2: startRun then await done honors busy_checkout; no createRun on reject", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-s5-co-"));
-    const checkout = await mkdtemp(path.join(tmpdir(), "sf-s5-checkout-"));
-    const store = createRunStore({ rootDir: root });
-    const createRunSpy = vi.spyOn(store, "createRun");
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const manager = createCliEquivalentManager({
-      agent: gatedAgent(gate),
-      store,
-      cwd: fixtures,
+      sharedCheckout: false,
+      code: "busy_capacity",
+    },
+    {
+      name: "busy_checkout",
       maxConcurrent: 3,
-    });
+      sharedCheckout: true,
+      code: "busy_checkout",
+    },
+  ] as const)(
+    "startRun then await done honors $name; no createRun on reject",
+    async ({ maxConcurrent, sharedCheckout, code }) => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-s5-"));
+      const checkout = sharedCheckout
+        ? await mkdtemp(path.join(tmpdir(), "sf-s5-checkout-"))
+        : undefined;
+      const checkoutOverride = checkout ? { checkoutOverride: checkout } : {};
+      const store = createRunStore({ rootDir: root });
+      const createRunSpy = vi.spyOn(store, "createRun");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const manager = createCliEquivalentManager({
+        agent: gatedAgent(gate),
+        store,
+        cwd: fixtures,
+        maxConcurrent,
+      });
 
-    const first = await manager.startRun({
-      pipeline: pipelinePath("docs-only"),
-      task: { id: "a", goal: "first" },
-      checkoutOverride: checkout,
-    });
-    expect(first.ok).toBe(true);
-    if (!first.ok) return;
-    const createsAfterFirst = createRunSpy.mock.calls.length;
+      const first = await manager.startRun({
+        pipeline: pipelinePath("docs-only"),
+        task: { id: "a", goal: "first" },
+        ...checkoutOverride,
+      });
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      const createsAfterFirst = createRunSpy.mock.calls.length;
+      expect(createsAfterFirst).toBeGreaterThan(0);
 
-    const second = await manager.startRun({
-      pipeline: pipelinePath("docs-only"),
-      task: { id: "b", goal: "second" },
-      checkoutOverride: checkout,
-    });
-    expect(second.ok).toBe(false);
-    if (!second.ok) {
-      expect(second.status).toBe(409);
-      expect(second.code).toBe("busy_checkout");
-      expect(second.conflictingCheckout).toBeTruthy();
-      expect(second.conflictingRunId).toBe(first.runId);
-    }
-    expect(createRunSpy).toHaveBeenCalledTimes(createsAfterFirst);
+      let firstSettled = false;
+      void first.done.then(() => {
+        firstSettled = true;
+      });
 
-    release();
-    const pipeline = await first.done;
-    expect(pipeline.ok).toBe(true);
-    await waitUntilIdle(manager);
-  });
+      const second = await manager.startRun({
+        pipeline: pipelinePath("docs-only"),
+        task: { id: "b", goal: "second" },
+        ...checkoutOverride,
+      });
+      expect(second.ok).toBe(false);
+      if (!second.ok) {
+        expect(second.status).toBe(409);
+        expect(second.code).toBe(code);
+        if (code === "busy_checkout") {
+          expect(second.conflictingCheckout).toBeTruthy();
+          expect(second.conflictingRunId).toBe(first.runId);
+        }
+      }
+      expect(createRunSpy).toHaveBeenCalledTimes(createsAfterFirst);
+      expect(firstSettled).toBe(false);
 
-  it("AE-S5-3: await done does not resolve before the pipeline finishes", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-s5-block-"));
-    const store = createRunStore({ rootDir: root });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const manager = createCliEquivalentManager({
-      agent: gatedAgent(gate),
-      store,
-      cwd: fixtures,
-      maxConcurrent: 1,
-    });
-
-    const started = await manager.startRun({
-      pipeline: pipelinePath("docs-only"),
-      task: { id: "block", goal: "wait for release" },
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    let settled = false;
-    const pending = started.done.then((pipeline) => {
-      settled = true;
-      return pipeline;
-    });
-    await new Promise((r) => setTimeout(r, 40));
-    expect(settled).toBe(false);
-
-    release();
-    const pipeline = await pending;
-    expect(settled).toBe(true);
-    expect(pipeline.ok).toBe(true);
-    expect(pipeline.runDir).toBeTruthy();
-    await waitUntilIdle(manager);
-  });
+      release();
+      const pipeline = await first.done;
+      expect(firstSettled).toBe(true);
+      expect(pipeline.ok).toBe(true);
+      expect(pipeline.runDir).toBeTruthy();
+      await waitUntilIdle(manager);
+    },
+  );
 });

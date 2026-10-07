@@ -262,7 +262,7 @@ describe("resolveCatalogRoots + multiProjectCatalog", () => {
       seededRoots: [],
       projectRootFilter: normalized,
     });
-    expect(filled.items.length).toBeGreaterThan(0);
+    expect(filled.items.map((i) => i.id)).toEqual(["hello"]);
     expect(filled.tip).toBeUndefined();
   });
 
@@ -283,8 +283,7 @@ describe("resolveCatalogRoots + multiProjectCatalog", () => {
       bootCwd: boot,
       seededRoots: [{ id: "examples", path: examples }],
     });
-    expect(result.items.length).toBeGreaterThan(0);
-    expect(result.items.every((i) => i.project_root === "examples")).toBe(true);
+    expect(result.items.map((i) => [i.id, i.project_root])).toEqual([["hello", "examples"]]);
     expect(result.tip).toBeUndefined();
   });
 });

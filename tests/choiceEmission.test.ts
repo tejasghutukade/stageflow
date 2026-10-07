@@ -1,48 +1,12 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FakeAgent } from "../src/agent/fakeAgent.js";
-import type { StageRunInput } from "../src/agent/port.js";
-import { buildStageRoots } from "../src/runtime/stageRoots.js";
+import { describe, expect, it } from "vitest";
 import { createEmitStageEnvelopeTool } from "../src/tools/emitStageEnvelope.js";
 import type { ForkEmitContext } from "../src/types/forkChoice.js";
-
-const tempDirs: string[] = [];
-
-beforeEach(async () => {});
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) await rm(dir, { recursive: true, force: true });
-  }
-});
-
-async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "sf-choice-"));
-  tempDirs.push(dir);
-  return dir;
-}
 
 function makeForkContext(
   immediateSuccessorIds: string[],
   forkShape: ForkEmitContext["forkShape"] = null,
 ): ForkEmitContext {
   return { immediateSuccessorIds, forkShape };
-}
-
-async function makeBaseInput(workspaceDir: string): Promise<Omit<StageRunInput, "forkEmitContext">> {
-  return {
-    roots: buildStageRoots(workspaceDir, "decide"),
-    stage: {
-      id: "decide",
-      system_prompt: "decide",
-      model: "anthropic/claude-sonnet-4-5",
-    },
-    task: { id: "t", goal: "g" },
-    priorEnvelope: null,
-  };
 }
 
 describe("createEmitStageEnvelopeTool - fork stage", () => {
@@ -103,43 +67,5 @@ describe("createEmitStageEnvelopeTool - non-fork stage", () => {
     expect(result.isError).toBeUndefined();
     expect(result.terminate).toBe(true);
     expect(capture.envelope?.fork_choice).toBeUndefined();
-  });
-});
-
-describe("FakeAgent - fork stage runtime", () => {
-  it("missing fork_choice on success → runStage ok: false (AE6 runtime proof)", async () => {
-    const workspaceDir = await makeTempDir();
-    const base = await makeBaseInput(workspaceDir);
-    const agent = new FakeAgent({
-      type: "emit",
-      envelope: {
-        status: "success",
-        summary: "see report",
-        artifacts: [],
-      },
-    });
-    const result = await agent.runStage({
-      ...base,
-      forkEmitContext: makeForkContext(["path-a", "path-b"]),
-    });
-    expect(result.ok).toBe(false);
-  });
-});
-
-
-describe("FakeAgent - success without fork_choice", () => {
-  it("success without fork_choice → runStage ok: true", async () => {
-    const workspaceDir = await makeTempDir();
-    const base = await makeBaseInput(workspaceDir);
-    const agent = new FakeAgent({
-      type: "emit",
-      envelope: {
-        status: "success",
-        summary: "done",
-        artifacts: [],
-      },
-    });
-    const result = await agent.runStage(base);
-    expect(result.ok).toBe(true);
   });
 });

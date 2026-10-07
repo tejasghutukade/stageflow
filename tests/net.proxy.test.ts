@@ -30,6 +30,10 @@ describe("proxy dispatcher", () => {
   });
 
   it("effectiveNoProxy is idempotent for loopback", () => {
-    expect(effectiveNoProxy({ NO_PROXY: "127.0.0.1" })).toContain("127.0.0.1");
+    const once = effectiveNoProxy({ NO_PROXY: "example.com" });
+    const twice = effectiveNoProxy({ NO_PROXY: once });
+    const entries = twice.split(",").map((e) => e.trim().toLowerCase());
+    expect(new Set(entries).size).toBe(entries.length);
+    expect(entries).toEqual(expect.arrayContaining(["127.0.0.1", "::1", "localhost"]));
   });
 });

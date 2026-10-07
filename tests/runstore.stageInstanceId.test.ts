@@ -45,21 +45,3 @@ describe("stage instance ids", () => {
     );
   });
 });
-
-
-describe("stage instance ids", () => {
-  it("mints 1-based ids in clone-list order", () => {
-    expect(mintCloneInstanceIds("author-diagrams", 3)).toEqual([
-      "author-diagrams~1",
-      "author-diagrams~2",
-      "author-diagrams~3",
-    ]);
-    expect(mintCloneInstanceId("author-diagrams", 1)).toBe("author-diagrams~1");
-  });
-
-  it("rejects slash catalog ids and n=0", () => {
-    expect(() => mintCloneInstanceId("author-diagrams/1", 1)).toThrow(/stageId/);
-    expect(() => guardStageId("a/b")).toThrow(/stageId/);
-    expect(() => mintCloneInstanceId("author-diagrams", 0)).toThrow();
-  });
-});

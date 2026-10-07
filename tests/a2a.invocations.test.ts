@@ -124,7 +124,7 @@ describe("A2aInvocations (direct interface)", () => {
     );
     await expect(
       invocations.send(caller, invoke("supplier_assessment", { supplier: "Northstar" }, "m-u7")),
-    ).rejects.toBeTruthy();
+    ).rejects.toMatchObject({ category: "invalid-input", message: "stopped for assertion" });
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
         task: expect.objectContaining({
