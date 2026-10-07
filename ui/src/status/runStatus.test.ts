@@ -15,7 +15,6 @@ import {
   trackSegmentToken,
   waitingOnYouTitle,
   type DisplayStatus,
-  type StageDisplayStatus,
 } from "./runStatus";
 
 function summary(
@@ -38,28 +37,6 @@ const runStatuses = [
   "failed",
   "cancelled",
 ] as const;
-const displayStatuses: DisplayStatus[] = [
-  "created",
-  "queued",
-  "pending",
-  "running",
-  "waiting_for_input",
-  "interrupted",
-  "succeeded",
-  "failed",
-  "cancelled",
-  "skipped",
-];
-const stageStatuses: StageDisplayStatus[] = [
-  "pending",
-  "running",
-  "waiting_for_input",
-  "interrupted",
-  "succeeded",
-  "failed",
-  "skipped",
-];
-
 describe("runDisplayStatus", () => {
   it("AE6: waiting_stage_id resolves to waiting_for_input regardless of status", () => {
     for (const status of runStatuses) {
@@ -84,126 +61,61 @@ describe("runDisplayStatus", () => {
   });
 });
 
-describe("cssStatusToken", () => {
-  it("maps every display status, with created as an unpulsed gray default", () => {
-    expect(cssStatusToken("waiting_for_input")).toBe("waiting");
-    expect(cssStatusToken("interrupted")).toBe("waiting");
-    expect(cssStatusToken("created")).toBeUndefined();
-    expect(cssStatusToken("queued")).toBeUndefined();
-    expect(cssStatusToken("running")).toBe("running");
-    expect(cssStatusToken("succeeded")).toBe("succeeded");
-    expect(cssStatusToken("failed")).toBe("failed");
-    expect(cssStatusToken("cancelled")).toBe("failed");
-    expect(cssStatusToken("pending")).toBeUndefined();
-    expect(cssStatusToken("skipped")).toBeUndefined();
-  });
-});
+const displayPresentation: Array<{
+  status: DisplayStatus;
+  css: ReturnType<typeof cssStatusToken>;
+  dot: ReturnType<typeof statusDotVariant>;
+  pulsing: boolean;
+  copy: string;
+}> = [
+  { status: "created", css: undefined, dot: "neutral", pulsing: false, copy: "not started" },
+  { status: "queued", css: undefined, dot: "neutral", pulsing: false, copy: "queued" },
+  { status: "pending", css: undefined, dot: "neutral", pulsing: false, copy: "pending" },
+  { status: "running", css: "running", dot: "accent", pulsing: true, copy: "running" },
+  { status: "waiting_for_input", css: "waiting", dot: "warning", pulsing: false, copy: "waiting on you" },
+  { status: "interrupted", css: "waiting", dot: "warning", pulsing: false, copy: "interrupted" },
+  { status: "succeeded", css: "succeeded", dot: "success", pulsing: false, copy: "succeeded" },
+  { status: "failed", css: "failed", dot: "error", pulsing: false, copy: "failed" },
+  { status: "cancelled", css: "failed", dot: "error", pulsing: false, copy: "cancelled" },
+  { status: "skipped", css: undefined, dot: "neutral", pulsing: false, copy: "skipped" },
+];
 
-describe("statusIsPulsing", () => {
-  it("is running-only, so created does not pulse", () => {
-    expect(statusIsPulsing("created")).toBe(false);
-    expect(statusIsPulsing("running")).toBe(true);
-    expect(statusIsPulsing("waiting_for_input")).toBe(false);
-    expect(statusIsPulsing("interrupted")).toBe(false);
-  });
-});
-
-describe("statusCopy", () => {
-  it("maps every display status, with waiting_for_input as waiting on you", () => {
-    expect(statusCopy("waiting_for_input")).toBe("waiting on you");
-    expect(statusCopy("created")).toBe("not started");
-    expect(statusCopy("queued")).toBe("queued");
-    expect(statusCopy("pending")).toBe("pending");
-    expect(statusCopy("running")).toBe("running");
-    expect(statusCopy("interrupted")).toBe("interrupted");
-    expect(statusCopy("succeeded")).toBe("succeeded");
-    expect(statusCopy("failed")).toBe("failed");
-    expect(statusCopy("cancelled")).toBe("cancelled");
-    expect(statusCopy("skipped")).toBe("skipped");
-  });
+describe("display status presentation", () => {
+  it.each(displayPresentation)(
+    "$status -> css $css, dot $dot, pulsing $pulsing, copy $copy",
+    ({ status, css, dot, pulsing, copy }) => {
+      expect(cssStatusToken(status)).toBe(css);
+      expect(statusDotVariant(status)).toBe(dot);
+      expect(statusIsPulsing(status)).toBe(pulsing);
+      expect(statusCopy(status)).toBe(copy);
+    },
+  );
 });
 
 describe("waitingOnYouTitle", () => {
   it("title-cases the waiting_for_input statusCopy phrase", () => {
     expect(waitingOnYouTitle()).toBe("Waiting on you");
-    expect(statusCopy("waiting_for_input")).toBe("waiting on you");
   });
 });
 
-describe("ringGlyph", () => {
-  it("uses a question mark for a waiting stage", () => {
-    expect(ringGlyph("waiting_for_input")).toBe("?");
-    expect(ringGlyph("interrupted")).toBe("?");
-    expect(ringGlyph("waiting")).toBe("?");
-  });
-
-  it("locks skipped to an en dash and pending to empty", () => {
-    expect(ringGlyph("skipped")).toBe("–");
-    expect(ringGlyph("pending")).toBe("");
-  });
-});
-
-describe("ringStatus skipped", () => {
-  it("is not pending", () => {
-    expect(ringStatus("skipped")).toBe("skipped");
-    expect(ringStatus("skipped")).not.toBe("pending");
-    expect(statusDotVariant("skipped")).toBe("neutral");
-  });
-});
-
-describe("interrupted status presentation", () => {
-  it("reuses the waiting token family without pulsing or failing", () => {
-    expect(cssStatusToken("interrupted")).toBe("waiting");
-    expect(ringStatus("interrupted")).toBe("waiting");
-    expect(statusDotVariant("interrupted")).toBe("warning");
-    expect(statusIsPulsing("interrupted")).toBe(false);
-    expect(statusCopy("interrupted")).toBe("interrupted");
-    expect(trackSegmentToken("interrupted")).toBe("waiting");
-  });
-});
-
-describe("trackSegmentToken", () => {
-  it("matches toSegStatus, including undefined for pending", () => {
-    expect(trackSegmentToken("succeeded")).toBe("succeeded");
-    expect(trackSegmentToken("running")).toBe("running");
-    expect(trackSegmentToken("waiting_for_input")).toBe("waiting");
-    expect(trackSegmentToken("interrupted")).toBe("waiting");
-    expect(trackSegmentToken("failed")).toBe("failed");
-    expect(trackSegmentToken("pending")).toBeUndefined();
-    expect(trackSegmentToken("skipped")).toBe("skipped");
-  });
-});
-
-describe("stage statuses without a run-level equivalent", () => {
-  it("resolve pending and waiting_for_input without a default fallthrough", () => {
-    expect(ringStatus("pending")).toBe("pending");
-    expect(ringStatus("waiting_for_input")).toBe("waiting");
-    expect(ringStatus("interrupted")).toBe("waiting");
-    expect(cssStatusToken("pending")).toBeUndefined();
-    expect(cssStatusToken("waiting_for_input")).toBe("waiting");
-    expect(cssStatusToken("interrupted")).toBe("waiting");
-    expect(trackSegmentToken("pending")).toBeUndefined();
-    expect(trackSegmentToken("waiting_for_input")).toBe("waiting");
-    expect(trackSegmentToken("interrupted")).toBe("waiting");
-    expect(statusCopy("pending")).toBe("pending");
-    expect(statusCopy("waiting_for_input")).toBe("waiting on you");
-    expect(statusCopy("interrupted")).toBe("interrupted");
-    expect(ringGlyph("pending")).toBe("");
-    expect(ringGlyph("waiting_for_input")).toBe("?");
-    expect(ringGlyph("interrupted")).toBe("?");
-
-    for (const status of stageStatuses) {
-      expect(ringStatus(status)).toBeDefined();
-      expect(() => ringGlyph(status)).not.toThrow();
-      expect(() => trackSegmentToken(status)).not.toThrow();
-    }
-    for (const status of displayStatuses) {
-      expect(() => cssStatusToken(status)).not.toThrow();
-      expect(() => statusCopy(status)).not.toThrow();
-      expect(() => statusDotVariant(status)).not.toThrow();
-      expect(() => statusIsPulsing(status)).not.toThrow();
-    }
-  });
+describe("stage status presentation", () => {
+  it.each([
+    { status: "pending", ring: "pending", glyph: "", seg: undefined },
+    { status: "running", ring: "running", glyph: "▸", seg: "running" },
+    { status: "waiting_for_input", ring: "waiting", glyph: "?", seg: "waiting" },
+    { status: "interrupted", ring: "waiting", glyph: "?", seg: "waiting" },
+    { status: "succeeded", ring: "succeeded", glyph: "✓", seg: "succeeded" },
+    { status: "failed", ring: "failed", glyph: "✕", seg: "failed" },
+    { status: "skipped", ring: "skipped", glyph: "–", seg: "skipped" },
+  ] as const)(
+    "$status -> ring $ring, glyph $glyph, segment $seg",
+    ({ status, ring, glyph, seg }) => {
+      expect(ringStatus(status)).toBe(ring);
+      expect(ringGlyph(status)).toBe(glyph);
+      expect(ringGlyph(ring)).toBe(glyph);
+      expect(trackSegmentToken(status)).toBe(seg);
+    },
+  );
 });
 
 describe("cancelledDisplayCopy", () => {

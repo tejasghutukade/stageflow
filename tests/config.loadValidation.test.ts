@@ -88,81 +88,38 @@ describe("load seam outcomes", () => {
     expect(outcome.issues[0]?.code).toBe("pipeline.invalid_shape");
   });
 
-  it("assigns stage.invalid_shape for missing required fields", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-stage-shape-"));
+  const SCHEMA_IO = [
+    "io:",
+    "  input:",
+    "    schema:",
+    "      type: object",
+    "  output:",
+    "    schema:",
+    "      type: object",
+  ];
+
+  it.each([
+    { code: "stage.invalid_shape", lines: ["id: bad"] },
+    {
+      code: "stage.invalid_payload_schema",
+      lines: ["id: bad", "system_prompt: test", "model: anthropic/claude-sonnet-4-5", "payload_schema:", "  type: not-a-valid-type"],
+    },
+    {
+      code: "stage.invalid_gate_kinds",
+      lines: ["id: bad", "system_prompt: test", "model: anthropic/claude-sonnet-4-5", ...SCHEMA_IO, "gate_kinds:", "  - not_a_kind"],
+    },
+    {
+      code: "stage.invalid_clone_input_schema",
+      lines: ["id: bad", "system_prompt: test", "model: anthropic/claude-sonnet-4-5", "clone_input_schema:", "  type: not-a-valid-type"],
+    },
+  ])("loadStageOutcome assigns $code", async ({ code, lines }) => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-stage-issue-"));
     const stagePath = path.join(root, "bad.yaml");
-    await writeFile(stagePath, "id: only-id\n", "utf8");
+    await writeFile(stagePath, [...lines, ""].join("\n"), "utf8");
     const outcome = await loadStageOutcome(stagePath);
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("stage.invalid_shape");
-  });
-
-  it("assigns stage.invalid_payload_schema for compile failures", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-stage-schema-"));
-    const stagePath = path.join(root, "bad-schema.yaml");
-    await writeFile(
-      stagePath,
-      [
-        "id: bad-schema",
-        "system_prompt: test",
-        "model: anthropic/claude-sonnet-4-5",
-        "payload_schema:",
-        "  type: not-a-valid-type",
-        "",
-      ].join("\n"),
-    );
-    const outcome = await loadStageOutcome(stagePath);
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("stage.invalid_payload_schema");
-  });
-
-  it("assigns stage.invalid_gate_kinds for unsupported gate kind", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-stage-gate-"));
-    const stagePath = path.join(root, "bad-gate.yaml");
-    await writeFile(
-      stagePath,
-      [
-        "id: bad-gate",
-        "system_prompt: test",
-        "model: anthropic/claude-sonnet-4-5",
-        "io:",
-        "  input:",
-        "    schema:",
-        "      type: object",
-        "  output:",
-        "    schema:",
-        "      type: object",
-        "gate_kinds:",
-        "  - not_a_kind",
-        "",
-      ].join("\n"),
-    );
-    const outcome = await loadStageOutcome(stagePath);
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("stage.invalid_gate_kinds");
-  });
-
-  it("assigns stage.invalid_clone_input_schema for compile failures", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-clone-schema-"));
-    const stagePath = path.join(root, "bad-clone-schema.yaml");
-    await writeFile(
-      stagePath,
-      [
-        "id: bad-clone-schema",
-        "system_prompt: test",
-        "model: anthropic/claude-sonnet-4-5",
-        "clone_input_schema:",
-        "  type: not-a-valid-type",
-        "",
-      ].join("\n"),
-    );
-    const outcome = await loadStageOutcome(stagePath);
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("stage.invalid_clone_input_schema");
+    expect(outcome.issues[0]?.code).toBe(code);
   });
 
   it("loadPipeline throws for missing uses target", async () => {
@@ -190,7 +147,7 @@ describe("loadPipelineValidated", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.loaded.pipeline.id).toBe("fork-demo");
-    expect(result.loaded.stages.length).toBeGreaterThan(0);
+    expect(result.loaded.stages.map((st) => st.id)).toEqual(["decide", "branch-a", "branch-b"]);
   });
 
   it("returns pipeline.stage_id_mismatch finding", async () => {
@@ -204,10 +161,9 @@ describe("loadPipelineValidated", () => {
     ).toBe(true);
   });
 
-  it("aggregates multiple findings sorted by path", async () => {
+  it("fails on a bare-string stage ref with pipeline.string_stage_ref", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-load-multi-"));
     const pipelinePath = path.join(root, "multi.pipeline.yaml");
-    await mkdir(path.join(root, "stages"), { recursive: true });
     await writeFile(
       pipelinePath,
       [
@@ -222,9 +178,7 @@ describe("loadPipelineValidated", () => {
     const result = await loadPipelineValidated(pipelinePath);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.findings.length).toBeGreaterThan(0);
-    const paths = result.findings.map((f) => f.path);
-    expect([...paths].sort()).toEqual(paths);
+    expect(result.findings.map((f) => f.code)).toEqual(["pipeline.string_stage_ref"]);
   });
 });
 
@@ -237,6 +191,89 @@ async function writeTempFiles(files: Record<string, string>): Promise<string> {
   }
   return root;
 }
+
+
+function ioPipeline(opts: {
+  id: string;
+  producerOut: string[];
+  consumerIn: string[];
+}): string {
+  const indent = (lines: string[]) => lines.map((line) => `          ${line}`);
+  return [
+    `id: ${opts.id}`,
+    "model: anthropic/claude-sonnet-4-5",
+    "stages:",
+    "  - id: produce",
+    "    entry: true",
+    "    route:",
+    "      - to: consume",
+    "    system_prompt: Produce",
+    "    io:",
+    "      input:",
+    "        schema:",
+    "          type: object",
+    "      output:",
+    "        schema:",
+    ...indent(opts.producerOut),
+    "  - id: consume",
+    "    system_prompt: Consume",
+    "    io:",
+    "      input:",
+    "        schema:",
+    ...indent(opts.consumerIn),
+    "      output:",
+    "        schema:",
+    "          type: object",
+    "",
+  ].join("\n");
+}
+
+function joinPipeline(opts: { id: string; leftOut: string[]; rightOut: string[] }): string {
+  const indent = (lines: string[]) => lines.map((line) => `          ${line}`);
+  const parent = (id: string, out: string[]) => [
+    `  - id: ${id}`,
+    `    system_prompt: ${id}`,
+    "    entry: true",
+    "    route:",
+    "      - to: merge",
+    "    io:",
+    "      input:",
+    "        schema:",
+    "          type: object",
+    "      output:",
+    "        schema:",
+    ...indent(out),
+  ];
+  return [
+    `id: ${opts.id}`,
+    "model: anthropic/claude-sonnet-4-5",
+    "stages:",
+    ...parent("left", opts.leftOut),
+    ...parent("right", opts.rightOut),
+    "  - id: merge",
+    "    system_prompt: Join",
+    "    io:",
+    "      input:",
+    "        schema:",
+    "          type: object",
+    "          required: [area_id]",
+    "          properties:",
+    "            area_id:",
+    "              type: string",
+    "      output:",
+    "        schema:",
+    "          type: object",
+    "",
+  ].join("\n");
+}
+
+const requiredString = (name: string) => [
+  "type: object",
+  `required: [${name}]`,
+  "properties:",
+  `  ${name}:`,
+  "    type: string",
+];
 
 const STORY_SLICE = [
   "  story-slice:",
@@ -352,51 +389,33 @@ describe("io $ref and sequential compatibility", () => {
     expect(outcome.issues[0]?.message).toMatch(/\$ref cycle/i);
   });
 
+
   it("fails pipeline.io_incompatible when consumer required field is missing from producer", async () => {
     const root = await writeTempFiles({
-      "incompat.pipeline.yaml": [
-        "id: incompat",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: produce",
-        "    entry: true",
-        "    route:",
-        "      - to: consume",
-        "    system_prompt: Produce",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [verdict]",
-        "          properties:",
-        "            verdict:",
-        "              type: string",
-        "  - id: consume",
-        "    system_prompt: Consume",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          required: [missing_field]",
-        "          properties:",
-        "            missing_field:",
-        "              type: string",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
+      "incompat.pipeline.yaml": ioPipeline({
+        id: "incompat",
+        producerOut: requiredString("verdict"),
+        consumerIn: requiredString("missing_field"),
+      }),
     });
     const outcome = await loadPipelineOutcome("incompat.pipeline.yaml", { cwd: root });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.io_incompatible")).toBe(
-      true,
-    );
+    expect(outcome.issues.map((issue) => issue.code)).toContain("pipeline.io_incompatible");
   });
+
+  it("loads when the producer output satisfies the consumer input", async () => {
+    const root = await writeTempFiles({
+      "compat.pipeline.yaml": ioPipeline({
+        id: "compat",
+        producerOut: [...requiredString("title"), "  extra:", "    type: string"],
+        consumerIn: requiredString("title"),
+      }),
+    });
+    const outcome = await loadPipelineOutcome("compat.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(true);
+  });
+
 
   it("does not treat string-equal $ref as compatible when resolved shapes are not a subset", async () => {
     const root = await writeTempFiles({
@@ -451,540 +470,30 @@ describe("io $ref and sequential compatibility", () => {
     );
   });
 
-  it("fails pipeline.io_incompatible when child additionalProperties false rejects parent extra fields", async () => {
-    const root = await writeTempFiles({
-      "closed.pipeline.yaml": [
-        "id: closed",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: produce",
-        "    entry: true",
-        "    route:",
-        "      - to: consume",
-        "    system_prompt: Produce",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          properties:",
-        "            title:",
-        "              type: string",
-        "            extra:",
-        "              type: string",
-        "  - id: consume",
-        "    system_prompt: Consume",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          additionalProperties: false",
-        "          properties:",
-        "            title:",
-        "              type: string",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("closed.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.io_incompatible")).toBe(
-      true,
-    );
-  });
 
-  it("loads when parent has extra properties and child input does not set additionalProperties false", async () => {
+  it.each([
+    {
+      name: "rejects a join when child io.input is not a subset of each parent",
+      leftOut: requiredString("foo"),
+      rightOut: requiredString("bar"),
+      ok: false,
+    },
+    {
+      name: "accepts a join when child io.input is a subset of each parent output",
+      leftOut: requiredString("area_id"),
+      rightOut: requiredString("area_id"),
+      ok: true,
+    },
+  ])("multi-parent join $name", async ({ leftOut, rightOut, ok }) => {
     const root = await writeTempFiles({
-      "open.pipeline.yaml": [
-        "id: open",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: produce",
-        "    entry: true",
-        "    route:",
-        "      - to: consume",
-        "    system_prompt: Produce",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          properties:",
-        "            title:",
-        "              type: string",
-        "            extra:",
-        "              type: string",
-        "  - id: consume",
-        "    system_prompt: Consume",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          properties:",
-        "            title:",
-        "              type: string",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("open.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(true);
-  });
-
-  it("fails pipeline.io_incompatible when integer consumer cannot accept number producer", async () => {
-    const root = await writeTempFiles({
-      "int-number.pipeline.yaml": [
-        "id: int-number",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: produce",
-        "    entry: true",
-        "    route:",
-        "      - to: consume",
-        "    system_prompt: Produce",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [n]",
-        "          properties:",
-        "            n:",
-        "              type: number",
-        "  - id: consume",
-        "    system_prompt: Consume",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          required: [n]",
-        "          properties:",
-        "            n:",
-        "              type: integer",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("int-number.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.io_incompatible")).toBe(
-      true,
-    );
-  });
-
-  it("loads when number consumer accepts integer producer", async () => {
-    const root = await writeTempFiles({
-      "number-int.pipeline.yaml": [
-        "id: number-int",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: produce",
-        "    entry: true",
-        "    route:",
-        "      - to: consume",
-        "    system_prompt: Produce",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [n]",
-        "          properties:",
-        "            n:",
-        "              type: integer",
-        "  - id: consume",
-        "    system_prompt: Consume",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          required: [n]",
-        "          properties:",
-        "            n:",
-        "              type: number",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("number-int.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(true);
-  });
-
-  it("fails pipeline.io_incompatible when producer array omits consumer minItems", async () => {
-    const root = await writeTempFiles({
-      "min-items.pipeline.yaml": [
-        "id: min-items",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: produce",
-        "    entry: true",
-        "    route:",
-        "      - to: consume",
-        "    system_prompt: Produce",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [tags]",
-        "          properties:",
-        "            tags:",
-        "              type: array",
-        "              items:",
-        "                type: string",
-        "  - id: consume",
-        "    system_prompt: Consume",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          required: [tags]",
-        "          properties:",
-        "            tags:",
-        "              type: array",
-        "              minItems: 1",
-        "              items:",
-        "                type: string",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("min-items.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.io_incompatible")).toBe(
-      true,
-    );
-  });
-
-  it("fails pipeline.io_incompatible when closed consumer allows an open producer", async () => {
-    const root = await writeTempFiles({
-      "open-producer.pipeline.yaml": [
-        "id: open-producer",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: produce",
-        "    entry: true",
-        "    route:",
-        "      - to: consume",
-        "    system_prompt: Produce",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          properties:",
-        "            title:",
-        "              type: string",
-        "  - id: consume",
-        "    system_prompt: Consume",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          additionalProperties: false",
-        "          properties:",
-        "            title:",
-        "              type: string",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("open-producer.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.io_incompatible")).toBe(
-      true,
-    );
-  });
-
-  it("fails pipeline.io_incompatible when producer property is nullable and consumer is not", async () => {
-    const root = await writeTempFiles({
-      "nullable.pipeline.yaml": [
-        "id: nullable-edge",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: produce",
-        "    entry: true",
-        "    route:",
-        "      - to: consume",
-        "    system_prompt: Produce",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [title]",
-        "          properties:",
-        "            title:",
-        "              type: string",
-        "              nullable: true",
-        "  - id: consume",
-        "    system_prompt: Consume",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          required: [title]",
-        "          properties:",
-        "            title:",
-        "              type: string",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("nullable.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.io_incompatible")).toBe(
-      true,
-    );
-  });
-
-  it("fails pipeline.io_incompatible when sequential enum is not assignable", async () => {
-    const root = await writeTempFiles({
-      "enum.pipeline.yaml": [
-        "id: enum-edge",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: produce",
-        "    entry: true",
-        "    route:",
-        "      - to: consume",
-        "    system_prompt: Produce",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [result]",
-        "          properties:",
-        "            result:",
-        "              type: string",
-        "              enum: [pass, fail]",
-        "  - id: consume",
-        "    system_prompt: Consume",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          required: [result]",
-        "          properties:",
-        "            result:",
-        "              type: string",
-        "              enum: [pass]",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("enum.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.io_incompatible")).toBe(
-      true,
-    );
-  });
-
-  it("fails pipeline.io_incompatible when child pattern is unconstrained on the parent", async () => {
-    const root = await writeTempFiles({
-      "pattern.pipeline.yaml": [
-        "id: pattern-edge",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: produce",
-        "    entry: true",
-        "    route:",
-        "      - to: consume",
-        "    system_prompt: Produce",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [code]",
-        "          properties:",
-        "            code:",
-        "              type: string",
-        "  - id: consume",
-        "    system_prompt: Consume",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          required: [code]",
-        "          properties:",
-        "            code:",
-        "              type: string",
-        "              pattern: '^[a-z]+$'",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("pattern.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.io_incompatible")).toBe(
-      true,
-    );
-  });
-
-  it("fails pipeline.io_incompatible on a multi-parent join when child io.input is not a subset of each parent", async () => {
-    const root = await writeTempFiles({
-      "join.pipeline.yaml": [
-        "id: join",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: left",
-        "    system_prompt: Left",
-        "    entry: true",
-        "    route:",
-        "      - to: merge",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [foo]",
-        "          properties:",
-        "            foo:",
-        "              type: string",
-        "  - id: right",
-        "    system_prompt: Right",
-        "    entry: true",
-        "    route:",
-        "      - to: merge",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [bar]",
-        "          properties:",
-        "            bar:",
-        "              type: string",
-        "  - id: merge",
-        "    system_prompt: Join",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          required: [area_id]",
-        "          properties:",
-        "            area_id:",
-        "              type: string",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
+      "join.pipeline.yaml": joinPipeline({ id: "join", leftOut, rightOut }),
     });
     const outcome = await loadPipelineOutcome("join.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
+    expect(outcome.ok).toBe(ok);
     if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.io_incompatible")).toBe(
-      true,
-    );
+    expect(outcome.issues.map((issue) => issue.code)).toContain("pipeline.io_incompatible");
   });
 
-  it("accepts a multi-parent join when child io.input is a subset of each parent output", async () => {
-    const root = await writeTempFiles({
-      "join-ok.pipeline.yaml": [
-        "id: join-ok",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: left",
-        "    system_prompt: Left",
-        "    entry: true",
-        "    route:",
-        "      - to: merge",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [area_id]",
-        "          properties:",
-        "            area_id:",
-        "              type: string",
-        "  - id: right",
-        "    system_prompt: Right",
-        "    entry: true",
-        "    route:",
-        "      - to: merge",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [area_id]",
-        "          properties:",
-        "            area_id:",
-        "              type: string",
-        "  - id: merge",
-        "    system_prompt: Join",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          required: [area_id]",
-        "          properties:",
-        "            area_id:",
-        "              type: string",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("join-ok.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(true);
-  });
 
   it("fails isolated stage $ref-only schema with stage.unresolved_schema_ref", async () => {
     const root = await writeTempFiles({
@@ -1062,6 +571,9 @@ describe("forward route if eq", () => {
     expect(
       (outcome.issues ?? []).some((issue) => issue.code === "pipeline.route_if_invalid"),
     ).toBe(false);
+    expect(
+      (outcome.issues ?? []).some((issue) => issue.code === "pipeline.route_all_gated"),
+    ).toBe(false);
     const byId = new Map(outcome.value.dag.nodes.map((node) => [node.id, node]));
     expect(byId.get("page")?.needsEdges).toEqual([
       {
@@ -1073,15 +585,6 @@ describe("forward route if eq", () => {
     expect(byId.get("notify")?.needsEdges).toEqual([
       { id: "triage", on: ["succeeded"] },
     ]);
-  });
-
-  it("a pipeline with no forward if gains no route_if findings", async () => {
-    const outcome = await loadPipelineOutcome(pipelinePath("route-linear"));
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    const codes = (outcome.issues ?? []).map((issue) => issue.code);
-    expect(codes).not.toContain("pipeline.route_if_invalid");
-    expect(codes).not.toContain("pipeline.route_all_gated");
   });
 
   it.each([
@@ -1134,34 +637,12 @@ describe("forward route if eq", () => {
     },
   );
 
-  it("duplicate to: still reports pipeline.dag_error", async () => {
-    const outcome = await loadPipelineOutcome(pipelinePath("route-if-duplicate-to"));
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) {
-      expect(outcome.issues.some((issue) => issue.code === "pipeline.dag_error")).toBe(
-        true,
-      );
-      expect(
-        outcome.issues.some((issue) => issue.code === "pipeline.route_if_invalid"),
-      ).toBe(false);
-    }
-  });
-
   it("loads remaining operators without pipeline.route_if_invalid", async () => {
     const outcome = await loadPipelineOutcome(pipelinePath("route-if-ops"));
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(
       (outcome.issues ?? []).some((issue) => issue.code === "pipeline.route_if_invalid"),
-    ).toBe(false);
-  });
-
-  it("mixed gated and always-run siblings does not emit pipeline.route_all_gated", async () => {
-    const outcome = await loadPipelineOutcome(pipelinePath("route-if-eq"));
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(
-      (outcome.issues ?? []).some((issue) => issue.code === "pipeline.route_all_gated"),
     ).toBe(false);
   });
 
@@ -1224,23 +705,15 @@ describe("forward route if eq", () => {
     ).toBe(false);
   });
 
-  it("circular forward to without type: loop stays pipeline.dag_error", async () => {
-    const outcome = await loadPipelineOutcome(pipelinePath("route-cycle"));
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.dag_error")).toBe(true);
-    expect(
-      outcome.issues.some((issue) => issue.code === "pipeline.route_if_invalid"),
-    ).toBe(false);
-  });
-
-  it("unknown loop key stays pipeline.dag_error", async () => {
-    const outcome = await loadPipelineOutcome(pipelinePath("route-loop-unknown-key"));
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.dag_error")).toBe(true);
-    expect(
-      outcome.issues.some((issue) => issue.code === "pipeline.route_if_invalid"),
-    ).toBe(false);
-  });
+  it.each(["route-if-duplicate-to", "route-cycle", "route-loop-unknown-key"])(
+    "%s stays pipeline.dag_error, not route_if_invalid",
+    async (fixture) => {
+      const outcome = await loadPipelineOutcome(pipelinePath(fixture));
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) return;
+      const codes = outcome.issues.map((issue) => issue.code);
+      expect(codes).toContain("pipeline.dag_error");
+      expect(codes).not.toContain("pipeline.route_if_invalid");
+    },
+  );
 });

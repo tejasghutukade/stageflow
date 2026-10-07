@@ -3,77 +3,20 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
+import type { AgentPort } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
 import { runPipelineDag } from "../src/runtime/pipelineScheduler.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
-import type { StageEnvelope } from "../src/types/envelope.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
+import { okEnvelope } from "./helpers/envelopes.js";
+import { stageKeyedAgent } from "./helpers/stageKeyedAgent.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
 );
-
-function okEnvelope(
-  summary: string,
-  extra?: Partial<StageEnvelope>,
-): StageEnvelope {
-  return { status: "success", summary, artifacts: [], payload: {}, ...extra };
-}
-
-type FakeAgentBehavior =
-  | { type: "emit"; envelope: StageEnvelope }
-  | { type: "never_emit" }
-  | { type: "throw"; message: string };
-
-function stageKeyedAgent(
-  behaviorsByStage: Record<string, FakeAgentBehavior[]>,
-): AgentPort & {
-  openCounts: Map<string, number>;
-  sessionModes: Map<string, Array<string | undefined>>;
-  feedbackContexts: Map<string, number>;
-} {
-  const openCounts = new Map<string, number>();
-  const stageIndex = new Map<string, number>();
-  const sessionModes = new Map<string, Array<string | undefined>>();
-  const feedbackContexts = new Map<string, number>();
-  return {
-    openCounts,
-    sessionModes,
-    feedbackContexts,
-    openStage(input: StageRunInput) {
-      const stageId = input.stage.id;
-      openCounts.set(stageId, (openCounts.get(stageId) ?? 0) + 1);
-      const modes = sessionModes.get(stageId) ?? [];
-      modes.push(input.sessionMode);
-      sessionModes.set(stageId, modes);
-      if (input.feedbackLoopContext !== undefined) {
-        feedbackContexts.set(
-          stageId,
-          (feedbackContexts.get(stageId) ?? 0) + 1,
-        );
-      }
-      const index = stageIndex.get(stageId) ?? 0;
-      stageIndex.set(stageId, index + 1);
-      const behaviors = behaviorsByStage[stageId] ?? [];
-      const behavior = behaviors[index] ?? { type: "never_emit" as const };
-      return scriptedFakeAgent([behavior]).openStage(input);
-    },
-    async runStage(input) {
-      const handle = this.openStage(input);
-      const event = await handle.next();
-      await handle.close();
-      if (event.status === "waiting_for_input") {
-        return { ok: false, reason: "unexpected wait" };
-      }
-      return event.result;
-    },
-  };
-}
 
 async function waitFor(
   predicate: () => Promise<boolean> | boolean,

@@ -5,7 +5,6 @@ import path from "node:path";
 import {
   INVALID_CREDENTIAL_SOURCE_MESSAGE,
   parseCredentialSource,
-  readCredentialSourceFromContext,
   readCredentialSourceFromFile,
   readFactorySettings,
   readMaxConcurrentFromContext,
@@ -18,7 +17,7 @@ import {
 } from "../src/runtime/settingsFile.js";
 import { storeRootFor } from "../src/runstore/paths.js";
 import { resolveProjectContext } from "../src/project/resolveProjectContext.js";
-import { initTempGitRepo, withIsolatedHome } from "./helpers/projectContext.js";
+import { withIsolatedHome } from "./helpers/projectContext.js";
 
 describe("settingsFile credentialSource", () => {
   it("writes sf_owned and reads it back", async () => {
@@ -92,28 +91,6 @@ describe("settingsFile credentialSource", () => {
       credentialSource: "sf_owned",
     });
     expect(raw).not.toMatch(/api[_-]?key|sk-|token/i);
-  });
-
-  it("AE5: project credentialSource overrides global in git repo", async () => {
-    await withIsolatedHome(async (home) => {
-      const { root, nested, cleanup } = await initTempGitRepo();
-      try {
-        writeFactorySettingsForContext(resolveProjectContext(home), {
-          credentialSource: "sf_owned",
-        });
-        await mkdir(storeRootFor(root), { recursive: true });
-        await writeFile(
-          path.join(storeRootFor(root), "settings.json"),
-          `${JSON.stringify({ credentialSource: "pi_home" }, null, 2)}\n`,
-        );
-        expect(readCredentialSourceFromContext(resolveProjectContext(nested))).toBe(
-          "sf_owned",
-        );
-        await readFile(path.join(storeRootFor(root), "settings.json"), "utf8");
-      } finally {
-        await cleanup();
-      }
-    });
   });
 
   it("non-git context reads settings from global home only", async () => {

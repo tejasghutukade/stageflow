@@ -76,157 +76,123 @@ function validFilePackageDraft(): DraftPackage {
   };
 }
 
+async function withRepo(fn: (root: string) => Promise<void>): Promise<void> {
+  const { root, cleanup } = await initTempGitRepo();
+  try {
+    await fn(root);
+  } finally {
+    await cleanup();
+  }
+}
+
+async function validate(root: string, draft: DraftPackage) {
+  return validateDraftPackage(draft, { cwd: root, projectRoot: root, strict: true });
+}
+
+async function seedPackage(
+  root: string,
+  options: {
+    prompts?: Record<string, string>;
+    stages?: Parameters<typeof createPipeline>[1]["stages"];
+  } = {},
+): Promise<string> {
+  const dir = path.join(root, "pipelines");
+  await mkdir(dir, { recursive: true });
+  const prompts = options.prompts ?? { clarify: "Clarify the task", decide: "Decide next steps" };
+  for (const [id, system_prompt] of Object.entries(prompts)) {
+    const created = await createStage(root, {
+      pipeline_directory: "pipelines",
+      filename: `${id}.yaml`,
+      id,
+      system_prompt,
+      model: MODEL,
+    });
+    expect(created.ok).toBe(true);
+  }
+  const pipeline = await createPipeline(root, {
+    directory: "pipelines",
+    id: "demo",
+    stages: options.stages ?? [
+      { id: "clarify", uses: "./clarify.yaml" },
+      { id: "decide", uses: "./decide.yaml", needs: "clarify" },
+    ],
+  });
+  expect(pipeline.ok).toBe(true);
+  return dir;
+}
+
+function withBrokenClarify(): DraftPackage {
+  const draft = validFilePackageDraft();
+  draft.stages![0]!.body = {
+    id: "clarify",
+    system_prompt: "Clarify the task",
+    model: MODEL,
+  };
+  return draft;
+}
+
 describe("validateDraftPackage", () => {
-  it("accepts a fully-inline draft with the same finding class as path-based validate", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const result = await validateDraftPackage(validInlineDraft(), {
-        cwd: root,
-        projectRoot: root,
-        strict: true,
-      });
+  it.each([
+    { name: "a fully-inline draft", draft: validInlineDraft() },
+    { name: "a multi-file package draft", draft: validFilePackageDraft() },
+    {
+      name: "a valid optional task alongside a valid pipeline",
+      draft: {
+        ...validInlineDraft(),
+        task: { filename: "sample.task.yaml", body: { id: "sample", goal: "Ship the demo" } },
+      },
+    },
+  ])("accepts $name", ({ draft }) =>
+    withRepo(async (root) => {
+      const result = await validate(root, draft);
       expect(result.ok).toBe(true);
       expect(result.scope).toBe("pipeline");
       expect(result.summary.errors).toBe(0);
-    } finally {
-      await cleanup();
-    }
-  });
+    }));
 
-  it("reports catalog-shaped errors for an invalid inline draft", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const result = await validateDraftPackage(
-        {
-          pipeline: {
-            id: "broken",
-            stages: [{ id: "plan", system_prompt: "Do work", model: MODEL }],
-          },
+  it("reports catalog-shaped findings for an invalid inline draft", () =>
+    withRepo(async (root) => {
+      const result = await validate(root, {
+        pipeline: {
+          id: "broken",
+          stages: [{ id: "plan", system_prompt: "Do work", model: MODEL }],
         },
-        { cwd: root, projectRoot: root, strict: true },
-      );
-      expect(result.ok).toBe(false);
-      expect(result.findings.some((f) => f.code === "stage.invalid_io")).toBe(true);
-      expect(result.findings.every((f) => f.severity === "error" || f.severity === "warning")).toBe(
-        true,
-      );
-      expect(result.findings.every((f) => typeof f.path === "string")).toBe(true);
-      expect(result.findings.every((f) => typeof f.category === "string")).toBe(true);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("validates a multi-file package draft via temp materialization", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const result = await validateDraftPackage(validFilePackageDraft(), {
-        cwd: root,
-        projectRoot: root,
-        strict: true,
-      });
-      expect(result.ok).toBe(true);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("fails multi-file package validation when a stage body is invalid", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const draft = validFilePackageDraft();
-      draft.stages![0]!.body = {
-        id: "clarify",
-        system_prompt: "Clarify the task",
-        model: MODEL,
-      };
-      const result = await validateDraftPackage(draft, {
-        cwd: root,
-        projectRoot: root,
-        strict: true,
       });
       expect(result.ok).toBe(false);
       expect(result.findings.some((f) => f.code === "stage.invalid_io")).toBe(true);
-    } finally {
-      await cleanup();
-    }
-  });
+      for (const finding of result.findings) {
+        expect(["error", "warning"]).toContain(finding.severity);
+        expect(typeof finding.path).toBe("string");
+        expect(typeof finding.category).toBe("string");
+      }
+    }));
 
-  it("includes task findings when an optional task is invalid", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const draft = validInlineDraft();
-      draft.task = {
-        filename: "sample.task.yaml",
-        body: { id: "sample" },
-      };
-      const result = await validateDraftPackage(draft, {
-        cwd: root,
-        projectRoot: root,
-        strict: true,
+  it("fails multi-file package validation when a stage body is invalid", () =>
+    withRepo(async (root) => {
+      const result = await validate(root, withBrokenClarify());
+      expect(result.ok).toBe(false);
+      expect(result.findings.some((f) => f.code === "stage.invalid_io")).toBe(true);
+    }));
+
+  it("includes task findings when an optional task is invalid", () =>
+    withRepo(async (root) => {
+      const result = await validate(root, {
+        ...validInlineDraft(),
+        task: { filename: "sample.task.yaml", body: { id: "sample" } },
       });
       expect(result.ok).toBe(false);
-      expect(result.findings.some((f) => f.category === "task")).toBe(true);
-      expect(result.findings.some((f) => f.code === "task.invalid_shape")).toBe(true);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("accepts a valid optional task alongside a valid pipeline", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const draft = validInlineDraft();
-      draft.task = {
-        filename: "sample.task.yaml",
-        body: { id: "sample", goal: "Ship the demo" },
-      };
-      const result = await validateDraftPackage(draft, {
-        cwd: root,
-        projectRoot: root,
-        strict: true,
-      });
-      expect(result.ok).toBe(true);
-    } finally {
-      await cleanup();
-    }
-  });
+      expect(
+        result.findings.some((f) => f.category === "task" && f.code === "task.invalid_shape"),
+      ).toBe(true);
+    }));
 });
 
 describe("overwriteDraftPackage", () => {
-  it("overwrites an existing package after successful validate-then-write", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const dir = path.join(root, "pipelines");
-      await mkdir(dir, { recursive: true });
-
-      const createdClarify = await createStage(root, {
-        pipeline_directory: "pipelines",
-        filename: "clarify.yaml",
-        id: "clarify",
-        system_prompt: "Old clarify",
-        model: MODEL,
+  it("overwrites an existing package after successful validate-then-write", () =>
+    withRepo(async (root) => {
+      const dir = await seedPackage(root, {
+        prompts: { clarify: "Old clarify", decide: "Old decide" },
       });
-      expect(createdClarify.ok).toBe(true);
-
-      const createdDecide = await createStage(root, {
-        pipeline_directory: "pipelines",
-        filename: "decide.yaml",
-        id: "decide",
-        system_prompt: "Old decide",
-        model: MODEL,
-      });
-      expect(createdDecide.ok).toBe(true);
-
-      const created = await createPipeline(root, {
-        directory: "pipelines",
-        id: "demo",
-        stages: [
-          { id: "clarify", uses: "./clarify.yaml" },
-          { id: "decide", uses: "./decide.yaml", needs: "clarify" },
-        ],
-      });
-      expect(created.ok).toBe(true);
 
       const draft = validFilePackageDraft();
       draft.stages![0]!.body.system_prompt = "New clarify prompt";
@@ -236,10 +202,7 @@ describe("overwriteDraftPackage", () => {
         body: { id: "demo-task", goal: "Run the demo package" },
       };
 
-      const result = await overwriteDraftPackage(root, {
-        directory: "pipelines",
-        draft,
-      });
+      const result = await overwriteDraftPackage(root, { directory: "pipelines", draft });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
 
@@ -249,74 +212,31 @@ describe("overwriteDraftPackage", () => {
       );
       expect(result.taskPath).toBe("pipelines/demo.task.yaml");
 
-      const clarifyYaml = await readFile(path.join(dir, "clarify.yaml"), "utf8");
-      expect(clarifyYaml).toContain("New clarify prompt");
-      const decideYaml = await readFile(path.join(dir, "decide.yaml"), "utf8");
-      expect(decideYaml).toContain("New decide prompt");
-      const taskYaml = await readFile(path.join(dir, "demo.task.yaml"), "utf8");
-      expect(taskYaml).toContain("Run the demo package");
+      expect(await readFile(path.join(dir, "clarify.yaml"), "utf8")).toContain(
+        "New clarify prompt",
+      );
+      expect(await readFile(path.join(dir, "decide.yaml"), "utf8")).toContain(
+        "New decide prompt",
+      );
+      expect(await readFile(path.join(dir, "demo.task.yaml"), "utf8")).toContain(
+        "Run the demo package",
+      );
       const pipelineYaml = await readFile(path.join(dir, "demo.pipeline.yaml"), "utf8");
       expect(pipelineYaml).toContain("id: demo");
       expect(pipelineYaml).toContain("clarify");
-    } finally {
-      await cleanup();
-    }
-  });
+    }));
 
-  it("refuses invalid overwrite and leaves existing files unchanged", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const dir = path.join(root, "pipelines");
-      await mkdir(dir, { recursive: true });
-
-      expect(
-        (
-          await createStage(root, {
-            pipeline_directory: "pipelines",
-            filename: "clarify.yaml",
-            id: "clarify",
-            system_prompt: "Keep me",
-            model: MODEL,
-          })
-        ).ok,
-      ).toBe(true);
-      expect(
-        (
-          await createStage(root, {
-            pipeline_directory: "pipelines",
-            filename: "decide.yaml",
-            id: "decide",
-            system_prompt: "Keep decide",
-            model: MODEL,
-          })
-        ).ok,
-      ).toBe(true);
-      expect(
-        (
-          await createPipeline(root, {
-            directory: "pipelines",
-            id: "demo",
-            stages: [
-              { id: "clarify", uses: "./clarify.yaml" },
-              { id: "decide", uses: "./decide.yaml", needs: "clarify" },
-            ],
-          })
-        ).ok,
-      ).toBe(true);
-
+  it("refuses invalid overwrite and leaves existing files unchanged", () =>
+    withRepo(async (root) => {
+      const dir = await seedPackage(root, {
+        prompts: { clarify: "Keep me", decide: "Keep decide" },
+      });
       const beforeClarify = await readFile(path.join(dir, "clarify.yaml"), "utf8");
       const beforePipeline = await readFile(path.join(dir, "demo.pipeline.yaml"), "utf8");
 
-      const draft = validFilePackageDraft();
-      draft.stages![0]!.body = {
-        id: "clarify",
-        system_prompt: "Broken clarify",
-        model: MODEL,
-      };
-
       const result = await overwriteDraftPackage(root, {
         directory: "pipelines",
-        draft,
+        draft: withBrokenClarify(),
       });
       expect(result.ok).toBe(false);
       if (result.ok) return;
@@ -325,45 +245,25 @@ describe("overwriteDraftPackage", () => {
 
       expect(await readFile(path.join(dir, "clarify.yaml"), "utf8")).toBe(beforeClarify);
       expect(await readFile(path.join(dir, "demo.pipeline.yaml"), "utf8")).toBe(beforePipeline);
-    } finally {
-      await cleanup();
-    }
-  });
+    }));
 
-  it("returns 404 when the pipeline does not already exist", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
+  it.each([
+    { name: "the pipeline does not already exist", directory: "pipelines", status: 404 },
+    { name: "directory is outside the project root", directory: "../outside", status: 400 },
+  ])("returns $status when $name", ({ directory, status }) =>
+    withRepo(async (root) => {
       await mkdir(path.join(root, "pipelines"), { recursive: true });
       const result = await overwriteDraftPackage(root, {
-        directory: "pipelines",
+        directory,
         draft: validFilePackageDraft(),
       });
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.status).toBe(404);
-    } finally {
-      await cleanup();
-    }
-  });
+      expect(result.status).toBe(status);
+    }));
 
-  it("returns 400 when directory is outside the project root", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const result = await overwriteDraftPackage(root, {
-        directory: "../outside",
-        draft: validFilePackageDraft(),
-      });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.status).toBe(400);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("returns 400 when a stage path escapes the package directory", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
+  it("returns 400 when a stage path escapes the package directory", () =>
+    withRepo(async (root) => {
       await mkdir(path.join(root, "pipelines"), { recursive: true });
       const seed = await createDraftPackage(root, {
         directory: "pipelines",
@@ -375,9 +275,7 @@ describe("overwriteDraftPackage", () => {
       const escaped: DraftPackage = {
         pipeline: {
           id: "demo",
-          stages: [
-            { id: "clarify", uses: "../escape.yaml", entry: true },
-          ],
+          stages: [{ id: "clarify", uses: "../escape.yaml", entry: true }],
         },
         stages: [
           {
@@ -400,17 +298,11 @@ describe("overwriteDraftPackage", () => {
       if (result.ok) return;
       expect(result.status).toBe(400);
       expect(result.error).toMatch(/escapes package directory/i);
-      await expect(
-        readFile(path.join(root, "escape.yaml"), "utf8"),
-      ).rejects.toThrow();
-    } finally {
-      await cleanup();
-    }
-  });
+      await expect(readFile(path.join(root, "escape.yaml"), "utf8")).rejects.toThrow();
+    }));
 
-  it("allowInvalid writes without validate gate (escape for Save invalid anyway)", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
+  it("allowInvalid writes without validate gate (escape for Save invalid anyway)", () =>
+    withRepo(async (root) => {
       const dir = path.join(root, "pipelines");
       await mkdir(dir, { recursive: true });
       await writeFile(
@@ -426,10 +318,7 @@ describe("overwriteDraftPackage", () => {
         },
       };
 
-      const refused = await overwriteDraftPackage(root, {
-        directory: "pipelines",
-        draft,
-      });
+      const refused = await overwriteDraftPackage(root, { directory: "pipelines", draft });
       expect(refused.ok).toBe(false);
 
       const forced = await overwriteDraftPackage(root, {
@@ -440,52 +329,13 @@ describe("overwriteDraftPackage", () => {
       expect(forced.ok).toBe(true);
       const written = await readFile(path.join(dir, "broken.pipeline.yaml"), "utf8");
       expect(written).toContain("Still broken");
-    } finally {
-      await cleanup();
-    }
-  });
+    }));
 });
 
 describe("loadDraftPackage", () => {
-  it("loads pipeline + referenced stage files; task absent by default", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const dir = path.join(root, "pipelines");
-      await mkdir(dir, { recursive: true });
-      expect(
-        (
-          await createStage(root, {
-            pipeline_directory: "pipelines",
-            filename: "clarify.yaml",
-            id: "clarify",
-            system_prompt: "Clarify the task",
-            model: MODEL,
-          })
-        ).ok,
-      ).toBe(true);
-      expect(
-        (
-          await createStage(root, {
-            pipeline_directory: "pipelines",
-            filename: "decide.yaml",
-            id: "decide",
-            system_prompt: "Decide next steps",
-            model: MODEL,
-          })
-        ).ok,
-      ).toBe(true);
-      expect(
-        (
-          await createPipeline(root, {
-            directory: "pipelines",
-            id: "demo",
-            stages: [
-              { id: "clarify", uses: "./clarify.yaml" },
-              { id: "decide", uses: "./decide.yaml", needs: "clarify" },
-            ],
-          })
-        ).ok,
-      ).toBe(true);
+  it("loads pipeline + referenced stage files; task absent by default", () =>
+    withRepo(async (root) => {
+      const dir = await seedPackage(root);
       await writeFile(
         path.join(dir, "demo.task.yaml"),
         "id: demo-task\ngoal: Should not load unless attached\n",
@@ -507,36 +357,14 @@ describe("loadDraftPackage", () => {
       expect(loaded.draft.stages?.[0]?.body.system_prompt).toBe("Clarify the task");
       expect(loaded.draft.task).toBeUndefined();
       expect(loaded.taskPath).toBeUndefined();
-    } finally {
-      await cleanup();
-    }
-  });
+    }));
 
-  it("optionally attaches a task when taskPath is provided", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const dir = path.join(root, "pipelines");
-      await mkdir(dir, { recursive: true });
-      expect(
-        (
-          await createStage(root, {
-            pipeline_directory: "pipelines",
-            filename: "clarify.yaml",
-            id: "clarify",
-            system_prompt: "Clarify",
-            model: MODEL,
-          })
-        ).ok,
-      ).toBe(true);
-      expect(
-        (
-          await createPipeline(root, {
-            directory: "pipelines",
-            id: "demo",
-            stages: [{ id: "clarify", uses: "./clarify.yaml" }],
-          })
-        ).ok,
-      ).toBe(true);
+  it("optionally attaches a task when taskPath is provided", () =>
+    withRepo(async (root) => {
+      const dir = await seedPackage(root, {
+        prompts: { clarify: "Clarify" },
+        stages: [{ id: "clarify", uses: "./clarify.yaml" }],
+      });
       await writeFile(
         path.join(dir, "demo.task.yaml"),
         "id: demo-task\ngoal: Attached brief\n",
@@ -551,14 +379,10 @@ describe("loadDraftPackage", () => {
       expect(loaded.draft.task?.filename).toBe("demo.task.yaml");
       expect(loaded.draft.task?.body.goal).toBe("Attached brief");
       expect(loaded.taskPath).toBe("pipelines/demo.task.yaml");
-    } finally {
-      await cleanup();
-    }
-  });
+    }));
 
-  it("loadTaskArtifact reads a task without loading the pipeline", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
+  it("loadTaskArtifact reads a task without loading the pipeline", () =>
+    withRepo(async (root) => {
       const dir = path.join(root, "pipelines");
       await mkdir(dir, { recursive: true });
       await writeFile(
@@ -573,69 +397,27 @@ describe("loadDraftPackage", () => {
       expect(loaded.task.filename).toBe("solo.task.yaml");
       expect(loaded.task.body.id).toBe("solo");
       expect(loaded.task.body.goal).toBe("Standalone attach");
-    } finally {
-      await cleanup();
-    }
-  });
+    }));
 
-  it("returns 404 when the pipeline is missing", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
+  it("returns 404 when the pipeline is missing", () =>
+    withRepo(async (root) => {
       const loaded = await loadDraftPackage(root, "pipelines/missing.pipeline.yaml");
       expect(loaded.ok).toBe(false);
       if (loaded.ok) return;
       expect(loaded.status).toBe(404);
-    } finally {
-      await cleanup();
-    }
-  });
+    }));
 });
 
 describe("open → edit → overwrite (draft/catalog seam)", () => {
-  it("loads a package, applies live draft edits, and overwrites known paths", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      const dir = path.join(root, "pipelines");
-      await mkdir(dir, { recursive: true });
-      expect(
-        (
-          await createStage(root, {
-            pipeline_directory: "pipelines",
-            filename: "clarify.yaml",
-            id: "clarify",
-            system_prompt: "Old prompt",
-            model: MODEL,
-          })
-        ).ok,
-      ).toBe(true);
-      expect(
-        (
-          await createStage(root, {
-            pipeline_directory: "pipelines",
-            filename: "decide.yaml",
-            id: "decide",
-            system_prompt: "Decide",
-            model: MODEL,
-          })
-        ).ok,
-      ).toBe(true);
-      expect(
-        (
-          await createPipeline(root, {
-            directory: "pipelines",
-            id: "demo",
-            stages: [
-              {
-                id: "clarify",
-                uses: "./clarify.yaml",
-                entry: true,
-                route: [{ to: "decide" }],
-              },
-              { id: "decide", uses: "./decide.yaml" },
-            ],
-          })
-        ).ok,
-      ).toBe(true);
+  it("loads a package, applies live draft edits, and overwrites known paths", () =>
+    withRepo(async (root) => {
+      const dir = await seedPackage(root, {
+        prompts: { clarify: "Old prompt", decide: "Decide" },
+        stages: [
+          { id: "clarify", uses: "./clarify.yaml", entry: true, route: [{ to: "decide" }] },
+          { id: "decide", uses: "./decide.yaml" },
+        ],
+      });
 
       const opened = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
       expect(opened.ok).toBe(true);
@@ -643,54 +425,31 @@ describe("open → edit → overwrite (draft/catalog seam)", () => {
 
       const draft: DraftPackage = {
         ...opened.draft,
-        stages: (opened.draft.stages ?? []).map((stage) =>
-          stage.body.id === "clarify"
-            ? {
-                ...stage,
-                body: {
-                  ...stage.body,
-                  system_prompt: "Inspector-edited clarify prompt",
-                },
-              }
-            : stage,
-        ),
+        stages: [
+          ...(opened.draft.stages ?? []).map((stage) =>
+            stage.body.id === "clarify"
+              ? {
+                  ...stage,
+                  body: { ...stage.body, system_prompt: "Inspector-edited clarify prompt" },
+                }
+              : stage,
+          ),
+          {
+            path: "./ship.yaml",
+            body: { id: "ship", system_prompt: "Ship it", model: MODEL, ...REQUIRED_IO },
+          },
+        ],
         pipeline: {
           ...opened.draft.pipeline,
           stages: [
-            {
-              id: "clarify",
-              uses: "./clarify.yaml",
-              entry: true,
-              route: [{ to: "decide" }],
-            },
-            {
-              id: "decide",
-              uses: "./decide.yaml",
-              route: [{ to: "ship" }],
-            },
+            { id: "clarify", uses: "./clarify.yaml", entry: true, route: [{ to: "decide" }] },
+            { id: "decide", uses: "./decide.yaml", route: [{ to: "ship" }] },
             { id: "ship", uses: "./ship.yaml" },
           ],
         },
       };
-      draft.stages = [
-        ...(draft.stages ?? []),
-        {
-          path: "./ship.yaml",
-          body: {
-            id: "ship",
-            system_prompt: "Ship it",
-            model: MODEL,
-            ...REQUIRED_IO,
-          },
-        },
-      ];
 
-      const validation = await validateDraftPackage(draft, {
-        cwd: root,
-        projectRoot: root,
-        strict: true,
-      });
-      expect(validation.ok).toBe(true);
+      expect((await validate(root, draft)).ok).toBe(true);
 
       const saved = await overwriteDraftPackage(root, {
         directory: opened.destination.directory,
@@ -701,20 +460,13 @@ describe("open → edit → overwrite (draft/catalog seam)", () => {
       if (!saved.ok) return;
 
       expect(saved.pipelinePath).toBe("pipelines/demo.pipeline.yaml");
-      const clarifyYaml = await readFile(path.join(dir, "clarify.yaml"), "utf8");
-      expect(clarifyYaml).toContain("Inspector-edited clarify prompt");
-      const shipYaml = await readFile(path.join(dir, "ship.yaml"), "utf8");
-      expect(shipYaml).toContain("Ship it");
-      const pipelineYaml = await readFile(
-        path.join(dir, "demo.pipeline.yaml"),
-        "utf8",
+      expect(await readFile(path.join(dir, "clarify.yaml"), "utf8")).toContain(
+        "Inspector-edited clarify prompt",
       );
-      expect(pipelineYaml).toContain("ship");
+      expect(await readFile(path.join(dir, "ship.yaml"), "utf8")).toContain("Ship it");
+      const pipelineYaml = await readFile(path.join(dir, "demo.pipeline.yaml"), "utf8");
       expect(pipelineYaml).toContain("to: ship");
-    } finally {
-      await cleanup();
-    }
-  });
+    }));
 });
 
 describe("Workshop Author save tool facade", () => {

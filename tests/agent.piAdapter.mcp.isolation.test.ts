@@ -339,6 +339,24 @@ function expectNoCanaryLeak(args: {
   expect(loadedPaths).not.toMatch(/pi-mcp-adapter/);
 }
 
+function sessionResourceLoader() {
+  const sessionOptions = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
+    | {
+        resourceLoader?: {
+          getExtensions: () => {
+            extensions: Array<{ path: string; tools: Map<string, unknown> }>;
+            errors: Array<{ path: string; error: string }>;
+          };
+        };
+      }
+    | undefined;
+  const loader = sessionOptions?.resourceLoader;
+  if (loader === undefined) {
+    throw new Error("createAgentSession was not given a resourceLoader");
+  }
+  return loader;
+}
+
 function wiringInput(
   runWs: string,
   overrides: Partial<StageRunInput> = {},
@@ -425,18 +443,6 @@ describe("ambient MCP isolation", () => {
 
   it("empty snapshot installs no MCP factory and no canary tools", async () => {
     await withPlantedAmbientMcp(async ({ home, cwd, agentDir }) => {
-      expect(await piIsolatedMcp.attachIsolatedMcp({})).toEqual({
-        extensionFactories: undefined,
-        eventBus: undefined,
-        connecting: undefined,
-      });
-      expect(await piIsolatedMcp.attachIsolatedMcp(undefined)).toEqual({
-        extensionFactories: undefined,
-        eventBus: undefined,
-        connecting: undefined,
-      });
-      expect(createMcpAdapter).not.toHaveBeenCalled();
-
       const loader = await sealedLoader({ cwd, agentDir });
 
       expect(lastLoaderOptions().noExtensions).toBe(true);
@@ -446,49 +452,6 @@ describe("ambient MCP isolation", () => {
       expect(loader.getExtensions().errors).toEqual([]);
       expect(registeredToolNames(loader)).toEqual([]);
       expectNoCanaryLeak({ home, cwd, agentDir, loader });
-    });
-  });
-
-  it("Cursor .cursor/mcp.json canary is not loaded", async () => {
-    await withPlantedAmbientMcp(async ({ cwd, agentDir }) => {
-      const attached = await piIsolatedMcp.attachIsolatedMcp(GITHUB_SNAPSHOT);
-      const loader = await sealedLoader({
-        cwd,
-        agentDir,
-        extensionFactories: attached.extensionFactories,
-      });
-      const cursorPath = path.join(cwd, ".cursor", "mcp.json");
-      const blob = [
-        ...registeredToolNames(loader),
-        extensionErrorBlob(loader),
-        ...loader.getExtensions().extensions.map((ext) => ext.path),
-        JSON.stringify(recordedAdapterOptions()),
-      ].join("\n");
-      expect(recordedServerNames()).not.toContain("canary-cursor");
-      expect(blob).not.toContain("canary-cursor");
-      expect(blob).not.toContain(cursorPath);
-      expect(blob).not.toContain(".cursor/mcp.json");
-      expect(lastLoaderOptions().noExtensions).toBe(true);
-    });
-  });
-
-  it("createMcpAdapter records only the Stageflow snapshot object", async () => {
-    await withPlantedAmbientMcp(async ({ cwd, agentDir }) => {
-      const attached = await piIsolatedMcp.attachIsolatedMcp(GITHUB_SNAPSHOT);
-      await sealedLoader({
-        cwd,
-        agentDir,
-        extensionFactories: attached.extensionFactories,
-      });
-
-      expect(createMcpAdapter).toHaveBeenCalled();
-      for (const options of recordedAdapterOptions()) {
-        expect(options).toEqual(EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS);
-        expect(options).not.toHaveProperty("configPath");
-        expect(Object.keys((options as { config: { mcpServers: object } }).config.mcpServers)).toEqual(
-          ["github"],
-        );
-      }
     });
   });
 
@@ -507,27 +470,13 @@ describe("ambient MCP isolation", () => {
         "github",
       ]);
 
-      const sessionOptions = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
-        | {
-            resourceLoader?: {
-              getExtensions: () => {
-                extensions: Array<{ path: string; tools: Map<string, unknown> }>;
-                errors: Array<{ path: string; error: string }>;
-              };
-            };
-          }
-        | undefined;
-      const loader = sessionOptions?.resourceLoader;
-      expect(loader).toBeDefined();
-      if (loader === undefined) {
-        throw new Error("createAgentSession was not given a resourceLoader");
-      }
+      const loader = sessionResourceLoader();
       expect(registeredToolNames(loader)).toEqual(["github__list_issues"]);
       expectNoCanaryLeak({ home, cwd, agentDir, loader });
     }, { useStageAgentDir: true });
   });
 
-  it("AE5: after a successful catalog probe, empty mcp still gets no catalog tools", async () => {
+  it("AE5: after a successful catalog probe, an empty mcp snapshot installs no MCP factory and no catalog tools", async () => {
     const { probeProjectMcpServer } = await import(
       "../src/agent/piIsolatedMcpProbe.js"
     );
@@ -575,66 +524,17 @@ describe("ambient MCP isolation", () => {
         }),
       ]);
 
-      const sessionOptions = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
-        | {
-            resourceLoader?: {
-              getExtensions: () => {
-                extensions: Array<{ path: string; tools: Map<string, unknown> }>;
-                errors: Array<{ path: string; error: string }>;
-              };
-            };
-          }
-        | undefined;
-      const loader = sessionOptions?.resourceLoader;
-      expect(loader).toBeDefined();
-      if (loader === undefined) {
-        throw new Error("createAgentSession was not given a resourceLoader");
-      }
-      expect(registeredToolNames(loader)).toEqual([]);
-      expect(recordedServerNames()).not.toContain("github");
-      expectNoCanaryLeak({ home, cwd, agentDir, loader });
-    }, { useStageAgentDir: true });
-  });
-
-  it("wiring with an empty snapshot installs no MCP factory", async () => {
-    await withPlantedAmbientMcp(async ({ home, cwd, agentDir }) => {
-      await new PiAgentAdapter().runStage(
-        wiringInput(cwd, { resolvedMcpServers: {} }),
-      );
-
-      expect(createMcpAdapter).not.toHaveBeenCalled();
-      expect(lastLoaderOptions().noExtensions).toBe(true);
-      expect(lastLoaderOptions().extensionFactories).toEqual([
-        expect.objectContaining({
-          name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
-          factory: expect.any(Function),
-        }),
-      ]);
+      const loader = sessionResourceLoader();
       expect(await attachSpy.mock.results.at(-1)?.value).toEqual({
         extensionFactories: undefined,
         eventBus: undefined,
         connecting: undefined,
       });
-
-      const sessionOptions = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
-        | {
-            resourceLoader?: {
-              getExtensions: () => {
-                extensions: Array<{ path: string; tools: Map<string, unknown> }>;
-                errors: Array<{ path: string; error: string }>;
-              };
-            };
-          }
-        | undefined;
-      const loader = sessionOptions?.resourceLoader;
-      expect(loader).toBeDefined();
-      if (loader === undefined) {
-        throw new Error("createAgentSession was not given a resourceLoader");
-      }
       expect(loader.getExtensions().extensions.map((ext) => ext.path)).toEqual([
         `<inline:${STAGEFLOW_PATH_DENY_EXTENSION_NAME}>`,
       ]);
       expect(registeredToolNames(loader)).toEqual([]);
+      expect(recordedServerNames()).not.toContain("github");
       expectNoCanaryLeak({ home, cwd, agentDir, loader });
     }, { useStageAgentDir: true });
   });

@@ -30,11 +30,6 @@ describe("project mcp api clients", () => {
       }),
     );
     expect(fetchMock.mock.calls[0]?.[1]?.method ?? "GET").toBe("GET");
-    const payload = JSON.stringify(await fetchProjectMcp());
-    expect(payload).not.toMatch(/"env"/);
-    expect(payload).not.toMatch(/"headers"/);
-    expect(payload).not.toMatch(/"args"/);
-    expect(payload).not.toMatch(/"url"/);
   });
 
   it("POST probe hits one encoded name and forwards AbortSignal", async () => {

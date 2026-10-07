@@ -40,16 +40,6 @@ export type RunRetentionSweepOptions = {
 const SLIM_ATTEMPT_FILES = ["pi-session.jsonl", "stream.log"] as const;
 const SLIM_ATTEMPT_DIRS = [".pi-agent"] as const;
 
-let slimWalkCallCount = 0;
-
-export function getSlimWalkCallCount(): number {
-  return slimWalkCallCount;
-}
-
-export function resetSlimWalkCallCount(): void {
-  slimWalkCallCount = 0;
-}
-
 async function pathExists(target: string): Promise<boolean> {
   try {
     await stat(target);
@@ -130,7 +120,6 @@ export async function slimRunWorkspaceArtifacts(
   workspaceDir: string,
   maxBytes: number,
 ): Promise<void> {
-  slimWalkCallCount += 1;
   const stagesRoot = path.join(workspaceDir, "stages");
   if (!(await pathExists(stagesRoot))) return;
 

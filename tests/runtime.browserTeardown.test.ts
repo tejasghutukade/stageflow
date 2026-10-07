@@ -298,13 +298,6 @@ describe("browser teardown", () => {
     expect(existsSync(env.AGENT_BROWSER_SOCKET_DIR!)).toBe(false);
   });
 
-  it("makes no browser calls for a stage without a browser field", async () => {
-    const calls: Call[] = [];
-    const { started } = await start(calls, [stage("plain")], {});
-    await started.done;
-    expect(calls).toEqual([]);
-  });
-
   it("does no browser teardown work at all for a run without browser stages", async () => {
     const calls: Call[] = [];
     const lockCalls: string[] = [];

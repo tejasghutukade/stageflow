@@ -1,102 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cp, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  createCompletedOnlyStageHandle,
-  type AgentPort,
-  type StageRunInput,
-} from "../src/agent/port.js";
+import type { StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { pipelinePath } from "./helpers/fixturePaths.js";
+import { gatedAgent, recordingAgent } from "./helpers/admissionAgents.js";
+import { plantMiniProject } from "./helpers/miniProject.js";
+import { waitFor } from "./helpers/waitFor.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
 );
-
-function gatedAgent(gate: Promise<void>): AgentPort {
-  return {
-    openStage(input: StageRunInput) {
-      return createCompletedOnlyStageHandle({
-        stageId: input.stage.id,
-        run: async () => {
-          await gate;
-          return {
-            ok: true as const,
-            envelope: {
-              status: "success" as const,
-              summary: "ok",
-              artifacts: [],
-              payload: {},
-            },
-          };
-        },
-      });
-    },
-    async runStage() {
-      await gate;
-      return {
-        ok: true as const,
-        envelope: {
-          status: "success" as const,
-          summary: "ok",
-          artifacts: [],
-          payload: {},
-        },
-      };
-    },
-  };
-}
-
-function recordingAgent(starts: string[]): AgentPort {
-  return {
-    openStage(input: StageRunInput) {
-      starts.push(input.runId);
-      return createCompletedOnlyStageHandle({
-        stageId: input.stage.id,
-        run: async () => ({
-          ok: true as const,
-          envelope: {
-            status: "success" as const,
-            summary: "ok",
-            artifacts: [],
-            payload: {},
-          },
-        }),
-      });
-    },
-    async runStage(input) {
-      starts.push(input.runId);
-      return {
-        ok: true as const,
-        envelope: {
-          status: "success" as const,
-          summary: "ok",
-          artifacts: [],
-          payload: {},
-        },
-      };
-    },
-  };
-}
-
-async function waitFor(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 8000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  throw new Error("timeout waiting for condition");
-}
 
 async function realpathSafe(p: string): Promise<string> {
   try {
@@ -104,21 +25,6 @@ async function realpathSafe(p: string): Promise<string> {
   } catch {
     return path.resolve(p);
   }
-}
-
-async function plantMiniProject(root: string): Promise<string> {
-  await mkdir(path.join(root, "pipelines"), { recursive: true });
-  await mkdir(path.join(root, "stages"), { recursive: true });
-  await cp(
-    path.join(fixtures, "pipelines", "single.pipeline.yaml"),
-    path.join(root, "pipelines", "single.pipeline.yaml"),
-  );
-  await cp(
-    path.join(fixtures, "stages", "clarify.yaml"),
-    path.join(root, "stages", "clarify.yaml"),
-  );
-  await writeFile(path.join(root, ".git"), "");
-  return path.join(root, "pipelines", "single.pipeline.yaml");
 }
 
 describe("runtime admission queue (U8)", () => {
@@ -390,20 +296,7 @@ describe("runtime admission queue (U8)", () => {
   it("cancel queued removes from queue; no worker spawned", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-adm-cancel-"));
     const store = createRunStore({ rootDir: root });
-    const openStage = vi.fn((input: StageRunInput) =>
-      createCompletedOnlyStageHandle({
-        stageId: input.stage.id,
-        run: async () => ({
-          ok: true as const,
-          envelope: {
-            status: "success" as const,
-            summary: "ok",
-            artifacts: [],
-            payload: {},
-          },
-        }),
-      }),
-    );
+    const openStage = vi.fn((_input: StageRunInput) => undefined);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;

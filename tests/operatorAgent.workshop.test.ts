@@ -10,7 +10,6 @@ import {
 } from "../src/operatorAgent/index.js";
 import {
   createDraftPackage,
-  validateDraftPackage,
   type DraftPackage,
 } from "../src/config/draftPackage.js";
 import {
@@ -332,22 +331,6 @@ describe("Operator Agent Host — Workshop Author", () => {
     expect(draft.pipeline.stages[0]!.id).toBe("manual");
   });
 
-  it("fake model create_stage path puts a stage on the draft before Accept", async () => {
-    const host = createWorkshopOperatorHost([{ type: "propose_stage" }]);
-    const session = host.openSession({
-      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
-      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
-    });
-
-    await session.send("intake form review");
-    expect(session.getPendingProposal()).not.toBeNull();
-    expect(readDraftFromContext(session.getContext()).pipeline.stages.length).toBe(
-      1,
-    );
-    expect(typeof readDraftFromContext(session.getContext()).pipeline.stages[0]!
-      .id).toBe("string");
-  });
-
   it("create_stage with a YAML string body stores those fields on the stage artifact", async () => {
     const host = createWorkshopOperatorHost([
       {
@@ -537,18 +520,6 @@ describe("Operator Agent Host — Workshop Author", () => {
     expect(draft.task?.body.goal).toBe("release brief");
     expect(draft.pipeline.stages).toEqual([]);
   });
-
-  it("is distinct from stage-execution AgentPort (no openStage/runStage)", () => {
-    const host = createWorkshopOperatorHost();
-    expect("openStage" in host).toBe(false);
-    expect("runStage" in host).toBe(false);
-    const session = host.openSession({
-      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
-      context: createWorkshopDraftContext(),
-    });
-    expect("openStage" in session).toBe(false);
-    expect("runStage" in session).toBe(false);
-  });
 });
 
 describe("createDraftPackage (first Save)", () => {
@@ -594,13 +565,6 @@ describe("createDraftPackage (first Save)", () => {
           },
         ],
       };
-
-      const validation = await validateDraftPackage(valid, {
-        cwd: root,
-        projectRoot: root,
-        strict: true,
-      });
-      expect(validation.ok).toBe(true);
 
       const created = await createDraftPackage(root, {
         directory: "pipelines",

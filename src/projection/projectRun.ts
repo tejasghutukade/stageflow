@@ -139,5 +139,3 @@ export function projectRun(detail: RunDetail): RunProjection {
     })),
   };
 }
-
-export { projectRun as projectRunForMcp };

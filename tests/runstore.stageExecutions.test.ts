@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
 import type { StageUsage } from "../src/types/usage.js";
+import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { SqliteRunStore } from "../src/runstore/sqlite/SqliteRunStore.js";
 import {
   attemptAgentDir,
@@ -320,6 +321,9 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     const ws = store.getWorkspaceDir(run.runId);
     await expect(access(attemptArtifactsDir(ws, "build", 1))).resolves.toBeUndefined();
     await expect(access(attemptAgentDir(ws, "build", 1))).resolves.toBeUndefined();
+    await expect(
+      access(path.join(ws, "stages", "build", ".pi-agent")),
+    ).rejects.toThrow();
     expect(attemptLogPath(ws, "build", 1)).toContain(
       path.join("stages", "build", "attempts", "1", "log.jsonl"),
     );
@@ -331,6 +335,21 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     expect(attemptWorkspaceDir(ws, "build", 2)).toContain(
       path.join("stages", "build", "attempts", "2"),
     );
+  });
+
+  it("updatePipelineDag round-trips stage_ids through readRunMeta", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-dag-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const frozen = linearCompatDagSnapshot(["detect", "author-diagrams", "collect"]);
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      pipelineDag: frozen,
+    });
+    const stageIds = ["detect", "author-diagrams~1", "author-diagrams~2", "collect"];
+    await store.updatePipelineDag(run.runId, { ...frozen, stage_ids: stageIds });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.pipeline_dag?.stage_ids).toEqual(stageIds);
   });
 
   it("AE4: readRun for retried stage returns latest-attempt envelope", async () => {

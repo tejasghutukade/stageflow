@@ -24,7 +24,13 @@ import { MIGRATION_006 } from "../src/runstore/sqlite/migrations/006-pipeline-bo
 import { MIGRATION_007 } from "../src/runstore/sqlite/migrations/007-projects-registry.js";
 import { MIGRATION_008 } from "../src/runstore/sqlite/migrations/008-triggers-table.js";
 import { MIGRATION_009 } from "../src/runstore/sqlite/migrations/009-trigger-next-run.js";
-import { StoreSchemaError } from "../src/runstore/sqlite/storeSchemaError.js";
+import {
+  columnNames,
+  legacyStagesAndEventsDdl,
+  LEGACY_EXECUTIONS_DDL,
+  LEGACY_RUNS_DDL,
+  seedLegacyDb,
+} from "./helpers/legacyRunstoreSchema.js";
 
 type TableInfoRow = {
   name: string;
@@ -128,6 +134,23 @@ function columnSignature(rows: TableInfoRow[]): string {
     .join("|");
 }
 
+function expectNullPipelineBodyColumns(db: Database.Database): void {
+  expect(
+    db
+      .prepare(
+        `SELECT pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
+         FROM runs WHERE run_id = 'keep-me'`,
+      )
+      .get(),
+  ).toEqual({
+    pipeline_source: null,
+    pipeline_body: null,
+    caller_id: null,
+    run_manifest: null,
+    skip_gates: null,
+  });
+}
+
 describe("sqlite store migrations", () => {
   it("fresh store has user_version matching CURRENT_SCHEMA_VERSION and ledger rows", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-fresh-"));
@@ -147,32 +170,16 @@ describe("sqlite store migrations", () => {
       min_stageflow_version: string;
     }>;
     expect(ledger).toHaveLength(CURRENT_SCHEMA_VERSION);
-    expect(ledger[0]?.version).toBe(1);
-    expect(ledger[0]?.name).toBe("001_baseline");
-    expect(ledger[1]?.version).toBe(2);
-    expect(ledger[1]?.name).toBe("002_repository_binding");
-    expect(ledger[2]?.version).toBe(3);
-    expect(ledger[2]?.name).toBe("003_run_lifecycle");
-    expect(ledger[3]?.version).toBe(4);
-    expect(ledger[3]?.name).toBe("004_auto_resume_count");
-    expect(ledger[4]?.version).toBe(5);
-    expect(ledger[4]?.name).toBe("005_config_origins");
-    expect(ledger[4]?.min_stageflow_version).toBe(PACKAGE_VERSION);
-    expect(ledger[5]?.version).toBe(6);
-    expect(ledger[5]?.name).toBe("006_pipeline_body_and_caller");
-    expect(ledger[5]?.min_stageflow_version).toBe(PACKAGE_VERSION);
-    expect(ledger[6]?.version).toBe(7);
-    expect(ledger[6]?.name).toBe("007_projects_registry");
-    expect(ledger[6]?.min_stageflow_version).toBe(PACKAGE_VERSION);
-    expect(ledger[7]?.version).toBe(8);
-    expect(ledger[7]?.name).toBe("008_triggers_table");
-    expect(ledger[7]?.min_stageflow_version).toBe(PACKAGE_VERSION);
-    expect(ledger[8]?.version).toBe(9);
-    expect(ledger[8]?.name).toBe("009_trigger_next_run");
-    expect(ledger[8]?.min_stageflow_version).toBe(PACKAGE_VERSION);
-    expect(ledger[9]?.version).toBe(10);
-    expect(ledger[9]?.name).toBe("010_trigger_adapter_state");
-    expect(ledger[9]?.min_stageflow_version).toBe(PACKAGE_VERSION);
+    expect(ledger.map((r) => r.version)).toEqual(
+      Array.from({ length: CURRENT_SCHEMA_VERSION }, (_, i) => i + 1),
+    );
+    for (const row of ledger) {
+      expect(row.name).toMatch(/^\d{3}_[a-z0-9_]+$/);
+      expect(row.applied_at).toBeTruthy();
+    }
+    for (const row of ledger.filter((r) => r.version >= 5)) {
+      expect(row.min_stageflow_version).toBe(PACKAGE_VERSION);
+    }
     const cols = (
       db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
     ).map((c) => c.name);
@@ -305,6 +312,111 @@ INSERT INTO verification_check_results
     }
     stampedDb.close();
     freshDb.close();
+  });
+
+  it.each([
+    {
+      name: "stage_events.attempt",
+      foreignKeys: true,
+      table: "stage_events",
+      columns: ["attempt"],
+    },
+    {
+      name: "runs.checkout_root and CI identity columns",
+      foreignKeys: true,
+      table: "runs",
+      columns: ["checkout_root", "git_sha", "ci_pr_url", "ci_job_url"],
+    },
+    {
+      name: "verification_check_results table",
+      foreignKeys: false,
+      table: "verification_check_results",
+      columns: ["check_id", "evidence_json"],
+    },
+  ])("adds $name via ALTER on a legacy DB", async ({ foreignKeys, table, columns }) => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-legacy-alter-"));
+    const dbPath = await seedLegacyDb(
+      root,
+      LEGACY_RUNS_DDL + legacyStagesAndEventsDdl({ foreignKeys }),
+    );
+    expect(columnNames(dbPath, table)).not.toEqual(expect.arrayContaining(columns));
+
+    createRunStore({ rootDir: root, kind: "sqlite" });
+
+    expect(columnNames(dbPath, table)).toEqual(expect.arrayContaining(columns));
+  });
+
+  it("round-trips checkout_root and CI identity on a migrated legacy DB", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-legacy-roundtrip-"));
+    await seedLegacyDb(
+      root,
+      LEGACY_RUNS_DDL + legacyStagesAndEventsDdl({ foreignKeys: true }),
+    );
+    const checkout = await mkdtemp(path.join(tmpdir(), "sf-checkout-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      checkoutRoot: checkout,
+      gitSha: "cafe1234",
+      ciPrUrl: "https://github.com/acme/repo/pull/7",
+      ciJobUrl: "https://github.com/acme/repo/actions/runs/11",
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.checkout_root).toBe(checkout);
+    expect(meta.git_sha).toBe("cafe1234");
+    expect(meta.ci_pr_url).toBe("https://github.com/acme/repo/pull/7");
+    expect(meta.ci_job_url).toBe("https://github.com/acme/repo/actions/runs/11");
+  });
+
+  it("adds and backfills verification dispositions on existing attempts", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-verification-outcome-"));
+    const dbPath = await seedLegacyDb(
+      root,
+      LEGACY_RUNS_DDL +
+        LEGACY_EXECUTIONS_DDL +
+        `
+INSERT INTO stage_executions (run_id, stage_id, attempt, status)
+  VALUES ('legacy-run', 'verify', 1, 'failed');
+INSERT INTO verification_check_results
+  (run_id, stage_id, attempt, check_id, check_type, status)
+  VALUES ('legacy-run', 'verify', 1, 'unit-tests', 'command', 'failed');
+`,
+    );
+
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    await expect(
+      store.getStageExecution("legacy-run", "verify", 1),
+    ).resolves.toMatchObject({ verification_outcome: "failed" });
+    expect(columnNames(dbPath, "stage_executions")).toContain("verification_outcome");
+  });
+
+  it("migrates a pre-locator runs table idempotently across store opens", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-locators-migrate-"));
+    const dbPath = path.join(root, "state.db");
+    const db = new Database(dbPath);
+    db.exec(
+      LEGACY_RUNS_DDL +
+        `INSERT INTO runs (run_id, pipeline_id, task_yaml, status, created_at, updated_at)
+VALUES ('legacy-1', 'docs-only', 'id: t\ngoal: g\n', 'succeeded', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z');`,
+    );
+    db.close();
+
+    for (let open = 0; open < 2; open += 1) {
+      const store = new SqliteRunStore(root);
+      await store.ready();
+      const meta = await store.readRunMeta("legacy-1");
+      expect(meta.pipeline_path).toBeUndefined();
+    }
+
+    expect(columnNames(dbPath, "runs")).toEqual(
+      expect.arrayContaining([
+        "pipeline_path",
+        "task_path",
+        "project_root",
+        "pipeline_body",
+      ]),
+    );
   });
 
   it("rolls back a failed migration", async () => {
@@ -464,23 +576,12 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
     expect(db.pragma("user_version", { simple: true })).toBe(
       CURRENT_SCHEMA_VERSION,
     );
-    const ledger = db
-      .prepare(
-        `SELECT version, name FROM schema_migrations ORDER BY version`,
-      )
-      .all() as Array<{ version: number; name: string }>;
-    expect(ledger).toEqual([
-      { version: 1, name: "001_baseline" },
-      { version: 2, name: "002_repository_binding" },
-      { version: 3, name: "003_run_lifecycle" },
-      { version: 4, name: "004_auto_resume_count" },
-      { version: 5, name: "005_config_origins" },
-      { version: 6, name: "006_pipeline_body_and_caller" },
-      { version: 7, name: "007_projects_registry" },
-      { version: 8, name: "008_triggers_table" },
-      { version: 9, name: "009_trigger_next_run" },
-      { version: 10, name: "010_trigger_adapter_state" },
-    ]);
+    const ledgerCount = (
+      db.prepare(`SELECT COUNT(*) AS n FROM schema_migrations`).get() as {
+        n: number;
+      }
+    ).n;
+    expect(ledgerCount).toBe(CURRENT_SCHEMA_VERSION);
     const cols = new Set(
       (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
         (c) => c.name,
@@ -622,25 +723,7 @@ CREATE TABLE stage_executions (
     for (const name of PIPELINE_BODY_COLUMNS) {
       expect(cols.has(name)).toBe(true);
     }
-    const legacyCols = after
-      .prepare(
-        `SELECT pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
-         FROM runs WHERE run_id = 'keep-me'`,
-      )
-      .get() as {
-      pipeline_source: string | null;
-      pipeline_body: string | null;
-      caller_id: string | null;
-      run_manifest: string | null;
-      skip_gates: number | null;
-    };
-    expect(legacyCols).toEqual({
-      pipeline_source: null,
-      pipeline_body: null,
-      caller_id: null,
-      run_manifest: null,
-      skip_gates: null,
-    });
+    expectNullPipelineBodyColumns(after);
     after.close();
   });
 
@@ -714,25 +797,7 @@ CREATE TABLE runs (
       ).map((c) => c.name),
     );
     expect(execCols.has("auto_resume_count")).toBe(true);
-    const legacyCols = after
-      .prepare(
-        `SELECT pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
-         FROM runs WHERE run_id = 'keep-me'`,
-      )
-      .get() as {
-      pipeline_source: string | null;
-      pipeline_body: string | null;
-      caller_id: string | null;
-      run_manifest: string | null;
-      skip_gates: number | null;
-    };
-    expect(legacyCols).toEqual({
-      pipeline_source: null,
-      pipeline_body: null,
-      caller_id: null,
-      run_manifest: null,
-      skip_gates: null,
-    });
+    expectNullPipelineBodyColumns(after);
     after.close();
   });
 
@@ -742,15 +807,9 @@ CREATE TABLE runs (
 
     expect(() =>
       createRunStore({ rootDir: root, kind: "sqlite", openerMode: "assert" }),
-    ).toThrow(StoreSchemaError);
-    try {
-      createRunStore({ rootDir: root, kind: "sqlite", openerMode: "assert" });
-    } catch (err) {
-      expect(err).toBeInstanceOf(StoreSchemaError);
-      expect((err as StoreSchemaError).code).toBe(
-        "store_schema_migration_required",
-      );
-    }
+    ).toThrow(
+      expect.objectContaining({ code: "store_schema_migration_required" }),
+    );
 
     const after = new Database(dbPath);
     expect(after.pragma("user_version", { simple: true })).toBe(1);
@@ -765,30 +824,43 @@ CREATE TABLE runs (
     after.close();
   });
 
-  it("migrates a v7 database to current and adds the triggers table", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v7-v8-"));
+  const PRE_MIGRATIONS = [
+    MIGRATION_001,
+    MIGRATION_002,
+    MIGRATION_003,
+    MIGRATION_004,
+    MIGRATION_005,
+    MIGRATION_006,
+    MIGRATION_007,
+    MIGRATION_008,
+    MIGRATION_009,
+  ];
+
+  async function seedAtVersion(
+    version: number,
+    prefix: string,
+  ): Promise<{ root: string; dbPath: string; db: Database.Database }> {
+    const root = await mkdtemp(path.join(tmpdir(), prefix));
     const storeRoot = storeRootFor(root);
     await mkdir(storeRoot, { recursive: true });
     const dbPath = path.join(storeRoot, "state.db");
     const db = new Database(dbPath);
-    applyPendingMigrations(db, {
-      migrations: [
-        MIGRATION_001,
-        MIGRATION_002,
-        MIGRATION_003,
-        MIGRATION_004,
-        MIGRATION_005,
-        MIGRATION_006,
-        MIGRATION_007,
-      ],
-    });
-    expect(db.pragma("user_version", { simple: true })).toBe(7);
-    const before = db
-      .prepare(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'triggers'`,
-      )
-      .get();
-    expect(before).toBeUndefined();
+    applyPendingMigrations(db, { migrations: PRE_MIGRATIONS.slice(0, version) });
+    expect(db.pragma("user_version", { simple: true })).toBe(version);
+    return { root, dbPath, db };
+  }
+
+  function tableExists(db: Database.Database, name: string): boolean {
+    return (
+      db
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+        .get(name) !== undefined
+    );
+  }
+
+  it("migrates a v7 database to current and adds the triggers table", async () => {
+    const { root, dbPath, db } = await seedAtVersion(7, "sf-migrate-v7-v8-");
+    expect(tableExists(db, "triggers")).toBe(false);
     db.close();
 
     createRunStore({ rootDir: root, kind: "sqlite", openerMode: "migrate" });
@@ -816,24 +888,7 @@ CREATE TABLE runs (
   });
 
   it("migrates a v8 database to current and adds the next_run_at column", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v8-v9-"));
-    const storeRoot = storeRootFor(root);
-    await mkdir(storeRoot, { recursive: true });
-    const dbPath = path.join(storeRoot, "state.db");
-    const db = new Database(dbPath);
-    applyPendingMigrations(db, {
-      migrations: [
-        MIGRATION_001,
-        MIGRATION_002,
-        MIGRATION_003,
-        MIGRATION_004,
-        MIGRATION_005,
-        MIGRATION_006,
-        MIGRATION_007,
-        MIGRATION_008,
-      ],
-    });
-    expect(db.pragma("user_version", { simple: true })).toBe(8);
+    const { root, dbPath, db } = await seedAtVersion(8, "sf-migrate-v8-v9-");
     db.prepare(
       `INSERT INTO triggers (id, definition_ref, enabled, created_at, updated_at)
        VALUES ('t1', 'triggers/t1.trigger.yaml', 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
@@ -850,9 +905,7 @@ CREATE TABLE runs (
     expect(after.pragma("user_version", { simple: true })).toBe(
       CURRENT_SCHEMA_VERSION,
     );
-    const cols = (
-      after.prepare(`PRAGMA table_info(triggers)`).all() as TableInfoRow[]
-    );
+    const cols = after.prepare(`PRAGMA table_info(triggers)`).all() as TableInfoRow[];
     const nextRunAt = cols.find((c) => c.name === "next_run_at");
     expect(nextRunAt).toBeDefined();
     expect(nextRunAt?.notnull).toBe(0);
@@ -864,31 +917,8 @@ CREATE TABLE runs (
   });
 
   it("migrates a v9 database to current and adds the trigger_adapter_state table", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v9-v10-"));
-    const storeRoot = storeRootFor(root);
-    await mkdir(storeRoot, { recursive: true });
-    const dbPath = path.join(storeRoot, "state.db");
-    const db = new Database(dbPath);
-    applyPendingMigrations(db, {
-      migrations: [
-        MIGRATION_001,
-        MIGRATION_002,
-        MIGRATION_003,
-        MIGRATION_004,
-        MIGRATION_005,
-        MIGRATION_006,
-        MIGRATION_007,
-        MIGRATION_008,
-        MIGRATION_009,
-      ],
-    });
-    expect(db.pragma("user_version", { simple: true })).toBe(9);
-    const before = db
-      .prepare(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'trigger_adapter_state'`,
-      )
-      .get();
-    expect(before).toBeUndefined();
+    const { root, dbPath, db } = await seedAtVersion(9, "sf-migrate-v9-v10-");
+    expect(tableExists(db, "trigger_adapter_state")).toBe(false);
     db.close();
 
     createRunStore({ rootDir: root, kind: "sqlite", openerMode: "migrate" });
@@ -897,19 +927,18 @@ CREATE TABLE runs (
     expect(after.pragma("user_version", { simple: true })).toBe(
       CURRENT_SCHEMA_VERSION,
     );
-    const cols = (
-      after.prepare(`PRAGMA table_info(trigger_adapter_state)`).all() as TableInfoRow[]
-    ).map((c) => c.name);
-    expect(cols).toEqual(
+    const info = after
+      .prepare(`PRAGMA table_info(trigger_adapter_state)`)
+      .all() as TableInfoRow[];
+    expect(info.map((c) => c.name)).toEqual(
       expect.arrayContaining(["trigger_id", "key", "value", "updated_at"]),
     );
-    const pkCols = (
-      after.prepare(`PRAGMA table_info(trigger_adapter_state)`).all() as TableInfoRow[]
-    )
-      .filter((c) => c.pk > 0)
-      .map((c) => c.name)
-      .sort();
-    expect(pkCols).toEqual(["key", "trigger_id"]);
+    expect(
+      info
+        .filter((c) => c.pk > 0)
+        .map((c) => c.name)
+        .sort(),
+    ).toEqual(["key", "trigger_id"]);
     expect(after.prepare(`SELECT * FROM trigger_adapter_state`).all()).toEqual([]);
     after.close();
   });

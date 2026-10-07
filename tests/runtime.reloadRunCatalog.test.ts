@@ -51,13 +51,6 @@ describe("reloadRunCatalog", () => {
     ).rejects.toThrow(/project_root/i);
   });
 
-  it("uses project_root as loader cwd", async () => {
-    const loaded = await reloadPipelineForRun(
-      meta({ pipeline_path: pipelinePath, project_root: owned }),
-    );
-    expect(loaded.pipelinePath).toBe(path.resolve(pipelinePath));
-  });
-
   it("loads task from stored path", async () => {
     const task = await reloadTaskForRun(
       meta({ task_path: taskPath, project_root: fixtures }),

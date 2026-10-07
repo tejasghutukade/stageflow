@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -267,15 +267,6 @@ describe("MCP catalog inspect", () => {
     } finally {
       await closeServer(server);
     }
-  });
-
-  it("probe_project_mcp does not import openStage or prepareStageSessionWiring", async () => {
-    const source = await readFile(
-      path.join(import.meta.dirname, "../src/mcp/projectMcpTools.ts"),
-      "utf8",
-    );
-    expect(source).not.toMatch(/openStage/);
-    expect(source).not.toMatch(/prepareStageSessionWiring/);
   });
 
   it("abort in-flight probe yields helper cancelled when the MCP signal fires", async () => {

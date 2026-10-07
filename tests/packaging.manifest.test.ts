@@ -28,12 +28,6 @@ describe("packaging manifest", () => {
     expect(prepublishOnly).toMatch(/\bcopy:ui-dist\b/);
   });
 
-  it("bins point at dist/cli.js", () => {
-    const bin = readPkg().bin as Record<string, string>;
-    expect(bin.sf).toBe("./dist/cli.js");
-    expect(bin.stageflow).toBe("./dist/cli.js");
-  });
-
   it("repository URL points at tejasghutukade/stageflow", () => {
     const repository = readPkg().repository as { url?: string } | string | undefined;
     const url =

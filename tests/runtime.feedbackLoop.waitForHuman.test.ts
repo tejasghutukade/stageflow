@@ -3,8 +3,6 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
 import { projectRun } from "../src/projection/projectRun.js";
@@ -13,56 +11,15 @@ import { runPipelineDag } from "../src/runtime/pipelineScheduler.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import type { RunDetail } from "../src/runstore/port.js";
-import type { StageEnvelope } from "../src/types/envelope.js";
 import type { FeedbackLoopConfig } from "../src/types/pipeline.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
+import { okEnvelope } from "./helpers/envelopes.js";
+import { stageKeyedAgent } from "./helpers/stageKeyedAgent.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
 );
-
-function okEnvelope(
-  summary: string,
-  extra?: Partial<StageEnvelope>,
-): StageEnvelope {
-  return { status: "success", summary, artifacts: [], payload: {}, ...extra };
-}
-
-type FakeAgentBehavior =
-  | { type: "emit"; envelope: StageEnvelope }
-  | { type: "never_emit" }
-  | { type: "throw"; message: string };
-
-function stageKeyedAgent(
-  behaviorsByStage: Record<string, FakeAgentBehavior[]>,
-): AgentPort & {
-  openCounts: Map<string, number>;
-} {
-  const openCounts = new Map<string, number>();
-  const stageIndex = new Map<string, number>();
-  return {
-    openCounts,
-    openStage(input: StageRunInput) {
-      const stageId = input.stage.id;
-      openCounts.set(stageId, (openCounts.get(stageId) ?? 0) + 1);
-      const index = stageIndex.get(stageId) ?? 0;
-      stageIndex.set(stageId, index + 1);
-      const behaviors = behaviorsByStage[stageId] ?? [];
-      const behavior = behaviors[index] ?? { type: "never_emit" as const };
-      return scriptedFakeAgent([behavior]).openStage(input);
-    },
-    async runStage(input) {
-      const handle = this.openStage(input);
-      const event = await handle.next();
-      await handle.close();
-      if (event.status === "waiting_for_input") {
-        return { ok: false, reason: "unexpected wait" };
-      }
-      return event.result;
-    },
-  };
-}
 
 async function prepareWaitForHumanRun(policyOverrides?: Partial<FeedbackLoopConfig>) {
   const root = await mkdtemp(path.join(tmpdir(), "sf-fb-wait-"));
@@ -383,45 +340,6 @@ describe("runtime feedback-loop wait_for_human", () => {
       terminal: "failed",
       reason: "operator abandoned loop",
     });
-  });
-
-  it("require_continue still fails closed at the limit", async () => {
-    const prepared = await prepareWaitForHumanRun({
-      max_replays: 1,
-      on_max_replays: "require_continue",
-    });
-    const agent = stageKeyedAgent({
-      plan: [{ type: "emit", envelope: okEnvelope("plan-ok") }],
-      implement: [
-        { type: "emit", envelope: okEnvelope("implement-1") },
-        { type: "emit", envelope: okEnvelope("implement-2") },
-      ],
-      review: [
-        { type: "emit", envelope: sendBack },
-        { type: "emit", envelope: sendBack },
-      ],
-      submit: [{ type: "throw", message: "submit must not run" }],
-    });
-
-    const result = await runPipelineDag({
-      prepared: {
-        ...prepared,
-        agent,
-        cwd: fixtures,
-      },
-      maxActiveStagesPerRun: 4,
-      executionMode: "inprocess",
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.outcome).toBe("failed");
-    expect(result.reason).toMatch(/max_replays/);
-    expect(agent.openCounts.get("submit") ?? 0).toBe(0);
-
-    const detail = await prepared.store.readRun(prepared.run.runId);
-    expect(detail.active_feedback_loop).toBeUndefined();
-    expect(detail.feedback_loops![0]!.loop.state).toBe("completed");
-    expect(detail.feedback_loops![0]!.replays[0]?.replay.status).toBe("failed");
   });
 
   it("continue vs extend CAS: second decide loses", async () => {

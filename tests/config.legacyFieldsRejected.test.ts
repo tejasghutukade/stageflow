@@ -37,179 +37,96 @@ async function writeTempCatalog(files: Record<string, string>): Promise<string> 
   return root;
 }
 
-describe("legacy needs/fork/feedback_loop fields are hard-rejected: raw-ref path (resolvePipelineDag)", () => {
-  it('rejects "needs" with a message naming the field and pointing at route', () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
-          { id: "design-doc", needs: "clarify" },
-        ],
-        ctx("legacy-needs"),
-      ),
-    ).toThrow(
+const STAGE_BODY = [
+  "    system_prompt: Work",
+  "    model: anthropic/claude-sonnet-4-5",
+  "    io:",
+  "      input:",
+  "        schema:",
+  "          type: object",
+  "      output:",
+  "        schema:",
+  "          type: object",
+];
+
+function yamlPipeline(stages: Array<{ id: string; extra: string[] }>): string {
+  return [
+    "id: demo",
+    "stages:",
+    ...stages.flatMap((s) => [`  - id: ${s.id}`, ...STAGE_BODY, ...s.extra]),
+    "",
+  ].join("\n");
+}
+
+const cases = [
+  {
+    field: "needs",
+    raw: [
+      { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
+      { id: "design-doc", needs: "clarify" },
+    ],
+    yaml: [
+      { id: "clarify", extra: ["    entry: true", "    route:", "      - to: design-doc"] },
+      { id: "design-doc", extra: ["    needs: clarify"] },
+    ],
+    message:
       /stage "design-doc": "needs" is no longer supported — declare the wiring on the source stage's "route" instead/,
-    );
-  });
-
-  it('rejects "fork" with a message naming the field and pointing at route', () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "decide", entry: true, fork: { select: "one" } },
-          { id: "branch-a" },
-        ],
-        ctx("legacy-fork"),
-      ),
-    ).toThrow(
+  },
+  {
+    field: "fork",
+    raw: [
+      { id: "decide", entry: true, fork: { select: "one" } },
+      { id: "branch-a" },
+    ],
+    yaml: [
+      { id: "decide", extra: ["    entry: true", "    fork:", "      select: one"] },
+      { id: "branch-a", extra: [] },
+    ],
+    message:
       /stage "decide": "fork" is no longer supported — use "route" instead; listed route targets always run/,
-    );
-  });
-
-  it('rejects "feedback_loop" with a message naming the field and pointing at a type: loop route entry', () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "plan", entry: true, route: [{ to: "review" }] },
-          {
-            id: "review",
-            feedback_loop: {
-              target: "plan",
-              max_replays: 2,
-              on_max_replays: "require_continue",
-              replay_session: "resume",
-            },
-          },
+  },
+  {
+    field: "feedback_loop",
+    raw: [
+      { id: "plan", entry: true, route: [{ to: "review" }] },
+      {
+        id: "review",
+        feedback_loop: {
+          target: "plan",
+          max_replays: 2,
+          on_max_replays: "require_continue",
+          replay_session: "resume",
+        },
+      },
+    ],
+    yaml: [
+      { id: "plan", extra: ["    entry: true", "    route:", "      - to: review"] },
+      {
+        id: "review",
+        extra: [
+          "    feedback_loop:",
+          "      target: plan",
+          "      max_replays: 2",
+          "      on_max_replays: require_continue",
+          "      replay_session: resume",
         ],
-        ctx("legacy-feedback-loop"),
-      ),
-    ).toThrow(
+      },
+    ],
+    message:
       /stage "review": "feedback_loop" is no longer supported — use a "type: loop" entry inside "route" instead/,
-    );
-  });
-});
+  },
+];
 
-describe("legacy needs/fork/feedback_loop fields are hard-rejected: YAML path (loadPipeline)", () => {
-  it('rejects "needs" in YAML with a message naming the field and pointing at route', async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: clarify",
-        "    system_prompt: Clarify",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "    entry: true",
-        "    route:",
-        "      - to: design-doc",
-        "  - id: design-doc",
-        "    system_prompt: Design",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "    needs: clarify",
-        "",
-      ].join("\n"),
-    });
+describe.each(cases)("legacy $field is hard-rejected", ({ field, raw, yaml, message }) => {
+  it("raw-ref path (resolvePipelineDag) names the field and its replacement", () => {
+    expect(() => resolvePipelineDag(raw, ctx(`legacy-${field}`))).toThrow(message);
+  });
+
+  it("YAML path (loadPipeline) names the field and its replacement", async () => {
+    const root = await writeTempCatalog({ "demo.pipeline.yaml": yamlPipeline(yaml) });
     const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.issues[0]?.message).toMatch(
-      /stage "design-doc": "needs" is no longer supported — declare the wiring on the source stage's "route" instead/,
-    );
-  });
-
-  it('rejects "fork" in YAML with a message naming the field and pointing at route', async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: decide",
-        "    system_prompt: Decide",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "    entry: true",
-        "    fork:",
-        "      select: one",
-        "  - id: branch-a",
-        "    system_prompt: Branch",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.message).toMatch(
-      /stage "decide": "fork" is no longer supported — use "route" instead; listed route targets always run/,
-    );
-  });
-
-  it('rejects "feedback_loop" in YAML with a message naming the field and pointing at a type: loop route entry', async () => {
-    const root = await writeTempCatalog({
-      "demo.pipeline.yaml": [
-        "id: demo",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Plan",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "    entry: true",
-        "    route:",
-        "      - to: review",
-        "  - id: review",
-        "    system_prompt: Review",
-        "    model: anthropic/claude-sonnet-4-5",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "    feedback_loop:",
-        "      target: plan",
-        "      max_replays: 2",
-        "      on_max_replays: require_continue",
-        "      replay_session: resume",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues[0]?.message).toMatch(
-      /stage "review": "feedback_loop" is no longer supported — use a "type: loop" entry inside "route" instead/,
-    );
+    expect(outcome.issues[0]?.message).toMatch(message);
   });
 });

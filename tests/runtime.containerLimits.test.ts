@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  assertNoOsTotalmemInSizing,
   deriveContainerLimits,
   resetContainerLimitsForTests,
 } from "../src/runtime/containerLimits.js";
@@ -16,10 +15,6 @@ describe("containerLimits", () => {
     expect(limits.maxActiveStageProcesses).toBeGreaterThanOrEqual(1);
     expect(limits.maxActiveStageProcesses).toBeLessThanOrEqual(8);
     expect(limits.maxOldSpaceSizeMb).toBe(512);
-  });
-
-  it("exposes os.totalmem but sizing path does not require it", () => {
-    expect(typeof assertNoOsTotalmemInSizing()).toBe("function");
   });
 });
 

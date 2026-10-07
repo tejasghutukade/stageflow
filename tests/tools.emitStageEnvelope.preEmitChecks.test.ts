@@ -83,294 +83,191 @@ function gateCheck(kind: StageGateKind): PreEmitCheck {
   return { id: `gate-${kind}`, type: "gate", kind };
 }
 
-async function emitSuccess(
-  tool: ReturnType<typeof createEmitStageEnvelopeTool>,
-  extra: Record<string, unknown> = {},
-) {
-  return tool.execute("emit-1", { ...approvedSuccess, ...extra });
+async function emitSuccess(tool: ReturnType<typeof createEmitStageEnvelopeTool>) {
+  return tool.execute("emit-1", approvedSuccess);
 }
 
+const explainerHtml = "stages/oss-explain-issue/attempts/1/artifacts/issue-explainer.html";
+
+type EmitOptions = NonNullable<Parameters<typeof createEmitStageEnvelopeTool>[4]>;
+
+async function emit(
+  options: EmitOptions | undefined,
+  envelope: Record<string, unknown> = approvedSuccess,
+  payloadSchema?: Record<string, unknown>,
+) {
+  const capture = {};
+  const tool = createEmitStageEnvelopeTool(
+    capture,
+    payloadSchema,
+    undefined,
+    undefined,
+    options,
+  );
+  const result = await tool.execute("emit-1", envelope);
+  return { result, capture };
+}
+
+function expectAccepted({ result, capture }: Awaited<ReturnType<typeof emit>>) {
+  expect(result.isError).toBeUndefined();
+  expect(result.terminate).toBe(true);
+  expect(capture).toHaveProperty("envelope");
+}
+
+function expectRejected({ result, capture }: Awaited<ReturnType<typeof emit>>) {
+  expect(result.isError).toBe(true);
+  expect(result.terminate).toBeUndefined();
+  expect(capture).not.toHaveProperty("envelope");
+}
+
+const plainSuccess = { status: "success", summary: "ok", artifacts: [] };
+
+describe("emit_stage_envelope payload_schema", () => {
+  const schema = {
+    type: "object",
+    required: ["changed_files"],
+    properties: {
+      changed_files: { type: "array", items: { type: "string" }, minItems: 1 },
+    },
+  };
+
+  it("accepts a matching payload, rejects a bad one, and skips the schema on failure", async () => {
+    expectAccepted(
+      await emit(undefined, { ...plainSuccess, payload: { changed_files: ["a.ts"] } }, schema),
+    );
+    expectRejected(
+      await emit(undefined, { ...plainSuccess, payload: { changed_files: [] } }, schema),
+    );
+
+    const failure = await emit(
+      undefined,
+      { status: "failure", summary: "blocked", artifacts: [] },
+      schema,
+    );
+    expectAccepted(failure);
+    expect(failure.capture).toMatchObject({ envelope: { status: "failure" } });
+  });
+
+  it("accepts an untyped payload when the stage declares no payload_schema", async () => {
+    const out = await emit(undefined, { ...plainSuccess, payload: { anything: true } });
+    expectAccepted(out);
+    expect(out.capture).toMatchObject({ envelope: { payload: { anything: true } } });
+  });
+});
+
 describe("emit_stage_envelope pre_emit_checks: gate", () => {
-  it("artifact_backed success with zero QA events is rejected", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("artifact_backed")],
-        readQaTrail: () => [],
-      },
-    );
-    const result = await emitSuccess(tool);
-    expect(result.isError).toBe(true);
-    expect(result.terminate).toBeUndefined();
-    expect(capture).not.toHaveProperty("envelope");
-  });
+  const ftChecks = (kind: StageGateKind) => ({ checks: [gateCheck(kind)] });
 
-  it("last decision reject rejects success emit", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("artifact_backed")],
-        readQaTrail: () => [
-          { prompt: artifactPrompt, answer: artifactAnswer("reject") },
-        ],
-      },
-    );
-    const result = await emitSuccess(tool);
-    expect(result.isError).toBe(true);
-    expect(result.terminate).toBeUndefined();
-    expect(capture).not.toHaveProperty("envelope");
-  });
-
-  it("reject then accept then success emit is accepted", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("artifact_backed")],
-        readQaTrail: () => [
-          { prompt: artifactPrompt, answer: artifactAnswer("reject") },
-          { prompt: artifactPrompt, answer: artifactAnswer("accept") },
-        ],
-      },
-    );
-    const result = await emitSuccess(tool);
-    expect(result.isError).toBeUndefined();
-    expect(result.terminate).toBe(true);
-    expect(capture).toHaveProperty("envelope");
-  });
-
-  it("two asks of the same kind: only the last decision matters", async () => {
-    const acceptThenReject = {};
-    const acceptThenRejectTool = createEmitStageEnvelopeTool(
-      acceptThenReject,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("confirm")],
-        readQaTrail: () => [
-          { prompt: confirmPrompt("c1"), answer: confirmAnswer("c1", "accept") },
-          { prompt: confirmPrompt("c2"), answer: confirmAnswer("c2", "reject") },
-        ],
-      },
-    );
-    const rejected = await acceptThenRejectTool.execute("emit-1", {
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-    });
-    expect(rejected.isError).toBe(true);
-    expect(acceptThenReject).not.toHaveProperty("envelope");
-
-    const rejectThenAccept = {};
-    const rejectThenAcceptTool = createEmitStageEnvelopeTool(
-      rejectThenAccept,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("confirm")],
-        readQaTrail: () => [
-          { prompt: confirmPrompt("c1"), answer: confirmAnswer("c1", "reject") },
-          { prompt: confirmPrompt("c2"), answer: confirmAnswer("c2", "accept") },
-        ],
-      },
-    );
-    const accepted = await rejectThenAcceptTool.execute("emit-1", {
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-    });
-    expect(accepted.isError).toBeUndefined();
-    expect(accepted.terminate).toBe(true);
-    expect(rejectThenAccept).toHaveProperty("envelope");
-  });
-
-  it("free_text declared: any completed answer satisfies without decision", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("free_text")],
-        readQaTrail: () => [freeTextExchange(true)],
-      },
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-    });
-    expect(result.isError).toBeUndefined();
-    expect(result.terminate).toBe(true);
-    expect(capture).toHaveProperty("envelope");
-  });
-
-  it("free_text declared: pending-only does not satisfy", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("free_text")],
-        readQaTrail: () => [freeTextExchange(false)],
-      },
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-    });
-    expect(result.isError).toBe(true);
-    expect(result.terminate).toBeUndefined();
-    expect(capture).not.toHaveProperty("envelope");
-  });
-
-  it("multi_question declared: any completed answer satisfies", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("multi_question")],
-        readQaTrail: () => [multiQuestionExchange()],
-      },
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-    });
-    expect(result.isError).toBeUndefined();
-    expect(capture).toHaveProperty("envelope");
+  it.each([
+    {
+      name: "artifact_backed with zero QA events is rejected",
+      kind: "artifact_backed" as const,
+      trail: [] as QaExchange[],
+      ok: false,
+    },
+    {
+      name: "last artifact_backed decision reject is rejected",
+      kind: "artifact_backed" as const,
+      trail: [{ prompt: artifactPrompt, answer: artifactAnswer("reject") }],
+      ok: false,
+    },
+    {
+      name: "reject then accept is accepted",
+      kind: "artifact_backed" as const,
+      trail: [
+        { prompt: artifactPrompt, answer: artifactAnswer("reject") },
+        { prompt: artifactPrompt, answer: artifactAnswer("accept") },
+      ],
+      ok: true,
+    },
+    {
+      name: "last pending prompt after accept does not satisfy",
+      kind: "artifact_backed" as const,
+      trail: [
+        { prompt: artifactPrompt, answer: artifactAnswer("accept") },
+        { prompt: artifactPrompt, answer: null },
+      ],
+      ok: false,
+    },
+    {
+      name: "confirm accept then reject: only the last decision matters (rejected)",
+      kind: "confirm" as const,
+      trail: [
+        { prompt: confirmPrompt("c1"), answer: confirmAnswer("c1", "accept") },
+        { prompt: confirmPrompt("c2"), answer: confirmAnswer("c2", "reject") },
+      ],
+      ok: false,
+    },
+    {
+      name: "confirm reject then accept: only the last decision matters (accepted)",
+      kind: "confirm" as const,
+      trail: [
+        { prompt: confirmPrompt("c1"), answer: confirmAnswer("c1", "reject") },
+        { prompt: confirmPrompt("c2"), answer: confirmAnswer("c2", "accept") },
+      ],
+      ok: true,
+    },
+    {
+      name: "free_text: any completed answer satisfies without decision",
+      kind: "free_text" as const,
+      trail: [freeTextExchange(true)],
+      ok: true,
+    },
+    {
+      name: "free_text: pending-only does not satisfy",
+      kind: "free_text" as const,
+      trail: [freeTextExchange(false)],
+      ok: false,
+    },
+    {
+      name: "multi_question: any completed answer satisfies",
+      kind: "multi_question" as const,
+      trail: [multiQuestionExchange()],
+      ok: true,
+    },
+  ])("$name", async ({ kind, trail, ok }) => {
+    const out = await emit({ ...ftChecks(kind), readQaTrail: () => trail }, plainSuccess);
+    if (ok) expectAccepted(out);
+    else expectRejected(out);
   });
 
   it("omitted pre_emit_checks may emit success with no QA events", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(capture);
-    const result = await emitSuccess(tool);
-    expect(result.isError).toBeUndefined();
-    expect(result.terminate).toBe(true);
-    expect(capture).toHaveProperty("envelope");
+    expectAccepted(await emit(undefined));
   });
 
   it("empty checks list skips completion even when a reader is present", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [],
-        readQaTrail: () => [],
-      },
-    );
-    const result = await emitSuccess(tool);
-    expect(result.isError).toBeUndefined();
-    expect(capture).toHaveProperty("envelope");
+    expectAccepted(await emit({ checks: [], readQaTrail: () => [] }));
   });
 
   it("failure envelopes skip the declared-gate check", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("artifact_backed")],
-        readQaTrail: () => [],
-      },
+    const out = await emit(
+      { ...ftChecks("artifact_backed"), readQaTrail: () => [] },
+      { status: "failure", summary: "blocked", artifacts: [] },
     );
-    const result = await tool.execute("emit-1", {
-      status: "failure",
-      summary: "blocked",
-      artifacts: [],
-    });
-    expect(result.isError).toBeUndefined();
-    expect(result.terminate).toBe(true);
-    expect(capture).toMatchObject({ envelope: { status: "failure" } });
+    expectAccepted(out);
+    expect(out.capture).toMatchObject({ envelope: { status: "failure" } });
   });
 
   it("gate check without a reader fails closed on success", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      { checks: [gateCheck("artifact_backed")] },
-    );
-    const result = await emitSuccess(tool);
-    expect(result.isError).toBe(true);
-    expect(result.terminate).toBeUndefined();
-    expect(capture).not.toHaveProperty("envelope");
+    expectRejected(await emit(ftChecks("artifact_backed")));
   });
 
   it("reads the trail inside execute, not at factory time", async () => {
     const exchanges: QaExchange[] = [];
     const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("artifact_backed")],
-        readQaTrail: () => exchanges,
-      },
-    );
+    const tool = createEmitStageEnvelopeTool(capture, undefined, undefined, undefined, {
+      checks: [gateCheck("artifact_backed")],
+      readQaTrail: () => exchanges,
+    });
     const before = await emitSuccess(tool);
     expect(before.isError).toBe(true);
     expect(capture).not.toHaveProperty("envelope");
 
-    exchanges.push({
-      prompt: artifactPrompt,
-      answer: artifactAnswer("accept"),
-    });
+    exchanges.push({ prompt: artifactPrompt, answer: artifactAnswer("accept") });
     const after = await emitSuccess(tool);
     expect(after.isError).toBeUndefined();
     expect(after.terminate).toBe(true);
     expect(capture).toHaveProperty("envelope");
-  });
-
-  it("last pending prompt after accept does not satisfy", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [gateCheck("artifact_backed")],
-        readQaTrail: () => [
-          { prompt: artifactPrompt, answer: artifactAnswer("accept") },
-          { prompt: artifactPrompt, answer: null },
-        ],
-      },
-    );
-    const result = await emitSuccess(tool);
-    expect(result.isError).toBe(true);
-    expect(result.terminate).toBeUndefined();
-    expect(capture).not.toHaveProperty("envelope");
   });
 
   it("live RunStore reader sees answers appended after the tool is created", async () => {
@@ -416,269 +313,81 @@ describe("emit_stage_envelope pre_emit_checks: gate", () => {
 });
 
 describe("emit_stage_envelope pre_emit_checks: artifact_declared", () => {
-  const explainerHtml =
-    "stages/oss-explain-issue/attempts/1/artifacts/issue-explainer.html";
-
-  function explainerOptions(basename: string) {
-    return {
-      checks: [
-        { id: "artifact-present", type: "artifact_declared" as const, basename },
-      ],
-    };
-  }
-
-  it("success with artifacts: [] is rejected when issue-explainer.html is required", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      explainerOptions("issue-explainer.html"),
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "explained the issue",
-      artifacts: [],
-    });
-    expect(result.isError).toBe(true);
-    expect(result.terminate).toBeUndefined();
-    expect(capture).not.toHaveProperty("envelope");
+  const explainerOptions = (basename: string) => ({
+    checks: [{ id: "artifact-present", type: "artifact_declared" as const, basename }],
+  });
+  const explained = (artifacts: string[], status = "success") => ({
+    status,
+    summary: "explained the issue",
+    artifacts,
   });
 
-  it("run-relative explainer path satisfies issue-explainer.html", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      explainerOptions("issue-explainer.html"),
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "explained the issue",
-      artifacts: [explainerHtml],
-    });
-    expect(result.isError).toBeUndefined();
-    expect(result.terminate).toBe(true);
-    expect(capture).toMatchObject({
-      envelope: { artifacts: [explainerHtml] },
-    });
-  });
-
-  it("exact basename in artifacts satisfies the required name", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      explainerOptions("issue-explainer.html"),
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "explained the issue",
-      artifacts: ["issue-explainer.html"],
-    });
-    expect(result.isError).toBeUndefined();
-    expect(result.terminate).toBe(true);
-    expect(capture).toHaveProperty("envelope");
-  });
-
-  it("list containing only notes.md does not satisfy issue-explainer.html", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      explainerOptions("issue-explainer.html"),
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "explained the issue",
-      artifacts: ["notes.md"],
-    });
-    expect(result.isError).toBe(true);
-    expect(result.terminate).toBeUndefined();
-    expect(capture).not.toHaveProperty("envelope");
-  });
-
-  it("foo-issue-explainer.html does not satisfy issue-explainer.html", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      explainerOptions("issue-explainer.html"),
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "explained the issue",
-      artifacts: ["foo-issue-explainer.html"],
-    });
-    expect(result.isError).toBe(true);
-    expect(result.terminate).toBeUndefined();
-    expect(capture).not.toHaveProperty("envelope");
-  });
-
-  it("prefixed basename after a directory separator still fails without a slash boundary", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      explainerOptions("issue-explainer.html"),
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "explained the issue",
-      artifacts: [
-        "stages/oss-explain-issue/attempts/1/artifacts/foo-issue-explainer.html",
-      ],
-    });
-    expect(result.isError).toBe(true);
-    expect(result.terminate).toBeUndefined();
-    expect(capture).not.toHaveProperty("envelope");
-  });
-
-  it("listed path that is not on disk still succeeds (no filesystem I/O)", async () => {
-    const missingPath =
-      "stages/oss-explain-issue/attempts/1/artifacts/issue-explainer.html";
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      explainerOptions("issue-explainer.html"),
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "explained the issue",
-      artifacts: [missingPath],
-    });
-    expect(result.isError).toBeUndefined();
-    expect(result.terminate).toBe(true);
-    expect(capture).toHaveProperty("envelope");
-  });
-
-  it("omitted checks allows success with artifacts: []", async () => {
-    const capture = {};
-    const fourArg = createEmitStageEnvelopeTool(capture);
-    const fourArgResult = await fourArg.execute("emit-1", {
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-    });
-    expect(fourArgResult.isError).toBeUndefined();
-    expect(fourArgResult.terminate).toBe(true);
-    expect(capture).toHaveProperty("envelope");
-
-    const capture5 = {};
-    const fiveArg = createEmitStageEnvelopeTool(
-      capture5,
-      undefined,
-      undefined,
-      undefined,
-      { checks: [], readQaTrail: () => [] },
-    );
-    const fiveArgResult = await fiveArg.execute("emit-2", {
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-    });
-    expect(fiveArgResult.isError).toBeUndefined();
-    expect(fiveArgResult.terminate).toBe(true);
-    expect(capture5).toHaveProperty("envelope");
+  it.each([
+    { name: "artifacts: [] is rejected", artifacts: [] as string[], ok: false },
+    { name: "run-relative explainer path satisfies the name", artifacts: [explainerHtml], ok: true },
+    { name: "exact basename satisfies the name", artifacts: ["issue-explainer.html"], ok: true },
+    { name: "only notes.md does not satisfy", artifacts: ["notes.md"], ok: false },
+    { name: "foo-issue-explainer.html does not satisfy", artifacts: ["foo-issue-explainer.html"], ok: false },
+    {
+      name: "prefixed basename after a directory separator fails without a slash boundary",
+      artifacts: ["stages/oss-explain-issue/attempts/1/artifacts/foo-issue-explainer.html"],
+      ok: false,
+    },
+  ])("issue-explainer.html required: $name", async ({ artifacts, ok }) => {
+    const out = await emit(explainerOptions("issue-explainer.html"), explained(artifacts));
+    if (ok) {
+      expectAccepted(out);
+      expect(out.capture).toMatchObject({ envelope: { artifacts } });
+    } else {
+      expectRejected(out);
+    }
   });
 
   it("failure emit with empty artifacts succeeds even when artifact_declared is set", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      explainerOptions("issue-explainer.html"),
-    );
-    const result = await tool.execute("emit-1", {
-      status: "failure",
-      summary: "could not explain",
-      artifacts: [],
-    });
-    expect(result.isError).toBeUndefined();
-    expect(result.terminate).toBe(true);
-    expect(capture).toMatchObject({
-      envelope: { status: "failure", artifacts: [] },
-    });
+    const out = await emit(explainerOptions("issue-explainer.html"), explained([], "failure"));
+    expectAccepted(out);
+    expect(out.capture).toMatchObject({ envelope: { status: "failure", artifacts: [] } });
   });
 });
 
 describe("emit_stage_envelope pre_emit_checks: mixed gate + artifact_declared", () => {
+  const mixedChecks = [
+    gateCheck("artifact_backed"),
+    { id: "artifact-present", type: "artifact_declared" as const, basename: "plan.md" },
+  ];
+
   it("declaration order matters for a predictable single error message", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [
-          gateCheck("artifact_backed"),
-          {
-            id: "artifact-present",
-            type: "artifact_declared",
-            basename: "plan.md",
-          },
-        ],
-        readQaTrail: () => [],
-      },
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-    });
-    expect(result.isError).toBe(true);
-    expect(result.details).toMatchObject({
+    const out = await emit({ checks: mixedChecks, readQaTrail: () => [] }, plainSuccess);
+    expectRejected(out);
+    expect(out.result.details).toMatchObject({
       error: expect.stringMatching(/artifact_backed/),
     });
-    expect(capture).not.toHaveProperty("envelope");
+  });
+
+  it("artifact_declared still rejects when the gate passes but the artifact is missing", async () => {
+    const out = await emit(
+      {
+        checks: mixedChecks,
+        readQaTrail: () => [{ prompt: artifactPrompt, answer: artifactAnswer("accept") }],
+      },
+      plainSuccess,
+    );
+    expectRejected(out);
+    expect(out.result.details).toMatchObject({
+      error: expect.stringMatching(/plan\.md/),
+    });
   });
 
   it("both checks pass: gate accepted and artifact declared", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: [
-          gateCheck("artifact_backed"),
-          {
-            id: "artifact-present",
-            type: "artifact_declared",
-            basename: "plan.md",
-          },
-        ],
-        readQaTrail: () => [
-          { prompt: artifactPrompt, answer: artifactAnswer("accept") },
-        ],
-      },
+    expectAccepted(
+      await emit(
+        {
+          checks: mixedChecks,
+          readQaTrail: () => [{ prompt: artifactPrompt, answer: artifactAnswer("accept") }],
+        },
+        { ...plainSuccess, artifacts: ["stages/plan-review/attempts/1/artifacts/plan.md"] },
+      ),
     );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "ok",
-      artifacts: ["stages/plan-review/attempts/1/artifacts/plan.md"],
-    });
-    expect(result.isError).toBeUndefined();
-    expect(result.terminate).toBe(true);
-    expect(capture).toHaveProperty("envelope");
   });
 });
 

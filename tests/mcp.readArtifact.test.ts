@@ -140,6 +140,26 @@ describe("readRunArtifact deny-list", () => {
     ).rejects.toThrow(/Artifact path denied/);
   });
 
+  it("rejects traversal, absolute paths, and run ids with separators", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-art-invalid-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+
+    await expect(
+      readRunArtifact(store, created.runId, "../outside.txt"),
+    ).rejects.toThrow(/^\.\.|must not contain/);
+    await expect(
+      readRunArtifact(store, created.runId, "/etc/passwd"),
+    ).rejects.toThrow(/relative/);
+    await expect(
+      readRunArtifact(store, "../escape", "stages/clarify/artifacts/a.txt"),
+    ).rejects.toThrow(/path separators|\.\./);
+  });
+
   it("denies symlink escape outside the run workspace", async () => {
     const outside = await mkdtemp(path.join(tmpdir(), "sf-art-out-"));
     await writeFile(path.join(outside, "secret.txt"), "nope");
