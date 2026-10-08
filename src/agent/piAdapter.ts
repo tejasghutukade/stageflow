@@ -65,6 +65,7 @@ import {
   createEmitStageEnvelopeTool,
   type EmitCapture,
 } from "../tools/emitStageEnvelope.js";
+import { remindUntilEmitted, type StageTurnSession } from "./stageTurnDriver.js";
 import {
   createAskOperatorTool,
   type AskOperatorPrompt,
@@ -759,7 +760,10 @@ async function shutdownSession(session: AgentSession | undefined): Promise<void>
   }
 }
 
-function resultFromCapture(capture: EmitCapture): StageRunResult {
+function resultFromCapture(capture: EmitCapture, providerError?: string): StageRunResult {
+  if (providerError !== undefined && !capture.envelope) {
+    return { ok: false, reason: `provider error: ${providerError}` };
+  }
   if (capture.error && !capture.envelope) {
     return { ok: false, reason: capture.error };
   }
@@ -1561,6 +1565,7 @@ export class PiAgentAdapter implements AgentPort {
     let wiring: StageSessionWiring | undefined;
     let unsubscribeProgress: (() => void) | undefined;
     let prepareError: StageRunResult | undefined;
+    let closing = false;
 
     const preparePromise = (async () => {
       if (forceNewSession) {
@@ -1613,15 +1618,30 @@ export class PiAgentAdapter implements AgentPort {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const workPromise = work();
+        const live = session;
+        const capture = wiring.capture;
+        const emitToolName = wiring.emitDefName;
+        const turns: StageTurnSession = {
+          prompt: (text) => live.prompt(text),
+          get messages() {
+            return live.messages ?? live.agent?.state?.messages ?? [];
+          },
+        };
+        const workPromise = (async () => {
+          await work();
+          return remindUntilEmitted(turns, capture, {
+            emitToolName,
+            shouldStop: () => closing || controller.signal.aborted,
+          });
+        })();
         const abortPromise = new Promise<never>((_, reject) => {
           controller.signal.addEventListener("abort", () => {
             void session?.abort();
             reject(new Error(stageTimeoutReason(timeoutMs)));
           });
         });
-        await Promise.race([workPromise, abortPromise]);
-        return { ...resultFromCapture(wiring.capture), usage: wiring.usage };
+        const outcome = await Promise.race([workPromise, abortPromise]);
+        return { ...resultFromCapture(capture, outcome.providerError), usage: wiring.usage };
       } catch (err) {
         if (sessionManager) {
           ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
@@ -1705,6 +1725,7 @@ export class PiAgentAdapter implements AgentPort {
           }
         : undefined,
       onClose: async (closeOptions) => {
+        closing = true;
         await preparePromise.catch(() => undefined);
         if (closeOptions?.park) {
           if (sessionManager) {
