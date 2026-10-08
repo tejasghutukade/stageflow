@@ -18,6 +18,8 @@ import {
   buildStageRoots,
   PI_CODING_AGENT_DIR_ENV,
 } from "../src/runtime/stageRoots.js";
+import { TOOL_OUTPUT_HARD_CEILING_BYTES } from "../src/agent/toolOutputBudget.js";
+import { STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME } from "../src/agent/toolOutputBudgetExtension.js";
 import { withIsolatedHome } from "./helpers/projectContext.js";
 
 const piSdkMocks = vi.hoisted(() => {
@@ -128,6 +130,13 @@ const EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS = {
       directTools: true,
       elicitation: false,
       hostConfigDiscovery: "off",
+      scriptMode: false,
+      disableProxyTool: true,
+      outputGuard: {
+        maxBytes: TOOL_OUTPUT_HARD_CEILING_BYTES,
+        maxLines: Number.MAX_SAFE_INTEGER,
+        detailsMaxBytes: 16 * 1024,
+      },
     },
   },
 } as const;
@@ -464,7 +473,17 @@ describe("ambient MCP isolation", () => {
       expect(lastLoaderOptions().noExtensions).toBe(true);
       expect(createMcpAdapter).toHaveBeenCalledTimes(1);
       const adapterOptions = createMcpAdapter.mock.calls[0]?.[0];
-      expect(adapterOptions).toEqual(EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS);
+      expect(adapterOptions).toEqual({
+        config: {
+          ...EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS.config,
+          mcpServers: {
+            github: {
+              ...EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS.config.mcpServers.github,
+              lifecycle: "eager",
+            },
+          },
+        },
+      });
       expect(adapterOptions).not.toHaveProperty("configPath");
       expect(Object.keys(adapterOptions?.config?.mcpServers ?? {})).toEqual([
         "github",
@@ -522,6 +541,10 @@ describe("ambient MCP isolation", () => {
           name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
           factory: expect.any(Function),
         }),
+        expect.objectContaining({
+          name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
+          factory: expect.any(Function),
+        }),
       ]);
 
       const loader = sessionResourceLoader();
@@ -532,6 +555,7 @@ describe("ambient MCP isolation", () => {
       });
       expect(loader.getExtensions().extensions.map((ext) => ext.path)).toEqual([
         `<inline:${STAGEFLOW_PATH_DENY_EXTENSION_NAME}>`,
+        `<inline:${STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME}>`,
       ]);
       expect(registeredToolNames(loader)).toEqual([]);
       expect(recordedServerNames()).not.toContain("github");

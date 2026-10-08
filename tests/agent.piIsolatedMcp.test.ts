@@ -2,6 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { TOOL_OUTPUT_HARD_CEILING_BYTES } from "../src/agent/toolOutputBudget.js";
 import {
   StageMcpError,
   resolveStageMcpServers,
@@ -155,6 +156,13 @@ describe("attachIsolatedMcp", () => {
           directTools: true,
           elicitation: false,
           hostConfigDiscovery: "off",
+          scriptMode: false,
+          disableProxyTool: true,
+          outputGuard: {
+            maxBytes: TOOL_OUTPUT_HARD_CEILING_BYTES,
+            maxLines: Number.MAX_SAFE_INTEGER,
+            detailsMaxBytes: 16 * 1024,
+          },
         },
       },
     });
