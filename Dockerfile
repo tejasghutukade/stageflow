@@ -49,6 +49,7 @@ RUN node ./scripts/generate-toolchain-manifest.mjs /etc/stageflow/toolchain.json
   && chmod 755 /opt/stageflow/dist/cli.js
 
 ENV STAGEFLOW_HOME=/data \
+  STAGEFLOW_CREDENTIAL_HOME=/data \
   STAGEFLOW_BIND=0.0.0.0 \
   STAGEFLOW_NO_AUTOSTART=1 \
   STAGEFLOW_NO_OPEN=1 \

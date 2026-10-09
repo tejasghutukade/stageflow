@@ -22,6 +22,7 @@ services:
       - "3847:3847"
     environment:
       STAGEFLOW_HOME: /data
+      STAGEFLOW_CREDENTIAL_HOME: /data
       TMPDIR: /data/tmp
       STAGEFLOW_CONTROL_TOKEN: ${STAGEFLOW_CONTROL_TOKEN:?set STAGEFLOW_CONTROL_TOKEN to a 32+ character secret}
       STAGEFLOW_MIN_FREE_DISK_BYTES: "1073741824"

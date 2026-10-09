@@ -151,6 +151,7 @@ CONTAINER_ID="$(
   docker run -d \
     --name "$CONTAINER_NAME" \
     -e STAGEFLOW_HOME=/data \
+    -e STAGEFLOW_CREDENTIAL_HOME=/data \
     -e TMPDIR=/data/tmp \
     -e SQLITE_TMPDIR=/data/tmp \
     -e "STAGEFLOW_CONTROL_TOKEN=${CONTROL_TOKEN}" \
