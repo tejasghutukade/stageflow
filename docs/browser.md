@@ -73,7 +73,9 @@ The shared browser listens on a CDP port bound to `127.0.0.1` with no token. Whi
 
 Headed is the default. The operator can watch, and all stages that share a profile look like one device to the site. Set `headed: false` per stage for CI or background work. Use one mode for all stages that share a profile, because headless Chrome reports a different user agent. A human login stage always gets a visible browser, whatever `headed` says: a window on a Host with a screen, or the live view on a Host without one.
 
-On Linux the Host needs `DISPLAY` or `WAYLAND_DISPLAY` for a headed browser. Without one, a stage that did not ask for a login window quietly runs headless. macOS and Windows always count as having a screen.
+To watch any running browser stage, use **Watch browser** on the stage in the run page. It is a read-only live view: the server refuses input from it, it follows popups, closing it does not affect the stage, and it ends when the stage ends.
+
+On Linux the Host needs `DISPLAY` or `WAYLAND_DISPLAY`, or `Xvfb` on `PATH` (see [Linux hosts with no screen](#linux-hosts-with-no-screen)), for a headed browser. With none of them, a stage that did not ask for a login window quietly runs headless. macOS and Windows always count as having a screen.
 
 ## Live view {#live-view}
 
@@ -169,6 +171,31 @@ browser:
 
 `launch_args` come after the Host's own switches (`--deny-permission-prompts`; listing it again has no effect). They apply to every browser the Host launches (the shared browser of a profile, profile-less stages, `sf browser login`) and are computed once per stage, so every command and resume uses the same values. They are never read from the environment and cannot be set in YAML: a stage `browser:` block with `launch_args`, `args`, `executable_path`, `executable` or `display` fails to load.
 
+### Container browser host {#container-browser-host}
+
+Development only; there is no production orchestrator yet. With `browser.host: container` the shared browser of each (run, profile) runs in its own container instead of on the Host. The container holds Chromium, a virtual display and the profile volume, nothing else. It always has a virtual display, so human login stages use the [live view](#live-view).
+
+```yaml
+browser:
+  host: container
+  container:
+    image: stageflow-browser-sandbox:local
+    shm_size: 1g
+    memory: 1g
+    pids_limit: 512
+```
+
+- Build the image with `docker build -f docker/Dockerfile.browser-sandbox -t stageflow-browser-sandbox:local docker`.
+- The Host uses the local `docker` CLI to start containers, so it must run on a machine with a Docker daemon and must not itself run in a Stageflow container. A production orchestrator plugs in behind the same port.
+- The container runs read-only and non-root, with all capabilities dropped, no privilege escalation, and process and memory limits. Its debugging port is published on `127.0.0.1` only.
+- The profile lives in a Docker volume named `sf-profile-<scope>-<profile>`. It survives container removal; the Host closes the browser gracefully before removing the container so a fresh login is kept. After a crash the last seconds of cookies may be lost, so re-verify the login.
+- At Host start, containers of runs that are gone or finished are removed (label `stageflow.run`). Only use one Host per Docker daemon, or a second Host would see the first one's runs as dead.
+- Profile-less browser stages still launch Chrome on the Host. `sf browser login` stays a local-host tool.
+- `browser.container` keys: `image` (image reference), `shm_size` and `memory` (a number with optional `b`, `k`, `m` or `g`), `pids_limit` (positive integer). All are optional; unknown keys fail config load.
+- `browser.host` is read when the Host starts.
+- Image and `docker run` flags are described in the [Docker guide](docker.md#container-browser-host).
+- `browser.owner_hosts` (map of owner scope to `local` or `container`) overrides `browser.host` for one owner scope; scopes not listed use `browser.host`. Today every run belongs to the single `local` owner, so only `local` is consulted.
+
 ### Linux hosts with no screen
 
 A Linux Host with no `DISPLAY` or `WAYLAND_DISPLAY` but with `Xvfb` on `PATH` runs browsers headed on a private virtual display that agent-browser starts itself. Nothing is shown on the Host, but the browser behaves like a headed one (same user agent as a desktop). A stage that sets `headed: false` still runs headless. Without Xvfb the Host falls back to headless as before. For Docker, the [browser image recipe](docker.md#browser-stages) installs Xvfb, Chromium and agent-browser.
@@ -186,6 +213,17 @@ The Host appends audit records to `$STAGEFLOW_HOME/browser/audit.jsonl`: profile
 ## Encryption
 
 The Chrome profile is protected by owner-only folder permissions and by Chrome's use of the OS keychain (on macOS the "Chrome Safe Storage" key). The agent-browser encryption key is not used. It only protects agent-browser's own restore and state files, and Stageflow does not write those. On Linux, Chrome's basic password store is weak. Use disk encryption for the home directory.
+
+## What is not built
+
+- No production container orchestrator. The container host uses the local `docker` CLI and is for development.
+- No console component for a provider-hosted viewer (`provider_view`). The route and ports exist; no provider adapter ships.
+- No egress proxy: `allow_domains` stays soft for profile stages, container host included.
+- Not tried against real sites. Popups, dialogs and second factors were checked on local fixtures. Sites may refuse a headed Chromium in a virtual display or a container.
+- Several people can hold an interactive session on one gate; there is no single-controller rule.
+- Some pages stop taking input after a login submit; the workaround is **Reopen browser tab** (see [Using it during a login gate](#using-it-during-a-login-gate)).
+
+Contributor detail and the full list: [Browser sessions internals](browser-internals.md#status-and-scope).
 
 ## Multi-tenant readiness
 
