@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  LuFolder,
+  LuPlay,
+  LuSquareArrowOutUpRight,
+  LuTriangleAlert,
+} from "react-icons/lu";
 import {
   fetchCatalogValidate,
   openDraftPackage,
@@ -13,10 +19,18 @@ import {
 import { newRunPath, workshopPath } from "../../routes";
 import { showToast } from "../../toast";
 import { ProblemsPanel } from "../ProblemsPanel";
+import { Keycap } from "../Keycap";
 import { StatusPill } from "../StatusPill";
+import { useHotkeys } from "../keys";
 import { FilterTabs } from "../shell/FilterTabs";
-import { PageHeader } from "../shell/PageHeader";
 import { cloneDraft } from "./draftMutators";
+import {
+  editorTabSpecs,
+  editorValidationPills,
+  isDraftDirty,
+  isEditorTabId,
+  type EditorTabId,
+} from "./pipelineEditorModel";
 import { PipelineEditorGraph } from "./PipelineEditorGraph";
 import { PipelineEditorInspector } from "./PipelineEditorInspector";
 import { YamlPanel } from "./YamlPanel";
@@ -59,7 +73,8 @@ export function PipelineEditorPage({
   const [loading, setLoading] = useState(true);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
   const [yamlPath, setYamlPath] = useState<string | null>(pipeline.path);
-  const [editorTab, setEditorTab] = useState("editor");
+  const [editorTab, setEditorTab] = useState<EditorTabId>("editor");
+  const [autoValidate, setAutoValidate] = useState(true);
   const [draftValidation, setDraftValidation] =
     useState<DraftValidationResult | null>(null);
   const [catalogFindings, setCatalogFindings] = useState<ValidationFinding[]>(
@@ -70,10 +85,7 @@ export function PipelineEditorPage({
   const [saving, setSaving] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const dirty = useMemo(() => {
-    if (!draft || !baseline) return false;
-    return JSON.stringify(draft) !== JSON.stringify(baseline);
-  }, [baseline, draft]);
+  const dirty = isDraftDirty(draft, baseline);
 
   const reloadDraft = useCallback(async () => {
     setLoading(true);
@@ -134,7 +146,7 @@ export function PipelineEditorPage({
   }, [runCatalogValidate]);
 
   useEffect(() => {
-    if (!draft) return;
+    if (!autoValidate || !draft) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       void runDraftValidate(draft);
@@ -142,7 +154,7 @@ export function PipelineEditorPage({
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [draft, runDraftValidate]);
+  }, [autoValidate, draft, runDraftValidate]);
 
   const onDraftChange = useCallback((next: DraftPackagePayload) => {
     setDraft(next);
@@ -182,92 +194,203 @@ export function PipelineEditorPage({
     void runCatalogValidate();
   }, [destination, draft, pipeline.project_root, runCatalogValidate]);
 
+  useHotkeys(
+    [
+      {
+        key: "mod+s",
+        scope: "pipelines",
+        allowInInput: true,
+        handler: (event) => {
+          event.preventDefault();
+          if (!dirty || saving || !draft) return;
+          void onSave();
+        },
+      },
+    ],
+    "pipelines",
+  );
+
   const defaultTask = defaultTaskForPipeline(pipeline, tasks);
-  const pillSignal =
-    draftValidation && !draftValidation.ok
-      ? "needs"
-      : draftValidation && draftValidation.summary.warnings > 0
-        ? "queued"
-        : "ok";
+  const pills = editorValidationPills(draftValidation);
+  const saveDisabled = !dirty || saving || loading || !draft;
+
+  const copyPath = useCallback(() => {
+    void navigator.clipboard.writeText(pipeline.path).then(
+      () => showToast("Copied path"),
+      () => showToast("Could not copy path"),
+    );
+  }, [pipeline.path]);
 
   return (
     <div className="flex min-h-screen min-w-0 flex-col">
-      <PageHeader
-        title={pipelineId}
-        subtitle={pipeline.path}
-        actions={
-          <>
-            {draftValidation ? (
-              <StatusPill
-                signal={pillSignal}
-                label={
-                  draftValidation.ok
-                    ? draftValidation.summary.warnings > 0
-                      ? "Warnings"
-                      : "Valid"
-                    : "Invalid"
-                }
-              />
-            ) : null}
-            <button
-              type="button"
-              className="sf-btn sf-btn--ghost"
-              disabled={!dirty || loading}
-              onClick={onDiscard}
-            >
-              Discard
-            </button>
+      <div className="flex w-full shrink-0 items-center justify-between gap-3 border-b border-b-[#ffffff12] px-5 py-2">
+        <div className="flex min-w-0 flex-col justify-center gap-1">
+          <div className="flex min-w-0 items-center gap-1.5">
             <a
-              className="sf-btn sf-btn--ghost"
-              href={`#${workshopPath({ pipeline: pipeline.path })}`}
+              href="#/pipelines"
+              className="text-[13px] text-[var(--sf-text-2)] hover:text-[var(--sf-text-1)]"
             >
-              Open in Workshop
+              Pipelines
             </a>
+            <span className="text-[13px] text-[var(--sf-text-3)]">/</span>
+            <span className="truncate text-[13px] font-medium text-[var(--sf-text-1)]">
+              {pipelineId}
+            </span>
+          </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="truncate text-[18px] font-semibold tracking-[-0.4px] text-[var(--sf-text-1)]">
+              {pipelineId}
+            </h1>
             <button
               type="button"
-              className="sf-btn sf-btn--ghost"
-              onClick={() =>
-                onNew(
-                  newRunPath({
-                    pipeline: pipeline.path,
-                    ...(defaultTask ? { task: defaultTask } : {}),
-                  }),
-                )
-              }
+              onClick={copyPath}
+              title={pipeline.path}
+              className="inline-flex max-w-[360px] min-w-0 items-center gap-1.5 rounded-md border border-[#ffffff1a] bg-[var(--sf-raised)] px-2 py-0.5 font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-2)] hover:text-[var(--sf-text-1)]"
             >
-              Start run
+              <LuFolder className="size-3 shrink-0" aria-hidden />
+              <span className="truncate">{pipeline.path}</span>
             </button>
-            <button
-              type="button"
-              className="sf-btn sf-btn--primary"
-              disabled={!dirty || saving || !draft}
-              onClick={() => void onSave()}
-            >
-              Save
-            </button>
-          </>
-        }
-      />
-      <FilterTabs
-        variant="underline"
-        tabs={[
-          { id: "editor", label: "Editor" },
-          { id: "runs", label: "Runs", count: 0 },
-          { id: "history", label: "History", count: 0 },
-        ]}
-        activeId={editorTab}
-        onChange={setEditorTab}
-      />
-      {loadError ? (
+            {dirty ? (
+              <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-[#f5b544]">
+                <span className="size-1.5 rounded-full bg-[#f5b544]" aria-hidden />
+                Unsaved changes
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {pills ? (
+            <>
+              <StatusPill signal={pills.strictSignal} label={pills.strictLabel} />
+              <span
+                className={`flex h-6 items-center gap-[5px] rounded-full px-2 ${
+                  pills.warningSignal === "needs"
+                    ? "border border-[#f5b5444d] bg-[#f5b5441f] text-[var(--sf-needs)]"
+                    : "bg-[var(--sf-raised)] text-[var(--sf-text-3)]"
+                }`}
+                aria-label={pills.warningLabel}
+              >
+                {pills.warningCount > 0 ? (
+                  <LuTriangleAlert className="size-3 shrink-0 text-[#f5b544]" aria-hidden />
+                ) : null}
+                <span className="font-sans text-xs font-medium">{pills.warningLabel}</span>
+              </span>
+            </>
+          ) : null}
+          <button
+            type="button"
+            className="sf-btn sf-btn--ghost"
+            disabled={!dirty || loading}
+            onClick={onDiscard}
+          >
+            Discard
+          </button>
+          <a
+            className="sf-btn sf-btn--secondary"
+            href={`#${workshopPath({
+              pipeline: pipeline.path,
+              ...(pipeline.project_root
+                ? { project_root: pipeline.project_root }
+                : {}),
+            })}`}
+          >
+            <LuSquareArrowOutUpRight className="size-3.5" aria-hidden />
+            Open in Workshop
+          </a>
+          <button
+            type="button"
+            className="sf-btn sf-btn--secondary"
+            onClick={() =>
+              onNew(
+                newRunPath({
+                  pipeline: pipeline.path,
+                  ...(defaultTask ? { task: defaultTask } : {}),
+                }),
+              )
+            }
+          >
+            <LuPlay className="size-3.5" aria-hidden />
+            Start a run
+          </button>
+          <button
+            type="button"
+            className="sf-btn sf-btn--primary"
+            disabled={saveDisabled}
+            onClick={() => void onSave()}
+          >
+            Save
+            <Keycap className="border-[#0c0d0f33] text-[#5a5e66]">⌘S</Keycap>
+          </button>
+        </div>
+      </div>
+      <div className="relative">
+        <FilterTabs
+          variant="underline"
+          tabs={editorTabSpecs(0)}
+          activeId={editorTab}
+          onChange={(id) => {
+            if (isEditorTabId(id)) setEditorTab(id);
+          }}
+        />
+        <button
+          type="button"
+          role="switch"
+          aria-checked={autoValidate}
+          aria-label="Auto-validate"
+          onClick={() => setAutoValidate((on) => !on)}
+          className="absolute right-7 top-1/2 flex -translate-y-1/2 items-center gap-[7px] rounded-md py-1 pr-1"
+        >
+          <span
+            className={`flex h-4 w-[26px] items-center rounded-full px-0.5 ${
+              autoValidate ? "bg-[var(--sf-text-1)]" : "bg-[var(--sf-raised)]"
+            }`}
+          >
+            <span
+              className={`block size-3 rounded-full transition-transform ${
+                autoValidate
+                  ? "translate-x-[10px] bg-[var(--sf-ground)]"
+                  : "bg-[var(--sf-text-3)]"
+              }`}
+            />
+          </span>
+          <span className="whitespace-nowrap text-xs text-[var(--sf-text-2)]">
+            Auto-validate
+          </span>
+        </button>
+      </div>
+      {editorTab === "runs" ? (
+        <div
+          role="tabpanel"
+          aria-label="Runs"
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <div className="flex h-9 items-center gap-6 border-b border-b-[#ffffff12] px-5 text-[11px] uppercase tracking-[0.04em] text-[var(--sf-text-3)]">
+            <span className="w-40">Run</span>
+            <span className="w-28">Status</span>
+            <span>Task</span>
+          </div>
+          <p className="px-5 py-6 text-[13px] text-[var(--sf-text-3)]">No runs</p>
+        </div>
+      ) : null}
+      {editorTab === "history" ? (
+        <div
+          role="tabpanel"
+          aria-label="History"
+          className="flex min-h-0 flex-1 flex-col px-5 py-6"
+        >
+          <p className="text-[13px] text-[var(--sf-text-3)]">No history</p>
+        </div>
+      ) : null}
+      {editorTab === "editor" && loadError ? (
         <p className="px-5 pt-3 text-[13px] text-[var(--sf-fail)]">{loadError}</p>
       ) : null}
-      {loading ? (
+      {editorTab === "editor" && loading ? (
         <p className="px-5 py-4 text-[13px] text-[var(--sf-text-3)]">
           Loading package…
         </p>
       ) : null}
-      {!loading && draft ? (
-        <div className="flex min-h-0 flex-1 flex-col">
+      {editorTab === "editor" && !loading && draft ? (
+        <div className="flex min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Editor">
           <div className="flex min-h-0 w-full min-w-0 flex-1 overflow-hidden">
             <YamlPanel
               draft={draft}
