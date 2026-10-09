@@ -281,8 +281,8 @@ export function SettingsProvidersPanel({
             tag="sf_owned"
             icon={LuKey}
             title="Stageflow-owned credentials"
-            description="Separate logins only Stageflow uses, kept in the OS keychain."
-            path="~/.stageflow/credentials"
+            description="Separate logins only Stageflow uses."
+            path="~/.stageflow/agent/auth.json (overridable)"
             onSelect={() => void onSourceChange("sf_owned")}
           />
         </div>

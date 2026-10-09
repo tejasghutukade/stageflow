@@ -7,6 +7,8 @@ title: Data Directory
 
 Stageflow keeps the SQLite run store, run workspaces, Host Pi agent files, and related state under one **durable root**. Override it with `STAGEFLOW_HOME`. When unset, the default is `~/.stageflow`.
 
+The operator auth file is `<credential-root>/agent/auth.json`. `STAGEFLOW_CREDENTIAL_HOME` sets that root to a directory. When it is unset, the root is the host user's `~/.stageflow`. A job-local data directory is its own operator when `STAGEFLOW_CREDENTIAL_HOME` is set to that directory. Docker and the release and publish workflows set the override. [`scripts/start-ui-local.sh`](../scripts/start-ui-local.sh) leaves it unset, so that server shares the machine operator store. When an existing login lives under a non-default data directory, set `STAGEFLOW_CREDENTIAL_HOME` to that directory.
+
 The Host is **machine-global**. Catalog roots are **seeded** examples plus **registered** absolute project folders stored in the durable SQLite store (not only past-run history). `sf ui` registers the directory it was started in. `sf mcp` does not. Local `sf run` registers its resolved project folder before start. Remote MCP/HTTP may only use already-registered or seeded roots. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root) and [CLI — `sf run`](cli-reference.md#sf-run).
 
 Per-project settings stay at `<git-root>/.stageflow/settings.json`. They are not the run store.
@@ -19,7 +21,7 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 |------------------------------|-------------------|-------|
 | `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode), including the durable **projects registry** |
 | `settings.json` | **keep** | Global settings (credential source, concurrency, …) |
-| `agent/auth.json` | **keep** | Stageflow-owned provider credentials (`sf_owned`) |
+| `agent/auth.json` | **keep** | Operator auth file when this directory is the credential root |
 | `agent/` | **keep** | Host Pi agent directory (`PI_CODING_AGENT_DIR` for the Host process) |
 | `runs/` | disposable | Per-run workspaces, stage attempts, artifacts |
 | `a2a-artifacts/` | disposable | A2A artifact bytes |
@@ -49,7 +51,7 @@ For the operator keep-table and why `cp state.db` is unsafe, see [Docker and sel
 
 Stage workers do **not** use `$STAGEFLOW_HOME/agent/` as their Pi agent directory. Each stage attempt binds `PI_CODING_AGENT_DIR` to a per-attempt directory under that run's workspace (`runs/<runId>/stages/<stageId>/attempts/<n>/.pi-agent`).
 
-Credential choice is unchanged: a saved setting, otherwise a usable `~/.pi/agent/auth.json`, otherwise `agent/auth.json` under the durable root.
+`models.json` sits beside the operator auth file. The Cursor key file is `<credential-root>/agent/cursor-api-key`. A usable `agent/auth.json` in a data directory is the store only when that directory is the credential root.
 
 **Temp dir:** Host boot still requires a writable temp directory. If `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty, Stageflow soft-defaults to `$STAGEFLOW_HOME/tmp` (creates it), then asserts writability. An explicit unwritable `TMPDIR` still fails with `tmpdir_unusable`.
 

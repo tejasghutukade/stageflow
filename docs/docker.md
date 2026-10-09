@@ -17,7 +17,7 @@ The shipped root [`docker-compose.yml`](../docker-compose.yml) has no socket mou
 
 ## Local try (Compose)
 
-First-run checklist for the shipped [`docker-compose.yml`](../docker-compose.yml). The compose file builds the local `Dockerfile`, mounts a named volume at `/data`, publishes port **3847**, and sets `STAGEFLOW_HOME=/data` and `TMPDIR=/data/tmp` (`STAGEFLOW_BIND=0.0.0.0` is already in the image). This is a **local try** surface — not the hardened egress sandbox.
+First-run checklist for the shipped [`docker-compose.yml`](../docker-compose.yml). The compose file builds the local `Dockerfile`, mounts a named volume at `/data`, publishes port **3847**, and sets `STAGEFLOW_HOME=/data`, `STAGEFLOW_CREDENTIAL_HOME=/data`, and `TMPDIR=/data/tmp` (`STAGEFLOW_BIND=0.0.0.0` is already in the image). The image, Compose, and `scripts/docker-smoke.sh` set `STAGEFLOW_CREDENTIAL_HOME` to that data directory, so the volume is the container's operator store. A data directory is its own operator only when that override is set. This is a **local try** surface — not the hardened egress sandbox.
 
 The compose service runs `command: ["sf", "ui"]` on purpose: operator console **and** MCP on the same Host. The image `CMD` is still `sf mcp` (headless); override to `sf mcp` only when you want a UI-less Host. Do not run both `sf ui` and `sf mcp` at once — they share port **3847**.
 
@@ -65,7 +65,7 @@ Host boot configures providers from `STAGEFLOW_PROVIDER_<ID>_API_KEY` / `_FILE` 
 - `STAGEFLOW_PROVIDER_OPENROUTER_API_KEY`
 - `STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY`
 
-See [Providers — Non-interactive Host boot credentials](providers.md#non-interactive-host-boot-credentials). Optional: put custom OpenRouter models / `maxTokens` in `$STAGEFLOW_HOME/agent/models.json` on the data volume (same durable agent dir as `auth.json`).
+See [Providers — Non-interactive Host boot credentials](providers.md#non-interactive-host-boot-credentials). Optional: put custom OpenRouter models / `maxTokens` in `/data/agent/models.json` on the data volume (the sibling of the operator auth file, because `STAGEFLOW_CREDENTIAL_HOME` is `/data`).
 
 ### Host `GITHUB_TOKEN` (clone / fetch)
 
@@ -117,12 +117,15 @@ DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/tejasghutuk
 # DIGEST looks like ghcr.io/tejasghutukade/stageflow@sha256:…
 docker run --rm \
   -e STAGEFLOW_HOME=/data \
+  -e STAGEFLOW_CREDENTIAL_HOME=/data \
   -e TMPDIR=/data/tmp \
   -e STAGEFLOW_CONTROL_TOKEN \
   -v stageflow-data:/data \
   -p 3847:3847 \
   "${DIGEST}"
 ```
+
+The published image already sets `STAGEFLOW_HOME` and `STAGEFLOW_CREDENTIAL_HOME` to `/data`. Keep the credential override on that directory when the volume should be the operator store. When an existing login lives under another data directory, set `STAGEFLOW_CREDENTIAL_HOME` to that directory.
 
 Verify cosign attestations with the [snippet below](#provenance). Prefer digest pins (`@sha256:…`) over floating tags for production.
 
@@ -148,7 +151,7 @@ Stageflow does not build derived images from `requires:` automatically — `requ
 | Path under `$STAGEFLOW_HOME` | Verdict | Why |
 |---|---|---|
 | `state.db` (+ `-wal`, `-shm`) | **Irreplaceable** | Every run, stage, envelope, event, verification record, and A2A rows. Only ever copy via `sf backup`. |
-| `agent/auth.json` | **Irreplaceable** | Provider credentials. |
+| `agent/auth.json` | **Irreplaceable** | Operator auth file. The image sets `STAGEFLOW_CREDENTIAL_HOME` to this data directory. |
 | `settings.json` | **Irreplaceable** | Concurrency and credential-source choice. |
 | `runs/<runId>/` | Situational | Artifact bytes; records live in `state.db`. |
 | `a2a-artifacts/` | Situational | Opt in with `sf backup --include-a2a-artifacts`. |

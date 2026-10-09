@@ -11,10 +11,11 @@ The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for 
 
 | Path | Purpose |
 |------|---------|
-| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`, including the projects registry), run workspaces (`runs/`), `sf_owned` auth (`agent/auth.json`), global `settings.json`, `service.log`, Workshop builds (`workshop/builds/`) and chat sessions (`workshop/sessions/`) |
+| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`, including the projects registry), run workspaces (`runs/`), global `settings.json`, `service.log`, Workshop builds (`workshop/builds/`) and chat sessions (`workshop/sessions/`) |
+| Operator auth file | `<credential-root>/agent/auth.json`. `STAGEFLOW_CREDENTIAL_HOME` sets the root to a directory. When it is unset, the root is the host user's `~/.stageflow` (`~/.stageflow/agent/auth.json`). `models.json` sits beside that file. The Cursor key file is `<credential-root>/agent/cursor-api-key`. |
 | `<git-root>/.stageflow/settings.json` | Per-project settings (`maxConcurrent`, `credentialSource`) when run from inside a git repo; not the run store |
 
-Override the durable root with `STAGEFLOW_HOME`. See [Data directory](data-directory.md) for the full tree (keep vs disposable), image user, and version support.
+Override the durable root with `STAGEFLOW_HOME`. A job-local or Docker data directory is its own operator when `STAGEFLOW_CREDENTIAL_HOME` is set to that directory. Docker and the release and publish workflows set the override. [`scripts/start-ui-local.sh`](../scripts/start-ui-local.sh) leaves it unset, so that server shares the machine operator store. When an existing login lives under a non-default data directory, set `STAGEFLOW_CREDENTIAL_HOME` to that directory. See [Data directory](data-directory.md) for the full tree (keep vs disposable), image user, and version support.
 
 Store backend: `SF_STORE=sqlite` only; `SF_STORE=disk` is rejected. If SQLite has no runs yet, a disk-era nested `runs` tree may be imported; if a project `.stageflow` is missing and `.software-factory` exists, the next project-settings open renames it.
 
