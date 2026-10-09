@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   CredentialSynchronizationError,
@@ -9,6 +10,7 @@ import type {
   AuthPrompt,
   Provider,
 } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import {
   parseCredentialSource,
   readCredentialSourceFromContext,
@@ -145,6 +147,38 @@ export async function openRuntime(
   return ctx.createRuntime(binding.authPath);
 }
 
+function catalogRuntime(): ProviderAuthRuntime {
+  const providers = builtinProviders();
+  return {
+    getProviders: () => providers,
+    getProvider: (id) => providers.find((provider) => provider.id === id),
+    getProviderAuthStatus: () => ({ configured: false }),
+    listCredentials: async () => [],
+    checkAuth: async () => undefined,
+    login: async () => {
+      throw new ProviderAuthError("Provider login failed", 500);
+    },
+    logout: async () => {
+      throw new ProviderAuthError("Provider logout failed", 500);
+    },
+  };
+}
+
+async function openReadRuntime(
+  cwd: string,
+  ctx: ProviderAuthContext,
+): Promise<ProviderAuthRuntime> {
+  const binding = resolveCredentialBinding(cwd);
+  // ModelRuntime.create writes auth.json when that file is missing.
+  if (
+    ctx.createRuntime === defaultCreateRuntime &&
+    !existsSync(binding.authPath)
+  ) {
+    return catalogRuntime();
+  }
+  return ctx.createRuntime(binding.authPath);
+}
+
 export function isLoginCapable(provider: {
   auth?: { oauth?: unknown; apiKey?: { login?: unknown } };
 }): boolean {
@@ -253,7 +287,7 @@ export async function listProviders(
   cwd: string,
   ctx: ProviderAuthContext = defaultContext,
 ): Promise<ProvidersListResult> {
-  const runtime = await openRuntime(cwd, ctx);
+  const runtime = await openReadRuntime(cwd, ctx);
   return {
     authShell: "pi",
     via: "pi",
@@ -269,7 +303,7 @@ export async function getAuthStatus(
   providerId?: string,
   ctx: ProviderAuthContext = defaultContext,
 ): Promise<ProviderAuthStatus | ProviderAuthStatus[]> {
-  const runtime = await openRuntime(cwd, ctx);
+  const runtime = await openReadRuntime(cwd, ctx);
   if (providerId !== undefined) {
     if (!runtime.getProvider(providerId)) {
       throw new ProviderAuthError("Provider not found", 404);

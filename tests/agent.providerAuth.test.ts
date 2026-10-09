@@ -1,5 +1,6 @@
+import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AuthInteraction, Provider } from "@earendil-works/pi-ai";
@@ -9,6 +10,7 @@ import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { PI_CODING_AGENT_DIR_ENV } from "../src/runtime/stageRoots.js";
 import { bootstrapStageflowHost } from "../src/server/bootstrap.js";
 import {
+  detectPiHome,
   getAuthStatus,
   listProviders,
   loginWithApiKey,
@@ -283,7 +285,7 @@ describe("providerAuth", () => {
     });
   });
 
-  it("opens models.json beside the operator auth file for list, login, and logout", async () => {
+  it("opens models.json beside the operator auth file for login and logout, and for list only when auth.json exists", async () => {
     await withDistinctRoots(async ({ data, creds }) => {
       const runtime = createFakeRuntime();
       const create = vi
@@ -293,26 +295,128 @@ describe("providerAuth", () => {
             runtime as Awaited<ReturnType<typeof ModelRuntime.create>>,
         );
       process.env[PI_CODING_AGENT_DIR_ENV] = path.join(data, "agent");
+      const operatorAuth = path.join(creds, "agent", "auth.json");
       const expected = {
-        authPath: path.join(creds, "agent", "auth.json"),
+        authPath: operatorAuth,
         modelsPath: path.join(creds, "agent", "models.json"),
         refreshOnCreate: false,
       };
       try {
         await listProviders(data);
+        expect(create).not.toHaveBeenCalled();
+        expect(existsSync(operatorAuth)).toBe(false);
+
         await loginWithApiKey(data, "key-provider", "sk-test-secret-marker-MODELS");
         await logoutProvider(data, "key-provider");
         expect(create.mock.calls.map((call) => call[0])).toEqual([
           expected,
           expected,
-          expected,
         ]);
+
+        create.mockClear();
+        await mkdir(path.dirname(operatorAuth), { recursive: true });
+        await writeFile(operatorAuth, "{}\n");
+        await listProviders(data);
+        expect(create.mock.calls.map((call) => call[0])).toEqual([expected]);
         expect(process.env[PI_CODING_AGENT_DIR_ENV]).toBe(
           path.join(data, "agent"),
         );
       } finally {
         create.mockRestore();
       }
+    });
+  });
+
+  it("detects and lists the operator auth file without creating it when the data directory differs", async () => {
+    await withDistinctRoots(async ({ data, creds }) => {
+      const operatorAuth = path.join(creds, "agent", "auth.json");
+      const dataAuth = path.join(data, "agent", "auth.json");
+      const dataCursor = path.join(data, "agent", "cursor-api-key");
+      const operatorCursor = path.join(creds, "agent", "cursor-api-key");
+      await mkdir(path.dirname(dataAuth), { recursive: true });
+      const dataBody = `${JSON.stringify({
+        openai: { type: "api_key", key: "data-only-secret" },
+      })}\n`;
+      await writeFile(dataAuth, dataBody);
+      await writeFile(dataCursor, "cursor-data-only\n");
+      const prevCursor = process.env.CURSOR_API_KEY;
+      const prevCursorFile = process.env.CURSOR_API_KEY_FILE;
+      delete process.env.CURSOR_API_KEY;
+      delete process.env.CURSOR_API_KEY_FILE;
+      try {
+        const missing = detectPiHome(data);
+        expect(missing.authConfigured).toBe(false);
+        expect(missing.cursorApiKeyConfigured).toBe(false);
+        expect(missing.source).toBe("sf_owned");
+        expect(missing).not.toHaveProperty("authPath");
+        expect(JSON.stringify(missing)).not.toMatch(
+          /data-only-secret|cursor-data-only/,
+        );
+
+        const listed = await listProviders(data);
+        expect(listed.providers.some((provider) => provider.id === "deepseek")).toBe(
+          true,
+        );
+        expect(JSON.stringify(listed)).not.toContain("data-only-secret");
+        await expect(getAuthStatus(data, "deepseek")).resolves.toMatchObject({
+          providerId: "deepseek",
+          configured: false,
+        });
+        await expect(
+          getAuthStatus(data, "not-a-real-provider-zz"),
+        ).rejects.toMatchObject({ status: 404 });
+        expect(existsSync(operatorAuth)).toBe(false);
+        expect(await readFile(dataAuth, "utf8")).toBe(dataBody);
+
+        await mkdir(path.dirname(operatorCursor), { recursive: true });
+        await writeFile(operatorCursor, "cursor-operator-key\n");
+        const withCursor = detectPiHome(data);
+        expect(withCursor.cursorApiKeyConfigured).toBe(true);
+        expect(withCursor.authConfigured).toBe(false);
+        expect(JSON.stringify(withCursor)).not.toContain("cursor-operator-key");
+
+        const operatorBody = `${JSON.stringify({
+          openai: { type: "api_key", key: "operator-secret" },
+        })}\n`;
+        await writeFile(operatorAuth, operatorBody);
+        const configured = detectPiHome(data);
+        expect(configured.authConfigured).toBe(true);
+        expect(JSON.stringify(configured)).not.toMatch(
+          /operator-secret|data-only-secret|cursor-operator-key/,
+        );
+        expect(await readFile(dataAuth, "utf8")).toBe(dataBody);
+      } finally {
+        if (prevCursor === undefined) delete process.env.CURSOR_API_KEY;
+        else process.env.CURSOR_API_KEY = prevCursor;
+        if (prevCursorFile === undefined) delete process.env.CURSOR_API_KEY_FILE;
+        else process.env.CURSOR_API_KEY_FILE = prevCursorFile;
+      }
+    });
+  });
+
+  it("login and logout write the operator auth file when the data directory differs", async () => {
+    await withDistinctRoots(async ({ data, creds }) => {
+      const marker = "sk-test-secret-marker-U5-operator";
+      const operatorAuth = path.join(creds, "agent", "auth.json");
+      const dataAuth = path.join(data, "agent", "auth.json");
+      await mkdir(path.dirname(dataAuth), { recursive: true });
+      await writeFile(dataAuth, "{}\n");
+
+      const afterLogin = await loginWithApiKey(data, "deepseek", marker);
+      expect(afterLogin).toMatchObject({
+        providerId: "deepseek",
+        configured: true,
+        authKind: "api_key",
+      });
+      expect(JSON.stringify(afterLogin)).not.toContain(marker);
+      expect(await readFile(operatorAuth, "utf8")).toContain(marker);
+      expect(await readFile(dataAuth, "utf8")).toBe("{}\n");
+
+      const afterLogout = await logoutProvider(data, "deepseek");
+      expect(afterLogout.configured).toBe(false);
+      expect(JSON.stringify(afterLogout)).not.toContain(marker);
+      expect(await readFile(operatorAuth, "utf8")).not.toContain(marker);
+      expect(await readFile(dataAuth, "utf8")).toBe("{}\n");
     });
   });
 

@@ -2,7 +2,8 @@ import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
 import * as resolveStageMcpServers from "../src/config/resolveStageMcpServers.js";
-import { access, cp, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { access, cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -3780,6 +3781,103 @@ describe("localhost HTTP API", () => {
         await new Promise<void>((resolve, reject) => {
           server.close((err) => (err ? reject(err) : resolve()));
         });
+      }
+    });
+
+    it("detect and list leave a missing operator auth file missing, and login writes that file", async () => {
+      const data = process.env.STAGEFLOW_HOME;
+      if (!data) throw new Error("STAGEFLOW_HOME missing");
+      const creds = await mkdtemp(path.join(tmpdir(), "sf-http-cred-"));
+      const prevCursor = process.env.CURSOR_API_KEY;
+      const prevCursorFile = process.env.CURSOR_API_KEY_FILE;
+      delete process.env.CURSOR_API_KEY;
+      delete process.env.CURSOR_API_KEY_FILE;
+      process.env.STAGEFLOW_CREDENTIAL_HOME = creds;
+      resetGlobalStageflowHomeForTests();
+
+      const operatorAuth = path.join(creds, "agent", "auth.json");
+      const dataAuth = path.join(data, "agent", "auth.json");
+      const dataBody = `${JSON.stringify({
+        openai: { type: "api_key", key: "data-only-secret" },
+      })}\n`;
+      await mkdir(path.dirname(dataAuth), { recursive: true });
+      await writeFile(dataAuth, dataBody);
+      await writeFile(path.join(data, "agent", "cursor-api-key"), "cursor-data-only\n");
+
+      const root = await mkdtemp(path.join(tmpdir(), "sf-http-providers-roots-"));
+      const { server, base } = await withServer(
+        root,
+        scriptedFakeAgent([]),
+        undefined,
+        { cwd: root },
+      );
+
+      try {
+        const detect = await jsonFetch(`${base}/api/providers/detect`);
+        expect(detect.status).toBe(200);
+        expect(detect.body.authConfigured).toBe(false);
+        expect(detect.body.cursorApiKeyConfigured).toBe(false);
+        expect(detect.body.source).toBe("sf_owned");
+        expect(detect.body.authPath).toBeUndefined();
+        const detectJson = JSON.stringify(detect.body);
+        expect(detectJson).not.toMatch(/data-only-secret|cursor-data-only|sk-/);
+        expect(detectJson).not.toMatch(/"apiKey"\s*:/);
+        expect(existsSync(operatorAuth)).toBe(false);
+
+        const noOrigin = await jsonFetch(`${base}/api/providers/deepseek/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ authType: "api_key", apiKey: marker }),
+        });
+        expect(noOrigin.status).toBe(403);
+        expect(JSON.stringify(noOrigin.body)).not.toContain(marker);
+        expect(existsSync(operatorAuth)).toBe(false);
+
+        const providers = await jsonFetch(`${base}/api/providers`);
+        expect(providers.status).toBe(200);
+        expect(providers.body.providers.length).toBeGreaterThan(0);
+        expect(JSON.stringify(providers.body)).not.toContain("data-only-secret");
+        expect(existsSync(operatorAuth)).toBe(false);
+        expect(await readFile(dataAuth, "utf8")).toBe(dataBody);
+
+        await mkdir(path.join(creds, "agent"), { recursive: true });
+        await writeFile(
+          path.join(creds, "agent", "cursor-api-key"),
+          "cursor-operator-key\n",
+        );
+        const detectCursor = await jsonFetch(`${base}/api/providers/detect`);
+        expect(detectCursor.status).toBe(200);
+        expect(detectCursor.body.cursorApiKeyConfigured).toBe(true);
+        expect(detectCursor.body.authConfigured).toBe(false);
+        expect(JSON.stringify(detectCursor.body)).not.toContain("cursor-operator-key");
+        expect(existsSync(operatorAuth)).toBe(false);
+
+        const login = await jsonFetch(`${base}/api/providers/deepseek/login`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Origin: base,
+          },
+          body: JSON.stringify({ authType: "api_key", apiKey: marker }),
+        });
+        expect(login.status).toBe(200);
+        expect(login.body.ok).toBe(true);
+        expect(JSON.stringify(login.body)).not.toContain(marker);
+        expect(await readFile(operatorAuth, "utf8")).toContain(marker);
+        expect(await readFile(dataAuth, "utf8")).toBe(dataBody);
+
+        const after = await jsonFetch(`${base}/api/providers/detect`);
+        expect(after.body.authConfigured).toBe(true);
+        expect(JSON.stringify(after.body)).not.toContain(marker);
+      } finally {
+        if (prevCursor === undefined) delete process.env.CURSOR_API_KEY;
+        else process.env.CURSOR_API_KEY = prevCursor;
+        if (prevCursorFile === undefined) delete process.env.CURSOR_API_KEY_FILE;
+        else process.env.CURSOR_API_KEY_FILE = prevCursorFile;
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+        await rm(creds, { recursive: true, force: true });
       }
     });
 
