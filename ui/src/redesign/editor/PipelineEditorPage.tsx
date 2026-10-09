@@ -24,6 +24,7 @@ import { StatusPill } from "../StatusPill";
 import { useHotkeys } from "../keys";
 import { FilterTabs } from "../shell/FilterTabs";
 import { cloneDraft } from "./draftMutators";
+import { addStage } from "../workshop/stageMutators";
 import {
   editorTabSpecs,
   editorValidationPills,
@@ -194,6 +195,13 @@ export function PipelineEditorPage({
     void runCatalogValidate();
   }, [destination, draft, pipeline.project_root, runCatalogValidate]);
 
+  const onAddStage = useCallback(() => {
+    if (!draft) return;
+    const result = addStage(draft);
+    setDraft(result.draft);
+    setSelectedStageId(result.stageId);
+  }, [draft]);
+
   useHotkeys(
     [
       {
@@ -204,6 +212,15 @@ export function PipelineEditorPage({
           event.preventDefault();
           if (!dirty || saving || !draft) return;
           void onSave();
+        },
+      },
+      {
+        key: "a",
+        scope: "pipelines",
+        when: () => editorTab === "editor" && !!draft && !loading,
+        handler: (event) => {
+          event.preventDefault();
+          onAddStage();
         },
       },
     ],
@@ -401,9 +418,9 @@ export function PipelineEditorPage({
             />
             <PipelineEditorGraph
               draft={draft}
-              listingStages={pipeline.stages}
               selectedStageId={selectedStageId}
               onSelectStage={setSelectedStageId}
+              onAddStage={onAddStage}
             />
             <PipelineEditorInspector
               draft={draft}

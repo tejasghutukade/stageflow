@@ -42,4 +42,24 @@ describe("projectionFromDraft", () => {
     ]);
     expect(layers[2]!.map((n) => n.stage_id)).toEqual(["report"]);
   });
+
+  it("fans route targets into one layer instead of a single column", () => {
+    const projection = projectionFromDraft({
+      pipeline: {
+        id: "fan",
+        stages: [
+          { id: "clarify", entry: true, route: [{ to: "research" }, { to: "validation" }] },
+          { id: "research", route: [{ to: "synthesize" }] },
+          { id: "validation", route: [{ to: "synthesize" }] },
+          { id: "synthesize" },
+        ],
+      },
+    });
+    const layers = groupNodesByLayer(projection.nodes);
+    expect(layers.map((layer) => layer.map((n) => n.stage_id))).toEqual([
+      ["clarify"],
+      ["research", "validation"],
+      ["synthesize"],
+    ]);
+  });
 });
