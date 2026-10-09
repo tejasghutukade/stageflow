@@ -33,6 +33,8 @@ type RunTarget = {
 
 type WorkshopTarget = {
   catalogPath: string;
+  pipeline?: { project_root?: string };
+  project_root?: string;
 };
 
 export function pipelineEditorPath(
@@ -57,5 +59,9 @@ export function pipelineWorkshopPath(
   row: WorkshopTarget | null | undefined,
 ): string | null {
   if (!row) return null;
-  return workshopPath({ pipeline: row.catalogPath });
+  const root = row.project_root ?? row.pipeline?.project_root;
+  return workshopPath({
+    pipeline: row.catalogPath,
+    ...(root ? { project_root: root } : {}),
+  });
 }

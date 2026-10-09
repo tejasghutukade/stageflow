@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent, type FakeAgentBehavior } from "../src/agent/fakeAgent.js";
 import { createCompletedOnlyStageHandle } from "../src/agent/port.js";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
+import type { StagePort, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { storeRootFor } from "../src/runstore/paths.js";
@@ -255,7 +255,7 @@ async function postRetry(
   );
 }
 
-function parallelRetryFanoutAgent(): { agent: AgentPort; release: () => void } {
+function parallelRetryFanoutAgent(): { agent: StagePort; release: () => void } {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -297,7 +297,7 @@ function parallelRetryFanoutAgent(): { agent: AgentPort; release: () => void } {
 
 function parallelFanoutStuckDesignAgent(
   options?: { holdDesignRetry?: Promise<void> },
-): AgentPort {
+): StagePort {
   const stageIndex = new Map<string, number>();
   let designOpens = 0;
 

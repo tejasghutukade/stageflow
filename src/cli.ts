@@ -5,7 +5,7 @@ import { A2A_USAGE, runA2aCommand } from "./cli/a2aCommand.js";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { globalAgentBackendFromManifest, resolveAgentPort } from "./agent/resolveAgentPort.js";
+import { globalStageBackendFromManifest, resolveStagePort } from "./agent/resolveStagePort.js";
 import { BROWSER_USAGE, runBrowserCommand } from "./cli/browserCommand.js";
 import { ARTIFACT_USAGE, runArtifactCommand } from "./cli/artifactCommand.js";
 import {
@@ -577,7 +577,7 @@ async function main(argv: string[]): Promise<number> {
       return runBrowserCommand(argv.slice(3));
     }
 
-    const globalAgent = globalAgentBackendFromManifest(ctx.manifest);
+    const globalAgent = globalStageBackendFromManifest(ctx.manifest);
 
     if (parsed.command === "ui") {
       const listenHost = resolveListenHost({ flag: parsed.host });
@@ -587,7 +587,7 @@ async function main(argv: string[]): Promise<number> {
         mcpStateless: parsed.mcpStateless,
       });
       const host = await startUiServer({
-        agent: resolveAgentPort({ global: globalAgent }),
+        agent: resolveStagePort({ global: globalAgent }),
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,
@@ -622,7 +622,7 @@ async function main(argv: string[]): Promise<number> {
         mcpStateless: parsed.mcpStateless,
       });
       const host = await startMcpServer({
-        agent: resolveAgentPort({ global: globalAgent }),
+        agent: resolveStagePort({ global: globalAgent }),
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,

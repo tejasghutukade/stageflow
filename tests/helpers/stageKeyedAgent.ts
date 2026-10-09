@@ -2,9 +2,9 @@ import {
   scriptedFakeAgent,
   type FakeAgentBehavior,
 } from "../../src/agent/fakeAgent.js";
-import type { AgentPort, StageRunInput } from "../../src/agent/port.js";
+import type { StagePort, StageRunInput } from "../../src/agent/port.js";
 
-export type StageKeyedAgent = AgentPort & {
+export type StageKeyedAgent = StagePort & {
   openCounts: Map<string, number>;
   sessionModes: Map<string, Array<string | undefined>>;
   feedbackContexts: Map<string, number>;

@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
@@ -44,10 +44,10 @@ function cloneChainLoopAgent(options: {
     string,
     Array<{ type: "emit"; envelope: StageEnvelope }>
   >;
-}): AgentPort & { openCounts: Map<string, number> } {
+}): StagePort & { openCounts: Map<string, number> } {
   const openCounts = new Map<string, number>();
   const stageIndex = new Map<string, number>();
-  const agent: AgentPort & { openCounts: Map<string, number> } = {
+  const agent: StagePort & { openCounts: Map<string, number> } = {
     openCounts,
     openStage(input: StageRunInput) {
       const stageId = schedulerStageId(input);

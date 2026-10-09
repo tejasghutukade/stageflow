@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../src/agent/port.js";
 import { RunManager } from "../src/runtime/runManager.js";
@@ -36,7 +36,7 @@ function gatedFanInAgent(options: {
       | { type: "throw"; message: string }
     >
   >;
-}): AgentPort & {
+}): StagePort & {
   openCounts: Map<string, number>;
   priorByStage: Map<
     string,
@@ -50,7 +50,7 @@ function gatedFanInAgent(options: {
     Array<Record<string, TerminalEnvelope | TerminalEnvelope[]> | undefined>
   >();
 
-  const agent: AgentPort & {
+  const agent: StagePort & {
     openCounts: Map<string, number>;
     priorByStage: Map<
       string,

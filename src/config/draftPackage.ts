@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { InlinePipelineDefinition } from "../types/pipeline.js";
@@ -403,13 +403,27 @@ async function gateDraftWrite(
   };
 }
 
-async function writeDraftPackageFiles(
+type DraftWriteFile = {
+  kind: "pipeline" | "stage" | "task";
+  absPath: string;
+  relPath: string;
+  content: string;
+};
+
+function resolveDraftWriteFiles(
   projectRoot: string,
   target: ResolvedDraftWrite,
-  allowInvalid: boolean | undefined,
-): Promise<DraftPackageWriteResult> {
+): { ok: true; files: DraftWriteFile[] } | { ok: false; status: 400; error: string } {
   const { packageDirectory, draft, pipelineAbsPath, pipelineRelPath } = target;
-  const stagePaths: string[] = [];
+  const toRel = (abs: string) => path.relative(projectRoot, abs).replace(/\\/g, "/");
+  const files: DraftWriteFile[] = [
+    {
+      kind: "pipeline",
+      absPath: pipelineAbsPath,
+      relPath: pipelineRelPath,
+      content: stringifyTargetYaml(pipelineDocument(draft.pipeline)),
+    },
+  ];
 
   for (const stage of draft.stages ?? []) {
     const rel = normalizeStageRelPath(stage.path);
@@ -429,30 +443,46 @@ async function writeDraftPackageFiles(
         error: `Stage path escapes package directory (${stage.path})`,
       };
     }
+    files.push({
+      kind: "stage",
+      absPath: stageAbs,
+      relPath: toRel(stageAbs),
+      content: stringifyTargetYaml(stage.body),
+    });
   }
+
+  if (draft.task) {
+    const taskAbs = path.join(packageDirectory, path.basename(draft.task.filename));
+    files.push({
+      kind: "task",
+      absPath: taskAbs,
+      relPath: toRel(taskAbs),
+      content: stringifyTargetYaml(draft.task.body),
+    });
+  }
+
+  return { ok: true, files };
+}
+
+async function writeDraftPackageFiles(
+  projectRoot: string,
+  target: ResolvedDraftWrite,
+  allowInvalid: boolean | undefined,
+): Promise<DraftPackageWriteResult> {
+  const { packageDirectory, draft, pipelineRelPath } = target;
+  const resolved = resolveDraftWriteFiles(projectRoot, target);
+  if (!resolved.ok) return resolved;
 
   try {
     await mkdir(packageDirectory, { recursive: true });
-    await writeFile(
-      pipelineAbsPath,
-      stringifyTargetYaml(pipelineDocument(draft.pipeline)),
-      "utf8",
-    );
-
-    for (const stage of draft.stages ?? []) {
-      const rel = normalizeStageRelPath(stage.path);
-      const stageAbs = path.resolve(packageDirectory, rel);
-      await mkdir(path.dirname(stageAbs), { recursive: true });
-      await writeFile(stageAbs, stringifyTargetYaml(stage.body), "utf8");
-      stagePaths.push(path.relative(projectRoot, stageAbs).replace(/\\/g, "/"));
+    for (const file of resolved.files) {
+      await mkdir(path.dirname(file.absPath), { recursive: true });
+      await writeFile(file.absPath, file.content, "utf8");
     }
-
-    let taskPath: string | undefined;
-    if (draft.task) {
-      const taskAbs = path.join(packageDirectory, path.basename(draft.task.filename));
-      await writeFile(taskAbs, stringifyTargetYaml(draft.task.body), "utf8");
-      taskPath = path.relative(projectRoot, taskAbs).replace(/\\/g, "/");
-    }
+    const stagePaths = resolved.files
+      .filter((file) => file.kind === "stage")
+      .map((file) => file.relPath);
+    const taskPath = resolved.files.find((file) => file.kind === "task")?.relPath;
 
     const loadOutcome = await loadPipelineOutcome(pipelineRelPath, {
       cwd: projectRoot,
@@ -530,6 +560,142 @@ export async function createDraftPackage(
   if (blocked) return blocked;
 
   return writeDraftPackageFiles(projectRoot, resolved.value, input.allowInvalid);
+}
+
+export type DraftPlanMode = "create" | "overwrite";
+
+export type DraftPlanFile = {
+  path: string;
+  kind: "pipeline" | "stage" | "task";
+  action: "new" | "overwrite" | "unchanged";
+  added: number;
+  removed: number;
+};
+
+export type DraftPlanResult = {
+  pipelinePath: string;
+  directory: string;
+  files: DraftPlanFile[];
+  pipelineIdTaken: boolean;
+};
+
+export type PlanDraftPackageOptions = {
+  mode?: DraftPlanMode;
+  catalogPipelines?: ReadonlyArray<{ id: string; path: string }>;
+};
+
+function splitLines(text: string): string[] {
+  if (!text) return [];
+  return (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
+}
+
+export function countLineChanges(
+  before: string,
+  after: string,
+): { added: number; removed: number } {
+  const a = splitLines(before);
+  const b = splitLines(after);
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1;
+  let endA = a.length;
+  let endB = b.length;
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA -= 1;
+    endB -= 1;
+  }
+  const midA = a.slice(start, endA);
+  const midB = b.slice(start, endB);
+  let prev = new Uint32Array(midB.length + 1);
+  let curr = new Uint32Array(midB.length + 1);
+  for (const lineA of midA) {
+    for (let j = 1; j <= midB.length; j += 1) {
+      curr[j] =
+        lineA === midB[j - 1] ? prev[j - 1]! + 1 : Math.max(prev[j]!, curr[j - 1]!);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  const common = prev[midB.length]!;
+  return { added: midB.length - common, removed: midA.length - common };
+}
+
+async function readExisting(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+export async function planDraftPackage(
+  projectRoot: string,
+  input: CreateDraftPackageInput,
+  options: PlanDraftPackageOptions = {},
+): Promise<({ ok: true } & DraftPlanResult) | { ok: false; status: 400; error: string }> {
+  const resolved = resolveDraftWriteTarget(projectRoot, input);
+  if (!resolved.ok) return resolved;
+  const writeFiles = resolveDraftWriteFiles(projectRoot, resolved.value);
+  if (!writeFiles.ok) return writeFiles;
+
+  const files: DraftPlanFile[] = [];
+  for (const file of writeFiles.files) {
+    const existing = await readExisting(file.absPath);
+    if (existing === null) {
+      files.push({
+        path: file.relPath,
+        kind: file.kind,
+        action: "new",
+        added: splitLines(file.content).length,
+        removed: 0,
+      });
+    } else if (existing === file.content) {
+      files.push({
+        path: file.relPath,
+        kind: file.kind,
+        action: "unchanged",
+        added: 0,
+        removed: 0,
+      });
+    } else {
+      files.push({
+        path: file.relPath,
+        kind: file.kind,
+        action: "overwrite",
+        ...countLineChanges(existing, file.content),
+      });
+    }
+  }
+
+  const { pipelineRelPath, packageDirectory, draft } = resolved.value;
+  const pipelineIdTaken =
+    (options.mode ?? "create") === "create" &&
+    (options.catalogPipelines ?? []).some(
+      (listing) =>
+        listing.id === draft.pipeline.id &&
+        listing.path.replace(/\\/g, "/") !== pipelineRelPath,
+    );
+
+  return {
+    ok: true,
+    pipelinePath: pipelineRelPath,
+    directory:
+      path.relative(projectRoot, packageDirectory).replace(/\\/g, "/") || ".",
+    files,
+    pipelineIdTaken,
+  };
+}
+
+export function parsePlanDraftPackageBody(
+  body: unknown,
+):
+  | (CreateDraftPackageInput & { mode: DraftPlanMode })
+  | { ok: false; status: 400; error: string } {
+  const parsed = parseCreateDraftPackageBody(body);
+  if ("ok" in parsed) return parsed;
+  const mode = isPlainObject(body) ? body.mode : undefined;
+  if (mode !== undefined && mode !== "create" && mode !== "overwrite") {
+    return { ok: false, status: 400, error: 'mode must be "create" or "overwrite"' };
+  }
+  return { ...parsed, mode: mode ?? "create" };
 }
 
 export function parseDraftPackageBody(

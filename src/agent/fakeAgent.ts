@@ -15,7 +15,7 @@ import {
 } from "../tools/askOperator.js";
 import { tryParsePendingPrompt } from "../runtime/stageHitl.js";
 import type {
-  AgentPort,
+  StagePort,
   OpaqueAnswer,
   OpaqueWaitRequest,
   StageHandle,
@@ -112,7 +112,7 @@ function loadFakeHitlResume(
   }
 }
 
-export class FakeAgent implements AgentPort {
+export class FakeAgent implements StagePort {
   lastRoots?: RecordedStageRoots;
   receivedAnswers: OpaqueAnswer[] = [];
 
@@ -388,7 +388,7 @@ export class FakeAgent implements AgentPort {
 
 export function scriptedFakeAgent(
   behaviors: FakeAgentBehavior[],
-): AgentPort & { recorded: RecordedStageRoots[] } {
+): StagePort & { recorded: RecordedStageRoots[] } {
   const recorded: RecordedStageRoots[] = [];
   let index = 0;
   return {

@@ -17,6 +17,12 @@ import {
 import { resolveWorkshopModel } from "./modelSettings.js";
 import { getWorkshopBuild, updateWorkshopBuild } from "./buildStore.js";
 import {
+  buildWorkshopChatPrompt,
+  readWorkshopDocsReference,
+  type WorkshopChatAttachment,
+  type WorkshopChatContext,
+} from "./chatAttachments.js";
+import {
   appendWorkshopSessionMessages,
   getWorkshopSession,
   resolveWorkshopSessionStoreRoot,
@@ -89,8 +95,9 @@ export type WorkshopChatTurnInput = {
   sessionId: string;
   draft: DraftPackage;
   message: string;
-  /** @deprecated Ignored — mutations apply immediately (Accept = soft undo). */
   autoApply?: boolean;
+  attachments?: WorkshopChatAttachment[];
+  context?: WorkshopChatContext;
   /** Session model override from Workshop chrome. */
   model?: string | null;
   /** Settings default from factory settings /api/settings. */
@@ -125,7 +132,6 @@ export type WorkshopChatTurnResult = {
    * Accept/undo. Name is historical — not a pending gated apply.
    */
   pending: WorkshopChatProposalPayload | null;
-  /** Always false — auto-apply chrome removed; mutations apply immediately. */
   autoApply: boolean;
   model: string;
   /** Build this turn edited. Null when the chat stayed unlinked. */
@@ -401,10 +407,15 @@ export function toWorkshopChatWireEvent(
 
 function transcriptMessagesForTurn(
   userMessage: string,
+  attachments: readonly WorkshopChatAttachment[],
   events: WorkshopChatWireEvent[],
 ): WorkshopSessionAppendMessage[] {
   const messages: WorkshopSessionAppendMessage[] = [
-    { role: "user", text: userMessage },
+    {
+      role: "user",
+      text: userMessage,
+      ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+    },
   ];
   for (const event of events) {
     if (event.type === "message") {
@@ -441,6 +452,12 @@ export async function runWorkshopChatTurn(
     sessionOverride: input.model,
     settingsDefault: input.settingsDefault,
   });
+  const attachments = input.attachments ?? [];
+  const prompt = buildWorkshopChatPrompt(
+    message,
+    attachments,
+    input.context?.docs === true ? await readWorkshopDocsReference() : null,
+  );
 
   const registry =
     input.registry ?? getDefaultRegistry(input.host);
@@ -493,7 +510,7 @@ export async function runWorkshopChatTurn(
       ) {
         await agentSession.prepareRestart(storeRecord.transcript);
       }
-      rawEvents = await agentSession.send(message, {
+      rawEvents = await agentSession.send(prompt, {
         onDelta: input.onDelta,
         onActivity: (update) => {
           const buildId = registry.getPinnedBuildId(sessionId);
@@ -527,7 +544,7 @@ export async function runWorkshopChatTurn(
       appendWorkshopSessionMessages(
         storeRoot,
         sessionId,
-        transcriptMessagesForTurn(message, events),
+        transcriptMessagesForTurn(message, attachments, events),
       );
     });
 
@@ -538,7 +555,7 @@ export async function runWorkshopChatTurn(
       pending: pendingRaw
         ? serializeWorkshopProposal(pendingRaw, draft)
         : null,
-      autoApply: false,
+      autoApply: input.autoApply === true,
       model,
       buildId: resultBuildId,
     };

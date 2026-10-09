@@ -3,7 +3,7 @@ import { readFile, access } from "node:fs/promises";
 import { createReadStream, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
 import {
   getCredentialSourceSettings,
   setCredentialSource,
@@ -24,6 +24,8 @@ import {
   parseDraftPackageBody,
   parseOpenDraftPackageBody,
   parseOverwriteDraftPackageBody,
+  parsePlanDraftPackageBody,
+  planDraftPackage,
   validateDraftPackage,
   type DraftPackage,
 } from "../config/draftPackage.js";
@@ -50,6 +52,10 @@ import {
   WorkshopSessionStoreError,
 } from "../workshop/chatTurn.js";
 import {
+  parseWorkshopChatAttachments,
+  parseWorkshopChatContext,
+} from "../workshop/chatAttachments.js";
+import {
   readWorkshopOpenModel,
   resolveWorkshopModel,
 } from "../workshop/modelSettings.js";
@@ -71,11 +77,9 @@ import {
   updateWorkshopBuild,
   WorkshopBuildStoreError,
 } from "../workshop/buildStore.js";
-import {
-  createLiveWorkshopOperatorHost,
-  type OperatorAgentHost,
-} from "../operatorAgent/index.js";
-import { browseCatalog } from "../config/browseCatalog.js";
+import { resolveAgentPort, type AgentPort } from "../operatorAgent/index.js";
+import { browseCatalog, listPipelinesForContext } from "../config/browseCatalog.js";
+import { catalogContextFromStageflow } from "../config/resolveCatalogContext.js";
 import {
   listModelsMultiProject,
   listPipelinesMultiProject,
@@ -201,7 +205,7 @@ import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 const auditLog = rootLogger.child({ component: "audit" });
 
 export type UiServerOptions = {
-  agent: AgentPort;
+  agent: StagePort;
   cwd?: string;
   agentDir?: string;
   rootDir?: string;
@@ -217,8 +221,8 @@ export type UiServerOptions = {
   runChangeBus?: RunChangeBus;
   allowedHosts?: AllowedHosts;
   controlTokens?: ControlTokens;
-  /** Optional Workshop Operator Agent Host (fake in tests). */
-  workshopOperatorHost?: OperatorAgentHost;
+  /** Optional AgentPort. Workshop is the caller today; tests inject a fake. */
+  workshopOperatorHost?: AgentPort;
 };
 
 function textPlain(res: ServerResponse, status: number, body: string): void {
@@ -351,11 +355,11 @@ export type OperatorRouteDeps = {
   /** Live shutdown controller; set after listen so restore can beginDrain. */
   getShutdown?: () => import("./shutdown.js").ShutdownController | undefined;
   /**
-   * Optional Operator Agent Host for Workshop chat (tests inject the fake host).
-   * Distinct from stage-execution AgentPort. Defaults to live Pi Workshop Author
-   * (fake remains available via createWorkshopOperatorHost / test injection).
+   * Optional AgentPort (tests inject the fake host).
+   * Distinct from StagePort. Defaults to resolveAgentPort (Pi).
+   * The fake host remains available via createWorkshopOperatorHost.
    */
-  workshopOperatorHost?: OperatorAgentHost;
+  workshopOperatorHost?: AgentPort;
   /**
    * Optional durable Workshop chat registry (host sessions keyed by session id).
    * Defaults to a registry owned by this route surface.
@@ -387,7 +391,7 @@ export function createOperatorRoutes(
     deps.workshopChatRegistry ??
     new WorkshopChatSessionRegistry(
       workshopOperatorHost ??
-        createLiveWorkshopOperatorHost({
+        resolveAgentPort({
           cwd,
           projectRoot: cwd,
         }),
@@ -1757,6 +1761,69 @@ export function createOperatorRoutes(
           return true;
         }
 
+        if (method === "POST" && pathname === "/api/drafts/plan") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let draftWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            draftWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parsePlanDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const ctx = await resolveStageflowContext(draftWriteRoot);
+          if (!ctx.isGitProject) {
+            json(res, 400, {
+              error:
+                "Project root not found; initialize stageflow.yaml in a git repo",
+            });
+            return true;
+          }
+          const catalogPipelines =
+            parsed.mode === "create"
+              ? await listPipelinesForContext(catalogContextFromStageflow(ctx))
+              : [];
+          const plan = await planDraftPackage(ctx.projectRoot, parsed, {
+            mode: parsed.mode,
+            catalogPipelines,
+          });
+          if (!plan.ok) {
+            json(res, plan.status, { error: plan.error });
+            return true;
+          }
+          json(res, 200, {
+            pipelinePath: plan.pipelinePath,
+            directory: plan.directory,
+            files: plan.files,
+            pipelineIdTaken: plan.pipelineIdTaken,
+          });
+          return true;
+        }
+
         if (method === "POST" && pathname === "/api/drafts/open") {
           let body: unknown;
           try {
@@ -2574,6 +2641,14 @@ export function createOperatorRoutes(
             json(res, draftParsed.status, { error: draftParsed.error });
             return true;
           }
+          const attachmentsParsed = parseWorkshopChatAttachments(body.attachments);
+          if (!attachmentsParsed.ok) {
+            json(res, 400, {
+              error: attachmentsParsed.error,
+              code: "workshop_attachment_invalid",
+            });
+            return true;
+          }
           const settingsDefault = await readWorkshopOpenModel(cwd);
           const accept = String(req.headers.accept ?? "");
           const wantsStream =
@@ -2585,6 +2660,8 @@ export function createOperatorRoutes(
             draft: draftParsed,
             message: body.message,
             autoApply: body.autoApply === true,
+            attachments: attachmentsParsed.attachments,
+            context: parseWorkshopChatContext(body.context),
             model:
               typeof body.model === "string" || body.model === null
                 ? body.model
@@ -2712,7 +2789,7 @@ export function createOperatorRoutes(
                 events: [errorEvent],
                 draft: draftParsed,
                 pending: null,
-                autoApply: false,
+                autoApply: chatTurnBase.autoApply,
                 model: resolvedModel,
                 buildId: workshopChatRegistry.getPinnedBuildId(body.sessionId),
               });

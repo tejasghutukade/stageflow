@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { startTestService } from "./helpers/testInProcessService.js";
@@ -64,7 +64,7 @@ async function withTriggerService(
   opts: {
     setup?: (root: string) => Promise<void>;
     ensureProject?: boolean;
-    agent?: AgentPort;
+    agent?: StagePort;
   },
   fn: (ctx: {
     root: string;

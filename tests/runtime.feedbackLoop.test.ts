@@ -3,7 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
 import { runPipelineDag } from "../src/runtime/pipelineScheduler.js";
@@ -139,7 +139,7 @@ describe("runtime feedback-loop scheduler", () => {
       ],
       submit: [{ type: "emit", envelope: okEnvelope("submit-ok") }],
     });
-    const agent: AgentPort = {
+    const agent: StagePort = {
       openStage(input) {
         if (
           input.stage.id === "submit" &&
@@ -353,7 +353,7 @@ describe("runtime feedback-loop scheduler", () => {
       ],
       submit: [{ type: "throw", message: "submit must not run" }],
     });
-    const gated: AgentPort = {
+    const gated: StagePort = {
       openStage(input) {
         const handle = agent.openStage(input);
         if (

@@ -282,7 +282,13 @@ function ConsoleRoot() {
       />
     );
   } else if (route.name === "workshop") {
-    content = <WorkshopPage />;
+    content = (
+      <WorkshopPage
+        pipelinePath={route.pipelinePath}
+        taskPath={route.taskPath}
+        projectRoot={route.projectRoot}
+      />
+    );
   } else {
     content = (
       <TodayPage

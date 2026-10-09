@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeAgent, type FakeAgentBehavior } from "../src/agent/fakeAgent.js";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import { runStageViaOpen } from "../src/agent/port.js";
 import type { BrowserRunner, StageBrowserSupport } from "../src/browser/browserHost.js";
 import { createLocalBrowserHost } from "../src/browser/localBrowserHost.js";
@@ -78,7 +78,7 @@ function setup(options: {
     }
     return { code: 0 };
   };
-  const agent: AgentPort = {
+  const agent: StagePort = {
     openStage(input) {
       const id = input.stageId ?? input.stage.id;
       (prompts[id] ??= []).push(input.stage.system_prompt);

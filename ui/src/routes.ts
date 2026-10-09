@@ -35,7 +35,12 @@ export type Route =
   | { name: "extensionFile"; path: string }
   | { name: "settings" }
   | { name: "connect" }
-  | { name: "workshop"; pipelinePath?: string; taskPath?: string };
+  | {
+      name: "workshop";
+      pipelinePath?: string;
+      taskPath?: string;
+      projectRoot?: string;
+    };
 
 export function navigate(to: string): void {
   window.location.hash = to.startsWith("#") ? to : `#${to}`;
@@ -117,10 +122,12 @@ export function extensionFilePath(filePath: string): string {
 export function workshopPath(opts?: {
   pipeline?: string;
   task?: string;
+  project_root?: string;
 }): string {
   const params = new URLSearchParams();
   if (opts?.pipeline) params.set("pipeline", opts.pipeline);
   if (opts?.task) params.set("task", opts.task);
+  if (opts?.project_root) params.set("project_root", opts.project_root);
   const query = params.toString();
   return query ? `/workshop?${query}` : "/workshop";
 }
@@ -246,10 +253,12 @@ export function parseHash(hash = window.location.hash): Route {
   if (path === "workshop" || path === "workshop-lab") {
     const pipelinePath = params.get("pipeline") ?? undefined;
     const taskPath = params.get("task") ?? undefined;
+    const projectRoot = params.get("project_root") ?? undefined;
     return {
       name: "workshop",
       ...(pipelinePath ? { pipelinePath } : {}),
       ...(taskPath ? { taskPath } : {}),
+      ...(projectRoot ? { projectRoot } : {}),
     };
   }
   if (path.startsWith("runs/")) {

@@ -51,6 +51,9 @@ import type {
   OpenDraftPackageResult,
   OverwriteDraftPackageInput,
   OverwriteDraftPackageResult,
+  DraftPlanResult,
+  PlanDraftPackageInput,
+  PlanDraftPackageResult,
   PutWorkshopAutosaveResult,
   CatalogFileResult,
   CatalogValidationResult,
@@ -923,6 +926,46 @@ export async function overwriteDraftPackageWithDetails(
   }
 }
 
+export async function planDraftPackage(
+  input: PlanDraftPackageInput,
+): Promise<PlanDraftPackageResult> {
+  try {
+    const res = await fetch("/api/drafts/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as Partial<DraftPlanResult> & {
+      error?: string;
+    };
+    if (
+      res.ok &&
+      typeof body.pipelinePath === "string" &&
+      typeof body.directory === "string" &&
+      Array.isArray(body.files)
+    ) {
+      return {
+        ok: true,
+        pipelinePath: body.pipelinePath,
+        directory: body.directory,
+        files: body.files,
+        pipelineIdTaken: body.pipelineIdTaken === true,
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export async function openDraftPackage(
   input: OpenDraftPackageInput,
 ): Promise<OpenDraftPackageResult> {
@@ -1515,6 +1558,8 @@ export async function sendWorkshopChatTurn(
         draft: input.draft,
         autoApply: input.autoApply === true,
         ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        ...(input.context ? { context: input.context } : {}),
         stream: false,
       }),
     });
@@ -1602,6 +1647,8 @@ export async function sendWorkshopChatTurnStreaming(
         draft: input.draft,
         autoApply: input.autoApply === true,
         ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        ...(input.context ? { context: input.context } : {}),
         stream: true,
       }),
       ...(handlers.signal ? { signal: handlers.signal } : {}),

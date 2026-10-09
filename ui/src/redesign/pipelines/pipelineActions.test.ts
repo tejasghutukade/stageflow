@@ -61,13 +61,17 @@ describe("pipeline navigation paths", () => {
     expect(withoutTask).not.toContain("task=");
   });
 
-  it("builds a workshop path from the catalog path", () => {
+  it("builds a workshop path from the catalog path and project_root", () => {
     const catalogPath = "pipelines/demo.pipeline.yaml";
-    const path = pipelineWorkshopPath({ catalogPath });
+    const path = pipelineWorkshopPath({
+      catalogPath,
+      pipeline: { project_root: "/Users/me/repo" },
+    });
     expect(path).not.toBeNull();
     expect(path!.startsWith("/workshop")).toBe(true);
     expect(path!.startsWith("/pipelines")).toBe(false);
     expect(decodeURIComponent(path!)).toContain(catalogPath);
+    expect(decodeURIComponent(path!)).toContain("project_root=/Users/me/repo");
   });
 
   it("does not produce a path when the row is missing", () => {

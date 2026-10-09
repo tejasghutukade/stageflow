@@ -6,7 +6,7 @@ import Database from "better-sqlite3";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { storeRootFor } from "../src/runstore/paths.js";
 import { RunManager } from "../src/runtime/runManager.js";
-import { createCompletedOnlyStageHandle, runStageViaOpen, type AgentPort } from "../src/agent/port.js";
+import { createCompletedOnlyStageHandle, runStageViaOpen, type StagePort } from "../src/agent/port.js";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { RunSubmissionExistsError } from "../src/runstore/submission.js";
 
@@ -19,7 +19,7 @@ describe("durable run submissions", () => {
     const store = createRunStore({ rootDir: root });
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const agent: AgentPort = {
+    const agent: StagePort = {
       openStage: vi.fn((stage) => createCompletedOnlyStageHandle({ stageId: stage.stage.id, run: async () => {
         await gate;
         return { ok: true, envelope: { status: "success", summary: "Done", artifacts: [], payload: {} } };

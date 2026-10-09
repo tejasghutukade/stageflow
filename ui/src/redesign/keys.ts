@@ -9,6 +9,7 @@ export type HotkeyScope =
   | "run-detail-gate"
   | "tasks"
   | "pipelines"
+  | "workshop"
   | "triggers"
   | "catalog";
 
@@ -27,6 +28,7 @@ const SCOPE_ORDER: HotkeyScope[] = [
   "runs",
   "tasks",
   "pipelines",
+  "workshop",
   "triggers",
   "catalog",
   "inbox",

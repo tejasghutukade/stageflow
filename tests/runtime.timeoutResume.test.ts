@@ -7,7 +7,7 @@ import {
   scriptedFakeAgent,
   type FakeAgentBehavior,
 } from "../src/agent/fakeAgent.js";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
+import type { StagePort, StageRunInput } from "../src/agent/port.js";
 import {
   isStageTimeoutReason,
   lastFailedReason,
@@ -34,7 +34,7 @@ const fixtures = path.resolve(
 
 function countingAgent(
   behaviorsByOpen: FakeAgentBehavior[],
-): AgentPort & { openCounts: Map<string, number>; sessionModes: string[] } {
+): StagePort & { openCounts: Map<string, number>; sessionModes: string[] } {
   const openCounts = new Map<string, number>();
   const sessionModes: string[] = [];
   let index = 0;

@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
@@ -23,7 +23,7 @@ const fixtures = path.resolve(
   "fixtures",
 );
 
-function hangingAgent(): AgentPort {
+function hangingAgent(): StagePort {
   return {
     openStage(_input: StageRunInput) {
       return {
@@ -41,7 +41,7 @@ function hangingAgent(): AgentPort {
   };
 }
 
-function reconcileAgent(): AgentPort {
+function reconcileAgent(): StagePort {
   return {
     openStage(input) {
       return createCompletedOnlyStageHandle({

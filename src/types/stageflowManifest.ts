@@ -15,7 +15,7 @@ export type StageflowManifestCatalog = {
 export type StageflowManifest = {
   version: StageflowManifestVersion;
   catalog: StageflowManifestCatalog;
-  /** Default AgentPort backend for every pipeline/stage that doesn't override it. */
+  /** Default StagePort backend for every pipeline/stage that doesn't override it. */
   agent?: string;
   /** Default LLM model id for every stage that doesn't override it at pipeline or stage level. */
   model?: string;

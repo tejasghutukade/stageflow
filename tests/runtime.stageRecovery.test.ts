@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { fakeHitlResumePath, scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
@@ -59,7 +59,7 @@ function parallelFanoutStuckDesignAgent(
     impl: Parameters<typeof scriptedFakeAgent>[0];
   },
   options?: { holdDesignRetry?: Promise<void> },
-): AgentPort & { openCounts: Map<string, number> } {
+): StagePort & { openCounts: Map<string, number> } {
   const clarifyAgent = scriptedFakeAgent([
     { type: "emit", envelope: okEnvelope("clarify-ok") },
   ]);
@@ -124,7 +124,7 @@ function parallelFanoutStuckDesignAgent(
 
 function agentWithHangingFirstDesign(retryBehaviors: Parameters<
   typeof scriptedFakeAgent
->[0]): AgentPort {
+>[0]): StagePort {
   const clarifyAgent = scriptedFakeAgent([
     { type: "emit", envelope: okEnvelope("clarify-ok") },
   ]);

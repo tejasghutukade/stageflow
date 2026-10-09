@@ -1,7 +1,8 @@
 /**
  * Live Pi-backed OperatorAgentModel for Workshop Author.
  *
- * Uses the shared Pi session factory (not AgentPort). Workshop tools only —
+ * Pi backend behind AgentPort, using the shared session factory. Not a StagePort.
+ * Workshop tools only —
  * resolveWorkshopToolNames / assertWorkshopToolsExcludeDiskShell. Durable Pi
  * session per host tool-context (R7). Restart: new Pi + transcript replay (KTD7).
  */

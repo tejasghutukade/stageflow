@@ -2,13 +2,13 @@
 html[data-redesign="on"] .sf-field {
   display: flex;
   flex-direction: column;
-  gap: var(--sf-space-1);
-  margin-bottom: var(--sf-space-3);
+  gap: 4px;
+  margin-bottom: 12px;
 }
 
 html[data-redesign="on"] .sf-field__label {
-  font-size: var(--sf-text-xs);
-  color: var(--sf-text-muted);
+  font-size: 11px;
+  color: var(--sf-text-3);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -16,11 +16,11 @@ html[data-redesign="on"] .sf-field__label {
 html[data-redesign="on"] .sf-field__input,
 html[data-redesign="on"] .sf-field__textarea {
   width: 100%;
-  border: 1px solid var(--sf-border);
-  border-radius: var(--sf-radius-sm);
-  background: var(--sf-surface-2);
-  color: var(--sf-text);
-  padding: var(--sf-space-2);
-  font-size: var(--sf-text-sm);
+  border: 1px solid var(--sf-hairline);
+  border-radius: 6px;
+  background: var(--sf-raised);
+  color: var(--sf-text-1);
+  padding: 8px;
+  font-size: 13px;
 }
 }

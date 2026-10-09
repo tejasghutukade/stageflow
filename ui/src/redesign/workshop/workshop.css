@@ -1,47 +1,47 @@
 @layer sf-components {
 html[data-redesign="on"] .sf-workshop-inspector__tabs {
   display: flex;
-  border-bottom: 1px solid var(--sf-border);
+  border-bottom: 1px solid var(--sf-hairline);
 }
 
 html[data-redesign="on"] .sf-workshop-inspector__tab {
   flex: 1;
   border: none;
   background: transparent;
-  padding: var(--sf-space-2);
+  padding: 8px;
   cursor: pointer;
-  font-size: var(--sf-text-sm);
+  font-size: 13px;
 }
 
 html[data-redesign="on"] .sf-workshop-inspector__tab--active {
-  background: var(--sf-surface-2);
+  background: var(--sf-raised);
 }
 
 html[data-redesign="on"] .sf-workshop-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--sf-space-3);
-  padding: var(--sf-space-2) var(--sf-space-5);
-  background: var(--sf-surface-2);
-  border-bottom: 1px solid var(--sf-border);
-  font-size: var(--sf-text-sm);
+  gap: 12px;
+  padding: 8px 20px;
+  background: var(--sf-raised);
+  border-bottom: 1px solid var(--sf-hairline);
+  font-size: 13px;
 }
 
 html[data-redesign="on"] .sf-workshop-banner--warn {
-  background: color-mix(in srgb, var(--sf-needs) 12%, var(--sf-surface-2));
+  background: color-mix(in srgb, var(--sf-needs) 12%, var(--sf-raised));
 }
 
 html[data-redesign="on"] .sf-workshop-banner__actions {
   display: flex;
-  gap: var(--sf-space-2);
+  gap: 8px;
 }
 
 html[data-redesign="on"] .sf-change-card {
-  border: 1px solid var(--sf-border);
-  border-radius: var(--sf-radius-md);
-  padding: var(--sf-space-3);
-  margin: var(--sf-space-2) 0;
-  background: var(--sf-surface-1);
+  border: 1px solid var(--sf-hairline);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 8px 0;
+  background: var(--sf-panel);
 }
 }

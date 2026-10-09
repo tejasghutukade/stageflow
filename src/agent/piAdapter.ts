@@ -1,5 +1,5 @@
 /**
- * Pi implementation of AgentPort.
+ * Pi implementation of StagePort.
  *
  * One stage = one `createAgentSession` (single-shot SDK path, not
  * AgentSessionRuntime / interactive / RPC). The session is sealed from host
@@ -82,7 +82,7 @@ import {
   type StageActivityObserver,
 } from "./activityObserver.js";
 import type {
-  AgentPort,
+  StagePort,
   OpaqueAnswer,
   StageHandle,
   StageHandleCloseOptions,
@@ -1469,7 +1469,7 @@ function syncAgentMessagesFromSession(
   session.agent.state.messages = sessionManager.buildSessionContext().messages;
 }
 
-export class PiAgentAdapter implements AgentPort {
+export class PiAgentAdapter implements StagePort {
   openStage(input: StageRunInput): StageHandle {
     const timeoutMs = input.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS;
     const askWaitChannel = new AskOperatorWaitChannel();

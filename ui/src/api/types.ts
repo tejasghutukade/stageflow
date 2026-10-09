@@ -568,6 +568,33 @@ export type CreateDraftPackageResult =
 export type OverwriteDraftPackageInput = CreateDraftPackageInput;
 export type OverwriteDraftPackageResult = CreateDraftPackageResult;
 
+export type PlanDraftPackageInput = {
+  directory: string;
+  draft: DraftPackagePayload;
+  pipelineFilename?: string;
+  project_root?: string;
+  mode?: "create" | "overwrite";
+};
+
+export type DraftPlanFile = {
+  path: string;
+  kind: "pipeline" | "stage" | "task";
+  action: "new" | "overwrite" | "unchanged";
+  added: number;
+  removed: number;
+};
+
+export type DraftPlanResult = {
+  pipelinePath: string;
+  directory: string;
+  files: DraftPlanFile[];
+  pipelineIdTaken: boolean;
+};
+
+export type PlanDraftPackageResult =
+  | ({ ok: true } & DraftPlanResult)
+  | { ok: false; status: number; error: string };
+
 export type OpenDraftPackageInput = {
   path: string;
   task?: string;
@@ -692,6 +719,13 @@ export type WorkshopChatTurnPayload = {
   buildId?: string | null;
 };
 
+export type WorkshopChatAttachment = {
+  name: string;
+  mediaType: string;
+  size: number;
+  content: string;
+};
+
 export type WorkshopChatTurnInput = {
   sessionId: string;
   message: string;
@@ -699,6 +733,8 @@ export type WorkshopChatTurnInput = {
   autoApply?: boolean;
   model?: string | null;
   stream?: boolean;
+  attachments?: WorkshopChatAttachment[];
+  context?: { docs?: boolean };
 };
 
 export type WorkshopChatTurnResult =
@@ -728,11 +764,18 @@ export type WorkshopChatStreamFrame =
   | { type: "event"; event: WorkshopChatWireEvent }
   | ({ type: "done" } & WorkshopChatTurnPayload);
 
+export type WorkshopSessionAttachment = {
+  name: string;
+  size: number;
+  mediaType: string;
+};
+
 export type WorkshopSessionMessage = {
   id: string;
   role: "assistant" | "user" | "system";
   text: string;
   createdAt: string;
+  attachments?: WorkshopSessionAttachment[];
 };
 
 export type WorkshopSessionRecord = {

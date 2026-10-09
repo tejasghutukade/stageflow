@@ -1,7 +1,7 @@
 import { emailHostFor, stageEmail, workerStageEmail, validateStageEmailAccounts } from "../email/host.js";
 import { EmailError } from "../email/port.js";
 import type {
-  AgentPort,
+  StagePort,
   FeedbackLoopContext,
   StageHandle,
   StageRepairContext,
@@ -101,7 +101,7 @@ type OpenStageWithOperatorCatalogResult =
   | { ok: false; reason: string };
 
 export type StageAttemptOpenInput = {
-  agent: Pick<AgentPort, "openStage">;
+  agent: Pick<StagePort, "openStage">;
   store: RunStore;
   runId: string;
   stage: LoadedStageConfig;
@@ -327,7 +327,7 @@ function verifyCommandOrigins(
 }
 
 async function openStageWithOperatorCatalog(
-  agent: Pick<AgentPort, "openStage">,
+  agent: Pick<StagePort, "openStage">,
   input: Omit<StageRunInput, "skillFilePath">,
   catalog: OperatorCatalog | undefined,
   factoryCwd: string | undefined,

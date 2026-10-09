@@ -788,3 +788,176 @@ describe("Workshop sessions HTTP API", () => {
     });
   });
 });
+
+describe("POST /api/workshop/chat attachments and context", () => {
+  const cleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    while (cleanups.length > 0) {
+      const fn = cleanups.pop();
+      if (fn) await fn();
+    }
+    resetWorkshopChatSessionsForTests();
+  });
+
+  async function withCapturingServer() {
+    const repo = await initTempGitRepo();
+    cleanups.push(repo.cleanup);
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-attach-"));
+    const prompts: string[] = [];
+    const model: OperatorAgentModel = {
+      async complete({ message }) {
+        prompts.push(message);
+        return {
+          events: [{ type: "message", role: "assistant", text: "noted" }],
+        };
+      },
+    };
+    const { server, base } = await withServer(
+      repo.root,
+      storeRoot,
+      createWorkshopOperatorHost({ model }),
+    );
+    cleanups.push(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        }),
+    );
+    return { base, prompts };
+  }
+
+  function chatBody(sessionId: string, extra: Record<string, unknown>) {
+    return JSON.stringify({
+      sessionId,
+      message: "use the attached notes",
+      draft: { pipeline: { id: "demo", stages: [] } },
+      ...extra,
+    });
+  }
+
+  it("rejects invalid attachments with workshop_attachment_invalid", async () => {
+    await withIsolatedHome(async () => {
+      const { base, prompts } = await withCapturingServer();
+      await createSession(base, "attach-invalid");
+      const file = { name: "a.md", mediaType: "text/markdown", size: 1, content: "x" };
+      const cases: unknown[] = [
+        "not-an-array",
+        Array.from({ length: 6 }, (_, i) => ({ ...file, name: `f${i}.md` })),
+        [{ ...file, content: 42 }],
+        [{ ...file, name: "" }],
+        [{ ...file, content: "x".repeat(256 * 1024 + 1) }],
+      ];
+      for (const attachments of cases) {
+        const result = await jsonFetch(`${base}/api/workshop/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: chatBody("attach-invalid", { attachments }),
+        });
+        expect(result.status).toBe(400);
+        expect(result.body.code).toBe("workshop_attachment_invalid");
+        expect(typeof result.body.error).toBe("string");
+      }
+      expect(prompts).toEqual([]);
+    });
+  });
+
+  it("injects attachments into the agent prompt and stores only metadata", async () => {
+    await withIsolatedHome(async () => {
+      const { base, prompts } = await withCapturingServer();
+      await createSession(base, "attach-json");
+      const content = "# Release notes\n```yaml\nid: x\n```\n";
+      const result = await jsonFetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: chatBody("attach-json", {
+          attachments: [
+            { name: "notes.md", mediaType: "text/markdown", size: 999, content },
+          ],
+        }),
+      });
+      expect(result.status).toBe(200);
+      expect(prompts).toHaveLength(1);
+      const prompt = prompts[0]!;
+      expect(prompt.startsWith("use the attached notes")).toBe(true);
+      expect(prompt).toContain("Attached file: notes.md\n````\n");
+      expect(prompt).toContain(content);
+      expect(prompt).not.toContain("YAML authoring reference");
+
+      const session = getWorkshopSession(
+        resolveWorkshopSessionStoreRoot(),
+        "attach-json",
+      );
+      const user = session.transcript.find((m) => m.role === "user");
+      expect(user?.text).toBe("use the attached notes");
+      expect(user?.attachments).toEqual([
+        {
+          name: "notes.md",
+          size: Buffer.byteLength(content, "utf8"),
+          mediaType: "text/markdown",
+        },
+      ]);
+      expect(JSON.stringify(session)).not.toContain("Release notes");
+
+      const got = await jsonFetch(`${base}/api/workshop/sessions/attach-json`);
+      expect(got.body.session.transcript[0].attachments[0].name).toBe("notes.md");
+    });
+  });
+
+  it("injects attachments and docs on the NDJSON path and echoes autoApply", async () => {
+    await withIsolatedHome(async () => {
+      const { base, prompts } = await withCapturingServer();
+      await createSession(base, "attach-stream");
+      const res = await fetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson",
+        },
+        body: chatBody("attach-stream", {
+          stream: true,
+          autoApply: true,
+          context: { docs: true },
+          attachments: [
+            { name: "spec.txt", mediaType: "text/plain", size: 5, content: "hello" },
+          ],
+        }),
+      });
+      expect(res.status).toBe(200);
+      const frames = (await res.text())
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type: string; autoApply?: boolean });
+      expect(frames.at(-1)?.type).toBe("done");
+      expect(frames.at(-1)?.autoApply).toBe(true);
+      const prompt = prompts[0]!;
+      expect(prompt).toContain("Attached file: spec.txt\n```\nhello\n```");
+      expect(prompt).toContain(
+        "Stageflow YAML authoring reference (docs/yaml-catalog.md):",
+      );
+      expect(prompt).toContain("# YAML catalog");
+      expect(prompt.indexOf("spec.txt")).toBeLessThan(
+        prompt.indexOf("YAML authoring reference"),
+      );
+    });
+  });
+
+  it("echoes autoApply on JSON turns", async () => {
+    await withIsolatedHome(async () => {
+      const { base } = await withCapturingServer();
+      await createSession(base, "auto-apply-echo");
+      const on = await jsonFetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: chatBody("auto-apply-echo", { autoApply: true }),
+      });
+      expect(on.status).toBe(200);
+      expect(on.body.autoApply).toBe(true);
+      const off = await jsonFetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: chatBody("auto-apply-echo", {}),
+      });
+      expect(off.body.autoApply).toBe(false);
+    });
+  });
+});

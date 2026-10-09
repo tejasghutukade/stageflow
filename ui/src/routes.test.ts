@@ -8,6 +8,7 @@ import {
   parseHash,
   pipelinePath,
   runStagePath,
+  workshopPath,
 } from "./routes";
 
 describe("parseHash", () => {
@@ -116,6 +117,20 @@ describe("parseHash", () => {
       name: "workshop",
       pipelinePath: "pipelines/demo.pipeline.yaml",
       taskPath: "pipelines/demo.task.yaml",
+    });
+    expect(
+      parseHash(
+        `#${workshopPath({
+          pipeline: "pipelines/demo.pipeline.yaml",
+          task: "pipelines/demo.task.yaml",
+          project_root: "examples",
+        })}`,
+      ),
+    ).toEqual({
+      name: "workshop",
+      pipelinePath: "pipelines/demo.pipeline.yaml",
+      taskPath: "pipelines/demo.task.yaml",
+      projectRoot: "examples",
     });
   });
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
@@ -51,7 +51,7 @@ function gatedFanInAgent(options: {
         }
     >
   >;
-}): AgentPort & {
+}): StagePort & {
   openCounts: Map<string, number>;
   launchOrder: string[];
   priorByStage: Map<
@@ -67,7 +67,7 @@ function gatedFanInAgent(options: {
     Record<string, TerminalEnvelope | TerminalEnvelope[]> | undefined
   >();
 
-  const agent: AgentPort & {
+  const agent: StagePort & {
     openCounts: Map<string, number>;
     launchOrder: string[];
     priorByStage: Map<
@@ -145,7 +145,7 @@ function gatedFanInAgent(options: {
 async function prepareInprocessPipeline(
   root: string,
   pipelineId: string,
-  agent: AgentPort,
+  agent: StagePort,
 ) {
   const store = createRunStore({ rootDir: root });
   const taskPath = SAMPLE_TASK;

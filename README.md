@@ -46,7 +46,7 @@ The same pipeline runs three ways without rewriting anything:
 
 ![Stageflow architecture: pipeline definitions and operator interfaces drive the orchestration runtime, which coordinates agent execution and persisted state](docs/img/stageflow-architecture.svg)
 
-The scheduler owns orchestration semantics: DAG readiness, bounded parallelism, fan-out/join, conditional routing, retries, skipped branches, and resumable human gates. Agent execution sits behind `AgentPort`; Pi supplies the current coding-agent session, while Stageflow owns pipeline state, stage workspaces, handoff validation, and the interfaces used by the CLI, console, MCP, and CI.
+The scheduler owns orchestration semantics: DAG readiness, bounded parallelism, fan-out/join, conditional routing, retries, skipped branches, and resumable human gates. Agent execution sits behind `StagePort`; Pi supplies the current coding-agent session, while Stageflow owns pipeline state, stage workspaces, handoff validation, and the interfaces used by the CLI, console, MCP, and CI.
 
 See [Architecture](docs/architecture.md) for component boundaries, execution flow, persistence, recovery behavior, and the tradeoffs behind fresh sessions and explicit handoffs.
 

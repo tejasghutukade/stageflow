@@ -10,7 +10,7 @@ Stageflow is a runtime for **configurable multi-stage agent workflows**, with a 
 - Each stage runs in a fresh Pi agent session
 - Stages hand off via typed envelopes and artifacts
 - HITL gates pause for operator input; the same pipeline runs locally, in CI (`sf run --json`), via MCP when `sf ui` or `sf mcp` is running, and host-down via `sf runs`
-- The orchestration layer is separated from agent execution by `AgentPort`
+- The orchestration layer is separated from agent execution by `StagePort`
 
 **Stages are domain-agnostic.** Release automation, research flows, content review, SDLC, and ops runbooks are all valid patterns. Stageflow validates shape and wiring; it does not ship domain-specific stage types.
 
