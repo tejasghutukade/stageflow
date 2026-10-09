@@ -37,6 +37,7 @@ import {
 } from "./pipelineEditorModel";
 import { PipelineEditorGraph } from "./PipelineEditorGraph";
 import { PipelineEditorInspector } from "./PipelineEditorInspector";
+import { yamlPathForSelectedStage } from "./draftYaml";
 import { YamlPanel } from "./YamlPanel";
 
 function defaultTaskForPipeline(
@@ -225,11 +226,23 @@ export function PipelineEditorPage({
     void runCatalogValidate();
   }, [destination, draft, pipeline.project_root, runCatalogValidate]);
 
+  const onSelectStage = useCallback(
+    (stageId: string) => {
+      setSelectedStageId(stageId);
+      if (!draft) return;
+      const path = yamlPathForSelectedStage(draft, stageId);
+      if (path) setYamlPath(path);
+    },
+    [draft],
+  );
+
   const onAddStage = useCallback(() => {
     if (!draft) return;
     const result = addStage(draft);
     setDraft(result.draft);
     setSelectedStageId(result.stageId);
+    const path = yamlPathForSelectedStage(result.draft, result.stageId);
+    if (path) setYamlPath(path);
   }, [draft]);
 
   const onRenameStage = useCallback(
@@ -458,14 +471,13 @@ export function PipelineEditorPage({
             <YamlPanel
               draft={draft}
               pipelinePath={pipeline.path}
-              projectRoot={pipeline.project_root}
               activePath={yamlPath}
               onActivePathChange={setYamlPath}
             />
             <PipelineEditorGraph
               draft={draft}
               selectedStageId={selectedStageId}
-              onSelectStage={setSelectedStageId}
+              onSelectStage={onSelectStage}
               onAddStage={onAddStage}
             />
             <PipelineEditorInspector
