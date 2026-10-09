@@ -190,6 +190,7 @@ export function PipelinesPage({
       <PipelineEditorPage
         pipelineId={pipelineId}
         pipeline={selected}
+        pipelines={pipelines}
         tasks={tasks}
         onNew={onNew}
       />

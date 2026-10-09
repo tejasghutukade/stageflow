@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { DraftPackagePayload, DraftValidationResult } from "../../api";
+import type {
+  DraftPackagePayload,
+  DraftValidationResult,
+  PipelineListing,
+} from "../../api";
 import {
   editorTabSpecs,
   editorValidationPills,
   isDraftDirty,
   isEditorTabId,
+  stageUsedByCount,
   type EditorTabId,
 } from "./pipelineEditorModel";
 
@@ -87,6 +92,68 @@ describe("editorValidationPills", () => {
     const pills = editorValidationPills(validation(false, 0));
     expect(pills?.strictLabel).toBe("Invalid · strict");
     expect(pills?.strictSignal).toBe("fail");
+  });
+});
+
+describe("stageUsedByCount", () => {
+  const shared: PipelineListing[] = [
+    {
+      path: "pipelines/a.pipeline.yaml",
+      id: "pipe-a",
+      project_root: "/repo",
+      stages: [
+        { id: "lint", uses_path: "stages/lint.yaml" },
+        { id: "ship" },
+      ],
+    },
+    {
+      path: "pipelines/b.pipeline.yaml",
+      id: "pipe-b",
+      project_root: "/repo",
+      stages: [{ id: "review", uses_path: "./stages/lint.yaml" }],
+    },
+    {
+      path: "pipelines/c.pipeline.yaml",
+      id: "pipe-c",
+      project_root: "/other",
+      stages: [{ id: "lint", uses_path: "stages/lint.yaml" }],
+    },
+  ];
+
+  it("returns null when the catalog list is absent", () => {
+    expect(
+      stageUsedByCount(null, { id: "lint", path: "stages/lint.yaml" }),
+    ).toBeNull();
+    expect(
+      stageUsedByCount(undefined, { id: "lint", path: null }),
+    ).toBeNull();
+  });
+
+  it("counts pipelines that list the same stage id or file in one project", () => {
+    expect(
+      stageUsedByCount(shared, {
+        id: "lint",
+        path: "stages/lint.yaml",
+        projectRoot: "/repo",
+      }),
+    ).toBe(2);
+    expect(
+      stageUsedByCount(shared, {
+        id: "ship",
+        path: null,
+        projectRoot: "/repo",
+      }),
+    ).toBe(1);
+  });
+
+  it("does not count the same stage id in a different project root", () => {
+    expect(
+      stageUsedByCount(shared, {
+        id: "lint",
+        path: "stages/lint.yaml",
+        projectRoot: "/other",
+      }),
+    ).toBe(1);
   });
 });
 

@@ -1,4 +1,8 @@
-import type { DraftPackagePayload, DraftValidationResult } from "../../api";
+import type {
+  DraftPackagePayload,
+  DraftValidationResult,
+  PipelineListing,
+} from "../../api";
 
 export const EDITOR_TAB_IDS = ["editor", "runs", "history"] as const;
 
@@ -61,6 +65,44 @@ export function editorValidationPills(
 
 export function isEditorTabId(value: string): value is EditorTabId {
   return (EDITOR_TAB_IDS as readonly string[]).includes(value);
+}
+
+function normalizeCatalogPath(value: string): string {
+  return value.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function sameCatalogRoot(left?: string, right?: string): boolean {
+  const a = left?.trim().replace(/\\/g, "/").replace(/\/$/, "") ?? "";
+  const b = right?.trim().replace(/\\/g, "/").replace(/\/$/, "") ?? "";
+  return a === b;
+}
+
+function sameStagePath(left: string, right: string): boolean {
+  const a = normalizeCatalogPath(left);
+  const b = normalizeCatalogPath(right);
+  if (!a || !b) return false;
+  return a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
+}
+
+export function stageUsedByCount(
+  pipelines: readonly PipelineListing[] | null | undefined,
+  stage: { id: string; path: string | null; projectRoot?: string },
+): number | null {
+  if (!pipelines) return null;
+  const ids = new Set<string>();
+  for (const pipeline of pipelines) {
+    if (!sameCatalogRoot(pipeline.project_root, stage.projectRoot)) continue;
+    const listed = pipeline.stages.some((row) => {
+      if (row.id === stage.id) return true;
+      return (
+        stage.path != null &&
+        row.uses_path != null &&
+        sameStagePath(row.uses_path, stage.path)
+      );
+    });
+    if (listed) ids.add(pipeline.id);
+  }
+  return ids.size;
 }
 
 export function editorTabSpecs(runsCount: number): EditorTabSpec[] {

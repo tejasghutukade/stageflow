@@ -60,6 +60,7 @@ export type WorkshopStageInspectorProps = {
   onRenameStage: (fromId: string, toId: string) => void;
   focusRequest?: StageFocusRequest | null;
   onFocusHandled?: () => void;
+  usedByCount?: number | null;
 };
 
 const FLASH_MS = 1400;
@@ -246,6 +247,7 @@ export function WorkshopStageInspector({
   onRenameStage,
   focusRequest,
   onFocusHandled,
+  usedByCount = null,
 }: WorkshopStageInspectorProps) {
   const form = getStageForm(draft, stageId);
   const fieldEls = useRef(new Map<StageFieldKey, HTMLDivElement>());
@@ -382,7 +384,13 @@ export function WorkshopStageInspector({
         <div className={`truncate text-[11px] leading-normal text-[#8b8f98] ${MONO}`}>
           {pathLabel}
           {changeKind !== "unchanged" ? " · unsaved" : ""}
+          {usedByCount != null && usedByCount > 1 ? ` · Used by ${usedByCount}` : ""}
         </div>
+        {usedByCount != null && usedByCount > 1 ? (
+          <div className="text-[11px] leading-[1.45] text-[#a7aab2]">
+            Shared stage. Saving writes this file for every pipeline that uses it.
+          </div>
+        ) : null}
       </div>
 
       <div className="flex w-full flex-col gap-3 px-3.5 py-3">

@@ -7,6 +7,8 @@ import {
 } from "react-icons/lu";
 import {
   fetchCatalogValidate,
+  fetchModels,
+  fetchSettings,
   openDraftPackage,
   overwriteDraftPackageWithDetails,
   validateDraftPackage,
@@ -24,7 +26,8 @@ import { StatusPill } from "../StatusPill";
 import { useHotkeys } from "../keys";
 import { FilterTabs } from "../shell/FilterTabs";
 import { cloneDraft } from "./draftMutators";
-import { addStage } from "../workshop/stageMutators";
+import { addStage, renameStage } from "../workshop/stageMutators";
+import { stagePathLabel } from "../workshop/inspector/stageFields";
 import {
   editorTabSpecs,
   editorValidationPills,
@@ -54,6 +57,7 @@ function defaultTaskForPipeline(
 export type PipelineEditorPageProps = {
   pipelineId: string;
   pipeline: PipelineListing;
+  pipelines?: readonly PipelineListing[] | null;
   tasks: TaskListing[];
   onNew: (path: string) => void;
 };
@@ -61,6 +65,7 @@ export type PipelineEditorPageProps = {
 export function PipelineEditorPage({
   pipelineId,
   pipeline,
+  pipelines = null,
   tasks,
   onNew,
 }: PipelineEditorPageProps) {
@@ -84,6 +89,8 @@ export function PipelineEditorPage({
   const [validating, setValidating] = useState(false);
   const [validateError, setValidateError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [defaultModel, setDefaultModel] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dirty = isDraftDirty(draft, baseline);
@@ -111,6 +118,29 @@ export function PipelineEditorPage({
   useEffect(() => {
     void reloadDraft();
   }, [reloadDraft]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [settings, listed] = await Promise.all([
+          fetchSettings(),
+          fetchModels(),
+        ]);
+        if (cancelled) return;
+        const trimmed = settings.defaultModel?.trim() ?? "";
+        setDefaultModel(trimmed.length > 0 ? trimmed : null);
+        setModels(listed.models);
+      } catch {
+        if (cancelled) return;
+        setModels([]);
+        setDefaultModel(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const runCatalogValidate = useCallback(async () => {
     setValidating(true);
@@ -201,6 +231,22 @@ export function PipelineEditorPage({
     setDraft(result.draft);
     setSelectedStageId(result.stageId);
   }, [draft]);
+
+  const onRenameStage = useCallback(
+    (fromId: string, toId: string) => {
+      if (!draft) return;
+      const previousPath = stagePathLabel(draft, fromId);
+      const next = renameStage(draft, fromId, toId);
+      if (next === draft) return;
+      const nextPath = stagePathLabel(next, toId);
+      setDraft(next);
+      setSelectedStageId((current) => (current === fromId ? toId : current));
+      if (previousPath && nextPath && previousPath !== nextPath) {
+        setYamlPath((active) => (active === previousPath ? nextPath : active));
+      }
+    },
+    [draft],
+  );
 
   useHotkeys(
     [
@@ -424,8 +470,15 @@ export function PipelineEditorPage({
             />
             <PipelineEditorInspector
               draft={draft}
+              baseline={baseline}
               selectedStageId={selectedStageId}
+              findings={draftValidation?.findings ?? []}
+              models={models}
+              defaultModel={defaultModel}
+              pipelines={pipelines}
+              projectRoot={pipeline.project_root}
               onDraftChange={onDraftChange}
+              onRenameStage={onRenameStage}
             />
           </div>
           <ProblemsPanel
