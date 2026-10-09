@@ -100,6 +100,10 @@ import {
   composeTimeoutResumePrompt,
   stageTimeoutReason,
 } from "./stageTimeout.js";
+import {
+  createMcpSpillArtifactExtension,
+  STAGEFLOW_MCP_SPILL_EXTENSION_NAME,
+} from "./mcpSpillArtifacts.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
   durableRootFileToolDenial,
@@ -1180,6 +1184,19 @@ async function prepareStageSessionWiring(
             : {}),
         }),
       },
+      // Only MCP tool results spill to a temp file, so the relocator rides along with MCP.
+      ...((attached.extensionFactories?.length ?? 0) > 0
+        ? [
+            {
+              name: STAGEFLOW_MCP_SPILL_EXTENSION_NAME,
+              factory: createMcpSpillArtifactExtension({
+                runWorkspaceDir: roots.runWorkspaceDir,
+                stageId: runtimeStageId(input),
+                attempt: roots.attempt ?? 1,
+              }),
+            },
+          ]
+        : []),
       ...(attached.extensionFactories ?? []),
     ];
     const loader = createSealedResourceLoader({
