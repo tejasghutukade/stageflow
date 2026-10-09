@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = process.env.STAGEFLOW_PACK_ROOT ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const REQUIRED = ["dist/cli.js", "dist/ui/index.html", "skills/stageflow/SKILL.md", "examples/README.md"] as const;
 

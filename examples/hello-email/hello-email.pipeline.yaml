@@ -1,0 +1,6 @@
+id: hello-email
+stages:
+  - id: send-hello-email
+    entry: true
+    uses: ./send-hello-email.yaml
+    replay_safe: false

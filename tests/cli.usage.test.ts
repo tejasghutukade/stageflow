@@ -185,6 +185,8 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     const out = result.stdout + result.stderr;
     expect(out).toMatch(/sf run[^\n]*--json/);
     expect(out).toMatch(/--pipeline <path>/);
+    expect(out).toMatch(/--repository/);
+    expect(out).toMatch(/--ref/);
     expect(out).not.toMatch(/name-or-path/);
   });
 

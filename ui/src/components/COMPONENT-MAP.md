@@ -42,6 +42,8 @@ Inventory mapping prototype concepts to React modules.
 | StageActivityLog | `StageActivityLog.tsx` | exists | Timestamped event list with raw JSON collapsible. Unused on run detail after Phase 2. |
 | PipelineList | `pages/PipelinesPage.tsx` | wired | Catalog table + stage library; detail at `#/pipelines/:id` with definition track and run history. |
 | TaskList | `pages/TasksPage.tsx` | wired | Task table + detail at `#/tasks/:id`. Last-run joined client-side on `task_id`. |
+| TriggerList | `pages/TriggersPage.tsx` + `pages/EmailTriggerView.tsx` | wired | Catalog and account-email rules in one table. Email detail routes use `#/triggers/email%3A<id>` and show inbox, matching filters, and task without a manual Fire action. |
+| ConnectionList | `pages/ConnectionsPage.tsx` | wired | Read-only communication account table at `#/connections`. Email account identity, enabled state, and watched folders only; credentials and server configuration are not rendered. |
 | SkillList | `pages/SkillsPage.tsx` | wired | Pi skill catalog table + detail at `#/skills/:name`. One-shot `GET /api/skills`; stages stay sealed. |
 | ExtensionList | `pages/ExtensionsPage.tsx` | wired | Pi package + extension-file catalog at `#/extensions`. Package detail `#/extensions/packages/:scope/:source`; file detail `#/extensions/files/:path`. One-shot `GET /api/extensions`; stages stay sealed. |
 | Mini-track | `components/MiniTrack.tsx` | wired | Default: `.mini` ring nodes on Runs and Pipelines. When `useRedesign()` (or `variant="bar"`): `sf-track` bar segments via `statusSignalFromStageStatus`. Today in-flight uses `MiniTrack` when redesign is on; legacy `.track-mini` when off. |

@@ -102,7 +102,7 @@ describe("createLiveChatModel model posting", () => {
       }),
       expect.any(Object),
     );
-    expect(parts.length).toBeGreaterThan(0);
+    expect(parts).toEqual([{ content: [{ type: "text", text: "ok" }] }]);
   });
 
   it("stop interrupts the stream and keeps the composer reply", async () => {
@@ -122,47 +122,18 @@ describe("createLiveChatModel model posting", () => {
     };
 
     vi.mocked(sendWorkshopChatTurnStreaming).mockImplementation(
-      (_input, handlers) =>
-        new Promise((resolve) => {
-          const finish = () =>
-            resolve({
-              ok: false,
-              status: 0,
-              error: "Stopped.",
-            });
-          if (handlers?.signal?.aborted) finish();
-          else handlers?.signal?.addEventListener("abort", finish, { once: true });
-        }),
+      abortableStreamMock(),
     );
     vi.mocked(stopWorkshopChat).mockResolvedValue({
       draft,
       pending: null,
     });
 
-    const adapter = createLiveChatModel(refs);
-    const run = adapter.run({
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "build a pipeline" }],
-        },
-      ],
-    } as never);
-
-    const iterator = run as AsyncGenerator<{
-      content: Array<{ type: string; text?: string }>;
-    }>;
-    const first = iterator.next();
-    for (let i = 0; i < 20 && !refs.stop.current; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-    expect(refs.stop.current).toEqual(expect.any(Function));
-    refs.stop.current?.();
-    const stopped = await first;
+    const { stopped, finished } = await startStopAndFinish(refs);
     expect(stopped.done).toBe(false);
     expect(stopped.value?.content[0]?.text).toBe("Stopped.");
     expect(stopWorkshopChat).toHaveBeenCalledWith("sess-1");
-    expect((await iterator.next()).done).toBe(true);
+    expect(finished.done).toBe(true);
   });
 });
 
@@ -211,6 +182,33 @@ async function drainRun(
   } else {
     await run;
   }
+}
+
+function abortableStreamMock() {
+  return (_input: unknown, handlers?: { signal?: AbortSignal }) =>
+    new Promise<{ ok: false; status: number; error: string }>((resolve) => {
+      const finish = () => resolve({ ok: false, status: 0, error: "Stopped." });
+      if (handlers?.signal?.aborted) finish();
+      else handlers?.signal?.addEventListener("abort", finish, { once: true });
+    });
+}
+
+async function startStopAndFinish(refs: LiveChatRefs) {
+  const run = createLiveChatModel(refs).run({
+    messages: [
+      { role: "user", content: [{ type: "text", text: "build a pipeline" }] },
+    ],
+  } as never);
+  const iterator = run as AsyncGenerator<{
+    content: Array<{ type: string; text?: string }>;
+  }>;
+  const first = iterator.next();
+  for (let i = 0; i < 20 && !refs.stop.current; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(refs.stop.current).toEqual(expect.any(Function));
+  refs.stop.current?.();
+  return { stopped: await first, finished: await iterator.next() };
 }
 
 describe("createLiveChatModel studio drafts", () => {
@@ -272,17 +270,7 @@ describe("createLiveChatModel studio drafts", () => {
     const setDraft = vi.fn();
     const refs = liveRefs("build-selected", setDraft);
     vi.mocked(sendWorkshopChatTurnStreaming).mockImplementation(
-      (_input, handlers) =>
-        new Promise((resolve) => {
-          const finish = () =>
-            resolve({
-              ok: false,
-              status: 0,
-              error: "Stopped.",
-            });
-          if (handlers?.signal?.aborted) finish();
-          else handlers?.signal?.addEventListener("abort", finish, { once: true });
-        }),
+      abortableStreamMock(),
     );
     vi.mocked(stopWorkshopChat).mockResolvedValue({
       draft: otherDraft,
@@ -290,23 +278,7 @@ describe("createLiveChatModel studio drafts", () => {
       buildId: "build-other",
     });
 
-    const adapter = createLiveChatModel(refs);
-    const run = adapter.run({
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "build a pipeline" }],
-        },
-      ],
-    } as never);
-    const iterator = run as AsyncGenerator<unknown>;
-    const first = iterator.next();
-    for (let i = 0; i < 20 && !refs.stop.current; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-    refs.stop.current?.();
-    await first;
-    await iterator.next();
+    await startStopAndFinish(refs);
 
     expect(setDraft).not.toHaveBeenCalled();
   });

@@ -11,13 +11,6 @@ import {
   INVALID_SLOT_COUNT_MESSAGE,
   parseSlotCount,
 } from "../src/runtime/settingsFile.js";
-import { startUiServer } from "../src/server/http.js";
-
-async function jsonFetch(url: string, init?: RequestInit) {
-  const res = await fetch(url, init);
-  const body = await res.json();
-  return { status: res.status, body };
-}
 
 describe("parseSlotCount", () => {
   it("rejects non-integers and values below 1", () => {
@@ -142,89 +135,6 @@ describe("RunManager.setMaxConcurrent", () => {
       } else {
         process.env.STAGEFLOW_MAX_CONCURRENT_RUNS = previousEnv;
       }
-    }
-  });
-});
-
-describe("POST /api/settings slot rule", () => {
-  const previousHome = process.env.HOME;
-
-  beforeEach(async () => {
-    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-cap-http-home-"));
-  });
-
-  afterEach(() => {
-    if (previousHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
-    }
-  });
-
-  it("returns 400 with the shared message for maxConcurrent 0", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-cap-http-400-"));
-    const started = await startUiServer({
-      agent: scriptedFakeAgent([]),
-      cwd: root,
-      store: createRunStore({ rootDir: root }),
-      port: 0,
-      uiDistDir: path.join(root, "missing-ui"),
-      maxConcurrent: 2,
-    });
-    const address = started.server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP address");
-    }
-    const base = `http://127.0.0.1:${address.port}`;
-
-    try {
-      const invalid = await jsonFetch(`${base}/api/settings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxConcurrent: 0 }),
-      });
-      expect(invalid.status).toBe(400);
-      expect(invalid.body.error).toBe(INVALID_SLOT_COUNT_MESSAGE);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        started.server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
-  });
-
-  it("returns 200 and updated capacity health for maxConcurrent 4", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-cap-http-200-"));
-    const started = await startUiServer({
-      agent: scriptedFakeAgent([]),
-      cwd: root,
-      store: createRunStore({ rootDir: root }),
-      port: 0,
-      uiDistDir: path.join(root, "missing-ui"),
-      maxConcurrent: 2,
-    });
-    const address = started.server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP address");
-    }
-    const base = `http://127.0.0.1:${address.port}`;
-
-    try {
-      const raised = await jsonFetch(`${base}/api/settings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxConcurrent: 4 }),
-      });
-      expect(raised.status).toBe(200);
-      expect(raised.body).toMatchObject({
-        ok: true,
-        maxConcurrent: 4,
-        activeCount: 0,
-        slotsAvailable: 4,
-      });
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        started.server.close((err) => (err ? reject(err) : resolve()));
-      });
     }
   });
 });

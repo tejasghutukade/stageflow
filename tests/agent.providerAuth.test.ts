@@ -14,6 +14,7 @@ import {
   getAuthStatus,
   listProviders,
   loginWithApiKey,
+  configurePiProviderApiKey,
   logoutProvider,
   makeMutationLock,
   ProviderAuthError,
@@ -551,6 +552,57 @@ describe("mapProviderAuthError", () => {
       status: 502,
       body: { error: "nope" },
     });
+  });
+
+  it("configurePiProviderApiKey logs in against the supplied auth file", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-pi-auth-"));
+    const authPath = path.join(dir, "nested", "hosted-agent-auth.json");
+    const marker = "sk-test-secret-marker-UNIT-XYZ";
+    let seenPath: string | undefined;
+    let seenSecret: string | undefined;
+    const ctx: ProviderAuthContext = {
+      lock: makeMutationLock(),
+      createRuntime: async (requested) => {
+        seenPath = requested;
+        const runtime: ProviderAuthRuntime = {
+          getProviders: () => [],
+          getProvider: () =>
+            ({
+              id: "openrouter",
+              name: "OpenRouter",
+              auth: {
+                apiKey: {
+                  name: "OpenRouter API key",
+                  async login() {
+                    return { type: "api_key" as const, key: "stored" };
+                  },
+                  async resolve() {
+                    return undefined;
+                  },
+                },
+              },
+            }) as Provider,
+          getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
+          listCredentials: async () => [{ providerId: "openrouter", type: "api_key" }],
+          checkAuth: async () => ({ type: "api_key", source: "stored" }),
+          login: async (_id, _type, interaction: AuthInteraction) => {
+            seenSecret = await interaction.prompt({ type: "secret", message: "key" });
+          },
+          logout: async () => undefined,
+        };
+        return runtime;
+      },
+    };
+
+    await configurePiProviderApiKey(
+      { authPath, providerId: "openrouter", apiKey: marker },
+      ctx,
+    );
+
+    expect(seenPath).toBe(path.resolve(authPath));
+    expect(seenSecret).toBe(marker);
+    const stored = await readFile(authPath, "utf8");
+    expect(stored).not.toContain(marker);
   });
 
   it("maps unknown errors to 500 with a generic message", () => {

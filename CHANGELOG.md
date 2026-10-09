@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-07
+
+### Added
+
+- Public hosted runtime for embedding one repository-free pipeline. `createHostedRuntime` accepts the existing Pi `AgentPort` from `createPiAgentPort()`, a local run store, and a `HostedEventSink`, then runs inline and returns a structured result and execution receipt. `configurePiProviderApiKey` stores a managed OpenRouter key in the Pi auth file that adapter already reads. Package skills at `.pi/skills/<name>/` are materialized for that run; operator-home skills are not loaded. See [Hosted runtime](docs/hosted.md).
+- Package-root `exports` so consumers can `import { createHostedRuntime } from "stageflow"`.
+
+### Changed
+
+- A hosted run does not create the operator home. Stage credentials resolve from `STAGEFLOW_AGENT_AUTH_PATH` when set, otherwise from a path next to the local store.
+
+## [0.32.0] - 2026-10-06
+
+### Added
+
+- Host-owned email connections to existing IMAP/SMTP mailboxes, configured through workspace `email.yaml`, with scoped stage tools for sending, replying, retrieving, searching, and handling bounded attachments.
+- Durable incoming-email detection and filtered pipeline triggers, with bounded retry queues, historical-message replay, and optional Sent-folder copies.
+- A read-only Connections page listing configured email accounts without credentials, and email-rule list and detail views on the Triggers page.
+- Single-stage email-send and conversational threaded-reply examples, including automatic-reply safeguards.
+
+### Changed
+
+- Inline mailbox passwords from local YAML stay in Host memory; persisted account configuration contains opaque credential references.
+- Email list-limit tests use a small mailbox instead of bulk network fetches. The clock-sensitive schedule catch-up test is temporarily skipped pending a deterministic timing check.
+
 ## [0.30.0] - 2026-10-04
 
 ### Added

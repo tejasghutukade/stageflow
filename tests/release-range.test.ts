@@ -26,6 +26,18 @@ const sample = `# Changelog
 
 - seven
 
+## [0.6.0] - 2026-08-30
+
+- six
+
+## [0.5.0] - 2026-08-29
+
+- five
+
+## [0.4.0] - 2026-08-28
+
+- four
+
 ## [0.3.0] - 2026-08-26
 
 - three
@@ -65,18 +77,6 @@ describe("release-range", () => {
       after: "0.3.0",
       through: "0.8.0",
     });
-    expect(includedVersionsFromChangelog(slice)).toEqual(["0.8.0", "0.7.0"]);
-    expect(slice).toContain("eight");
-    expect(slice).toContain("seven");
-    expect(slice).not.toContain("three");
-    expect(slice).not.toContain("Unreleased");
-  });
-
-  it("covers the 0.3.0 to 0.8.0 gap from the repo CHANGELOG", () => {
-    const slice = extractChangelogRange(changelog, {
-      after: "0.3.0",
-      through: "0.8.0",
-    });
     expect(includedVersionsFromChangelog(slice)).toEqual([
       "0.8.0",
       "0.7.0",
@@ -84,13 +84,25 @@ describe("release-range", () => {
       "0.5.0",
       "0.4.0",
     ]);
+    expect(slice).toContain("eight");
+    expect(slice).toContain("four");
+    expect(slice).not.toContain("three");
+    expect(slice).not.toContain("Unreleased");
+  });
+
+  it("parses the real CHANGELOG format", () => {
+    const included = includedVersionsFromChangelog(
+      extractChangelogRange(changelog, { through: includedVersionsFromChangelog(changelog)[0] }),
+    );
+    expect(included.length).toBeGreaterThan(0);
+    expect(included.every((v) => /^\d+\.\d+\.\d+/.test(v))).toBe(true);
   });
 
   it("repairs the latest GitHub Release across a version gap", () => {
     const tags = ["v0.2.0", "v0.3.0", "v0.8.0"];
     const [latest] = listRepairTargets(tags, {});
     expect(latest).toEqual({ tag: "v0.8.0", version: "0.8.0" });
-    const plan = planRepair(changelog, latest, tags);
+    const plan = planRepair(sample, latest, tags);
     expect(plan.previous).toBe("0.3.0");
     expect(plan.included).toEqual([
       "0.8.0",

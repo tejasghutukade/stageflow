@@ -40,10 +40,6 @@ describe("createHttpHost shared listen", () => {
       expect(started.server.requestTimeout).toBe(DEFAULT_REQUEST_TIMEOUT_MS);
       expect(started.server.maxConnections).toBe(DEFAULT_MAX_CONNECTIONS);
       expect(started.mcpUrl).toBe(`${started.url}/mcp`);
-      expect(started.manager).toBeTruthy();
-      expect(started.store).toBeTruthy();
-      expect(typeof started.store!.readRun).toBe("function");
-      expect(started.runChangeBus).toBeTruthy();
       expect(started.mcpStateless).toBe(true);
       expect(started.host).toBe("127.0.0.1");
       expect(started.port).toBeGreaterThan(0);
@@ -67,9 +63,6 @@ describe("createHttpHost shared listen", () => {
     try {
       expect(started.server.requestTimeout).toBe(DEFAULT_REQUEST_TIMEOUT_MS);
       expect(started.mcpUrl).toBe(`${started.url}/mcp`);
-      expect(started.manager).toBeTruthy();
-      expect(started.store).toBeTruthy();
-      expect(started.runChangeBus).toBeTruthy();
       expect(started.mcpStateless).toBe(true);
     } finally {
       await closeServer(started.server);

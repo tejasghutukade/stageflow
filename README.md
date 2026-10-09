@@ -254,6 +254,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 |-----|-------------|
 | [docs/README.md](docs/README.md) | Documentation index |
 | [docs/architecture.md](docs/architecture.md) | Runtime components, execution flow, persistence, and design decisions |
+| [docs/hosted.md](docs/hosted.md) | Embed Stageflow from another application and receive ordered run events |
 | [docs/quickstart.md](docs/quickstart.md) | Expanded quick start |
 | [docs/yaml-catalog.md](docs/yaml-catalog.md) | Pipelines, stages, tasks schema |
 | [docs/cli-reference.md](docs/cli-reference.md) | `sf init`, `sf run`, `sf run-stage`, `sf graph`, `sf validate`, `sf ui`, `sf mcp`, `sf envelope`, `sf export-run`, `sf artifact`, `sf skills`, `sf providers` |

@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { ensureGlobalHome, globalCredentialRoot } from "../project/globalHome.js";
 import {
@@ -90,16 +91,31 @@ export function ensureSfOwnedAuthStore(): string {
   return authPath;
 }
 
+const explicitAuthPath = new AsyncLocalStorage<string>();
+
+/** Use this auth file for credential binding and do not create the operator home. */
+export function runWithExplicitAuthPath<T>(
+  authPath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return explicitAuthPath.run(path.resolve(authPath), fn);
+}
+
+export function currentExplicitAuthPath(): string | undefined {
+  return explicitAuthPath.getStore();
+}
+
 export function resolveCredentialBinding(
   ctx: ProjectContext | string,
   _options: ResolveCredentialBindingOptions = {},
 ): CredentialBinding {
+  const explicit = currentExplicitAuthPath();
   const projectCtx =
     typeof ctx === "string" ? resolveProjectContext(ctx) : ctx;
   const persisted = readCredentialSourceFromContext(projectCtx);
   return {
     source: "sf_owned",
-    authPath: sfOwnedAuthPath(),
+    authPath: explicit ?? sfOwnedAuthPath(),
     provisional: persisted === undefined,
   };
 }

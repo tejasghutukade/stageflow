@@ -9,6 +9,7 @@ import type { TaskFile, TaskGitIdentity } from "../types/task.js";
 import {
   resolveCredentialBinding,
   STAGEFLOW_AGENT_AUTH_PATH_ENV,
+  currentExplicitAuthPath,
 } from "./credentialBinding.js";
 import { SF_STAGE_WORKER } from "./stageWorkerProtocol.js";
 
@@ -202,6 +203,10 @@ export function withResolvedAuthPath(
   factoryCwd: string,
 ): StageRoots {
   if (roots.authPath) return roots;
+  const explicit = currentExplicitAuthPath();
+  if (explicit !== undefined) {
+    return { ...roots, authPath: explicit };
+  }
   if (process.env[SF_STAGE_WORKER] === "1") {
     const stamped = process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV]?.trim();
     if (!stamped) return roots;

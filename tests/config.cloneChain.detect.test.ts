@@ -152,11 +152,7 @@ describe("detectCloneChains", () => {
       stage("handle-item", { clone_input_schema: objectSchema() }),
       stage("gather"),
     ];
-    const outcome = detectCloneChains(
-      stages,
-      legalRefs({ clone_cap: 4, clone_mode: "parallel" }),
-      PIPELINE_ID,
-    );
+    const outcome = detectCloneChains(stages, legalRefs(), PIPELINE_ID);
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.issues[0]?.message).toMatch(/named \$ref/);

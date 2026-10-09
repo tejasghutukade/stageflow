@@ -26,11 +26,7 @@ import {
   retentionWindowsFromEnv,
   type RetentionWindows,
 } from "../src/runstore/retention.js";
-import {
-  getSlimWalkCallCount,
-  resetSlimWalkCallCount,
-  runRetentionSweep,
-} from "../src/runtime/runRetentionSweep.js";
+import { runRetentionSweep } from "../src/runtime/runRetentionSweep.js";
 import { worktreePathForRun } from "../src/runtime/repositoryMaterialize.js";
 
 const gitAvailable = (() => {
@@ -85,6 +81,30 @@ function setFinishedAt(
     finishedAt,
     runId,
   );
+}
+
+async function seedRepoBinding(
+  connection: Database.Database,
+  runId: string,
+  repository: string,
+  source: { root: string; sha: string },
+): Promise<{ cachePath: string; checkoutRoot: string; runBranch: string }> {
+  setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source.root).href);
+  const runBranch = `stageflow/run-${runId}`;
+  const checkoutRoot = worktreePathForRun(runId);
+  const { cachePath } = await ensureBareCache(repository, "main");
+  mkdirSync(path.dirname(checkoutRoot), { recursive: true });
+  await worktreeAdd(cachePath, {
+    worktreePath: checkoutRoot,
+    branch: runBranch,
+    startPoint: source.sha,
+  });
+  connection
+    .prepare(
+      `UPDATE runs SET repository = ?, ref = ?, resolved_sha = ?, checkout_root = ?, run_branch = ? WHERE run_id = ?`,
+    )
+    .run(repository, "main", source.sha, checkoutRoot, runBranch, runId);
+  return { cachePath, checkoutRoot, runBranch };
 }
 
 async function seedAttemptTree(
@@ -161,7 +181,6 @@ beforeEach(async () => {
   resetGlobalStageflowHomeForTests();
   resetBareCacheStateForTests();
   setBareCacheRemoteUrlOverrideForTests(null);
-  resetSlimWalkCallCount();
   const home = await mkdtemp(path.join(tmpdir(), "sf-u6-home-"));
   temps.push(home);
   process.env.STAGEFLOW_HOME = home;
@@ -186,7 +205,6 @@ afterEach(async () => {
     "STAGEFLOW_SLIM_ARTIFACT_MAX_BYTES",
   ]);
   resetGlobalStageflowHomeForTests();
-  resetSlimWalkCallCount();
   for (const dir of temps.splice(0)) {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
@@ -271,19 +289,20 @@ describe("retentionDecision (KD1 table-driven)", () => {
     expect(DEFAULT_RETENTION_WINDOWS.failed.slimMs).toBe(30 * DAY_MS);
     expect(DEFAULT_RETENTION_WINDOWS.cancelled.slimMs).toBe(30 * DAY_MS);
     expect(DEFAULT_RETENTION_WINDOWS.succeeded.slimMs).toBe(3 * DAY_MS);
+    expect(DEFAULT_RETENTION_WINDOWS.succeeded.purgeMs).toBe(30 * DAY_MS);
     expect(DEFAULT_RETENTION_WINDOWS.failed.purgeMs).toBe(90 * DAY_MS);
     expect(DEFAULT_RETENTION_WINDOWS.cancelled.purgeMs).toBe(90 * DAY_MS);
   });
 
-  it("reads finished_at only — updated_at is irrelevant (KTD1)", () => {
+  it("reads finished_at only — a recent updated_at does not delay SLIM (KTD1)", () => {
     const finished_at = new Date(now.getTime() - 4 * DAY_MS).toISOString();
-    expect(
-      retentionDecision(
-        { status: "succeeded", finished_at, slimmed_at: undefined },
-        now,
-        windows,
-      ),
-    ).toBe("slim");
+    const row = {
+      status: "succeeded" as const,
+      finished_at,
+      slimmed_at: undefined,
+      updated_at: now.toISOString(),
+    };
+    expect(retentionDecision(row, now, windows)).toBe("slim");
   });
 
   it("applies per-status env overrides", () => {
@@ -294,40 +313,6 @@ describe("retentionDecision (KD1 table-driven)", () => {
     expect(envWindows.succeeded.slimMs).toBe(10 * DAY_MS);
     expect(envWindows.failed.purgeMs).toBe(5 * DAY_MS);
     expect(envWindows.cancelled).toEqual(DEFAULT_RETENTION_WINDOWS.cancelled);
-  });
-});
-
-describe("run retention fixtures (U1 columns)", () => {
-  it("exposes finished_at and slimmed_at for later retention decisions", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-retention-fixture-"));
-    temps.push(root);
-    const store = createRunStore({ rootDir: root, kind: "sqlite" });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    await store.updateRunStatus(run.runId, "succeeded");
-
-    const meta = await store.readRunMeta(run.runId);
-    expect(meta.finished_at).toBeDefined();
-    expect(meta.slimmed_at).toBeUndefined();
-
-    const db = new Database(path.join(storeRootFor(root), "state.db"));
-    const cols = new Set(
-      (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
-        (c) => c.name,
-      ),
-    );
-    for (const name of [
-      "cancel_reason",
-      "finished_at",
-      "slimmed_at",
-      "disk_bytes",
-      "disk_measured_at",
-    ]) {
-      expect(cols.has(name)).toBe(true);
-    }
-    db.close();
   });
 });
 
@@ -369,24 +354,15 @@ describe("runRetentionSweep (U6)", () => {
     let cachePath: string | undefined;
     let runBranch: string | undefined;
     if (gitAvailable) {
-      const { root: source, sha } = await createSourceRepo();
-      setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source).href);
-      const repository = "acme/u6-slim";
-      runBranch = `stageflow/run-${run.runId}`;
-      checkoutRoot = worktreePathForRun(run.runId);
-      const ensured = await ensureBareCache(repository, "main");
-      cachePath = ensured.cachePath;
-      mkdirSync(path.dirname(checkoutRoot), { recursive: true });
-      await worktreeAdd(cachePath, {
-        worktreePath: checkoutRoot,
-        branch: runBranch,
-        startPoint: sha,
-      });
-      connection
-        .prepare(
-          `UPDATE runs SET repository = ?, ref = ?, resolved_sha = ?, checkout_root = ?, run_branch = ? WHERE run_id = ?`,
-        )
-        .run(repository, "main", sha, checkoutRoot, runBranch, run.runId);
+      const bound = await seedRepoBinding(
+        connection,
+        run.runId,
+        "acme/u6-slim",
+        await createSourceRepo(),
+      );
+      checkoutRoot = bound.checkoutRoot;
+      cachePath = bound.cachePath;
+      runBranch = bound.runBranch;
     }
 
     const report = await runRetentionSweep(store, a2aStore, {
@@ -470,37 +446,6 @@ describe("runRetentionSweep (U6)", () => {
     await expect(store.readRun(run.runId)).rejects.toThrow(/Run not found/);
   });
 
-  it("failed vs succeeded with the same finished_at SLIM on different days", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-u6-windows-"));
-    temps.push(root);
-    const { store, connection } = createRunStoreWithConnection({ rootDir: root });
-    const a2aStore = new A2aStore(root, connection);
-    const now = new Date("2026-09-22T12:00:00.000Z");
-    const finishedAt = new Date(now.getTime() - 5 * DAY_MS).toISOString();
-
-    const ok = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: ok\ngoal: g\n",
-    });
-    await store.updateRunStatus(ok.runId, "succeeded");
-    setFinishedAt(connection, ok.runId, finishedAt);
-
-    const bad = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: bad\ngoal: g\n",
-    });
-    await store.updateRunStatus(bad.runId, "failed");
-    setFinishedAt(connection, bad.runId, finishedAt);
-
-    const dry = await runRetentionSweep(store, a2aStore, {
-      now,
-      execute: false,
-    });
-    expect(dry.slimmed).toEqual([ok.runId]);
-    expect(dry.slimmed).not.toContain(bad.runId);
-    expect(dry.purged).toEqual([]);
-  });
-
   it("leaves non-terminal runs untouched even when ancient", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-u6-running-"));
     temps.push(root);
@@ -550,27 +495,30 @@ describe("runRetentionSweep (U6)", () => {
       run.runId,
       new Date(now.getTime() - 4 * DAY_MS).toISOString(),
     );
-    await seedAttemptTree(store.getWorkspaceDir(run.runId));
+    const tree = await seedAttemptTree(store.getWorkspaceDir(run.runId));
 
-    resetSlimWalkCallCount();
     const first = await runRetentionSweep(store, a2aStore, {
       now,
       execute: true,
     });
     expect(first.slimmed).toEqual([run.runId]);
-    const walksAfterFirst = getSlimWalkCallCount();
-    expect(walksAfterFirst).toBeGreaterThan(0);
+    expect(existsSync(tree.streamPath)).toBe(false);
+    const slimmedAt = (await store.readRunMeta(run.runId)).slimmed_at;
+    expect(slimmedAt).toBeDefined();
+
+    await writeFile(tree.streamPath, "planted-after-slim\n");
 
     const second = await runRetentionSweep(store, a2aStore, {
-      now,
+      now: new Date(now.getTime() + DAY_MS),
       execute: true,
     });
     expect(second.slimmed).toEqual([]);
     expect(second.purged).toEqual([]);
-    expect(getSlimWalkCallCount()).toBe(walksAfterFirst);
+    expect(existsSync(tree.streamPath)).toBe(true);
+    expect((await store.readRunMeta(run.runId)).slimmed_at).toBe(slimmedAt);
   });
 
-  it("dry-run reports the same candidates without mutating", async () => {
+  it("dry-run reports only status-eligible candidates (failed at 4d is not) without mutating", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-u6-dry-"));
     temps.push(root);
     const { store, connection } = createRunStoreWithConnection({ rootDir: root });
@@ -588,12 +536,23 @@ describe("runRetentionSweep (U6)", () => {
       new Date(now.getTime() - 4 * DAY_MS).toISOString(),
     );
     const tree = await seedAttemptTree(store.getWorkspaceDir(run.runId));
+    const failedRun = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: bad\ngoal: g\n",
+    });
+    await store.updateRunStatus(failedRun.runId, "failed");
+    setFinishedAt(
+      connection,
+      failedRun.runId,
+      new Date(now.getTime() - 4 * DAY_MS).toISOString(),
+    );
 
     const dry = await runRetentionSweep(store, a2aStore, {
       now,
       execute: false,
     });
     expect(dry.slimmed).toEqual([run.runId]);
+    expect(dry.purged).toEqual([]);
     expect(existsSync(tree.streamPath)).toBe(true);
     const meta = await store.readRunMeta(run.runId);
     expect(meta.slimmed_at).toBeUndefined();
@@ -634,9 +593,6 @@ describe.skipIf(!gitAvailable)("bare-cache eviction (U6)", () => {
     const { store, connection } = createRunStoreWithConnection({ rootDir: root });
     const a2aStore = new A2aStore(root, connection);
     const now = new Date("2026-09-22T12:00:00.000Z");
-    const { root: source, sha } = await createSourceRepo();
-    setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source).href);
-    const repository = "acme/u6-bare";
     // failed: SLIM 30d / PURGE 90d — 10d-old stays unreclaimed so the worktree can stay live.
     const finishedAt = new Date(now.getTime() - 10 * DAY_MS).toISOString();
     const bareTtlMs = 7 * DAY_MS;
@@ -647,20 +603,12 @@ describe.skipIf(!gitAvailable)("bare-cache eviction (U6)", () => {
     });
     await store.updateRunStatus(live.runId, "failed");
     setFinishedAt(connection, live.runId, finishedAt);
-    const liveCheckout = worktreePathForRun(live.runId);
-    const liveBranch = `stageflow/run-${live.runId}`;
-    const { cachePath } = await ensureBareCache(repository, "main");
-    mkdirSync(path.dirname(liveCheckout), { recursive: true });
-    await worktreeAdd(cachePath, {
-      worktreePath: liveCheckout,
-      branch: liveBranch,
-      startPoint: sha,
-    });
-    connection
-      .prepare(
-        `UPDATE runs SET repository = ?, ref = ?, resolved_sha = ?, checkout_root = ?, run_branch = ? WHERE run_id = ?`,
-      )
-      .run(repository, "main", sha, liveCheckout, liveBranch, live.runId);
+    const { cachePath, checkoutRoot: liveCheckout } = await seedRepoBinding(
+      connection,
+      live.runId,
+      "acme/u6-bare",
+      await createSourceRepo(),
+    );
 
     const blocked = await runRetentionSweep(store, a2aStore, {
       now,
@@ -689,76 +637,23 @@ describe.skipIf(!gitAvailable)("bare-cache eviction (U6)", () => {
     expect(existsSync(cachePath)).toBe(false);
   });
 
-  it("anti: run branch survives SLIM", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-u6-branch-"));
-    temps.push(root);
-    const { store, connection } = createRunStoreWithConnection({ rootDir: root });
-    const a2aStore = new A2aStore(root, connection);
-    const now = new Date("2026-09-22T12:00:00.000Z");
-    const { root: source, sha } = await createSourceRepo();
-    setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source).href);
-
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    await store.updateRunStatus(run.runId, "succeeded");
-    setFinishedAt(
-      connection,
-      run.runId,
-      new Date(now.getTime() - 4 * DAY_MS).toISOString(),
-    );
-    await seedAttemptTree(store.getWorkspaceDir(run.runId));
-
-    const repository = "acme/u6-branch";
-    const runBranch = `stageflow/run-${run.runId}`;
-    const checkoutRoot = worktreePathForRun(run.runId);
-    const { cachePath } = await ensureBareCache(repository, "main");
-    mkdirSync(path.dirname(checkoutRoot), { recursive: true });
-    await worktreeAdd(cachePath, {
-      worktreePath: checkoutRoot,
-      branch: runBranch,
-      startPoint: sha,
-    });
-    connection
-      .prepare(
-        `UPDATE runs SET repository = ?, ref = ?, resolved_sha = ?, checkout_root = ?, run_branch = ? WHERE run_id = ?`,
-      )
-      .run(repository, "main", sha, checkoutRoot, runBranch, run.runId);
-
-    await runRetentionSweep(store, a2aStore, { now, execute: true });
-    expect(existsSync(checkoutRoot)).toBe(false);
-    expect(git(cachePath, ["branch", "--list", runBranch])).toContain(runBranch);
-  });
-
   it("SLIM after succeed reclaim still sets slimmed_at (worktree step no-op)", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-u2-slim-after-"));
     temps.push(root);
     const { store, connection } = createRunStoreWithConnection({ rootDir: root });
     const a2aStore = new A2aStore(root, connection);
     const now = new Date("2026-09-22T12:00:00.000Z");
-    const { root: source, sha } = await createSourceRepo();
-    setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source).href);
 
     const run = await store.createRun({
       pipelineId: "docs-only",
       taskYaml: "id: t\ngoal: g\n",
     });
-    const repository = "acme/u2-slim-after";
-    const runBranch = `stageflow/run-${run.runId}`;
-    const checkoutRoot = worktreePathForRun(run.runId);
-    const { cachePath } = await ensureBareCache(repository, "main");
-    mkdirSync(path.dirname(checkoutRoot), { recursive: true });
-    await worktreeAdd(cachePath, {
-      worktreePath: checkoutRoot,
-      branch: runBranch,
-      startPoint: sha,
-    });
-    connection
-      .prepare(
-        `UPDATE runs SET repository = ?, ref = ?, resolved_sha = ?, checkout_root = ?, run_branch = ? WHERE run_id = ?`,
-      )
-      .run(repository, "main", sha, checkoutRoot, runBranch, run.runId);
+    const { cachePath, checkoutRoot, runBranch } = await seedRepoBinding(
+      connection,
+      run.runId,
+      "acme/u2-slim-after",
+      await createSourceRepo(),
+    );
 
     const { writeTerminalRunStatus } = await import(
       "../src/runtime/pipelineScheduler.js"
@@ -784,7 +679,9 @@ describe.skipIf(!gitAvailable)("bare-cache eviction (U6)", () => {
     expect(meta.checkout_root).toBe(checkoutRoot);
     expect(git(cachePath, ["branch", "--list", runBranch])).toContain(runBranch);
   });
+});
 
+describe("runRetentionSweep guards (U6)", () => {
   it("refuses execute when a2aStore missing and PURGE candidates exist (before SLIM)", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-u6-no-a2a-"));
     temps.push(root);

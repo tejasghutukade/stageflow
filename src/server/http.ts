@@ -151,6 +151,9 @@ import {
 } from "../runtime/startPayload.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { TaskFile } from "../types/task.js";
+import { emailHostFor, releaseEmailHost } from "../email/host.js";
+import { handleEmailRoutes } from "./emailRoutes.js";
+import { EmailTriggers } from "../email/triggers.js";
 import {
   bootstrapStageflowHost,
   type StageflowHostOptions,
@@ -208,6 +211,7 @@ export type UiServerOptions = {
   host?: string;
   uiDistDir?: string;
   maxConcurrent?: number;
+  emailTriggerQueue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"];
   providerAuthContext?: ProviderAuthContext;
   mcpStateless?: boolean;
   runChangeBus?: RunChangeBus;
@@ -429,6 +433,13 @@ export function createOperatorRoutes(
 
       async function handleOperatorRequest(): Promise<boolean> {
       try {
+        if (pathname.startsWith("/api/email/")) {
+          if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: ["POST", "PATCH", "DELETE"].includes(method) })) return true;
+          const email = boot.email;
+          if (!email) { json(res, 503, { code: "EMAIL_CONNECTION_FAILED" }); return true; }
+          await handleEmailRoutes(req, res, pathname, email.accounts, email.mailbox, email.triggers);
+          return true;
+        }
         if (method === "GET" && pathname === "/api/runs") {
           const filter: ListRunsFilter = {};
           const status = url.searchParams.get("status");
@@ -3043,6 +3054,10 @@ export async function startUiServer(
     controlTokens,
     routes,
   });
+  const closeServer = envelope.server.close.bind(envelope.server);
+  envelope.server.close = ((callback?: (error?: Error) => void) => closeServer(error => {
+    void (boot.email?.stop() ?? Promise.resolve()).then(() => callback?.(error), () => callback?.(error ?? new Error("Email host shutdown failed")));
+  })) as typeof envelope.server.close;
   shutdown = installShutdownController({
     server: envelope.server,
     host: makeDrainableHostFromOptional(envelope.manager, envelope.store),

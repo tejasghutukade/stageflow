@@ -26,11 +26,16 @@ export function resolveAgentBackend(selection: AgentSelection = {}): AgentBacken
   return selection.pipeline ?? selection.global ?? "pi";
 }
 
+/** Existing Pi AgentPort. Hosted runs pass this into createHostedRuntime. */
+export function createPiAgentPort(): AgentPort {
+  return new PiAgentAdapter();
+}
+
 export function resolveAgentPort(selection: AgentSelection = {}): AgentPort {
   const backend = resolveAgentBackend(selection);
   switch (backend) {
     case "pi":
-      return new PiAgentAdapter();
+      return createPiAgentPort();
     case "claude":
       return new ClaudeAgentAdapter();
   }

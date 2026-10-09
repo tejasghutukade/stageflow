@@ -3,8 +3,10 @@ model: cursor/auto
 catalog:
   pipelines:
     - examples
+    - workshop
   tasks:
     - examples
+    - workshop
   triggers: []
   patterns:
     pipeline: "*.pipeline.yaml"

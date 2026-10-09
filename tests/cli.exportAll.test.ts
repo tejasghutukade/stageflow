@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   assertExportOutPathAllowed,
-  buildExportHeader,
   iterateExportNdjson,
   projectRunForExport,
 } from "../src/cli/exportAllCommand.js";
@@ -45,10 +44,6 @@ describe("export --all", () => {
     expect(() =>
       assertExportOutPathAllowed(`${home}/worktrees/x/out.ndjson`, home),
     ).toThrow(/worktrees/);
-  });
-
-  it("buildExportHeader is stable", () => {
-    expect(buildExportHeader().type).toBe("stageflow_export");
   });
 });
 

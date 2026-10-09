@@ -152,17 +152,6 @@ describe("buildLogPanelSteps", () => {
     });
   });
 
-  it("labels a Read tool call with just the filename, and hides its result content", () => {
-    const events: StageLogEvent[] = [
-      { event: "tool_start", toolName: "Read", toolCallId: "c1", argsPreview: '{"file_path":"/repo/src/index.ts"}' },
-      { event: "tool_end", toolName: "Read", toolCallId: "c1", resultPreview: "export function main() {}" },
-    ];
-    const steps = buildLogPanelSteps(events);
-    expect(steps).toHaveLength(1);
-    expect(steps[0]).toMatchObject({ label: "Read index.ts", status: "succeeded" });
-    expect(steps[0].detail).toBeUndefined();
-  });
-
   it("still surfaces the error detail for a failed Read call", () => {
     const events: StageLogEvent[] = [
       { event: "tool_start", toolName: "Read", toolCallId: "c1", argsPreview: '{"file_path":"/repo/missing.ts"}' },
@@ -176,72 +165,80 @@ describe("buildLogPanelSteps", () => {
     });
   });
 
-  it("labels a Bash tool call with the full command", () => {
-    const events: StageLogEvent[] = [
-      { event: "tool_start", toolName: "Bash", toolCallId: "c1", argsPreview: '{"command":"npm test"}' },
-      { event: "tool_end", toolName: "Bash", toolCallId: "c1", resultPreview: "ok" },
-    ];
-    const steps = buildLogPanelSteps(events);
-    expect(steps[0]).toMatchObject({ label: "Bash npm test", detail: "ok" });
-  });
-
-  it("labels a Write tool call with just the filename", () => {
-    const events: StageLogEvent[] = [
-      { event: "tool_start", toolName: "Write", toolCallId: "c1", argsPreview: '{"file_path":"/repo/notes.md"}' },
-      { event: "tool_end", toolName: "Write", toolCallId: "c1", resultPreview: "wrote 12 lines" },
-    ];
-    const steps = buildLogPanelSteps(events);
-    expect(steps[0]).toMatchObject({ label: "Write notes.md" });
-  });
-
-  it("falls back to the raw tool name for an unrecognized tool", () => {
-    const events: StageLogEvent[] = [
-      { event: "tool_start", toolName: "context7_resolve-library-id", toolCallId: "c1", argsPreview: '{"libraryName":"Express"}' },
-      { event: "tool_end", toolName: "context7_resolve-library-id", toolCallId: "c1", resultPreview: "found it" },
-    ];
-    const steps = buildLogPanelSteps(events);
-    expect(steps[0].label).toBe("context7_resolve-library-id");
-  });
-
-  it("falls back to the raw tool name when argsPreview isn't valid JSON", () => {
-    const events: StageLogEvent[] = [
-      { event: "tool_start", toolName: "Bash", toolCallId: "c1", argsPreview: "not json" },
-      { event: "tool_end", toolName: "Bash", toolCallId: "c1", resultPreview: "ok" },
-    ];
-    const steps = buildLogPanelSteps(events);
-    expect(steps[0].label).toBe("Bash");
-  });
-
-  it("still recovers the filename when argsPreview is truncated (invalid) JSON", () => {
-    // Mirrors how the backend actually produces argsPreview: JSON.stringify(input)
-    // cut off at a fixed character limit with a trailing ellipsis, regardless of
-    // where that lands — here mid-way through a long old_string value.
-    const truncated = `{"file_path":"/repo/big.ts","old_string":"line one\\nline two\\nline th…`;
-    const events: StageLogEvent[] = [
-      { event: "tool_start", toolName: "Edit", toolCallId: "c1", argsPreview: truncated },
-      { event: "tool_end", toolName: "Edit", toolCallId: "c1", resultPreview: "ok" },
-    ];
-    const steps = buildLogPanelSteps(events);
-    expect(steps[0].label).toBe("Edit big.ts");
-  });
-
-  it("falls back to the raw tool name when the expected argument is missing", () => {
-    const events: StageLogEvent[] = [
-      { event: "tool_start", toolName: "Bash", toolCallId: "c1", argsPreview: "{}" },
-      { event: "tool_end", toolName: "Bash", toolCallId: "c1", resultPreview: "ok" },
-    ];
-    const steps = buildLogPanelSteps(events);
-    expect(steps[0].label).toBe("Bash");
-  });
-
-  it("labels the Pi backend's lowercase tool names the same way as Claude's capitalized ones", () => {
-    const events: StageLogEvent[] = [
-      { event: "tool_start", toolName: "read", toolCallId: "c1", argsPreview: '{"file_path":"/repo/src/index.ts"}' },
-      { event: "tool_end", toolName: "read", toolCallId: "c1", resultPreview: "export function main() {}" },
-    ];
-    const steps = buildLogPanelSteps(events);
-    expect(steps[0]).toMatchObject({ label: "read index.ts", status: "succeeded" });
-    expect(steps[0].detail).toBeUndefined();
+  it.each([
+    {
+      name: "Read: filename only, result content hidden",
+      toolName: "Read",
+      args: '{"file_path":"/repo/src/index.ts"}',
+      result: "export function main() {}",
+      label: "Read index.ts",
+      detail: undefined,
+    },
+    {
+      name: "lowercase Pi tool name labelled like Claude's capitalized one",
+      toolName: "read",
+      args: '{"file_path":"/repo/src/index.ts"}',
+      result: "export function main() {}",
+      label: "read index.ts",
+      detail: undefined,
+    },
+    {
+      name: "Bash: full command",
+      toolName: "Bash",
+      args: '{"command":"npm test"}',
+      result: "ok",
+      label: "Bash npm test",
+      detail: "ok",
+    },
+    {
+      name: "Write: filename only",
+      toolName: "Write",
+      args: '{"file_path":"/repo/notes.md"}',
+      result: "wrote 12 lines",
+      label: "Write notes.md",
+      detail: "wrote 12 lines",
+    },
+    {
+      name: "unrecognized tool falls back to the raw name",
+      toolName: "context7_resolve-library-id",
+      args: '{"libraryName":"Express"}',
+      result: "found it",
+      label: "context7_resolve-library-id",
+      detail: "found it",
+    },
+    {
+      name: "invalid JSON args fall back to the raw name",
+      toolName: "Bash",
+      args: "not json",
+      result: "ok",
+      label: "Bash",
+      detail: "ok",
+    },
+    {
+      // Mirrors the backend: JSON.stringify(input) cut at a fixed limit with a trailing ellipsis.
+      name: "truncated JSON args still recover the filename",
+      toolName: "Edit",
+      args: `{"file_path":"/repo/big.ts","old_string":"line one\\nline two\\nline th…`,
+      result: "ok",
+      label: "Edit big.ts",
+      detail: "ok",
+    },
+    {
+      name: "missing expected argument falls back to the raw name",
+      toolName: "Bash",
+      args: "{}",
+      result: "ok",
+      label: "Bash",
+      detail: "ok",
+    },
+  ])("tool label: $name", ({ toolName, args, result, label, detail }) => {
+    const steps = buildLogPanelSteps([
+      { event: "tool_start", toolName, toolCallId: "c1", argsPreview: args },
+      { event: "tool_end", toolName, toolCallId: "c1", resultPreview: result },
+    ]);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({ label, status: "succeeded" });
+    expect(steps[0].detail).toBe(detail);
   });
 
   it("carries the paired start and end timestamps on a completed tool step", () => {
@@ -428,19 +425,15 @@ describe("stepPreview", () => {
 });
 
 describe("formatDuration", () => {
-  it("shows sub-second durations as <1s", () => {
-    expect(formatDuration(0)).toBe("<1s");
-    expect(formatDuration(999)).toBe("<1s");
-  });
-
-  it("shows whole seconds under a minute", () => {
-    expect(formatDuration(1000)).toBe("1s");
-    expect(formatDuration(23000)).toBe("23s");
-  });
-
-  it("shows minutes and seconds at or over a minute", () => {
-    expect(formatDuration(65000)).toBe("1m 5s");
-    expect(formatDuration(600000)).toBe("10m 0s");
+  it.each([
+    [0, "<1s"],
+    [999, "<1s"],
+    [1000, "1s"],
+    [23000, "23s"],
+    [65000, "1m 5s"],
+    [600000, "10m 0s"],
+  ])("%ims -> %s", (ms, expected) => {
+    expect(formatDuration(ms)).toBe(expected);
   });
 });
 

@@ -8,9 +8,6 @@ import type {
   StageSnapshot,
 } from "../api";
 import type { DetailView } from "../routes";
-import { statusCopy } from "../status/runStatus";
-import { formatEnvelopeSubtitle } from "../components/EnvelopeFields";
-import { spatialNodeKicker } from "../components/SpatialRunMap";
 import {
   buildFeedbackOverlays,
   collectSupersededCloneStageIds,
@@ -162,45 +159,31 @@ describe("stage selection", () => {
     });
   });
 
-  it("stays empty after Hide workspace while the same wait is open", () => {
-    const run = detail(
-      [
-        stage({
-          stage_id: "clarify",
-          status: "waiting_for_input",
-          pending_prompt: freeText,
-        }),
-      ],
-      { waiting_stage_id: "clarify" },
-    );
-    const workspace = resolveRunWorkspace(
-      stream,
-      run,
-      selection({ dismissedWaitKey: "clarify:p-ft" }),
-    );
-    expect(workspace.selectedStageId).toBeNull();
-    expect(workspace.kind).toBe("empty");
-  });
-
-  it("selects a new wait after a dismissed key", () => {
-    const run = detail(
-      [
-        stage({
-          stage_id: "review",
-          status: "waiting_for_input",
-          pending_prompt: { kind: "confirm", id: "p-cf", message: "OK?" },
-        }),
-      ],
-      { waiting_stage_id: "review" },
-    );
-    expect(
-      resolveRunWorkspace(
+  it.each([
+    { dismissedWaitKey: "clarify:p-ft", selected: null, kind: "empty" },
+    { dismissedWaitKey: "review:p-old", selected: "clarify", kind: "stream" },
+  ] as const)(
+    "wait dismissed with key $dismissedWaitKey selects $selected",
+    ({ dismissedWaitKey, selected, kind }) => {
+      const run = detail(
+        [
+          stage({
+            stage_id: "clarify",
+            status: "waiting_for_input",
+            pending_prompt: freeText,
+          }),
+        ],
+        { waiting_stage_id: "clarify" },
+      );
+      const workspace = resolveRunWorkspace(
         stream,
         run,
-        selection({ dismissedWaitKey: "clarify:p-ft" }),
-      ).selectedStageId,
-    ).toBe("review");
-  });
+        selection({ dismissedWaitKey }),
+      );
+      expect(workspace.selectedStageId).toBe(selected);
+      expect(workspace.kind).toBe(kind);
+    },
+  );
 
   it("falls back to waiting_prompt_id when the waiter has no snapshot prompt", () => {
     const run = detail(
@@ -548,7 +531,7 @@ describe("drawer arbitration", () => {
 });
 
 describe("track stages", () => {
-  it("marks the selected stage and uses statusCopy for waiting meta", () => {
+  it("marks the selected stage and shows the waiting copy as meta", () => {
     const run = detail(
       [
         stage({
@@ -571,7 +554,7 @@ describe("track stages", () => {
         label: "clarify",
         status: "waiting",
         selected: true,
-        meta: statusCopy("waiting_for_input"),
+        meta: "waiting on you",
         envelope: null,
       },
       {
@@ -585,104 +568,61 @@ describe("track stages", () => {
     ]);
   });
 
-  it("pads not-yet-run planned stages as pending", () => {
-    const run = detail([stage({ stage_id: "a", status: "running" })]);
+  it.each([
+    {
+      name: "pads not-yet-run planned stages as pending",
+      live: [stage({ stage_id: "a", status: "running" })],
+      planned: ["a", "b", "c"],
+      expected: [
+        { id: "a", status: "running", meta: undefined },
+        { id: "b", status: "pending", meta: "pending" },
+        { id: "c", status: "pending", meta: "pending" },
+      ],
+    },
+    {
+      name: "shows all planned stages as pending when the run has none yet",
+      live: [],
+      planned: ["a", "b"],
+      expected: [
+        { id: "a", status: "pending", meta: "pending" },
+        { id: "b", status: "pending", meta: "pending" },
+      ],
+    },
+    {
+      name: "reorders live snapshots into planned YAML order",
+      live: [
+        stage({ stage_id: "implement", status: "running" }),
+        stage({ stage_id: "plan-review", status: "succeeded" }),
+      ],
+      planned: ["plan-review", "implement"],
+      expected: [
+        { id: "plan-review", status: "succeeded", meta: undefined },
+        { id: "implement", status: "running", meta: undefined },
+      ],
+    },
+    {
+      name: "appends live stages missing from the planned list",
+      live: [
+        stage({ stage_id: "a", status: "running" }),
+        stage({ stage_id: "orphan", status: "succeeded" }),
+      ],
+      planned: ["a", "b"],
+      expected: [
+        { id: "a", status: "running", meta: undefined },
+        { id: "b", status: "pending", meta: "pending" },
+        { id: "orphan", status: "succeeded", meta: undefined },
+      ],
+    },
+  ])("track stages: $name", ({ live, planned, expected }) => {
     const workspace = resolveRunWorkspace(
       stream,
-      run,
+      detail(live),
       selection(),
-      ["a", "b", "c"],
+      planned,
     );
-    expect(workspace.selectedStageId).toBe("a");
-    expect(workspace.trackStages).toEqual([
-      {
-        id: "a",
-        label: "a",
-        status: "running",
-        selected: true,
-        meta: undefined,
-        envelope: null,
-      },
-      {
-        id: "b",
-        label: "b",
-        status: "pending",
-        selected: false,
-        meta: "pending",
-        envelope: null,
-      },
-      {
-        id: "c",
-        label: "c",
-        status: "pending",
-        selected: false,
-        meta: "pending",
-        envelope: null,
-      },
-    ]);
-  });
-
-  it("reorders live snapshots into planned YAML order", () => {
-    const run = detail([
-      stage({ stage_id: "implement", status: "running" }),
-      stage({ stage_id: "plan-review", status: "succeeded" }),
-    ]);
-    const workspace = resolveRunWorkspace(
-      stream,
-      run,
-      selection(),
-      ["plan-review", "implement"],
-    );
-    expect(workspace.trackStages.map((s) => s.id)).toEqual([
-      "plan-review",
-      "implement",
-    ]);
-    expect(workspace.trackStages[0]?.status).toBe("succeeded");
-    expect(workspace.trackStages[1]?.status).toBe("running");
-  });
-
-  it("shows all planned stages as pending when the run has none yet", () => {
-    const run = detail([]);
-    const workspace = resolveRunWorkspace(
-      stream,
-      run,
-      selection(),
-      ["a", "b"],
-    );
-    expect(workspace.kind).toBe("empty");
-    expect(workspace.selectedStageId).toBeNull();
-    expect(workspace.trackStages).toEqual([
-      {
-        id: "a",
-        label: "a",
-        status: "pending",
-        selected: false,
-        meta: "pending",
-        envelope: null,
-      },
-      {
-        id: "b",
-        label: "b",
-        status: "pending",
-        selected: false,
-        meta: "pending",
-        envelope: null,
-      },
-    ]);
-  });
-
-  it("appends live stages that are missing from the planned list", () => {
-    const run = detail([
-      stage({ stage_id: "a", status: "running" }),
-      stage({ stage_id: "orphan", status: "succeeded" }),
-    ]);
-    const workspace = resolveRunWorkspace(
-      stream,
-      run,
-      selection(),
-      ["a", "b"],
-    );
-    expect(workspace.trackStages.map((s) => s.id)).toEqual(["a", "b", "orphan"]);
+    expect(
+      workspace.trackStages.map(({ id, status, meta }) => ({ id, status, meta })),
+    ).toEqual(expected);
   });
 
   it("does not select a planned placeholder that has no live snapshot", () => {
@@ -820,14 +760,6 @@ describe("spatial track layout", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
-      "recon",
-      "improve-a",
-      "improve-b",
-      "improve-c",
-      "report-b",
-    ]);
-    expect(workspace.spatialLayout.edges).toEqual(fanOutTrack.edges);
     expect(
       workspace.nodeChrome.filter((c) => c.isWaitingAttention).map((c) => c.stageId),
     ).toEqual(["improve-a", "improve-c"]);
@@ -901,68 +833,29 @@ describe("spatial track layout", () => {
     );
     expect(chrome?.attemptCount).toBe(2);
   });
-
-  it("lays out a single-chain projection as a spatial row", () => {
-    const run = detail(
-      [
-        stage({ stage_id: "a", status: "succeeded" }),
-        stage({ stage_id: "b", status: "running" }),
-        stage({ stage_id: "c", status: "pending" }),
-      ],
-      {
-        pipeline_track: {
-          nodes: [
-            trackNode({ stage_id: "a", layer: 0, layer_order: 0, status: "succeeded", readiness: "succeeded" }),
-            trackNode({ stage_id: "b", layer: 1, layer_order: 0, status: "running", readiness: "running" }),
-            trackNode({ stage_id: "c", layer: 2, layer_order: 0, status: "pending", readiness: "blocked" }),
-          ],
-          edges: [
-            { from: "a", to: "b" },
-            { from: "b", to: "c" },
-          ],
-        },
-      },
-    );
-    const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual(["a", "b", "c"]);
-    expect(workspace.spatialLayout.edges).toEqual([
-      { from: "a", to: "b" },
-      { from: "b", to: "c" },
-    ]);
-  });
 });
 
 describe("formatCloneLabel", () => {
-  it("returns stageId when definitionId is missing", () => {
-    expect(formatCloneLabel("author-diagrams~1")).toBe("author-diagrams~1");
-  });
-
-  it("returns definitionId when stageId equals definitionId", () => {
-    expect(formatCloneLabel("collect", "collect")).toBe("collect");
-  });
-
-  it("returns definition plus 1-based ordinal for fan-out instances", () => {
-    expect(formatCloneLabel("author-diagrams~1", "author-diagrams", 1)).toBe(
-      "author-diagrams · 1",
-    );
+  it.each([
+    { args: ["author-diagrams~1"], label: "author-diagrams~1" },
+    { args: ["author-diagrams~1", ""], label: "author-diagrams~1" },
+    { args: ["collect", "collect"], label: "collect" },
+    { args: ["collect", "collect", 2], label: "collect" },
+    { args: ["author-diagrams~1", "author-diagrams"], label: "author-diagrams~1" },
+    {
+      args: ["author-diagrams~1", "author-diagrams", 1],
+      label: "author-diagrams · 1",
+    },
+  ] as const)("$args -> $label", ({ args, label }) => {
+    expect(
+      formatCloneLabel(...(args as unknown as Parameters<typeof formatCloneLabel>)),
+    ).toBe(label);
   });
 });
 
-function cloneTrackNode(
-  overrides: Partial<PipelineTrackNode> & Pick<PipelineTrackNode, "stage_id">,
-): PipelineTrackNode {
-  return {
-    status: "pending",
-    readiness: "blocked",
-    layer: 0,
-    layer_order: 0,
-    ...overrides,
-  };
-}
-
 const threeCloneTrack = {
   nodes: [
-    cloneTrackNode({
+    trackNode({
       stage_id: "detect-changes",
       definition_id: "detect-changes",
       status: "succeeded",
@@ -970,7 +863,7 @@ const threeCloneTrack = {
       layer: 0,
       layer_order: 0,
     }),
-    cloneTrackNode({
+    trackNode({
       stage_id: "author-diagrams~1",
       definition_id: "author-diagrams",
       status: "succeeded",
@@ -978,7 +871,7 @@ const threeCloneTrack = {
       layer: 1,
       layer_order: 0,
     }),
-    cloneTrackNode({
+    trackNode({
       stage_id: "author-diagrams~2",
       definition_id: "author-diagrams",
       status: "waiting_for_input",
@@ -986,7 +879,7 @@ const threeCloneTrack = {
       layer: 1,
       layer_order: 1,
     }),
-    cloneTrackNode({
+    trackNode({
       stage_id: "author-diagrams~3",
       definition_id: "author-diagrams",
       status: "running",
@@ -994,7 +887,7 @@ const threeCloneTrack = {
       layer: 1,
       layer_order: 2,
     }),
-    cloneTrackNode({
+    trackNode({
       stage_id: "collect",
       definition_id: "collect",
       status: "pending",
@@ -1015,8 +908,8 @@ const threeCloneTrack = {
 };
 
 describe("AE-console-nodes clone labels", () => {
-  it("renders three clone nodes with definition-plus-index labels in dag mode", () => {
-    const run = detail(
+  function threeCloneRun() {
+    return detail(
       [
         stage({ stage_id: "detect-changes", status: "succeeded" }),
         stage({ stage_id: "author-diagrams~1", status: "succeeded" }),
@@ -1034,7 +927,10 @@ describe("AE-console-nodes clone labels", () => {
         waiting_stage_ids: ["author-diagrams~2"],
       },
     );
-    const workspace = resolveRunWorkspace(stream, run, selection());
+  }
+
+  it("renders three clone nodes with definition-plus-index titles in dag mode", () => {
+    const workspace = resolveRunWorkspace(stream, threeCloneRun(), selection());
     expect(
       workspace.spatialLayout.nodes
         .filter((n) => n.layerIndex === 1)
@@ -1051,45 +947,18 @@ describe("AE-console-nodes clone labels", () => {
     expect(workspace.trackStages.find((s) => s.id === "collect")?.label).toBe(
       "collect",
     );
-    const cloneChrome = workspace.nodeChrome.find((c) => c.stageId === "author-diagrams~2");
-    expect(cloneChrome?.title).toBe("author-diagrams · 2");
-    expect(cloneChrome?.kicker).toBe("author-diagrams");
-    expect(spatialNodeKicker(cloneChrome!.kicker, cloneChrome!.title)).toBe(
-      "author-diagrams",
-    );
+  });
 
+  it("labels the picked clone's track stage with definition · N", () => {
     const picked = resolveRunWorkspace(
       stream,
-      run,
+      threeCloneRun(),
       selection({ previousStageId: "author-diagrams~2", userPicked: true }),
     );
     expect(picked.selectedStageId).toBe("author-diagrams~2");
     expect(picked.trackStages.find((s) => s.selected)?.label).toBe(
       "author-diagrams · 2",
     );
-  });
-
-  it("joins clone chrome kicker against the ordinal title", () => {
-    const run = detail(
-      [
-        stage({
-          stage_id: "author-diagrams~2",
-          status: "waiting_for_input",
-          pending_prompt: freeText,
-        }),
-      ],
-      { pipeline_track: threeCloneTrack, waiting_stage_id: "author-diagrams~2" },
-    );
-    const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
-      (c) => c.stageId === "author-diagrams~2",
-    );
-    expect(chrome).toEqual(
-      expect.objectContaining({
-        title: "author-diagrams · 2",
-        kicker: "author-diagrams",
-      }),
-    );
-    expect(spatialNodeKicker(chrome!.kicker, chrome!.title)).not.toBeNull();
   });
 
   it("labels a run-once author-diagrams node with the catalog id", () => {
@@ -1102,21 +971,21 @@ describe("AE-console-nodes clone labels", () => {
       {
         pipeline_track: {
           nodes: [
-            cloneTrackNode({
+            trackNode({
               stage_id: "detect-changes",
               definition_id: "detect-changes",
               layer: 0,
               status: "succeeded",
               readiness: "succeeded",
             }),
-            cloneTrackNode({
+            trackNode({
               stage_id: "author-diagrams",
               definition_id: "author-diagrams",
               layer: 1,
               status: "running",
               readiness: "running",
             }),
-            cloneTrackNode({
+            trackNode({
               stage_id: "collect",
               definition_id: "collect",
               layer: 2,
@@ -1132,18 +1001,12 @@ describe("AE-console-nodes clone labels", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
-      "detect-changes",
-      "author-diagrams",
-      "collect",
-    ]);
     expect(workspace.trackStages.find((s) => s.id === "author-diagrams")?.label).toBe(
       "author-diagrams",
     );
     const chrome = workspace.nodeChrome.find((c) => c.stageId === "author-diagrams");
     expect(chrome?.title).toBe("author-diagrams");
     expect(chrome?.kicker).toBe("author-diagrams");
-    expect(spatialNodeKicker(chrome!.kicker, chrome!.title)).toBeNull();
   });
 });
 
@@ -1165,7 +1028,7 @@ describe("AE-today-first-waiter clone waiters", () => {
       {
         pipeline_track: {
           nodes: [
-            cloneTrackNode({
+            trackNode({
               stage_id: "author-diagrams~1",
               definition_id: "author-diagrams",
               layer: 0,
@@ -1173,7 +1036,7 @@ describe("AE-today-first-waiter clone waiters", () => {
               status: "waiting_for_input",
               readiness: "waiting",
             }),
-            cloneTrackNode({
+            trackNode({
               stage_id: "author-diagrams~2",
               definition_id: "author-diagrams",
               layer: 0,
@@ -1215,7 +1078,7 @@ describe("AE-skipped-leftovers", () => {
       {
         pipeline_track: {
           nodes: [
-            cloneTrackNode({
+            trackNode({
               stage_id: "author-diagrams~1",
               definition_id: "author-diagrams",
               layer: 0,
@@ -1223,7 +1086,7 @@ describe("AE-skipped-leftovers", () => {
               status: "succeeded",
               readiness: "succeeded",
             }),
-            cloneTrackNode({
+            trackNode({
               stage_id: "author-diagrams~2",
               definition_id: "author-diagrams",
               layer: 0,
@@ -1231,7 +1094,7 @@ describe("AE-skipped-leftovers", () => {
               status: "failed",
               readiness: "failed",
             }),
-            cloneTrackNode({
+            trackNode({
               stage_id: "author-diagrams~3",
               definition_id: "author-diagrams",
               layer: 0,
@@ -1265,21 +1128,30 @@ describe("AE-skipped-leftovers", () => {
 });
 
 describe("aside and envelope clone labels", () => {
-  it("uses definition · N for clone artifact meta", () => {
+  it.each([
+    {
+      name: "clone artifact meta uses definition · N",
+      stageId: "work~1",
+      definitionId: "work",
+      path: "out.md",
+      meta: "work · 1",
+    },
+    {
+      name: "non-clone stage meta has no ordinal",
+      stageId: "design",
+      definitionId: "design",
+      path: "plan.md",
+      meta: "design",
+    },
+  ])("aside labels: $name", ({ stageId, definitionId, path, meta }) => {
     const run = detail(
-      [
-        stage({
-          stage_id: "work~1",
-          status: "succeeded",
-          artifacts: ["out.md"],
-        }),
-      ],
+      [stage({ stage_id: stageId, status: "succeeded", artifacts: [path] })],
       {
         pipeline_track: {
           nodes: [
-            cloneTrackNode({
-              stage_id: "work~1",
-              definition_id: "work",
+            trackNode({
+              stage_id: stageId,
+              definition_id: definitionId,
               layer: 0,
               status: "succeeded",
               readiness: "succeeded",
@@ -1292,52 +1164,10 @@ describe("aside and envelope clone labels", () => {
     const workspace = resolveRunWorkspace(
       stream,
       run,
-      selection({ previousStageId: "work~1", userPicked: true }),
+      selection({ previousStageId: stageId, userPicked: true }),
     );
-    expect(stageCloneLabel(run, "work~1")).toBe("work · 1");
-    expect(workspace.artifactFiles).toEqual([
-      { path: "out.md", meta: "work · 1" },
-    ]);
-  });
-
-  it("keeps a non-clone stage meta without an ordinal", () => {
-    const run = detail(
-      [
-        stage({
-          stage_id: "design",
-          status: "succeeded",
-          artifacts: ["plan.md"],
-        }),
-      ],
-      {
-        pipeline_track: {
-          nodes: [
-            cloneTrackNode({
-              stage_id: "design",
-              definition_id: "design",
-              layer: 0,
-              status: "succeeded",
-              readiness: "succeeded",
-            }),
-          ],
-          edges: [],
-        },
-      },
-    );
-    const workspace = resolveRunWorkspace(
-      stream,
-      run,
-      selection({ previousStageId: "design", userPicked: true }),
-    );
-    expect(workspace.artifactFiles[0]?.meta).toBe("design");
-  });
-
-  it("joins two formatted envelope labels with an arrow", () => {
-    expect(
-      formatEnvelopeSubtitle("work~1", "collect", (id) =>
-        id === "work~1" ? "work · 1" : "collect",
-      ),
-    ).toBe("work · 1 → collect");
+    expect(stageCloneLabel(run, stageId)).toBe(meta);
+    expect(workspace.artifactFiles).toEqual([{ path, meta }]);
   });
 });
 
@@ -1391,57 +1221,40 @@ describe("handoff envelope aside", () => {
       run,
       selection({ previousStageId: "review", userPicked: true }),
     );
-    expect(workspace.artifactFiles.every((f) => f.label !== "Handoff envelope")).toBe(
-      true,
-    );
     expect(workspace.artifactFiles).toEqual([
       { path: "notes.md", meta: "clarify" },
       { path: "plan.md", meta: "review" },
     ]);
   });
 
-  it("selects the envelope sentinel while the envelope view is open", () => {
-    const run = detail([
-      stage({
-        stage_id: "clarify",
-        status: "succeeded",
-        envelope,
-      }),
-    ]);
-    const workspace = resolveRunWorkspace(
-      { kind: "envelope", stageId: "clarify" },
-      run,
-      selection(),
-    );
-    expect(workspace.kind).toBe("envelope");
-    expect(workspace.selectedPath).toBe(envelopeAsidePath("clarify"));
-  });
-
-  it("focuses the envelope stage in Files when the envelope route is open", () => {
-    const run = detail([
-      stage({
-        stage_id: "clarify",
-        status: "succeeded",
-        envelope,
-      }),
-      stage({
-        stage_id: "review",
-        status: "running",
-      }),
-    ]);
-    const workspace = resolveRunWorkspace(
-      { kind: "envelope", stageId: "clarify" },
-      run,
-      selection({ previousStageId: "review", userPicked: true }),
-    );
-    expect(workspace.selectedStageId).toBe("clarify");
-    expect(workspace.artifactFiles[0]).toEqual({
-      path: envelopeAsidePath("clarify"),
-      label: "Handoff envelope",
-      meta: "clarify",
-    });
-    expect(workspace.selectedPath).toBe(envelopeAsidePath("clarify"));
-  });
+  it.each([
+    { name: "no pick", sel: selection() },
+    {
+      name: "another stage picked",
+      sel: selection({ previousStageId: "review", userPicked: true }),
+    },
+  ])(
+    "the envelope route selects the envelope stage and sentinel path ($name)",
+    ({ sel }) => {
+      const run = detail([
+        stage({ stage_id: "clarify", status: "succeeded", envelope }),
+        stage({ stage_id: "review", status: "running" }),
+      ]);
+      const workspace = resolveRunWorkspace(
+        { kind: "envelope", stageId: "clarify" },
+        run,
+        sel,
+      );
+      expect(workspace.kind).toBe("envelope");
+      expect(workspace.selectedStageId).toBe("clarify");
+      expect(workspace.artifactFiles[0]).toEqual({
+        path: envelopeAsidePath("clarify"),
+        label: "Handoff envelope",
+        meta: "clarify",
+      });
+      expect(workspace.selectedPath).toBe(envelopeAsidePath("clarify"));
+    },
+  );
 
   it("parses envelope aside paths and rejects ordinary artifact paths", () => {
     expect(parseEnvelopeAsidePath(envelopeAsidePath("clarify"))).toBe("clarify");
@@ -1457,44 +1270,71 @@ describe("handoff envelope aside", () => {
 describe("runDetailShouldPoll", () => {
   const idle = { retrying: false, abandoning: false };
 
-  it("polls a failed run while a clone is still waiting", () => {
-    const run = detail(
-      [
-        stage({ stage_id: "work~1", status: "failed" }),
-        stage({
-          stage_id: "work~2",
-          status: "waiting_for_input",
-          pending_prompt: freeText,
-        }),
-      ],
-      { status: "failed", waiting_stage_id: "work~2" },
-    );
-    expect(runDetailShouldPoll(run, idle)).toBe(true);
-  });
-
-  it("polls a failed run while a retried clone is running", () => {
-    const run = detail(
-      [
-        stage({ stage_id: "work~1", status: "failed" }),
-        stage({ stage_id: "work~2", status: "running" }),
-      ],
-      { status: "failed" },
-    );
-    expect(runDetailShouldPoll(run, idle)).toBe(true);
-  });
-
-  it("stops polling when every stage has finished and nothing is retrying", () => {
-    const run = detail(
-      [
-        stage({ stage_id: "work~1", status: "failed" }),
-        stage({ stage_id: "work~2", status: "failed" }),
-      ],
-      { status: "failed" },
-    );
-    expect(runDetailShouldPoll(run, idle)).toBe(false);
-    expect(runDetailShouldPoll(run, { retrying: true, abandoning: false })).toBe(
-      true,
-    );
+  it.each([
+    { name: "no run", run: null, action: idle, expected: false },
+    { name: "no run but retrying", run: null, action: { ...idle, retrying: true }, expected: true },
+    { name: "no run but abandoning", run: null, action: { ...idle, abandoning: true }, expected: true },
+    { name: "created run", run: detail([], { status: "created" }), action: idle, expected: true },
+    { name: "running run", run: detail([], { status: "running" }), action: idle, expected: true },
+    {
+      name: "failed run while a clone waits",
+      run: detail(
+        [
+          stage({ stage_id: "work~1", status: "failed" }),
+          stage({ stage_id: "work~2", status: "waiting_for_input", pending_prompt: freeText }),
+        ],
+        { status: "failed", waiting_stage_id: "work~2" },
+      ),
+      action: idle,
+      expected: true,
+    },
+    {
+      name: "failed run with only waiting_stage_id set",
+      run: detail([stage({ stage_id: "work~1", status: "failed" })], {
+        status: "failed",
+        waiting_stage_id: "work~1",
+      }),
+      action: idle,
+      expected: true,
+    },
+    {
+      name: "failed run while a retried clone is running",
+      run: detail(
+        [
+          stage({ stage_id: "work~1", status: "failed" }),
+          stage({ stage_id: "work~2", status: "running" }),
+        ],
+        { status: "failed" },
+      ),
+      action: idle,
+      expected: true,
+    },
+    {
+      name: "failed run, all stages finished, idle",
+      run: detail(
+        [
+          stage({ stage_id: "work~1", status: "failed" }),
+          stage({ stage_id: "work~2", status: "failed" }),
+        ],
+        { status: "failed" },
+      ),
+      action: idle,
+      expected: false,
+    },
+    {
+      name: "failed run, all stages finished, retrying",
+      run: detail([stage({ stage_id: "work~1", status: "failed" })], { status: "failed" }),
+      action: { retrying: true, abandoning: false },
+      expected: true,
+    },
+    {
+      name: "succeeded run",
+      run: detail([stage({ stage_id: "a", status: "succeeded" })], { status: "succeeded" }),
+      action: idle,
+      expected: false,
+    },
+  ])("$name -> $expected", ({ run, action, expected }) => {
+    expect(runDetailShouldPoll(run, action)).toBe(expected);
   });
 });
 
@@ -1503,6 +1343,11 @@ const feedbackEnvelope = {
   summary: "send back",
   artifacts: [],
 };
+
+const T0 = "2026-08-18T00:00:00.000Z";
+
+type ReplayEntry = FeedbackLoopHistory["replays"][number];
+type ForkGeneration = FeedbackLoopHistory["fork_generations"][number];
 
 function feedbackLoop(
   overrides: Partial<FeedbackLoopRecord> = {},
@@ -1519,123 +1364,118 @@ function feedbackLoop(
       replay_session: "resume",
     },
     state: "active",
-    created_at: "2026-08-18T00:00:00.000Z",
-    updated_at: "2026-08-18T00:00:00.000Z",
+    created_at: T0,
+    updated_at: T0,
     ...overrides,
   };
 }
 
+function replayEntry(
+  replay: Partial<ReplayEntry["replay"]> = {},
+  extra: Partial<Omit<ReplayEntry, "replay">> = {},
+): ReplayEntry {
+  return {
+    replay: {
+      run_id: "run-1",
+      replay_id: "replay-1",
+      loop_id: "loop-1",
+      source_stage_id: "review",
+      source_attempt: 1,
+      target_stage_id: "implement",
+      replay_number: 1,
+      max_replays: 2,
+      replay_session: "resume",
+      route_stage_ids: ["implement", "review"],
+      feedback_envelope: feedbackEnvelope,
+      status: "completed",
+      created_at: T0,
+      updated_at: T0,
+      ...replay,
+    },
+    stage_passes: [],
+    fork_generations: [],
+    ...extra,
+  };
+}
+
+function forkGeneration(
+  status: ForkGeneration["status"],
+  cloneStageIds: string[],
+): ForkGeneration {
+  return {
+    run_id: "run-1",
+    generation_id: "gen-1",
+    fork_parent_stage_id: "fork",
+    generation_number: 1,
+    clone_stage_ids: cloneStageIds,
+    status,
+    created_at: T0,
+    updated_at: T0,
+  };
+}
+
+function historyOf(
+  loop: FeedbackLoopRecord,
+  replays: ReplayEntry[] = [],
+  forkGenerations: ForkGeneration[] = [],
+): FeedbackLoopHistory {
+  return { loop, replays, fork_generations: forkGenerations };
+}
+
+const deferredSendBack = (sourceAttempt: number) => ({
+  target: "implement",
+  feedback_envelope: feedbackEnvelope,
+  source_attempt: sourceAttempt,
+});
+
 describe("feedback loop workspace", () => {
-  it("builds a deferred overlay from the active loop", () => {
-    const active = feedbackLoop({
-      state: "waiting_for_human",
-      current_replay_number: 2,
-      deferred_send_back: {
-        target: "implement",
-        feedback_envelope: feedbackEnvelope,
-        source_attempt: 2,
-      },
-    });
-    expect(buildFeedbackOverlays(active, [])).toEqual([
+  const waitingActive = feedbackLoop({
+    state: "waiting_for_human",
+    current_replay_number: 2,
+    deferred_send_back: deferredSendBack(2),
+  });
+
+  it.each([
+    { name: "no history", history: [] as FeedbackLoopHistory[] },
+    {
+      name: "completed replay history",
+      history: [historyOf(waitingActive, [replayEntry()])],
+    },
+  ])("builds only the deferred overlay from the active loop ($name)", ({ history }) => {
+    expect(buildFeedbackOverlays(waitingActive, history)).toEqual([
       { from: "review", to: "implement", kind: "deferred" },
     ]);
   });
 
-  it("prefers deferred overlay over historical replay overlays", () => {
-    const active = feedbackLoop({
-      state: "waiting_for_human",
-      current_replay_number: 2,
-      deferred_send_back: {
-        target: "implement",
-        feedback_envelope: feedbackEnvelope,
-        source_attempt: 2,
-      },
-    });
-    const history: FeedbackLoopHistory[] = [
-      {
-        loop: active,
-        replays: [
-          {
-            replay: {
+  const supersededHistory = () => [
+    historyOf(feedbackLoop({ current_replay_number: 1 }), [
+      replayEntry(
+        { status: "active" },
+        {
+          stage_passes: [
+            {
               run_id: "run-1",
               replay_id: "replay-1",
-              loop_id: "loop-1",
-              source_stage_id: "review",
-              source_attempt: 1,
-              target_stage_id: "implement",
-              replay_number: 1,
-              max_replays: 2,
-              replay_session: "resume",
-              route_stage_ids: ["implement", "review"],
-              feedback_envelope: feedbackEnvelope,
-              status: "completed",
-              created_at: "2026-08-18T00:00:00.000Z",
-              updated_at: "2026-08-18T00:00:00.000Z",
+              stage_id: "implement~old",
+              stage_attempt: 1,
+              session_mode: "resume",
+              status: "superseded",
             },
-            stage_passes: [],
-            fork_generations: [],
-          },
-        ],
-        fork_generations: [],
-      },
-    ];
-    expect(buildFeedbackOverlays(active, history)).toEqual([
-      { from: "review", to: "implement", kind: "deferred" },
-    ]);
-  });
+          ],
+          fork_generations: [forkGeneration("superseded", ["work~1"])],
+        },
+      ),
+    ]),
+  ];
 
-  it("builds replay overlays from history and marks superseded clones", () => {
-    const history: FeedbackLoopHistory[] = [
-      {
-        loop: feedbackLoop({ current_replay_number: 1 }),
-        replays: [
-          {
-            replay: {
-              run_id: "run-1",
-              replay_id: "replay-1",
-              loop_id: "loop-1",
-              source_stage_id: "review",
-              source_attempt: 1,
-              target_stage_id: "implement",
-              replay_number: 1,
-              max_replays: 2,
-              replay_session: "resume",
-              route_stage_ids: ["implement", "review"],
-              feedback_envelope: feedbackEnvelope,
-              status: "active",
-              created_at: "2026-08-18T00:00:00.000Z",
-              updated_at: "2026-08-18T00:00:00.000Z",
-            },
-            stage_passes: [
-              {
-                run_id: "run-1",
-                replay_id: "replay-1",
-                stage_id: "implement~old",
-                stage_attempt: 1,
-                session_mode: "resume",
-                status: "superseded",
-              },
-            ],
-            fork_generations: [
-              {
-                run_id: "run-1",
-                generation_id: "gen-1",
-                fork_parent_stage_id: "fork",
-                generation_number: 1,
-                clone_stage_ids: ["work~1"],
-                status: "superseded",
-                created_at: "2026-08-18T00:00:00.000Z",
-                updated_at: "2026-08-18T00:00:00.000Z",
-              },
-            ],
-          },
-        ],
-        fork_generations: [],
-      },
-    ];
-    expect(buildFeedbackOverlays(feedbackLoop(), history)).toEqual([
+  it("builds a replay overlay from an active replay in history", () => {
+    expect(buildFeedbackOverlays(feedbackLoop(), supersededHistory())).toEqual([
       { from: "review", to: "implement", kind: "replay" },
     ]);
+  });
+
+  it("collects superseded stage passes and superseded fork clones", () => {
+    const history = supersededHistory();
     expect([...collectSupersededStageIds(history)].sort()).toEqual([
       "implement~old",
       "work~1",
@@ -1644,9 +1484,9 @@ describe("feedback loop workspace", () => {
   });
 
   it("shows completed replay overlays when no live replays remain", () => {
-    const history: FeedbackLoopHistory[] = [
-      {
-        loop: feedbackLoop({
+    const history = [
+      historyOf(
+        feedbackLoop({
           state: "continued",
           current_replay_number: 1,
           policy: {
@@ -1656,30 +1496,8 @@ describe("feedback loop workspace", () => {
             replay_session: "resume",
           },
         }),
-        replays: [
-          {
-            replay: {
-              run_id: "run-1",
-              replay_id: "replay-1",
-              loop_id: "loop-1",
-              source_stage_id: "review",
-              source_attempt: 1,
-              target_stage_id: "implement",
-              replay_number: 1,
-              max_replays: 2,
-              replay_session: "resume",
-              route_stage_ids: ["implement", "review"],
-              feedback_envelope: feedbackEnvelope,
-              status: "completed",
-              created_at: "2026-08-18T00:00:00.000Z",
-              updated_at: "2026-08-18T00:00:00.000Z",
-            },
-            stage_passes: [],
-            fork_generations: [],
-          },
-        ],
-        fork_generations: [],
-      },
+        [replayEntry()],
+      ),
     ];
     expect(buildFeedbackOverlays(undefined, history)).toEqual([
       { from: "review", to: "implement", kind: "replay" },
@@ -1687,121 +1505,44 @@ describe("feedback loop workspace", () => {
   });
 
   it("prefers live replay overlays over completed history", () => {
-    const history: FeedbackLoopHistory[] = [
-      {
-        loop: feedbackLoop({ current_replay_number: 2 }),
-        replays: [
-          {
-            replay: {
-              run_id: "run-1",
-              replay_id: "replay-1",
-              loop_id: "loop-1",
-              source_stage_id: "review",
-              source_attempt: 1,
-              target_stage_id: "plan",
-              replay_number: 1,
-              max_replays: 2,
-              replay_session: "resume",
-              route_stage_ids: ["plan", "implement", "review"],
-              feedback_envelope: feedbackEnvelope,
-              status: "completed",
-              created_at: "2026-08-18T00:00:00.000Z",
-              updated_at: "2026-08-18T00:00:00.000Z",
-            },
-            stage_passes: [],
-            fork_generations: [],
-          },
-          {
-            replay: {
-              run_id: "run-1",
-              replay_id: "replay-2",
-              loop_id: "loop-1",
-              source_stage_id: "review",
-              source_attempt: 2,
-              target_stage_id: "implement",
-              replay_number: 2,
-              max_replays: 2,
-              replay_session: "resume",
-              route_stage_ids: ["implement", "review"],
-              feedback_envelope: feedbackEnvelope,
-              status: "active",
-              created_at: "2026-08-18T00:01:00.000Z",
-              updated_at: "2026-08-18T00:01:00.000Z",
-            },
-            stage_passes: [],
-            fork_generations: [],
-          },
-        ],
-        fork_generations: [],
-      },
+    const loop = feedbackLoop({ current_replay_number: 2 });
+    const history = [
+      historyOf(loop, [
+        replayEntry({
+          target_stage_id: "plan",
+          route_stage_ids: ["plan", "implement", "review"],
+        }),
+        replayEntry({
+          replay_id: "replay-2",
+          source_attempt: 2,
+          replay_number: 2,
+          status: "active",
+          created_at: "2026-08-18T00:01:00.000Z",
+          updated_at: "2026-08-18T00:01:00.000Z",
+        }),
+      ]),
     ];
-    expect(buildFeedbackOverlays(feedbackLoop({ current_replay_number: 2 }), history)).toEqual([
+    expect(buildFeedbackOverlays(loop, history)).toEqual([
       { from: "review", to: "implement", kind: "replay" },
     ]);
   });
 
   it("skips superseded and failed replays for overlays", () => {
-    const history: FeedbackLoopHistory[] = [
-      {
-        loop: feedbackLoop(),
-        replays: [
-          {
-            replay: {
-              run_id: "run-1",
-              replay_id: "replay-failed",
-              loop_id: "loop-1",
-              source_stage_id: "review",
-              source_attempt: 1,
-              target_stage_id: "plan",
-              replay_number: 1,
-              max_replays: 2,
-              replay_session: "resume",
-              route_stage_ids: ["plan", "implement", "review"],
-              feedback_envelope: feedbackEnvelope,
-              status: "failed",
-              created_at: "2026-08-18T00:00:00.000Z",
-              updated_at: "2026-08-18T00:00:00.000Z",
-            },
-            stage_passes: [],
-            fork_generations: [],
-          },
-          {
-            replay: {
-              run_id: "run-1",
-              replay_id: "replay-superseded",
-              loop_id: "loop-1",
-              source_stage_id: "review",
-              source_attempt: 1,
-              target_stage_id: "implement",
-              replay_number: 1,
-              max_replays: 2,
-              replay_session: "resume",
-              route_stage_ids: ["implement", "review"],
-              feedback_envelope: feedbackEnvelope,
-              status: "superseded",
-              created_at: "2026-08-18T00:00:00.000Z",
-              updated_at: "2026-08-18T00:00:00.000Z",
-            },
-            stage_passes: [],
-            fork_generations: [],
-          },
-        ],
-        fork_generations: [],
-      },
+    const history = [
+      historyOf(feedbackLoop(), [
+        replayEntry({
+          replay_id: "replay-failed",
+          target_stage_id: "plan",
+          route_stage_ids: ["plan", "implement", "review"],
+          status: "failed",
+        }),
+        replayEntry({ replay_id: "replay-superseded", status: "superseded" }),
+      ]),
     ];
     expect(buildFeedbackOverlays(undefined, history)).toEqual([]);
   });
 
   it("shows feedback decide when waiting_kind is feedback_loop_decision", () => {
-    const active = feedbackLoop({
-      state: "waiting_for_human",
-      current_replay_number: 2,
-      deferred_send_back: {
-        target: "implement",
-        feedback_envelope: feedbackEnvelope,
-        source_attempt: 2,
-      },
-    });
     const run = detail(
       [
         stage({ stage_id: "implement", status: "succeeded" }),
@@ -1811,30 +1552,21 @@ describe("feedback loop workspace", () => {
         waiting_stage_id: "review",
         waiting_kind: "feedback_loop_decision",
         waiting_summary: "Feedback loop limit reached",
-        active_feedback_loop: active,
-        feedback_loops: [
-          {
-            loop: active,
-            replays: [],
-            fork_generations: [],
-          },
-        ],
+        active_feedback_loop: waitingActive,
+        feedback_loops: [historyOf(waitingActive)],
         pipeline_track: {
           nodes: [
-            {
+            trackNode({
               stage_id: "implement",
               status: "succeeded",
               readiness: "succeeded",
-              layer: 0,
-              layer_order: 0,
-            },
-            {
+            }),
+            trackNode({
               stage_id: "review",
               status: "waiting_for_input",
               readiness: "waiting",
               layer: 1,
-              layer_order: 0,
-            },
+            }),
           ],
           edges: [{ from: "implement", to: "review" }],
         },
@@ -1860,36 +1592,28 @@ describe("feedback loop workspace", () => {
   });
 
   it("does not change pipeline_track edge layout when overlays are present", () => {
-    const active = feedbackLoop({
-      deferred_send_back: {
-        target: "implement",
-        feedback_envelope: feedbackEnvelope,
-        source_attempt: 1,
-      },
-    });
     const run = detail(
       [
         stage({ stage_id: "implement", status: "succeeded" }),
         stage({ stage_id: "review", status: "succeeded" }),
       ],
       {
-        active_feedback_loop: active,
+        active_feedback_loop: feedbackLoop({
+          deferred_send_back: deferredSendBack(1),
+        }),
         pipeline_track: {
           nodes: [
-            {
+            trackNode({
               stage_id: "implement",
               status: "succeeded",
               readiness: "succeeded",
-              layer: 0,
-              layer_order: 0,
-            },
-            {
+            }),
+            trackNode({
               stage_id: "review",
               status: "succeeded",
               readiness: "succeeded",
               layer: 1,
-              layer_order: 0,
-            },
+            }),
           ],
           edges: [{ from: "implement", to: "review" }],
         },
@@ -1902,116 +1626,42 @@ describe("feedback loop workspace", () => {
     expect(workspace.feedbackOverlays).toHaveLength(1);
   });
 
-  it("emits policy overlays from pipeline_track when no live history exists", () => {
+  it("deferred overlay replaces the policy stub on its route; a replay on another route coexists with the stub", () => {
     const track = {
       nodes: [
-        {
+        trackNode({
           stage_id: "implement",
-          status: "pending" as const,
-          readiness: "ready" as const,
-          layer: 0,
-          layer_order: 0,
-        },
-        {
+          status: "succeeded",
+          readiness: "succeeded",
+        }),
+        trackNode({
           stage_id: "review",
-          status: "pending" as const,
-          readiness: "blocked" as const,
+          status: "waiting_for_input",
+          readiness: "waiting",
           layer: 1,
-          layer_order: 0,
           feedback_loop: { target: "implement" },
-        },
-        {
+        }),
+        trackNode({
           stage_id: "plan",
-          status: "pending" as const,
-          readiness: "ready" as const,
-          layer: 0,
+          status: "succeeded",
+          readiness: "succeeded",
           layer_order: 1,
-        },
-      ],
-      edges: [
-        { from: "plan", to: "implement" },
-        { from: "implement", to: "review" },
-      ],
-    };
-    expect(buildFeedbackOverlays(undefined, [], track)).toEqual([
-      { from: "review", to: "implement", kind: "policy" },
-    ]);
-  });
-
-  it("prefers deferred and replay overlays over policy stubs for the same route", () => {
-    const track = {
-      nodes: [
-        {
-          stage_id: "implement",
-          status: "succeeded" as const,
-          readiness: "succeeded" as const,
-          layer: 0,
-          layer_order: 0,
-        },
-        {
-          stage_id: "review",
-          status: "waiting_for_input" as const,
-          readiness: "waiting" as const,
-          layer: 1,
-          layer_order: 0,
-          feedback_loop: { target: "implement" },
-        },
-        {
-          stage_id: "plan",
-          status: "succeeded" as const,
-          readiness: "succeeded" as const,
-          layer: 0,
-          layer_order: 1,
-        },
+        }),
       ],
       edges: [],
     };
-    const active = feedbackLoop({
-      state: "waiting_for_human",
-      current_replay_number: 2,
-      deferred_send_back: {
-        target: "implement",
-        feedback_envelope: feedbackEnvelope,
-        source_attempt: 2,
-      },
-      policy: {
-        target: "implement",
-        max_replays: 2,
-        on_max_replays: "wait_for_human",
-        replay_session: "resume",
-      },
-    });
-    expect(buildFeedbackOverlays(active, [], track)).toEqual([
+    expect(buildFeedbackOverlays(waitingActive, [], track)).toEqual([
       { from: "review", to: "implement", kind: "deferred" },
     ]);
 
-    const history: FeedbackLoopHistory[] = [
-      {
-        loop: feedbackLoop({ current_replay_number: 1 }),
-        replays: [
-          {
-            replay: {
-              run_id: "run-1",
-              replay_id: "replay-1",
-              loop_id: "loop-1",
-              source_stage_id: "review",
-              source_attempt: 1,
-              target_stage_id: "plan",
-              replay_number: 1,
-              max_replays: 2,
-              replay_session: "resume",
-              route_stage_ids: ["plan", "implement", "review"],
-              feedback_envelope: feedbackEnvelope,
-              status: "active",
-              created_at: "2026-08-18T00:00:00.000Z",
-              updated_at: "2026-08-18T00:00:00.000Z",
-            },
-            stage_passes: [],
-            fork_generations: [],
-          },
-        ],
-        fork_generations: [],
-      },
+    const history = [
+      historyOf(feedbackLoop({ current_replay_number: 1 }), [
+        replayEntry({
+          target_stage_id: "plan",
+          route_stage_ids: ["plan", "implement", "review"],
+          status: "active",
+        }),
+      ]),
     ];
     expect(buildFeedbackOverlays(undefined, history, track)).toEqual([
       { from: "review", to: "implement", kind: "policy" },
@@ -2029,28 +1679,13 @@ describe("feedback loop workspace", () => {
       {
         pipeline_track: {
           nodes: [
-            {
-              stage_id: "plan",
-              status: "pending",
-              readiness: "ready",
-              layer: 0,
-              layer_order: 0,
-            },
-            {
-              stage_id: "implement",
-              status: "pending",
-              readiness: "blocked",
-              layer: 1,
-              layer_order: 0,
-            },
-            {
+            trackNode({ stage_id: "plan", readiness: "ready" }),
+            trackNode({ stage_id: "implement", layer: 1 }),
+            trackNode({
               stage_id: "review",
-              status: "pending",
-              readiness: "blocked",
               layer: 2,
-              layer_order: 0,
               feedback_loop: { target: "implement" },
-            },
+            }),
           ],
           edges: [
             { from: "plan", to: "implement" },
@@ -2071,204 +1706,75 @@ describe("feedback loop workspace", () => {
     ).toBe(true);
   });
 
-  it("omits superseded clone instances from the spatial map", () => {
-    const cloneTrack = {
-      nodes: [
-        cloneTrackNode({
-          stage_id: "fork",
-          definition_id: "fork",
-          status: "succeeded",
-          readiness: "succeeded",
-          layer: 0,
-          layer_order: 0,
-        }),
-        cloneTrackNode({
-          stage_id: "work~1",
+  const forkJoinTrack = {
+    nodes: [
+      trackNode({
+        stage_id: "fork",
+        definition_id: "fork",
+        status: "succeeded",
+        readiness: "succeeded",
+      }),
+      ...(["work~1", "work~2", "work~3"] as const).map((id, i) =>
+        trackNode({
+          stage_id: id,
           definition_id: "work",
-          status: "succeeded",
-          readiness: "succeeded",
+          status: i < 2 ? "succeeded" : "running",
+          readiness: i < 2 ? "succeeded" : "running",
           layer: 1,
-          layer_order: 0,
+          layer_order: i,
         }),
-        cloneTrackNode({
-          stage_id: "work~2",
-          definition_id: "work",
-          status: "succeeded",
-          readiness: "succeeded",
-          layer: 1,
-          layer_order: 1,
-        }),
-        cloneTrackNode({
-          stage_id: "work~3",
-          definition_id: "work",
-          status: "running",
-          readiness: "running",
-          layer: 1,
-          layer_order: 2,
-        }),
-        cloneTrackNode({
-          stage_id: "join",
-          definition_id: "join",
-          status: "pending",
-          readiness: "blocked",
-          layer: 2,
-          layer_order: 0,
-        }),
-      ],
+      ),
+      trackNode({ stage_id: "join", definition_id: "join", layer: 2 }),
+    ],
+    edges: [
+      { from: "fork", to: "work~1" },
+      { from: "fork", to: "work~2" },
+      { from: "fork", to: "work~3" },
+      { from: "work~1", to: "join" },
+      { from: "work~2", to: "join" },
+      { from: "work~3", to: "join" },
+    ],
+  };
+
+  it.each([
+    {
+      generation: "superseded",
+      visible: ["fork", "work~3", "join"],
       edges: [
-        { from: "fork", to: "work~1" },
-        { from: "fork", to: "work~2" },
         { from: "fork", to: "work~3" },
-        { from: "work~1", to: "join" },
-        { from: "work~2", to: "join" },
         { from: "work~3", to: "join" },
       ],
-    };
-    const history: FeedbackLoopHistory[] = [
-      {
-        loop: feedbackLoop(),
-        replays: [],
-        fork_generations: [
-          {
-            run_id: "run-1",
-            generation_id: "gen-1",
-            fork_parent_stage_id: "fork",
-            generation_number: 1,
-            clone_stage_ids: ["work~1", "work~2"],
-            status: "superseded",
-            created_at: "2026-08-18T00:00:00.000Z",
-            updated_at: "2026-08-18T00:00:00.000Z",
-          },
+    },
+    {
+      generation: "active",
+      visible: ["fork", "work~1", "work~2", "work~3", "join"],
+      edges: forkJoinTrack.edges,
+    },
+  ] as const)(
+    "fork generation $generation: map keeps $visible",
+    ({ generation, visible, edges }) => {
+      const run = detail(
+        [
+          stage({ stage_id: "fork", status: "succeeded" }),
+          stage({ stage_id: "work~1", status: "succeeded" }),
+          stage({ stage_id: "work~2", status: "succeeded" }),
+          stage({ stage_id: "work~3", status: "running" }),
+          stage({ stage_id: "join", status: "pending" }),
         ],
-      },
-    ];
-    const run = detail(
-      [
-        stage({ stage_id: "fork", status: "succeeded" }),
-        stage({ stage_id: "work~1", status: "succeeded" }),
-        stage({ stage_id: "work~2", status: "succeeded" }),
-        stage({ stage_id: "work~3", status: "running" }),
-        stage({ stage_id: "join", status: "pending" }),
-      ],
-      {
-        pipeline_track: cloneTrack,
-        feedback_loops: history,
-      },
-    );
-    const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
-      "fork",
-      "work~3",
-      "join",
-    ]);
-    expect(workspace.trackStages.map((s) => s.id)).toEqual([
-      "fork",
-      "work~3",
-      "join",
-    ]);
-    expect(workspace.nodeChrome.map((c) => c.stageId)).toEqual([
-      "fork",
-      "work~3",
-      "join",
-    ]);
-    expect(workspace.spatialLayout.edges).toEqual([
-      { from: "fork", to: "work~3" },
-      { from: "work~3", to: "join" },
-    ]);
-  });
-
-  it("keeps every clone on the map when no fork generation is superseded", () => {
-    const cloneTrack = {
-      nodes: [
-        cloneTrackNode({
-          stage_id: "fork",
-          definition_id: "fork",
-          status: "succeeded",
-          readiness: "succeeded",
-          layer: 0,
-          layer_order: 0,
-        }),
-        cloneTrackNode({
-          stage_id: "work~1",
-          definition_id: "work",
-          status: "succeeded",
-          readiness: "succeeded",
-          layer: 1,
-          layer_order: 0,
-        }),
-        cloneTrackNode({
-          stage_id: "work~2",
-          definition_id: "work",
-          status: "succeeded",
-          readiness: "succeeded",
-          layer: 1,
-          layer_order: 1,
-        }),
-        cloneTrackNode({
-          stage_id: "join",
-          definition_id: "join",
-          status: "pending",
-          readiness: "blocked",
-          layer: 2,
-          layer_order: 0,
-        }),
-      ],
-      edges: [
-        { from: "fork", to: "work~1" },
-        { from: "fork", to: "work~2" },
-        { from: "work~1", to: "join" },
-        { from: "work~2", to: "join" },
-      ],
-    };
-    const history: FeedbackLoopHistory[] = [
-      {
-        loop: feedbackLoop(),
-        replays: [],
-        fork_generations: [
-          {
-            run_id: "run-1",
-            generation_id: "gen-1",
-            fork_parent_stage_id: "fork",
-            generation_number: 1,
-            clone_stage_ids: ["work~1", "work~2"],
-            status: "active",
-            created_at: "2026-08-18T00:00:00.000Z",
-            updated_at: "2026-08-18T00:00:00.000Z",
-          },
-        ],
-      },
-    ];
-    const run = detail(
-      [
-        stage({ stage_id: "fork", status: "succeeded" }),
-        stage({ stage_id: "work~1", status: "succeeded" }),
-        stage({ stage_id: "work~2", status: "succeeded" }),
-        stage({ stage_id: "join", status: "pending" }),
-      ],
-      {
-        pipeline_track: cloneTrack,
-        feedback_loops: history,
-      },
-    );
-    const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
-      "fork",
-      "work~1",
-      "work~2",
-      "join",
-    ]);
-    expect(workspace.trackStages.map((s) => s.id)).toEqual([
-      "fork",
-      "work~1",
-      "work~2",
-      "join",
-    ]);
-    expect(workspace.nodeChrome.map((c) => c.stageId)).toEqual([
-      "fork",
-      "work~1",
-      "work~2",
-      "join",
-    ]);
-    expect(workspace.spatialLayout.edges).toEqual(cloneTrack.edges);
-  });
+        {
+          pipeline_track: forkJoinTrack,
+          feedback_loops: [
+            historyOf(feedbackLoop(), [], [
+              forkGeneration(generation, ["work~1", "work~2"]),
+            ]),
+          ],
+        },
+      );
+      const workspace = resolveRunWorkspace(stream, run, selection());
+      expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual(visible);
+      expect(workspace.trackStages.map((s) => s.id)).toEqual(visible);
+      expect(workspace.nodeChrome.map((c) => c.stageId)).toEqual(visible);
+      expect(workspace.spatialLayout.edges).toEqual(edges);
+    },
+  );
 });

@@ -38,218 +38,110 @@ async function seedCatalog(root: string): Promise<void> {
   );
 }
 
+const BASE_BODY = {
+  directory: "triggers",
+  id: "ok",
+  pipeline: "hello",
+  task: "my-task",
+  kind: "manual",
+};
+
 describe("parseCreateTriggerBody", () => {
-  it("accepts a valid manual body", () => {
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "nightly-hello",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "manual",
-      }),
-    ).toEqual({
-      directory: "triggers",
-      id: "nightly-hello",
-      pipeline: "hello",
-      task: "my-task",
-      kind: "manual",
-    });
-  });
-
-  it("accepts a valid manual body with task omitted", () => {
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "dynamic-hello",
-        pipeline: "hello",
-        kind: "manual",
-      }),
-    ).toEqual({
-      directory: "triggers",
-      id: "dynamic-hello",
-      pipeline: "hello",
-      kind: "manual",
-    });
-  });
-
-  it("rejects a non-object body", () => {
-    expect(parseCreateTriggerBody(null)).toEqual({
-      ok: false,
-      status: 400,
-      error: "Request body must be an object",
-    });
-  });
-
-  it("rejects a bad id format", () => {
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "Bad_Id",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "manual",
-      }),
-    ).toEqual({ ok: false, status: 400, error: "id must be lowercase kebab-case" });
-  });
-
-  it("rejects an unknown kind", () => {
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "ok",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "cron",
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
-      error: "kind must be one of: manual, schedule, event",
-    });
-  });
-
-  it("requires schedule.cron for kind=schedule", () => {
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "nightly",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "schedule",
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
-      error: "schedule.cron is required for kind=schedule",
-    });
-
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "nightly",
-        pipeline: "hello",
-        task: "my-task",
+  it.each([
+    { name: "a valid manual body", body: { ...BASE_BODY, id: "nightly-hello" } },
+    {
+      name: "a manual body with task omitted",
+      body: { directory: "triggers", id: "dynamic-hello", pipeline: "hello", kind: "manual" },
+    },
+    {
+      name: "schedule.cron with timezone",
+      body: {
+        ...BASE_BODY,
         kind: "schedule",
         schedule: { cron: "0 2 * * *", timezone: "UTC" },
-      }),
-    ).toEqual({
-      directory: "triggers",
-      id: "nightly",
-      pipeline: "hello",
-      task: "my-task",
-      kind: "schedule",
-      schedule: { cron: "0 2 * * *", timezone: "UTC" },
-    });
-  });
-
-  it("requires event.source for kind=event", () => {
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "on-issue",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "event",
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
-      error: "event.source is required for kind=event",
-    });
-
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "on-issue",
-        pipeline: "hello",
-        task: "my-task",
+      },
+    },
+    {
+      name: "event.source with match",
+      body: {
+        ...BASE_BODY,
         kind: "event",
         event: { source: "github", match: { type: "issue" } },
-      }),
-    ).toEqual({
-      directory: "triggers",
-      id: "on-issue",
-      pipeline: "hello",
-      task: "my-task",
-      kind: "event",
-      event: { source: "github", match: { type: "issue" } },
-    });
-  });
-
-  it("passes through event.config alongside match", () => {
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "on-webhook",
-        pipeline: "hello",
-        task: "my-task",
+      },
+    },
+    {
+      name: "event.config alongside match",
+      body: {
+        ...BASE_BODY,
         kind: "event",
         event: {
           source: "webhook",
           match: { action: "opened" },
           config: { secretRef: "WEBHOOK_SECRET", header: "x-signature" },
         },
-      }),
-    ).toEqual({
-      directory: "triggers",
-      id: "on-webhook",
-      pipeline: "hello",
-      task: "my-task",
-      kind: "event",
-      event: {
-        source: "webhook",
-        match: { action: "opened" },
-        config: { secretRef: "WEBHOOK_SECRET", header: "x-signature" },
       },
-    });
+    },
+    { name: "a boolean enabled", body: { ...BASE_BODY, enabled: false } },
+  ])("passes through $name unchanged", ({ body }) => {
+    expect(parseCreateTriggerBody(body)).toEqual(body);
   });
 
-  it("rejects a non-object event.config", () => {
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "on-webhook",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "event",
-        event: { source: "webhook", config: "nope" },
-      }),
-    ).toEqual({ ok: false, status: 400, error: "event.config must be an object" });
-  });
-
-  it("passes through enabled when a boolean, rejects otherwise", () => {
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "ok",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "manual",
-        enabled: false,
-      }),
-    ).toMatchObject({ enabled: false });
-
-    expect(
-      parseCreateTriggerBody({
-        directory: "triggers",
-        id: "ok",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "manual",
-        enabled: "yes",
-      }),
-    ).toEqual({ ok: false, status: 400, error: "enabled must be a boolean" });
+  it.each([
+    {
+      name: "a non-object body",
+      body: null,
+      error: "Request body must be an object",
+    },
+    {
+      name: "a bad id format",
+      body: { ...BASE_BODY, id: "Bad_Id" },
+      error: "id must be lowercase kebab-case",
+    },
+    {
+      name: "an unknown kind",
+      body: { ...BASE_BODY, kind: "cron" },
+      error: "kind must be one of: manual, schedule, event",
+    },
+    {
+      name: "kind=schedule without schedule.cron",
+      body: { ...BASE_BODY, kind: "schedule" },
+      error: "schedule.cron is required for kind=schedule",
+    },
+    {
+      name: "kind=event without event.source",
+      body: { ...BASE_BODY, kind: "event" },
+      error: "event.source is required for kind=event",
+    },
+    {
+      name: "a non-object event.config",
+      body: { ...BASE_BODY, kind: "event", event: { source: "webhook", config: "nope" } },
+      error: "event.config must be an object",
+    },
+    {
+      name: "a non-boolean enabled",
+      body: { ...BASE_BODY, enabled: "yes" },
+      error: "enabled must be a boolean",
+    },
+  ])("rejects $name", ({ body, error }) => {
+    expect(parseCreateTriggerBody(body)).toEqual({ ok: false, status: 400, error });
   });
 });
 
-describe("createTrigger", () => {
-  it("creates a manual trigger file that round-trips, defaulting enabled to true", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
+async function withCatalog(fn: (root: string) => Promise<void>): Promise<void> {
+  const { root, cleanup } = await initTempGitRepo();
+  try {
+    await seedCatalog(root);
+    clearFindProjectRootCacheForTests();
+    await fn(root);
+  } finally {
+    clearFindProjectRootCacheForTests();
+    await cleanup();
+  }
+}
 
+describe("createTrigger", () => {
+  it("creates a manual trigger file that round-trips, defaulting enabled to true", () =>
+    withCatalog(async (root) => {
       const created = await createTrigger(root, {
         directory: "triggers",
         id: "manual-new",
@@ -276,28 +168,17 @@ describe("createTrigger", () => {
       expect(yaml).toContain("enabled: true");
 
       const reloaded = await loadTriggerOutcome(filePath);
-      expect(reloaded.ok).toBe(true);
-      if (reloaded.ok) {
-        expect(reloaded.value).toEqual({
-          id: "manual-new",
-          pipeline: "hello",
-          task: "my-task",
-          kind: "manual",
-          enabled: true,
-        });
-      }
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
+      expect(reloaded.ok && reloaded.value).toEqual({
+        id: "manual-new",
+        pipeline: "hello",
+        task: "my-task",
+        kind: "manual",
+        enabled: true,
+      });
+    }));
 
-  it("creates a schedule trigger honoring an explicit enabled: false", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
+  it("creates a schedule trigger honoring an explicit enabled: false", () =>
+    withCatalog(async (root) => {
       const created = await createTrigger(root, {
         directory: "triggers",
         id: "nightly",
@@ -316,138 +197,14 @@ describe("createTrigger", () => {
         schedule: { cron: "0 2 * * *", timezone: "UTC" },
         enabled: false,
       });
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
+      const reloaded = await loadTriggerOutcome(
+        path.join(root, "triggers", "nightly.trigger.yaml"),
+      );
+      expect(reloaded.ok && reloaded.value.enabled).toBe(false);
+    }));
 
-  it("returns 400 for a bad id format", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const result = await createTrigger(root, {
-        directory: "triggers",
-        id: "Bad_Id",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "manual",
-      });
-      expect(result).toEqual({
-        ok: false,
-        status: 400,
-        error: "id must be lowercase kebab-case",
-      });
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
-
-  it("returns 400 when directory resolves outside the project root", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const result = await createTrigger(root, {
-        directory: "../outside",
-        id: "manual-outside",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "manual",
-      });
-      expect(result).toEqual({
-        ok: false,
-        status: 400,
-        error: "directory must be inside the project root",
-      });
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
-
-  it("returns 422 for a dangling pipeline ref", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const result = await createTrigger(root, {
-        directory: "triggers",
-        id: "manual-bad-pipeline",
-        pipeline: "does-not-exist",
-        task: "my-task",
-        kind: "manual",
-      });
-      expect(result).toEqual({
-        ok: false,
-        status: 422,
-        error: 'Trigger references unknown pipeline "does-not-exist"',
-      });
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
-
-  it("returns 422 for a dangling task ref", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const result = await createTrigger(root, {
-        directory: "triggers",
-        id: "manual-bad-task",
-        pipeline: "hello",
-        task: "also-missing",
-        kind: "manual",
-      });
-      expect(result).toEqual({
-        ok: false,
-        status: 422,
-        error: 'Trigger references unknown task "also-missing"',
-      });
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
-
-  it("returns 422 for an invalid cron expression on a schedule-kind trigger", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const result = await createTrigger(root, {
-        directory: "triggers",
-        id: "bad-cron",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "schedule",
-        schedule: { cron: "not a cron expression" },
-      });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.status).toBe(422);
-      expect(result.error).toContain("Invalid schedule.cron");
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
-
-  it("creates a dynamic-mode trigger with task omitted, writing no task key", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
+  it("creates a dynamic-mode trigger with task omitted, writing no task key", () =>
+    withCatalog(async (root) => {
       const created = await createTrigger(root, {
         directory: "triggers",
         id: "dynamic-hello",
@@ -467,172 +224,111 @@ describe("createTrigger", () => {
       });
 
       const filePath = path.join(root, "triggers", "dynamic-hello.trigger.yaml");
-      const yaml = await readFile(filePath, "utf8");
-      expect(yaml).not.toContain("task:");
+      expect(await readFile(filePath, "utf8")).not.toContain("task:");
 
       const reloaded = await loadTriggerOutcome(filePath);
-      expect(reloaded.ok).toBe(true);
-      if (reloaded.ok) {
-        expect(reloaded.value).toEqual({
-          id: "dynamic-hello",
-          pipeline: "hello",
-          kind: "manual",
-          enabled: true,
-        });
-      }
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
-
-  it("still rejects a dangling pipeline ref when task is omitted", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const result = await createTrigger(root, {
-        directory: "triggers",
-        id: "dynamic-bad-pipeline",
-        pipeline: "does-not-exist",
+      expect(reloaded.ok && reloaded.value).toEqual({
+        id: "dynamic-hello",
+        pipeline: "hello",
         kind: "manual",
+        enabled: true,
       });
-      expect(result).toEqual({
-        ok: false,
-        status: 422,
-        error: 'Trigger references unknown pipeline "does-not-exist"',
-      });
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
+    }));
 
-  it("creates an event trigger with webhook config that round-trips through YAML", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const created = await createTrigger(root, {
-        directory: "triggers",
-        id: "on-webhook",
-        pipeline: "hello",
-        kind: "event",
-        event: {
-          source: "webhook",
-          config: { secretRef: "WEBHOOK_SECRET", header: "x-signature" },
-        },
-      });
-
-      expect(created.ok).toBe(true);
-      if (!created.ok) return;
-      expect(created.trigger).toMatchObject({
-        id: "on-webhook",
-        kind: "event",
-        event: {
-          source: "webhook",
-          config: { secretRef: "WEBHOOK_SECRET", header: "x-signature" },
-        },
-      });
-
-      const filePath = path.join(root, "triggers", "on-webhook.trigger.yaml");
-      const reloaded = await loadTriggerOutcome(filePath);
-      expect(reloaded.ok).toBe(true);
-      if (reloaded.ok) {
-        expect(reloaded.value.event?.config).toEqual({
-          secretRef: "WEBHOOK_SECRET",
-          header: "x-signature",
-        });
-      }
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
-
-  it("creates an event trigger with email config (numeric port) that round-trips through YAML", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const created = await createTrigger(root, {
-        directory: "triggers",
-        id: "on-email",
-        pipeline: "hello",
-        kind: "event",
-        event: {
-          source: "email.message",
-          config: {
-            host: "imap.example.com",
-            port: 993,
-            user: "notifications@example.com",
-            secretRef: "EMAIL_PASSWORD",
-          },
-        },
-      });
-
-      expect(created.ok).toBe(true);
-      if (!created.ok) return;
-      expect(created.trigger).toMatchObject({
-        id: "on-email",
-        kind: "event",
-        event: {
-          source: "email.message",
-          config: {
-            host: "imap.example.com",
-            port: 993,
-            user: "notifications@example.com",
-            secretRef: "EMAIL_PASSWORD",
-          },
-        },
-      });
-
-      const filePath = path.join(root, "triggers", "on-email.trigger.yaml");
-      const reloaded = await loadTriggerOutcome(filePath);
-      expect(reloaded.ok).toBe(true);
-      if (reloaded.ok) {
-        expect(reloaded.value.event?.config).toEqual({
+  it.each([
+    {
+      id: "on-webhook",
+      event: {
+        source: "webhook",
+        config: { secretRef: "WEBHOOK_SECRET", header: "x-signature" },
+      },
+    },
+    {
+      id: "on-email",
+      event: {
+        source: "email.message",
+        config: {
           host: "imap.example.com",
           port: 993,
           user: "notifications@example.com",
           secretRef: "EMAIL_PASSWORD",
-        });
-        expect(typeof reloaded.value.event?.config?.port).toBe("number");
-      }
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
+        },
+      },
+    },
+  ])("creates an event trigger ($event.source) whose config round-trips through YAML", ({ id, event }) =>
+    withCatalog(async (root) => {
+      const created = await createTrigger(root, {
+        directory: "triggers",
+        id,
+        pipeline: "hello",
+        kind: "event",
+        event,
+      });
 
-  it("returns 409 when the id collides with an existing trigger", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      expect(created.trigger).toMatchObject({ id, kind: "event", event });
+
+      const reloaded = await loadTriggerOutcome(path.join(root, "triggers", `${id}.trigger.yaml`));
+      expect(reloaded.ok && reloaded.value.event).toMatchObject(event);
+    }));
+
+  it.each([
+    {
+      name: "a bad id format",
+      body: { id: "Bad_Id" },
+      status: 400,
+      error: "id must be lowercase kebab-case",
+    },
+    {
+      name: "a directory outside the project root",
+      body: { directory: "../outside", id: "manual-outside" },
+      status: 400,
+      error: "directory must be inside the project root",
+    },
+    {
+      name: "a dangling pipeline ref",
+      body: { id: "manual-bad-pipeline", pipeline: "does-not-exist" },
+      status: 422,
+      error: 'Trigger references unknown pipeline "does-not-exist"',
+    },
+    {
+      name: "a dangling task ref",
+      body: { id: "manual-bad-task", task: "also-missing" },
+      status: 422,
+      error: 'Trigger references unknown task "also-missing"',
+    },
+  ])("returns $status for $name", ({ body, status, error }) =>
+    withCatalog(async (root) => {
+      const result = await createTrigger(root, { ...BASE_BODY, ...body });
+      expect(result).toEqual({ ok: false, status, error });
+    }));
+
+  it("returns 422 for an invalid cron expression on a schedule-kind trigger", () =>
+    withCatalog(async (root) => {
+      const result = await createTrigger(root, {
+        ...BASE_BODY,
+        id: "bad-cron",
+        kind: "schedule",
+        schedule: { cron: "not a cron expression" },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.status).toBe(422);
+      expect(result.error).toContain("Invalid schedule.cron");
+    }));
+
+  it("returns 409 when the id collides with an existing trigger", () =>
+    withCatalog(async (root) => {
       await writeFile(
         path.join(root, "triggers", "manual-hello-world.trigger.yaml"),
         "id: manual-hello-world\npipeline: hello\ntask: my-task\nkind: manual\nenabled: true\n",
       );
-      clearFindProjectRootCacheForTests();
-
-      const result = await createTrigger(root, {
-        directory: "triggers",
-        id: "manual-hello-world",
-        pipeline: "hello",
-        task: "my-task",
-        kind: "manual",
-      });
+      const result = await createTrigger(root, { ...BASE_BODY, id: "manual-hello-world" });
       expect(result).toEqual({
         ok: false,
         status: 409,
         error: "Trigger id already exists (triggers/manual-hello-world.trigger.yaml)",
       });
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
-  });
+    }));
 });

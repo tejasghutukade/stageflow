@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import type { AgentPort } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { startTestService } from "./helpers/testInProcessService.js";
@@ -59,18 +60,45 @@ function successEnvelope(summary: string) {
   };
 }
 
+async function withTriggerService(
+  opts: {
+    setup?: (root: string) => Promise<void>;
+    ensureProject?: boolean;
+    agent?: AgentPort;
+  },
+  fn: (ctx: {
+    root: string;
+    store: ReturnType<typeof createRunStore>;
+    service: Awaited<ReturnType<typeof startTestService>>;
+  }) => Promise<void>,
+): Promise<void> {
+  const { root, cleanup } = await initTempGitRepo();
+  try {
+    await seedCatalog(root);
+    await opts.setup?.(root);
+    clearFindProjectRootCacheForTests();
+    const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-"));
+    const store = createRunStore({ rootDir: homeRoot });
+    if (opts.ensureProject) await store.ensureProject(root);
+    const service = await startTestService(store, opts.agent ?? scriptedFakeAgent([]), root);
+    try {
+      await fn({ root, store, service });
+    } finally {
+      await service.stop();
+    }
+  } finally {
+    clearFindProjectRootCacheForTests();
+    await cleanup();
+  }
+}
+
 describe("trigger HTTP routes", () => {
   it("GET /api/triggers lists the catalog trigger; GET /:id and POST /:id/fire round-trip", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-home-"));
-      const store = createRunStore({ rootDir: homeRoot });
-      const agent = scriptedFakeAgent([successEnvelope("clarified")]);
-      const service = await startTestService(store, agent, root);
-      try {
+    await withTriggerService(
+      {
+        agent: scriptedFakeAgent([successEnvelope("clarified")]),
+      },
+      async ({ root, store, service }) => {
         const listRes = await fetch(`${service.baseUrl}/api/triggers`);
         expect(listRes.status).toBe(200);
         const listed = (await listRes.json()) as {
@@ -119,30 +147,22 @@ describe("trigger HTTP routes", () => {
           { method: "POST" },
         );
         expect(fireMissingRes.status).toBe(404);
-      } finally {
-        await service.stop();
-      }
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
+      },
+    );
   });
 
   it("POST /api/triggers/:id/fire either/or task modes: dynamic+task, dynamic+no-task, catalog+task, catalog+no-task, malformed task body", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      await writeFile(
-        path.join(root, "triggers", "dynamic-hello.trigger.yaml"),
-        await readFile(dynamicTriggerFixture, "utf8"),
-      );
-      clearFindProjectRootCacheForTests();
-
-      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-dynamic-"));
-      const store = createRunStore({ rootDir: homeRoot });
-      const agent = scriptedFakeAgent([successEnvelope("clarified"), successEnvelope("clarified")]);
-      const service = await startTestService(store, agent, root);
-      try {
+    await withTriggerService(
+      {
+        setup: async (root) => {
+            await writeFile(
+              path.join(root, "triggers", "dynamic-hello.trigger.yaml"),
+              await readFile(dynamicTriggerFixture, "utf8"),
+            );
+            },
+        agent: scriptedFakeAgent([successEnvelope("clarified"), successEnvelope("clarified")]),
+      },
+      async ({ root, store, service }) => {
         const dynamicFireRes = await fetch(
           `${service.baseUrl}/api/triggers/dynamic-hello/fire`,
           {
@@ -199,26 +219,17 @@ describe("trigger HTTP routes", () => {
         expect(malformedTaskRes.status).toBe(400);
         const malformedTask = (await malformedTaskRes.json()) as { error: string };
         expect(malformedTask.error).toMatch(/id and goal are required strings/);
-      } finally {
-        await service.stop();
-      }
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
+      },
+    );
   });
 
   it("POST /api/triggers creates a trigger, validates the body, and rejects bad refs/cron/duplicates", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-create-"));
-      const store = createRunStore({ rootDir: homeRoot });
-      await store.ensureProject(root);
-      const service = await startTestService(store, scriptedFakeAgent([]), root);
-      try {
+    await withTriggerService(
+      {
+        ensureProject: true,
+        agent: scriptedFakeAgent([]),
+      },
+      async ({ root, store, service }) => {
         const invalidJsonRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -353,29 +364,22 @@ describe("trigger HTTP routes", () => {
         );
         expect(dynamicListed).toBeDefined();
         expect(dynamicListed?.task).toBeUndefined();
-      } finally {
-        await service.stop();
-      }
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
+      },
+    );
   });
 
   it("POST /api/triggers/:id/fire on a disabled trigger returns 409 and does not create a run", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      await writeFile(
-        path.join(root, "triggers", "manual-disabled.trigger.yaml"),
-        "id: manual-disabled\npipeline: hello\ntask: my-task\nkind: manual\nenabled: false\n",
-      );
-      clearFindProjectRootCacheForTests();
-
-      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-disabled-"));
-      const store = createRunStore({ rootDir: homeRoot });
-      const service = await startTestService(store, scriptedFakeAgent([]), root);
-      try {
+    await withTriggerService(
+      {
+        setup: async (root) => {
+            await writeFile(
+              path.join(root, "triggers", "manual-disabled.trigger.yaml"),
+              "id: manual-disabled\npipeline: hello\ntask: my-task\nkind: manual\nenabled: false\n",
+            );
+            },
+        agent: scriptedFakeAgent([]),
+      },
+      async ({ root, store, service }) => {
         const fireRes = await fetch(
           `${service.baseUrl}/api/triggers/manual-disabled/fire`,
           { method: "POST" },
@@ -386,13 +390,8 @@ describe("trigger HTTP routes", () => {
 
         expect(await store.getTrigger("manual-disabled")).toBeNull();
         expect((await store.listRuns()).length).toBe(0);
-      } finally {
-        await service.stop();
-      }
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
+      },
+    );
   });
 
   it("POST /api/triggers creates a webhook-configured event trigger that fires end to end via POST /:id/webhook", async () => {
@@ -479,17 +478,12 @@ describe("trigger HTTP routes", () => {
   });
 
   it("POST /api/triggers creates an email-configured event trigger with a numeric port that round-trips via GET", async () => {
-    const { root, cleanup } = await initTempGitRepo();
-    try {
-      await seedCatalog(root);
-      clearFindProjectRootCacheForTests();
-
-      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-create-email-"));
-      const store = createRunStore({ rootDir: homeRoot });
-      await store.ensureProject(root);
-      const agent = scriptedFakeAgent([successEnvelope("clarified")]);
-      const service = await startTestService(store, agent, root);
-      try {
+    await withTriggerService(
+      {
+        ensureProject: true,
+        agent: scriptedFakeAgent([successEnvelope("clarified")]),
+      },
+      async ({ root, store, service }) => {
         const createdRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -545,13 +539,8 @@ describe("trigger HTTP routes", () => {
           },
         });
         expect(typeof fetched.event?.config?.port).toBe("number");
-      } finally {
-        await service.stop();
-      }
-    } finally {
-      clearFindProjectRootCacheForTests();
-      await cleanup();
-    }
+      },
+    );
   });
 
   it("POST /api/triggers/:id/webhook verifies signature, evaluates match, and fires either/or", async () => {
@@ -695,6 +684,10 @@ describe("trigger HTTP routes", () => {
         expect(matchedFired.fired).toBe(true);
         const matchedRun = await store.readRun(matchedFired.runId);
         expect(matchedRun.pipeline_id).toBe("hello");
+        expect(matchedRun.task_id).toMatch(/^webhook-dynamic-webhook-/);
+        const matchedTask = await store.readTaskYaml(matchedFired.runId);
+        expect(matchedTask).toContain("number: 11");
+        expect(matchedTask).toContain("action: opened");
       } finally {
         await service.stop();
       }

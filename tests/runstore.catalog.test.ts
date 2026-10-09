@@ -158,6 +158,19 @@ describe("runstore catalog", () => {
     ).toBe("failed");
   });
 
+  it("stageStatusFromEvents derives running/succeeded/failed from lifecycle events", () => {
+    expect(stageStatusFromEvents([{ event: "started" }])).toBe("running");
+    expect(
+      stageStatusFromEvents([{ event: "started" }, { event: "succeeded" }]),
+    ).toBe("succeeded");
+    expect(
+      stageStatusFromEvents([
+        { event: "started" },
+        { event: "failed", reason: "boom" },
+      ]),
+    ).toBe("failed");
+  });
+
   it("stageStatusFromEvents derives waiting_for_input and resumed", () => {
     expect(
       stageStatusFromEvents([
@@ -293,7 +306,18 @@ describe("runstore catalog", () => {
     ).toBe("running");
   });
 
-  it("listRuns includes waiting fields while a stage waits", async () => {
+  it.each([
+    {
+      kind: "free_text" as const,
+      message: "What should the module name be?",
+      answer: { kind: "free_text" as const, text: "payments" },
+    },
+    {
+      kind: "confirm" as const,
+      message: "Accept this plan?",
+      answer: { kind: "confirm" as const, decision: "accept" as const },
+    },
+  ])("listRuns includes waiting fields while a $kind stage waits", async ({ kind, message, answer }) => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-cat-list-wait-"));
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
@@ -305,9 +329,9 @@ describe("runstore catalog", () => {
     await store.appendStageEvent(run.runId, "clarify", {
       event: "operator_prompt",
       prompt: {
-        kind: "free_text",
+        kind,
         id: "prompt-1",
-        message: "What should the module name be?",
+        message,
       },
     });
     await store.appendStageEvent(run.runId, "clarify", {
@@ -318,8 +342,8 @@ describe("runstore catalog", () => {
     const row = listed.find((r) => r.run_id === run.runId);
     expect(row?.status).toBe("running");
     expect(row?.waiting_stage_id).toBe("clarify");
-    expect(row?.waiting_summary).toBe("What should the module name be?");
-    expect(row?.waiting_kind).toBe("free_text");
+    expect(row?.waiting_summary).toBe(message);
+    expect(row?.waiting_kind).toBe(kind);
     expect(row?.waiting_prompt_id).toBe("prompt-1");
     expect(row?.stages).toEqual([
       { id: "clarify", status: "waiting_for_input", attempt_count: 1 },
@@ -329,15 +353,15 @@ describe("runstore catalog", () => {
     const detail = await store.readRun(run.runId);
     expect(detail.status).toBe("running");
     expect(detail.waiting_stage_id).toBe("clarify");
-    expect(detail.waiting_summary).toBe("What should the module name be?");
-    expect(detail.waiting_kind).toBe("free_text");
+    expect(detail.waiting_summary).toBe(message);
+    expect(detail.waiting_kind).toBe(kind);
     expect(detail.waiting_prompt_id).toBe("prompt-1");
     expect(detail.failed_stage_id).toBeUndefined();
 
     await store.appendStageEvent(run.runId, "clarify", {
       event: "operator_answer",
       promptId: "prompt-1",
-      answer: { kind: "free_text", text: "payments" },
+      answer,
     });
     await store.appendStageEvent(run.runId, "clarify", { event: "resumed" });
 

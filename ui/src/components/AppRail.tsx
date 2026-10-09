@@ -20,6 +20,7 @@ const defaultItems: RailItem[] = [
   { id: "workshop", label: "Workshop", glyph: "✎" },
   { id: "tasks", label: "Tasks", glyph: "▦" },
   { id: "triggers", label: "Triggers", glyph: "⚡" },
+  { id: "connections", label: "Connections", glyph: "↔" },
   { id: "skills", label: "Skills", glyph: "✦" },
   { id: "extensions", label: "Extensions", glyph: "◇" },
   { id: "settings", label: "Settings", glyph: "⚙" },

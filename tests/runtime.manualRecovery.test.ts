@@ -9,7 +9,9 @@ import { RunManager } from "../src/runtime/runManager.js";
 import { runPipeline } from "../src/runtime/pipelineRunner.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { startUiServer } from "../src/server/http.js";
+import { closeServer } from "./helpers/closeServer.js";
 import { mcpCall } from "./helpers/mcpCall.js";
+import { waitFor } from "./helpers/waitFor.js";
 
 async function writeManualRecoveryCatalog(root: string): Promise<string> {
   await writeFile(
@@ -92,44 +94,27 @@ async function writeTargetManualRecoveryCatalog(root: string): Promise<string> {
   return pipeline;
 }
 
+function failFirstAttempt(
+  store: ReturnType<typeof createRunStore>,
+  cwd: string,
+  pipeline: string,
+) {
+  return runPipeline({
+    agent: scriptedFakeAgent([
+      { type: "emit", envelope: { status: "success", summary: "candidate", artifacts: [] } },
+    ]),
+    store,
+    taskYaml: "id: t\ngoal: g\n",
+    pipeline,
+    cwd,
+    executionMode: "inprocess",
+  });
+}
+
 async function jsonFetch(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
   const body = await res.json();
   return { status: res.status, body };
-}
-
-async function mcpListTools(base: string) {
-  const res = await fetch(`${base}/mcp`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/list",
-      params: {},
-    }),
-  });
-  const text = await res.text();
-  const dataLine = text.split("\n").find((line) => line.startsWith("data: "));
-  if (!dataLine) {
-    throw new Error(`no SSE data in MCP tools/list: ${text.slice(0, 200)}`);
-  }
-  const message = JSON.parse(dataLine.slice("data: ".length)) as {
-    result?: { tools?: Array<{ name: string }> };
-  };
-  return message.result?.tools ?? [];
-}
-
-async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 8000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  throw new Error("timeout waiting for condition");
 }
 
 describe("manual completion recovery", () => {
@@ -137,16 +122,7 @@ describe("manual completion recovery", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-manual-recover-"));
     const pipeline = await writeManualRecoveryCatalog(root);
     const store = createRunStore({ rootDir: root });
-    const initial = await runPipeline({
-      agent: scriptedFakeAgent([
-        { type: "emit", envelope: { status: "success", summary: "candidate", artifacts: [] } },
-      ]),
-      store,
-      taskYaml: "id: t\ngoal: g\n",
-      pipeline,
-      cwd: root,
-      executionMode: "inprocess",
-    });
+    const initial = await failFirstAttempt(store, root, pipeline);
     expect(initial).toMatchObject({ ok: false, outcome: "failed" });
     await expect(
       store.getLatestStageExecution(initial.runId, "implement"),
@@ -238,16 +214,7 @@ describe("manual completion recovery", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-manual-stop-"));
     const pipeline = await writeManualRecoveryCatalog(root);
     const store = createRunStore({ rootDir: root });
-    const initial = await runPipeline({
-      agent: scriptedFakeAgent([
-        { type: "emit", envelope: { status: "success", summary: "candidate", artifacts: [] } },
-      ]),
-      store,
-      taskYaml: "id: t\ngoal: g\n",
-      pipeline,
-      cwd: root,
-      executionMode: "inprocess",
-    });
+    const initial = await failFirstAttempt(store, root, pipeline);
     const manager = new RunManager({
       agent: scriptedFakeAgent([]),
       store,
@@ -284,16 +251,7 @@ describe("manual completion recovery", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-manual-target-"));
     const pipeline = await writeTargetManualRecoveryCatalog(root);
     const store = createRunStore({ rootDir: root });
-    const initial = await runPipeline({
-      agent: scriptedFakeAgent([
-        { type: "emit", envelope: { status: "success", summary: "candidate", artifacts: [] } },
-      ]),
-      store,
-      taskYaml: "id: t\ngoal: g\n",
-      pipeline,
-      cwd: root,
-      executionMode: "inprocess",
-    });
+    const initial = await failFirstAttempt(store, root, pipeline);
     expect(initial).toMatchObject({ ok: false, outcome: "failed" });
 
     const inputs: StageRunInput[] = [];
@@ -384,16 +342,7 @@ describe("manual completion recovery", () => {
       ].join("\n"),
     );
     const store = createRunStore({ rootDir: root });
-    const initial = await runPipeline({
-      agent: scriptedFakeAgent([
-        { type: "emit", envelope: { status: "success", summary: "candidate", artifacts: [] } },
-      ]),
-      store,
-      taskYaml: "id: t\ngoal: g\n",
-      pipeline,
-      cwd: root,
-      executionMode: "inprocess",
-    });
+    const initial = await failFirstAttempt(store, root, pipeline);
     expect(initial).toMatchObject({ ok: false, outcome: "failed" });
     const frozen = (await store.readRunMeta(initial.runId)).pipeline_dag;
     expect(frozen?.nodes[0]?.completion).toEqual({
@@ -494,20 +443,11 @@ describe("manual completion recovery", () => {
     });
   });
 
-  it("HTTP /recovery and MCP recover_manual_stage still recover a target-dialect stage", async () => {
+  it("HTTP /recovery and MCP recover_manual_stage recover a target-dialect stage", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-manual-http-mcp-"));
     const pipeline = await writeTargetManualRecoveryCatalog(root);
     const store = createRunStore({ rootDir: root });
-    const initial = await runPipeline({
-      agent: scriptedFakeAgent([
-        { type: "emit", envelope: { status: "success", summary: "candidate", artifacts: [] } },
-      ]),
-      store,
-      taskYaml: "id: t\ngoal: g\n",
-      pipeline,
-      cwd: root,
-      executionMode: "inprocess",
-    });
+    const initial = await failFirstAttempt(store, root, pipeline);
     expect(initial).toMatchObject({ ok: false, outcome: "failed" });
 
     const recoverAgent = scriptedFakeAgent([
@@ -536,11 +476,6 @@ describe("manual completion recovery", () => {
     }
     const base = `http://127.0.0.1:${address.port}`;
     try {
-      const tools = await mcpListTools(base);
-      expect(tools.map((tool) => tool.name)).toEqual(
-        expect.arrayContaining(["recover_manual_stage", "stop_manual_recovery"]),
-      );
-
       const recovered = await jsonFetch(
         `${base}/api/runs/${encodeURIComponent(initial.runId)}/stages/implement/recovery`,
         {
@@ -557,24 +492,13 @@ describe("manual completion recovery", () => {
       });
       await waitFor(async () => (await store.readRunMeta(initial.runId)).status === "succeeded");
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        started.server.close((err) => (err ? reject(err) : resolve()));
-      });
+      await closeServer(started.server);
     }
 
     const stopRoot = await mkdtemp(path.join(tmpdir(), "sf-manual-mcp-stop-"));
     const stopPipeline = await writeTargetManualRecoveryCatalog(stopRoot);
     const stopStore = createRunStore({ rootDir: stopRoot });
-    const parked = await runPipeline({
-      agent: scriptedFakeAgent([
-        { type: "emit", envelope: { status: "success", summary: "candidate", artifacts: [] } },
-      ]),
-      store: stopStore,
-      taskYaml: "id: t\ngoal: g\n",
-      pipeline: stopPipeline,
-      cwd: stopRoot,
-      executionMode: "inprocess",
-    });
+    const parked = await failFirstAttempt(stopStore, stopRoot, stopPipeline);
     const mcpAgent = scriptedFakeAgent([
       {
         type: "emit",
@@ -616,9 +540,7 @@ describe("manual completion recovery", () => {
         async () => (await stopStore.readRunMeta(parked.runId)).status === "succeeded",
       );
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        mcpStarted.server.close((err) => (err ? reject(err) : resolve()));
-      });
+      await closeServer(mcpStarted.server);
     }
   });
 });

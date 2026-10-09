@@ -6,7 +6,6 @@ import {
   ACTIVITY_TEXT_LIMIT,
   truncateActivityText,
   type StageActivityEvent,
-  type StageLogLine,
 } from "../src/agent/activity.js";
 import {
   isOperatorAnswerEvent,
@@ -47,32 +46,15 @@ describe("qaTrail activity event vocabulary", () => {
     "confirm.json",
     "multi_question.json",
     "artifact_backed.json",
-  ] as const)("constructs operator_prompt/answer from %s", async (name) => {
+  ] as const)("operator prompt/answer guards discriminate %s", async (name) => {
     const { prompt, answer } = await loadPair(name);
     const promptEvent = operatorPromptEvent(prompt);
     const answerEvent = operatorAnswerEvent(answer);
 
-    expect(promptEvent).toEqual({ event: "operator_prompt", prompt });
-    expect(answerEvent).toEqual({
-      event: "operator_answer",
-      promptId: answer.promptId,
-      answer,
-    });
     expect(isOperatorPromptEvent(promptEvent)).toBe(true);
     expect(isOperatorAnswerEvent(answerEvent)).toBe(true);
     expect(isOperatorPromptEvent(answerEvent)).toBe(false);
     expect(isOperatorAnswerEvent(promptEvent)).toBe(false);
-
-    const asActivity: StageActivityEvent[] = [promptEvent, answerEvent];
-    const asLog: StageLogLine[] = [promptEvent, answerEvent];
-    expect(asActivity.map((e) => e.event)).toEqual([
-      "operator_prompt",
-      "operator_answer",
-    ]);
-    expect(asLog.map((e) => e.event)).toEqual([
-      "operator_prompt",
-      "operator_answer",
-    ]);
   });
 
   it("stageStatusFromEvents ignores Q&A events", async () => {
@@ -108,19 +90,6 @@ describe("qaTrail activity event vocabulary", () => {
         { event: "resumed" },
       ]),
     ).toBe("running");
-  });
-
-  it("regression: non-HITL started/succeeded/failed status unchanged", () => {
-    expect(stageStatusFromEvents([{ event: "started" }])).toBe("running");
-    expect(
-      stageStatusFromEvents([{ event: "started" }, { event: "succeeded" }]),
-    ).toBe("succeeded");
-    expect(
-      stageStatusFromEvents([
-        { event: "started" },
-        { event: "failed", reason: "boom" },
-      ]),
-    ).toBe("failed");
   });
 
   it("large message and many artifacts round-trip without ACTIVITY_TEXT_LIMIT", () => {

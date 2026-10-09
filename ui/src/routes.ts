@@ -17,6 +17,7 @@ export type Route =
   | { name: "tasks" }
   | { name: "task"; taskId: string }
   | { name: "triggers" }
+  | { name: "connections" }
   | { name: "trigger"; triggerId: string }
   | { name: "skills" }
   | { name: "skill"; skillName: string }
@@ -196,6 +197,7 @@ export function parseHash(hash = window.location.hash): Route {
     if (taskId) return { name: "task", taskId };
   }
   if (path === "triggers") return { name: "triggers" };
+  if (path === "connections") return { name: "connections" };
   if (path.startsWith("triggers/")) {
     const triggerId = firstSegment(path.slice("triggers/".length));
     if (triggerId) return { name: "trigger", triggerId };

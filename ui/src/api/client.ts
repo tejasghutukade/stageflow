@@ -29,6 +29,8 @@ import type {
   TaskDetailFile,
   SkillUsageIndex,
   TriggerListItem,
+  EmailTriggerRule,
+  ConnectionListing,
   CreatedStageListing,
   PackageListing,
   ExtensionFileListing,
@@ -121,6 +123,32 @@ export function fetchPipelines(): Promise<{ pipelines: PipelineListing[] }> {
 
 export function fetchTriggers(): Promise<{ triggers: TriggerListItem[] }> {
   return api("/api/triggers");
+}
+
+export function fetchEmailTriggers(): Promise<{ triggers: EmailTriggerRule[] }> {
+  return api("/api/email/triggers");
+}
+
+export async function fetchConnections(): Promise<ConnectionListing[]> {
+  const result = await api<{ accounts: {
+    accountId: string;
+    displayName: string;
+    address: string;
+    enabled: boolean;
+    folders: string[];
+  }[] }>("/api/email/accounts");
+  return result.accounts.map((account) => ({
+    id: account.accountId,
+    channel: "Email",
+    displayName: account.displayName,
+    address: account.address,
+    enabled: account.enabled,
+    folders: account.folders,
+  }));
+}
+
+export function fetchEmailTrigger(id: string): Promise<EmailTriggerRule> {
+  return api(`/api/email/triggers/${encodeURIComponent(id)}`);
 }
 
 export function fetchTrigger(id: string): Promise<TriggerListItem> {

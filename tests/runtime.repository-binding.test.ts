@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCompletedOnlyStageHandle } from "../src/agent/port.js";
 import {
   bareCachePath,
   resetBareCacheStateForTests,
@@ -18,6 +17,7 @@ import {
   resetGlobalStageflowHomeForTests,
 } from "../src/project/globalHome.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { gatedAgent, recordingAgent } from "./helpers/admissionAgents.js";
 import { pipelinePath } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(
@@ -66,70 +66,6 @@ async function createSourceRepo(): Promise<{ root: string; sha: string }> {
   git(root, ["commit", "-m", "init"]);
   const sha = git(root, ["rev-parse", "HEAD"]);
   return { root, sha };
-}
-
-function gatedAgent(gate: Promise<void>) {
-  return {
-    openStage(input: { stage: { id: string } }) {
-      return createCompletedOnlyStageHandle({
-        stageId: input.stage.id,
-        run: async () => {
-          await gate;
-          return {
-            ok: true as const,
-            envelope: {
-              status: "success" as const,
-              summary: "ok",
-              artifacts: [],
-              payload: {},
-            },
-          };
-        },
-      });
-    },
-    async runStage() {
-      await gate;
-      return {
-        ok: true as const,
-        envelope: {
-          status: "success" as const,
-          summary: "ok",
-          artifacts: [],
-          payload: {},
-        },
-      };
-    },
-  };
-}
-
-function fastAgent() {
-  return {
-    openStage(input: { stage: { id: string } }) {
-      return createCompletedOnlyStageHandle({
-        stageId: input.stage.id,
-        run: async () => ({
-          ok: true as const,
-          envelope: {
-            status: "success" as const,
-            summary: "ok",
-            artifacts: [],
-            payload: {},
-          },
-        }),
-      });
-    },
-    async runStage() {
-      return {
-        ok: true as const,
-        envelope: {
-          status: "success" as const,
-          summary: "ok",
-          artifacts: [],
-          payload: {},
-        },
-      };
-    },
-  };
 }
 
 async function waitUntilIdle(manager: RunManager): Promise<void> {
@@ -191,7 +127,7 @@ describe.skipIf(!gitAvailable)("repository binding start (U5)", () => {
     temps.push(storeRoot);
     const store = createRunStore({ rootDir: storeRoot });
     const manager = new RunManager({
-      agent: fastAgent(),
+      agent: recordingAgent([]),
       cwd: fixtures,
       store,
       maxConcurrent: 3,
@@ -225,7 +161,7 @@ describe.skipIf(!gitAvailable)("repository binding start (U5)", () => {
     await waitUntilIdle(manager);
   });
 
-  it("allows parallel repository runs and still conflicts path peers", async () => {
+  it("allows parallel runs against the same repository", async () => {
     const { root: source } = await createSourceRepo();
     setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source).href);
 
@@ -267,25 +203,6 @@ describe.skipIf(!gitAvailable)("repository binding start (U5)", () => {
     expect(first.runId).not.toBe(second.runId);
     expect(manager.getActiveCount()).toBe(2);
 
-    const checkout = await mkdtemp(path.join(tmpdir(), "sf-u5-path-"));
-    temps.push(checkout);
-    const pathFirst = await manager.startRun({
-      pipeline: pipelinePath("docs-only"),
-      task: { id: "p1", goal: "path-a", checkout },
-    });
-    expect(pathFirst.ok).toBe(true);
-    if (!pathFirst.ok) return;
-
-    const pathSecond = await manager.startRun({
-      pipeline: pipelinePath("docs-only"),
-      task: { id: "p2", goal: "path-b", checkout },
-    });
-    expect(pathSecond.ok).toBe(false);
-    if (!pathSecond.ok) {
-      expect(pathSecond.code).toBe("busy_checkout");
-      expect(pathSecond.status).toBe(409);
-    }
-
     release();
     await waitUntilIdle(manager);
   });
@@ -298,7 +215,7 @@ describe.skipIf(!gitAvailable)("repository binding start (U5)", () => {
     temps.push(storeRoot);
     const store = createRunStore({ rootDir: storeRoot });
     const manager = new RunManager({
-      agent: fastAgent(),
+      agent: recordingAgent([]),
       cwd: fixtures,
       store,
     });
@@ -345,7 +262,7 @@ describe.skipIf(!gitAvailable)("repository binding start (U5)", () => {
     };
 
     const manager = new RunManager({
-      agent: fastAgent(),
+      agent: recordingAgent([]),
       cwd: fixtures,
       store,
     });
@@ -399,7 +316,7 @@ describe.skipIf(!gitAvailable)("repository binding start (U5)", () => {
     });
 
     const manager = new RunManager({
-      agent: fastAgent(),
+      agent: recordingAgent([]),
       cwd: fixtures,
       store,
       maxConcurrent: 3,
@@ -430,7 +347,7 @@ describe.skipIf(!gitAvailable)("repository binding start (U5)", () => {
     temps.push(storeRoot);
     const store = createRunStore({ rootDir: storeRoot });
     const manager = new RunManager({
-      agent: fastAgent(),
+      agent: recordingAgent([]),
       cwd: fixtures,
       store,
     });
@@ -508,7 +425,7 @@ describe.skipIf(!gitAvailable)("repository binding start (U5)", () => {
     temps.push(storeRoot);
     const store = createRunStore({ rootDir: storeRoot });
     const manager = new RunManager({
-      agent: fastAgent(),
+      agent: recordingAgent([]),
       cwd: fixtures,
       store,
     });

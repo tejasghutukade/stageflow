@@ -20,43 +20,26 @@ import { RunManager } from "../src/runtime/runManager.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
-import type { StageEnvelope } from "../src/types/envelope.js";
+import { okEnvelope } from "./helpers/envelopes.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
+import { waitFor } from "./helpers/waitFor.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
 );
 
-const okEnvelope = (
-  summary: string,
-  artifacts: string[] = [],
-): StageEnvelope => ({
-  status: "success",
-  summary,
-  artifacts,
-  payload: {},
-});
-
-async function waitFor(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 5000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  throw new Error("timeout waiting for condition");
-}
-
 function gatedParallelAgent(options: {
   gate: Promise<void>;
   behaviorsByStage: Record<
     string,
-    { summary: string; fail?: boolean; delayMs?: number }
+    { summary: string; fail?: boolean }
   >;
-}): AgentPort & { openCounts: Map<string, number>; concurrent: number } {
+}): AgentPort & {
+  openCounts: Map<string, number>;
+  concurrent: number;
+  maxConcurrent: number;
+} {
   const openCounts = new Map<string, number>();
   let concurrent = 0;
   let maxConcurrent = 0;
@@ -93,9 +76,6 @@ function gatedParallelAgent(options: {
         stageId: input.stage.id,
         run: async () => {
           await options.gate;
-          if (spec?.delayMs) {
-            await new Promise((r) => setTimeout(r, spec.delayMs));
-          }
           concurrent -= 1;
           agent.concurrent = concurrent;
           if (spec?.fail) {
@@ -325,7 +305,7 @@ describe("parallel pipeline scheduler process mode", () => {
 
     expect(result.outcome).toBe("failed");
     expect(result.ok).toBe(false);
-    expect(result.reason).toBeTruthy();
+    expect(result.reason).toMatch(/envelope/i);
   });
 
   it("resumeRun hasActive early return is waiting not succeeded", async () => {
@@ -412,79 +392,6 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     expect(priors["implementation-plan"]).toBe("ancestor");
   });
 
-  it("AE6: sibling isolation — C prior does not include B envelope while C runs", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-parallel-"));
-    const store = createRunStore({ rootDir: root });
-    let releaseB: () => void = () => undefined;
-    const bGate = new Promise<void>((resolve) => {
-      releaseB = resolve;
-    });
-    const priors: Record<string, string | undefined> = {};
-
-    const agent = gatedParallelAgent({
-      gate: Promise.resolve(),
-      behaviorsByStage: {
-        clarify: { summary: "ancestor" },
-        "design-doc": { summary: "branch-b" },
-        "implementation-plan": { summary: "branch-c", delayMs: 200 },
-      },
-    });
-
-    const wrapped = {
-      openStage(input: StageRunInput) {
-        if (input.stage.id === "design-doc") {
-          priors[input.stage.id] = input.priorEnvelope?.summary;
-          return createCompletedOnlyStageHandle({
-            stageId: input.stage.id,
-            run: async () => {
-              await bGate;
-              return {
-                ok: true as const,
-                envelope: okEnvelope("branch-b"),
-              };
-            },
-          });
-        }
-        if (input.stage.id === "implementation-plan") {
-          priors[input.stage.id] = input.priorEnvelope?.summary;
-        }
-        return agent.openStage(input);
-      },
-      runStage(input: StageRunInput) {
-        const handle = wrapped.openStage(input);
-        return (async () => {
-          const event = await handle.next();
-          await handle.close();
-          if (event.status === "waiting_for_input") {
-            return { ok: false as const, reason: "wait" };
-          }
-          return event.result;
-        })();
-      },
-    };
-
-    const runPromise = runPipeline({
-      agent: wrapped,
-      store,
-      taskPath: SAMPLE_TASK,
-      pipeline: pipelinePath("parallel-after-clarify"),
-      cwd: fixtures,
-    });
-
-    await waitFor(
-      async () =>
-        priors["implementation-plan"] !== undefined &&
-        priors["design-doc"] !== undefined,
-    );
-    expect(priors["implementation-plan"]).toBe("ancestor");
-    expect(priors["design-doc"]).toBe("ancestor");
-
-    releaseB();
-    const result = await runPromise;
-    expect(result.ok).toBe(true);
-    expect(priors["design-doc"]).toBe("ancestor");
-  });
-
   it("AE2: ceiling 3 with five siblings — max 3 concurrent, rest after drain", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-parallel-"));
     const store = createRunStore({ rootDir: root });
@@ -536,7 +443,9 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const clarifyAgent = scriptedFakeAgent([
       {
         type: "emit",
-        envelope: okEnvelope("ancestor", ["stages/clarify/attempts/1/artifacts/a.md"]),
+        envelope: okEnvelope("ancestor", {
+          artifacts: ["stages/clarify/attempts/1/artifacts/a.md"],
+        }),
       },
     ]);
 

@@ -18,6 +18,7 @@ import { InboxPage } from "./pages/InboxPage";
 import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TriggersPage } from "./pages/TriggersPage";
+import { ConnectionsPage } from "./pages/ConnectionsPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { CatalogPage } from "./pages/CatalogPage";
@@ -224,6 +225,8 @@ function ConsoleRoot() {
     content = <TasksPage taskId={route.taskId} onNew={go} />;
   } else if (route.name === "triggers") {
     content = <TriggersPage />;
+  } else if (route.name === "connections") {
+    content = <ConnectionsPage />;
   } else if (route.name === "trigger") {
     content = <TriggersPage triggerId={route.triggerId} />;
   } else if (route.name === "catalog") {

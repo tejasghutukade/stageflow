@@ -120,6 +120,7 @@ export type PipelineRunResult = {
 };
 
 export type StartedPipeline = {
+  created?: boolean;
   runId: string;
   runDir: string;
   done: Promise<PipelineRunResult>;
@@ -128,7 +129,7 @@ export type StartedPipeline = {
 export type PreparedPipeline = {
   task: TaskFile;
   loaded: LoadedPipeline;
-  run: { runId: string; workspaceDir: string };
+  run: { runId: string; workspaceDir: string; created?: boolean };
   agent: AgentPort;
   store: RunStore;
   cwd: string;
@@ -162,6 +163,7 @@ function resolveStageProcessLauncher(
 }
 
 async function preparePipeline(options: {
+  dispatchKey?: string;
   submission?: RunSubmission;
   agent: AgentPort;
   store: RunStore;
@@ -352,6 +354,7 @@ async function preparePipeline(options: {
       namedSecrets,
     });
     run = await options.store.createRun({
+      dispatchKey: options.dispatchKey,
       submission: options.submission,
       runId,
       pipelineId: loaded.pipeline.id,
@@ -497,6 +500,7 @@ export async function runPipeline(options: {
 
 /** Create the run immediately, then execute stages in the returned promise. */
 export async function startPipeline(options: {
+  dispatchKey?: string;
   submission?: RunSubmission;
   agent: AgentPort;
   store: RunStore;
@@ -530,6 +534,7 @@ export async function startPipeline(options: {
   const cwd = options.cwd ?? process.cwd();
   const projectRoot = options.projectRoot ?? cwd;
   const prepared = await preparePipeline({
+    dispatchKey: options.dispatchKey,
     submission: options.submission,
     agent: options.agent,
     store: options.store,
@@ -558,6 +563,15 @@ export async function startPipeline(options: {
     callerId: options.callerId,
     ...(options.skills !== undefined ? { skills: options.skills } : {}),
   });
+  if (prepared.run.created === false) {
+    const meta = await prepared.store.readRunMeta(prepared.run.runId);
+    return {
+      created: false,
+      runId: prepared.run.runId,
+      runDir: prepared.run.workspaceDir,
+      done: Promise.resolve({ ok: meta.status === "succeeded", outcome: meta.status === "succeeded" ? "succeeded" : "failed", runId: prepared.run.runId, runDir: prepared.run.workspaceDir, reason: "Recovered existing dispatch; execution was not restarted" }),
+    };
+  }
   const done = executeStages(prepared, {
     maxActiveStagesPerRun: options.maxActiveStagesPerRun,
     executionMode: prepared.executionMode,

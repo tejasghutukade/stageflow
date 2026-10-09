@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
 import { createRunStore } from "../src/runstore/createStore.js";
@@ -19,14 +18,14 @@ import {
   hydratedScheduleHasRunnableWork,
   runPipelineDag,
 } from "../src/runtime/pipelineScheduler.js";
-import {
-  isUnchosenForkChild,
-  shouldReopenSkippedStage,
-} from "../src/runtime/reopenSkipped.js";
+import { shouldReopenSkippedStage } from "../src/runtime/reopenSkipped.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import { syncRunStatusFromStages } from "../src/runtime/stageRecovery.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
+import { okEnvelope } from "./helpers/envelopes.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
+import { stageKeyedAgent } from "./helpers/stageKeyedAgent.js";
+import { waitFor } from "./helpers/waitFor.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -72,66 +71,27 @@ async function seedFailed(
   });
 }
 
-function okEnvelope(
-  summary: string,
-  extra?: Partial<StageEnvelope>,
-): StageEnvelope {
-  return { status: "success", summary, artifacts: [], payload: {}, ...extra };
-}
+const unexpectedOpen = {
+  type: "throw" as const,
+  message: "unexpected stage open",
+};
 
-type FakeAgentBehavior =
-  | { type: "emit"; envelope: StageEnvelope }
-  | { type: "throw"; message: string };
-
-function stageKeyedAgent(
-  behaviorsByStage: Record<string, FakeAgentBehavior[]>,
-): AgentPort {
-  const stageIndex = new Map<string, number>();
-  return {
-    openStage(input: StageRunInput) {
-      const stageId = input.stage.id;
-      const index = stageIndex.get(stageId) ?? 0;
-      stageIndex.set(stageId, index + 1);
-      const behaviors = behaviorsByStage[stageId] ?? [];
-      const behavior = behaviors[index] ?? {
-        type: "throw" as const,
-        message: `no behavior for ${stageId}`,
-      };
-      if (behavior.type === "throw") {
-        throw new Error(behavior.message);
-      }
-      return {
-        async next() {
-          return {
-            status: "completed" as const,
-            result: { ok: true as const, envelope: behavior.envelope },
-          };
-        },
-        async close() {},
-      };
+async function createRunFor(
+  store: ReturnType<typeof createRunStore>,
+  pipelineName: string,
+) {
+  const loaded = await loadPipeline(pipelinePath(pipelineName), {
+    cwd: fixtures,
+  });
+  const run = await store.createRun({
+    pipelineId: loaded.pipeline.id,
+    taskYaml: "id: t\ngoal: g\n",
+    pipelineDag: {
+      ...loaded.dag,
+      stage_ids: loaded.dag.nodes.map((n) => n.id),
     },
-    async runStage(input) {
-      const handle = this.openStage(input);
-      const event = await handle.next();
-      await handle.close();
-      if (event.status === "waiting_for_input") {
-        return { ok: false, reason: "unexpected wait" };
-      }
-      return event.result;
-    },
-  };
-}
-
-async function waitFor(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 8000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  throw new Error("timeout waiting for condition");
+  });
+  return { loaded, run };
 }
 
 const linearParentChildDag = {
@@ -149,160 +109,75 @@ const linearParentChildDag = {
   childrenOf: { a: ["b"], b: [] },
 };
 
-describe("reopenSkipped", () => {
-  it("does not reopen an unchosen fork child", () => {
-    const dag = {
-      nodes: [{ id: "fork", needs: null, needsEdges: [], ancestors: [], stageIndex: 0, fork: { select: "one" as const, allow_none: false } },
-        { id: "a", needs: "fork", needsEdges: [{ id: "fork", on: ["succeeded" as const] }], ancestors: ["fork"], stageIndex: 1 },
-        { id: "b", needs: "fork", needsEdges: [{ id: "fork", on: ["succeeded" as const] }], ancestors: ["fork"], stageIndex: 2 }],
-      roots: ["fork"],
-      childrenOf: { fork: ["a", "b"], a: [], b: [] },
-    };
-    const envelopes = new Map<string, StageEnvelope>([
-      ["fork", { status: "success", summary: "ok", artifacts: [], fork_choice: ["a"] }],
-    ]);
-    expect(isUnchosenForkChild(dag, "b", envelopes)).toBe(true);
-    expect(isUnchosenForkChild(dag, "a", envelopes)).toBe(false);
-  });
+describe("shouldReopenSkippedStage", () => {
+  const okA = new Map<string, StageEnvelope>([["a", okEnvelope("ok")]]);
+  const aSucceededBSkipped = new Map([
+    ["a", "succeeded" as const],
+    ["b", "skipped" as const],
+  ]);
 
-  it("reopens a cascade-skipped child once its parent succeeded", () => {
-    const dag = {
-      nodes: [
-        { id: "a", needs: null, needsEdges: [], ancestors: [], stageIndex: 0 },
-        { id: "b", needs: "a", needsEdges: [{ id: "a", on: ["succeeded" as const] }], ancestors: ["a"], stageIndex: 1 },
-      ],
-      roots: ["a"],
-      childrenOf: { a: ["b"], b: [] },
-    };
-    const states = new Map([
-      ["a", "succeeded" as const],
-      ["b", "skipped" as const],
-    ]);
-    const envelopes = new Map<string, StageEnvelope>([
-      ["a", { status: "success", summary: "ok", artifacts: [] }],
-    ]);
-    expect(shouldReopenSkippedStage(dag, "b", states, envelopes, false)).toBe(
-      true,
-    );
-    expect(shouldReopenSkippedStage(dag, "b", states, envelopes, true)).toBe(
-      false,
-    );
-  });
-
-  it("does not reopen a skipped stage that already started", () => {
-    const states = new Map([
-      ["a", "succeeded" as const],
-      ["b", "skipped" as const],
-    ]);
-    const envelopes = new Map<string, StageEnvelope>([
-      ["a", { status: "success", summary: "ok", artifacts: [] }],
-    ]);
-    expect(
-      shouldReopenSkippedStage(linearParentChildDag, "b", states, envelopes, true),
-    ).toBe(false);
-  });
-
-  it("does not reopen a superseded clone instance", () => {
-    const states = new Map([
-      ["a", "succeeded" as const],
-      ["b", "skipped" as const],
-    ]);
-    const envelopes = new Map<string, StageEnvelope>([
-      ["a", { status: "success", summary: "ok", artifacts: [] }],
-    ]);
+  it.each([
+    {
+      name: "cascade-skipped child whose parent succeeded and has not started",
+      states: aSucceededBSkipped,
+      envelopes: okA,
+      alreadyStarted: false,
+      expected: true,
+    },
+    {
+      name: "skipped stage that already started",
+      states: aSucceededBSkipped,
+      envelopes: okA,
+      alreadyStarted: true,
+      expected: false,
+    },
+    {
+      name: "superseded clone instance",
+      states: aSucceededBSkipped,
+      envelopes: okA,
+      alreadyStarted: false,
+      options: { supersededCloneIds: new Set(["b"]) },
+      expected: false,
+    },
+    {
+      name: "child whose parent failed",
+      states: new Map([
+        ["a", "failed" as const],
+        ["b", "skipped" as const],
+      ]),
+      envelopes: new Map([["a", okEnvelope("boom", { status: "failure" })]]),
+      alreadyStarted: false,
+      expected: false,
+    },
+    {
+      name: "child whose parent is itself skipped",
+      states: new Map([
+        ["a", "skipped" as const],
+        ["b", "skipped" as const],
+      ]),
+      envelopes: new Map<string, StageEnvelope>(),
+      alreadyStarted: false,
+      expected: false,
+    },
+  ])("$name: reopen=$expected", ({ states, envelopes, alreadyStarted, options, expected }) => {
     expect(
       shouldReopenSkippedStage(
         linearParentChildDag,
         "b",
         states,
         envelopes,
-        false,
-        { supersededCloneIds: new Set(["b"]) },
+        alreadyStarted,
+        options,
       ),
-    ).toBe(false);
-  });
-
-  it("does not reopen a child when the parent is still failed", () => {
-    const envelopes = new Map<string, StageEnvelope>([
-      ["a", { status: "failure", summary: "boom", artifacts: [] }],
-    ]);
-    expect(
-      shouldReopenSkippedStage(
-        linearParentChildDag,
-        "b",
-        new Map([
-          ["a", "failed" as const],
-          ["b", "skipped" as const],
-        ]),
-        envelopes,
-        false,
-      ),
-    ).toBe(false);
-    expect(
-      shouldReopenSkippedStage(
-        linearParentChildDag,
-        "b",
-        new Map([
-          ["a", "skipped" as const],
-          ["b", "skipped" as const],
-        ]),
-        new Map(),
-        false,
-      ),
-    ).toBe(false);
+    ).toBe(expected);
   });
 });
 
 describe("hydrateScheduleFromStore cascade skip", () => {
-  it("reopens a skipped successor of a succeeded parent", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-reopen-hydrate-store-"));
-    const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("linear-explicit"), {
-      cwd: fixtures,
-    });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
-
-    await seedSucceeded(store, run.runId, "clarify");
-    await seedSucceeded(store, run.runId, "design-doc");
-    await seedSkipped(store, run.runId, "implementation-plan");
-    await store.updateRunStatus(run.runId, "succeeded");
-
-    const hydrated = await hydrateScheduleFromStore(
-      store,
-      run.runId,
-      loaded.dag,
-    );
-
-    expect(hydrated.states.get("implementation-plan")).toBe("pending");
-    const events = await store.listStageEvents(
-      run.runId,
-      "implementation-plan",
-    );
-    expect(stageStatusFromEvents(events)).toBe("pending");
-    expect(events.map((e) => e.event)).toContain("reopened");
-  });
-
   it("reopens only the next cascade-skipped stage in a linear chain", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-reopen-hydrate-chain-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("linear-explicit"), {
-      cwd: fixtures,
-    });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createRunFor(store, "linear-explicit");
 
     await seedSucceeded(store, run.runId, "clarify");
     await seedSkipped(store, run.runId, "design-doc");
@@ -348,17 +223,7 @@ describe("hydrateScheduleFromStore cascade skip", () => {
   it("does not reopen a cascade-skipped child while the parent is failed", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-reopen-hydrate-failed-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("linear-explicit"), {
-      cwd: fixtures,
-    });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createRunFor(store, "linear-explicit");
 
     await seedSucceeded(store, run.runId, "clarify");
     await seedFailed(store, run.runId, "design-doc");
@@ -385,17 +250,7 @@ describe("hydrateScheduleFromStore cascade skip", () => {
   it("hydrate is idempotent: a second hydrate does not append another reopened", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-reopen-hydrate-idemp-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("linear-explicit"), {
-      cwd: fixtures,
-    });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createRunFor(store, "linear-explicit");
 
     await seedSucceeded(store, run.runId, "clarify");
     await seedSucceeded(store, run.runId, "design-doc");
@@ -466,17 +321,7 @@ describe("hydrateScheduleFromStore cascade skip", () => {
   it("reopens an ungated sibling but not an if-miss gated sibling", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-reopen-hydrate-if-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("route-if-eq"), {
-      cwd: fixtures,
-    });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createRunFor(store, "route-if-eq");
 
     await seedSucceeded(store, run.runId, "triage", {
       payload: { severity: "low" },
@@ -504,17 +349,7 @@ describe("hydrateScheduleFromStore cascade skip", () => {
   it("does not reopen a skipped successor that already started", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-reopen-hydrate-started-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("linear-explicit"), {
-      cwd: fixtures,
-    });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createRunFor(store, "linear-explicit");
 
     await seedSucceeded(store, run.runId, "clarify");
     await seedSucceeded(store, run.runId, "design-doc");
@@ -546,17 +381,7 @@ describe("hydrateScheduleForRetry cascade skip", () => {
   it("persists reopened on skipped downstream of the retry root", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-reopen-hydrate-retry-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("linear-explicit"), {
-      cwd: fixtures,
-    });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createRunFor(store, "linear-explicit");
 
     await seedSucceeded(store, run.runId, "clarify");
     await store.appendStageEvent(run.runId, "design-doc", { event: "started" });
@@ -622,7 +447,7 @@ describe("resume after premature succeeded+skipped", () => {
       "implementation-plan": [
         { type: "emit", envelope: okEnvelope("implementation-plan") },
       ],
-    });
+    }, { fallback: unexpectedOpen });
 
     const result = await runPipelineDag({
       prepared: {
@@ -648,7 +473,7 @@ describe("resume after premature succeeded+skipped", () => {
     expect(names.indexOf("started")).toBeGreaterThan(names.indexOf("reopened"));
   });
 
-  it("onStageSuccess reopens a skipped successor of a parent that was still pending", async () => {
+  it("runPipelineDag reopens a skipped successor of a parent that was still pending", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-reopen-live-success-"));
     const store = createRunStore({ rootDir: root });
     const taskYaml = await readFile(SAMPLE_TASK, "utf8");
@@ -689,7 +514,7 @@ describe("resume after premature succeeded+skipped", () => {
       "implementation-plan": [
         { type: "emit", envelope: okEnvelope("implementation-plan") },
       ],
-    });
+    }, { fallback: unexpectedOpen });
 
     const result = await runPipelineDag({
       prepared: {
@@ -752,7 +577,7 @@ describe("resume after premature succeeded+skipped", () => {
       "implementation-plan": [
         { type: "emit", envelope: okEnvelope("implementation-plan") },
       ],
-    });
+    }, { fallback: unexpectedOpen });
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const resumed = await manager.resumeStalledSchedules();
     expect(resumed.map((entry) => entry.runId)).toContain(run.runId);

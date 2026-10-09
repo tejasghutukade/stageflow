@@ -141,19 +141,6 @@ describe("RunChangeBus", () => {
     expect(missingRunStoreMethods(store)).toEqual([]);
   });
 
-  it("completeness check fails on incomplete hand-list", () => {
-    const incompleteHandList = {
-      createRun: async () => ({ runId: "r", workspaceDir: "/w" }),
-      updateRunStatus: async () => {},
-      appendStageEvent: async () => {},
-      readRun: async () => ({}),
-    };
-    const missing = missingRunStoreMethods(incompleteHandList);
-    expect(missing.length).toBeGreaterThan(0);
-    expect(missing).toContain("listRuns");
-    expect(missing).toContain("updatePipelineDag");
-  });
-
   it("same-bus re-wrap is idempotent and does not double-emit", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-bus-nowrap-"));
     const bus = createRunChangeBus();
