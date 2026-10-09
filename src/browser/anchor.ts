@@ -18,6 +18,8 @@ const LOCK_WAIT_MS = 120_000;
 export type PersistedAnchor = ProfileBrowser & {
   runId: string;
   profile: string;
+  /** Owner scope the profile was opened in; absent in anchors written before it was persisted. */
+  scope?: string;
   /** Bumped each time the anchor was replaced after the first start. */
   restarts: number;
 };
@@ -131,9 +133,10 @@ export function ensureRunProfileBrowser(
       anchorEnv: result.anchorEnv,
       runId: input.runId,
       profile: input.profile.key.name,
+      scope: input.profile.key.scope,
       restarts: (stored?.restarts ?? 0) + (stored !== undefined && changed ? 1 : 0),
     };
-    if (changed) {
+    if (changed || stored?.scope === undefined) {
       const dir = anchorDir(input.runDir, input.profile.key.name);
       const file = path.join(dir, BROWSER_ANCHOR_FILENAME);
       const tmp = `${file}.${process.pid}.tmp`;

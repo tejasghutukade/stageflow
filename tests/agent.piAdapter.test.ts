@@ -18,6 +18,7 @@ import {
   StageSessionReconstructError,
 } from "../src/agent/piAdapter.js";
 import { registerProviderSupport } from "../src/agent/providerSupport.js";
+import { STAGEFLOW_MCP_SPILL_EXTENSION_NAME } from "../src/agent/mcpSpillArtifacts.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { StageMcpError } from "../src/config/resolveStageMcpServers.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
@@ -394,6 +395,11 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     expect(tools).toContain("emit_stage_envelope");
     expect(tools).toContain("write_stage_artifact");
     expect(tools).toEqual([...expectedSealedTools, MCP_TOOL_NAME]);
+    expect(lastLoaderOptions().extensionFactories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: STAGEFLOW_MCP_SPILL_EXTENSION_NAME }),
+      ]),
+    );
   });
 
   it("keeps Cursor additionalExtensionPaths when a snapshot is also present", async () => {

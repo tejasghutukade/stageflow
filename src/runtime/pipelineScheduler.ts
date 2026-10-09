@@ -8,6 +8,7 @@ import {
   resolveStageBrowserEnv,
 } from "../browser/stageBrowserEnv.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
+import { runOwnerScope } from "../browser/ownerScope.js";
 import {
   teardownRunBrowsers,
   teardownStageBrowser,
@@ -1293,6 +1294,7 @@ export async function runPipelineDag(
         acquired = await acquireStageProfile(
           prepared.browser ?? defaultStageBrowserSupport(),
           {
+            scope: runOwnerScope(prepared.browser ?? defaultStageBrowserSupport(), { runId: run.runId }),
             profile,
             owner: { runId: run.runId, stageId },
             isRunLive: createRunLiveness(store),
@@ -1401,6 +1403,7 @@ export async function runPipelineDag(
         {
           runId: run.runId,
           stageId,
+          scope: runOwnerScope(prepared.browser ?? defaultStageBrowserSupport(), { runId: run.runId }),
           runDir: run.workspaceDir,
           browser: stage.browser,
           attempt,

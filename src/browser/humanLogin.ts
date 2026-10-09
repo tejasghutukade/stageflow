@@ -5,7 +5,7 @@ import type { StageBrowserConfig } from "../types/stage.js";
 export type DisplayProbe = () => { hasDisplay: boolean; docker: boolean };
 
 export const NO_SCREEN_MESSAGE =
-  "A visible browser is needed for login, but this Host has no screen. A live view handoff is not available yet.";
+  "A visible browser is needed for login, but this Host has no screen and no live view.";
 export const DOCKER_HINT =
   " This Host runs in Docker: run the login stage on a machine with a screen, or log in there first and reuse the profile.";
 
@@ -42,7 +42,19 @@ export function noScreenError(docker: boolean): Error {
   return new Error(`${NO_SCREEN_MESSAGE}${docker ? DOCKER_HINT : ""}`);
 }
 
-export function humanLoginPromptBlock(url: string | undefined): string {
+export function humanLoginPromptBlock(
+  url: string | undefined,
+  handoff: "local_window" | "live_view" = "local_window",
+): string {
+  if (handoff === "live_view") {
+    return [
+      "## Human login",
+      "",
+      `The Host has opened ${url !== undefined ? JSON.stringify(url) : "the login page"} in a browser the operator can see through the live view shown in the console in this gate.`,
+      "Do not type credentials and do not drive the browser. Call ask_operator with kind confirm: ask the operator to log in through the live view and confirm when done. Leave the browser open.",
+      "After the operator accepts, emit the envelope. The Host re-checks the login itself; if it still sees a logged-out session, this stage runs again.",
+    ].join("\n");
+  }
   return [
     "## Human login",
     "",

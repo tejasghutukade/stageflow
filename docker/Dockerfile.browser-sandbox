@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+#
+# Per-run browser sandbox for the container browser host: Chromium, a virtual
+# display, a TCP forwarder and the profile volume. No agent-browser, no Node,
+# no Stageflow code, no secrets. Run it with the flags the Docker development
+# orchestrator sets (read-only root, tmpfs /tmp, all capabilities dropped,
+# no-new-privileges, pids and memory limits, debugging port on loopback only).
+#
+#   docker build -f docker/Dockerfile.browser-sandbox -t stageflow-browser-sandbox:local docker
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    chromium xvfb xauth socat tini procps ca-certificates \
+    fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
+  && rm -rf /var/lib/apt/lists/* \
+  && useradd --create-home --uid 1000 browser \
+  && mkdir /profile \
+  && chown browser:browser /profile
+
+COPY browser-sandbox-entrypoint.sh /usr/local/bin/browser-sandbox-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/browser-sandbox-entrypoint.sh
+
+USER 1000:1000
+ENV CHROME_FLAGS="--no-sandbox --deny-permission-prompts --disable-crash-reporter --disable-blink-features=AutomationControlled --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader"
+EXPOSE 9222
+VOLUME /profile
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/browser-sandbox-entrypoint.sh"]

@@ -1,6 +1,7 @@
 import { appendFile, chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { globalStageflowHome } from "../project/globalHome.js";
+import type { LiveViewMode } from "./liveViewTickets.js";
 
 /** Records carry names, ids and hosts only: never paths, URLs with queries, or cookie values. */
 export type AuditRecord =
@@ -26,6 +27,14 @@ export type AuditRecord =
       stageId: string;
       profile?: string;
       reason: string;
+    }
+  | {
+      event: "live_view_opened" | "live_view_closed";
+      scope: string;
+      runId: string;
+      stageId: string;
+      mode: LiveViewMode;
+      callerId: string | null;
     };
 
 export interface AuditSink {

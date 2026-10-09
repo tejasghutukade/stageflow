@@ -20,6 +20,8 @@ import {
   maybeCheckpointResidualWal,
   rethrowAsStoreIntegrityFailed,
 } from "../runstore/sqlite/applyStorePragmas.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
+import { consoleStageBrowserSupport } from "../browser/stageBrowserEnv.js";
 import { RunManager } from "../runtime/runManager.js";
 import { PI_CODING_AGENT_DIR_ENV } from "../runtime/stageRoots.js";
 import {
@@ -77,6 +79,8 @@ export type StageflowHostOptions = {
   hostConfig?: HostConfig;
   /** Skip HostConfig load (tests that inject store/manager pieces only). */
   skipHostConfig?: boolean;
+  /** Browser support for the runs this Host executes; defaults to the local host with the live view relay. */
+  browser?: StageBrowserSupport;
   emailTriggerQueue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"];
 };
 
@@ -374,6 +378,7 @@ export async function bootstrapStageflowHost(
     ),
     operatorCatalog: { cwd, agentDir },
     a2aStore,
+    browser: options.browser ?? consoleStageBrowserSupport(),
   });
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();

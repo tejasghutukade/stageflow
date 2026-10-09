@@ -6,6 +6,7 @@ import { FakeAgent, type FakeAgentBehavior } from "../src/agent/fakeAgent.js";
 import type { AgentPort } from "../src/agent/port.js";
 import { runStageViaOpen } from "../src/agent/port.js";
 import type { BrowserRunner, StageBrowserSupport } from "../src/browser/browserHost.js";
+import { createFakeRemoteBrowserHost } from "../src/browser/fakeRemoteBrowserHost.js";
 import { createLocalBrowserHost } from "../src/browser/localBrowserHost.js";
 import { createLocalProfileStore } from "../src/browser/localProfileStore.js";
 import { createInMemoryProfileLock } from "../src/browser/memoryProfileLock.js";
@@ -62,6 +63,7 @@ function setup(options: {
   /** Final URL the Nth `open` lands on; the last one repeats. */
   urls: string[];
   display?: { hasDisplay: boolean; docker: boolean };
+  host?: StageBrowserSupport["host"];
   locks?: ReturnType<typeof createInMemoryProfileLock>;
 }) {
   const calls: Call[] = [];
@@ -93,7 +95,7 @@ function setup(options: {
   };
   const locks = options.locks ?? createInMemoryProfileLock();
   const support: StageBrowserSupport = {
-    host: createLocalBrowserHost({ platform: "darwin", hostEnv: {}, socketRoot: path.join(root, "sock") }),
+    host: options.host ?? createLocalBrowserHost({ platform: "darwin", hostEnv: {}, socketRoot: path.join(root, "sock") }),
     profiles: createLocalProfileStore(),
     runner,
     locks,
@@ -147,6 +149,53 @@ describe("browser human login stage", () => {
     });
     expect(JSON.stringify(prompt)).not.toContain(root);
     expect(JSON.stringify(prompt)).not.toContain("evil.test");
+    const d = await s.manager.deliverAnswer(started.runId, "login", { promptId: String(prompt.id), kind: "confirm", decision: "accept" });
+    expect(d.ok).toBe(true);
+    await started.done;
+  });
+
+  it("host reporting headless_only and no live view fails before the agent starts", async () => {
+    const s = setup({
+      plan: { check: [{ type: "emit", envelope: checkOut }], login: [{ type: "emit", envelope: ok() }] },
+      urls: [LOGGED_OUT],
+      host: createFakeRemoteBrowserHost("ws://127.0.0.1:41000/devtools/browser/anchor", {
+        display: "headless_only",
+        liveView: "none",
+      }),
+      display: { hasDisplay: true, docker: false },
+    });
+    const { started } = await start(s);
+    const result = (await started.done) as { ok: boolean; reason: string };
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("no screen and no live view");
+    expect(s.prompts.login).toBeUndefined();
+  });
+
+  it("virtual display host with a relay: gate carries a tokenless live_view path and the prompt says live view", async () => {
+    const s = setup({
+      plan: {
+        check: [{ type: "emit", envelope: checkOut }],
+        login: [{ type: "wait_then_emit", waitRequests: [{ ...confirmGate(), handoff: { kind: "local_window" } }], envelope: ok() }],
+        work: [{ type: "emit", envelope: ok() }],
+      },
+      urls: [LOGGED_OUT, LOGGED_OUT, LOGGED_IN],
+      display: { hasDisplay: false, docker: true },
+      host: createFakeRemoteBrowserHost("ws://127.0.0.1:41000/devtools/browser/anchor", {
+        display: "virtual_display",
+        liveView: "relay",
+        attach: "cdp",
+      }),
+    });
+    const { started, status } = await start(s);
+    await waitFor(async () => (await status("login"))?.status === "waiting_for_input");
+    const prompt = (await status("login"))!.pending_prompt as Record<string, unknown>;
+    expect(prompt.handoff).toEqual({
+      kind: "live_view",
+      url: `/api/runs/${encodeURIComponent(started.runId)}/stages/login/live-view`,
+    });
+    expect(JSON.stringify(prompt.handoff)).not.toMatch(/token|\?|=/i);
+    expect(s.prompts.login![0]).toContain("through the live view shown in the console");
+    expect(s.prompts.login![0]).not.toContain("visible browser window");
     const d = await s.manager.deliverAnswer(started.runId, "login", { promptId: String(prompt.id), kind: "confirm", decision: "accept" });
     expect(d.ok).toBe(true);
     await started.done;
@@ -226,10 +275,37 @@ describe("browser human login stage", () => {
       expect(s.prompts.login).toBeUndefined();
       const reason = result as { reason: string };
       expect(reason.reason).toContain(
-        "A visible browser is needed for login, but this Host has no screen. A live view handoff is not available yet.",
+        "A visible browser is needed for login, but this Host has no screen and no live view.",
       );
       expect(/Docker/.test(reason.reason)).toBe(docker);
     }
+  });
+
+  it("local host without a display but with the relay option: no early failure, gate is live_view", async () => {
+    const s = setup({
+      plan: {
+        check: [{ type: "emit", envelope: checkOut }],
+        login: [{ type: "wait_then_emit", waitRequests: [confirmGate()], envelope: ok() }],
+        work: [{ type: "emit", envelope: ok() }],
+      },
+      urls: [LOGGED_OUT, LOGGED_OUT, LOGGED_IN],
+      display: { hasDisplay: false, docker: true },
+      host: createLocalBrowserHost({
+        platform: "linux",
+        hostEnv: {},
+        socketRoot: path.join(root, "sock"),
+        liveView: "relay",
+      }),
+    });
+    const { started, status } = await start(s);
+    await waitFor(async () => (await status("login"))?.status === "waiting_for_input");
+    const prompt = (await status("login"))!.pending_prompt as Record<string, unknown>;
+    expect(prompt.handoff).toEqual({
+      kind: "live_view",
+      url: `/api/runs/${encodeURIComponent(started.runId)}/stages/login/live-view`,
+    });
+    await s.manager.deliverAnswer(started.runId, "login", { promptId: String(prompt.id), kind: "confirm", decision: "accept" });
+    expect((await started.done).ok).toBe(true);
   });
 
   it("non-browser stage gate has no handoff, site or profile", async () => {

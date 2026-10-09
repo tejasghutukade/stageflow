@@ -971,3 +971,158 @@ describe("ClaudeAgentAdapter — message-ordering invariant", () => {
     if (result.ok) expect(result.envelope.summary).toBe("ok");
   });
 });
+
+describe("ClaudeAgentAdapter — turn ends without an envelope", () => {
+  type Prompted = { resume?: string };
+
+  /** Each query() call runs the next script and records which session it resumed. */
+  function scriptTurns(scripts: Array<(options: Record<string, unknown>) => AsyncGenerator<unknown>>) {
+    const calls: Prompted[] = [];
+    queryImpl = (options) => {
+      const script = scripts.shift() ?? noEmitTurn("session-r");
+      calls.push({ resume: options.resume as string | undefined });
+      return script(options);
+    };
+    return calls;
+  }
+
+  function noEmitTurn(sessionId: string) {
+    return async function* () {
+      yield initMessage(sessionId);
+      yield { type: "result", subtype: "success", is_error: false, result: "I think we're done." };
+    };
+  }
+
+  async function promptsSent(): Promise<string[]> {
+    const queryMock = (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as {
+      mock: { calls: Array<[{ prompt: AsyncIterable<{ message: { content: string } }> }]> };
+    };
+    const texts: string[] = [];
+    for (const [params] of queryMock.mock.calls) {
+      for await (const m of params.prompt) texts.push(m.message.content);
+    }
+    return texts;
+  }
+
+  let workspaceDir: string;
+  const input = (stage: Partial<StageRunInput["stage"]> = {}): StageRunInput => ({
+    ...baseInput(stage),
+    roots: buildStageRoots(workspaceDir, "review"),
+  });
+
+  beforeEach(async () => {
+    workspaceDir = await mkdtemp(path.join(tmpdir(), "sf-claude-adapter-remind-"));
+    const queryMock = (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as { mockClear(): void };
+    queryMock.mockClear();
+  });
+
+  afterEach(async () => {
+    await rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  it("resumes the same session with a reminder and succeeds when the agent then emits", async () => {
+    const calls = scriptTurns([
+      noEmitTurn("session-a"),
+      async function* (options) {
+        yield initMessage("session-a");
+        await findTool(options, "emit_stage_envelope").handler(
+          { status: "success", summary: "emitted after reminder", artifacts: [] },
+          undefined,
+        );
+        yield userToolResultMessage("emit-1", "ok");
+      },
+    ]);
+    const activity: unknown[] = [];
+    const result = await (await newAdapter()).runStage({ ...input(), onActivity: (e) => activity.push(e) });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.envelope.summary).toBe("emitted after reminder");
+    expect(activity).toContainEqual(
+      expect.objectContaining({ event: "message", role: "user", text: expect.stringContaining("Reminder 1 of 2") }),
+    );
+    expect(calls.map((c) => c.resume)).toEqual([undefined, "session-a"]);
+    const prompts = await promptsSent();
+    expect(prompts[1]).toContain("Reminder 1 of 2");
+  });
+
+  it("fails as missing emit after two unanswered reminders", async () => {
+    const calls = scriptTurns([noEmitTurn("session-b"), noEmitTurn("session-b"), noEmitTurn("session-b")]);
+    const result = await (await newAdapter()).runStage(input());
+    expect(result).toMatchObject({ ok: false, reason: "missing emit_stage_envelope" });
+    expect(calls).toHaveLength(3);
+  });
+
+  it("quotes a rejected emit in the reminder", async () => {
+    scriptTurns([
+      async function* (options) {
+        yield initMessage("session-c");
+        await findTool(options, "emit_stage_envelope").handler({ status: "success" }, undefined);
+        yield { type: "result", subtype: "success", is_error: false, result: "gave up" };
+      },
+    ]);
+    await (await newAdapter()).runStage(input());
+    const prompts = await promptsSent();
+    expect(prompts[1]).toMatch(/was rejected: /);
+  });
+
+  it("reports an API error as a provider error, without reminders", async () => {
+    const calls = scriptTurns([
+      async function* () {
+        yield initMessage("session-d");
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 401,
+          result: "Invalid API key · Please run /login",
+        };
+      },
+    ]);
+    const result = await (await newAdapter()).runStage(input());
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "provider error: Invalid API key · Please run /login (HTTP 401)",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("reports an execution error result as a provider error", async () => {
+    scriptTurns([
+      async function* () {
+        yield initMessage("session-e");
+        yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["stream closed"] };
+      },
+    ]);
+    const result = await (await newAdapter()).runStage(input());
+    expect(result).toMatchObject({ ok: false, reason: "provider error: stream closed" });
+  });
+
+  it("does not remind when no session id was seen", async () => {
+    const calls = scriptTurns([
+      async function* () {
+        yield { type: "result", subtype: "success", is_error: false, result: "done talking" };
+      },
+    ]);
+    const result = await (await newAdapter()).runStage(input());
+    expect(result).toMatchObject({ ok: false, reason: "missing emit_stage_envelope" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("parks normally when a reminder turn asks the operator", async () => {
+    scriptTurns([
+      noEmitTurn("session-f"),
+      async function* (options) {
+        yield initMessage("session-f");
+        await findTool(options, "ask_operator").handler(
+          { kind: "confirm", message: "Proceed?" },
+          undefined,
+        );
+        yield userToolResultMessage("ask-1", "waiting");
+      },
+    ]);
+    const adapter = await newAdapter();
+    const handle = adapter.openStage(input({ gate_kinds: ["confirm"] }));
+    const event = await handle.next();
+    expect(event.status).toBe("waiting_for_input");
+    await handle.close();
+  });
+});

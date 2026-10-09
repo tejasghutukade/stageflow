@@ -5,7 +5,7 @@ import {
   type BrowserSessionOwner,
   closeBrowserSession,
 } from "./browserTeardown.js";
-import type { BrowserRunner } from "./browserHost.js";
+import type { BrowserHost, BrowserRunner } from "./browserHost.js";
 import { defaultSocketRoot } from "./localBrowserHost.js";
 import { rmdir } from "node:fs/promises";
 
@@ -14,6 +14,8 @@ export type BrowserSweepOptions = {
   socketRoot?: string;
   runner?: BrowserRunner;
   closeWaitMs?: number;
+  /** A host whose browsers live outside the local sockets sweeps them itself (containers, by label). */
+  host?: BrowserHost;
 };
 
 async function readOwner(
@@ -37,6 +39,16 @@ async function readOwner(
  * files, and leave sessions of live or waiting runs alone.
  */
 export async function sweepOrphanBrowserSessions(
+  options: BrowserSweepOptions,
+): Promise<{ closed: string[]; released: string[] }> {
+  const { closed } = await sweepLocalSessions(options);
+  // Stage sessions are closed first; the host then releases the browsers they were attached to.
+  const swept = await (options.host?.sweepOrphans?.({ isRunLive: options.isRunLive }) ?? Promise.resolve({ released: [] }))
+    .catch(() => ({ released: [] as string[] }));
+  return { closed, released: swept.released };
+}
+
+async function sweepLocalSessions(
   options: BrowserSweepOptions,
 ): Promise<{ closed: string[] }> {
   const root = options.socketRoot ?? defaultSocketRoot(process.platform);
