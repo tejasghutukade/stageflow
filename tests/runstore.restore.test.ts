@@ -2,17 +2,26 @@ import { describe, expect, it } from "vitest";
 import {
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { createBackup } from "../src/runstore/backup.js";
 import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
 import { storeRootFor } from "../src/runstore/paths.js";
+
+const CREDENTIAL_HOME_ENV = "STAGEFLOW_CREDENTIAL_HOME";
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
 import {
   applyPendingRestoreAtBoot,
   applyRestoreArchive,
@@ -149,5 +158,124 @@ describe("restore", () => {
 
     const blocked = await applyPendingRestoreAtBoot(home);
     expect(blocked.status).toBe("blocked");
+  });
+
+  it("restoring a process archive leaves the operator auth file unchanged and restores settings", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-restore-process-"));
+    const creds = await mkdtemp(path.join(tmpdir(), "sf-restore-operator-"));
+    const prevHome = process.env.STAGEFLOW_HOME;
+    const prevCreds = process.env[CREDENTIAL_HOME_ENV];
+    const { store } = createRunStoreWithConnection({
+      rootDir: root,
+      openerMode: "migrate",
+    });
+    const home = storeRootFor(root);
+    const archivedAuth = '{"archived":"old"}\n';
+    const operatorAuth = '{"operator":"keep"}\n';
+    const archivedSettings = '{"from":"archive"}\n';
+    mkdirSync(path.join(home, "agent"), { recursive: true });
+    writeFileSync(path.join(home, "agent", "auth.json"), archivedAuth, {
+      mode: 0o600,
+    });
+    writeFileSync(path.join(home, "settings.json"), archivedSettings);
+
+    try {
+      process.env.STAGEFLOW_HOME = home;
+      process.env[CREDENTIAL_HOME_ENV] = home;
+      resetGlobalStageflowHomeForTests();
+
+      const backup = await createBackup({
+        store,
+        homeDir: home,
+        outPath: path.join(home, "backups", "process-old.tar.gz"),
+      });
+      await store.close();
+
+      process.env.STAGEFLOW_HOME = home;
+      process.env[CREDENTIAL_HOME_ENV] = creds;
+      resetGlobalStageflowHomeForTests();
+
+      mkdirSync(path.join(creds, "agent"), { recursive: true });
+      writeFileSync(path.join(creds, "agent", "auth.json"), operatorAuth, {
+        mode: 0o600,
+      });
+      writeFileSync(path.join(home, "agent", "auth.json"), "{}\n", {
+        mode: 0o600,
+      });
+      writeFileSync(path.join(home, "settings.json"), '{"from":"live"}\n');
+
+      await applyRestoreArchive({
+        archivePath: backup.path,
+        homeDir: home,
+        probe: async () => "unreachable",
+      });
+
+      expect(readFileSync(path.join(creds, "agent", "auth.json"), "utf8")).toBe(
+        operatorAuth,
+      );
+      expect(readFileSync(path.join(home, "agent", "auth.json"), "utf8")).toBe(
+        "{}\n",
+      );
+      expect(readFileSync(path.join(home, "settings.json"), "utf8")).toBe(
+        archivedSettings,
+      );
+    } finally {
+      restoreEnv("STAGEFLOW_HOME", prevHome);
+      restoreEnv(CREDENTIAL_HOME_ENV, prevCreds);
+      resetGlobalStageflowHomeForTests();
+      await rm(creds, { recursive: true, force: true });
+    }
+  });
+
+  it("restores a usable auth file onto the credential root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-restore-cred-root-"));
+    const prevHome = process.env.STAGEFLOW_HOME;
+    const prevCreds = process.env[CREDENTIAL_HOME_ENV];
+    const { store } = createRunStoreWithConnection({
+      rootDir: root,
+      openerMode: "migrate",
+    });
+    const home = storeRootFor(root);
+    const archivedAuth = '{"archived":"usable"}\n';
+    const archivedSettings = '{"from":"archive"}\n';
+    mkdirSync(path.join(home, "agent"), { recursive: true });
+    writeFileSync(path.join(home, "agent", "auth.json"), archivedAuth, {
+      mode: 0o600,
+    });
+    writeFileSync(path.join(home, "settings.json"), archivedSettings);
+
+    try {
+      process.env.STAGEFLOW_HOME = home;
+      process.env[CREDENTIAL_HOME_ENV] = home;
+      resetGlobalStageflowHomeForTests();
+
+      const backup = await createBackup({
+        store,
+        homeDir: home,
+        outPath: path.join(home, "backups", "cred-root.tar.gz"),
+      });
+      await store.close();
+      writeFileSync(path.join(home, "agent", "auth.json"), '{"replaced":true}\n', {
+        mode: 0o600,
+      });
+      writeFileSync(path.join(home, "settings.json"), '{"from":"live"}\n');
+
+      await applyRestoreArchive({
+        archivePath: backup.path,
+        homeDir: home,
+        probe: async () => "unreachable",
+      });
+
+      expect(readFileSync(path.join(home, "agent", "auth.json"), "utf8")).toBe(
+        archivedAuth,
+      );
+      expect(readFileSync(path.join(home, "settings.json"), "utf8")).toBe(
+        archivedSettings,
+      );
+    } finally {
+      restoreEnv("STAGEFLOW_HOME", prevHome);
+      restoreEnv(CREDENTIAL_HOME_ENV, prevCreds);
+      resetGlobalStageflowHomeForTests();
+    }
   });
 });
