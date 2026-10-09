@@ -98,6 +98,11 @@ import {
 } from "./stageTimeout.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
+  isUsableAuthFile,
+  STAGEFLOW_AGENT_AUTH_PATH_ENV,
+} from "../runtime/credentialBinding.js";
+import { SF_STAGE_WORKER } from "../runtime/stageWorkerProtocol.js";
+import {
   durableRootFileToolDenial,
   STAGEFLOW_PATH_DENIED,
 } from "../runstore/workspaceLayout.js";
@@ -1077,6 +1082,18 @@ async function prepareStageSessionWiring(
   existingAskWaitChannel?: AskOperatorWaitChannel,
 ): Promise<StageSessionWiring | StageRunResult> {
   const { roots } = input;
+  if (
+    process.env[SF_STAGE_WORKER] === "1" &&
+    (!roots.authPath || !isUsableAuthFile(roots.authPath))
+  ) {
+    const authPath = roots.authPath;
+    return {
+      ok: false,
+      reason: authPath
+        ? `Stage provider auth is not configured (auth file missing or empty: ${authPath}).`
+        : `Stage provider auth is not configured (${STAGEFLOW_AGENT_AUTH_PATH_ENV} is unset).`,
+    };
+  }
   const provider = findProviderSupport(input.stage.model);
   const capture: EmitCapture = {};
   const usage: StageUsage = emptyStageUsage();

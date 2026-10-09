@@ -6,7 +6,11 @@ import type { RunMeta } from "../runstore/port.js";
 import { attemptContext, noAttemptContext } from "./stageAttemptContext.js";
 import type { StageAttemptContext } from "./stageAttemptContext.js";
 import type { TaskFile, TaskGitIdentity } from "../types/task.js";
-import { resolveCredentialBinding } from "./credentialBinding.js";
+import {
+  resolveCredentialBinding,
+  STAGEFLOW_AGENT_AUTH_PATH_ENV,
+} from "./credentialBinding.js";
+import { SF_STAGE_WORKER } from "./stageWorkerProtocol.js";
 
 export type DerivedBindingKind = "repository" | "checkout" | "unbound";
 
@@ -198,6 +202,11 @@ export function withResolvedAuthPath(
   factoryCwd: string,
 ): StageRoots {
   if (roots.authPath) return roots;
+  if (process.env[SF_STAGE_WORKER] === "1") {
+    const stamped = process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV]?.trim();
+    if (!stamped) return roots;
+    return { ...roots, authPath: path.resolve(stamped) };
+  }
   const binding = resolveCredentialBinding(factoryCwd);
   return { ...roots, authPath: binding.authPath };
 }

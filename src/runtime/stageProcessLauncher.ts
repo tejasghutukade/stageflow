@@ -10,7 +10,7 @@ import {
 import { isCursorModelRef, readCursorApiKey } from "../agent/cursorProvider.js";
 import { BROWSER_ENV_PREFIX } from "../browser/browserHost.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
-import { PI_HOME_AUTH_PATH_ENV, stageflowAgentAuthPath } from "./credentialBinding.js";
+import { PI_HOME_AUTH_PATH_ENV, sfOwnedAuthPath } from "./credentialBinding.js";
 import { redactString } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
 import {
@@ -470,7 +470,7 @@ export class StageProcessLauncher {
         : overlaid;
     const childEnv: Record<string, string> = {
       ...withBrowser,
-      [PI_HOME_AUTH_PATH_ENV]: stageflowAgentAuthPath(),
+      [PI_HOME_AUTH_PATH_ENV]: sfOwnedAuthPath(),
     };
     const cursorApiKey = readCursorApiKey(hostEnv);
     if (
