@@ -97,10 +97,9 @@ export function resolveCredentialBinding(
   const projectCtx =
     typeof ctx === "string" ? resolveProjectContext(ctx) : ctx;
   const persisted = readCredentialSourceFromContext(projectCtx);
-  const authPath = ensureSfOwnedAuthStore();
   return {
     source: "sf_owned",
-    authPath,
+    authPath: sfOwnedAuthPath(),
     provisional: persisted === undefined,
   };
 }

@@ -1,4 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import type { Provider } from "@earendil-works/pi-ai";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  loginWithApiKey,
+  makeMutationLock,
+  type ProviderAuthRuntime,
+} from "../src/agent/providerAuth.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import {
   createLiveWorkshopOperatorHost,
   sessionNeedsExtensionReload,
@@ -17,6 +29,130 @@ import { resolveWorkshopToolNames } from "../src/agent/piSessionFactory.js";
 import { WORKSHOP_AUTHOR_TOOL_NAMES } from "../src/operatorAgent/profiles/workshopAuthor.js";
 
 const tempHandles: PiOperatorSessionHandle[] = [];
+
+const CREDENTIAL_HOME_ENV = "STAGEFLOW_CREDENTIAL_HOME";
+const USABLE_AUTH = `${JSON.stringify({
+  openai: { type: "api_key", key: "sk-operator" },
+})}\n`;
+const AUTHOR_MODEL = "anthropic/claude-sonnet-4-5";
+
+type AuthFileState = "missing" | "blank" | "{}";
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+
+async function withSplitRoots<T>(
+  fn: (roots: { data: string; creds: string; cwd: string }) => Promise<T>,
+): Promise<T> {
+  const home = await mkdtemp(path.join(tmpdir(), "sf-pi-home-"));
+  const data = await mkdtemp(path.join(tmpdir(), "sf-pi-data-"));
+  const creds = await mkdtemp(path.join(tmpdir(), "sf-pi-cred-"));
+  const cwd = await mkdtemp(path.join(tmpdir(), "sf-pi-cwd-"));
+  const prev = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    STAGEFLOW_HOME: process.env.STAGEFLOW_HOME,
+    credentialHome: process.env[CREDENTIAL_HOME_ENV],
+  };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  process.env.STAGEFLOW_HOME = data;
+  process.env[CREDENTIAL_HOME_ENV] = creds;
+  resetGlobalStageflowHomeForTests();
+  try {
+    return await fn({ data, creds, cwd });
+  } finally {
+    restoreEnv("HOME", prev.HOME);
+    restoreEnv("USERPROFILE", prev.USERPROFILE);
+    restoreEnv("STAGEFLOW_HOME", prev.STAGEFLOW_HOME);
+    restoreEnv(CREDENTIAL_HOME_ENV, prev.credentialHome);
+    resetGlobalStageflowHomeForTests();
+    await rm(home, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+    await rm(creds, { recursive: true, force: true });
+    await rm(cwd, { recursive: true, force: true });
+  }
+}
+
+async function writeAuthState(
+  authPath: string,
+  state: AuthFileState,
+): Promise<void> {
+  if (state === "missing") return;
+  await mkdir(path.dirname(authPath), { recursive: true });
+  await writeFile(authPath, state === "blank" ? " \n" : "{}\n");
+}
+
+function authorHost(
+  cwd: string,
+  agentDir: string,
+  openPiSession?: (
+    input: PiOperatorOpenSessionInput,
+  ) => Promise<PiOperatorSessionHandle>,
+) {
+  return createLiveWorkshopOperatorHost({
+    cwd,
+    agentDir,
+    ...(openPiSession !== undefined ? { openPiSession } : {}),
+    model: AUTHOR_MODEL,
+    settingsDefault: "openai/gpt-4.1",
+    profileDefault: "cursor/auto",
+  });
+}
+
+async function authorError(
+  cwd: string,
+  agentDir: string,
+): Promise<string> {
+  const host = authorHost(cwd, agentDir);
+  const session = host.openSession({
+    profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+    context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+  });
+  try {
+    const events = await session.send("hello");
+    const error = events.find((event) => event.type === "error");
+    expect(error?.type).toBe("error");
+    if (error?.type !== "error") {
+      throw new Error("expected an author error event");
+    }
+    return error.message;
+  } finally {
+    session.close();
+  }
+}
+
+function loginRuntime(): ProviderAuthRuntime {
+  const store = new Map<string, "api_key" | "oauth">();
+  const provider = {
+    id: "key-provider",
+    name: "Key Provider",
+    auth: {
+      apiKey: {
+        login: async () => ({ type: "api_key" as const, key: "stored" }),
+      },
+    },
+  } as unknown as Provider;
+  return {
+    getProviders: () => [provider],
+    getProvider: (id) => (id === provider.id ? provider : undefined),
+    getProviderAuthStatus: (id) => ({
+      configured: store.has(id),
+      source: store.has(id) ? "stored" : undefined,
+    }),
+    listCredentials: async () =>
+      [...store.entries()].map(([providerId, type]) => ({ providerId, type })),
+    checkAuth: async () => undefined,
+    login: async (providerId, type) => {
+      store.set(providerId, type);
+    },
+    logout: async (providerId) => {
+      store.delete(providerId);
+    },
+  };
+}
 
 afterEach(async () => {
   while (tempHandles.length > 0) {
@@ -508,5 +644,161 @@ describe("createPiOperatorAgentModel", () => {
     expect(sessionNeedsExtensionReload([], ["/ext/index.js"])).toBe(true);
     expect(sessionNeedsExtensionReload(["/ext/index.js"], ["/ext/index.js"])).toBe(false);
     expect(sessionNeedsExtensionReload(["/ext/index.js"], [])).toBe(false);
+  });
+
+  it("opens a model session from a usable operator auth file when the process file is {}", async () => {
+    await withSplitRoots(async ({ data, creds, cwd }) => {
+      const operatorAuth = path.join(creds, "agent", "auth.json");
+      const dataAuth = path.join(data, "agent", "auth.json");
+      await mkdir(path.dirname(operatorAuth), { recursive: true });
+      await mkdir(path.dirname(dataAuth), { recursive: true });
+      await writeFile(operatorAuth, USABLE_AUTH);
+      await writeFile(dataAuth, "{}\n");
+      const agentDir = path.join(data, "workshop-agent");
+
+      const create = vi
+        .spyOn(ModelRuntime, "create")
+        .mockRejectedValue(new Error("model-session-opened"));
+      try {
+        const message = await authorError(cwd, agentDir);
+        expect(message).toBe("model-session-opened");
+        expect(create).toHaveBeenCalledWith({
+          authPath: operatorAuth,
+          modelsPath: path.join(creds, "agent", "models.json"),
+        });
+      } finally {
+        create.mockRestore();
+      }
+
+      const mock = createMockPiHandle();
+      const host = authorHost(cwd, agentDir, mock.openPiSession);
+      const session = host.openSession({
+        profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+        context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+      });
+      const events = await session.send("hello");
+      expect(events.some((event) => event.type === "message")).toBe(true);
+      expect(mock.getOpened()?.authPath).toBe(operatorAuth);
+      expect(mock.getOpened()?.modelId).toBe(AUTHOR_MODEL);
+      expect(await readFile(operatorAuth, "utf8")).toBe(USABLE_AUTH);
+      expect(await readFile(dataAuth, "utf8")).toBe("{}\n");
+      session.close();
+    });
+  });
+
+  it("does not create a missing operator auth file when Author opens", async () => {
+    await withSplitRoots(async ({ data, creds, cwd }) => {
+      const operatorAuth = path.join(creds, "agent", "auth.json");
+      const create = vi.spyOn(ModelRuntime, "create");
+      try {
+        const message = await authorError(cwd, path.join(data, "workshop-agent"));
+        expect(message).toMatch(/provider auth is not configured/i);
+        expect(message).toContain(operatorAuth);
+        expect(message).toMatch(/sf providers/i);
+        expect(existsSync(operatorAuth)).toBe(false);
+        expect(create).not.toHaveBeenCalled();
+      } finally {
+        create.mockRestore();
+      }
+    });
+  });
+
+  it("fails Author before the model call for a blank or empty operator auth file", async () => {
+    for (const state of ["blank", "{}"] as const) {
+      await withSplitRoots(async ({ data, creds, cwd }) => {
+        const operatorAuth = path.join(creds, "agent", "auth.json");
+        await writeAuthState(operatorAuth, state);
+        const create = vi.spyOn(ModelRuntime, "create");
+        try {
+          const message = await authorError(
+            cwd,
+            path.join(data, "workshop-agent"),
+          );
+          expect(message).toMatch(/provider auth is not configured/i);
+          expect(message).toContain(operatorAuth);
+          expect(message).not.toMatch(/is not used/);
+          expect(create).not.toHaveBeenCalled();
+        } finally {
+          create.mockRestore();
+        }
+      });
+    }
+  });
+
+  it("names the unused data-directory auth file when the operator file is unusable", async () => {
+    for (const state of ["missing", "blank", "{}"] as const) {
+      await withSplitRoots(async ({ data, creds, cwd }) => {
+        const operatorAuth = path.join(creds, "agent", "auth.json");
+        const dataAuth = path.join(data, "agent", "auth.json");
+        await mkdir(path.dirname(dataAuth), { recursive: true });
+        await writeFile(dataAuth, USABLE_AUTH);
+        await writeAuthState(operatorAuth, state);
+        const create = vi.spyOn(ModelRuntime, "create");
+        try {
+          const message = await authorError(
+            cwd,
+            path.join(data, "workshop-agent"),
+          );
+          expect(message).toContain(operatorAuth);
+          expect(message).toContain(dataAuth);
+          expect(message).toMatch(/process data directory/i);
+          expect(message).toMatch(/is not used/i);
+          expect(create).not.toHaveBeenCalled();
+          if (state === "missing") {
+            expect(existsSync(operatorAuth)).toBe(false);
+          }
+          expect(await readFile(dataAuth, "utf8")).toBe(USABLE_AUTH);
+        } finally {
+          create.mockRestore();
+        }
+      });
+    }
+  });
+
+  it("login creates a missing operator auth file and a later Author open uses it", async () => {
+    await withSplitRoots(async ({ data, creds, cwd }) => {
+      const operatorAuth = path.join(creds, "agent", "auth.json");
+      const dataAuth = path.join(data, "agent", "auth.json");
+      expect(existsSync(operatorAuth)).toBe(false);
+
+      await loginWithApiKey(cwd, "key-provider", "sk-test-secret-marker-U4", {
+        lock: makeMutationLock(),
+        createRuntime: async (authPath) => {
+          expect(authPath).toBe(operatorAuth);
+          await mkdir(path.dirname(authPath), { recursive: true });
+          await writeFile(authPath, USABLE_AUTH);
+          return loginRuntime();
+        },
+      });
+      expect(await readFile(operatorAuth, "utf8")).toBe(USABLE_AUTH);
+      expect(existsSync(dataAuth)).toBe(false);
+
+      const agentDir = path.join(data, "workshop-agent");
+      const create = vi
+        .spyOn(ModelRuntime, "create")
+        .mockRejectedValue(new Error("model-session-opened"));
+      try {
+        const message = await authorError(cwd, agentDir);
+        expect(message).toBe("model-session-opened");
+        expect(create).toHaveBeenCalledWith({
+          authPath: operatorAuth,
+          modelsPath: path.join(path.dirname(operatorAuth), "models.json"),
+        });
+      } finally {
+        create.mockRestore();
+      }
+
+      const mock = createMockPiHandle();
+      const host = authorHost(cwd, agentDir, mock.openPiSession);
+      const session = host.openSession({
+        profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+        context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+      });
+      const events = await session.send("hello");
+      expect(events.some((event) => event.type === "message")).toBe(true);
+      expect(mock.getOpened()?.authPath).toBe(operatorAuth);
+      expect(mock.getOpened()?.modelId).toBe(AUTHOR_MODEL);
+      session.close();
+    });
   });
 });

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { detectPiHome } from "../src/agent/providerAuth.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import {
   ensureSfOwnedAuthStore,
@@ -11,6 +12,8 @@ import {
   sfOwnedAuthPath,
   STAGEFLOW_AGENT_AUTH_PATH_ENV,
 } from "../src/runtime/credentialBinding.js";
+import { withResolvedAuthPath } from "../src/runtime/stageRoots.js";
+import { SF_STAGE_WORKER } from "../src/runtime/stageWorkerProtocol.js";
 import {
   readCredentialSourceFromFile,
   writeCredentialSourceToContext,
@@ -270,6 +273,62 @@ describe("resolveCredentialBinding", () => {
       await rm(home, { recursive: true, force: true });
       await rm(privateDir, { recursive: true, force: true });
       await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a missing operator auth file absent on read, and ensure still creates it", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-cred-home-"));
+    const data = await mkdtemp(path.join(tmpdir(), "sf-cred-data-"));
+    const creds = await mkdtemp(path.join(tmpdir(), "sf-cred-root-"));
+    const operatorAuth = path.join(creds, "agent", "auth.json");
+    const dataAuth = path.join(data, "agent", "auth.json");
+    await mkdir(path.dirname(dataAuth), { recursive: true });
+    const dataAuthBody = `${JSON.stringify({
+      openai: { type: "api_key", key: "data-only" },
+    })}\n`;
+    await writeFile(dataAuth, dataAuthBody);
+    try {
+      await withSavedProcessEnv(async () => {
+        const prevWorker = process.env[SF_STAGE_WORKER];
+        process.env.HOME = home;
+        process.env.USERPROFILE = home;
+        process.env.STAGEFLOW_HOME = data;
+        process.env[CREDENTIAL_HOME_ENV] = creds;
+        delete process.env[SF_STAGE_WORKER];
+        resetGlobalStageflowHomeForTests();
+        try {
+          expect(existsSync(operatorAuth)).toBe(false);
+          const binding = resolveCredentialBinding(home);
+          expect(binding.authPath).toBe(operatorAuth);
+          expect(existsSync(operatorAuth)).toBe(false);
+          detectPiHome(home);
+          expect(existsSync(operatorAuth)).toBe(false);
+          const stageRoots = withResolvedAuthPath(
+            {
+              mode: "unbound",
+              cwd: home,
+              runWorkspaceDir: data,
+              agentDir: path.join(data, "pi-agent"),
+            },
+            home,
+          );
+          expect(stageRoots.authPath).toBe(operatorAuth);
+          expect(existsSync(operatorAuth)).toBe(false);
+          expect(await readFile(dataAuth, "utf8")).toBe(dataAuthBody);
+
+          const created = ensureSfOwnedAuthStore();
+          expect(created).toBe(operatorAuth);
+          expect(await readFile(operatorAuth, "utf8")).toBe("{}\n");
+          expect(await readFile(dataAuth, "utf8")).toBe(dataAuthBody);
+        } finally {
+          if (prevWorker === undefined) delete process.env[SF_STAGE_WORKER];
+          else process.env[SF_STAGE_WORKER] = prevWorker;
+        }
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+      await rm(data, { recursive: true, force: true });
+      await rm(creds, { recursive: true, force: true });
     }
   });
 });

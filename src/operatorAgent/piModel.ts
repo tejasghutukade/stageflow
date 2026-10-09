@@ -319,9 +319,19 @@ function formatTranscriptReplay(
   ].join("\n");
 }
 
+function processDataAuthPath(): string {
+  return path.join(globalStageflowHome(), "agent", "auth.json");
+}
+
 function authNotConfiguredError(authPath: string): Error {
+  const dataAuth = processDataAuthPath();
+  const unusedDataFile =
+    path.resolve(dataAuth) !== path.resolve(authPath) &&
+    isUsableAuthFile(dataAuth)
+      ? ` A usable auth file at ${dataAuth} in the process data directory is not used.`
+      : "";
   return new Error(
-    `Workshop Author provider auth is not configured (auth file missing or empty: ${authPath}). Configure credentials via \`sf providers\` / the operator console Providers page, then retry.`,
+    `Workshop Author provider auth is not configured (auth file missing or empty: ${authPath}).${unusedDataFile} Configure credentials via \`sf providers\` / the operator console Providers page, then retry.`,
   );
 }
 

@@ -10,7 +10,6 @@ import type {
   Provider,
 } from "@earendil-works/pi-ai";
 import {
-  ensureSfOwnedAuthStore,
   parseCredentialSource,
   readCredentialSourceFromContext,
   resolveCredentialBinding,
