@@ -1,17 +1,61 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   cursorBridgePrompt,
   cursorExtensionEntryInPackage,
   isCursorModelRef,
+  readCursorApiKey,
   resolveAgentHomeCursorExtensionPath,
   resolveBundledCursorExtensionPath,
   resolveCursorExtensionPath,
   workshopCursorBridgeHint,
 } from "../src/agent/cursorProvider.js";
 import { findProviderSupport } from "../src/agent/providerSupport.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+
+const CREDENTIAL_HOME_ENV = "STAGEFLOW_CREDENTIAL_HOME";
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+
+async function withDistinctRoots<T>(
+  fn: (roots: { data: string; creds: string }) => Promise<T>,
+): Promise<T> {
+  const data = await mkdtemp(path.join(tmpdir(), "sf-cursor-data-"));
+  const creds = await mkdtemp(path.join(tmpdir(), "sf-cursor-cred-"));
+  const prev = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    STAGEFLOW_HOME: process.env.STAGEFLOW_HOME,
+    credentialHome: process.env[CREDENTIAL_HOME_ENV],
+    STAGEFLOW_AGENT_AUTH_PATH: process.env.STAGEFLOW_AGENT_AUTH_PATH,
+    CURSOR_API_KEY: process.env.CURSOR_API_KEY,
+    CURSOR_API_KEY_FILE: process.env.CURSOR_API_KEY_FILE,
+  };
+  process.env.STAGEFLOW_HOME = data;
+  process.env[CREDENTIAL_HOME_ENV] = creds;
+  resetGlobalStageflowHomeForTests();
+  delete process.env.CURSOR_API_KEY;
+  delete process.env.CURSOR_API_KEY_FILE;
+  try {
+    return await fn({ data, creds });
+  } finally {
+    restoreEnv("HOME", prev.HOME);
+    restoreEnv("USERPROFILE", prev.USERPROFILE);
+    restoreEnv("STAGEFLOW_HOME", prev.STAGEFLOW_HOME);
+    restoreEnv(CREDENTIAL_HOME_ENV, prev.credentialHome);
+    restoreEnv("STAGEFLOW_AGENT_AUTH_PATH", prev.STAGEFLOW_AGENT_AUTH_PATH);
+    restoreEnv("CURSOR_API_KEY", prev.CURSOR_API_KEY);
+    restoreEnv("CURSOR_API_KEY_FILE", prev.CURSOR_API_KEY_FILE);
+    resetGlobalStageflowHomeForTests();
+    await rm(data, { recursive: true, force: true });
+    await rm(creds, { recursive: true, force: true });
+  }
+}
 
 describe("cursor provider support", () => {
   const prevExt = process.env.STAGEFLOW_CURSOR_EXTENSION;
@@ -70,38 +114,44 @@ describe("cursor provider support", () => {
     expect(resolveCursorExtensionPath()).toBe(bundled);
   });
 
-  it("finds the npm install via STAGEFLOW_AGENT_AUTH_PATH when HOME is the attempt dir", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-cursor-home-"));
-    const attemptHome = path.join(root, "attempt");
-    const agentDir = path.join(root, "pi-agent");
-    const entry = path.join(
-      agentDir,
-      "npm",
-      "node_modules",
-      "pi-cursor-sdk",
-      "dist",
-      "index.js",
-    );
-    await mkdir(path.dirname(entry), { recursive: true });
-    await mkdir(attemptHome, { recursive: true });
-    await writeFile(entry, "export {};\n");
+  it("resolves the npm install from the process agent directory when the credential root differs", async () => {
+    await withDistinctRoots(async ({ data, creds }) => {
+      const attemptHome = path.join(data, "attempt");
+      const entry = path.join(
+        data,
+        "agent",
+        "npm",
+        "node_modules",
+        "pi-cursor-sdk",
+        "dist",
+        "index.js",
+      );
+      const decoy = path.join(
+        creds,
+        "agent",
+        "npm",
+        "node_modules",
+        "pi-cursor-sdk",
+        "dist",
+        "index.js",
+      );
+      await mkdir(path.dirname(entry), { recursive: true });
+      await mkdir(path.dirname(decoy), { recursive: true });
+      await mkdir(attemptHome, { recursive: true });
+      await writeFile(entry, "export {};\n");
+      await writeFile(decoy, "export {};\n");
 
-    const prevHome = process.env.HOME;
-    const prevAuth = process.env.STAGEFLOW_AGENT_AUTH_PATH;
-    const prevExt = process.env.STAGEFLOW_CURSOR_EXTENSION;
-    process.env.HOME = attemptHome;
-    process.env.STAGEFLOW_AGENT_AUTH_PATH = path.join(agentDir, "auth.json");
-    delete process.env.STAGEFLOW_CURSOR_EXTENSION;
-    try {
+      process.env.HOME = attemptHome;
+      process.env.USERPROFILE = attemptHome;
+      process.env.STAGEFLOW_AGENT_AUTH_PATH = path.join(
+        creds,
+        "agent",
+        "auth.json",
+      );
+      delete process.env.STAGEFLOW_CURSOR_EXTENSION;
+
       expect(resolveAgentHomeCursorExtensionPath()).toBe(entry);
-    } finally {
-      if (prevHome === undefined) delete process.env.HOME;
-      else process.env.HOME = prevHome;
-      if (prevAuth === undefined) delete process.env.STAGEFLOW_AGENT_AUTH_PATH;
-      else process.env.STAGEFLOW_AGENT_AUTH_PATH = prevAuth;
-      if (prevExt === undefined) delete process.env.STAGEFLOW_CURSOR_EXTENSION;
-      else process.env.STAGEFLOW_CURSOR_EXTENSION = prevExt;
-    }
+    });
   });
 
   it("falls back to src/index.ts when dist is absent", async () => {
@@ -127,5 +177,41 @@ describe("cursor provider support", () => {
     expect(
       cursorBridgePrompt("make a research stage", "anthropic/claude-sonnet-4-5", ["create_stage"]),
     ).toBe("make a research stage");
+  });
+});
+
+describe("readCursorApiKey credential root", () => {
+  it("reads cursor-api-key from the credential root when CURSOR_API_KEY is unset", async () => {
+    await withDistinctRoots(async ({ data, creds }) => {
+      const credentialKey = path.join(creds, "agent", "cursor-api-key");
+      const dataKey = path.join(data, "agent", "cursor-api-key");
+      await mkdir(path.dirname(credentialKey), { recursive: true });
+      await mkdir(path.dirname(dataKey), { recursive: true });
+      await writeFile(credentialKey, "cursor-key-from-credential-root\n");
+      await writeFile(dataKey, "cursor-key-from-data-dir\n");
+
+      expect(readCursorApiKey()).toBe("cursor-key-from-credential-root");
+    });
+  });
+
+  it("prefers CURSOR_API_KEY over the credential-root file", async () => {
+    await withDistinctRoots(async ({ creds }) => {
+      const credentialKey = path.join(creds, "agent", "cursor-api-key");
+      await mkdir(path.dirname(credentialKey), { recursive: true });
+      await writeFile(credentialKey, "cursor-key-from-credential-root\n");
+      process.env.CURSOR_API_KEY = "cursor-key-from-env";
+
+      expect(readCursorApiKey()).toBe("cursor-key-from-env");
+    });
+  });
+
+  it("does not return a key file that exists only under the process data directory", async () => {
+    await withDistinctRoots(async ({ data }) => {
+      const dataKey = path.join(data, "agent", "cursor-api-key");
+      await mkdir(path.dirname(dataKey), { recursive: true });
+      await writeFile(dataKey, "cursor-key-from-data-dir\n");
+
+      expect(readCursorApiKey()).toBeUndefined();
+    });
   });
 });

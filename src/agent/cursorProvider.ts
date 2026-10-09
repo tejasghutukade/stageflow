@@ -9,13 +9,15 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
-import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  globalCredentialRoot,
+  globalStageflowHome,
+} from "../project/globalHome.js";
 import {
   registerProviderSupport,
   type ProviderPrepareResult,
   type StageProviderSupport,
 } from "./providerSupport.js";
-import { stageflowAgentAuthPath } from "../runtime/credentialBinding.js";
 
 const CURSOR_SETTING_SOURCES_ENV = "PI_CURSOR_SETTING_SOURCES";
 
@@ -31,14 +33,14 @@ const CURSOR_SETTING_SOURCES_ENV = "PI_CURSOR_SETTING_SOURCES";
  *    (`dist/index.js` for 0.3+, `src/index.ts` for older publishes)
  * 5. Sibling checkout at ../pi-cursor-sdk relative to this repo
  *
- * A stage worker's HOME is an empty attempt directory; the agent dir comes from
- * STAGEFLOW_AGENT_AUTH_PATH when the Host set it.
+ * A stage worker's HOME is an empty attempt directory. Package lookup uses
+ * $STAGEFLOW_HOME/agent, not the credential root.
  */
 const CURSOR_PACKAGE_ENTRIES = ["dist/index.js", "src/index.ts"] as const;
 
 /** Stageflow agent dir ($STAGEFLOW_HOME/agent). Stage workers must not use os.homedir(): HOME is the attempt dir. */
 function piAgentDir(): string {
-  return path.dirname(stageflowAgentAuthPath());
+  return path.join(globalStageflowHome(), "agent");
 }
 
 export function cursorExtensionEntryInPackage(
@@ -188,7 +190,7 @@ export function readCursorApiKey(
     return fromEnv.trim();
   }
   const filePath = path.join(
-    globalStageflowHome(),
+    globalCredentialRoot(),
     "agent",
     CURSOR_API_KEY_FILE_NAME,
   );

@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AuthInteraction, Provider } from "@earendil-works/pi-ai";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import { PI_CODING_AGENT_DIR_ENV } from "../src/runtime/stageRoots.js";
+import { bootstrapStageflowHost } from "../src/server/bootstrap.js";
 import {
   getAuthStatus,
   listProviders,
@@ -142,6 +147,38 @@ function makeTestContext(runtime: ProviderAuthRuntime): ProviderAuthContext {
   };
 }
 
+const CREDENTIAL_HOME_ENV = "STAGEFLOW_CREDENTIAL_HOME";
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+
+async function withDistinctRoots<T>(
+  fn: (roots: { data: string; creds: string }) => Promise<T>,
+): Promise<T> {
+  const data = await mkdtemp(path.join(tmpdir(), "sf-pa-data-"));
+  const creds = await mkdtemp(path.join(tmpdir(), "sf-pa-cred-"));
+  const prev = {
+    STAGEFLOW_HOME: process.env.STAGEFLOW_HOME,
+    credentialHome: process.env[CREDENTIAL_HOME_ENV],
+    piAgentDir: process.env[PI_CODING_AGENT_DIR_ENV],
+  };
+  process.env.STAGEFLOW_HOME = data;
+  process.env[CREDENTIAL_HOME_ENV] = creds;
+  resetGlobalStageflowHomeForTests();
+  try {
+    return await fn({ data, creds });
+  } finally {
+    restoreEnv("STAGEFLOW_HOME", prev.STAGEFLOW_HOME);
+    restoreEnv(CREDENTIAL_HOME_ENV, prev.credentialHome);
+    restoreEnv(PI_CODING_AGENT_DIR_ENV, prev.piAgentDir);
+    resetGlobalStageflowHomeForTests();
+    await rm(data, { recursive: true, force: true });
+    await rm(creds, { recursive: true, force: true });
+  }
+}
+
 describe("providerAuth", () => {
 
   it("lists providers with capability flags and no secrets", async () => {
@@ -243,6 +280,65 @@ describe("providerAuth", () => {
       expect(settings).not.toContain(marker);
       expect(settings).toContain("sf_owned");
       expect(sfOwnedAuthPath().endsWith("auth.json")).toBe(true);
+    });
+  });
+
+  it("opens models.json beside the operator auth file for list, login, and logout", async () => {
+    await withDistinctRoots(async ({ data, creds }) => {
+      const runtime = createFakeRuntime();
+      const create = vi
+        .spyOn(ModelRuntime, "create")
+        .mockImplementation(
+          async () =>
+            runtime as Awaited<ReturnType<typeof ModelRuntime.create>>,
+        );
+      process.env[PI_CODING_AGENT_DIR_ENV] = path.join(data, "agent");
+      const expected = {
+        authPath: path.join(creds, "agent", "auth.json"),
+        modelsPath: path.join(creds, "agent", "models.json"),
+        refreshOnCreate: false,
+      };
+      try {
+        await listProviders(data);
+        await loginWithApiKey(data, "key-provider", "sk-test-secret-marker-MODELS");
+        await logoutProvider(data, "key-provider");
+        expect(create.mock.calls.map((call) => call[0])).toEqual([
+          expected,
+          expected,
+          expected,
+        ]);
+        expect(process.env[PI_CODING_AGENT_DIR_ENV]).toBe(
+          path.join(data, "agent"),
+        );
+      } finally {
+        create.mockRestore();
+      }
+    });
+  });
+
+  it("keeps PI_CODING_AGENT_DIR on the process agent directory when the credential root differs", async () => {
+    await withDistinctRoots(async ({ data, creds }) => {
+      expect(sfOwnedAuthPath()).toBe(path.join(creds, "agent", "auth.json"));
+      const { root, cleanup } = await initTempGitRepo();
+      delete process.env[PI_CODING_AGENT_DIR_ENV];
+      try {
+        const boot = await bootstrapStageflowHost({
+          agent: scriptedFakeAgent([]),
+          cwd: root,
+          skipHostConfig: true,
+        });
+        await boot.mcpHandler.close();
+        boot.stopGcInterval();
+        boot.stopScheduleSource();
+        boot.stopGithubPollSource();
+        boot.stopEmailSource();
+        expect(process.env[PI_CODING_AGENT_DIR_ENV]).toBe(
+          path.join(data, "agent"),
+        );
+        expect(boot.agentDir).toBe(path.join(data, "agent"));
+      } finally {
+        await cleanup();
+      }
     });
   });
 });

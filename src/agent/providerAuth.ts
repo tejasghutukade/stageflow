@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   CredentialSynchronizationError,
   ModelRuntime,
@@ -124,7 +125,13 @@ export class ProviderAuthError extends Error {
 }
 
 const defaultCreateRuntime: CreateProviderAuthRuntime = async (authPath) =>
-  ModelRuntime.create({ authPath, refreshOnCreate: false });
+  ModelRuntime.create({
+    authPath,
+    // ModelRuntime otherwise reads models.json from PI_CODING_AGENT_DIR,
+    // which stays on the process data directory.
+    modelsPath: path.join(path.dirname(authPath), "models.json"),
+    refreshOnCreate: false,
+  });
 
 export const defaultContext: ProviderAuthContext = {
   createRuntime: defaultCreateRuntime,
