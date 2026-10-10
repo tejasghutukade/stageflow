@@ -1,0 +1,12 @@
+id: sample-github-pr
+pipeline: hello
+task: my-task
+kind: event
+enabled: false
+event:
+  source: github.pull_request
+  match:
+    action: opened
+  config:
+    repo: tejasghutukade/software-factory
+    secretRef: GITHUB_TOKEN

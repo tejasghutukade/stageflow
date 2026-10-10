@@ -49,7 +49,7 @@ function validateTriggerId(id: string): string | null {
 
 type ParsedField<T> = { ok: true; value: T | undefined } | { ok: false; message: string };
 
-function parseScheduleField(raw: unknown): ParsedField<TriggerSchedule> {
+export function parseScheduleField(raw: unknown): ParsedField<TriggerSchedule> {
   if (raw === undefined) return { ok: true, value: undefined };
   if (!isPlainObject(raw)) {
     return { ok: false, message: "schedule must be an object" };
@@ -69,7 +69,7 @@ function parseScheduleField(raw: unknown): ParsedField<TriggerSchedule> {
   };
 }
 
-function parseEventField(raw: unknown): ParsedField<TriggerEvent> {
+export function parseEventField(raw: unknown): ParsedField<TriggerEvent> {
   if (raw === undefined) return { ok: true, value: undefined };
   if (!isPlainObject(raw)) {
     return { ok: false, message: "event must be an object" };
@@ -169,6 +169,37 @@ function resolveDirectory(projectRoot: string, directory: string): string | null
   return absDirectory;
 }
 
+export function scheduleCronError(schedule: TriggerSchedule): string | null {
+  try {
+    new Cron(
+      schedule.cron,
+      schedule.timezone !== undefined ? { timezone: schedule.timezone } : {},
+    );
+    return null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return `Invalid schedule.cron: ${message}`;
+  }
+}
+
+export async function triggerReferenceError(
+  scanPaths: { pipelinePaths: string[]; taskPaths: string[] },
+  pipeline: string,
+  task: string | undefined,
+): Promise<string | null> {
+  const pipelineIds = await collectPipelineIdsFromPaths(scanPaths.pipelinePaths);
+  if (!pipelineIds.has(pipeline)) {
+    return `Trigger references unknown pipeline "${pipeline}"`;
+  }
+  if (task !== undefined) {
+    const taskIds = await collectTaskIdsFromPaths(scanPaths.taskPaths);
+    if (!taskIds.has(task)) {
+      return `Trigger references unknown task "${task}"`;
+    }
+  }
+  return null;
+}
+
 function triggerInputToYaml(input: CreateTriggerInput, enabled: boolean): string {
   const doc: Record<string, unknown> = {
     id: input.id,
@@ -221,38 +252,18 @@ export async function createTrigger(
     };
   }
 
-  const pipelineIds = await collectPipelineIdsFromPaths(scanPaths.pipelinePaths);
-  if (!pipelineIds.has(input.pipeline)) {
-    return {
-      ok: false,
-      status: 422,
-      error: `Trigger references unknown pipeline "${input.pipeline}"`,
-    };
-  }
-
-  if (input.task !== undefined) {
-    const taskIds = await collectTaskIdsFromPaths(scanPaths.taskPaths);
-    if (!taskIds.has(input.task)) {
-      return {
-        ok: false,
-        status: 422,
-        error: `Trigger references unknown task "${input.task}"`,
-      };
-    }
+  const refError = await triggerReferenceError(scanPaths, input.pipeline, input.task);
+  if (refError) {
+    return { ok: false, status: 422, error: refError };
   }
 
   if (input.kind === "schedule") {
     if (!input.schedule) {
       return { ok: false, status: 422, error: "schedule.cron is required for kind=schedule" };
     }
-    try {
-      new Cron(
-        input.schedule.cron,
-        input.schedule.timezone !== undefined ? { timezone: input.schedule.timezone } : {},
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { ok: false, status: 422, error: `Invalid schedule.cron: ${message}` };
+    const cronError = scheduleCronError(input.schedule);
+    if (cronError) {
+      return { ok: false, status: 422, error: cronError };
     }
   }
 

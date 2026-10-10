@@ -1368,15 +1368,39 @@ export class SqliteRunStore implements RunStore {
   async recordTriggerFired(id: string, runId: string): Promise<void> {
     await this.ready();
     const now = new Date().toISOString();
-    const result = this.db
+    const apply = this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          `UPDATE triggers SET last_fired_at = @last_fired_at, last_run_id = @last_run_id, updated_at = @updated_at
+           WHERE id = @id`,
+        )
+        .run({ id, last_fired_at: now, last_run_id: runId, updated_at: now });
+      if (result.changes === 0) {
+        throw new Error(`Trigger not found: ${id}`);
+      }
+      this.db
+        .prepare(
+          `INSERT INTO trigger_fires (trigger_id, run_id, fired_at)
+           VALUES (@trigger_id, @run_id, @fired_at)`,
+        )
+        .run({ trigger_id: id, run_id: runId, fired_at: now });
+    });
+    apply();
+  }
+
+  async listTriggerFires(
+    triggerId: string,
+    limit: number,
+  ): Promise<Array<{ fired_at: string; run_id: string }>> {
+    await this.ready();
+    return this.db
       .prepare(
-        `UPDATE triggers SET last_fired_at = @last_fired_at, last_run_id = @last_run_id, updated_at = @updated_at
-         WHERE id = @id`,
+        `SELECT fired_at, run_id FROM trigger_fires
+         WHERE trigger_id = ?
+         ORDER BY fired_at DESC, id DESC
+         LIMIT ?`,
       )
-      .run({ id, last_fired_at: now, last_run_id: runId, updated_at: now });
-    if (result.changes === 0) {
-      throw new Error(`Trigger not found: ${id}`);
-    }
+      .all(triggerId, limit) as Array<{ fired_at: string; run_id: string }>;
   }
 
   async setTriggerNextRun(id: string, nextRunAt: string): Promise<void> {

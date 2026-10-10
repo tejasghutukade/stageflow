@@ -7,7 +7,8 @@ catalog:
   tasks:
     - examples
     - workshop
-  triggers: []
+  triggers:
+    - examples
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"

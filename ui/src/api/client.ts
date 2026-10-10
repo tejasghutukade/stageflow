@@ -29,6 +29,7 @@ import type {
   TaskDetailFile,
   SkillUsageIndex,
   TriggerListItem,
+  TriggerFireRecord,
   EmailTriggerRule,
   ConnectionListing,
   CreatedStageListing,
@@ -158,12 +159,39 @@ export function fetchTrigger(id: string): Promise<TriggerListItem> {
   return api(`/api/triggers/${encodeURIComponent(id)}`);
 }
 
+export function fetchTriggerFires(
+  id: string,
+): Promise<{ fires: TriggerFireRecord[] }> {
+  return api(`/api/triggers/${encodeURIComponent(id)}/fires`);
+}
+
 export function patchTrigger(
   id: string,
   body: { enabled: boolean },
 ): Promise<TriggerListItem> {
   return api(`/api/triggers/${encodeURIComponent(id)}`, {
     method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateTrigger(
+  id: string,
+  body: {
+    pipeline: string;
+    task?: string | null;
+    kind: "manual" | "schedule" | "event";
+    schedule?: { cron: string; timezone?: string } | null;
+    event?: {
+      source: string;
+      match?: Record<string, unknown>;
+      config?: Record<string, unknown>;
+    } | null;
+    enabled: boolean;
+  },
+): Promise<TriggerListItem> {
+  return api(`/api/triggers/${encodeURIComponent(id)}`, {
+    method: "PUT",
     body: JSON.stringify(body),
   });
 }

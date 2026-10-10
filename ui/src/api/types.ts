@@ -1098,6 +1098,8 @@ export type TriggerListItem = {
   adapter_status?: TriggerAdapterStatus;
 };
 
+export type TriggerFireRecord = { fired_at: string; run_id: string };
+
 export type SkillUsageEntry = {
   stage_ids: string[];
   pipeline_ids: string[];

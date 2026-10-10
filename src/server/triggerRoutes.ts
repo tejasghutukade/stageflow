@@ -14,7 +14,12 @@ import type { RunManager } from "../runtime/runManager.js";
 import type { RunStore } from "../runstore/port.js";
 import { loadCatalogTriggers, type TriggerListItem } from "../config/triggerCatalog.js";
 import { createTrigger, parseCreateTriggerBody } from "../config/createTrigger.js";
-import { parsePatchTriggerBody, updateTriggerEnabled } from "../config/updateTrigger.js";
+import {
+  parsePatchTriggerBody,
+  parsePutTriggerBody,
+  updateTriggerDefinition,
+  updateTriggerEnabled,
+} from "../config/updateTrigger.js";
 import {
   readTriggerAdapterStatus,
   type TriggerAdapterStatus,
@@ -322,6 +327,62 @@ export async function handleTriggerRoutes(
     }
     const adapter_status = await readTriggerAdapterStatus(found, store);
     json(res, 200, adapter_status);
+    return true;
+  }
+
+  const firesMatch = pathname.match(/^\/api\/triggers\/([^/]+)\/fires$/);
+  if (method === "GET" && firesMatch) {
+    const id = decodeURIComponent(firesMatch[1] ?? "");
+    const items = await loadCatalogTriggers(cwd, store);
+    if (items === undefined) {
+      json(res, 404, { error: "No Stageflow catalog found" });
+      return true;
+    }
+    const found = items.find((item) => item.id === id);
+    if (!found) {
+      json(res, 404, { error: `Trigger not found: ${id}` });
+      return true;
+    }
+    const fires = await store.listTriggerFires(id, 20);
+    json(res, 200, { fires });
+    return true;
+  }
+
+  const putMatch = pathname.match(/^\/api\/triggers\/([^/]+)$/);
+  if (method === "PUT" && putMatch) {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return true;
+    }
+    const id = decodeURIComponent(putMatch[1] ?? "");
+    const parsed = parsePutTriggerBody(body, id);
+    if ("ok" in parsed) {
+      json(res, parsed.status, { error: parsed.error });
+      return true;
+    }
+    const callerId = callerIdFromRequestAuth();
+    const result = await updateTriggerDefinition(cwd, store, id, parsed);
+    if (!result.ok) {
+      writeAudit(auditLog, {
+        caller_id: callerId,
+        surface: getRequestAuth()?.surface ?? "rest",
+        action: "trigger_update",
+        outcome: "error",
+      });
+      json(res, result.status, { error: result.error });
+      return true;
+    }
+    writeAudit(auditLog, {
+      caller_id: callerId,
+      surface: getRequestAuth()?.surface ?? "rest",
+      action: "trigger_update",
+      outcome: "ok",
+    });
+    const enriched = await enrichTriggerListItem(result.trigger, store);
+    json(res, 200, enriched);
     return true;
   }
 
