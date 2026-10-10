@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { globalStageflowHome } from "../project/globalHome.js";
+import { validateProfileScope } from "../browser/profileStore.js";
 import { readSecretFromEnvOrFile } from "./secretFromEnvOrFile.js";
 
 export class HostConfigError extends Error {
@@ -99,6 +100,17 @@ export type CallerQuotaConfig = {
   maxConcurrent: number;
 };
 
+export const DEFAULT_BROWSER_DIALOG_TIMEOUT_SECONDS = 60;
+
+export type BrowserContainerConfig = {
+  image: string;
+  shmSize: string;
+  memory: string;
+  pidsLimit: number;
+};
+
+export const DEFAULT_BROWSER_CONTAINER_IMAGE = "stageflow-browser-sandbox:local";
+
 export type HostConfig = {
   maxConcurrentRuns: number;
   maxConcurrentRunsPerProject: number | undefined;
@@ -112,6 +124,18 @@ export type HostConfig = {
   callers: Record<string, CallerQuotaConfig>;
   /** Domains no browser stage may use (`browser.blocked_sites` in config.yaml). */
   browserBlockedSites: string[];
+  /** Chrome launch arguments (`browser.launch_args`); empty when unset. */
+  browserLaunchArgs: string[];
+  /** Explicit Chrome path (`browser.executable_path`); undefined when unset. */
+  browserExecutablePath: string | undefined;
+  /** Seconds an unanswered live view page dialog waits before the Host dismisses it (`browser.dialog_timeout_seconds`). */
+  browserDialogTimeoutSeconds: number;
+  /** Where shared profile browsers run (`browser.host`): this machine, or one container per run. */
+  browserHost: "local" | "container";
+  /** Per-owner adapter override (`browser.owner_hosts`, owner scope to host); scopes absent here use `browserHost`. */
+  browserOwnerHosts: Record<string, "local" | "container">;
+  /** Container host settings (`browser.container`); defaults apply when unset. */
+  browserContainer: BrowserContainerConfig;
   /** Absolute path of config.yaml when loaded; undefined if absent. */
   configFilePath: string | undefined;
   warnings: string[];
@@ -138,6 +162,13 @@ export type HostConfigPublicEcho = {
   callers: Record<string, CallerQuotaConfig>;
   secrets: HostConfigSecretsEcho;
 };
+
+export function browserHostForOwner(
+  config: Pick<HostConfig, "browserHost" | "browserOwnerHosts">,
+  scope: string,
+): "local" | "container" {
+  return config.browserOwnerHosts[scope] ?? config.browserHost;
+}
 
 const DEFAULT_MAX_CONCURRENT = 3;
 const DEFAULT_MAX_QUEUED = 32;
@@ -490,18 +521,157 @@ export function loadHostConfig(options?: {
   }
 
   let browserBlockedSites: string[] = [];
+  let browserLaunchArgs: string[] = [];
+  let browserExecutablePath: string | undefined;
+  let browserDialogTimeoutSeconds = DEFAULT_BROWSER_DIALOG_TIMEOUT_SECONDS;
+  let browserHost: "local" | "container" = "local";
+  const browserOwnerHosts: Record<string, "local" | "container"> = {};
+  const browserContainer: BrowserContainerConfig = {
+    image: DEFAULT_BROWSER_CONTAINER_IMAGE,
+    shmSize: "1g",
+    memory: "1g",
+    pidsLimit: 512,
+  };
   if (file.values.browser !== undefined) {
     const raw = file.values.browser;
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       throw new HostConfigError(`Invalid value for browser`, "config_invalid", "browser");
     }
     for (const sub of Object.keys(raw)) {
-      if (sub !== "blocked_sites") {
+      if (sub !== "blocked_sites" && sub !== "launch_args" && sub !== "executable_path" && sub !== "dialog_timeout_seconds" && sub !== "host" && sub !== "container" && sub !== "owner_hosts") {
         throw new HostConfigError(
           `Unknown key "${sub}" under browser`,
           "config_unknown_key",
           `browser.${sub}`,
         );
+      }
+    }
+    const args = (raw as Record<string, unknown>).launch_args;
+    if (args !== undefined && args !== null) {
+      if (!Array.isArray(args) || !args.every((a) => typeof a === "string")) {
+        throw new HostConfigError(
+          "Invalid value for browser.launch_args; expected a list of strings",
+          "config_invalid",
+          "browser.launch_args",
+        );
+      }
+      for (const arg of args as string[]) {
+        if (arg.trim() === "" || /[,\r\n]/.test(arg)) {
+          throw new HostConfigError(
+            `Invalid item ${JSON.stringify(arg)} in browser.launch_args; each item must be non-empty with no comma or newline`,
+            "config_invalid",
+            "browser.launch_args",
+          );
+        }
+      }
+      browserLaunchArgs = (args as string[]).map((a) => a.trim());
+    }
+    const exe = (raw as Record<string, unknown>).executable_path;
+    if (exe !== undefined && exe !== null) {
+      if (
+        typeof exe !== "string" ||
+        exe.trim() === "" ||
+        !(path.posix.isAbsolute(exe.trim()) || path.win32.isAbsolute(exe.trim()))
+      ) {
+        throw new HostConfigError(
+          "Invalid value for browser.executable_path; expected a non-empty absolute path",
+          "config_invalid",
+          "browser.executable_path",
+        );
+      }
+      browserExecutablePath = exe.trim();
+    }
+    const dialogTimeout = (raw as Record<string, unknown>).dialog_timeout_seconds;
+    if (dialogTimeout !== undefined && dialogTimeout !== null) {
+      if (
+        typeof dialogTimeout !== "number" ||
+        !Number.isInteger(dialogTimeout) ||
+        dialogTimeout < 1
+      ) {
+        throw new HostConfigError(
+          "Invalid value for browser.dialog_timeout_seconds; expected a positive integer",
+          "config_invalid",
+          "browser.dialog_timeout_seconds",
+        );
+      }
+      browserDialogTimeoutSeconds = dialogTimeout;
+    }
+    const host = (raw as Record<string, unknown>).host;
+    if (host !== undefined && host !== null) {
+      if (host !== "local" && host !== "container") {
+        throw new HostConfigError(
+          'Invalid value for browser.host; expected "local" or "container"',
+          "config_invalid",
+          "browser.host",
+        );
+      }
+      browserHost = host;
+    }
+    const ownerHosts = (raw as Record<string, unknown>).owner_hosts;
+    if (ownerHosts !== undefined && ownerHosts !== null) {
+      if (typeof ownerHosts !== "object" || Array.isArray(ownerHosts)) {
+        throw new HostConfigError("Invalid value for browser.owner_hosts", "config_invalid", "browser.owner_hosts");
+      }
+      for (const [scope, value] of Object.entries(ownerHosts)) {
+        try {
+          validateProfileScope(scope);
+        } catch {
+          throw new HostConfigError(
+            `Invalid owner scope "${scope}" in browser.owner_hosts`,
+            "config_invalid",
+            "browser.owner_hosts",
+          );
+        }
+        if (value !== "local" && value !== "container") {
+          throw new HostConfigError(
+            `Invalid value for browser.owner_hosts.${scope}; expected "local" or "container"`,
+            "config_invalid",
+            `browser.owner_hosts.${scope}`,
+          );
+        }
+        browserOwnerHosts[scope] = value;
+      }
+    }
+    const container = (raw as Record<string, unknown>).container;
+    if (container !== undefined && container !== null) {
+      if (typeof container !== "object" || Array.isArray(container)) {
+        throw new HostConfigError("Invalid value for browser.container", "config_invalid", "browser.container");
+      }
+      const fields = container as Record<string, unknown>;
+      for (const sub of Object.keys(fields)) {
+        if (!["image", "shm_size", "memory", "pids_limit"].includes(sub)) {
+          throw new HostConfigError(
+            `Unknown key "${sub}" under browser.container`,
+            "config_unknown_key",
+            `browser.container.${sub}`,
+          );
+        }
+      }
+      const text = (key: "image" | "shm_size" | "memory", pattern: RegExp, target: "image" | "shmSize" | "memory") => {
+        const value = fields[key];
+        if (value === undefined || value === null) return;
+        if (typeof value !== "string" || !pattern.test(value.trim())) {
+          throw new HostConfigError(
+            `Invalid value for browser.container.${key}`,
+            "config_invalid",
+            `browser.container.${key}`,
+          );
+        }
+        browserContainer[target] = value.trim();
+      };
+      text("image", /^[A-Za-z0-9][A-Za-z0-9._\-/:@]*$/, "image");
+      text("shm_size", /^[1-9][0-9]*[bkmg]?$/i, "shmSize");
+      text("memory", /^[1-9][0-9]*[bkmg]?$/i, "memory");
+      const pids = fields.pids_limit;
+      if (pids !== undefined && pids !== null) {
+        if (typeof pids !== "number" || !Number.isInteger(pids) || pids < 1) {
+          throw new HostConfigError(
+            "Invalid value for browser.container.pids_limit; expected a positive integer",
+            "config_invalid",
+            "browser.container.pids_limit",
+          );
+        }
+        browserContainer.pidsLimit = pids;
       }
     }
     const sites = (raw as Record<string, unknown>).blocked_sites;
@@ -532,6 +702,12 @@ export function loadHostConfig(options?: {
     readToken,
     callers,
     browserBlockedSites,
+    browserLaunchArgs,
+    browserExecutablePath,
+    browserDialogTimeoutSeconds,
+    browserHost,
+    browserOwnerHosts,
+    browserContainer,
     configFilePath:
       configFilePath !== undefined && existsSync(configFilePath)
         ? configFilePath

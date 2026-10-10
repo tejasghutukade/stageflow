@@ -1,3 +1,4 @@
+import { accessSync, constants } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,10 +11,13 @@ import {
   type ProfileBrowserResult,
   shortHash,
 } from "./browserHost.js";
+import type { BrowserHostCapabilityRecord, DisplayCapability } from "./hostCapabilities.js";
 import type { ProfileHandle } from "./profileStore.js";
 
 const MAX_SOCKET_PATH_BYTES = 103;
 const MAX_SESSION_NAME_LENGTH = 48;
+export const DENY_PERMISSION_PROMPTS_ARG = "--deny-permission-prompts";
+const HOST_LAUNCH_ARGS: readonly string[] = [DENY_PERMISSION_PROMPTS_ARG];
 const DISPLAY_VARS = ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"] as const;
 
 export type LocalBrowserHostOptions = {
@@ -22,7 +26,32 @@ export type LocalBrowserHostOptions = {
   hostEnv?: Record<string, string | undefined>;
   socketRoot?: string;
   emptyConfigPath?: string;
+  /** `relay` only when the process also serves the live view routes; default `none`. */
+  liveView?: "relay" | "none";
+  /** Whether an Xvfb binary is installed; default searches `PATH` for an executable `Xvfb`. */
+  xvfbProbe?: () => boolean;
+  /** Host config `browser.launch_args`; applied only to sessions that launch Chrome, after the Host's own switches. */
+  launchArgs?: readonly string[];
+  /** Host config `browser.executable_path`; applied only to sessions that launch Chrome. */
+  executablePath?: string;
 };
+
+export function defaultXvfbProbe(
+  platform: NodeJS.Platform = process.platform,
+  hostEnv: Record<string, string | undefined> = process.env,
+): boolean {
+  const dirs = (hostEnv.PATH ?? "").split(platform === "win32" ? ";" : ":");
+  for (const dir of dirs) {
+    if (dir === "") continue;
+    try {
+      accessSync(path.join(dir, "Xvfb"), constants.X_OK);
+      return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
 
 export function defaultSocketRoot(platform: NodeJS.Platform): string {
   const uid = typeof process.getuid === "function" ? process.getuid() : "u";
@@ -49,12 +78,14 @@ function sessionNameForProfileStage(
 
 const OPEN_ANCHOR_TIMEOUT_MS = 60_000;
 
-function hasDisplay(
+function displayKind(
   platform: NodeJS.Platform,
   hostEnv: Record<string, string | undefined>,
-): boolean {
-  if (platform !== "linux") return true;
-  return Boolean(hostEnv.DISPLAY || hostEnv.WAYLAND_DISPLAY);
+  xvfbProbe: () => boolean,
+): DisplayCapability {
+  if (platform !== "linux") return "local_window";
+  if (hostEnv.DISPLAY || hostEnv.WAYLAND_DISPLAY) return "local_window";
+  return xvfbProbe() ? "virtual_display" : "headless_only";
 }
 
 export function createLocalBrowserHost(
@@ -62,11 +93,22 @@ export function createLocalBrowserHost(
 ): BrowserHost {
   const platform = options.platform ?? process.platform;
   const hostEnv = options.hostEnv ?? process.env;
+  const display = displayKind(
+    platform,
+    hostEnv,
+    options.xvfbProbe ?? (() => defaultXvfbProbe(platform, hostEnv)),
+  );
+  const launchArgs = [
+    ...HOST_LAUNCH_ARGS,
+    ...(options.launchArgs ?? []).filter((arg) => !HOST_LAUNCH_ARGS.includes(arg)),
+  ];
+  const executablePath = options.executablePath;
 
   async function build(input: {
     identity: string;
     session: string;
     headed: boolean;
+    launches: boolean;
     set: (env: BrowserEnv) => void;
   }): Promise<BrowserEnv> {
     const socketRoot = options.socketRoot ?? defaultSocketRoot(platform);
@@ -95,7 +137,11 @@ export function createLocalBrowserHost(
       AGENT_BROWSER_CONFIG: emptyConfigPath,
     };
     input.set(env);
-    if (input.headed && platform === "linux") {
+    if (input.launches) {
+      env.AGENT_BROWSER_ARGS = launchArgs.join(",");
+      if (executablePath !== undefined) env.AGENT_BROWSER_EXECUTABLE_PATH = executablePath;
+    }
+    if (input.headed && platform === "linux" && display === "local_window") {
       for (const name of DISPLAY_VARS) {
         const value = hostEnv[name];
         if (value) env[name] = value;
@@ -109,7 +155,7 @@ export function createLocalBrowserHost(
   ): boolean {
     return (
       request.humanLogin === true ||
-      ((request.browser.headed ?? true) && hasDisplay(platform, hostEnv))
+      ((request.browser.headed ?? true) && display !== "headless_only")
     );
   }
 
@@ -119,12 +165,17 @@ export function createLocalBrowserHost(
     },
   ): Promise<BrowserEnv> {
     const { profile } = request;
+    const profileDir = profile.profileDir;
+    if (profileDir === undefined) {
+      throw new Error(`profile "${profile.key.name}" has no folder; the local browser host needs one`);
+    }
     return build({
-      identity: `profile:${profile.key.scope}/${profile.key.name}:${profile.profileDir}`,
+      identity: `profile:${profile.key.scope}/${profile.key.name}:${profileDir}`,
       session: sessionNameForProfile(profile.key.scope, profile.key.name),
       headed: headedFor(request),
+      launches: true,
       set: (env) => {
-        env.AGENT_BROWSER_PROFILE = profile.profileDir;
+        env.AGENT_BROWSER_PROFILE = profileDir;
       },
     });
   }
@@ -143,7 +194,17 @@ export function createLocalBrowserHost(
     return address;
   }
 
+  const capabilities: BrowserHostCapabilityRecord = {
+    display,
+    liveView: options.liveView ?? "none",
+    attach: "host_launched",
+    profilePersistence: "host_volume",
+    gracefulCloseRequired: true,
+  };
+
   return {
+    capabilities,
+
     async ensureProfileBrowser(
       request: ProfileBrowserRequest,
     ): Promise<ProfileBrowserResult> {
@@ -192,6 +253,7 @@ export function createLocalBrowserHost(
           identity: `stage:${request.runId}/${request.stageId}`,
           session: sessionNameForProfileStage(profile, request.runId, request.stageId),
           headed: headedFor(request),
+          launches: false,
           set: (env) => {
             env.AGENT_BROWSER_CDP = cdp;
             env.AGENT_BROWSER_PIN_TAB = "1";
@@ -203,6 +265,7 @@ export function createLocalBrowserHost(
         identity,
         session: `sf-t-${shortHash(identity, 12)}`,
         headed: headedFor(request),
+        launches: true,
         set: (env) => {
           if (browser.allow_domains && browser.allow_domains.length > 0) {
             env.AGENT_BROWSER_ALLOWED_DOMAINS = browser.allow_domains.join(",");

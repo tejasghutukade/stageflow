@@ -509,6 +509,11 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     expect(tools).toContain("emit_stage_envelope");
     expect(tools).toContain("write_stage_artifact");
     expect(tools).toEqual([...expectedSealedTools, MCP_TOOL_NAME]);
+    expect(lastLoaderOptions().extensionFactories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME }),
+      ]),
+    );
   });
 
   it("keeps Cursor additionalExtensionPaths when a snapshot is also present", async () => {

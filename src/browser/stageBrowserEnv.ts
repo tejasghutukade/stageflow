@@ -1,6 +1,6 @@
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { loadHostConfig } from "../config/hostConfig.js";
+import { browserHostForOwner, loadHostConfig } from "../config/hostConfig.js";
 import { stageDir } from "../runstore/paths.js";
 import type { StageBrowserConfig } from "../types/stage.js";
 import { safeAudit } from "./auditSink.js";
@@ -18,12 +18,16 @@ import {
   defaultBrowserRunner,
   writeSessionOwner,
 } from "./browserTeardown.js";
-import { defaultDisplayProbe, loginPageUrl, noScreenError } from "./humanLogin.js";
+import { defaultDisplayProbe, loginPageUrl } from "./humanLogin.js";
+import { persistStageHandoff, resolveStageHandoffCapabilities } from "./stageHandoff.js";
 import { ensureStageLoginCheck, OPEN_COMMAND_TIMEOUT_MS } from "./loginCheck.js";
 import { readPersistedBrowserEnv } from "./persistedEnv.js";
+import { createContainerBrowserHost } from "./containerBrowserHost.js";
+import { createDockerSandboxOrchestrator } from "./dockerSandboxOrchestrator.js";
+import { createVolumeProfileStore } from "./volumeProfileStore.js";
 import { createLocalBrowserHost } from "./localBrowserHost.js";
 import { createLocalProfileStore } from "./localProfileStore.js";
-import { LOCAL_BROWSER_SCOPE } from "./profileStore.js";
+import { localOwnerScope } from "./ownerScope.js";
 
 export { BROWSER_ENV_FILENAME };
 
@@ -36,12 +40,52 @@ export async function readStagePersistedBrowserEnv(
 
 let defaultSupport: StageBrowserSupport | undefined;
 
-export function defaultStageBrowserSupport(): StageBrowserSupport {
-  defaultSupport ??= {
-    host: createLocalBrowserHost(),
+export function hostLaunchOptions(): { launchArgs: string[]; executablePath?: string } {
+  const config = loadHostConfig();
+  return {
+    launchArgs: config.browserLaunchArgs,
+    ...(config.browserExecutablePath !== undefined
+      ? { executablePath: config.browserExecutablePath }
+      : {}),
+  };
+}
+
+function configuredBrowserSupport(liveView: "relay" | "none"): StageBrowserSupport {
+  const config = loadHostConfig();
+  if (browserHostForOwner(config, localOwnerScope()) === "container") {
+    const container = config.browserContainer;
+    return {
+      host: createContainerBrowserHost({
+        orchestrator: createDockerSandboxOrchestrator({
+          image: container.image,
+          shmSize: container.shmSize,
+          memory: container.memory,
+          pidsLimit: container.pidsLimit,
+          user: "1000:1000",
+        }),
+        liveView,
+        local: hostLaunchOptions(),
+      }),
+      profiles: createVolumeProfileStore(),
+    };
+  }
+  return {
+    host: createLocalBrowserHost({ liveView, ...hostLaunchOptions() }),
     profiles: createLocalProfileStore(),
   };
+}
+
+export function defaultStageBrowserSupport(): StageBrowserSupport {
+  defaultSupport ??= configuredBrowserSupport("none");
   return defaultSupport;
+}
+
+let consoleSupport: StageBrowserSupport | undefined;
+
+/** Browser support for a process that serves the live view routes (`sf ui`, `sf mcp`). */
+export function consoleStageBrowserSupport(): StageBrowserSupport {
+  consoleSupport ??= configuredBrowserSupport("relay");
+  return consoleSupport;
 }
 
 /**
@@ -54,6 +98,7 @@ export async function resolveStageBrowserEnv(
   input: {
     runId: string;
     stageId: string;
+    scope: string;
     runDir: string;
     browser: StageBrowserConfig | undefined;
     /** Attempt the login check result belongs to; defaults to 1. */
@@ -67,10 +112,9 @@ export async function resolveStageBrowserEnv(
   const { browser } = input;
   if (browser === undefined) return undefined;
 
-  if (input.humanLogin === true) {
-    const screen = (support.display ?? defaultDisplayProbe)();
-    if (!screen.hasDisplay) throw noScreenError(screen.docker);
-  }
+  const capabilities = resolveStageHandoffCapabilities(support, {
+    ...(input.humanLogin === true ? { humanLogin: true } : {}),
+  });
 
   if (
     (browser.allow_domains?.length ?? 0) > 0 ||
@@ -86,12 +130,13 @@ export async function resolveStageBrowserEnv(
 
   const dir = stageDir(input.runDir, input.stageId);
   const file = path.join(dir, BROWSER_ENV_FILENAME);
+  await mkdir(dir, { recursive: true });
+  await persistStageHandoff({ runDir: input.runDir, stageId: input.stageId }, capabilities);
 
-  // TODO(multi-tenant): open the profile in the run owner's scope, not the fixed local scope.
   const profile =
     browser.profile !== undefined
       ? await support.profiles.open({
-          scope: LOCAL_BROWSER_SCOPE,
+          scope: input.scope,
           name: browser.profile,
         })
       : undefined;
@@ -143,10 +188,9 @@ export async function resolveStageBrowserEnv(
   if (persisted === undefined) {
     await writeEnv(fresh);
     if (browser.profile !== undefined) {
-      // TODO(multi-tenant): audit the run owner's scope.
       await safeAudit(support.audit, {
         event: "profile_used",
-        scope: LOCAL_BROWSER_SCOPE,
+        scope: input.scope,
         profile: browser.profile,
         runId: input.runId,
         stageId: input.stageId,

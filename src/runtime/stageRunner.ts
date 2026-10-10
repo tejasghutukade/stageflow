@@ -6,11 +6,8 @@ import type {
   StageSessionMode,
 } from "../agent/port.js";
 import type { StageLogLine } from "../agent/activity.js";
-import {
-  hostGateContextFor,
-  stampGateRequest,
-  type HostGateContext,
-} from "../browser/gateHandoff.js";
+import { stampGateRequest, type HostGateContext } from "../browser/gateHandoff.js";
+import { stageGateContext } from "../browser/stageHandoff.js";
 import type { BrowserRunner, StageBrowserSupport } from "../browser/browserHost.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { LoadedStageConfig } from "../types/stage.js";
@@ -385,7 +382,12 @@ export async function runStage(
       store: workerMode ? store : undefined,
       attemptCtx,
       skipGates,
-      gateContext: hostGateContextFor(stage.browser),
+      gateContext: await stageGateContext({
+        runDir: workspaceDir ?? store.getWorkspaceDir(runId),
+        runId,
+        stageId,
+        browser: stage.browser,
+      }),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);

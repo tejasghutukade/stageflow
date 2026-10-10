@@ -354,11 +354,10 @@ function extractAssistantText(message: {
 async function openDefaultPiSession(
   input: PiOperatorOpenSessionInput,
 ): Promise<PiOperatorSessionHandle> {
-  if (!isUsableAuthFile(input.authPath)) {
+  const provider = findProviderSupport(input.modelId);
+  if (!provider && !isUsableAuthFile(input.authPath)) {
     throw authNotConfiguredError(input.authPath);
   }
-
-  const provider = findProviderSupport(input.modelId);
   const additionalExtensionPaths: string[] = [];
   let restoreProvider: (() => void) | undefined;
   if (provider) {

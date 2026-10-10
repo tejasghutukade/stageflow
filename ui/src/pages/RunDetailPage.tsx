@@ -20,6 +20,9 @@ import {
   runTaskLabel,
 } from "../catalog/displayCatalogPath";
 import { ReplyZone } from "../ReplyZone";
+import { canWatchBrowser, liveViewHandoffUrl } from "../liveView/handoff";
+import { WATCH_LABEL } from "../liveView/helpText";
+import { WatchBrowserPanel } from "../liveView/WatchBrowser";
 import { AttemptCountBadge } from "../components/AttemptCountBadge";
 import { CostBadge, formatCostUsd } from "../components/CostBadge";
 import { ArtifactAside } from "../components/ArtifactAside";
@@ -78,6 +81,11 @@ export function clampWorkHeight(requested: number, paneHeight: number): number {
   return Math.max(WORK_MIN_H, Math.min(requested, maxByMap));
 }
 
+export function liveViewWorkHeight(paneHeight: number, headHeight: number): number {
+  if (paneHeight <= 0) return WORK_DEFAULT_H;
+  return Math.max(WORK_MIN_H, paneHeight - headHeight - MAP_MIN_H);
+}
+
 function sessionChipEl(kind: SessionChipKind) {
   if (kind === "alive") return <span className="chip">session alive</span>;
   if (kind === "closed") return <span className="chip">session closed</span>;
@@ -134,6 +142,7 @@ export function RunDetailPage({
   onOpenEnvelope: (stageId: string) => void;
 }) {
   const [run, setRun] = useState<RunDetail | null>(null);
+  const [watchStageId, setWatchStageId] = useState<string | null>(null);
   const [pipelines, setPipelines] = useState<PipelineListing[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [verification, setVerification] = useState<StageVerificationHistory | null>(null);
@@ -147,10 +156,12 @@ export function RunDetailPage({
   const [drawerStageId, setDrawerStageId] = useState<string | null>(null);
   const [dismissedWaitKey, setDismissedWaitKey] = useState<string | null>(null);
   const [workHeight, setWorkHeight] = useState(WORK_DEFAULT_H);
+  const [layoutAdjusted, setLayoutAdjusted] = useState(false);
   const [hiddenCenterSide, setHiddenCenterSide] = useState<"transcript" | "logs" | null>(
     null,
   );
   const [paneHeight, setPaneHeight] = useState(0);
+  const [headHeight, setHeadHeight] = useState(0);
   const [splitDragging, setSplitDragging] = useState(false);
   const paneRef = useRef<HTMLDivElement>(null);
   const splitGestureRef = useRef<{ id: number; y: number; h: number } | null>(null);
@@ -281,6 +292,7 @@ export function RunDetailPage({
     setDrawerStageId(null);
     setDismissedWaitKey(null);
     setWorkHeight(WORK_DEFAULT_H);
+    setLayoutAdjusted(false);
     setHiddenCenterSide(null);
     setRun(null);
     setError(null);
@@ -405,7 +417,10 @@ export function RunDetailPage({
   useEffect(() => {
     const el = paneRef.current;
     if (!el) return;
-    const measure = () => setPaneHeight(el.getBoundingClientRect().height);
+    const measure = () => {
+      setPaneHeight(el.getBoundingClientRect().height);
+      setHeadHeight(el.firstElementChild?.getBoundingClientRect().height ?? 0);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
@@ -415,6 +430,7 @@ export function RunDetailPage({
   const applyWorkHeight = useCallback(
     (requested: number) => {
       const height = paneRef.current?.getBoundingClientRect().height ?? paneHeight;
+      setLayoutAdjusted(true);
       setWorkHeight(clampWorkHeight(requested, height));
     },
     [paneHeight],
@@ -469,6 +485,19 @@ export function RunDetailPage({
   const composer = workspace
     ? composerEl(runId, workspace, onOpenArtifact)
     : undefined;
+  const liveViewGate = Boolean(
+    stage &&
+      workspace?.composer.kind === "reply" &&
+      liveViewHandoffUrl(workspace.composer.prompt) !== null,
+  );
+  const watchStage = stage && canWatchBrowser(stage.status) ? stage : null;
+  const watching = watchStage !== null && watchStageId === watchStage.stage_id;
+  const gateLayout = liveViewGate && !layoutAdjusted;
+  const effectiveWorkHeight = gateLayout
+    ? liveViewWorkHeight(paneHeight, headHeight)
+    : workHeight;
+  const effectiveHiddenSide =
+    gateLayout && hiddenCenterSide === null ? "logs" : hiddenCenterSide;
   const hasMapNodes = Boolean(workspace && workspace.spatialLayout.nodes.length > 0);
   const showWorkspace = Boolean(
     workspace &&
@@ -538,14 +567,17 @@ export function RunDetailPage({
   } else if (workspace.selectedStageId) {
     const streamStageId = workspace.selectedStageId;
     const stageToken = stage ? cssStatusToken(stage.status) : undefined;
-    const showTranscript = hiddenCenterSide !== "transcript";
-    const showLogs = hiddenCenterSide !== "logs";
+    const showTranscript = effectiveHiddenSide !== "transcript";
+    const showLogs = effectiveHiddenSide !== "logs";
     const transcriptTrailing = (
       <>
         <button
           type="button"
           className="btn btn--sm"
-          onClick={() => setHiddenCenterSide(showLogs ? "logs" : null)}
+          onClick={() => {
+            setLayoutAdjusted(true);
+            setHiddenCenterSide(showLogs ? "logs" : null);
+          }}
         >
           {showLogs ? "Hide logs" : "Show logs"}
         </button>
@@ -558,7 +590,10 @@ export function RunDetailPage({
         <button
           type="button"
           className="btn btn--sm"
-          onClick={() => setHiddenCenterSide(showTranscript ? "transcript" : null)}
+          onClick={() => {
+            setLayoutAdjusted(true);
+            setHiddenCenterSide(showTranscript ? "transcript" : null);
+          }}
         >
           {showTranscript ? "Hide transcript" : "Show transcript"}
         </button>
@@ -613,6 +648,16 @@ export function RunDetailPage({
                   : "Retry stage"}
               </button>
             ) : null}
+            {watchStage !== null && !liveViewGate ? (
+              <button
+                type="button"
+                className="btn btn--sm"
+                aria-pressed={watching}
+                onClick={() => setWatchStageId(watching ? null : watchStage.stage_id)}
+              >
+                {WATCH_LABEL}
+              </button>
+            ) : null}
             {stage && canAbandon(stage.status) ? (
               <button
                 type="button"
@@ -658,7 +703,7 @@ export function RunDetailPage({
       <div
         ref={paneRef}
         className={`pane run-detail${showWorkspace ? " has-stage" : ""}${splitDragging ? " is-resizing" : ""}`}
-        style={{ height: "100%", ["--work-h" as string]: `${workHeight}px` }}
+        style={{ height: "100%", ["--work-h" as string]: `${effectiveWorkHeight}px` }}
       >
         <div>
           <div className="topbar">
@@ -825,7 +870,7 @@ export function RunDetailPage({
               aria-label="Resize workspace"
               aria-valuemin={splitMin}
               aria-valuemax={splitMax}
-              aria-valuenow={Math.round(workHeight)}
+              aria-valuenow={Math.round(effectiveWorkHeight)}
               tabIndex={0}
               onPointerDown={(event) => {
                 if (event.button != null && event.button !== 0) return;
@@ -835,7 +880,7 @@ export function RunDetailPage({
                 splitGestureRef.current = {
                   id: event.pointerId,
                   y: event.clientY,
-                  h: workHeight,
+                  h: effectiveWorkHeight,
                 };
               }}
               onPointerMove={(event) => {
@@ -856,11 +901,11 @@ export function RunDetailPage({
               onKeyDown={(event) => {
                 if (event.key === "ArrowUp") {
                   event.preventDefault();
-                  applyWorkHeight(workHeight + WORK_ARROW_STEP);
+                  applyWorkHeight(effectiveWorkHeight + WORK_ARROW_STEP);
                 }
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  applyWorkHeight(workHeight - WORK_ARROW_STEP);
+                  applyWorkHeight(effectiveWorkHeight - WORK_ARROW_STEP);
                 }
                 if (event.key === "Home") {
                   event.preventDefault();
@@ -961,6 +1006,14 @@ export function RunDetailPage({
             setDrawerStageId(null);
             onOpenArtifact(path);
           }}
+        />
+      ) : null}
+
+      {watching && watchStage !== null && !liveViewGate ? (
+        <WatchBrowserPanel
+          runId={runId}
+          stageId={watchStage.stage_id}
+          onClose={() => setWatchStageId(null)}
         />
       ) : null}
     </>

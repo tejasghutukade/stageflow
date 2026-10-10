@@ -13,6 +13,7 @@ import {
   type BrowserRunner,
   type StageBrowserSupport,
 } from "./browserHost.js";
+import { runOwnerScope } from "./ownerScope.js";
 import { stageProfileLock } from "./stageProfileLock.js";
 import {
   BROWSER_ANCHOR_FILENAME,
@@ -26,6 +27,7 @@ export const BROWSER_CLOSED_FILENAME = "browser-closed.json";
 const DEFAULT_CLOSE_WAIT_MS = 10_000;
 const POLL_MS = 50;
 const CLOSE_COMMAND_TIMEOUT_MS = 20_000;
+export const DEFAULT_BEFORE_TEARDOWN_WAIT_MS = 5_000;
 
 export type BrowserSessionOwner = {
   runId: string;
@@ -139,6 +141,23 @@ async function readEnvFile(file: string): Promise<BrowserEnv | undefined> {
   }
 }
 
+async function runBeforeTeardown(
+  support: StageBrowserSupport,
+  input: { runId: string; stageId?: string },
+): Promise<void> {
+  if (support.beforeTeardown === undefined) return;
+  const hook = support.beforeTeardown;
+  let timer: NodeJS.Timeout | undefined;
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, support.beforeTeardownWaitMs ?? DEFAULT_BEFORE_TEARDOWN_WAIT_MS);
+  });
+  try {
+    await Promise.race([Promise.resolve().then(() => hook(input)).catch(() => undefined), bound]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function closeOptions(support: StageBrowserSupport) {
   return {
     ...(support.runner !== undefined ? { runner: support.runner } : {}),
@@ -214,6 +233,7 @@ async function teardownStageBrowserOnce(
   support: StageBrowserSupport,
   input: StageTeardownInput,
 ): Promise<void> {
+  await runBeforeTeardown(support, { runId: input.runId, stageId: input.stageId });
   const env = await readEnvFile(
     path.join(stageDir(input.runDir, input.stageId), BROWSER_ENV_FILENAME),
   );
@@ -264,11 +284,22 @@ async function closeRunAnchorsOnce(
   for (const name of names) {
     const anchor = await readPersistedAnchor(run.runDir, name);
     if (anchor === undefined) continue;
-    const { gone } = await closeBrowserSession(
+    const { gone: sessionGone } = await closeBrowserSession(
       anchor.anchorEnv,
       closeOptions(support),
     ).catch(() => ({ gone: false }));
-    if (gone) {
+    // Anchors written before the scope was persisted fall back to the run owner's scope.
+    const released =
+      support.host.releaseProfileBrowser === undefined ||
+      (await support.host
+        .releaseProfileBrowser({
+          scope: anchor.scope ?? runOwnerScope(support, { runId: anchor.runId }),
+          runId: anchor.runId,
+          profile: name,
+        })
+        .then(() => true)
+        .catch(() => false));
+    if (sessionGone && released) {
       await rm(path.join(anchorDir(run.runDir, name), BROWSER_ANCHOR_FILENAME), {
         force: true,
       }).catch(() => undefined);
@@ -290,6 +321,7 @@ export async function teardownRunBrowsers(
   },
   only?: (stageId: string) => boolean,
 ): Promise<void> {
+  if (only === undefined) await runBeforeTeardown(support, { runId: run.runId });
   let ids: string[] = [];
   try {
     ids = await readdir(path.join(run.runDir, "stages"));

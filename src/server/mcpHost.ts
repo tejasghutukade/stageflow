@@ -1,3 +1,4 @@
+import type { StageBrowserSupport } from "../browser/browserHost.js";
 import type { AgentPort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type { RunStoreKind } from "../runstore/createStore.js";
@@ -15,8 +16,9 @@ import {
   createHttpHost,
   DEFAULT_PORT,
   type HttpHostEnvelope,
+  type HttpHostRouteContext,
 } from "./createHttpHost.js";
-import { createOperatorRoutes } from "./http.js";
+import { createOperatorRoutes, type OperatorRoutes } from "./http.js";
 import {
   installShutdownController,
   makeDrainableHostFromOptional,
@@ -40,6 +42,7 @@ export type McpServerOptions = {
   controlTokens?: ControlTokens;
   requestTimeoutMs?: number;
   maxConnections?: number;
+  browser?: StageBrowserSupport;
 };
 
 export async function startMcpServer(
@@ -54,7 +57,7 @@ export async function startMcpServer(
   const controlTokens = options.controlTokens ?? loadControlTokens();
 
   let shutdown: ShutdownController | undefined;
-  const routes =
+  const routes: OperatorRoutes | ((ctx: HttpHostRouteContext) => Promise<boolean>) =
     boot.serveBlocked !== undefined ||
     boot.manager === undefined ||
     boot.store === undefined
@@ -86,6 +89,7 @@ export async function startMcpServer(
   });
   envelope.server.on("close", () => {
     shutdown?.uninstall();
+    if ("dispose" in routes) void routes.dispose();
   });
   return { ...envelope, shutdown };
 }
