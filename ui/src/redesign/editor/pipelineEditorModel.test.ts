@@ -15,6 +15,7 @@ import {
   isEditorTabId,
   lastValidatedFooter,
   mergeEditorFindings,
+  mergeEditorHistory,
   problemCounts,
   stageUsedByCount,
   type EditorTabId,
@@ -316,6 +317,166 @@ describe("focusEditorFinding", () => {
         draft,
       ),
     ).toEqual({ kind: "row" });
+  });
+});
+
+describe("mergeEditorHistory", () => {
+  const now = new Date(2026, 9, 9, 18, 0, 0).getTime();
+
+  function localIso(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute = 0,
+  ): string {
+    return new Date(year, month - 1, day, hour, minute, 0, 0).toISOString();
+  }
+
+  it("puts this session's saves and validates ahead of older finished runs, by day", () => {
+    const groups = mergeEditorHistory({
+      now,
+      events: [
+        {
+          id: "save-1",
+          at: localIso(2026, 10, 9, 10, 0),
+          label: "Saved",
+        },
+        {
+          id: "val-draft",
+          at: localIso(2026, 10, 9, 10, 5),
+          label: "Validated",
+          detail: "draft · valid",
+        },
+        {
+          id: "val-catalog",
+          at: localIso(2026, 10, 8, 16, 0),
+          label: "Validated",
+          detail: "catalog · 1 error",
+        },
+      ],
+      runs: [
+        {
+          run_id: "run-today",
+          status: "succeeded",
+          created_at: localIso(2026, 10, 9, 8, 0),
+          finished_at: localIso(2026, 10, 9, 9, 0),
+        },
+        {
+          run_id: "run-yesterday",
+          status: "failed",
+          created_at: localIso(2026, 10, 8, 9, 0),
+          finished_at: localIso(2026, 10, 8, 9, 30),
+        },
+        {
+          run_id: "run-old",
+          status: "cancelled",
+          created_at: localIso(2025, 12, 31, 12, 0),
+          finished_at: localIso(2025, 12, 31, 12, 20),
+        },
+        {
+          run_id: "run-live",
+          status: "running",
+          created_at: localIso(2026, 10, 9, 17, 0),
+        },
+        {
+          run_id: "run-queued",
+          status: "queued",
+          created_at: localIso(2026, 10, 9, 17, 5),
+          finished_at: localIso(2026, 10, 9, 17, 6),
+        },
+        {
+          run_id: "run-waiting",
+          status: "succeeded",
+          waiting_stage_id: "approve",
+          created_at: localIso(2026, 10, 9, 11, 0),
+          finished_at: localIso(2026, 10, 9, 11, 5),
+        },
+      ],
+    });
+
+    expect(groups.map((group) => group.label)).toEqual([
+      "Today",
+      "Yesterday",
+      "Dec 31 2025",
+    ]);
+    expect(groups[0]?.entries.map((entry) => entry.id)).toEqual([
+      "val-draft",
+      "save-1",
+      "run:run-today",
+    ]);
+    expect(groups[0]?.entries[0]).toMatchObject({
+      source: "session",
+      label: "Validated",
+      detail: "draft · valid",
+    });
+    expect(groups[1]?.entries.map((entry) => entry.id)).toEqual([
+      "val-catalog",
+      "run:run-yesterday",
+    ]);
+    expect(groups[2]?.entries[0]).toMatchObject({
+      source: "run",
+      runId: "run-old",
+      status: "cancelled",
+    });
+  });
+
+  it("keeps a later session row first when timestamps match, and skips a bad clock", () => {
+    const at = localIso(2026, 10, 9, 12, 0);
+    const groups = mergeEditorHistory({
+      now,
+      events: [
+        { id: "first", at, label: "Validated", detail: "draft · valid" },
+        { id: "second", at, label: "Validated", detail: "catalog · valid" },
+        { id: "bad", at: "not-a-time", label: "Saved" },
+      ],
+      runs: [
+        {
+          run_id: "same-instant",
+          status: "succeeded",
+          created_at: at,
+          finished_at: at,
+        },
+        {
+          run_id: "no-clock",
+          status: "failed",
+          created_at: "nope",
+        },
+        {
+          run_id: "same-instant",
+          status: "failed",
+          created_at: at,
+          finished_at: localIso(2026, 10, 9, 13, 0),
+        },
+      ],
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.entries.map((entry) => entry.id)).toEqual([
+      "second",
+      "first",
+      "run:same-instant",
+    ]);
+    expect(groups[0]?.entries[2]).toMatchObject({ status: "succeeded" });
+  });
+
+  it("places a finished run that has no finished_at on the day it was updated", () => {
+    const groups = mergeEditorHistory({
+      now,
+      events: [],
+      runs: [
+        {
+          run_id: "updated-only",
+          status: "succeeded",
+          created_at: localIso(2026, 9, 2, 9, 0),
+          updated_at: localIso(2026, 9, 2, 9, 40),
+        },
+      ],
+    });
+    expect(groups.map((group) => group.label)).toEqual(["Sep 2"]);
+    expect(groups[0]?.entries[0]).toMatchObject({
+      source: "run",
+      runId: "updated-only",
+    });
   });
 });
 

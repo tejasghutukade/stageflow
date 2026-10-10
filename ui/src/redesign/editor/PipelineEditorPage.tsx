@@ -39,13 +39,39 @@ import {
   isDraftDirty,
   isEditorTabId,
   mergeEditorFindings,
+  type EditorHistorySessionEvent,
   type EditorTabId,
 } from "./pipelineEditorModel";
 import { PipelineEditorGraph } from "./PipelineEditorGraph";
+import { PipelineEditorHistory } from "./PipelineEditorHistory";
 import { PipelineEditorRuns } from "./PipelineEditorRuns";
 import { PipelineEditorInspector } from "./PipelineEditorInspector";
 import { yamlPathForSelectedStage } from "./draftYaml";
 import { YamlPanel } from "./YamlPanel";
+
+function editorPipelineKey(pipeline: {
+  id: string;
+  path: string;
+  project_root?: string;
+}): string {
+  return `${pipeline.id}\0${pipeline.project_root ?? ""}\0${pipeline.path}`;
+}
+
+function historyValidationDetail(
+  source: "draft" | "catalog",
+  result: DraftValidationResult,
+): string {
+  const errors =
+    result.summary.errors === 1 ? "1 error" : `${result.summary.errors} errors`;
+  const warnings =
+    result.summary.warnings === 1
+      ? "1 warning"
+      : `${result.summary.warnings} warnings`;
+  const outcome = result.ok ? "valid" : errors;
+  return result.summary.warnings > 0
+    ? `${source} · ${outcome} · ${warnings}`
+    : `${source} · ${outcome}`;
+}
 
 function defaultTaskForPipeline(
   pipeline: PipelineListing,
@@ -104,6 +130,11 @@ export function PipelineEditorPage({
   >(null);
   const focusNonce = useRef(0);
   const [saving, setSaving] = useState(false);
+  const [sessionEvents, setSessionEvents] = useState<
+    Array<EditorHistorySessionEvent & { pipelineKey: string }>
+  >([]);
+  const sessionSeq = useRef(0);
+  const pipelineKey = editorPipelineKey(pipeline);
   const [models, setModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -121,6 +152,28 @@ export function PipelineEditorPage({
         project_root: pipeline.project_root,
       }),
     [pipeline.id, pipeline.project_root, runSnapshot.runs],
+  );
+  const historyEvents = useMemo(
+    () => sessionEvents.filter((event) => event.pipelineKey === pipelineKey),
+    [pipelineKey, sessionEvents],
+  );
+
+  const appendSession = useCallback(
+    (label: string, detail?: string) => {
+      const id = `session-${sessionSeq.current}`;
+      sessionSeq.current += 1;
+      setSessionEvents((current) => [
+        ...current,
+        {
+          pipelineKey,
+          id,
+          at: new Date().toISOString(),
+          label,
+          ...(detail ? { detail } : {}),
+        },
+      ]);
+    },
+    [pipelineKey],
   );
 
   const reloadDraft = useCallback(async () => {
@@ -184,12 +237,13 @@ export function PipelineEditorPage({
       });
       setCatalogFindings(result.findings);
       setValidatedMs(Date.now() - started);
+      appendSession("Validated", historyValidationDetail("catalog", result));
     } catch (err) {
       setValidateError(err instanceof Error ? err.message : String(err));
     } finally {
       setValidating(false);
     }
-  }, [pipeline.path, pipeline.project_root]);
+  }, [appendSession, pipeline.path, pipeline.project_root]);
 
   const runDraftValidate = useCallback(
     async (nextDraft: DraftPackagePayload) => {
@@ -200,8 +254,9 @@ export function PipelineEditorPage({
       );
       setDraftValidation(result);
       setValidatedMs(Date.now() - started);
+      appendSession("Validated", historyValidationDetail("draft", result));
     },
-    [pipeline.project_root],
+    [appendSession, pipeline.project_root],
   );
 
   useEffect(() => {
@@ -254,8 +309,9 @@ export function PipelineEditorPage({
     }
     setBaseline(cloneDraft(draft));
     showToast("Saved");
+    appendSession("Saved");
     void runCatalogValidate();
-  }, [destination, draft, pipeline.project_root, runCatalogValidate]);
+  }, [appendSession, destination, draft, pipeline.project_root, runCatalogValidate]);
 
   const onSelectStage = useCallback(
     (stageId: string) => {
@@ -515,13 +571,11 @@ export function PipelineEditorPage({
         />
       ) : null}
       {editorTab === "history" ? (
-        <div
-          role="tabpanel"
-          aria-label="History"
-          className="flex min-h-0 flex-1 flex-col px-5 py-6"
-        >
-          <p className="text-[13px] text-[var(--sf-text-3)]">No history</p>
-        </div>
+        <PipelineEditorHistory
+          events={historyEvents}
+          runs={pipelineRuns}
+          loading={runsLoading}
+        />
       ) : null}
       {editorTab === "editor" && loadError ? (
         <p className="px-5 pt-3 text-[13px] text-[var(--sf-fail)]">{loadError}</p>

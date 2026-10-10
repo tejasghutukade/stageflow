@@ -184,3 +184,177 @@ export function lastValidatedFooter(elapsedMs: number | null): string {
       : `${Math.max(0, Math.round(elapsedMs))}ms`;
   return `Last validated · sf validate --strict · ${timing}`;
 }
+
+const EDITOR_HISTORY_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+const FINISHED_EDITOR_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+
+export type EditorHistorySessionEvent = {
+  id: string;
+  at: string;
+  label: string;
+  detail?: string;
+};
+
+export type EditorHistoryRunRef = {
+  run_id: string;
+  status: string;
+  created_at: string;
+  updated_at?: string;
+  finished_at?: string;
+  waiting_stage_id?: string;
+};
+
+export type EditorHistoryEntry =
+  | {
+      source: "session";
+      id: string;
+      at: string;
+      label: string;
+      detail?: string;
+    }
+  | {
+      source: "run";
+      id: string;
+      at: string;
+      runId: string;
+      status: string;
+    };
+
+export type EditorHistoryGroup = {
+  day: string;
+  label: string;
+  entries: EditorHistoryEntry[];
+};
+
+export function isFinishedEditorRun(run: {
+  status: string;
+  waiting_stage_id?: string;
+}): boolean {
+  if (run.waiting_stage_id) return false;
+  return FINISHED_EDITOR_RUN_STATUSES.has(run.status);
+}
+
+function localDayKey(ms: number): string {
+  const date = new Date(ms);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function editorHistoryDayLabel(dayKey: string, now: number): string {
+  if (dayKey === localDayKey(now)) return "Today";
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  yesterday.setHours(12, 0, 0, 0);
+  if (dayKey === localDayKey(yesterday.getTime())) return "Yesterday";
+  const [yearText, monthText, dayText] = dayKey.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (!year || month < 1 || month > 12 || !day) return dayKey;
+  const yearSuffix = year === new Date(now).getFullYear() ? "" : ` ${year}`;
+  return `${EDITOR_HISTORY_MONTHS[month - 1]} ${day}${yearSuffix}`;
+}
+
+function finishedRunAt(run: EditorHistoryRunRef): string | null {
+  if (!isFinishedEditorRun(run)) return null;
+  const raw = run.finished_at ?? run.updated_at ?? run.created_at;
+  if (!raw || !Number.isFinite(Date.parse(raw))) return null;
+  return raw;
+}
+
+export function mergeEditorHistory<T extends EditorHistoryRunRef>(input: {
+  events: readonly EditorHistorySessionEvent[];
+  runs: readonly T[];
+  now?: number;
+}): EditorHistoryGroup[] {
+  const now = input.now ?? Date.now();
+  const ranked: Array<EditorHistoryEntry & { seq: number }> = [];
+
+  input.events.forEach((event, index) => {
+    if (!Number.isFinite(Date.parse(event.at))) return;
+    ranked.push({
+      source: "session",
+      id: event.id,
+      at: event.at,
+      label: event.label,
+      ...(event.detail ? { detail: event.detail } : {}),
+      seq: index,
+    });
+  });
+
+  const seenRuns = new Set<string>();
+  for (const run of input.runs) {
+    if (seenRuns.has(run.run_id)) continue;
+    const at = finishedRunAt(run);
+    if (!at) continue;
+    seenRuns.add(run.run_id);
+    ranked.push({
+      source: "run",
+      id: `run:${run.run_id}`,
+      at,
+      runId: run.run_id,
+      status: run.status,
+      seq: -1,
+    });
+  }
+
+  ranked.sort((a, b) => {
+    const delta = Date.parse(b.at) - Date.parse(a.at);
+    if (delta !== 0) return delta;
+    if (a.source !== b.source) return a.source === "session" ? -1 : 1;
+    return b.seq - a.seq;
+  });
+
+  const groups: EditorHistoryGroup[] = [];
+  for (const entry of ranked) {
+    const day = localDayKey(Date.parse(entry.at));
+    const item = toHistoryEntry(entry);
+    const last = groups[groups.length - 1];
+    if (!last || last.day !== day) {
+      groups.push({
+        day,
+        label: editorHistoryDayLabel(day, now),
+        entries: [item],
+      });
+    } else {
+      last.entries.push(item);
+    }
+  }
+  return groups;
+}
+
+function toHistoryEntry(
+  entry: EditorHistoryEntry & { seq: number },
+): EditorHistoryEntry {
+  if (entry.source === "session") {
+    return {
+      source: "session",
+      id: entry.id,
+      at: entry.at,
+      label: entry.label,
+      ...(entry.detail ? { detail: entry.detail } : {}),
+    };
+  }
+  return {
+    source: "run",
+    id: entry.id,
+    at: entry.at,
+    runId: entry.runId,
+    status: entry.status,
+  };
+}
