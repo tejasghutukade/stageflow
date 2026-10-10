@@ -4,12 +4,20 @@ import {
   normalizeCatalogSlashes,
 } from "../../catalog/displayCatalogPath";
 import { runDisplayStatus } from "../../status/runStatus";
-import type { RunSummary, TaskListing } from "../../api";
+import type {
+  CatalogValidationResult,
+  PipelineListing,
+  RunSummary,
+  TaskDetailFile,
+  TaskListing,
+} from "../../api";
+import { relativeTime } from "../../catalogJoin";
 
 export type TaskFilterTab =
   | "all"
   | "has_open_gate"
   | "has_failed_run"
+  | "failing"
   | "no_runs";
 
 function isAbsolutePath(value: string): boolean {
@@ -183,9 +191,14 @@ export function parseConstraintItems(
   if (Array.isArray(constraints)) {
     return constraints.map(String).filter((line) => line.trim().length > 0);
   }
-  return constraints
+  const lines = constraints
     .split(/\r?\n/)
-    .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const listed = lines.filter((line) => /^[-*]\s+/.test(line));
+  if (listed.length === 0) return [constraints.trim()].filter((line) => line.length > 0);
+  return listed
+    .map((line) => line.replace(/^[-*]\s+/, "").trim())
     .filter((line) => line.length > 0);
 }
 
@@ -228,6 +241,9 @@ export function filterTasksByTab(
     if (tab === "has_failed_run") {
       return runs.some((run) => runDisplayStatus(run) === "failed");
     }
+    if (tab === "failing") {
+      return taskLastRunKind(runs[0]) === "failed";
+    }
     return true;
   });
 }
@@ -263,6 +279,281 @@ export function taskFilterCounts(
     all: tasks.length,
     has_open_gate: filterTasksByTab(tasks, snapshot, "has_open_gate").length,
     has_failed_run: filterTasksByTab(tasks, snapshot, "has_failed_run").length,
+    failing: filterTasksByTab(tasks, snapshot, "failing").length,
     no_runs: filterTasksByTab(tasks, snapshot, "no_runs").length,
   };
+}
+
+export type TaskLastRunKind =
+  | "waiting"
+  | "failed"
+  | "running"
+  | "succeeded"
+  | "cancelled"
+  | "none";
+
+export function taskLastRunKind(last: RunSummary | undefined): TaskLastRunKind {
+  if (!last) return "none";
+  if (last.waiting_stage_id) return "waiting";
+  switch (last.status) {
+    case "failed":
+      return "failed";
+    case "succeeded":
+      return "succeeded";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return "running";
+  }
+}
+
+const ATTENTION_ORDER: TaskLastRunKind[] = [
+  "waiting",
+  "failed",
+  "running",
+  "succeeded",
+  "cancelled",
+  "none",
+];
+
+export function taskAttentionBucket(last: RunSummary | undefined): number {
+  return ATTENTION_ORDER.indexOf(taskLastRunKind(last));
+}
+
+export function sortTasksByAttention(
+  tasks: TaskListing[],
+  snapshot: CatalogSnapshot,
+): TaskListing[] {
+  const lastByKey = new Map<string, RunSummary | undefined>();
+  for (const task of tasks) {
+    lastByKey.set(taskRowKey(task), runsForTaskListing(snapshot, task)[0]);
+  }
+  return [...tasks].sort((a, b) => {
+    const la = lastByKey.get(taskRowKey(a));
+    const lb = lastByKey.get(taskRowKey(b));
+    const bucketCmp = taskAttentionBucket(la) - taskAttentionBucket(lb);
+    if (bucketCmp !== 0) return bucketCmp;
+    if (la && lb) {
+      const timeCmp = lb.created_at.localeCompare(la.created_at);
+      if (timeCmp !== 0) return timeCmp;
+    }
+    const idCmp = a.id.localeCompare(b.id);
+    if (idCmp !== 0) return idCmp;
+    return a.path.localeCompare(b.path);
+  });
+}
+
+export function filterTasksBySearch(
+  tasks: TaskListing[],
+  query: string,
+): TaskListing[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return tasks;
+  return tasks.filter(
+    (task) =>
+      task.id.toLowerCase().includes(q) ||
+      (task.goal ?? "").toLowerCase().includes(q),
+  );
+}
+
+export function catalogRelativePath(pathValue: string, projectRoot?: string): string {
+  const normalized = normalizeCatalogSlashes(pathValue).replace(/^\.\//, "");
+  if (isAbsolutePath(normalized) && projectRoot) {
+    return normalizeCatalogSlashes(displayCatalogPath(normalized, projectRoot));
+  }
+  return normalized;
+}
+
+export function parentDirectory(pathValue: string): string {
+  const normalized = normalizeCatalogSlashes(pathValue);
+  const slash = normalized.lastIndexOf("/");
+  return slash >= 0 ? normalized.slice(0, slash) : ".";
+}
+
+export function taskFolderLabel(tasks: TaskListing[]): string {
+  if (tasks.length === 0) return "tasks/";
+  const dirs = new Set(
+    tasks.map((task) =>
+      parentDirectory(catalogRelativePath(task.path, task.project_root)),
+    ),
+  );
+  if (dirs.size !== 1) return "multiple folders";
+  const [dir] = [...dirs];
+  return dir === "." ? "./" : `${dir}/`;
+}
+
+export type TaskPipelineRef = { id: string; path?: string; project_root?: string };
+
+function pipelineRef(listing: PipelineListing): TaskPipelineRef {
+  return {
+    id: listing.id,
+    path: listing.path,
+    ...(listing.project_root ? { project_root: listing.project_root } : {}),
+  };
+}
+
+export function taskPipelineFor(
+  task: TaskListing,
+  last: RunSummary | undefined,
+  pipelines: PipelineListing[],
+): TaskPipelineRef | null {
+  if (last) {
+    const listing = pipelines
+      .filter(
+        (p) =>
+          p.id === last.pipeline_id &&
+          projectRootsMatch(task.project_root, p.project_root),
+      )
+      .sort((a, b) => a.path.localeCompare(b.path))[0];
+    return listing ? pipelineRef(listing) : { id: last.pipeline_id };
+  }
+  const taskDir = parentDirectory(catalogRelativePath(task.path, task.project_root));
+  const match = pipelines
+    .filter(
+      (p) =>
+        projectRootsMatch(task.project_root, p.project_root) &&
+        parentDirectory(catalogRelativePath(p.path, p.project_root)) === taskDir,
+    )
+    .sort((a, b) => a.id.localeCompare(b.id) || a.path.localeCompare(b.path))[0];
+  return match ? pipelineRef(match) : null;
+}
+
+export type TaskRowView = {
+  key: string;
+  task: TaskListing;
+  runs: RunSummary[];
+  last: RunSummary | undefined;
+  kind: TaskLastRunKind;
+  pipeline: TaskPipelineRef | null;
+  costUsd: number | undefined;
+};
+
+export function buildTaskRowViews(
+  tasks: TaskListing[],
+  snapshot: CatalogSnapshot,
+  pipelines: PipelineListing[],
+): TaskRowView[] {
+  return sortTasksByAttention(tasks, snapshot).map((task) => {
+    const runs = runsForTaskListing(snapshot, task);
+    const last = runs[0];
+    return {
+      key: taskRowKey(task),
+      task,
+      runs,
+      last,
+      kind: taskLastRunKind(last),
+      pipeline: taskPipelineFor(task, last, pipelines),
+      costUsd: runsTotalCostUsd(runs),
+    };
+  });
+}
+
+export function filterRowViewsByTab(
+  rows: TaskRowView[],
+  tab: TaskFilterTab,
+): TaskRowView[] {
+  if (tab === "all") return rows;
+  return rows.filter((row) => {
+    if (tab === "no_runs") return row.runs.length === 0;
+    if (tab === "has_open_gate") return openGateCount(row.runs) > 0;
+    if (tab === "has_failed_run") {
+      return row.runs.some((run) => runDisplayStatus(run) === "failed");
+    }
+    if (tab === "failing") return row.kind === "failed";
+    return true;
+  });
+}
+
+export function formatUsd(value: number | undefined): string {
+  return value === undefined ? "—" : `$${value.toFixed(2)}`;
+}
+
+export function shortRunId(runId: string): string {
+  return runId.length > 10 ? `run_${runId.slice(-6)}` : runId;
+}
+
+export function openGateCount(runs: RunSummary[]): number {
+  return runs.filter((run) => Boolean(run.waiting_stage_id)).length;
+}
+
+export function runsTotalCostUsd(runs: RunSummary[]): number | undefined {
+  let sum = 0;
+  let any = false;
+  for (const run of runs) {
+    if (run.total_cost_usd !== undefined) {
+      sum += run.total_cost_usd;
+      any = true;
+    }
+  }
+  return any ? sum : undefined;
+}
+
+export type RunHistorySegment = { kind: "runs" | "cost" | "gates"; text: string };
+
+export function runHistorySegments(runs: RunSummary[]): RunHistorySegment[] {
+  const segments: RunHistorySegment[] = [];
+  if (runs.length > 0) {
+    segments.push({
+      kind: "runs",
+      text: `${runs.length} ${runs.length === 1 ? "run" : "runs"}`,
+    });
+  }
+  const cost = runsTotalCostUsd(runs);
+  if (cost !== undefined && cost > 0) {
+    segments.push({ kind: "cost", text: formatUsd(cost) });
+  }
+  const gates = openGateCount(runs);
+  if (gates > 0) {
+    segments.push({
+      kind: "gates",
+      text: `${gates} open ${gates === 1 ? "gate" : "gates"}`,
+    });
+  }
+  return segments;
+}
+
+export function newestWaitingRun(runs: RunSummary[]): RunSummary | undefined {
+  return sortRunsNewest(runs).find((run) => Boolean(run.waiting_stage_id));
+}
+
+export function runDurationMs(run: RunSummary): number | undefined {
+  if (!run.finished_at || !run.created_at) return undefined;
+  const start = Date.parse(run.created_at);
+  const end = Date.parse(run.finished_at);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return undefined;
+  return Math.max(0, end - start);
+}
+
+export type TaskCheckoutView = { target?: string; repository?: string };
+
+export function taskCheckoutView(
+  detail: Pick<TaskDetailFile, "checkout" | "repository" | "ref"> | null | undefined,
+): TaskCheckoutView | null {
+  if (!detail) return null;
+  const checkout = detail.checkout?.trim();
+  const repository = detail.repository?.trim();
+  if (!checkout && !repository) return null;
+  const ref = detail.ref?.trim();
+  const target = checkout || ref || undefined;
+  return {
+    ...(target ? { target } : {}),
+    ...(repository ? { repository } : {}),
+  };
+}
+
+export function validationStatusLabel(
+  result: CatalogValidationResult | null,
+  checkedAt: string | null,
+  now = Date.now(),
+): string | null {
+  if (!result || !checkedAt) return null;
+  const errors = result.summary.errors;
+  if (errors > 0) return `${errors} ${errors === 1 ? "error" : "errors"}`;
+  return `validated ${relativeAgo(checkedAt, now)}`;
+}
+
+export function relativeAgo(iso: string, now = Date.now()): string {
+  const rel = relativeTime(iso, now);
+  if (rel === "just now" || rel.endsWith(" ago")) return rel;
+  return /^\d+m$/.test(rel) ? `${rel} ago` : rel;
 }

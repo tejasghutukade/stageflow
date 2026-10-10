@@ -22,6 +22,7 @@ export function ConsoleOverlays({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [startRunOpen, setStartRunOpen] = useState(false);
   const focusReturnRef = useRef<HTMLElement | null>(null);
+  const returnPathRef = useRef("/inbox");
 
   const rememberFocus = useCallback(() => {
     const el = document.activeElement;
@@ -57,9 +58,15 @@ export function ConsoleOverlays({
     setStartRunOpen(false);
     restoreFocus();
     if (route.name === "new") {
-      navigate("/inbox");
+      navigate(returnPathRef.current);
     }
   }, [route.name, restoreFocus]);
+
+  useEffect(() => {
+    if (route.name !== "new") {
+      returnPathRef.current = `${window.location.hash.replace(/^#/, "") || "/inbox"}`;
+    }
+  }, [route]);
 
   useEffect(() => {
     onOpenPaletteRef?.(openPalette);

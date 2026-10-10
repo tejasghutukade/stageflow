@@ -27,6 +27,10 @@ import type {
   StartRunResult,
   TaskListing,
   TaskDetailFile,
+  CreateTaskInput,
+  UpdateTaskBody,
+  ImportTaskFromIssueInput,
+  TaskWriteResult,
   SkillUsageIndex,
   TriggerListItem,
   TriggerFireRecord,
@@ -119,6 +123,50 @@ export function fetchTasks(): Promise<{ tasks: TaskListing[] }> {
 
 export function fetchTask(id: string): Promise<{ task: TaskDetailFile }> {
   return api(`/api/tasks/${encodeURIComponent(id)}`);
+}
+
+async function taskWriteRequest(
+  url: string,
+  method: "POST" | "PUT",
+  input: unknown,
+): Promise<TaskWriteResult> {
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      task?: TaskDetailFile;
+      error?: string;
+    };
+    if (res.ok && body.task && typeof body.task.id === "string") {
+      return { ok: true, task: body.task };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export function createTaskWithDetails(input: CreateTaskInput): Promise<TaskWriteResult> {
+  return taskWriteRequest("/api/tasks", "POST", input);
+}
+
+export function updateTask(id: string, body: UpdateTaskBody): Promise<TaskWriteResult> {
+  return taskWriteRequest(`/api/tasks/${encodeURIComponent(id)}`, "PUT", body);
+}
+
+export function importTaskFromIssue(input: ImportTaskFromIssueInput): Promise<TaskWriteResult> {
+  return taskWriteRequest("/api/tasks/import", "POST", input);
 }
 
 export function fetchPipelines(): Promise<{ pipelines: PipelineListing[] }> {

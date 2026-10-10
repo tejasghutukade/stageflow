@@ -396,6 +396,41 @@ export type TaskDetailFile = {
   input?: Record<string, unknown>;
 };
 
+export type CreateTaskInput = {
+  directory: string;
+  id: string;
+  goal: string;
+  context?: string;
+  constraints?: string;
+  checkout?: string;
+  repository?: string;
+  ref?: string;
+  project_root?: string;
+};
+
+export type UpdateTaskBody = {
+  goal: string;
+  context?: string | null;
+  constraints?: string | null;
+  checkout?: string | null;
+  repository?: string | null;
+  ref?: string | null;
+  directory?: string;
+  id?: string;
+  project_root?: string;
+};
+
+export type ImportTaskFromIssueInput = {
+  repo: string;
+  number: number;
+  directory: string;
+  project_root?: string;
+};
+
+export type TaskWriteResult =
+  | { ok: true; task: TaskDetailFile }
+  | { ok: false; status: number; error: string };
+
 export type PipelineStageListing = {
   id: string;
   gate_kinds?: StageGateKind[];

@@ -32,6 +32,11 @@ export type UseStartRunFormOptions = {
   onStarted: (runId: string) => void;
 };
 
+function sameCatalogPath(rowPath: string, path: string): boolean {
+  if (rowPath === path) return true;
+  return rowPath.endsWith(`/${path}`) || path.endsWith(`/${rowPath}`);
+}
+
 function preferCatalogRow<T extends { path: string; project_root?: string }>(
   rows: readonly T[],
   path: string | undefined,
@@ -39,13 +44,12 @@ function preferCatalogRow<T extends { path: string; project_root?: string }>(
 ): T | undefined {
   if (path && projectRoot) {
     const exact = rows.find(
-      (row) => row.path === path && row.project_root === projectRoot,
+      (row) => sameCatalogPath(row.path, path) && row.project_root === projectRoot,
     );
     if (exact) return exact;
   }
   if (path) {
-    const byPath = rows.find((row) => row.path === path);
-    if (byPath) return byPath;
+    return rows.find((row) => sameCatalogPath(row.path, path));
   }
   return rows[0];
 }

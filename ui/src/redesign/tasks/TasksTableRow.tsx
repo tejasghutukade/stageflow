@@ -1,130 +1,170 @@
-import type { TaskListing } from "../../api";
-import type { CatalogSnapshot } from "../../catalog/source";
-import { relativeTime } from "../../catalogJoin";
-import { runDisplayStatus } from "../../status/runStatus";
-import { StatusPill } from "../StatusPill";
-import { runStatusPillLabel, statusSignalFromRun } from "../statusSignal";
+import type { IconType } from "react-icons";
 import {
-  runsForTaskListing,
-  taskRootLabel,
-  taskRootTitle,
-  taskTotalCostUsd,
+  LuBan,
+  LuCheck,
+  LuClock,
+  LuHand,
+  LuLoaderCircle,
+  LuX,
+} from "react-icons/lu";
+import {
+  formatUsd,
+  relativeAgo,
+  type TaskLastRunKind,
+  type TaskRowView,
 } from "./taskViews";
-import { NeverRunPill } from "../NeverRunPill";
 
-const COL_LAST = "w-[108px] shrink-0";
-const COL_PIPE = "w-[92px] min-w-0 shrink-0";
-const COL_RUNS = "w-9 shrink-0";
-const COL_WHEN = "w-[60px] shrink-0";
-const COL_COST = "w-[52px] shrink-0";
+const MONO = "[font-family:'Geist_Mono',_monospace]";
+const NOWRAP = "[white-space-collapse:collapse] [text-wrap-mode:nowrap]";
+const COL_LABEL = `text-[#8b8f98] font-sans text-[11px] font-medium leading-normal tracking-[0.88px] uppercase ${NOWRAP}`;
+
+type PillStyle = { label: string; icon: IconType; pill: string; tone: string };
+
+const PILL_STYLES: Record<TaskLastRunKind, PillStyle> = {
+  waiting: {
+    label: "Needs you",
+    icon: LuHand,
+    pill: "bg-[#f5b5441f] border border-[#f5b5444d] shadow-[0px_0px_10px_rgba(245,181,68,0.25)]",
+    tone: "text-[#f5b544]",
+  },
+  running: {
+    label: "Running",
+    icon: LuLoaderCircle,
+    pill: "bg-[#6ca6ff1a]",
+    tone: "text-[#6ca6ff]",
+  },
+  failed: {
+    label: "Failed",
+    icon: LuX,
+    pill: "bg-[#f2645a1a]",
+    tone: "text-[#f2645a]",
+  },
+  succeeded: {
+    label: "Succeeded",
+    icon: LuCheck,
+    pill: "bg-[#4cc38a1a]",
+    tone: "text-[#4cc38a]",
+  },
+  cancelled: {
+    label: "Abandoned",
+    icon: LuBan,
+    pill: "bg-[#8b8f981a]",
+    tone: "text-[#8b8f98] line-through",
+  },
+  none: {
+    label: "Never run",
+    icon: LuClock,
+    pill: "border border-dashed border-[#a7aab266]",
+    tone: "text-[#a7aab2]",
+  },
+};
+
+export function TaskRunPill({
+  kind,
+  suffix,
+}: {
+  kind: TaskLastRunKind;
+  suffix?: string;
+}) {
+  const style = PILL_STYLES[kind];
+  const Icon = style.icon;
+  const label = suffix ? `${style.label} · ${suffix}` : style.label;
+  return (
+    <span
+      className={`flex h-6 shrink-0 items-center rounded-full px-2 py-0 gap-[5px] ${style.pill}`}
+      aria-label={label}
+    >
+      <Icon className={`size-3 block shrink-0 ${style.tone}`} aria-hidden="true" />
+      <span className={`w-fit font-sans text-xs font-medium leading-normal ${NOWRAP} ${style.tone}`}>
+        {label}
+      </span>
+    </span>
+  );
+}
 
 export function TasksColumnHeader() {
   return (
-    <div className="flex h-8 w-full shrink-0 items-center gap-3 border-b border-b-[#ffffff12] px-5 py-0">
-      <div className="min-w-0 flex-1 text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]">
-        Task
-      </div>
-      <div className={`${COL_LAST} text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]`}>
-        Last run
-      </div>
-      <div className={`${COL_PIPE} text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]`}>
-        Pipeline
-      </div>
-      <div className={`${COL_RUNS} text-right text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]`}>
-        Runs
-      </div>
-      <div className={`${COL_WHEN} text-right text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]`}>
-        When
-      </div>
-      <div className={`${COL_COST} text-right text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]`}>
-        Cost
-      </div>
+    <div className="flex w-full h-8 shrink-0 items-center border-b px-5 py-0 gap-3 border-b-[#ffffff12]">
+      <div className={`min-w-0 flex-1 text-left ${COL_LABEL}`}>Task</div>
+      <div className={`w-[108px] shrink-0 text-left ${COL_LABEL}`}>Last run</div>
+      <div className={`w-[92px] shrink-0 text-left ${COL_LABEL}`}>Pipeline</div>
+      <div className={`w-9 shrink-0 text-right ${COL_LABEL}`}>Runs</div>
+      <div className={`w-[60px] shrink-0 text-right ${COL_LABEL}`}>When</div>
+      <div className={`w-[52px] shrink-0 text-right ${COL_LABEL}`}>Cost</div>
     </div>
   );
 }
 
 export function TasksTableRow({
-  task,
-  snapshot,
+  row,
   selected,
-  showRootLabel,
+  rootLabel,
   onSelect,
 }: {
-  task: TaskListing;
-  snapshot: CatalogSnapshot;
+  row: TaskRowView;
   selected: boolean;
-  showRootLabel: boolean;
+  rootLabel?: string;
   onSelect: () => void;
 }) {
-  const runs = runsForTaskListing(snapshot, task);
-  const last = runs[0];
-  const cost = taskTotalCostUsd(snapshot, task);
-  const rootLabel = taskRootLabel(task);
+  const { task, runs, last, kind, pipeline, costUsd } = row;
+  const dim = kind === "cancelled";
+  const never = kind === "none";
+  const idTone = dim ? "text-[#a7aab2]" : "text-[#ecedee]";
+  const metaTone = dim ? "text-[#8b8f98]" : "text-[#a7aab2]";
+  const countTone = never ? "text-[#8b8f98]" : metaTone;
+  const costTone =
+    costUsd === undefined ? "text-[#8b8f98]" : dim ? "text-[#a7aab2]" : "text-[#ecedee]";
 
   return (
     <button
       type="button"
       onClick={onSelect}
-      className={`relative flex h-12 w-full shrink-0 items-center gap-3 border-b border-b-[#ffffff12] px-5 py-0 text-left${
-        selected ? " bg-[var(--sf-panel)]" : " bg-transparent hover:bg-[var(--sf-raised)]"
+      aria-current={selected ? "true" : undefined}
+      data-task-row=""
+      className={`flex relative w-full h-12 shrink-0 items-center border-b px-5 py-0 gap-3 border-b-[#ffffff12] text-left ${
+        selected ? "bg-[#131418]" : "bg-transparent hover:bg-[#131418]"
       }`}
     >
       {selected ? (
-        <span className="absolute left-0 top-0 block h-12 w-0.5 bg-[var(--sf-text-1)]" />
+        <span className="block absolute w-0.5 h-12 left-0 top-0 bg-[#ecedee]" aria-hidden="true" />
       ) : null}
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
-        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-          <span
-            className="truncate font-['Geist_Mono',monospace] text-[13px] text-[var(--sf-text-1)]"
-            title={task.id}
-          >
+      <span className="flex min-w-0 flex-col flex-1 gap-0.5">
+        <span className="flex min-w-0 items-baseline gap-1.5" title={task.id}>
+          <span className={`min-w-0 truncate ${MONO} text-[13px] leading-normal ${idTone}`}>
             {task.id}
           </span>
-          {showRootLabel ? (
-            <span
-              className="shrink-0 truncate font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-3)]"
-              title={taskRootTitle(task)}
-            >
+          {rootLabel ? (
+            <span className={`shrink-0 truncate ${MONO} text-[11px] leading-normal text-[#8b8f98]`}>
               {rootLabel}
             </span>
           ) : null}
-        </div>
-        <span className="truncate text-xs text-[var(--sf-text-2)]" title={task.goal}>
+        </span>
+        <span
+          className={`min-w-0 truncate font-sans text-xs leading-normal ${dim ? "text-[#8b8f98]" : "text-[#a7aab2]"}`}
+          title={task.goal}
+        >
           {task.goal}
         </span>
-      </div>
-      <div className={`flex ${COL_LAST}`}>
-        {last ? (
-          <StatusPill
-            signal={statusSignalFromRun(last)}
-            label={runStatusPillLabel(runDisplayStatus(last))}
-          />
-        ) : (
-          <NeverRunPill />
-        )}
-      </div>
-      <span
-        className={`truncate font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-2)] ${COL_PIPE}`}
-        title={last?.pipeline_id}
-      >
-        {last?.pipeline_id ?? "—"}
       </span>
-      <span className={`text-right font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-2)] ${COL_RUNS}`}>
+      <span className="flex w-[108px] shrink-0">
+        <TaskRunPill kind={kind} />
+      </span>
+      <span
+        className={`w-[92px] min-w-0 shrink-0 truncate ${MONO} text-xs leading-normal ${metaTone}`}
+        title={pipeline?.id}
+      >
+        {pipeline?.id ?? "—"}
+      </span>
+      <span className={`w-9 shrink-0 text-right ${MONO} text-xs leading-normal ${countTone}`}>
         {runs.length}
       </span>
       <span
-        className={`text-right font-['Geist_Mono',monospace] text-xs ${COL_WHEN}${
-          last ? " text-[var(--sf-text-2)]" : " text-[#8b8f98]"
-        }`}
+        className={`w-[60px] shrink-0 text-right ${MONO} text-xs leading-normal ${NOWRAP} ${countTone}`}
       >
-        {last ? relativeTime(last.created_at) : "—"}
+        {last ? relativeAgo(last.created_at) : "—"}
       </span>
-      <span
-        className={`text-right font-['Geist_Mono',monospace] text-xs ${COL_COST}${
-          last && cost !== undefined ? " text-[var(--sf-text-1)]" : " text-[#8b8f98]"
-        }`}
-      >
-        {cost !== undefined ? `$${cost.toFixed(2)}` : "—"}
+      <span className={`w-[52px] shrink-0 text-right ${MONO} text-xs leading-normal ${costTone}`}>
+        {formatUsd(costUsd)}
       </span>
     </button>
   );

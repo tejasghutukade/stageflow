@@ -16,6 +16,9 @@ import { handleTriggerRoutes } from "./triggerRoutes.js";
 import { readCatalogFileForHttp } from "./readCatalogFile.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
+import { createTask, parseCreateTaskBody } from "../config/createTask.js";
+import { importTaskFromIssue, parseImportTaskBody } from "../config/importTask.js";
+import { parseUpdateTaskBody, updateTask } from "../config/updateTask.js";
 import {
   loadDraftPackage,
   loadTaskArtifact,
@@ -1418,6 +1421,106 @@ export function createOperatorRoutes(
           }
         }
 
+        if (method === "POST" && pathname === "/api/tasks/import") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseImportTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let taskWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            taskWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const stageflowCtx = await resolveStageflowContext(taskWriteRoot);
+          if (stageflowCtx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const result = await importTaskFromIssue(stageflowCtx.projectRoot, parsed);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 201, { task: result.task });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/tasks") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let taskWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            taskWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parseCreateTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const stageflowCtx = await resolveStageflowContext(taskWriteRoot);
+          if (stageflowCtx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const result = await createTask(stageflowCtx.projectRoot, parsed);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 201, { task: result.task });
+          return true;
+        }
+
         const taskDetailMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
         if (method === "GET" && taskDetailMatch) {
           const taskId = decodeURIComponent(taskDetailMatch[1] ?? "");
@@ -1427,6 +1530,29 @@ export function createOperatorRoutes(
             return true;
           }
           json(res, 200, { task });
+          return true;
+        }
+
+        if (method === "PUT" && taskDetailMatch) {
+          const taskId = decodeURIComponent(taskDetailMatch[1] ?? "");
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseUpdateTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const result = await updateTask(cwd, taskId, parsed);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 200, { task: result.task });
           return true;
         }
 
