@@ -1,50 +1,108 @@
+import type { ReactNode } from "react";
+import {
+  LuArrowRight,
+  LuCheck,
+  LuCopy,
+  LuFileText,
+  LuHand,
+  LuPlay,
+  LuRotateCcw,
+  LuSquare,
+  LuX,
+} from "react-icons/lu";
 import type { CapacityHealth, RunDetail, StageSnapshot } from "../../api";
-import { formatRunCost, formatRunDuration } from "../../runs/formatRunMetrics";
-import { relativeTime } from "../../catalogJoin";
+import { formatDurationMs, formatRunCost } from "../../runs/formatRunMetrics";
+import { stageRowDurationMs } from "../../runs/stageTimeline";
 import {
   canAbandon,
   canRetry,
   canResumeTimedOut,
   isStageActionBusy,
 } from "../../stageAction";
-import { statusCopy } from "../../status/runStatus";
-import { Inspector } from "../shell/Inspector";
+import { useHotkeys } from "../keys";
 import { stageCloneLabel } from "../../workspace/resolveRunWorkspace";
+import { retryBlockedByAnswerGate } from "./runInspectorFields";
 import {
-  pendingGateLabel,
-  retryBlockedByAnswerGate,
-  stageReadinessLabel,
-} from "./runInspectorFields";
+  formatTokenCount,
+  formatWaitDuration,
+  runSlotLabel,
+  stagePrimaryModel,
+  stageStartedClock,
+  stageTokenTotals,
+  stageWaitingMs,
+} from "./stageUsage";
 
-function waitingSince(stage: StageSnapshot): string | null {
-  for (let i = stage.events.length - 1; i >= 0; i--) {
-    const ev = stage.events[i];
-    if (ev.event === "waiting_for_input" && ev.at) {
-      return relativeTime(ev.at);
-    }
-  }
-  return null;
-}
-
-function startedAtLabel(stage: StageSnapshot): string | null {
-  for (const ev of stage.events) {
-    if (ev.event === "started" && ev.at) {
-      return relativeTime(ev.at);
-    }
-  }
-  return null;
-}
+const MONO = "font-['Geist_Mono',monospace]";
+const SECTION_LABEL = "text-[11px] font-medium uppercase tracking-[0.88px] text-[#8b8f98]";
+const ACTION_ROW =
+  "flex h-8 items-center gap-2 rounded-lg px-1 text-[13px] text-[#a7aab2] hover:bg-[#ffffff0a] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent";
 
 function artifactName(path: string): string {
   return path.split("/").pop() ?? path;
+}
+
+function copyRunId(runId: string): void {
+  void navigator.clipboard?.writeText(runId);
+}
+
+function PropRow({ label, children }: { label: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex h-7 items-center justify-between gap-3">
+      <dt className="text-xs text-[#8b8f98]">{label}</dt>
+      <dd className={`${MONO} flex items-center gap-2 whitespace-nowrap text-xs text-[#ecedee]`}>
+        {children}
+      </dd>
+    </div>
+  );
+}
+
+function InspectorColumn({ children }: { children: ReactNode }) {
+  return (
+    <aside className="flex min-h-0 w-[360px] shrink-0 flex-col overflow-y-auto bg-[#0c0d0f]">
+      {children}
+    </aside>
+  );
+}
+
+function InspectorHeader({ name, waiting }: { name?: string; waiting?: boolean }) {
+  return (
+    <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-b-[#ffffff12] px-4">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className={SECTION_LABEL}>Stage</span>
+        {name ? (
+          <span className={`${MONO} truncate text-[13px] text-[#ecedee]`}>{name}</span>
+        ) : null}
+      </div>
+      {waiting ? (
+        <span className="flex h-6 shrink-0 items-center gap-[5px] rounded-full border border-[#f5b5444d] bg-[#f5b5441a] px-2">
+          <LuHand className="size-3 text-[#f5b544]" aria-hidden />
+          <span className="text-xs font-medium text-[#f5b544]">Waiting for input</span>
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function EnvelopeStatusPill({ status }: { status: string }) {
+  const ok = status === "success";
+  return (
+    <span
+      className={`flex h-5 w-fit items-center gap-1 rounded-full px-1.5 text-[11px] font-medium ${
+        ok ? "bg-[#4cc38a1a] text-[#4cc38a]" : "bg-[#f2645a1a] text-[#f2645a]"
+      }`}
+    >
+      {ok ? <LuCheck className="size-3" aria-hidden /> : <LuX className="size-3" aria-hidden />}
+      {status}
+    </span>
+  );
 }
 
 export function RunStageInspector({
   run,
   stage,
   health,
-  modelLabel,
   inboundSummary,
+  inboundFromStageId,
   actionBusy,
   onRetry,
   onResume,
@@ -58,6 +116,7 @@ export function RunStageInspector({
   health: CapacityHealth | null;
   modelLabel?: string | null;
   inboundSummary?: string | null;
+  inboundFromStageId?: string | null;
   actionBusy: {
     retryingStageIds: ReadonlySet<string>;
     abandoningStageId: string | null;
@@ -70,198 +129,197 @@ export function RunStageInspector({
   onOpenEnvelope?: (stageId: string) => void;
   artifactPath?: string | null;
 }) {
+  useHotkeys(
+    [
+      {
+        key: "c",
+        scope: "run-detail",
+        handler: (e) => {
+          e.preventDefault();
+          copyRunId(run.run_id);
+        },
+      },
+    ],
+    "run-detail",
+  );
+
   if (!stage) {
     return (
-      <Inspector title="Stage" className="!w-[360px]">
-        <p className="text-[13px] text-[var(--sf-text-3)]">Select a stage to inspect.</p>
-      </Inspector>
+      <InspectorColumn>
+        <InspectorHeader />
+        <p className="px-4 py-3 text-[13px] text-[#8b8f98]">Select a stage to inspect.</p>
+      </InspectorColumn>
     );
   }
 
+  const now = Date.now();
   const stageId = stage.stage_id;
-  const holdingSlot = health?.activeRunIds?.includes(run.run_id) ?? false;
-  const failedReason = stage.events
-    .slice()
-    .reverse()
-    .find((e) => e.event === "failed")?.reason;
-  const readiness = stageReadinessLabel(run, stage);
-  const pendingGate = pendingGateLabel(stage.pending_prompt);
+  const waiting = stage.status === "waiting_for_input";
+  const failedReason =
+    stage.status === "failed"
+      ? stage.events
+          .slice()
+          .reverse()
+          .find((e) => e.event === "failed")?.reason
+      : undefined;
   const outbound = stage.envelope;
   const retryBlocked = retryBlockedByAnswerGate(run);
   const retryBusy = isStageActionBusy(actionBusy, stageId);
+  const showRetry = canRetry(stage.status) || retryBlocked;
+
+  const model = stagePrimaryModel(stage);
+  const tokens = stageTokenTotals(stage);
+  const startedClock = stageStartedClock(stage);
+  const elapsed = startedClock ? formatDurationMs(stageRowDurationMs(stage, now)) : null;
+  const waitingMs = waiting ? stageWaitingMs(stage, now) : null;
+  const slot = runSlotLabel(run.run_id, health);
 
   return (
-    <Inspector title={stageCloneLabel(run, stageId)} className="!w-[360px]">
-      <dl className="flex flex-col gap-2.5 text-[13px]">
-        <div className="flex justify-between gap-3">
-          <dt className="text-[var(--sf-text-3)]">Status</dt>
-          <dd className="text-[var(--sf-text-1)]">{statusCopy(stage.status)}</dd>
-        </div>
-        {readiness ? (
-          <div className="flex justify-between gap-3">
-            <dt className="text-[var(--sf-text-3)]">Readiness</dt>
-            <dd className="text-right text-[var(--sf-text-1)]">{readiness}</dd>
-          </div>
-        ) : null}
-        {pendingGate ? (
-          <div className="flex justify-between gap-3">
-            <dt className="text-[var(--sf-text-3)]">Pending gate</dt>
-            <dd className="text-[var(--sf-needs)]">{pendingGate}</dd>
-          </div>
-        ) : null}
-        <div className="flex justify-between gap-3">
-          <dt className="text-[var(--sf-text-3)]">Attempt</dt>
-          <dd className="font-['Geist_Mono',monospace] text-[var(--sf-text-1)]">
-            {stage.attempt_count}
-          </dd>
-        </div>
-        {modelLabel ? (
-          <div className="flex justify-between gap-3">
-            <dt className="text-[var(--sf-text-3)]">Model</dt>
-            <dd className="font-['Geist_Mono',monospace] text-[var(--sf-text-1)]">
-              {modelLabel}
-            </dd>
-          </div>
-        ) : null}
-        <div className="flex justify-between gap-3">
-          <dt className="text-[var(--sf-text-3)]">Started</dt>
-          <dd className="text-[var(--sf-text-1)]">{startedAtLabel(stage) ?? "—"}</dd>
-        </div>
-        <div className="flex justify-between gap-3">
-          <dt className="text-[var(--sf-text-3)]">Elapsed</dt>
-          <dd className="whitespace-nowrap font-['Geist_Mono',monospace] text-[var(--sf-text-1)]">
-            {formatRunDuration(run.created_at, run.finished_at, run.updated_at)}
-          </dd>
-        </div>
-        {stage.status === "waiting_for_input" ? (
-          <div className="flex justify-between gap-3">
-            <dt className="text-[var(--sf-text-3)]">Waiting on you</dt>
-            <dd className="text-[var(--sf-text-1)]">{waitingSince(stage) ?? "now"}</dd>
-          </div>
-        ) : null}
-        <div className="flex justify-between gap-3">
-          <dt className="text-[var(--sf-text-3)]">Cost</dt>
-          <dd className="font-['Geist_Mono',monospace] text-[var(--sf-text-1)]">
-            {formatRunCost(stage.cost_usd)}
-          </dd>
-        </div>
-        {holdingSlot ? (
-          <div className="flex justify-between gap-3">
-            <dt className="text-[var(--sf-text-3)]">Session</dt>
-            <dd className="text-[var(--sf-text-1)]">Holding a session slot</dd>
-          </div>
-        ) : null}
-        {inboundSummary ? (
-          <div className="flex flex-col gap-1">
-            <dt className="text-[var(--sf-text-3)]">Inbound</dt>
-            <dd className="text-[13px] leading-snug text-[var(--sf-text-2)]">
-              {inboundSummary}
-            </dd>
-          </div>
-        ) : null}
-      </dl>
-      {outbound ? (
-        <section className="mt-4 rounded-lg border border-[#ffffff12] bg-[var(--sf-raised)] p-3">
-          <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--sf-text-3)]">
-            Handoff envelope
-          </div>
-          <p className="text-[13px] leading-snug text-[var(--sf-text-1)]">
-            {outbound.summary}
+    <InspectorColumn>
+      <InspectorHeader name={stageCloneLabel(run, stageId)} waiting={waiting} />
+      <div className="flex flex-col border-b border-b-[#ffffff12] px-4 py-2">
+        <dl className="flex flex-col">
+          <PropRow label="Attempt">{stage.attempt_count}</PropRow>
+          {model ? <PropRow label="Model">{model}</PropRow> : null}
+          {startedClock ? (
+            <PropRow label="Started · elapsed">
+              <span>{startedClock}</span>
+              <span>{elapsed}</span>
+            </PropRow>
+          ) : null}
+          {waitingMs !== null ? (
+            <PropRow label="Waiting on you">{formatWaitDuration(waitingMs)}</PropRow>
+          ) : null}
+          {tokens ? (
+            <PropRow label="Tokens in / out">
+              {formatTokenCount(tokens.input)} / {formatTokenCount(tokens.output)}
+            </PropRow>
+          ) : null}
+          <PropRow label="Cost">{formatRunCost(stage.cost_usd)}</PropRow>
+          {slot ? (
+            <PropRow label="Slot held">
+              <span className="size-1.5 rounded-full bg-[#f5b544]" aria-hidden />
+              {slot}
+            </PropRow>
+          ) : null}
+        </dl>
+        {failedReason ? (
+          <p className="my-2 rounded-lg border border-[#f2645a33] bg-[#f2645a14] px-3 py-2 text-[13px] text-[#f2645a]">
+            {failedReason}
           </p>
-          {outbound.artifacts.length > 0 ? (
-            <div className="mt-2.5 flex flex-wrap gap-1.5">
-              {outbound.artifacts.map((path) => {
-                const name = artifactName(path);
-                if (onOpenArtifact) {
-                  return (
+        ) : null}
+      </div>
+      {inboundSummary || outbound ? (
+        <div className="flex flex-col gap-2 border-b border-b-[#ffffff12] px-4 py-3">
+          {inboundSummary ? (
+            <>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className={SECTION_LABEL}>{inboundFromStageId ? "Envelope from" : "Envelope in"}</span>
+                {inboundFromStageId ? (
+                  <>
+                    <span className={`${MONO} truncate text-[13px] text-[#ecedee]`}>
+                      {inboundFromStageId}
+                    </span>
+                    <LuArrowRight className="size-3 shrink-0 text-[#8b8f98]" aria-hidden />
+                    <span className={`${MONO} truncate text-[13px] text-[#ecedee]`}>{stageId}</span>
+                  </>
+                ) : null}
+              </div>
+              <p className="text-[13px] leading-snug text-[#ecedee]">{inboundSummary}</p>
+            </>
+          ) : null}
+          {outbound ? (
+            <>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className={SECTION_LABEL}>Envelope</span>
+                <span className={`${MONO} truncate text-[13px] text-[#ecedee]`}>{stageId}</span>
+              </div>
+              <EnvelopeStatusPill status={outbound.status} />
+              <p className="text-[13px] leading-snug text-[#ecedee]">{outbound.summary}</p>
+              {outbound.artifacts.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {outbound.artifacts.map((path) => (
                     <button
                       key={path}
                       type="button"
-                      className="rounded-md border border-[#ffffff1a] bg-[var(--sf-panel)] px-2 py-0.5 font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-2)] hover:border-[#ffffff28]"
-                      onClick={() => onOpenArtifact(path)}
+                      disabled={!onOpenArtifact}
+                      className={`${MONO} flex h-[26px] items-center gap-1.5 rounded-md border border-[#ffffff1a] bg-[#1a1c21] px-2 text-[11px] text-[#a7aab2] hover:border-[#ffffff28] disabled:hover:border-[#ffffff1a]`}
+                      onClick={() => onOpenArtifact?.(path)}
                     >
-                      {name}
+                      <LuFileText className="size-3 text-[#8b8f98]" aria-hidden />
+                      {artifactName(path)}
                     </button>
-                  );
-                }
-                return (
-                  <span
-                    key={path}
-                    className="rounded-md border border-[#ffffff1a] bg-[var(--sf-panel)] px-2 py-0.5 font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-2)]"
-                  >
-                    {name}
-                  </span>
-                );
-              })}
-            </div>
+                  ))}
+                </div>
+              ) : null}
+              {onOpenEnvelope ? (
+                <button
+                  type="button"
+                  className="w-fit text-xs text-[#8b8f98] hover:text-[#ecedee]"
+                  onClick={() => onOpenEnvelope(stageId)}
+                >
+                  Open full record
+                </button>
+              ) : null}
+            </>
           ) : null}
-          {onOpenEnvelope ? (
-            <button
-              type="button"
-              className="sf-btn sf-btn--ghost sf-btn--sm mt-3"
-              onClick={() => onOpenEnvelope(stageId)}
-            >
-              Open full record
-            </button>
-          ) : null}
-        </section>
+        </div>
       ) : null}
-      {failedReason ? (
-        <p className="mt-3 rounded-lg border border-[#f2645a33] bg-[#f2645a14] px-3 py-2 text-[13px] text-[var(--sf-fail)]">
-          {failedReason}
-        </p>
-      ) : null}
-      <div className="mt-4 flex flex-wrap gap-2">
-        {canRetry(stage.status) ? (
+      <div className="flex flex-col gap-1 px-4 py-3">
+        <span className={`${SECTION_LABEL} mb-1`}>Actions</span>
+        {showRetry ? (
           <button
             type="button"
-            className="sf-btn sf-btn--secondary sf-btn--sm"
+            className={ACTION_ROW}
             disabled={retryBusy || retryBlocked}
-            title={
-              retryBlocked
-                ? "Answer the pending gate on this run before retrying a stage."
-                : undefined
-            }
             onClick={() => onRetry(stageId)}
           >
-            Retry
+            <LuRotateCcw className="size-3.5 text-[#8b8f98]" aria-hidden />
+            <span>Retry stage</span>
+            {retryBlocked ? (
+              <span className="ml-auto text-xs text-[#8b8f98]">answer gate first</span>
+            ) : null}
           </button>
         ) : null}
         {canResumeTimedOut(stage) ? (
           <button
             type="button"
-            className="sf-btn sf-btn--secondary sf-btn--sm"
+            className={ACTION_ROW}
             disabled={retryBusy || retryBlocked}
-            title={
-              retryBlocked
-                ? "Answer the pending gate on this run before resuming."
-                : undefined
-            }
             onClick={() => onResume(stageId)}
           >
-            Resume
+            <LuPlay className="size-3.5 text-[#8b8f98]" aria-hidden />
+            <span>Resume stage</span>
+            {retryBlocked ? (
+              <span className="ml-auto text-xs text-[#8b8f98]">answer gate first</span>
+            ) : null}
+          </button>
+        ) : null}
+        <button type="button" className={ACTION_ROW} onClick={() => copyRunId(run.run_id)}>
+          <LuCopy className="size-3.5 text-[#8b8f98]" aria-hidden />
+          <span>Copy run id</span>
+          <kbd className="ml-auto rounded-sm border border-[#ffffff1a] bg-[#131418] px-[5px] font-mono text-[11px] text-[#8b8f98]">
+            C
+          </kbd>
+        </button>
+        {artifactPath && onOpenArtifact ? (
+          <button type="button" className={ACTION_ROW} onClick={() => onOpenArtifact(artifactPath)}>
+            <LuFileText className="size-3.5 text-[#8b8f98]" aria-hidden />
+            <span>Open artifact</span>
           </button>
         ) : null}
         {canAbandon(stage.status) ? (
           <button
             type="button"
-            className="sf-btn sf-btn--ghost sf-btn--sm"
+            className={ACTION_ROW}
             disabled={retryBusy}
             onClick={() => onAbandon(stageId)}
           >
-            Abandon
-          </button>
-        ) : null}
-        {artifactPath && onOpenArtifact ? (
-          <button
-            type="button"
-            className="sf-btn sf-btn--ghost sf-btn--sm"
-            onClick={() => onOpenArtifact(artifactPath)}
-          >
-            Open artifact
+            <LuSquare className="size-3.5 text-[#8b8f98]" aria-hidden />
+            <span>Abandon stage</span>
           </button>
         ) : null}
       </div>
-    </Inspector>
+    </InspectorColumn>
   );
 }

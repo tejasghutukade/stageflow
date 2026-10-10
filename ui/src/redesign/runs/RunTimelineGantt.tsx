@@ -6,9 +6,12 @@ import {
   formatRunCost,
 } from "../../runs/formatRunMetrics";
 import {
+  axisSpanMs,
+  futureBarSlots,
+  isFutureTimelineStage,
   stageRowDurationMs,
-  stageSegments,
   timelineBounds,
+  visibleStageBars,
   type TimelineSegment,
 } from "../../runs/stageTimeline";
 import {
@@ -16,43 +19,39 @@ import {
   isTimelineBlockedStage,
   stageTimelineSubline,
 } from "../../runs/stageTrackNode";
-import { runDetailShouldPoll } from "../../workspace/resolveRunWorkspace";
 import {
   signalIcon,
   statusSignalFromReadiness,
   statusSignalFromStageStatus,
 } from "../statusSignal";
 
-function segmentKindForBar(
-  stage: StageSnapshot,
-  seg: TimelineSegment,
-): TimelineSegment["kind"] {
-  if (seg.kind !== "running") return seg.kind;
-  if (stage.status === "failed") return "failed";
-  if (stage.events?.some((e) => e.event === "failed")) return "failed";
-  return seg.kind;
-}
-
 function barClass(kind: TimelineSegment["kind"]): string {
   if (kind === "running") return "bg-[var(--sf-running)]";
   if (kind === "waiting") {
-    return "border border-[#f5b544b3] bg-[#f5b54424] shadow-[0px_0px_10px_rgba(245,181,68,0.35)]";
+    return "overflow-hidden border border-[#f5b544b3] shadow-[0px_0px_10px_rgba(245,181,68,0.35)]";
   }
   if (kind === "succeeded") return "bg-[var(--sf-ok)]";
   if (kind === "failed") return "bg-[var(--sf-fail)]";
   if (kind === "skipped") return "bg-[var(--sf-text-3)]";
-  if (kind === "queued" || kind === "empty") {
-    return "border border-[#a7aab28c] bg-transparent";
-  }
-  if (kind === "blocked") {
-    return "border border-dashed border-[var(--sf-text-2)] bg-transparent";
-  }
   return "bg-[var(--sf-track-empty)]";
 }
 
-function formatAxisMinutes(ms: number): string {
-  const min = Math.round(ms / 60_000);
-  return `${min}m`;
+function barRadius(index: number, count: number): string {
+  if (count <= 1) return "rounded-sm";
+  if (index === 0) return "rounded-l-sm";
+  if (index === count - 1) return "rounded-r-sm";
+  return "rounded-none";
+}
+
+function formatAxis(ms: number, spanMs: number): string {
+  const trim = (value: number) => {
+    const rounded = Math.round(value * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  };
+  if (spanMs <= 60_000) return `${trim(ms / 1000)}s`;
+  if (spanMs < 3_600_000) return `${trim(ms / 60_000)}m`;
+  if (spanMs < 86_400_000) return `${trim(ms / 3_600_000)}h`;
+  return `${trim(ms / 86_400_000)}d`;
 }
 
 export function RunTimelineGantt({
@@ -72,20 +71,31 @@ export function RunTimelineGantt({
     () => timelineBounds(run, stages, now),
     [run, stages, now],
   );
-  const span = Math.max(1, bounds.endMs - bounds.startMs);
-  const live = runDetailShouldPoll(run, { retrying: false, abandoning: false });
+  const terminalRunStatuses = new Set<string>([
+    "succeeded",
+    "failed",
+    "cancelled",
+    "abandoned",
+  ]);
+  const showNowMarker =
+    run.finished_at == null && !terminalRunStatuses.has(run.status);
+  const span = axisSpanMs(bounds.endMs - bounds.startMs, showNowMarker);
   const doneCount = stages.filter((s) => s.status === "succeeded").length;
   const tickCount = 5;
   const ticks = useMemo(() => {
     return Array.from({ length: tickCount }, (_, i) => {
       const frac = i / (tickCount - 1);
-      return { label: formatAxisMinutes(span * frac), left: `${frac * 100}%` };
+      return { label: formatAxis(span * frac, span), left: `${frac * 100}%` };
     });
   }, [span]);
-  const nowLeftPct =
-    live && run.finished_at == null
-      ? Math.min(100, Math.max(0, ((now - bounds.startMs) / span) * 100))
-      : null;
+  const nowLeftPct = showNowMarker
+    ? Math.min(100, Math.max(0, ((now - bounds.startMs) / span) * 100))
+    : null;
+  const futureStages = stages.filter((stage) => isFutureTimelineStage(stage));
+  const futureSlots = futureBarSlots(futureStages.length, nowLeftPct);
+  const futureSlotById = new Map(
+    futureStages.map((stage, index) => [stage.stage_id, futureSlots[index]]),
+  );
 
   return (
     <div className="flex w-full flex-col border-b border-b-[#ffffff12] px-0 pt-3 pb-2">
@@ -112,36 +122,46 @@ export function RunTimelineGantt({
             <span className="font-sans text-xs text-[var(--sf-text-2)]">Waiting on you</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="block h-1.5 w-2.5 rounded-xs border border-[var(--sf-text-2)] bg-transparent" />
-            <span className="font-sans text-xs text-[var(--sf-text-2)]">Blocked</span>
+            <span className="block h-1.5 w-2.5 rounded-xs border border-dashed border-[#a7aab28c] bg-transparent" />
+            <span className="font-sans text-xs text-[var(--sf-text-2)]">Queued</span>
           </span>
         </div>
       </div>
       <div className="relative flex w-full flex-col">
         <div
-          className="pointer-events-none absolute bottom-0 left-[180px] right-[190px] top-6"
+          className="pointer-events-none absolute flex gap-4 px-6"
+          style={{ top: 0, right: 0, bottom: 0, left: 0, zIndex: 3 }}
           aria-hidden="true"
         >
-          {ticks.map((tick) => (
-            <span
-              key={`grid-${tick.label}`}
-              className="absolute top-0 bottom-0 w-px bg-[#ffffff0f]"
-              style={{ left: tick.left }}
-            />
-          ))}
-          {nowLeftPct != null ? (
-            <span
-              className="absolute top-[-6px] bottom-0 w-px bg-[#ecedeeb3]"
-              style={{ left: `${nowLeftPct}%` }}
-            />
-          ) : null}
-        </div>
-        <div className="relative z-[1] flex h-6 items-center gap-4 px-6 py-0">
-          <span className="block w-[140px] shrink-0" />
-          <div className="relative h-4 flex-1">
-            {ticks.map((tick) => (
+          <span className="block w-[140px] shrink-0" style={{ width: 140 }} />
+          <div className="relative flex-1">
+            {ticks.map((tick, index) => (
               <span
-                key={tick.label}
+                key={`grid-${index}`}
+                className="absolute bottom-0 w-px bg-[#ffffff0f]"
+                style={{ left: tick.left, top: 24 }}
+              />
+            ))}
+            {nowLeftPct != null ? (
+              <span
+                className="absolute w-px"
+                style={{
+                  left: `${nowLeftPct}%`,
+                  top: 18,
+                  bottom: 0,
+                  backgroundColor: "rgba(236, 237, 238, 0.7)",
+                }}
+              />
+            ) : null}
+          </div>
+          <span className="block w-[150px] shrink-0" />
+        </div>
+        <div className="relative flex h-6 items-center gap-4 px-6 py-0" style={{ zIndex: 4 }}>
+          <span className="block w-[140px] shrink-0" style={{ width: 140 }} />
+          <div className="relative h-4 flex-1">
+            {ticks.map((tick, index) => (
+              <span
+                key={`tick-${index}`}
                 className="absolute top-0 font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-3)]"
                 style={{ left: tick.left, transform: "translateX(-50%)" }}
               >
@@ -150,7 +170,7 @@ export function RunTimelineGantt({
             ))}
             {nowLeftPct != null ? (
               <span
-                className="absolute top-[-2px] rounded-sm bg-[var(--sf-text-1)] px-[5px] py-0 font-['Geist_Mono',monospace] text-[10px] font-semibold leading-[1.6] text-[var(--sf-ground)]"
+                className="absolute z-[2] rounded-sm bg-[#ecedee] px-[5px] py-0 font-['Geist_Mono',monospace] text-[10px] font-semibold leading-[1.6] text-[#0c0d0f]"
                 style={{ left: `${nowLeftPct}%`, transform: "translateX(-50%)" }}
               >
                 now
@@ -170,7 +190,8 @@ export function RunTimelineGantt({
           const trackNode = findStageTrackNode(run, stage.stage_id);
           const blocked = isTimelineBlockedStage(stage, trackNode);
           const waiting = stage.status === "waiting_for_input";
-          const segments = stageSegments(stage, now, trackNode);
+          const futureSlot = futureSlotById.get(stage.stage_id);
+          const bars = futureSlot ? [] : visibleStageBars(stage, now, trackNode);
           const duration = formatDurationMs(stageRowDurationMs(stage, now));
           const selected = selectedStageId === stage.stage_id;
           const signal = blocked
@@ -216,7 +237,10 @@ export function RunTimelineGantt({
                   className={`absolute bottom-0 left-0 top-0 w-0.5 ${selectionBarClass}`}
                 />
               ) : null}
-              <div className="flex w-[140px] min-w-0 shrink-0 items-center gap-2 overflow-hidden">
+              <div
+                className="flex w-[140px] min-w-0 shrink-0 items-center gap-2 overflow-hidden"
+                style={{ width: 140 }}
+              >
                 <Icon className={`size-3.5 shrink-0 ${iconColor}`} aria-hidden="true" />
                 <span
                   className={`truncate font-sans text-[13px] leading-normal${
@@ -242,38 +266,38 @@ export function RunTimelineGantt({
                 ) : null}
               </div>
               <div className="relative h-3.5 flex-1">
-                {segments.map((seg, i) => {
-                  const barKind = segmentKindForBar(stage, seg);
-                  const leftPct =
-                    ((Math.max(bounds.startMs, seg.startMs) - bounds.startMs) /
-                      span) *
-                    100;
-                  const widthPct =
-                    (Math.max(0, seg.endMs - seg.startMs) / span) * 100;
-                  if (widthPct <= 0 && barKind === "empty") return null;
-                  const cls = barClass(barKind);
-                  const minW =
-                    barKind === "empty" ||
-                    barKind === "queued" ||
-                    barKind === "blocked"
-                      ? 0
-                      : 0.35;
-                  const barWidth =
-                    barKind === "blocked"
-                      ? 100
-                      : Math.max(widthPct, minW);
-                  const barLeft = barKind === "blocked" ? 0 : leftPct;
-                  return (
-                    <span
-                      key={`${barKind}-${i}`}
-                      className={`absolute top-0 block h-3.5 rounded-sm ${cls}`}
-                      style={{
-                        left: `${barLeft}%`,
-                        width: `${barWidth}%`,
-                      }}
-                    />
-                  );
-                })}
+                {futureSlot ? (
+                  <span
+                    className="absolute top-0 block h-3.5 rounded-sm border border-dashed border-[#a7aab28c] bg-transparent"
+                    style={{
+                      left: `${futureSlot.left}%`,
+                      width: `${futureSlot.width}%`,
+                    }}
+                  />
+                ) : (
+                  bars.map((seg, i) => {
+                    const leftPct =
+                      ((Math.max(bounds.startMs, seg.startMs) - bounds.startMs) / span) * 100;
+                    const widthPct = (Math.max(0, seg.endMs - seg.startMs) / span) * 100;
+                    return (
+                      <span
+                        key={`${seg.kind}-${i}`}
+                        className={`absolute top-0 block h-3.5 ${barRadius(i, bars.length)} ${barClass(seg.kind)}`}
+                        style={{
+                          left: `${leftPct}%`,
+                          width: `${Math.max(widthPct, 0.35)}%`,
+                          ...(seg.kind === "waiting"
+                            ? {
+                                backgroundColor: "#f5b54424",
+                                backgroundImage:
+                                  "repeating-linear-gradient(90deg, #f5b54499 0 2px, transparent 2px 8px)",
+                              }
+                            : {}),
+                        }}
+                      />
+                    );
+                  })
+                )}
               </div>
               <div className="flex w-[150px] shrink-0 justify-end gap-3 font-['Geist_Mono',monospace] text-xs">
                 <span className={durationClass}>{duration}</span>

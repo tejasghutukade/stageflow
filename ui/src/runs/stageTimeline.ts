@@ -158,3 +158,79 @@ export function stageRowDurationMs(
     0,
   );
 }
+
+const AXIS_UNITS = [1_000, 60_000, 3_600_000, 86_400_000];
+const AXIS_STEPS = [1, 2, 4, 5, 10, 15, 20, 30, 45, 60];
+const MAX_NOW_FRACTION = 0.92;
+
+export function axisSpanMs(elapsedMs: number, open: boolean): number {
+  const elapsed = Math.max(0, elapsedMs);
+  if (!open) return Math.max(elapsed, 1);
+  const needed = Math.max(elapsed + 1, elapsed / MAX_NOW_FRACTION);
+  for (const unit of AXIS_UNITS) {
+    for (const step of AXIS_STEPS) {
+      const horizon = step * unit;
+      if (horizon >= needed) return horizon;
+    }
+  }
+  return needed;
+}
+
+export function isFutureTimelineStage(stage: StageSnapshot): boolean {
+  if (stage.status !== "pending") return false;
+  return !stage.events?.some((event) => event.event === "started");
+}
+
+function settledKind(stage: StageSnapshot): TimelineSegmentKind | null {
+  if (stage.status === "succeeded") return "succeeded";
+  if (stage.status === "failed") return "failed";
+  if (stage.status === "skipped") return "skipped";
+  return null;
+}
+
+export function visibleStageBars(
+  stage: StageSnapshot,
+  now = Date.now(),
+  trackNode?: StageTrackReadiness,
+): TimelineSegment[] {
+  const settled = settledKind(stage);
+  const failedEvent = stage.events?.some((event) => event.event === "failed") ?? false;
+  const bars: TimelineSegment[] = [];
+  for (const seg of stageSegments(stage, now, trackNode)) {
+    if (seg.endMs <= seg.startMs) continue;
+    if (seg.kind === "blocked" || seg.kind === "queued" || seg.kind === "empty") continue;
+    const kind: TimelineSegmentKind =
+      settled &&
+      (seg.kind === "running" || seg.kind === "waiting" || seg.kind === settled)
+        ? settled
+        : seg.kind === "running" && (stage.status === "failed" || failedEvent)
+          ? "failed"
+          : seg.kind;
+    const prev = bars[bars.length - 1];
+    if (prev && prev.kind === kind && seg.startMs <= prev.endMs + 1) {
+      prev.endMs = Math.max(prev.endMs, seg.endMs);
+      continue;
+    }
+    bars.push({ kind, startMs: seg.startMs, endMs: seg.endMs });
+  }
+  return bars;
+}
+
+export function futureBarSlots(
+  count: number,
+  nowPct: number | null,
+): { left: number; width: number }[] {
+  if (count <= 0) return [];
+  const gap = 0.6;
+  const maxWidth = 6;
+  const origin = nowPct == null ? Math.max(0, 100 - count * maxWidth) : nowPct + gap;
+  const room = Math.max(0, 100 - origin);
+  const gapTotal = gap * Math.max(0, count - 1);
+  const width =
+    room <= gapTotal ? room / count : Math.min(maxWidth, (room - gapTotal) / count);
+  const stride = width + (count > 1 && room > gapTotal ? gap : 0);
+  return Array.from({ length: count }, (_, index) => ({
+    left: origin + index * stride,
+    width,
+  }));
+}

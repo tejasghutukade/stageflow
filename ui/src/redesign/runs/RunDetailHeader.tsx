@@ -13,10 +13,21 @@ import {
   canDeleteRun,
 } from "../../runLifecycle/runActions";
 import { canAbandon } from "../../stageAction";
-import { LuChevronRight, LuCircleX, LuCopy, LuRotateCcw } from "react-icons/lu";
+import {
+  LuChevronRight,
+  LuCircleX,
+  LuCopy,
+  LuOctagonX,
+  LuRotateCcw,
+  LuTrash2,
+} from "react-icons/lu";
 import { RunDetailViewToggle } from "./RunDetailViewToggle";
 import { runsPipelineDisplayId } from "./runsRowHelpers";
 import { runGoalFromTaskYaml } from "./runTaskGoal";
+import { runUsageSummary } from "./runUsageSummary";
+
+const ghostActionClass =
+  "flex h-8 shrink-0 items-center whitespace-nowrap rounded-lg px-3 py-0 gap-1.5 text-[#a7aab2] font-sans text-[13px] font-medium disabled:opacity-60";
 
 export type RunDetailViewMode = "timeline" | "graph" | "list";
 
@@ -63,7 +74,7 @@ export function RunDetailHeader({
   const duration = formatRunDuration(
     run.created_at,
     run.finished_at,
-    run.updated_at,
+    run.finished_at ? run.updated_at : undefined,
     now ?? Date.now(),
   );
   const started = formatStartedLabel(run.created_at);
@@ -75,6 +86,16 @@ export function RunDetailHeader({
   const showPipeline =
     pipelineLabel && pipelineLabel !== "—" ? pipelineLabel : null;
   const goalSummary = runGoalFromTaskYaml(run.task_yaml);
+  const usage = runUsageSummary(run.stages);
+  const elapsed = duration && duration !== "—" ? duration : null;
+  const costLabel = cost && cost !== "—" ? cost : null;
+  const meta: Array<{ text: string; tone: "lead" | "rest" }> = [];
+  if (showPipeline) meta.push({ text: showPipeline, tone: "lead" });
+  if (started) meta.push({ text: started, tone: "rest" });
+  if (elapsed) meta.push({ text: elapsed, tone: "rest" });
+  if (usage) meta.push({ text: `${usage.tokensLabel} tok`, tone: "rest" });
+  if (costLabel) meta.push({ text: costLabel, tone: "rest" });
+  if (usage) meta.push({ text: usage.modelLabel, tone: "rest" });
 
   const copyRunId = () => {
     void navigator.clipboard?.writeText(run.run_id);
@@ -124,39 +145,37 @@ export function RunDetailHeader({
             </span>
           ) : null}
         </div>
-        {showPipeline || started || (duration && duration !== "—") || (cost && cost !== "—") ? (
-          <div className="flex flex-wrap items-center gap-2 font-['Geist_Mono',monospace] text-xs">
-            {showPipeline ? (
-              <span className="whitespace-nowrap text-[var(--sf-text-1)]">{showPipeline}</span>
-            ) : null}
-            {showPipeline && started ? (
-              <span className="text-[var(--sf-text-3)]">·</span>
-            ) : null}
-            {started ? (
-              <span className="whitespace-nowrap text-[var(--sf-text-2)]">{started}</span>
-            ) : null}
-            {(showPipeline || started) && duration && duration !== "—" ? (
-              <span className="text-[var(--sf-text-3)]">·</span>
-            ) : null}
-            {duration && duration !== "—" ? (
-              <span className="whitespace-nowrap text-[var(--sf-text-2)]">{duration}</span>
-            ) : null}
-            {(showPipeline || started || (duration && duration !== "—")) &&
-            cost &&
-            cost !== "—" ? (
-              <span className="text-[var(--sf-text-3)]">·</span>
-            ) : null}
-            {cost && cost !== "—" ? (
-              <span className="whitespace-nowrap text-[var(--sf-text-2)]">{cost}</span>
-            ) : null}
+        {meta.length > 0 ? (
+          <div className="flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden font-['Geist_Mono',monospace] text-xs">
+            {meta.flatMap((part, index) => {
+              const item = (
+                <span
+                  key={`${part.text}-${index}`}
+                  className={
+                    part.tone === "lead"
+                      ? "shrink-0 whitespace-nowrap text-[#ecedee]"
+                      : "shrink-0 whitespace-nowrap text-[#a7aab2]"
+                  }
+                >
+                  {part.text}
+                </span>
+              );
+              if (index === 0) return [item];
+              return [
+                <span key={`sep-${index}`} className="shrink-0 text-[#8b8f98]">
+                  ·
+                </span>,
+                item,
+              ];
+            })}
           </div>
         ) : null}
       </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
+      <div className="flex shrink-0 flex-nowrap items-center gap-2">
         {showAbandon && onAbandonStage ? (
           <button
             type="button"
-            className="sf-btn sf-btn--ghost flex h-8 items-center gap-1.5 px-3 text-[13px] font-medium"
+            className={ghostActionClass}
             disabled={abandoning}
             onClick={onAbandonStage}
           >
@@ -164,41 +183,43 @@ export function RunDetailHeader({
             {abandoning ? "Abandoning…" : "Abandon"}
           </button>
         ) : null}
-        <button
-          type="button"
-          className="sf-btn sf-btn--secondary flex h-8 items-center gap-1.5 px-3 text-[13px] font-medium"
-          disabled={rerunning || cancelling || deleting}
-          onClick={onRerun}
-        >
-          <LuRotateCcw className="size-3.5 shrink-0" aria-hidden="true" />
-          {rerunning ? "Starting fresh…" : "Start fresh"}
-          {!rerunning ? (
-            <span className="font-['Geist_Mono',monospace] text-[11px] font-normal text-[var(--sf-text-3)]">
-              F
-            </span>
-          ) : null}
-        </button>
         {canCancelRun(run.status) ? (
           <button
             type="button"
-            className="sf-btn sf-btn--ghost flex h-8 items-center px-3 text-[13px]"
+            className={ghostActionClass}
             disabled={cancelling || deleting || rerunning}
             onClick={onCancel}
           >
+            <LuOctagonX className="size-3.5 shrink-0" aria-hidden="true" />
             {cancelling ? "Cancelling…" : "Cancel"}
           </button>
         ) : null}
         {canDeleteRun(run.status) ? (
           <button
             type="button"
-            className="sf-btn sf-btn--ghost flex h-8 items-center px-3 text-[13px]"
+            className={ghostActionClass}
             disabled={cancelling || deleting || rerunning}
             onClick={onDelete}
           >
+            <LuTrash2 className="size-3.5 shrink-0" aria-hidden="true" />
             {deleting ? "Deleting…" : "Delete"}
           </button>
         ) : null}
-        <span className="mx-1 block h-5 w-px shrink-0 bg-[#ffffff12]" aria-hidden="true" />
+        <button
+          type="button"
+          className="flex h-8 shrink-0 items-center whitespace-nowrap bg-[#1a1c21] border border-[#ffffff1a] rounded-lg px-3 py-0 gap-1.5 disabled:opacity-60"
+          disabled={rerunning || cancelling || deleting}
+          onClick={onRerun}
+        >
+          <LuRotateCcw className="size-3.5 shrink-0 text-[#ecedee]" aria-hidden="true" />
+          <span className="text-[#ecedee] font-sans text-[13px] font-medium">
+            {rerunning ? "Starting fresh…" : "Start fresh"}
+          </span>
+          <span className="bg-[#131418] border border-[#ffffff1a] text-[#8b8f98] font-['Geist_Mono',monospace] text-[11px] rounded-sm px-[5px]">
+            F
+          </span>
+        </button>
+        <span className="block w-px h-5 bg-[#ffffff12] mx-1 shrink-0" aria-hidden="true" />
         <RunDetailViewToggle viewMode={viewMode} onViewModeChange={onViewModeChange} />
       </div>
     </header>

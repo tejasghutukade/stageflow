@@ -134,6 +134,7 @@ export type StageSnapshot = {
   attempt_count: number;
   /** Total $ spent on this stage across every attempt; omitted when no attempt reported usage. */
   cost_usd?: number;
+  usage?: StageUsage;
 };
 
 export type StageExecution = {

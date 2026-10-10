@@ -313,6 +313,19 @@ export type StageSnapshot = {
   pending_prompt?: PendingPrompt;
   attempt_count: number;
   cost_usd?: number;
+  usage?: {
+    costUsd: number;
+    models: Record<
+      string,
+      {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadInputTokens: number;
+        cacheCreationInputTokens: number;
+        costUsd: number;
+      }
+    >;
+  };
 };
 
 export type VerificationCheckStatus =

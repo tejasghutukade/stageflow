@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { LuCheck, LuX } from "react-icons/lu";
+import { LuCheck, LuFileText, LuX } from "react-icons/lu";
 import { Keycap } from "../Keycap";
 
 export type GateDecisionBarProps = {
@@ -12,6 +12,8 @@ export type GateDecisionBarProps = {
   showActions?: boolean;
   canReject?: boolean;
   layout?: "inbox-footer" | "run-detail-inline";
+  acceptLabel?: string;
+  onOpenArtifact?: () => void;
 };
 
 export function GateDecisionBar({
@@ -24,6 +26,8 @@ export function GateDecisionBar({
   showActions = true,
   canReject = false,
   layout = "inbox-footer",
+  acceptLabel = "Accept",
+  onOpenArtifact,
 }: GateDecisionBarProps) {
   const inline = layout === "run-detail-inline";
 
@@ -67,15 +71,23 @@ export function GateDecisionBar({
         {inline ? (
           <LuCheck className="size-3.5 shrink-0" aria-hidden="true" />
         ) : null}
-        Accept
-        <Keycap>1</Keycap>
+        {acceptLabel}
+        <Keycap
+          className={
+            inline
+              ? "border-[#1a130640]! bg-[#1a13061a] text-[#1a1306]!"
+              : undefined
+          }
+        >
+          1
+        </Keycap>
       </button>
       {canReject ? (
         <button
           type="button"
           className={
             inline
-              ? "flex h-8 shrink-0 items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] font-medium text-[var(--sf-text-1)] disabled:opacity-50"
+              ? "flex h-8 shrink-0 items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] font-medium text-[#ecedee] disabled:opacity-50"
               : "flex h-[34px] shrink-0 items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[var(--sf-raised)] px-3.5 text-[13px] text-[var(--sf-text-1)] disabled:opacity-50"
           }
           disabled={disabled}
@@ -86,6 +98,16 @@ export function GateDecisionBar({
           ) : null}
           {inline ? "Reject with note" : "Send back with note"}
           <Keycap>3</Keycap>
+        </button>
+      ) : null}
+      {inline && onOpenArtifact ? (
+        <button
+          type="button"
+          className="flex h-8 shrink-0 items-center gap-2 rounded-lg px-3 text-[13px] text-[#a7aab2] hover:bg-[#ffffff0a] hover:text-[#ecedee]"
+          onClick={onOpenArtifact}
+        >
+          <LuFileText className="size-3.5 shrink-0" aria-hidden="true" />
+          Open artifact
         </button>
       ) : null}
       {inline ? (

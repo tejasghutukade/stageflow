@@ -461,25 +461,17 @@ export function RunDetailPageRedesign({
           artifactCount={stage.artifacts?.length ?? 0}
         />
         {centerTab === "transcript" ? (
-          <>
-            <RunDetailTranscriptBody
-              autoScroll={workspace.liveStream}
-              scrollKey={stage.events.length}
-            >
-              <RunDetailTranscriptTurns
-                events={stage.events}
-                inboundEnvelope={workspace.inboundEnvelope}
-                stageLabel={streamStageLabel}
-              />
-              <RunDetailGateSection
-                run={run}
-                stage={stage}
-                health={health}
-                onAnswered={() => void onStageActionSuccess()}
-              />
-            </RunDetailTranscriptBody>
+          <RunDetailTranscriptBody
+            autoScroll={workspace.liveStream}
+            scrollKey={stage.events.length}
+          >
+            <RunDetailTranscriptTurns
+              events={stage.events}
+              inboundEnvelope={workspace.inboundEnvelope}
+              stageLabel={streamStageLabel}
+            />
             {verification || verificationError ? (
-              <div className="shrink-0 border-t border-t-[#ffffff12] px-6 py-2">
+              <div className="border-t border-t-[#ffffff12] pt-2">
                 <VerificationHistory
                   history={verification}
                   error={verificationError}
@@ -489,44 +481,65 @@ export function RunDetailPageRedesign({
                 />
               </div>
             ) : null}
-          </>
+          </RunDetailTranscriptBody>
         ) : null}
         {centerTab === "events" ? (
-          <RunEventsPanel
-            events={stage.events}
-            stageId={stage.stage_id}
-            live={workspace.liveStream}
-          />
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <RunEventsPanel
+              events={stage.events}
+              stageId={stage.stage_id}
+              live={workspace.liveStream}
+            />
+          </div>
         ) : null}
         {centerTab === "envelope" ? (
-          <RunEnvelopePanel
-            run={run}
-            stage={stage}
-            inboundEnvelope={workspace.inboundEnvelope}
-            inboundFromStageId={workspace.inboundFromStageId}
-            outboundEnvelope={workspace.outboundEnvelope}
-            outboundToStageId={workspace.outboundToStageId}
-            onArtifactClick={(path) => {
-              setCenterTab("artifacts");
-              onOpenArtifact(path);
-            }}
-          />
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <RunEnvelopePanel
+              run={run}
+              stage={stage}
+              inboundEnvelope={workspace.inboundEnvelope}
+              inboundFromStageId={workspace.inboundFromStageId}
+              outboundEnvelope={workspace.outboundEnvelope}
+              outboundToStageId={workspace.outboundToStageId}
+              onArtifactClick={(path) => {
+                setCenterTab("artifacts");
+                onOpenArtifact(path);
+              }}
+            />
+          </div>
         ) : null}
         {centerTab === "artifacts" ? (
-          <RunArtifactsPanel
-            runId={runId}
-            run={run}
-            stage={stage}
-            initialPath={artifactInitialPath}
-            readOnly={workspace.artifactReadOnly}
-          />
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <RunArtifactsPanel
+              runId={runId}
+              run={run}
+              stage={stage}
+              initialPath={artifactInitialPath}
+              readOnly={workspace.artifactReadOnly}
+            />
+          </div>
         ) : null}
-        {workspace.showFeedbackDecide && workspace.feedbackDecide ? (
-          <FeedbackDecidePanel
-            runId={runId}
-            decide={workspace.feedbackDecide}
-            onSuccess={onStageActionSuccess}
-          />
+        {stage.status === "waiting_for_input" ||
+        (workspace.showFeedbackDecide && workspace.feedbackDecide) ? (
+          <div className="shrink-0 px-6 pb-3 empty:hidden">
+            <RunDetailGateSection
+              run={run}
+              stage={stage}
+              health={health}
+              onAnswered={() => void onStageActionSuccess()}
+              onOpenArtifact={(path) => {
+                setCenterTab("artifacts");
+                onOpenArtifact(path);
+              }}
+            />
+            {workspace.showFeedbackDecide && workspace.feedbackDecide ? (
+              <FeedbackDecidePanel
+                runId={runId}
+                decide={workspace.feedbackDecide}
+                onSuccess={onStageActionSuccess}
+              />
+            ) : null}
+          </div>
         ) : null}
       </div>
     );
@@ -603,6 +616,7 @@ export function RunDetailPageRedesign({
             stage={stage}
             health={health}
             inboundSummary={inboundSummary}
+            inboundFromStageId={workspace?.inboundFromStageId}
             actionBusy={actionBusy}
             onRetry={retryAndSelect}
             onResume={resumeAndSelect}

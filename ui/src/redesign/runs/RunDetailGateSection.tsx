@@ -28,11 +28,13 @@ export function RunDetailGateSection({
   stage,
   health,
   onAnswered,
+  onOpenArtifact,
 }: {
   run: RunDetail;
   stage: StageSnapshot;
   health: CapacityHealth | null;
   onAnswered?: () => void;
+  onOpenArtifact?: (path: string) => void;
 }) {
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const [note, setNote] = useState("");
@@ -46,6 +48,12 @@ export function RunDetailGateSection({
   const stageLabel = stageCloneLabel(run, stage.stage_id);
   const gateAge = gatePromptAge(stage);
   const kindChip = pendingPrompt?.kind?.replace(/_/g, " ") ?? "gate";
+  const artifactPath =
+    (pendingPrompt?.kind === "artifact_backed" ? pendingPrompt.artifacts[0] : undefined) ??
+    run.waiting_artifacts?.[0];
+  const answerKind = pendingPrompt?.kind;
+  const acceptLabel =
+    answerKind === "free_text" || answerKind === "multi_question" ? "Send answer" : "Accept";
 
   useEffect(() => {
     setNote("");
@@ -141,6 +149,10 @@ export function RunDetailGateSection({
           onReject={() => void panelActions?.reject()}
           disabled={panelActions?.locked}
           canReject={panelActions?.canReject ?? false}
+          acceptLabel={acceptLabel}
+          onOpenArtifact={
+            artifactPath && onOpenArtifact ? () => onOpenArtifact(artifactPath) : undefined
+          }
         />
       </div>
     </section>

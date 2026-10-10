@@ -146,8 +146,11 @@ export function GateAnswerPanel({
     canReject,
   ]);
 
-  const inputClass =
-    "w-full max-w-[680px] rounded-lg border border-[#ffffff1a] bg-[var(--sf-panel)] px-3 py-2 text-[13px] text-[var(--sf-text-1)] outline-none";
+  const inline = presentation === "run-detail-inline";
+  const surfaceBg = inline ? "bg-[#1a1c21]" : "bg-[var(--sf-panel)]";
+  const inputClass = inline
+    ? "w-full resize-none rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-2.5 py-2 text-[13px] text-[#ecedee] outline-none placeholder:text-[#8b8f98]"
+    : "w-full max-w-[680px] rounded-lg border border-[#ffffff1a] bg-[var(--sf-panel)] px-3 py-2 text-[13px] text-[var(--sf-text-1)] outline-none";
 
   if (showOpenRunOnly) {
     return (
@@ -184,8 +187,6 @@ export function GateAnswerPanel({
     .filter(Boolean)
     .join(" · ");
 
-  const inline = presentation === "run-detail-inline";
-
   return (
     <>
       <div className={`flex flex-col gap-2.5${inline ? "" : " max-w-[680px]"}`}>
@@ -197,7 +198,7 @@ export function GateAnswerPanel({
         <div
           className={
             inline
-              ? "text-[15px] font-medium leading-[1.45] text-[var(--sf-text-1)]"
+              ? "text-[15px] font-medium leading-[1.45] text-[#ecedee]"
               : "text-xl font-medium leading-[1.4] tracking-[-0.2px] text-[var(--sf-text-1)]"
           }
         >
@@ -219,7 +220,7 @@ export function GateAnswerPanel({
           className={inputClass}
           value={freeText}
           onChange={(e) => setFreeText(e.target.value)}
-          rows={5}
+          rows={inline ? 3 : 5}
           disabled={locked}
           placeholder="Your answer"
         />
@@ -312,14 +313,14 @@ export function GateAnswerPanel({
             {pendingPrompt.artifacts.map((path) => (
               <span
                 key={path}
-                className="rounded-md border border-[#ffffff12] bg-[var(--sf-panel)] px-2 py-0.5 font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-2)]"
+                className={`rounded-md border border-[#ffffff12] ${surfaceBg} px-2 py-0.5 font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-2)]`}
               >
                 {path}
               </span>
             ))}
           </div>
           {artifactPreview ? (
-            <pre className="max-h-[200px] overflow-auto whitespace-pre-wrap rounded-[10px] border border-[#ffffff12] bg-[var(--sf-panel)] p-3 font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-2)]">
+            <pre className={`max-h-[200px] overflow-auto whitespace-pre-wrap rounded-[10px] border border-[#ffffff12] ${surfaceBg} p-3 font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-2)]`}>
               {artifactPreview}
             </pre>
           ) : null}
