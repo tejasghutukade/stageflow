@@ -58,6 +58,7 @@ export type YamlPanelProps = {
   onParseError?: (error: YamlParseError | null) => void;
   formatNonce?: number;
   readOnly?: boolean;
+  width?: number;
 };
 
 type LocalYaml = { path: string; text: string; error: YamlEditError | null };
@@ -106,6 +107,7 @@ export function YamlPanel({
   onParseError,
   formatNonce = 0,
   readOnly,
+  width = 400,
 }: YamlPanelProps) {
   const editable = !(readOnly ?? !onDraftChange);
   const [internalPath, setInternalPath] = useState<string | null>(null);
@@ -279,14 +281,14 @@ export function YamlPanel({
 
   if (!pipelinePath) {
     return (
-      <div className="flex w-[400px] shrink-0 flex-col border-r border-r-[#ffffff12] bg-[#131418]">
+      <div className="flex shrink-0 flex-col bg-[#131418]" style={{ width }}>
         <p className="p-3 text-xs text-[#8b8f98]">YAML unavailable</p>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-0 w-[400px] shrink-0 flex-col border-r border-r-[#ffffff12] bg-[#131418]">
+    <div className="flex min-h-0 shrink-0 flex-col bg-[#131418]" style={{ width }}>
       <div
         className="flex h-9 w-full shrink-0 items-end gap-0.5 overflow-x-auto border-b border-b-[#ffffff12] px-2 [scrollbar-width:none]"
         role="tablist"

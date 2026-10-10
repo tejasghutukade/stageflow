@@ -18,6 +18,25 @@ import {
 } from "./editorProblemsModel";
 import type { YamlParseError } from "./yamlEditorModel";
 
+export const EDITOR_YAML_DEFAULT_WIDTH = 400;
+export const EDITOR_YAML_MIN_WIDTH = 280;
+export const EDITOR_YAML_MAX_WIDTH = 720;
+
+export const EDITOR_INSPECTOR_DEFAULT_WIDTH = 300;
+export const EDITOR_INSPECTOR_MIN_WIDTH = 240;
+export const EDITOR_INSPECTOR_MAX_WIDTH = 480;
+
+export function clampEditorYamlWidth(width: number): number {
+  return Math.max(EDITOR_YAML_MIN_WIDTH, Math.min(EDITOR_YAML_MAX_WIDTH, width));
+}
+
+export function clampEditorInspectorWidth(width: number): number {
+  return Math.max(
+    EDITOR_INSPECTOR_MIN_WIDTH,
+    Math.min(EDITOR_INSPECTOR_MAX_WIDTH, width),
+  );
+}
+
 function basename(path: string): string {
   const normalized = normalizeYamlPath(path);
   const slash = normalized.lastIndexOf("/");

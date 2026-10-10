@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { DraftPackagePayload, DraftValidationResult, ValidationFinding } from "../../api";
 import { cloneDraft } from "./draftMutators";
 import {
+  EDITOR_INSPECTOR_MAX_WIDTH,
+  EDITOR_INSPECTOR_MIN_WIDTH,
+  EDITOR_YAML_MAX_WIDTH,
+  EDITOR_YAML_MIN_WIDTH,
+  clampEditorInspectorWidth,
+  clampEditorYamlWidth,
   draftSchemaCount,
   editorDirtyPaths,
   editorFindingTarget,
@@ -181,5 +187,23 @@ describe("draftSchemaCount", () => {
     next.pipeline.schemas = { a: {}, b: {} };
     expect(draftSchemaCount(next)).toBe(2);
     expect(draftSchemaCount(null)).toBe(0);
+  });
+});
+
+describe("editor column width clamps", () => {
+  it("clamps yaml width to the allowed range", () => {
+    expect(clampEditorYamlWidth(EDITOR_YAML_MIN_WIDTH - 40)).toBe(EDITOR_YAML_MIN_WIDTH);
+    expect(clampEditorYamlWidth(EDITOR_YAML_MAX_WIDTH + 40)).toBe(EDITOR_YAML_MAX_WIDTH);
+    expect(clampEditorYamlWidth(500)).toBe(500);
+  });
+
+  it("clamps inspector width to the allowed range", () => {
+    expect(clampEditorInspectorWidth(EDITOR_INSPECTOR_MIN_WIDTH - 40)).toBe(
+      EDITOR_INSPECTOR_MIN_WIDTH,
+    );
+    expect(clampEditorInspectorWidth(EDITOR_INSPECTOR_MAX_WIDTH + 40)).toBe(
+      EDITOR_INSPECTOR_MAX_WIDTH,
+    );
+    expect(clampEditorInspectorWidth(320)).toBe(320);
   });
 });

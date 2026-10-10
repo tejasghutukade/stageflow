@@ -62,6 +62,7 @@ export type PipelineEditorInspectorProps = {
   onRenameStage: (fromId: string, toId: string) => void;
   onOpenYaml?: (path: string) => void;
   focusRequest?: { field: string; nonce: number } | null;
+  width?: number;
 };
 
 export function PipelineEditorInspector({
@@ -79,6 +80,7 @@ export function PipelineEditorInspector({
   onRenameStage,
   onOpenYaml = () => {},
   focusRequest = null,
+  width = 300,
 }: PipelineEditorInspectorProps) {
   const form = selectedStageId ? getStageForm(draft, selectedStageId) : null;
   const idKey = `${selectedStageId ?? ""}\0${form?.id ?? ""}`;
@@ -112,7 +114,8 @@ export function PipelineEditorInspector({
     return (
       <aside
         aria-label="Stage inspector"
-        className="flex w-[300px] min-h-0 shrink-0 flex-col border-l border-l-[#ffffff12] bg-[#131418] [font-family:Geist,_sans-serif]"
+        className="flex min-h-0 shrink-0 flex-col bg-[#131418] [font-family:Geist,_sans-serif]"
+        style={{ width }}
       >
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
           <p className="text-[13px] font-medium text-[#ecedee]">Click a stage on the graph</p>
@@ -160,7 +163,8 @@ export function PipelineEditorInspector({
   return (
     <aside
       aria-label="Stage inspector"
-      className="flex w-[300px] min-h-0 shrink-0 flex-col overflow-hidden border-l border-l-[#ffffff12] bg-[#131418] [font-family:Geist,_sans-serif]"
+      className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-[#131418] [font-family:Geist,_sans-serif]"
+      style={{ width }}
     >
       <div
         ref={bindFocus("header")}

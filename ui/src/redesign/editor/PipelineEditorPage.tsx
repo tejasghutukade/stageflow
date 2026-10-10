@@ -40,7 +40,16 @@ import {
   yamlPathsMatch,
 } from "./draftYaml";
 import { unsavedChangeCount } from "./editorHeaderModel";
+import { EditorColumnResizeHandle } from "./EditorColumnResizeHandle";
 import {
+  EDITOR_INSPECTOR_DEFAULT_WIDTH,
+  EDITOR_INSPECTOR_MAX_WIDTH,
+  EDITOR_INSPECTOR_MIN_WIDTH,
+  EDITOR_YAML_DEFAULT_WIDTH,
+  EDITOR_YAML_MAX_WIDTH,
+  EDITOR_YAML_MIN_WIDTH,
+  clampEditorInspectorWidth,
+  clampEditorYamlWidth,
   draftSchemaCount,
   editorDirtyPaths,
   editorFindingTarget,
@@ -125,6 +134,10 @@ export function PipelineEditorPage({
   const [yamlParseError, setYamlParseError] = useState<YamlParseError | null>(null);
   const [yamlKey, setYamlKey] = useState(0);
   const [formatNonce, setFormatNonce] = useState(0);
+  const [yamlWidth, setYamlWidth] = useState(EDITOR_YAML_DEFAULT_WIDTH);
+  const [inspectorWidth, setInspectorWidth] = useState(
+    EDITOR_INSPECTOR_DEFAULT_WIDTH,
+  );
   const [editorTab, setEditorTab] = useState<EditorTabId>("editor");
   const [autoValidate, setAutoValidate] = useState(true);
   const [draftValidation, setDraftValidation] =
@@ -651,6 +664,14 @@ export function PipelineEditorPage({
               onParseError={setYamlParseError}
               formatNonce={formatNonce}
               readOnly={false}
+              width={yamlWidth}
+            />
+            <EditorColumnResizeHandle
+              label="Resize YAML panel"
+              value={yamlWidth}
+              min={EDITOR_YAML_MIN_WIDTH}
+              max={EDITOR_YAML_MAX_WIDTH}
+              onChange={(next) => setYamlWidth(clampEditorYamlWidth(next))}
             />
             <PipelineEditorGraph
               draft={draft}
@@ -661,6 +682,16 @@ export function PipelineEditorPage({
               stageFindings={stageFindings}
               stageStats={stageStats}
               p50Ms={p50Ms}
+            />
+            <EditorColumnResizeHandle
+              label="Resize stage inspector"
+              value={inspectorWidth}
+              min={EDITOR_INSPECTOR_MIN_WIDTH}
+              max={EDITOR_INSPECTOR_MAX_WIDTH}
+              invert
+              onChange={(next) =>
+                setInspectorWidth(clampEditorInspectorWidth(next))
+              }
             />
             <PipelineEditorInspector
               draft={draft}
@@ -677,6 +708,7 @@ export function PipelineEditorPage({
               onDraftChange={onDraftChange}
               onRenameStage={onRenameStage}
               onOpenYaml={onOpenYaml}
+              width={inspectorWidth}
               focusRequest={
                 fieldFocus && fieldFocus.stageId === selectedStageId
                   ? { field: fieldFocus.field, nonce: fieldFocus.nonce }
