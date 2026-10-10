@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -154,6 +154,85 @@ describe("tool output budget extension", () => {
       content: [{ type: "text", text: "c".repeat(150_000) }],
     });
     expect(third).toBeUndefined();
+  });
+
+  it("saves the full body of a result the MCP adapter cut, not the cut-off head", async () => {
+    const h = await harness();
+    const spillDir = await mkdtemp(path.join(tmpdir(), "pi-mcp-output-"));
+    const spill = path.join(spillDir, "output-abcd1234.txt");
+    const full = exaBody(9_000_000);
+    await writeFile(spill, full, "utf8");
+    const head = full.slice(0, 1_000);
+
+    const result = await h.toolResult({
+      content: [
+        {
+          type: "text",
+          text: `${head}\n\n[MCP text output truncated: original 1 lines / 8.6MB. Truncated. Full text saved to: ${spill} — use read with offset/limit or grep to inspect.]`,
+        },
+      ],
+      details: {
+        server: "exa",
+        outputGuard: { truncated: true, fullOutputPath: spill },
+      },
+    });
+
+    const relative =
+      "stages/enrich/attempts/1/artifacts/tool-output/call_1-exa_web_fetch_exa.json";
+    const absolute = path.join(h.runWorkspaceDir, relative);
+    expect(JSON.parse(await readFile(absolute, "utf8"))).toEqual(JSON.parse(full));
+    const text = result!.content[0]!.text!;
+    expect(result!.content).toHaveLength(1);
+    expect(text).toContain(`[Tool output saved as stage artifact: ${relative}`);
+    expect(text).not.toContain(spill);
+    expect(text).not.toContain("rest is not available");
+    expect(result!.details).toMatchObject({
+      outputGuard: { truncated: true, fullOutputPath: absolute },
+      stageflowToolOutput: {
+        spilled: true,
+        reason: "adapter_truncated",
+        originalBytes: Buffer.byteLength(full),
+      },
+    });
+    await expect(access(spillDir)).rejects.toThrow();
+  });
+
+  it("spills a small cut result too, since its inline text is incomplete", async () => {
+    const h = await harness();
+    const spillDir = await mkdtemp(path.join(tmpdir(), "pi-mcp-output-"));
+    const spill = path.join(spillDir, "output-0000ffff.txt");
+    await writeFile(spill, "complete body", "utf8");
+
+    const result = await h.toolResult({
+      content: [{ type: "text", text: "compl" }],
+      details: { outputGuard: { truncated: true, fullOutputPath: spill } },
+    });
+
+    expect(result!.details.stageflowToolOutput).toMatchObject({ reason: "adapter_truncated" });
+    const saved = path.join(
+      h.runWorkspaceDir,
+      "stages/enrich/attempts/1/artifacts/tool-output/call_1-exa_web_fetch_exa.txt",
+    );
+    expect(await readFile(saved, "utf8")).toBe("complete body");
+  });
+
+  it("says the rest is not available when the adapter could not save it", async () => {
+    const h = await harness();
+
+    const result = await h.toolResult({
+      content: [{ type: "text", text: "head only" }],
+      details: { outputGuard: { truncated: true, writeError: "ENOSPC" } },
+    });
+
+    const text = result!.content[0]!.text!;
+    expect(text).toContain(
+      "The MCP adapter cut this output and the rest is not available (ENOSPC). This file holds only what was returned.",
+    );
+    expect(result!.details.stageflowToolOutput).toMatchObject({
+      spilled: true,
+      incomplete: true,
+      reason: "adapter_truncated",
+    });
   });
 
   it("falls back to a truncated inline result when the artifact write fails", async () => {

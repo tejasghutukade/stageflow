@@ -23,7 +23,8 @@ export type BudgetInput = {
 export type SpillReason =
   | "exceeds_remaining"
   | "exceeds_per_result_cap"
-  | "unknown_usage_fallback";
+  | "unknown_usage_fallback"
+  | "adapter_truncated";
 
 export type BudgetDecision =
   | { kind: "inline"; estTokens: number }

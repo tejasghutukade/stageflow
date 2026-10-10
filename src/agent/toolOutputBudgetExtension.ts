@@ -14,9 +14,11 @@ import {
   truncateUtf8,
   UNKNOWN_USAGE_INLINE_MAX_BYTES,
   utf8ByteLength,
+  type BudgetDecision,
   type SpillReason,
 } from "./toolOutputBudget.js";
 import { spillToolOutput, type SpilledToolOutput } from "./toolOutputSpill.js";
+import { discardAdapterSpill, readAdapterSpill } from "./adapterSpill.js";
 
 export const STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME = "stageflow-tool-output";
 
@@ -40,11 +42,18 @@ export type ToolOutputBudgetOptions = {
 
 type ContentBlock = TextContent | ImageContent;
 
-export function formatSpillNotice(spilled: SpilledToolOutput, estTokens: number): string {
+export function formatSpillNotice(
+  spilled: SpilledToolOutput,
+  estTokens: number,
+  lostReason?: string,
+): string {
   return [
     `[Tool output saved as stage artifact: ${spilled.runRelativePath}`,
     ` Read path: ${spilled.absolutePath}`,
     ` Size: ${spilled.bytes} bytes, ${spilled.lines} lines (~${estTokens} tokens). Too large to include inline.`,
+    lostReason !== undefined
+      ? ` The MCP adapter cut this output and the rest is not available (${lostReason}). This file holds only what was returned.`
+      : undefined,
     spilled.wrapped
       ? ` Long lines were wrapped at 4 KiB so the file can be paged; the breaks are not part of the data.`
       : undefined,
@@ -86,15 +95,22 @@ export function createToolOutputBudgetExtension(
         (block): block is ImageContent => block.type === "image",
       );
       turnLedgerTokens += images.length * IMAGE_BLOCK_EST_TOKENS;
-      const text = joinText(event.content);
+      const visible = joinText(event.content);
+      // A result the MCP adapter already cut is incomplete inline: always spill
+      // it, from the adapter's full-output file when that file checks out.
+      const adapterSpill = await readAdapterSpill(visible, event.details);
+      const text = adapterSpill.kind === "full" ? adapterSpill.text : visible;
       const resultBytes = utf8ByteLength(text);
       const usage = ctx.getContextUsage();
-      const decision = decideToolOutput({
-        resultBytes,
-        contextWindow: usage?.contextWindow ?? 0,
-        knownTokens: usage?.tokens ?? null,
-        turnLedgerTokens,
-      });
+      const decision: BudgetDecision =
+        adapterSpill.kind === "none"
+          ? decideToolOutput({
+              resultBytes,
+              contextWindow: usage?.contextWindow ?? 0,
+              knownTokens: usage?.tokens ?? null,
+              turnLedgerTokens,
+            })
+          : { kind: "spill", estTokens: estimateTokens(resultBytes), reason: "adapter_truncated" };
 
       if (decision.kind === "inline") {
         turnLedgerTokens += decision.estTokens;
@@ -103,6 +119,7 @@ export function createToolOutputBudgetExtension(
 
       let replacement: string;
       let spillDetails: Record<string, unknown>;
+      let fullOutputPath: string | undefined;
       try {
         const spilled = await spillToolOutput({
           runWorkspaceDir: options.runWorkspaceDir,
@@ -112,7 +129,15 @@ export function createToolOutputBudgetExtension(
           toolName: event.toolName,
           text,
         });
-        const notice = formatSpillNotice(spilled, decision.estTokens);
+        if (adapterSpill.kind === "full") {
+          await discardAdapterSpill(adapterSpill.sourcePath);
+          fullOutputPath = spilled.absolutePath;
+        }
+        const notice = formatSpillNotice(
+          spilled,
+          decision.estTokens,
+          adapterSpill.kind === "lost" ? adapterSpill.reason : undefined,
+        );
         replacement = `${notice}\n\n${buildPreview(spilled.body, spilled.json !== undefined ? { json: spilled.json } : {})}`;
         spillDetails = {
           spilled: true,
@@ -122,6 +147,7 @@ export function createToolOutputBudgetExtension(
           originalBytes: resultBytes,
           estTokens: decision.estTokens,
           reason: decision.reason,
+          ...(adapterSpill.kind === "lost" ? { incomplete: true } : {}),
         };
         options.onSpill?.({
           toolName: event.toolName,
@@ -156,9 +182,18 @@ export function createToolOutputBudgetExtension(
         event.details !== null && typeof event.details === "object"
           ? (event.details as Record<string, unknown>)
           : {};
+      const outputGuard = previousDetails.outputGuard;
       return {
         content: [{ type: "text" as const, text: replacement }, ...images],
-        details: { ...previousDetails, stageflowToolOutput: spillDetails },
+        details: {
+          ...previousDetails,
+          ...(fullOutputPath !== undefined &&
+          outputGuard !== null &&
+          typeof outputGuard === "object"
+            ? { outputGuard: { ...outputGuard, fullOutputPath } }
+            : {}),
+          stageflowToolOutput: spillDetails,
+        },
       };
     });
   };
