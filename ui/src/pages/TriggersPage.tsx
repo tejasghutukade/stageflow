@@ -11,6 +11,8 @@ import { relativeTime } from "../catalogJoin";
 import { NewTriggerPanel } from "../components/NewTriggerPanel";
 import { runStreamPath, triggerPath } from "../routes";
 import { showToast } from "../toast";
+import { useRedesign } from "../redesign/flag";
+import { TriggersRedesign } from "../redesign/triggers/TriggersRedesign";
 import { EmailTriggerDetail, EmailTriggerRow } from "./EmailTriggerView";
 
 export function triggerKindLabel(kind: TriggerListItem["kind"]): string {
@@ -46,6 +48,18 @@ export function triggerTaskSummary(task?: string): string {
 }
 
 export function TriggersPage({
+  triggerId,
+}: {
+  triggerId?: string;
+}) {
+  const redesignOn = useRedesign();
+  if (redesignOn) {
+    return <TriggersRedesign triggerId={triggerId} />;
+  }
+  return <TriggersPageLegacy triggerId={triggerId} />;
+}
+
+function TriggersPageLegacy({
   triggerId,
 }: {
   triggerId?: string;

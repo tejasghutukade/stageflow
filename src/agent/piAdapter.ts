@@ -1,5 +1,5 @@
 /**
- * Pi implementation of AgentPort.
+ * Pi implementation of StagePort.
  *
  * One stage = one `createAgentSession` (single-shot SDK path, not
  * AgentSessionRuntime / interactive / RPC). The session is sealed from host
@@ -83,6 +83,7 @@ import { createSendEmailTool } from "../tools/sendEmail.js";
 import { createReplyEmailTool } from "../tools/replyEmail.js";
 import { createGetEmailTool, createSearchEmailTool, createDownloadEmailAttachmentTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
+import { isCursorModelRef, readCursorApiKey } from "./cursorProvider.js";
 import { findProviderSupport } from "./providerSupport.js";
 import { mapSessionEventToActivity, readActivityVerbose, type StageActivityEvent } from "./activity.js";
 import {
@@ -90,7 +91,7 @@ import {
   type StageActivityObserver,
 } from "./activityObserver.js";
 import type {
-  AgentPort,
+  StagePort,
   OpaqueAnswer,
   StageHandle,
   StageHandleCloseOptions,
@@ -108,6 +109,11 @@ import {
   stageTimeoutReason,
 } from "./stageTimeout.js";
 import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  isUsableAuthFile,
+  STAGEFLOW_AGENT_AUTH_PATH_ENV,
+} from "../runtime/credentialBinding.js";
+import { SF_STAGE_WORKER } from "../runtime/stageWorkerProtocol.js";
 import {
   durableRootFileToolDenial,
   STAGEFLOW_PATH_DENIED,
@@ -1115,6 +1121,29 @@ async function prepareStageSessionWiring(
 ): Promise<StageSessionWiring | StageRunResult> {
   const { roots } = input;
   const provider = findProviderSupport(input.stage.model);
+  if (process.env[SF_STAGE_WORKER] === "1" && !provider) {
+    if (!roots.authPath || !isUsableAuthFile(roots.authPath)) {
+      const authPath = roots.authPath;
+      return {
+        ok: false,
+        reason: authPath
+          ? `Stage provider auth is not configured (auth file missing or empty: ${authPath}).`
+          : `Stage provider auth is not configured (${STAGEFLOW_AGENT_AUTH_PATH_ENV} is unset).`,
+      };
+    }
+  }
+  if (
+    process.env[SF_STAGE_WORKER] === "1" &&
+    provider &&
+    isCursorModelRef(input.stage.model) &&
+    !readCursorApiKey()
+  ) {
+    return {
+      ok: false,
+      reason:
+        "Stage provider auth is not configured (Cursor API key missing from the credential root).",
+    };
+  }
   const capture: EmitCapture = {};
   const usage: StageUsage = emptyStageUsage();
   const askWaitChannel = existingAskWaitChannel ?? new AskOperatorWaitChannel();
@@ -1526,7 +1555,7 @@ function syncAgentMessagesFromSession(
   session.agent.state.messages = sessionManager.buildSessionContext().messages;
 }
 
-export class PiAgentAdapter implements AgentPort {
+export class PiAgentAdapter implements StagePort {
   openStage(input: StageRunInput): StageHandle {
     const timeoutMs = input.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS;
     const askWaitChannel = new AskOperatorWaitChannel();

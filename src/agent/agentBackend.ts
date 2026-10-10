@@ -1,5 +1,5 @@
 /**
- * Known AgentPort backend ids, and the config-hierarchy gate.
+ * Known StagePort backend ids, and the config-hierarchy gate.
  *
  * Kept dependency-free (no adapter imports) so config loaders can validate
  * `agent:` fields without pulling in the actual SDKs.
@@ -40,7 +40,7 @@ export function parseAgentField(raw: unknown): ParsedAgentField {
 
 /**
  * Stage-level `agent` overrides are parsed and stored on StageConfig, but
- * intentionally not consulted by resolveAgentBackend while this is false.
+ * intentionally not consulted by resolveStageBackend while this is false.
  * Flip to true once per-stage selection is ready to ship; no other change
  * needed to light it up.
  */

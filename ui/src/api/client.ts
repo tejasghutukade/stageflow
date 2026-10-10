@@ -26,7 +26,14 @@ import type {
   StageAnswer,
   StartRunResult,
   TaskListing,
+  TaskDetailFile,
+  CreateTaskInput,
+  UpdateTaskBody,
+  ImportTaskFromIssueInput,
+  TaskWriteResult,
+  SkillUsageIndex,
   TriggerListItem,
+  TriggerFireRecord,
   EmailTriggerRule,
   ConnectionListing,
   CreatedStageListing,
@@ -49,7 +56,12 @@ import type {
   OpenDraftPackageResult,
   OverwriteDraftPackageInput,
   OverwriteDraftPackageResult,
+  DraftPlanResult,
+  PlanDraftPackageInput,
+  PlanDraftPackageResult,
   PutWorkshopAutosaveResult,
+  CatalogFileResult,
+  CatalogValidationResult,
   ValidationFinding,
   WorkshopAutosavePayload,
   WorkshopChatProposalPayload,
@@ -109,6 +121,54 @@ export function fetchTasks(): Promise<{ tasks: TaskListing[] }> {
   return api("/api/tasks");
 }
 
+export function fetchTask(id: string): Promise<{ task: TaskDetailFile }> {
+  return api(`/api/tasks/${encodeURIComponent(id)}`);
+}
+
+async function taskWriteRequest(
+  url: string,
+  method: "POST" | "PUT",
+  input: unknown,
+): Promise<TaskWriteResult> {
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      task?: TaskDetailFile;
+      error?: string;
+    };
+    if (res.ok && body.task && typeof body.task.id === "string") {
+      return { ok: true, task: body.task };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export function createTaskWithDetails(input: CreateTaskInput): Promise<TaskWriteResult> {
+  return taskWriteRequest("/api/tasks", "POST", input);
+}
+
+export function updateTask(id: string, body: UpdateTaskBody): Promise<TaskWriteResult> {
+  return taskWriteRequest(`/api/tasks/${encodeURIComponent(id)}`, "PUT", body);
+}
+
+export function importTaskFromIssue(input: ImportTaskFromIssueInput): Promise<TaskWriteResult> {
+  return taskWriteRequest("/api/tasks/import", "POST", input);
+}
+
 export function fetchPipelines(): Promise<{ pipelines: PipelineListing[] }> {
   return api("/api/pipelines");
 }
@@ -145,6 +205,43 @@ export function fetchEmailTrigger(id: string): Promise<EmailTriggerRule> {
 
 export function fetchTrigger(id: string): Promise<TriggerListItem> {
   return api(`/api/triggers/${encodeURIComponent(id)}`);
+}
+
+export function fetchTriggerFires(
+  id: string,
+): Promise<{ fires: TriggerFireRecord[] }> {
+  return api(`/api/triggers/${encodeURIComponent(id)}/fires`);
+}
+
+export function patchTrigger(
+  id: string,
+  body: { enabled: boolean },
+): Promise<TriggerListItem> {
+  return api(`/api/triggers/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateTrigger(
+  id: string,
+  body: {
+    pipeline: string;
+    task?: string | null;
+    kind: "manual" | "schedule" | "event";
+    schedule?: { cron: string; timezone?: string } | null;
+    event?: {
+      source: string;
+      match?: Record<string, unknown>;
+      config?: Record<string, unknown>;
+    } | null;
+    enabled: boolean;
+  },
+): Promise<TriggerListItem> {
+  return api(`/api/triggers/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
 }
 
 export function fireTrigger(
@@ -256,6 +353,10 @@ export function fetchSkills(): Promise<{
   diagnostics: SkillDiagnostic[];
 }> {
   return api("/api/skills");
+}
+
+export function fetchSkillUsage(): Promise<SkillUsageIndex> {
+  return api("/api/skills/usage");
 }
 
 export function fetchExtensions(): Promise<{
@@ -495,22 +596,35 @@ export function postWorkshopModel(
   });
 }
 
-export function startRun(task: string, pipeline: string): Promise<{ runId: string }> {
+export function startRun(
+  task: string,
+  pipeline: string,
+  projectRoot?: string,
+): Promise<{ runId: string }> {
   return api("/api/runs", {
     method: "POST",
-    body: JSON.stringify({ task, pipeline }),
+    body: JSON.stringify({
+      task,
+      pipeline,
+      ...(projectRoot ? { project_root: projectRoot } : {}),
+    }),
   });
 }
 
 export async function startRunWithDetails(
   task: string,
   pipeline: string,
+  projectRoot?: string,
 ): Promise<StartRunResult> {
   try {
     const res = await fetch("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authorizationHeaders() },
-      body: JSON.stringify({ task, pipeline }),
+      body: JSON.stringify({
+        task,
+        pipeline,
+        ...(projectRoot ? { project_root: projectRoot } : {}),
+      }),
     });
     const body = (await res.json().catch(() => ({}))) as {
       runId?: string;
@@ -878,6 +992,46 @@ export async function overwriteDraftPackageWithDetails(
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
       ...(body.findings ? { findings: body.findings } : {}),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function planDraftPackage(
+  input: PlanDraftPackageInput,
+): Promise<PlanDraftPackageResult> {
+  try {
+    const res = await fetch("/api/drafts/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as Partial<DraftPlanResult> & {
+      error?: string;
+    };
+    if (
+      res.ok &&
+      typeof body.pipelinePath === "string" &&
+      typeof body.directory === "string" &&
+      Array.isArray(body.files)
+    ) {
+      return {
+        ok: true,
+        pipelinePath: body.pipelinePath,
+        directory: body.directory,
+        files: body.files,
+        pipelineIdTaken: body.pipelineIdTaken === true,
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
     };
   } catch (err) {
     return {
@@ -1480,6 +1634,8 @@ export async function sendWorkshopChatTurn(
         draft: input.draft,
         autoApply: input.autoApply === true,
         ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        ...(input.context ? { context: input.context } : {}),
         stream: false,
       }),
     });
@@ -1567,6 +1723,8 @@ export async function sendWorkshopChatTurnStreaming(
         draft: input.draft,
         autoApply: input.autoApply === true,
         ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        ...(input.context ? { context: input.context } : {}),
         stream: true,
       }),
       ...(handlers.signal ? { signal: handlers.signal } : {}),
@@ -1690,4 +1848,30 @@ export async function sendWorkshopChatTurnStreaming(
     }
     return sendWorkshopChatTurn(input);
   }
+}
+
+export async function fetchCatalogValidate(input: {
+  pipeline?: string;
+  task?: string;
+  strict?: boolean;
+  project_root?: string;
+}): Promise<CatalogValidationResult> {
+  return api("/api/catalog/validate", {
+    method: "POST",
+    body: JSON.stringify({
+      ...(input.pipeline ? { pipeline: input.pipeline } : {}),
+      ...(input.task ? { task: input.task } : {}),
+      ...(input.strict === true ? { strict: true } : {}),
+      ...(input.project_root ? { project_root: input.project_root } : {}),
+    }),
+  });
+}
+
+export async function fetchCatalogFile(input: {
+  path: string;
+  project_root?: string;
+}): Promise<CatalogFileResult> {
+  const params = new URLSearchParams({ path: input.path });
+  if (input.project_root) params.set("project_root", input.project_root);
+  return api(`/api/catalog/file?${params}`);
 }

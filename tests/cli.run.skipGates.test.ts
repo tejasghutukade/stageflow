@@ -19,7 +19,7 @@ import {
 import { startUiServer } from "../src/server/http.js";
 import type { StartRunResult } from "../src/runtime/runManager.js";
 import type { PipelineRunResult } from "../src/runtime/pipelineRunner.js";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import type { RunStore } from "../src/runstore/port.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -79,7 +79,7 @@ const waitThenEmit = {
 
 function workerLikeLauncher(
   store: RunStore,
-  agent: AgentPort,
+  agent: StagePort,
 ): { launch: (input: StageLaunchInput) => Promise<{ type: "waiting" } | { type: "succeeded" } | { type: "failed"; reason: string }> } {
   return {
     async launch(input: StageLaunchInput) {

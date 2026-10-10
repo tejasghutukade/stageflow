@@ -1,7 +1,8 @@
 /**
  * Live Pi-backed OperatorAgentModel for Workshop Author.
  *
- * Uses the shared Pi session factory (not AgentPort). Workshop tools only —
+ * Pi backend behind AgentPort, using the shared session factory. Not a StagePort.
+ * Workshop tools only —
  * resolveWorkshopToolNames / assertWorkshopToolsExcludeDiskShell. Durable Pi
  * session per host tool-context (R7). Restart: new Pi + transcript replay (KTD7).
  */
@@ -21,7 +22,7 @@ import {
   createSealedResourceLoader,
   resolveWorkshopToolNames,
 } from "../agent/piSessionFactory.js";
-import { cursorBridgePrompt } from "../agent/cursorProvider.js";
+import { bindCursorApiKey, cursorBridgePrompt } from "../agent/cursorProvider.js";
 import { findProviderSupport } from "../agent/providerSupport.js";
 import "../agent/cursorProvider.js";
 import { logger as rootLogger } from "../logging/logger.js";
@@ -319,9 +320,19 @@ function formatTranscriptReplay(
   ].join("\n");
 }
 
+function processDataAuthPath(): string {
+  return path.join(globalStageflowHome(), "agent", "auth.json");
+}
+
 function authNotConfiguredError(authPath: string): Error {
+  const dataAuth = processDataAuthPath();
+  const unusedDataFile =
+    path.resolve(dataAuth) !== path.resolve(authPath) &&
+    isUsableAuthFile(dataAuth)
+      ? ` A usable auth file at ${dataAuth} in the process data directory is not used.`
+      : "";
   return new Error(
-    `Workshop Author provider auth is not configured (auth file missing or empty: ${authPath}). Configure credentials via \`sf providers\` / the operator console Providers page, then retry.`,
+    `Workshop Author provider auth is not configured (auth file missing or empty: ${authPath}).${unusedDataFile} Configure credentials via \`sf providers\` / the operator console Providers page, then retry.`,
   );
 }
 
@@ -360,9 +371,16 @@ async function openDefaultPiSession(
   }
   const additionalExtensionPaths: string[] = [];
   let restoreProvider: (() => void) | undefined;
+  let restoreCursorKey: (() => void) | undefined;
+  const bindCursor = (modelId: string) => {
+    const restore = bindCursorApiKey(modelId);
+    if (restore) restoreCursorKey = restore;
+  };
+  bindCursor(input.modelId);
   if (provider) {
     const prepared = provider.prepare(input.modelId);
     if (prepared.error) {
+      restoreCursorKey?.();
       throw new Error(prepared.error);
     }
     additionalExtensionPaths.push(...prepared.extensionPaths);
@@ -439,6 +457,7 @@ async function openDefaultPiSession(
     let currentModelId = input.modelId;
     const applyModel = async (modelId: string): Promise<void> => {
       if (modelId === currentModelId) return;
+      bindCursor(modelId);
       const provider = findProviderSupport(modelId);
       if (provider) {
         const prepared = provider.prepare(modelId);
@@ -473,6 +492,7 @@ async function openDefaultPiSession(
         } catch {
           // best-effort
         }
+        restoreCursorKey?.();
         restoreProvider?.();
       },
     };
@@ -482,6 +502,7 @@ async function openDefaultPiSession(
     } catch {
       // best-effort
     }
+    restoreCursorKey?.();
     restoreProvider?.();
     throw err;
   }

@@ -1,4 +1,4 @@
 id: hello
 stages:
-  - id: research
-    uses: ./research.yaml
+  - id: hello-research
+    uses: ./hello-research.yaml

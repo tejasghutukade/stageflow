@@ -3,7 +3,7 @@ import { readFile, access } from "node:fs/promises";
 import { createReadStream, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
 import {
   getCredentialSourceSettings,
   setCredentialSource,
@@ -13,6 +13,7 @@ import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { handleTriggerRoutes } from "./triggerRoutes.js";
+import { readCatalogFileForHttp } from "./readCatalogFile.js";
 import {
   applyLiveViewHeaders,
   createLiveViewRoutes,
@@ -24,6 +25,9 @@ import {
 } from "./liveViewRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
+import { createTask, parseCreateTaskBody } from "../config/createTask.js";
+import { importTaskFromIssue, parseImportTaskBody } from "../config/importTask.js";
+import { parseUpdateTaskBody, updateTask } from "../config/updateTask.js";
 import {
   loadDraftPackage,
   loadTaskArtifact,
@@ -32,6 +36,8 @@ import {
   parseDraftPackageBody,
   parseOpenDraftPackageBody,
   parseOverwriteDraftPackageBody,
+  parsePlanDraftPackageBody,
+  planDraftPackage,
   validateDraftPackage,
   type DraftPackage,
 } from "../config/draftPackage.js";
@@ -58,6 +64,10 @@ import {
   WorkshopSessionStoreError,
 } from "../workshop/chatTurn.js";
 import {
+  parseWorkshopChatAttachments,
+  parseWorkshopChatContext,
+} from "../workshop/chatAttachments.js";
+import {
   readWorkshopOpenModel,
   resolveWorkshopModel,
 } from "../workshop/modelSettings.js";
@@ -79,11 +89,9 @@ import {
   updateWorkshopBuild,
   WorkshopBuildStoreError,
 } from "../workshop/buildStore.js";
-import {
-  createLiveWorkshopOperatorHost,
-  type OperatorAgentHost,
-} from "../operatorAgent/index.js";
-import { browseCatalog } from "../config/browseCatalog.js";
+import { resolveAgentPort, type AgentPort } from "../operatorAgent/index.js";
+import { browseCatalog, listPipelinesForContext } from "../config/browseCatalog.js";
+import { catalogContextFromStageflow } from "../config/resolveCatalogContext.js";
 import {
   listModelsMultiProject,
   listPipelinesMultiProject,
@@ -98,6 +106,9 @@ import {
 } from "../config/catalogRelativePath.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
+import { findTaskInCatalog } from "../config/findTaskInCatalog.js";
+import { buildSkillUsageIndex } from "../config/skillUsageIndex.js";
+import { validateCatalog } from "../config/validateCatalog.js";
 import {
   artifactMediaType,
   classifyArtifactContent,
@@ -207,7 +218,7 @@ import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 const auditLog = rootLogger.child({ component: "audit" });
 
 export type UiServerOptions = {
-  agent: AgentPort;
+  agent: StagePort;
   cwd?: string;
   agentDir?: string;
   rootDir?: string;
@@ -224,8 +235,8 @@ export type UiServerOptions = {
   allowedHosts?: AllowedHosts;
   controlTokens?: ControlTokens;
   browser?: StageBrowserSupport;
-  /** Optional Workshop Operator Agent Host (fake in tests). */
-  workshopOperatorHost?: OperatorAgentHost;
+  /** Optional AgentPort. Workshop is the caller today; tests inject a fake. */
+  workshopOperatorHost?: AgentPort;
 };
 
 function textPlain(res: ServerResponse, status: number, body: string): void {
@@ -363,11 +374,11 @@ export type OperatorRouteDeps = {
   /** Live shutdown controller; set after listen so restore can beginDrain. */
   getShutdown?: () => import("./shutdown.js").ShutdownController | undefined;
   /**
-   * Optional Operator Agent Host for Workshop chat (tests inject the fake host).
-   * Distinct from stage-execution AgentPort. Defaults to live Pi Workshop Author
-   * (fake remains available via createWorkshopOperatorHost / test injection).
+   * Optional AgentPort (tests inject the fake host).
+   * Distinct from StagePort. Defaults to resolveAgentPort (Pi).
+   * The fake host remains available via createWorkshopOperatorHost.
    */
-  workshopOperatorHost?: OperatorAgentHost;
+  workshopOperatorHost?: AgentPort;
   /**
    * Optional durable Workshop chat registry (host sessions keyed by session id).
    * Defaults to a registry owned by this route surface.
@@ -402,7 +413,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
     deps.workshopChatRegistry ??
     new WorkshopChatSessionRegistry(
       workshopOperatorHost ??
-        createLiveWorkshopOperatorHost({
+        resolveAgentPort({
           cwd,
           projectRoot: cwd,
         }),
@@ -1369,6 +1380,206 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           return true;
         }
 
+        if (method === "POST" && pathname === "/api/catalog/validate") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+            const record = body as Record<string, unknown>;
+            const pipeline =
+              typeof record.pipeline === "string" ? record.pipeline : undefined;
+            const task = typeof record.task === "string" ? record.task : undefined;
+            const strict = record.strict === true;
+            if (pipeline !== undefined && task !== undefined) {
+              json(res, 400, {
+                error: "Use at most one of pipeline or task",
+              });
+              return true;
+            }
+            const scope = pipeline ? "pipeline" : task ? "task" : "full";
+            const result = await validateCatalog({
+              scope,
+              cwd,
+              pipeline,
+              task,
+              strict,
+            });
+            json(res, 200, result);
+            return true;
+          }
+          json(res, 400, { error: "Request body must be an object" });
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/catalog/file") {
+          const relPath = url.searchParams.get("path");
+          if (relPath === null || relPath.length === 0) {
+            json(res, 400, { error: "path query parameter is required" });
+            return true;
+          }
+          const projectRoot = url.searchParams.get("project_root") ?? undefined;
+          try {
+            const { roots } = await resolveCatalogStartInput({ store, bootCwd: cwd }, projectRoot);
+            const result = await readCatalogFileForHttp({
+              inputPath: relPath,
+              projectRoot,
+              roots,
+              fieldName: "path",
+            });
+            if (!result.ok) {
+              json(res, result.status, { error: result.error, code: result.code });
+              return true;
+            }
+            json(res, 200, { path: result.path, content: result.content });
+            return true;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+        }
+
+        if (method === "POST" && pathname === "/api/tasks/import") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseImportTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let taskWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            taskWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const stageflowCtx = await resolveStageflowContext(taskWriteRoot);
+          if (stageflowCtx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const result = await importTaskFromIssue(stageflowCtx.projectRoot, parsed);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 201, { task: result.task });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/tasks") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let taskWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            taskWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parseCreateTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const stageflowCtx = await resolveStageflowContext(taskWriteRoot);
+          if (stageflowCtx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const result = await createTask(stageflowCtx.projectRoot, parsed);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 201, { task: result.task });
+          return true;
+        }
+
+        const taskDetailMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+        if (method === "GET" && taskDetailMatch) {
+          const taskId = decodeURIComponent(taskDetailMatch[1] ?? "");
+          const task = await findTaskInCatalog(cwd, taskId);
+          if (task === null) {
+            json(res, 404, { error: `Task not found: ${taskId}` });
+            return true;
+          }
+          json(res, 200, { task });
+          return true;
+        }
+
+        if (method === "PUT" && taskDetailMatch) {
+          const taskId = decodeURIComponent(taskDetailMatch[1] ?? "");
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseUpdateTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const result = await updateTask(cwd, taskId, parsed);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 200, { task: result.task });
+          return true;
+        }
+
         if (method === "GET" && pathname === "/api/tasks") {
           const filter = url.searchParams.get("project_root") ?? undefined;
           const result = await listTasksMultiProject({
@@ -1696,6 +1907,69 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             pipelinePath: result.pipelinePath,
             stagePaths: result.stagePaths,
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/plan") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let draftWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            draftWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parsePlanDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const ctx = await resolveStageflowContext(draftWriteRoot);
+          if (!ctx.isGitProject) {
+            json(res, 400, {
+              error:
+                "Project root not found; initialize stageflow.yaml in a git repo",
+            });
+            return true;
+          }
+          const catalogPipelines =
+            parsed.mode === "create"
+              ? await listPipelinesForContext(catalogContextFromStageflow(ctx))
+              : [];
+          const plan = await planDraftPackage(ctx.projectRoot, parsed, {
+            mode: parsed.mode,
+            catalogPipelines,
+          });
+          if (!plan.ok) {
+            json(res, plan.status, { error: plan.error });
+            return true;
+          }
+          json(res, 200, {
+            pipelinePath: plan.pipelinePath,
+            directory: plan.directory,
+            files: plan.files,
+            pipelineIdTaken: plan.pipelineIdTaken,
           });
           return true;
         }
@@ -2517,6 +2791,14 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             json(res, draftParsed.status, { error: draftParsed.error });
             return true;
           }
+          const attachmentsParsed = parseWorkshopChatAttachments(body.attachments);
+          if (!attachmentsParsed.ok) {
+            json(res, 400, {
+              error: attachmentsParsed.error,
+              code: "workshop_attachment_invalid",
+            });
+            return true;
+          }
           const settingsDefault = await readWorkshopOpenModel(cwd);
           const accept = String(req.headers.accept ?? "");
           const wantsStream =
@@ -2528,6 +2810,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             draft: draftParsed,
             message: body.message,
             autoApply: body.autoApply === true,
+            attachments: attachmentsParsed.attachments,
+            context: parseWorkshopChatContext(body.context),
             model:
               typeof body.model === "string" || body.model === null
                 ? body.model
@@ -2655,7 +2939,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
                 events: [errorEvent],
                 draft: draftParsed,
                 pending: null,
-                autoApply: false,
+                autoApply: chatTurnBase.autoApply,
                 model: resolvedModel,
                 buildId: workshopChatRegistry.getPinnedBuildId(body.sessionId),
               });
@@ -2816,6 +3100,16 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             auditLog,
           })
         ) {
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/skills/usage") {
+          const usages = await buildSkillUsageIndex(cwd);
+          if (usages === null) {
+            json(res, 404, { error: "No Stageflow catalog found" });
+            return true;
+          }
+          json(res, 200, { usages });
           return true;
         }
 

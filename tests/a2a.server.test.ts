@@ -9,7 +9,7 @@ import { createA2aHost, A2A_BODY_LIMIT, type A2aRuntime } from "../src/a2a/serve
 import { encodePromptHandle } from "../src/a2a/contracts.js";
 import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import { supplierAgent, gatedAgent } from "./fixtures/a2a/agents.js";
 
 const env = { PROCUREMENT_TOKEN: "p".repeat(40), OTHER_TOKEN: "o".repeat(40) };
@@ -19,7 +19,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); })));
 });
 
-async function host(configPath: string, agent: AgentPort = supplierAgent()) {
+async function host(configPath: string, agent: StagePort = supplierAgent()) {
   const root = await mkdtemp(path.join(tmpdir(), "sf-a2a-server-"));
   roots.push(root);
   const { store, connection } = createRunStoreWithConnection({ rootDir: root });

@@ -1,4 +1,5 @@
 import type { StageEnvelope } from "../types/envelope.js";
+import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
 import { derivePendingPrompt } from "../hitl/qaTrail.js";
 import type { RunStore, StageExecution, StageLogEvent, StageSnapshot } from "./port.js";
 import { stageStatusFromEvents } from "./port.js";
@@ -33,6 +34,7 @@ export async function buildStageSnapshotFromStore(
   let envelope: StageEnvelope | null;
   let attempt_count: number;
   let cost_usd: number | undefined;
+  let usage: StageUsage | undefined;
 
   if (latest !== null) {
     events = await store.listStageEvents(runId, stageId, latest.attempt);
@@ -41,6 +43,7 @@ export async function buildStageSnapshotFromStore(
     attempt_count = await store.countStageAttempts(runId, stageId);
     const executions = await store.listStageExecutions(runId, stageId);
     cost_usd = sumStageExecutionCost(executions);
+    usage = mergeStageExecutionUsage(executions);
   } else {
     events = await store.listStageEvents(runId, stageId);
     status = stageStatusFromEvents(events);
@@ -65,7 +68,25 @@ export async function buildStageSnapshotFromStore(
     attempt_count,
     ...(pending ? { pending_prompt: pending } : {}),
     ...(cost_usd !== undefined ? { cost_usd } : {}),
+    ...(usage !== undefined ? { usage } : {}),
   };
+}
+
+export function mergeStageExecutionUsage(
+  executions: StageExecution[],
+): StageUsage | undefined {
+  const usages = executions
+    .map((e) => e.usage)
+    .filter((u): u is StageUsage => u !== undefined);
+  if (usages.length === 0) return undefined;
+  const merged = emptyStageUsage();
+  for (const u of usages) {
+    for (const [model, breakdown] of Object.entries(u.models)) {
+      addModelUsage(merged, model, breakdown);
+    }
+  }
+  merged.costUsd = usages.reduce((sum, u) => sum + u.costUsd, 0);
+  return merged;
 }
 
 /** Sum cost across every attempt — retries are real spend too, so a stage's total isn't just its latest attempt. */

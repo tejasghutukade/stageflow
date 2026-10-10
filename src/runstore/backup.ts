@@ -19,7 +19,8 @@ import { pipeline } from "node:stream/promises";
 import { createWriteStream } from "node:fs";
 import Database from "better-sqlite3";
 import { PACKAGE_VERSION } from "../package-meta.js";
-import { globalStageflowHome } from "../project/globalHome.js";
+import { globalCredentialRoot, globalStageflowHome } from "../project/globalHome.js";
+import { isUsableAuthFile } from "../runtime/credentialBinding.js";
 import { readFilesystemSize } from "./diskUsage.js";
 import type { RunStore } from "./port.js";
 import { isInsideDir } from "./workspaceLayout.js";
@@ -132,6 +133,22 @@ export function assertBackupOutPathAllowed(
     );
   }
   return resolved;
+}
+
+function isCredentialRootDir(dir: string): boolean {
+  return path.resolve(dir) === path.resolve(globalCredentialRoot());
+}
+
+function packAuthMember(
+  homeDir: string,
+  authPath: string,
+  noCredentials: boolean,
+): boolean {
+  return (
+    !noCredentials &&
+    isCredentialRootDir(homeDir) &&
+    isUsableAuthFile(authPath)
+  );
 }
 
 function fingerprint(filePath: string): string | null {
@@ -333,7 +350,8 @@ export async function createBackup(
       contents.push("settings.json");
     }
 
-    if (!noCredentials && existsSync(authPath)) {
+    const includeAuth = packAuthMember(homeDir, authPath, noCredentials);
+    if (includeAuth) {
       const stagedAuth = path.join(staging, "auth.json");
       copyFileSync(authPath, stagedAuth);
       chmodSync(stagedAuth, 0o600);
@@ -358,14 +376,14 @@ export async function createBackup(
       schema_version: userVersion,
       contents,
       db_only: false,
-      credentials_included: !noCredentials && existsSync(authPath),
+      credentials_included: includeAuth,
       a2a_artifacts_included: includeA2a,
       settings_fingerprint_before: settingsBefore,
       settings_fingerprint_after: settingsAfter,
       auth_fingerprint_before: authBefore,
       auth_fingerprint_after: authAfter,
       fingerprint_skew: fingerprintSkew,
-      secret_warning: SECRET_WARNING,
+      secret_warning: includeAuth ? SECRET_WARNING : "",
     };
     const manifestPath = path.join(staging, "manifest.json");
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {

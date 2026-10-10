@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeAgent, fakeHitlResumePath } from "../src/agent/fakeAgent.js";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
+import type { StagePort, StageRunInput } from "../src/agent/port.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { createEmitStageEnvelopeTool } from "../src/tools/emitStageEnvelope.js";
 
 /**
  * `@anthropic-ai/claude-agent-sdk` is mocked here (not just in
  * tests/agent.claudeAdapter.test.ts) so `ClaudeAgentAdapter` can join the
- * parameterized "AgentPort contract" suite below without spawning a
+ * parameterized "StagePort contract" suite below without spawning a
  * subprocess or spending API budget — same approach, separate module
  * registry per Vitest test file, so this has no effect on FakeAgent tests
  * in this same file.
@@ -71,7 +71,7 @@ const baseInput: StageRunInput = {
   priorEnvelope: null,
 };
 
-describe("AgentPort contract", () => {
+describe("StagePort contract", () => {
   it("fake agent emit success returns checked envelope", async () => {
     const agent = new FakeAgent({
       type: "emit",
@@ -280,7 +280,7 @@ describe("AgentPort contract", () => {
 /**
  * Same scenarios, run against every backend that has a scriptable test seam
  * — proof that "emit success" / "emit failure" / "never emit" behave
- * identically at the `AgentPort` contract level regardless of which adapter
+ * identically at the `StagePort` contract level regardless of which adapter
  * is behind it, matching decision 5 ("two backends, two mechanisms, one
  * contract") from the adapter's plan doc.
  *
@@ -300,7 +300,7 @@ type ContractScenario =
 
 type ContractDriver = {
   name: string;
-  makeAgent(scenario: ContractScenario): Promise<AgentPort>;
+  makeAgent(scenario: ContractScenario): Promise<StagePort>;
 };
 
 const fakeAgentDriver: ContractDriver = {
@@ -345,7 +345,7 @@ const claudeAgentDriver: ContractDriver = {
 
 const drivers = [fakeAgentDriver, claudeAgentDriver];
 
-describe.each(drivers)("AgentPort contract — parameterized ($name)", (driver) => {
+describe.each(drivers)("StagePort contract — parameterized ($name)", (driver) => {
   it("emit success returns an advancing envelope", async () => {
     const agent = await driver.makeAgent({
       type: "emit_success",

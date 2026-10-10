@@ -2,7 +2,7 @@ import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createA2aHost, type A2aHost } from "../a2a/server.js";
 import { A2aStore } from "../a2a/store.js";
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type Database from "better-sqlite3";
 import { createRunStoreWithConnection, type RunStoreKind } from "../runstore/createStore.js";
@@ -65,7 +65,7 @@ import { logger as rootLogger } from "../logging/logger.js";
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
 
 export type StageflowHostOptions = {
-  agent: AgentPort;
+  agent: StagePort;
   cwd?: string;
   agentDir?: string;
   rootDir?: string;

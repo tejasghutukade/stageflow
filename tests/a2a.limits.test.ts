@@ -11,7 +11,7 @@ import { RateLimiter } from "../src/a2a/limits.js";
 import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
 import { storeRootFor } from "../src/runstore/paths.js";
 import { RunManager } from "../src/runtime/runManager.js";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import { supplierAgent } from "./fixtures/a2a/agents.js";
 
 const env = { PROCUREMENT_TOKEN: "p".repeat(40), OTHER_TOKEN: "o".repeat(40) };
@@ -21,7 +21,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); })));
 });
 
-async function host(agent: AgentPort = supplierAgent()) {
+async function host(agent: StagePort = supplierAgent()) {
   const configPath = path.resolve("tests/fixtures/a2a/a2a.yaml");
   const root = await mkdtemp(path.join(tmpdir(), "sf-a2a-limits-"));
   roots.push(root);

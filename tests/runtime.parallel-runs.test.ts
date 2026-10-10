@@ -17,7 +17,7 @@ import {
 } from "../src/agent/fakeAgent.js";
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
@@ -69,7 +69,7 @@ function gatedAgent(gate: Promise<void>) {
 }
 
 /** Mirrors PiAdapter: bind for bound stages and hold until handle close (incl. HITL wait). */
-function withBoundWorkspaceEnvBind(base: AgentPort): AgentPort {
+function withBoundWorkspaceEnvBind(base: StagePort): StagePort {
   return {
     openStage(input: StageRunInput) {
       const restore =
@@ -811,7 +811,7 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
         envelope: successEnvelope,
       },
     ]);
-    const agent: AgentPort = {
+    const agent: StagePort = {
       openStage(input) {
         const handle = base.openStage(input);
         return {
@@ -875,7 +875,7 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
       },
       { type: "emit", envelope: successEnvelope },
     ]);
-    const agent: AgentPort = {
+    const agent: StagePort = {
       openStage(input) {
         const handle = base.openStage(input);
         if (input.stage.id !== "branch-a") {
@@ -1044,7 +1044,7 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
 });
 
 function createCliEquivalentManager(opts: {
-  agent: ReturnType<typeof gatedAgent> | AgentPort;
+  agent: ReturnType<typeof gatedAgent> | StagePort;
   store: RunStore;
   cwd: string;
   maxConcurrent: number;

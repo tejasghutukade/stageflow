@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import {
   type ProviderAuthRuntime,
 } from "../src/agent/providerAuth.js";
 import { SecretFromEnvError } from "../src/config/secretFromEnvOrFile.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 
 const temps: string[] = [];
 
@@ -159,6 +160,67 @@ describe("bootProviderConfig", () => {
         authContext: makeTestContext(createFakeRuntime()),
       }),
     ).rejects.toThrow(/STAGEFLOW_REQUIRE_PROVIDERS/);
+  });
+
+  it("STAGEFLOW_PROVIDER API key login writes the operator auth file when the data directory differs", async () => {
+    const data = mkdtempSync(path.join(tmpdir(), "sf-boot-data-"));
+    const creds = mkdtempSync(path.join(tmpdir(), "sf-boot-cred-"));
+    temps.push(data, creds);
+    const prevHome = process.env.STAGEFLOW_HOME;
+    const prevCredential = process.env.STAGEFLOW_CREDENTIAL_HOME;
+    const marker = "sk-boot-operator-marker-u5";
+    process.env.STAGEFLOW_HOME = data;
+    process.env.STAGEFLOW_CREDENTIAL_HOME = creds;
+    resetGlobalStageflowHomeForTests();
+    try {
+      const result = await bootProviderConfig({
+        cwd: data,
+        env: { STAGEFLOW_PROVIDER_DEEPSEEK_API_KEY: marker },
+      });
+      expect(result.configured).toEqual(["deepseek"]);
+      expect(result.failures).toEqual([]);
+      const operatorAuth = path.join(creds, "agent", "auth.json");
+      expect(readFileSync(operatorAuth, "utf8")).toContain(marker);
+      expect(existsSync(path.join(data, "agent", "auth.json"))).toBe(false);
+    } finally {
+      if (prevHome === undefined) delete process.env.STAGEFLOW_HOME;
+      else process.env.STAGEFLOW_HOME = prevHome;
+      if (prevCredential === undefined) delete process.env.STAGEFLOW_CREDENTIAL_HOME;
+      else process.env.STAGEFLOW_CREDENTIAL_HOME = prevCredential;
+      resetGlobalStageflowHomeForTests();
+    }
+  });
+
+  it("setting both API key and file still fails and does not write the operator auth file", async () => {
+    const data = mkdtempSync(path.join(tmpdir(), "sf-boot-both-data-"));
+    const creds = mkdtempSync(path.join(tmpdir(), "sf-boot-both-cred-"));
+    temps.push(data, creds);
+    const file = path.join(data, "key");
+    writeFileSync(file, "file-secret\n", "utf8");
+    const prevHome = process.env.STAGEFLOW_HOME;
+    const prevCredential = process.env.STAGEFLOW_CREDENTIAL_HOME;
+    process.env.STAGEFLOW_HOME = data;
+    process.env.STAGEFLOW_CREDENTIAL_HOME = creds;
+    resetGlobalStageflowHomeForTests();
+    try {
+      await expect(
+        bootProviderConfig({
+          cwd: data,
+          env: {
+            STAGEFLOW_PROVIDER_DEEPSEEK_API_KEY: "plain",
+            STAGEFLOW_PROVIDER_DEEPSEEK_API_KEY_FILE: file,
+          },
+        }),
+      ).rejects.toBeInstanceOf(SecretFromEnvError);
+      expect(existsSync(path.join(creds, "agent", "auth.json"))).toBe(false);
+      expect(existsSync(path.join(data, "agent", "auth.json"))).toBe(false);
+    } finally {
+      if (prevHome === undefined) delete process.env.STAGEFLOW_HOME;
+      else process.env.STAGEFLOW_HOME = prevHome;
+      if (prevCredential === undefined) delete process.env.STAGEFLOW_CREDENTIAL_HOME;
+      else process.env.STAGEFLOW_CREDENTIAL_HOME = prevCredential;
+      resetGlobalStageflowHomeForTests();
+    }
   });
 
   it("rejected key soft-fails without leaking secret", async () => {

@@ -134,6 +134,7 @@ export type StageSnapshot = {
   attempt_count: number;
   /** Total $ spent on this stage across every attempt; omitted when no attempt reported usage. */
   cost_usd?: number;
+  usage?: StageUsage;
 };
 
 export type StageExecution = {
@@ -632,12 +633,21 @@ export interface RunStore {
   upsertTrigger(input: UpsertTriggerInput): Promise<TriggerRecord>;
   getTrigger(id: string): Promise<TriggerRecord | null>;
   listTriggers(): Promise<TriggerRecord[]>;
-  /** Record a fire: stamps last_fired_at/last_run_id. Throws if the trigger is missing. */
+  /** Record a fire: stamps last_fired_at/last_run_id and appends trigger_fires. Throws if the trigger is missing. */
   recordTriggerFired(id: string, runId: string): Promise<void>;
+  /** Newest first. */
+  listTriggerFires(
+    triggerId: string,
+    limit: number,
+  ): Promise<Array<{ fired_at: string; run_id: string }>>;
   /** Persist the next computed fire time for a schedule-kind trigger. Throws if the trigger is missing. */
   setTriggerNextRun(id: string, nextRunAt: string): Promise<void>;
   /** Read a single adapter-owned state value for a trigger, or null if unset. */
   getTriggerAdapterState(triggerId: string, key: string): Promise<string | null>;
+  getTriggerAdapterStateMeta(
+    triggerId: string,
+    key: string,
+  ): Promise<{ value: string; updated_at: string } | null>;
   /** Upsert a single adapter-owned state value for a trigger. */
   setTriggerAdapterState(triggerId: string, key: string, value: string): Promise<void>;
   readRun(runId: string): Promise<RunDetail>;

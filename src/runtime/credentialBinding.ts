@@ -1,7 +1,7 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { ensureGlobalHome } from "../project/globalHome.js";
+import { ensureGlobalHome, globalCredentialRoot } from "../project/globalHome.js";
 import {
   resolveProjectContext,
   type ProjectContext,
@@ -30,7 +30,7 @@ export type ResolveCredentialBindingOptions = {
 };
 
 export function sfOwnedAgentDir(): string {
-  return path.join(ensureGlobalHome(), "agent");
+  return path.join(globalCredentialRoot(), "agent");
 }
 
 export function sfOwnedAuthPath(): string {
@@ -72,7 +72,14 @@ export function isUsableAuthFile(authPath: string): boolean {
 
 export function ensureSfOwnedAuthStore(): string {
   ensureGlobalHome();
-  const authPath = sfOwnedAuthPath();
+  const agentDir = sfOwnedAgentDir();
+  mkdirSync(agentDir, { recursive: true });
+  try {
+    chmodSync(agentDir, 0o700);
+  } catch {
+    // best-effort on non-POSIX
+  }
+  const authPath = path.join(agentDir, "auth.json");
   if (!existsSync(authPath)) {
     writeFileSync(authPath, "{}\n", { encoding: "utf8", mode: 0o600 });
   }
@@ -102,13 +109,13 @@ export function resolveCredentialBinding(
   ctx: ProjectContext | string,
   _options: ResolveCredentialBindingOptions = {},
 ): CredentialBinding {
+  const explicit = currentExplicitAuthPath();
   const projectCtx =
     typeof ctx === "string" ? resolveProjectContext(ctx) : ctx;
   const persisted = readCredentialSourceFromContext(projectCtx);
-  const authPath = ensureSfOwnedAuthStore();
   return {
     source: "sf_owned",
-    authPath,
+    authPath: explicit ?? sfOwnedAuthPath(),
     provisional: persisted === undefined,
   };
 }

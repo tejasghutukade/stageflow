@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentPort } from "../../src/agent/port.js";
+import type { StagePort } from "../../src/agent/port.js";
 import { startUiServer } from "../../src/server/http.js";
 import type { HttpHostEnvelope } from "../../src/server/createHttpHost.js";
 import type { RunStore } from "../../src/runstore/port.js";
@@ -31,7 +31,7 @@ export type TestInProcessService = {
  */
 export async function startTestService(
   store: RunStore,
-  agent: AgentPort,
+  agent: StagePort,
   cwd: string,
 ): Promise<TestInProcessService> {
   const scratchRoot = await mkdtemp(path.join(tmpdir(), "sf-test-service-"));

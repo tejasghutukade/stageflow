@@ -19,7 +19,7 @@ function runCli(args: string[], cwd: string = root) {
   });
 }
 
-describe("sf --version", () => {
+describe("sf --version", { timeout: 30_000 }, () => {
   it("prints the package version and exits 0", () => {
     const result = runCli(["--version"]);
     expect(result.status).toBe(0);

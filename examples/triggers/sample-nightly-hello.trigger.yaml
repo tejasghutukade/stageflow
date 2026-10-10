@@ -1,0 +1,8 @@
+id: sample-nightly-hello
+pipeline: hello
+task: my-task
+kind: schedule
+enabled: false
+schedule:
+  cron: "0 2 * * *"
+  timezone: America/New_York

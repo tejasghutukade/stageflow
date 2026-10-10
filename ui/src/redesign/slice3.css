@@ -1,0 +1,13 @@
+@layer sf-components {
+html[data-redesign="on"] .sf-banner {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+html[data-redesign="on"] .sf-banner--warn {
+  background: color-mix(in srgb, var(--sf-needs) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sf-needs) 40%, transparent);
+}
+}

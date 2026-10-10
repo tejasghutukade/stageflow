@@ -12,8 +12,18 @@ import {
 } from "./requestAuthContext.js";
 import type { RunManager } from "../runtime/runManager.js";
 import type { RunStore } from "../runstore/port.js";
-import { loadCatalogTriggers } from "../config/triggerCatalog.js";
+import { loadCatalogTriggers, type TriggerListItem } from "../config/triggerCatalog.js";
 import { createTrigger, parseCreateTriggerBody } from "../config/createTrigger.js";
+import {
+  parsePatchTriggerBody,
+  parsePutTriggerBody,
+  updateTriggerDefinition,
+  updateTriggerEnabled,
+} from "../config/updateTrigger.js";
+import {
+  readTriggerAdapterStatus,
+  type TriggerAdapterStatus,
+} from "../config/triggerAdapterStatus.js";
 import {
   CatalogPathError,
   catalogPathErrorBody,
@@ -26,6 +36,15 @@ import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
 import { coerceTaskFile } from "../config/loadTask.js";
 import type { TaskFile } from "../types/task.js";
 export type { TriggerListItem } from "../config/triggerCatalog.js";
+export type { TriggerAdapterStatus } from "../config/triggerAdapterStatus.js";
+
+async function enrichTriggerListItem(
+  item: TriggerListItem,
+  store: RunStore,
+): Promise<TriggerListItem & { adapter_status: TriggerAdapterStatus }> {
+  const adapter_status = await readTriggerAdapterStatus(item, store);
+  return { ...item, adapter_status };
+}
 
 export type TriggerRoutesCtx = {
   cwd: string;
@@ -115,7 +134,8 @@ export async function handleTriggerRoutes(
       json(res, 404, { error: "No Stageflow catalog found" });
       return true;
     }
-    json(res, 200, { triggers: items });
+    const triggers = await Promise.all(items.map((item) => enrichTriggerListItem(item, store)));
+    json(res, 200, { triggers });
     return true;
   }
 
@@ -292,6 +312,118 @@ export async function handleTriggerRoutes(
     return true;
   }
 
+  const statusMatch = pathname.match(/^\/api\/triggers\/([^/]+)\/status$/);
+  if (method === "GET" && statusMatch) {
+    const id = decodeURIComponent(statusMatch[1] ?? "");
+    const items = await loadCatalogTriggers(cwd, store);
+    if (items === undefined) {
+      json(res, 404, { error: "No Stageflow catalog found" });
+      return true;
+    }
+    const found = items.find((item) => item.id === id);
+    if (!found) {
+      json(res, 404, { error: `Trigger not found: ${id}` });
+      return true;
+    }
+    const adapter_status = await readTriggerAdapterStatus(found, store);
+    json(res, 200, adapter_status);
+    return true;
+  }
+
+  const firesMatch = pathname.match(/^\/api\/triggers\/([^/]+)\/fires$/);
+  if (method === "GET" && firesMatch) {
+    const id = decodeURIComponent(firesMatch[1] ?? "");
+    const items = await loadCatalogTriggers(cwd, store);
+    if (items === undefined) {
+      json(res, 404, { error: "No Stageflow catalog found" });
+      return true;
+    }
+    const found = items.find((item) => item.id === id);
+    if (!found) {
+      json(res, 404, { error: `Trigger not found: ${id}` });
+      return true;
+    }
+    const fires = await store.listTriggerFires(id, 20);
+    json(res, 200, { fires });
+    return true;
+  }
+
+  const putMatch = pathname.match(/^\/api\/triggers\/([^/]+)$/);
+  if (method === "PUT" && putMatch) {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return true;
+    }
+    const id = decodeURIComponent(putMatch[1] ?? "");
+    const parsed = parsePutTriggerBody(body, id);
+    if ("ok" in parsed) {
+      json(res, parsed.status, { error: parsed.error });
+      return true;
+    }
+    const callerId = callerIdFromRequestAuth();
+    const result = await updateTriggerDefinition(cwd, store, id, parsed);
+    if (!result.ok) {
+      writeAudit(auditLog, {
+        caller_id: callerId,
+        surface: getRequestAuth()?.surface ?? "rest",
+        action: "trigger_update",
+        outcome: "error",
+      });
+      json(res, result.status, { error: result.error });
+      return true;
+    }
+    writeAudit(auditLog, {
+      caller_id: callerId,
+      surface: getRequestAuth()?.surface ?? "rest",
+      action: "trigger_update",
+      outcome: "ok",
+    });
+    const enriched = await enrichTriggerListItem(result.trigger, store);
+    json(res, 200, enriched);
+    return true;
+  }
+
+  const patchMatch = pathname.match(/^\/api\/triggers\/([^/]+)$/);
+  if (method === "PATCH" && patchMatch) {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return true;
+    }
+    const parsed = parsePatchTriggerBody(body);
+    if ("ok" in parsed) {
+      json(res, parsed.status, { error: parsed.error });
+      return true;
+    }
+    const id = decodeURIComponent(patchMatch[1] ?? "");
+    const callerId = callerIdFromRequestAuth();
+    const result = await updateTriggerEnabled(cwd, store, id, parsed.enabled);
+    if (!result.ok) {
+      writeAudit(auditLog, {
+        caller_id: callerId,
+        surface: getRequestAuth()?.surface ?? "rest",
+        action: "trigger_patch",
+        outcome: "error",
+      });
+      json(res, result.status, { error: result.error });
+      return true;
+    }
+    writeAudit(auditLog, {
+      caller_id: callerId,
+      surface: getRequestAuth()?.surface ?? "rest",
+      action: "trigger_patch",
+      outcome: "ok",
+    });
+    const enriched = await enrichTriggerListItem(result.trigger, store);
+    json(res, 200, enriched);
+    return true;
+  }
+
   const idMatch = pathname.match(/^\/api\/triggers\/([^/]+)$/);
   if (method === "GET" && idMatch) {
     const id = decodeURIComponent(idMatch[1] ?? "");
@@ -305,7 +437,7 @@ export async function handleTriggerRoutes(
       json(res, 404, { error: `Trigger not found: ${id}` });
       return true;
     }
-    json(res, 200, found);
+    json(res, 200, await enrichTriggerListItem(found, store));
     return true;
   }
 

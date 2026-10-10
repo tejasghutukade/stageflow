@@ -24,6 +24,7 @@ export class HostConfigError extends Error {
 /** Env keys that are known STAGEFLOW_* (or dynamic families) so unknown-key check accepts them. */
 export const KNOWN_STAGEFLOW_ENV_KEYS = new Set<string>([
   "STAGEFLOW_HOME",
+  "STAGEFLOW_CREDENTIAL_HOME",
   "STAGEFLOW_BIND",
   "STAGEFLOW_ALLOWED_HOSTS",
   "STAGEFLOW_CONTROL_TOKEN",

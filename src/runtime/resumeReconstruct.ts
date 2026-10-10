@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
+import type { StagePort, OpaqueAnswer } from "../agent/port.js";
 import { fakeHitlResumePath } from "../agent/fakeAgent.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
@@ -29,7 +29,7 @@ export type PreparedResumeContext = {
   runId: string;
   stageId: string;
   opaqueAnswer: OpaqueAnswer;
-  agent: AgentPort;
+  agent: StagePort;
   store: RunStore;
   hitl: StageHitlController;
   executionMode: StageExecutionMode;

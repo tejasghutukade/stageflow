@@ -131,14 +131,14 @@ export interface StageHandle {
   close(options?: StageHandleCloseOptions): Promise<void>;
 }
 
-export interface AgentPort {
+export interface StagePort {
   openStage(input: StageRunInput): StageHandle;
   runStage(input: StageRunInput): Promise<StageRunResult>;
 }
 
 /** Thin non-HITL wrapper: open → next; unexpected wait fails closed. */
 export async function runStageViaOpen(
-  port: Pick<AgentPort, "openStage">,
+  port: Pick<StagePort, "openStage">,
   input: StageRunInput,
 ): Promise<StageRunResult> {
   const handle = port.openStage(input);

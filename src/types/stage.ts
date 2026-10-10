@@ -67,7 +67,7 @@ export type StageConfig = {
   /** Browser session settings for this stage; adds the agent-browser requirement. */
   browser?: StageBrowserConfig;
   /**
-   * Selects the AgentPort backend for this stage, overriding pipeline/global.
+   * Selects the StagePort backend for this stage, overriding pipeline/global.
    * Parsed but not yet consulted — see STAGE_LEVEL_AGENT_OVERRIDE_ENABLED.
    */
   agent?: string;

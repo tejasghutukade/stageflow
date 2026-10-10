@@ -8,7 +8,7 @@ import path from "node:path";
 import { A2aStore } from "../src/a2a/store.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { bootstrapStageflowHost } from "../src/server/bootstrap.js";
-import { resolveAgentPort } from "../src/agent/resolveAgentPort.js";
+import { resolveStagePort } from "../src/agent/resolveStagePort.js";
 import {
   createRunStore,
   createRunStoreAfterHostEnsure,
@@ -226,7 +226,7 @@ INSERT INTO schema_migrations (version, name, applied_at, min_stageflow_version)
     resetGlobalStageflowHomeForTests();
     try {
     const boot = await bootstrapStageflowHost({
-      agent: resolveAgentPort({}),
+      agent: resolveStagePort({}),
       rootDir: root,
       cwd: root,
     });

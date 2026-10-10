@@ -1,3 +1,6 @@
+import type { InboxTabId } from "./redesign/inbox/inboxTab";
+import { inboxPath as inboxPathWithTab } from "./redesign/inbox/inboxTab";
+
 export type DetailView =
   | { kind: "stream"; stageId?: string }
   | { kind: "envelope"; stageId: string }
@@ -5,11 +8,12 @@ export type DetailView =
 
 export type Route =
   | { name: "today" }
+  | { name: "inbox"; tab?: InboxTabId }
   | { name: "runs" }
-  | { name: "new"; pipelineId?: string; taskPath?: string }
+  | { name: "new"; pipelineId?: string; taskPath?: string; projectRoot?: string }
   | { name: "detail"; runId: string; view: DetailView }
   | { name: "pipelines" }
-  | { name: "pipeline"; pipelineId: string }
+  | { name: "pipeline"; pipelineId: string; projectRoot?: string }
   | { name: "tasks" }
   | { name: "task"; taskId: string }
   | { name: "triggers" }
@@ -17,6 +21,11 @@ export type Route =
   | { name: "trigger"; triggerId: string }
   | { name: "skills" }
   | { name: "skill"; skillName: string }
+  | {
+      name: "catalog";
+      tab?: "stages" | "skills" | "extensions";
+      skillName?: string;
+    }
   | { name: "extensions" }
   | {
       name: "extensionPackage";
@@ -26,7 +35,12 @@ export type Route =
   | { name: "extensionFile"; path: string }
   | { name: "settings" }
   | { name: "connect" }
-  | { name: "workshop"; pipelinePath?: string; taskPath?: string };
+  | {
+      name: "workshop";
+      pipelinePath?: string;
+      taskPath?: string;
+      projectRoot?: string;
+    };
 
 export function navigate(to: string): void {
   window.location.hash = to.startsWith("#") ? to : `#${to}`;
@@ -48,8 +62,27 @@ export function runEnvelopePath(runId: string, stageId: string): string {
   return `/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/envelope`;
 }
 
-export function pipelinePath(pipelineId: string): string {
-  return `/pipelines/${encodeURIComponent(pipelineId)}`;
+export function pipelinePath(
+  pipelineId: string,
+  opts?: { project_root?: string },
+): string {
+  const base = `/pipelines/${encodeURIComponent(pipelineId)}`;
+  if (!opts?.project_root) return base;
+  const params = new URLSearchParams();
+  params.set("project_root", opts.project_root);
+  return `${base}?${params.toString()}`;
+}
+
+export function resolvePipelineListing<
+  T extends { id: string; project_root?: string },
+>(pipelines: T[], pipelineId: string, projectRoot?: string): T | null {
+  if (projectRoot) {
+    const exact = pipelines.find(
+      (p) => p.id === pipelineId && p.project_root === projectRoot,
+    );
+    if (exact) return exact;
+  }
+  return pipelines.find((p) => p.id === pipelineId) ?? null;
 }
 
 export function taskPath(taskId: string): string {
@@ -62,6 +95,17 @@ export function triggerPath(triggerId: string): string {
 
 export function skillPath(name: string): string {
   return `/skills/${encodeURIComponent(name)}`;
+}
+
+export function catalogPath(opts?: {
+  tab?: "stages" | "skills" | "extensions";
+  skill?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (opts?.tab) params.set("tab", opts.tab);
+  if (opts?.skill) params.set("skill", opts.skill);
+  const query = params.toString();
+  return query ? `/catalog?${query}` : "/catalog";
 }
 
 export function extensionPackagePath(
@@ -78,10 +122,12 @@ export function extensionFilePath(filePath: string): string {
 export function workshopPath(opts?: {
   pipeline?: string;
   task?: string;
+  project_root?: string;
 }): string {
   const params = new URLSearchParams();
   if (opts?.pipeline) params.set("pipeline", opts.pipeline);
   if (opts?.task) params.set("task", opts.task);
+  if (opts?.project_root) params.set("project_root", opts.project_root);
   const query = params.toString();
   return query ? `/workshop?${query}` : "/workshop";
 }
@@ -90,13 +136,19 @@ export function connectPath(): string {
   return "/connect";
 }
 
+export function inboxPath(tab?: InboxTabId): string {
+  return inboxPathWithTab(tab ?? "needs");
+}
+
 export function newRunPath(opts?: {
   pipeline?: string;
   task?: string;
+  project_root?: string;
 }): string {
   const params = new URLSearchParams();
   if (opts?.pipeline) params.set("pipeline", opts.pipeline);
   if (opts?.task) params.set("task", opts.task);
+  if (opts?.project_root) params.set("project_root", opts.project_root);
   const query = params.toString();
   return query ? `/new?${query}` : "/new";
 }
@@ -120,20 +172,35 @@ function firstSegment(rest: string): string {
 export function parseHash(hash = window.location.hash): Route {
   const { path, params } = splitHash(hash);
   if (!path || path === "today") return { name: "today" };
+  if (path === "inbox") {
+    const tabRaw = params.get("tab");
+    const tab: InboxTabId | undefined =
+      tabRaw === "failed" || tabRaw === "done_today" ? tabRaw : undefined;
+    return tab ? { name: "inbox", tab } : { name: "inbox" };
+  }
   if (path === "runs") return { name: "runs" };
   if (path === "new") {
     const pipelineId = params.get("pipeline") ?? undefined;
     const taskPath = params.get("task") ?? undefined;
+    const projectRoot = params.get("project_root") ?? undefined;
     return {
       name: "new",
       ...(pipelineId ? { pipelineId } : {}),
       ...(taskPath ? { taskPath } : {}),
+      ...(projectRoot ? { projectRoot } : {}),
     };
   }
   if (path === "pipelines") return { name: "pipelines" };
   if (path.startsWith("pipelines/")) {
     const pipelineId = firstSegment(path.slice("pipelines/".length));
-    if (pipelineId) return { name: "pipeline", pipelineId };
+    if (pipelineId) {
+      const projectRoot = params.get("project_root") ?? undefined;
+      return {
+        name: "pipeline",
+        pipelineId,
+        ...(projectRoot ? { projectRoot } : {}),
+      };
+    }
   }
   if (path === "tasks") return { name: "tasks" };
   if (path.startsWith("tasks/")) {
@@ -145,6 +212,19 @@ export function parseHash(hash = window.location.hash): Route {
   if (path.startsWith("triggers/")) {
     const triggerId = firstSegment(path.slice("triggers/".length));
     if (triggerId) return { name: "trigger", triggerId };
+  }
+  if (path === "catalog") {
+    const tabRaw = params.get("tab");
+    const tab =
+      tabRaw === "skills" || tabRaw === "extensions" || tabRaw === "stages"
+        ? tabRaw
+        : "stages";
+    const skillName = params.get("skill") ?? undefined;
+    return {
+      name: "catalog",
+      tab,
+      ...(skillName ? { skillName } : {}),
+    };
   }
   if (path === "skills") return { name: "skills" };
   if (path.startsWith("skills/")) {
@@ -177,10 +257,12 @@ export function parseHash(hash = window.location.hash): Route {
   if (path === "workshop" || path === "workshop-lab") {
     const pipelinePath = params.get("pipeline") ?? undefined;
     const taskPath = params.get("task") ?? undefined;
+    const projectRoot = params.get("project_root") ?? undefined;
     return {
       name: "workshop",
       ...(pipelinePath ? { pipelinePath } : {}),
       ...(taskPath ? { taskPath } : {}),
+      ...(projectRoot ? { projectRoot } : {}),
     };
   }
   if (path.startsWith("runs/")) {

@@ -1,4 +1,4 @@
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
 import {
   findUnhandledFailedStage,
   type RunDetail,
@@ -103,7 +103,7 @@ export type RetryStageRequest = {
   runId: string;
   stageId: string;
   store: RunStore;
-  agent: AgentPort;
+  agent: StagePort;
   cwd: string;
   operatorCatalog?: OperatorCatalog;
   browser?: StageBrowserSupport;

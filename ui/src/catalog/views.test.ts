@@ -9,6 +9,8 @@ import {
   runsFilterCounts,
   runsForPipelineView,
   runsForTaskView,
+  heldWaitingCount,
+  inboxWaitingView,
   waitingRunsAmongView,
   waitingView,
 } from "./views";
@@ -42,6 +44,43 @@ const health = (
 });
 
 describe("catalog views", () => {
+  it("inbox waiting view sorts by updated_at ascending", () => {
+    const older = summary({
+      run_id: "older",
+      waiting_stage_id: "ask",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+    const newer = summary({
+      run_id: "newer",
+      waiting_stage_id: "ask",
+      updated_at: "2026-06-01T00:00:00.000Z",
+    });
+    expect(
+      inboxWaitingView(snapshot([newer, older])).map((r) => r.run_id),
+    ).toEqual(["older", "newer"]);
+  });
+
+  it("held waiting count counts waiting runs on active slots", () => {
+    const waitingActive = summary({
+      run_id: "a",
+      waiting_stage_id: "ask",
+    });
+    const waitingIdle = summary({
+      run_id: "b",
+      waiting_stage_id: "ask",
+    });
+    const snap = snapshot(
+      [waitingActive, waitingIdle],
+      health({
+        slotsAvailable: 0,
+        activeCount: 1,
+        maxConcurrent: 2,
+        activeRunIds: ["a"],
+      }),
+    );
+    expect(heldWaitingCount(snap, snap.health)).toBe(1);
+  });
+
   it("waiting view returns exactly the runs with waiting_stage_id set", () => {
     const waiting = summary({
       run_id: "w",

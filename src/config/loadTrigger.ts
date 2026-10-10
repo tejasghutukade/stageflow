@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { parse as parseYaml } from "yaml";
 import type { TriggerEvent, TriggerFile, TriggerSchedule } from "../types/trigger.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
+import { yamlParsePosition } from "./yamlParsePosition.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -95,6 +96,7 @@ export function loadTriggerFromYamlOutcome(
         code: "trigger.load_error",
         message,
         category: "trigger",
+        ...yamlParsePosition(err),
       },
     ]);
   }

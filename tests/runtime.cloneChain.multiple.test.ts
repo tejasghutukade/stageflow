@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
@@ -68,7 +68,7 @@ function cloneChainAgent(options: {
         }
     >
   >;
-}): AgentPort & {
+}): StagePort & {
   openCounts: Map<string, number>;
   launchOrder: string[];
   priorPayloadByStage: Map<string, unknown>;
@@ -80,7 +80,7 @@ function cloneChainAgent(options: {
   const priorPayloadByStage = new Map<string, unknown>();
   const priorEnvelopesByStage = new Map<string, StageEnvelope[] | undefined>();
 
-  const agent: AgentPort & {
+  const agent: StagePort & {
     openCounts: Map<string, number>;
     launchOrder: string[];
     priorPayloadByStage: Map<string, unknown>;
@@ -140,7 +140,7 @@ function cloneChainAgent(options: {
 
 async function prepareCloneChainRun(
   root: string,
-  agent: AgentPort,
+  agent: StagePort,
   pipelineName: string,
 ) {
   const store = createRunStore({ rootDir: root });

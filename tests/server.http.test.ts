@@ -2,13 +2,14 @@ import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
 import * as resolveStageMcpServers from "../src/config/resolveStageMcpServers.js";
-import { access, cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { access, cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent, type FakeAgentBehavior } from "../src/agent/fakeAgent.js";
 import { createCompletedOnlyStageHandle } from "../src/agent/port.js";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
+import type { StagePort, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { storeRootFor } from "../src/runstore/paths.js";
@@ -23,7 +24,7 @@ import { failEnvelope, okEnvelope } from "./helpers/envelopes.js";
 import { stageKeyedAgent } from "./helpers/stageKeyedAgent.js";
 import { waitFor } from "./helpers/waitFor.js";
 import { withEnv } from "./helpers/withEnv.js";
-import { netPipeline } from "./helpers/fixturePaths.js";
+import { netPipeline, netTask, SAMPLE_TASK, SINGLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -32,6 +33,7 @@ import {
   setBareCacheRemoteUrlOverrideForTests,
 } from "../src/git/cache.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import { validateCatalog } from "../src/config/validateCatalog.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -253,7 +255,7 @@ async function postRetry(
   );
 }
 
-function parallelRetryFanoutAgent(): { agent: AgentPort; release: () => void } {
+function parallelRetryFanoutAgent(): { agent: StagePort; release: () => void } {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -295,7 +297,7 @@ function parallelRetryFanoutAgent(): { agent: AgentPort; release: () => void } {
 
 function parallelFanoutStuckDesignAgent(
   options?: { holdDesignRetry?: Promise<void> },
-): AgentPort {
+): StagePort {
   const stageIndex = new Map<string, number>();
   let designOpens = 0;
 
@@ -937,6 +939,7 @@ describe("localhost HTTP API", () => {
             "artifact_backed",
           ],
           uses_path: "stages/hitl-four-kinds.yaml",
+          model: "anthropic/claude-sonnet-4-5",
         },
       ]);
     } finally {
@@ -3237,6 +3240,103 @@ describe("localhost HTTP API", () => {
       }
     });
 
+    it("detect and list leave a missing operator auth file missing, and login writes that file", async () => {
+      const data = process.env.STAGEFLOW_HOME;
+      if (!data) throw new Error("STAGEFLOW_HOME missing");
+      const creds = await mkdtemp(path.join(tmpdir(), "sf-http-cred-"));
+      const prevCursor = process.env.CURSOR_API_KEY;
+      const prevCursorFile = process.env.CURSOR_API_KEY_FILE;
+      delete process.env.CURSOR_API_KEY;
+      delete process.env.CURSOR_API_KEY_FILE;
+      process.env.STAGEFLOW_CREDENTIAL_HOME = creds;
+      resetGlobalStageflowHomeForTests();
+
+      const operatorAuth = path.join(creds, "agent", "auth.json");
+      const dataAuth = path.join(data, "agent", "auth.json");
+      const dataBody = `${JSON.stringify({
+        openai: { type: "api_key", key: "data-only-secret" },
+      })}\n`;
+      await mkdir(path.dirname(dataAuth), { recursive: true });
+      await writeFile(dataAuth, dataBody);
+      await writeFile(path.join(data, "agent", "cursor-api-key"), "cursor-data-only\n");
+
+      const root = await mkdtemp(path.join(tmpdir(), "sf-http-providers-roots-"));
+      const { server, base } = await withServer(
+        root,
+        scriptedFakeAgent([]),
+        undefined,
+        { cwd: root },
+      );
+
+      try {
+        const detect = await jsonFetch(`${base}/api/providers/detect`);
+        expect(detect.status).toBe(200);
+        expect(detect.body.authConfigured).toBe(false);
+        expect(detect.body.cursorApiKeyConfigured).toBe(false);
+        expect(detect.body.source).toBe("sf_owned");
+        expect(detect.body.authPath).toBeUndefined();
+        const detectJson = JSON.stringify(detect.body);
+        expect(detectJson).not.toMatch(/data-only-secret|cursor-data-only|sk-/);
+        expect(detectJson).not.toMatch(/"apiKey"\s*:/);
+        expect(existsSync(operatorAuth)).toBe(false);
+
+        const noOrigin = await jsonFetch(`${base}/api/providers/deepseek/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ authType: "api_key", apiKey: marker }),
+        });
+        expect(noOrigin.status).toBe(403);
+        expect(JSON.stringify(noOrigin.body)).not.toContain(marker);
+        expect(existsSync(operatorAuth)).toBe(false);
+
+        const providers = await jsonFetch(`${base}/api/providers`);
+        expect(providers.status).toBe(200);
+        expect(providers.body.providers.length).toBeGreaterThan(0);
+        expect(JSON.stringify(providers.body)).not.toContain("data-only-secret");
+        expect(existsSync(operatorAuth)).toBe(false);
+        expect(await readFile(dataAuth, "utf8")).toBe(dataBody);
+
+        await mkdir(path.join(creds, "agent"), { recursive: true });
+        await writeFile(
+          path.join(creds, "agent", "cursor-api-key"),
+          "cursor-operator-key\n",
+        );
+        const detectCursor = await jsonFetch(`${base}/api/providers/detect`);
+        expect(detectCursor.status).toBe(200);
+        expect(detectCursor.body.cursorApiKeyConfigured).toBe(true);
+        expect(detectCursor.body.authConfigured).toBe(false);
+        expect(JSON.stringify(detectCursor.body)).not.toContain("cursor-operator-key");
+        expect(existsSync(operatorAuth)).toBe(false);
+
+        const login = await jsonFetch(`${base}/api/providers/deepseek/login`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Origin: base,
+          },
+          body: JSON.stringify({ authType: "api_key", apiKey: marker }),
+        });
+        expect(login.status).toBe(200);
+        expect(login.body.ok).toBe(true);
+        expect(JSON.stringify(login.body)).not.toContain(marker);
+        expect(await readFile(operatorAuth, "utf8")).toContain(marker);
+        expect(await readFile(dataAuth, "utf8")).toBe(dataBody);
+
+        const after = await jsonFetch(`${base}/api/providers/detect`);
+        expect(after.body.authConfigured).toBe(true);
+        expect(JSON.stringify(after.body)).not.toContain(marker);
+      } finally {
+        if (prevCursor === undefined) delete process.env.CURSOR_API_KEY;
+        else process.env.CURSOR_API_KEY = prevCursor;
+        if (prevCursorFile === undefined) delete process.env.CURSOR_API_KEY_FILE;
+        else process.env.CURSOR_API_KEY_FILE = prevCursorFile;
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+        await rm(creds, { recursive: true, force: true });
+      }
+    });
+
     it("denies auth.json artifact reads over HTTP", async () => {
       const root = await mkdtemp(path.join(tmpdir(), "sf-http-providers-deny-"));
       const store = createRunStore({ rootDir: root });
@@ -3838,3 +3938,481 @@ describe("HTTP repository binding surfaces (U7)", () => {
     });
   });
 });
+describe("HTTP console foundation BF-1–BF-6", () => {
+  async function seedHttpCatalogRepo(repoRoot: string): Promise<void> {
+    await mkdir(path.join(repoRoot, "pipelines"), { recursive: true });
+    await mkdir(path.join(repoRoot, "tasks"), { recursive: true });
+    await mkdir(path.join(repoRoot, "triggers"), { recursive: true });
+    await mkdir(path.join(repoRoot, "stages"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "stageflow.yaml"),
+      [
+        "version: 1",
+        "model: anthropic/claude-sonnet-4-5",
+        "catalog:",
+        "  pipelines:",
+        "    - pipelines",
+        "  tasks:",
+        "    - tasks",
+        "  triggers:",
+        "    - triggers",
+        "",
+      ].join("\n"),
+    );
+    await cp(SAMPLE_TASK, path.join(repoRoot, "tasks/sample.task.yaml"));
+    await cp(SINGLE_PIPELINE, path.join(repoRoot, "pipelines/single.pipeline.yaml"));
+    await cp(
+      path.join(fixtures, "stages/clarify.yaml"),
+      path.join(repoRoot, "stages/clarify.yaml"),
+    );
+    await writeFile(
+      path.join(repoRoot, "stages/review.yaml"),
+      [
+        "id: review",
+        "model: anthropic/claude-sonnet-4-5",
+        "system_prompt: Review changes.",
+        "skill: code-review",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      path.join(repoRoot, "pipelines/skilled.pipeline.yaml"),
+      [
+        "id: skilled",
+        "stages:",
+        "  - id: review",
+        "    uses: ../stages/review.yaml",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      path.join(repoRoot, "triggers/manual-fire.trigger.yaml"),
+      [
+        "id: manual-fire",
+        "pipeline: single",
+        "kind: manual",
+        "enabled: true",
+        "",
+      ].join("\n"),
+    );
+    clearFindProjectRootCacheForTests();
+  }
+
+  it("BF-1 POST /api/catalog/validate matches validateCatalog strict full scope", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf1-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf1-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoRoot);
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const expected = await validateCatalog({
+        scope: "full",
+        cwd: repoRoot,
+        strict: true,
+      });
+      const res = await jsonFetch(`${base}/api/catalog/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strict: true }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(expected);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-1 rejects pipeline and task together", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf1-bad-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf1-bad-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const store = createRunStore({ rootDir: storeRoot });
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(`${base}/api/catalog/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pipeline: "pipelines/single.pipeline.yaml", task: netTask("sample") }),
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("at most one");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-2 GET /api/catalog/file reads catalog YAML", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoRoot);
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(`${base}/api/catalog/file?path=${encodeURIComponent(netTask("sample"))}`);
+      expect(res.status).toBe(200);
+      expect(res.body.path).toBe(netTask("sample"));
+      expect(res.body.content).toContain("id: sample");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-2 refuses non-YAML paths such as .env", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-env-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-env-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    await writeFile(path.join(repoRoot, ".env"), "SECRET=1\n");
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoRoot);
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(
+        `${base}/api/catalog/file?path=${encodeURIComponent(".env")}`,
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("unsupported_file_type");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-2 refuses symlink alias.yaml pointing at .env inside root", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-alias-env-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-alias-env-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    await writeFile(path.join(repoRoot, ".env"), "SECRET=1\n");
+    await symlink(path.join(repoRoot, ".env"), path.join(repoRoot, "alias.yaml"));
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoRoot);
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(
+        `${base}/api/catalog/file?path=${encodeURIComponent("alias.yaml")}`,
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("unsupported_file_type");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-2 refuses directory named dir.yaml", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-dir-yaml-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-dir-yaml-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    await mkdir(path.join(repoRoot, "dir.yaml"));
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoRoot);
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(
+        `${base}/api/catalog/file?path=${encodeURIComponent("dir.yaml")}`,
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("unsupported_file_type");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-2 refuses symlink escape outside project root", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-symlink-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-symlink-store-"));
+    const outside = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-outside-"));
+    await seedHttpCatalogRepo(repoRoot);
+    await writeFile(path.join(outside, "secret.yaml"), "id: leaked\n");
+    await symlink(path.join(outside, "secret.yaml"), path.join(repoRoot, "pipelines/leak.yaml"));
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoRoot);
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(
+        `${base}/api/catalog/file?path=${encodeURIComponent("pipelines/leak.yaml")}`,
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("path_outside_project_root");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-2 returns 404 for missing catalog file", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-miss-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-miss-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoRoot);
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(
+        `${base}/api/catalog/file?path=${encodeURIComponent("tasks/missing.task.yaml")}`,
+      );
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe("catalog_file_not_found");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-2 returns 413 when catalog file exceeds size cap", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-big-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-big-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const bigPath = path.join(repoRoot, "tasks/huge.task.yaml");
+    await writeFile(bigPath, `id: huge\ngoal: ${"x".repeat(512 * 1024)}\n`);
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoRoot);
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(
+        `${base}/api/catalog/file?path=${encodeURIComponent("tasks/huge.task.yaml")}`,
+      );
+      expect(res.status).toBe(413);
+      expect(res.body.code).toBe("catalog_file_too_large");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-3 GET /api/tasks/:id returns task detail", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf3-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf3-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const store = createRunStore({ rootDir: storeRoot });
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(`${base}/api/tasks/sample`);
+      expect(res.status).toBe(200);
+      expect(res.body.task).toMatchObject({
+        id: "sample",
+        goal: "Design a calendar web app",
+        context: "Personal productivity prototype",
+        path: netTask("sample"),
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-3 GET /api/tasks/:id returns 404 for unknown task", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf3-miss-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf3-miss-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const store = createRunStore({ rootDir: storeRoot });
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(`${base}/api/tasks/missing-task`);
+      expect(res.status).toBe(404);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-4 PATCH /api/triggers/:id toggles enabled in YAML and store", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf4-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf4-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const store = createRunStore({ rootDir: storeRoot });
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(`${base}/api/triggers/manual-fire`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.enabled).toBe(false);
+      const onDisk = await readFile(
+        path.join(repoRoot, "triggers/manual-fire.trigger.yaml"),
+        "utf8",
+      );
+      expect(onDisk).toContain("enabled: false");
+      const record = await store.getTrigger("manual-fire");
+      expect(record?.enabled).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-4 PATCH rejects unknown body fields", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf4-fields-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf4-fields-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const store = createRunStore({ rootDir: storeRoot });
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(`${base}/api/triggers/manual-fire`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false, pipeline: "x" }),
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-4 PATCH preserves YAML comments and key order", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf4-format-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf4-format-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const triggerPath = path.join(repoRoot, "triggers/ordered.trigger.yaml");
+    const before = [
+      "# Keep this comment",
+      "pipeline: single",
+      "id: ordered-trigger",
+      "kind: manual",
+      "enabled: true",
+      "",
+    ].join("\n");
+    await writeFile(triggerPath, before);
+    clearFindProjectRootCacheForTests();
+    const store = createRunStore({ rootDir: storeRoot });
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(`${base}/api/triggers/ordered-trigger`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      });
+      expect(res.status).toBe(200);
+      const after = await readFile(triggerPath, "utf8");
+      expect(after).toContain("# Keep this comment");
+      expect(after.indexOf("pipeline:")).toBeLessThan(after.indexOf("id:"));
+      expect(after).toContain("enabled: false");
+      expect(after).not.toContain("enabled: true");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-5 GET /api/triggers/:id includes adapter_status", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf5-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf5-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const store = createRunStore({ rootDir: storeRoot });
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(`${base}/api/triggers/manual-fire`);
+      expect(res.status).toBe(200);
+      expect(res.body.adapter_status).toMatchObject({
+        adapter: "manual",
+        state: "idle",
+      });
+      const status = await jsonFetch(`${base}/api/triggers/manual-fire/status`);
+      expect(status.status).toBe(200);
+      expect(status.body.adapter).toBe("manual");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("BF-6 GET /api/skills/usage indexes stage skills", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf6-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf6-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    await writeFile(
+      path.join(repoRoot, "stageflow.yaml"),
+      [
+        "version: 1",
+        "model: anthropic/claude-sonnet-4-5",
+        "catalog:",
+        "  pipelines:",
+        "    - pipelines",
+        "    - pipelines/skilled.pipeline.yaml",
+        "  tasks:",
+        "    - tasks",
+        "  triggers:",
+        "    - triggers",
+        "",
+      ].join("\n"),
+    );
+    clearFindProjectRootCacheForTests();
+    const store = createRunStore({ rootDir: storeRoot });
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(`${base}/api/skills/usage`);
+      expect(res.status).toBe(200);
+      expect(res.body.usages["code-review"]).toEqual({
+        stage_ids: ["review"],
+        pipeline_ids: ["skilled"],
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+

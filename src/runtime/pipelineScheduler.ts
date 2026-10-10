@@ -1,4 +1,4 @@
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
 import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
@@ -107,7 +107,7 @@ type SchedulerPreparedPipeline = {
   task: TaskFile;
   loaded: LoadedPipeline;
   run: { runId: string; workspaceDir: string };
-  agent: AgentPort;
+  agent: StagePort;
   store: RunStore;
   cwd: string;
   projectRoot?: string;

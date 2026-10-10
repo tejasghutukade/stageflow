@@ -1,0 +1,59 @@
+@layer sf-components {
+html[data-redesign="on"] .sf-inbox-zero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--sf-space-8) var(--sf-space-4);
+  gap: var(--sf-space-4);
+}
+
+html[data-redesign="on"] .sf-inbox-zero__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sf-signal-ok-muted);
+  color: var(--sf-signal-ok);
+  font-size: 1.5rem;
+}
+
+html[data-redesign="on"] .sf-inbox-zero__actions {
+  display: flex;
+  gap: var(--sf-space-3);
+}
+
+html[data-redesign="on"] .sf-inbox-zero__meta {
+  font-size: var(--sf-text-sm);
+  color: var(--sf-text-muted);
+}
+
+html[data-redesign="on"] .sf-inbox-zero__strip {
+  width: min(480px, 100%);
+  text-align: left;
+  margin-top: var(--sf-space-4);
+}
+
+html[data-redesign="on"] .sf-inbox-zero__strip-label {
+  font-size: var(--sf-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--sf-text-muted);
+  margin-bottom: var(--sf-space-2);
+}
+
+html[data-redesign="on"] .sf-inbox-zero__strip-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  padding: var(--sf-space-2) var(--sf-space-3);
+  border: none;
+  background: var(--sf-surface);
+  border-radius: var(--sf-radius-md);
+  color: var(--sf-text);
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+}

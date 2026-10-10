@@ -77,6 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       STAGEFLOW_HOME: ${{ github.workspace }}/.stageflow
+      STAGEFLOW_CREDENTIAL_HOME: ${{ github.workspace }}/.stageflow
     permissions:
       contents: write
     steps:

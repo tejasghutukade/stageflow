@@ -1,0 +1,61 @@
+@layer sf-components {
+html[data-redesign="on"] .sf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+html[data-redesign="on"] .sf-field__label {
+  font-size: 11px;
+  color: var(--sf-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+html[data-redesign="on"] .sf-field__input,
+html[data-redesign="on"] .sf-field__textarea {
+  width: 100%;
+  border: 1px solid var(--sf-hairline);
+  border-radius: 6px;
+  background: var(--sf-raised);
+  color: var(--sf-text-1);
+  padding: 8px;
+  font-size: 13px;
+}
+}
+
+html[data-redesign="on"] .editor-live-graph .track,
+html[data-redesign="on"] .editor-live-graph .track-dag {
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+html[data-redesign="on"] .editor-live-graph .node-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  max-width: 140px;
+  margin-top: 6px;
+}
+
+html[data-redesign="on"] .editor-live-graph .node-chip {
+  border: 1px solid var(--sf-hairline);
+  border-radius: var(--radius-full, 999px);
+  padding: 1px 6px;
+  color: var(--sf-text-3);
+  font-family: var(--font-family-code, ui-monospace, monospace);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+html[data-redesign="on"] .editor-live-graph .node-chip[data-kind="no_gate"] {
+  border-style: dashed;
+}
+
+html[data-redesign="on"] .editor-live-graph .node[data-selected="true"] .node__ring {
+  box-shadow: 0 0 0 3px rgba(108, 166, 255, 0.45);
+}

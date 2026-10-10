@@ -11,6 +11,7 @@ import {
 } from "./legacyYaml.js";
 import { parseModelField } from "./modelField.js";
 import { readYamlObject } from "./readYamlObject.js";
+import { yamlParsePosition } from "./yamlParsePosition.js";
 import { parseToolRequires, type ToolRequirement } from "./toolRequires.js";
 import {
   classifyYamlDocument,
@@ -66,6 +67,7 @@ async function visitPipelineFile(
         code: "pipeline.load_error",
         message,
         category: "pipeline",
+        ...yamlParsePosition(err),
       },
     ]);
   }
@@ -184,6 +186,7 @@ export async function mergePipelineStages(
         code: "pipeline.load_error",
         message,
         category: "pipeline",
+        ...yamlParsePosition(err),
       },
     ]);
   }

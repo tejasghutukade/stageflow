@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentPort, StageHandle } from "../src/agent/port.js";
+import type { StagePort, StageHandle } from "../src/agent/port.js";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import {
   createHostedRuntime,
@@ -130,9 +130,9 @@ class MemorySink {
   }
 }
 
-function hangingAgent(): AgentPort & { closes: number } {
+function hangingAgent(): StagePort & { closes: number } {
   let closes = 0;
-  const agent: AgentPort & { closes: number } = {
+  const agent: StagePort & { closes: number } = {
     get closes() {
       return closes;
     },
@@ -702,7 +702,7 @@ stages:
     });
     const agent = scriptedFakeAgent([SUCCESS]);
     let starts = 0;
-    const counting: AgentPort = {
+    const counting: StagePort = {
       openStage(input) {
         starts += 1;
         return agent.openStage(input);
@@ -755,7 +755,7 @@ stages:
 
     let skillFilePath: string | undefined;
     const agent = scriptedFakeAgent([SUCCESS]);
-    const recording: AgentPort = {
+    const recording: StagePort = {
       openStage(input) {
         skillFilePath = input.skillFilePath;
         return agent.openStage(input);
@@ -806,7 +806,7 @@ stages:
     });
     const agent = scriptedFakeAgent([SUCCESS]);
     let starts = 0;
-    const counting: AgentPort = {
+    const counting: StagePort = {
       openStage(input) {
         starts += 1;
         return agent.openStage(input);
@@ -886,10 +886,10 @@ describe("packed stageflow package", () => {
         );
         await execFileAsync("npm", ["install", tarball], { cwd: consumer });
         const script = `
-          import { configurePiProviderApiKey, createHostedRuntime, createPiAgentPort, HostedRuntimeError } from "stageflow";
+          import { configurePiProviderApiKey, createHostedRuntime, createPiStagePort, HostedRuntimeError } from "stageflow";
           if (typeof createHostedRuntime !== "function") process.exit(1);
           if (typeof HostedRuntimeError !== "function") process.exit(2);
-          if (typeof createPiAgentPort !== "function") process.exit(3);
+          if (typeof createPiStagePort !== "function") process.exit(3);
           if (typeof configurePiProviderApiKey !== "function") process.exit(4);
         `;
         await execFileAsync("node", ["--input-type=module", "-e", script], {

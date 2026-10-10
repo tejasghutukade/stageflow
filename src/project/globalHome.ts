@@ -15,9 +15,11 @@ export class StageflowHomeError extends Error {
 }
 
 let memoizedHome: string | undefined;
+let memoizedCredentialRoot: string | undefined;
 
 export function resetGlobalStageflowHomeForTests(): void {
   memoizedHome = undefined;
+  memoizedCredentialRoot = undefined;
 }
 
 function resolveStageflowHomeFromEnv(): string {
@@ -37,6 +39,24 @@ export function globalStageflowHome(): string {
     process.env.STAGEFLOW_HOME = memoizedHome;
   }
   return memoizedHome;
+}
+
+function resolveCredentialRootFromEnv(): string {
+  const raw = process.env.STAGEFLOW_CREDENTIAL_HOME?.trim();
+  if (raw) {
+    if (path.isAbsolute(raw)) {
+      return path.resolve(raw);
+    }
+    return path.resolve(process.cwd(), raw);
+  }
+  return path.join(os.homedir(), ".stageflow");
+}
+
+export function globalCredentialRoot(): string {
+  if (memoizedCredentialRoot === undefined) {
+    memoizedCredentialRoot = resolveCredentialRootFromEnv();
+  }
+  return memoizedCredentialRoot;
 }
 
 function stageflowHomeNotWritableMessage(resolvedPath: string): string {

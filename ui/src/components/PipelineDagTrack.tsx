@@ -4,6 +4,11 @@ import type { PipelineTrackNode } from "../api";
 import { StageNode } from "./StageNode";
 import { TrackWire, type TrackEnvelope } from "./PipelineTrack";
 
+export type DagTrackChip = {
+  kind: string;
+  label: string;
+};
+
 export type DagTrackNode = {
   id: string;
   label: string;
@@ -17,6 +22,8 @@ export type DagTrackNode = {
     | "skipped";
   selected?: boolean;
   meta?: string;
+  chips?: DagTrackChip[];
+  selectId?: string;
   envelope?: TrackEnvelope | null;
   isWaitingAttention?: boolean;
 };
@@ -30,6 +37,8 @@ export type PipelineDagTrackProps = {
   onSelect?: (stageId: string) => void;
   onEnvelopeClick?: (fromStageId: string) => void;
   activeEnvelopeId?: string | null;
+  mode?: "run" | "definition";
+  selectPending?: boolean;
 };
 
 function wireEnvelope(
@@ -57,6 +66,8 @@ export function PipelineDagTrack({
   onSelect,
   onEnvelopeClick,
   activeEnvelopeId,
+  mode = "run",
+  selectPending = false,
 }: PipelineDagTrackProps) {
   const nodeById = new Map(layers.flat().map((n) => [n.id, n]));
 
@@ -82,7 +93,7 @@ export function PipelineDagTrack({
                     return (
                       <TrackWire
                         key={`${edge.from}-${edge.to}`}
-                        mode="run"
+                        mode={mode}
                         flowed={flowed}
                         envelope={envelope}
                         fromStageId={edge.from}
@@ -107,11 +118,20 @@ export function PipelineDagTrack({
                       meta={node.meta}
                       selected={node.selected}
                       onClick={
-                        onSelect && node.stageStatus !== "pending"
-                          ? () => onSelect(node.id)
+                        onSelect && (selectPending || node.stageStatus !== "pending")
+                          ? () => onSelect(node.selectId ?? node.id)
                           : undefined
                       }
                     />
+                    {node.chips && node.chips.length > 0 ? (
+                      <span className="node-chips">
+                        {node.chips.map((chip) => (
+                          <span key={chip.kind} className="node-chip" data-kind={chip.kind}>
+                            {chip.label}
+                          </span>
+                        ))}
+                      </span>
+                    ) : null}
                   </div>
                 ))}
               </div>

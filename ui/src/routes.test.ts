@@ -1,13 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
+  catalogPath,
   extensionFilePath,
   extensionPackagePath,
+  inboxPath,
   newRunPath,
   parseHash,
+  pipelinePath,
   runStagePath,
+  workshopPath,
 } from "./routes";
 
 describe("parseHash", () => {
+  it("parses the catalog route with default stages tab", () => {
+    expect(parseHash("#/catalog")).toEqual({ name: "catalog", tab: "stages" });
+  });
+
+  it("parses catalog skills tab and skill query", () => {
+    expect(parseHash(`#${catalogPath({ tab: "skills", skill: "code-review" })}`)).toEqual({
+      name: "catalog",
+      tab: "skills",
+      skillName: "code-review",
+    });
+  });
+
   it("parses the skills list", () => {
     expect(parseHash("#/skills")).toEqual({ name: "skills" });
   });
@@ -44,6 +60,40 @@ describe("parseHash", () => {
     expect(parseHash("#/connect")).toEqual({ name: "connect" });
   });
 
+  it("parses the inbox route", () => {
+    expect(parseHash("#/inbox")).toEqual({ name: "inbox" });
+  });
+
+  it("parses inbox tab query", () => {
+    expect(parseHash("#/inbox?tab=failed")).toEqual({
+      name: "inbox",
+      tab: "failed",
+    });
+    expect(parseHash("#/inbox?tab=done_today")).toEqual({
+      name: "inbox",
+      tab: "done_today",
+    });
+    expect(parseHash(`#${inboxPath("failed")}`)).toEqual({
+      name: "inbox",
+      tab: "failed",
+    });
+    expect(parseHash("#/inbox?tab=needs")).toEqual({ name: "inbox" });
+  });
+
+  it("parses pipeline detail with optional project_root query", () => {
+    const root = "/Users/me/project-a";
+    const hash = `#${pipelinePath("hello", { project_root: root })}`;
+    expect(parseHash(hash)).toEqual({
+      name: "pipeline",
+      pipelineId: "hello",
+      projectRoot: root,
+    });
+    expect(parseHash("#/pipelines/hello")).toEqual({
+      name: "pipeline",
+      pipelineId: "hello",
+    });
+  });
+
   it("parses the workshop route", () => {
     expect(parseHash("#/workshop")).toEqual({ name: "workshop" });
   });
@@ -68,6 +118,20 @@ describe("parseHash", () => {
       pipelinePath: "pipelines/demo.pipeline.yaml",
       taskPath: "pipelines/demo.task.yaml",
     });
+    expect(
+      parseHash(
+        `#${workshopPath({
+          pipeline: "pipelines/demo.pipeline.yaml",
+          task: "pipelines/demo.task.yaml",
+          project_root: "examples",
+        })}`,
+      ),
+    ).toEqual({
+      name: "workshop",
+      pipelinePath: "pipelines/demo.pipeline.yaml",
+      taskPath: "pipelines/demo.task.yaml",
+      projectRoot: "examples",
+    });
   });
 
   it("falls aui sample hash through to today", () => {
@@ -91,6 +155,17 @@ describe("parseHash", () => {
       name: "new",
       pipelineId: "pipelines/demo.pipeline.yaml",
       taskPath: "pipelines/demo.task.yaml",
+    });
+    const rooted = newRunPath({
+      pipeline: "pipelines/demo.pipeline.yaml",
+      task: "pipelines/demo.task.yaml",
+      project_root: "/repo/examples",
+    });
+    expect(parseHash(`#${rooted}`)).toEqual({
+      name: "new",
+      pipelineId: "pipelines/demo.pipeline.yaml",
+      taskPath: "pipelines/demo.task.yaml",
+      projectRoot: "/repo/examples",
     });
   });
 });

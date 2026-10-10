@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
 import { fakeHitlResumePath } from "../agent/fakeAgent.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { RunStore } from "../runstore/port.js";
@@ -26,7 +26,7 @@ import { deriveExecutionPatchFromEvent } from "../runstore/stageExecution.js";
 export type ResumeTimedOutContext = {
   runId: string;
   stageId: string;
-  agent: AgentPort;
+  agent: StagePort;
   store: RunStore;
   hitl: StageHitlController;
   executionMode: StageExecutionMode;

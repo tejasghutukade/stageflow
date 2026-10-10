@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
 import { startUiServer } from "../src/server/http.js";
@@ -92,7 +92,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
   });
 
   async function withServer(
-    agentOrBehaviors: AgentPort | Parameters<typeof scriptedFakeAgent>[0],
+    agentOrBehaviors: StagePort | Parameters<typeof scriptedFakeAgent>[0],
     fn: (base: string, store: RunStore) => Promise<void>,
   ): Promise<void> {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-run-stage-"));
@@ -300,8 +300,8 @@ describe("run_stage — standalone stage execution (MCP)", () => {
     it("a blocking call respects the timeout budget instead of hanging indefinitely", async () => {
       // A FakeAgent behavior always resolves (or fails/parks) near-instantly,
       // so it can't exercise the "still running" timeout path. This stand-in
-      // AgentPort deliberately never resolves within the test's timeout_ms.
-      const hangingAgent: AgentPort = {
+      // StagePort deliberately never resolves within the test's timeout_ms.
+      const hangingAgent: StagePort = {
         openStage(input) {
           return {
             stageId: input.stage.id,
@@ -447,7 +447,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
   });
 
   describe("per-call model override", () => {
-    function modelRecordingAgent(models: string[]): AgentPort {
+    function modelRecordingAgent(models: string[]): StagePort {
       const inner = scriptedFakeAgent([emitOk()]);
       return {
         openStage(input) {
@@ -504,7 +504,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
         "artifacts",
         "findings.md",
       );
-      const producingAgent: AgentPort = {
+      const producingAgent: StagePort = {
         openStage(input) {
           return {
             stageId: input.stage.id,

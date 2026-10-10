@@ -45,7 +45,7 @@ Runs and Pipelines list rows stack identity above a full-width mini track so cat
 
 ## Workshop
 
-Workshop (`#/workshop`) is the interactive authoring surface. Chat turns go to **`POST /api/workshop/chat`**, which uses an **Operator Agent Host** session with the Workshop Author profile (baked playbook, draft tools, docs retrieval) — distinct from stage-execution **AgentPort**.
+Workshop (`#/workshop`) is the interactive authoring surface. Chat turns go to **`POST /api/workshop/chat`**, which uses an **AgentPort** with the Workshop Author profile (baked playbook, draft tools, docs retrieval). A stage run uses **StagePort** instead. AgentPort stays up and answers messages; Workshop is the first caller, and a later scout or researcher would use the same port.
 
 The Author clarifies intent, then creates and edits. Create and edit tools mutate the in-memory draft immediately, so the studio updates before Accept. Accept confirms. Reject soft-undos that mutation when the draft fingerprint is unchanged. Soft undo does not reverse a successful save. Disk writes happen only when you ask the agent to save (validate, then write).
 
