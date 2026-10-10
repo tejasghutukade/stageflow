@@ -106,6 +106,8 @@ export type ValidationFinding = {
   category: ValidationCategory;
   pipelineId?: string;
   stageId?: string;
+  line?: number;
+  column?: number;
 };
 
 export type ValidationScope = "full" | "pipeline" | "task" | "trigger";
@@ -312,6 +314,15 @@ function findingCatalog(
   );
 }
 
+function withIssueLocation(finding: ValidationFinding, issue: LoadIssue): ValidationFinding {
+  if (issue.line === undefined && issue.column === undefined) return finding;
+  return {
+    ...finding,
+    ...(issue.line !== undefined ? { line: issue.line } : {}),
+    ...(issue.column !== undefined ? { column: issue.column } : {}),
+  };
+}
+
 export function findingsFromLoadIssues(
   cwd: string,
   absPath: string,
@@ -321,59 +332,74 @@ export function findingsFromLoadIssues(
     if (issue.category === "pipeline") {
       if (issue.code === "pipeline.model_applies" || issue.code === "pipeline.route_all_gated") {
         return [
-          baseFinding(
-            {
-              cwd,
-              absPath,
-              message: issue.message,
-              code: issue.code,
-              category: "pipeline",
-              pipelineId: issue.pipelineId,
-              stageId: issue.stageId,
-            },
-            "warning",
+          withIssueLocation(
+            baseFinding(
+              {
+                cwd,
+                absPath,
+                message: issue.message,
+                code: issue.code,
+                category: "pipeline",
+                pipelineId: issue.pipelineId,
+                stageId: issue.stageId,
+              },
+              "warning",
+            ),
+            issue,
           ),
         ];
       }
       return [
-        findingPipelineError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
-          issue.pipelineId,
-          issue.stageId,
+        withIssueLocation(
+          findingPipelineError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+            issue.pipelineId,
+            issue.stageId,
+          ),
+          issue,
         ),
       ];
     }
     if (issue.category === "stage") {
       return [
-        findingStageError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
-          issue.stageId,
+        withIssueLocation(
+          findingStageError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+            issue.stageId,
+          ),
+          issue,
         ),
       ];
     }
     if (issue.category === "task") {
       return [
-        findingTaskError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
+        withIssueLocation(
+          findingTaskError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+          ),
+          issue,
         ),
       ];
     }
     if (issue.category === "trigger") {
       return [
-        findingTriggerError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
+        withIssueLocation(
+          findingTriggerError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+          ),
+          issue,
         ),
       ];
     }
@@ -385,7 +411,7 @@ export function findingsFromLoadIssues(
         code === "catalog.legacy_yaml"
           ? "warning"
           : "error";
-      return [findingCatalog(cwd, absPath, issue.message, code, severity)];
+      return [withIssueLocation(findingCatalog(cwd, absPath, issue.message, code, severity), issue)];
     }
     return [];
   });

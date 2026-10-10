@@ -368,6 +368,20 @@ describe("validateCatalog task scope", () => {
     expect(result.findings.some((f) => f.code === "task.load_error")).toBe(true);
   });
 
+  it("malformed YAML produces load_error finding with line", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-task-"));
+    const taskPath = path.join(root, "bad.task.yaml");
+    await writeFile(taskPath, "id: [\n  - unclosed\n");
+    const result = await validateCatalog({
+      scope: "task",
+      task: taskPath,
+      cwd: root,
+    });
+    const finding = result.findings.find((f) => f.code === "task.load_error");
+    expect(finding?.line).toBe(2);
+    expect(finding?.column).toBe(3);
+  });
+
   it("throws when task scope omits task path", async () => {
     await expect(validateCatalog({ scope: "task", cwd: fixtures })).rejects.toThrow(
       /task is required/i,

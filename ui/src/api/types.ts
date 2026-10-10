@@ -513,6 +513,8 @@ export type ValidationFinding = {
   category: string;
   pipelineId?: string;
   stageId?: string;
+  line?: number;
+  column?: number;
 };
 
 export type DraftValidationResult = {

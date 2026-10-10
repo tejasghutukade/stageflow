@@ -14,37 +14,42 @@ export type TriggerLoadCode =
   | "trigger.unknown_pipeline"
   | "trigger.unknown_task";
 
+type LoadIssueLocation = {
+  line?: number;
+  column?: number;
+};
+
 export type LoadIssue =
-  | {
+  | ({
       code: ValidationFindingCode;
       message: string;
       category: "pipeline";
       pipelineId?: string;
       stageId?: string;
-    }
-  | {
+    } & LoadIssueLocation)
+  | ({
       code: ValidationFindingCode;
       message: string;
       category: "stage";
       stageId?: string;
-    }
-  | {
+    } & LoadIssueLocation)
+  | ({
       code: TaskLoadCode;
       message: string;
       category: "task";
       taskId?: string;
-    }
-  | {
+    } & LoadIssueLocation)
+  | ({
       code: TriggerLoadCode;
       message: string;
       category: "trigger";
       triggerId?: string;
-    }
-  | {
+    } & LoadIssueLocation)
+  | ({
       code: ValidationFindingCode | string;
       message: string;
       category: "catalog";
-    };
+    } & LoadIssueLocation);
 
 export type LoadOutcome<T> =
   | { ok: true; value: T; issues?: LoadIssue[] }

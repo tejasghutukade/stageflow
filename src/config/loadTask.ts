@@ -3,6 +3,7 @@ import { parse as parseYaml } from "yaml";
 import type { TaskFile, TaskGitIdentity } from "../types/task.js";
 import { resolveWorkspaceBinding } from "../runtime/workspaceBinding.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
+import { yamlParsePosition } from "./yamlParsePosition.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -95,6 +96,7 @@ export function loadTaskFromYamlOutcome(
         code: "task.load_error",
         message,
         category: "task",
+        ...yamlParsePosition(err),
       },
     ]);
   }
