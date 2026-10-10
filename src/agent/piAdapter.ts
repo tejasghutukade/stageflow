@@ -48,7 +48,14 @@ import { StageMcpError } from "../config/resolveStageMcpServers.js";
 import {
   attachIsolatedMcp,
   STAGEFLOW_PI_MCP_EXTENSION_NAME,
+  UNREQUESTED_MCP_ADAPTER_TOOLS,
 } from "./piIsolatedMcp.js";
+import { warmIsolatedMcpMetadata } from "./piIsolatedMcpProbe.js";
+import {
+  createToolOutputBudgetExtension,
+  STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
+} from "./toolOutputBudgetExtension.js";
+import { TOOL_OUTPUT_ARTIFACT_DIR } from "./toolOutputSpill.js";
 import {
   createPiAgentSession,
   createSealedResourceLoader,
@@ -100,10 +107,6 @@ import {
   composeTimeoutResumePrompt,
   stageTimeoutReason,
 } from "./stageTimeout.js";
-import {
-  createMcpSpillArtifactExtension,
-  STAGEFLOW_MCP_SPILL_EXTENSION_NAME,
-} from "./mcpSpillArtifacts.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
   durableRootFileToolDenial,
@@ -625,6 +628,11 @@ function buildUserPrompt(
   ].filter((dir): dir is string => dir !== undefined);
   const skillBaseDir = skillBaseDirs.length > 0 ? skillBaseDirs.join(", ") : undefined;
   const browserGuidance = formatBrowserGuidance(input);
+  const toolOutputGuidance =
+    Object.keys(input.resolvedMcpServers ?? {}).length > 0 ||
+    (input.stage.email?.length ?? 0) > 0
+      ? `Large tool results are saved automatically as stage artifacts under ${attemptArtifactsPath}${TOOL_OUTPUT_ARTIFACT_DIR}/. The tool result names the path. Read or grep that file; do not copy tool output into ${artifactToolName ?? "an artifact"}.`
+      : "";
   const artifactGuidance =
     input.roots.mode === "bound" && artifactToolName !== undefined
       ? [
@@ -668,6 +676,7 @@ function buildUserPrompt(
       : "",
     "",
     artifactGuidance,
+    toolOutputGuidance,
     browserGuidance,
     emitHint,
   ]
@@ -734,14 +743,28 @@ export function composeFeedbackResumePrompt(input: StageRunInput): string {
   ].join("\n\n");
 }
 
-function collectMcpExtensionToolNames(loader: DefaultResourceLoader): string[] {
+function mcpExtensionTools(loader: DefaultResourceLoader): string[] {
   const inlinePath = `<inline:${STAGEFLOW_PI_MCP_EXTENSION_NAME}>`;
+  return loader
+    .getExtensions()
+    .extensions.filter((ext) => ext.path === inlinePath)
+    .flatMap((ext) => [...ext.tools.keys()]);
+}
+
+function mcpToolMetadataMissing(loader: DefaultResourceLoader): boolean {
+  return mcpExtensionTools(loader).includes("mcp");
+}
+
+function collectMcpExtensionToolNames(
+  loader: DefaultResourceLoader,
+): { ok: true; names: string[] } | { ok: false; unrequested: string[] } {
   const names: string[] = [];
-  for (const ext of loader.getExtensions().extensions) {
-    if (ext.path !== inlinePath) continue;
-    names.push(...ext.tools.keys());
+  const unrequested: string[] = [];
+  for (const name of mcpExtensionTools(loader)) {
+    if (UNREQUESTED_MCP_ADAPTER_TOOLS.has(name)) unrequested.push(name);
+    else names.push(name);
   }
-  return names;
+  return unrequested.length > 0 ? { ok: false, unrequested } : { ok: true, names };
 }
 
 async function shutdownSession(session: AgentSession | undefined): Promise<void> {
@@ -1167,7 +1190,9 @@ async function prepareStageSessionWiring(
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
     });
-    attached = await attachIsolatedMcp(input.resolvedMcpServers);
+    attached = await attachIsolatedMcp(input.resolvedMcpServers, {
+      lifecycle: "eager",
+    });
     const failAfterAttach = (reason: string): StageRunResult => {
       attached?.cancel?.();
       restoreProvider?.();
@@ -1184,19 +1209,21 @@ async function prepareStageSessionWiring(
             : {}),
         }),
       },
-      // Only MCP tool results spill to a temp file, so the relocator rides along with MCP.
-      ...((attached.extensionFactories?.length ?? 0) > 0
-        ? [
-            {
-              name: STAGEFLOW_MCP_SPILL_EXTENSION_NAME,
-              factory: createMcpSpillArtifactExtension({
-                runWorkspaceDir: roots.runWorkspaceDir,
-                stageId: runtimeStageId(input),
-                attempt: roots.attempt ?? 1,
-              }),
-            },
-          ]
-        : []),
+      {
+        name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
+        factory: createToolOutputBudgetExtension({
+          runWorkspaceDir: roots.runWorkspaceDir,
+          stageId: runtimeStageId(input),
+          attempt: roots.attempt ?? 1,
+          exempt: new Set([
+            "read",
+            "bash",
+            emitDef.name,
+            artifactDef.name,
+            askDef?.name ?? "ask_operator",
+          ]),
+        }),
+      },
       ...(attached.extensionFactories ?? []),
     ];
     const loader = createSealedResourceLoader({
@@ -1210,6 +1237,26 @@ async function prepareStageSessionWiring(
       ...(attached.eventBus !== undefined ? { eventBus: attached.eventBus } : {}),
     });
     await loader.reload();
+    if (
+      attached.extensionFactories !== undefined &&
+      input.resolvedMcpServers !== undefined &&
+      mcpToolMetadataMissing(loader)
+    ) {
+      // A cold adapter metadata cache registers only the `mcp` gateway at load,
+      // and the session allowlist is fixed at load. Warm the cache, then reload
+      // so the declared servers' direct tools exist when the allowlist is built.
+      try {
+        await warmIsolatedMcpMetadata(input.resolvedMcpServers, { cwd: roots.cwd });
+      } catch (err) {
+        return failAfterAttach(err instanceof Error ? err.message : String(err));
+      }
+      await loader.reload();
+      if (mcpToolMetadataMissing(loader)) {
+        return failAfterAttach(
+          `MCP tool metadata unavailable for: ${Object.keys(input.resolvedMcpServers).join(", ")}`,
+        );
+      }
+    }
 
     const extensionErrors = loader.getExtensions().errors;
     if (extensionErrors.length > 0) {
@@ -1247,7 +1294,13 @@ async function prepareStageSessionWiring(
       gateKinds,
     );
     if (attached.extensionFactories !== undefined) {
-      tools.push(...collectMcpExtensionToolNames(loader));
+      const mcpTools = collectMcpExtensionToolNames(loader);
+      if (!mcpTools.ok) {
+        return failAfterAttach(
+          `MCP adapter registered unrequested tool(s): ${mcpTools.unrequested.join(", ")}`,
+        );
+      }
+      tools.push(...mcpTools.names);
     }
     if (input.email) {
       const permitted = new Set(input.stage.email?.flatMap(permission => permission.operations));

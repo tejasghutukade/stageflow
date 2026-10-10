@@ -3,6 +3,7 @@ import {
   StageMcpError,
   resolveStageMcpServers,
   type ResolvedMcpServerConfig,
+  type ResolvedMcpServers,
 } from "../config/resolveStageMcpServers.js";
 import * as piIsolatedMcp from "./piIsolatedMcp.js";
 import type { IsolatedMcpAttach } from "./piIsolatedMcp.js";
@@ -380,5 +381,28 @@ export async function probeProjectMcpServer(
     };
   } finally {
     await dispose();
+  }
+}
+
+/**
+ * Connects the snapshot's servers headlessly so the adapter writes its tool
+ * metadata cache into the current Pi agent dir. A sealed loader reloaded after
+ * this registers the servers' direct tools at load time, which is when the
+ * stage tool allowlist is computed.
+ */
+export async function warmIsolatedMcpMetadata(
+  snapshot: ResolvedMcpServers,
+  options: { cwd: string; timeoutMs?: number },
+): Promise<void> {
+  const attached = await piIsolatedMcp.attachIsolatedMcp(snapshot, {
+    lifecycle: "eager",
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+  });
+  const shutdown = instantiateProbeFactories(attached, options.cwd);
+  try {
+    await attached.connecting;
+  } finally {
+    attached.cancel?.();
+    await shutdown();
   }
 }

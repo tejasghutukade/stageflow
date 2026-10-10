@@ -8,6 +8,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
+import * as piIsolatedMcpProbe from "../src/agent/piIsolatedMcpProbe.js";
 import {
   createSealedResourceLoader,
   createStageSessionManager,
@@ -18,7 +19,7 @@ import {
   StageSessionReconstructError,
 } from "../src/agent/piAdapter.js";
 import { registerProviderSupport } from "../src/agent/providerSupport.js";
-import { STAGEFLOW_MCP_SPILL_EXTENSION_NAME } from "../src/agent/mcpSpillArtifacts.js";
+import { STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME } from "../src/agent/toolOutputBudgetExtension.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { StageMcpError } from "../src/config/resolveStageMcpServers.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
@@ -293,6 +294,10 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
         name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
         factory: expect.any(Function),
       }),
+      expect.objectContaining({
+        name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
+        factory: expect.any(Function),
+      }),
     ]);
     expect(lastLoaderOptions()).not.toHaveProperty("eventBus");
     expect(lastSessionTools()).toEqual(expectedSealedTools);
@@ -314,6 +319,10 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     expect(lastLoaderOptions().extensionFactories).toEqual([
       expect.objectContaining({
         name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
+        factory: expect.any(Function),
+      }),
+      expect.objectContaining({
+        name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
         factory: expect.any(Function),
       }),
     ]);
@@ -354,6 +363,111 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
       expect.objectContaining({ on: expect.any(Function), emit: expect.any(Function) }),
     );
     expect(lastLoaderExtensionPaths()).toContain(mcpInlinePath);
+  });
+
+  function adapterRegistering(sequence: string[][]) {
+    let call = 0;
+    return () => (pi: ExtensionAPI) => {
+      const names = sequence[Math.min(call, sequence.length - 1)] ?? [];
+      call += 1;
+      for (const name of names) {
+        pi.registerTool({
+          name,
+          label: name,
+          description: name,
+          parameters: Type.Object({}),
+          async execute() {
+            return { content: [{ type: "text", text: "ok" }], details: {} };
+          },
+        });
+      }
+    };
+  }
+
+  it("attaches stage MCP with the eager lifecycle", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-eager-"));
+    await new PiAgentAdapter().runStage(
+      wiringInput(runWs, {
+        resolvedMcpServers: { github: { url: "https://mcp.example.invalid/mcp" } },
+      }),
+    );
+    expect(attachSpy).toHaveBeenCalledWith(expect.any(Object), { lifecycle: "eager" });
+  });
+
+  it("fails the stage when the adapter registers mcpScript", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-script-"));
+    createMcpAdapter.mockImplementationOnce(
+      adapterRegistering([[MCP_TOOL_NAME, "mcpScript"]]),
+    );
+
+    const result = await new PiAgentAdapter().runStage(
+      wiringInput(runWs, {
+        resolvedMcpServers: { github: { url: "https://mcp.example.invalid/mcp" } },
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "MCP adapter registered unrequested tool(s): mcpScript",
+    });
+    expect(piSdkMocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("warms MCP metadata and reloads when only the gateway is registered", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-warm-"));
+    const snapshot = { github: { url: "https://mcp.example.invalid/mcp" } };
+    createMcpAdapter.mockImplementationOnce(
+      adapterRegistering([["mcp"], [MCP_TOOL_NAME]]),
+    );
+    const warmSpy = vi
+      .spyOn(piIsolatedMcpProbe, "warmIsolatedMcpMetadata")
+      .mockResolvedValue(undefined);
+
+    await new PiAgentAdapter().runStage(
+      wiringInput(runWs, { resolvedMcpServers: snapshot }),
+    );
+
+    expect(warmSpy).toHaveBeenCalledTimes(1);
+    expect(warmSpy).toHaveBeenCalledWith(snapshot, { cwd: expect.any(String) });
+    expect(lastSessionTools()).toEqual([...expectedSealedTools, MCP_TOOL_NAME]);
+  });
+
+  it("fails the stage when MCP metadata is still missing after warming", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-cold-"));
+    createMcpAdapter.mockImplementationOnce(adapterRegistering([["mcp"]]));
+    vi.spyOn(piIsolatedMcpProbe, "warmIsolatedMcpMetadata").mockResolvedValue(
+      undefined,
+    );
+
+    const result = await new PiAgentAdapter().runStage(
+      wiringInput(runWs, {
+        resolvedMcpServers: { github: { url: "https://mcp.example.invalid/mcp" } },
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "MCP tool metadata unavailable for: github",
+    });
+  });
+
+  it("fails the stage when warming MCP metadata cannot connect", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-warmfail-"));
+    createMcpAdapter.mockImplementationOnce(adapterRegistering([["mcp"]]));
+    vi.spyOn(piIsolatedMcpProbe, "warmIsolatedMcpMetadata").mockRejectedValue(
+      new StageMcpError('MCP server "github" failed to connect (status: failed)', "connect_failed"),
+    );
+
+    const result = await new PiAgentAdapter().runStage(
+      wiringInput(runWs, {
+        resolvedMcpServers: { github: { url: "https://mcp.example.invalid/mcp" } },
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'MCP server "github" failed to connect (status: failed)',
+    });
   });
 
   it("connect-fail returns ok false after bindExtensions", async () => {
@@ -397,7 +511,7 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     expect(tools).toEqual([...expectedSealedTools, MCP_TOOL_NAME]);
     expect(lastLoaderOptions().extensionFactories).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: STAGEFLOW_MCP_SPILL_EXTENSION_NAME }),
+        expect.objectContaining({ name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME }),
       ]),
     );
   });

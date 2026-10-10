@@ -10,6 +10,7 @@ import {
   type ResolvedMcpServers,
 } from "../config/resolveStageMcpServers.js";
 import { globalStageflowHome } from "../project/globalHome.js";
+import { TOOL_OUTPUT_HARD_CEILING_BYTES } from "./toolOutputBudget.js";
 
 export const STAGEFLOW_PI_MCP_EXTENSION_NAME = "stageflow-mcp";
 
@@ -30,6 +31,13 @@ type IsolatedMcpSettings = {
   directTools: true;
   elicitation: false;
   hostConfigDiscovery: "off";
+  scriptMode: false;
+  disableProxyTool: true;
+  outputGuard: {
+    maxBytes: number;
+    maxLines: number;
+    detailsMaxBytes: number;
+  };
 };
 
 type IsolatedMcpServerEntry = Record<string, unknown> & {
@@ -85,11 +93,26 @@ export type IsolatedMcpAttach = {
   cancel?: () => void;
 };
 
+// Stages get only the declared servers' direct tools: no mcpScript sandbox and
+// no `mcp` gateway. The adapter's output guard is a backstop; the stage budget
+// lives in toolOutputBudgetExtension.
 const ISOLATED_MCP_SETTINGS: IsolatedMcpSettings = {
   directTools: true,
   elicitation: false,
   hostConfigDiscovery: "off",
+  scriptMode: false,
+  disableProxyTool: true,
+  outputGuard: {
+    maxBytes: TOOL_OUTPUT_HARD_CEILING_BYTES,
+    maxLines: Number.MAX_SAFE_INTEGER,
+    detailsMaxBytes: 16 * 1024,
+  },
 };
+
+export const UNREQUESTED_MCP_ADAPTER_TOOLS: ReadonlySet<string> = new Set([
+  "mcpScript",
+  "mcp",
+]);
 
 const SUCCESS_STATUSES = new Set<IsolatedMcpServerRuntimeStatus>([
   "connected",
@@ -128,7 +151,10 @@ function toIsolatedMcpConfig(
   }
   return {
     mcpServers,
-    settings: { ...ISOLATED_MCP_SETTINGS },
+    settings: {
+      ...ISOLATED_MCP_SETTINGS,
+      outputGuard: { ...ISOLATED_MCP_SETTINGS.outputGuard },
+    },
   };
 }
 
