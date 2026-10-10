@@ -8,6 +8,7 @@ import type {
 import {
   editorTabSpecs,
   editorValidationPills,
+  filterEditorPipelineRuns,
   findingDedupeKey,
   focusEditorFinding,
   isDraftDirty,
@@ -160,6 +161,50 @@ describe("stageUsedByCount", () => {
         projectRoot: "/other",
       }),
     ).toBe(1);
+  });
+});
+
+describe("filterEditorPipelineRuns", () => {
+  const runs = [
+    { run_id: "a", pipeline_id: "feature-loop", project_root: "/repo" },
+    { run_id: "b", pipeline_id: "feature-loop", project_root: "/other" },
+    { run_id: "c", pipeline_id: "other", project_root: "/repo" },
+    { run_id: "d", pipeline_id: "feature-loop", project_root: "/repo/" },
+    { run_id: "e", pipeline_id: "feature-loop", project_root: "\\repo" },
+    { run_id: "f", pipeline_id: "solo" },
+  ];
+
+  it("keeps runs for this pipeline id and project root", () => {
+    expect(
+      filterEditorPipelineRuns(runs, {
+        id: "feature-loop",
+        project_root: "/repo",
+      }).map((run) => run.run_id),
+    ).toEqual(["a", "d", "e"]);
+  });
+
+  it("drops the same pipeline id in another project root", () => {
+    expect(
+      filterEditorPipelineRuns(runs, {
+        id: "feature-loop",
+        project_root: "/missing",
+      }),
+    ).toEqual([]);
+  });
+
+  it("matches when neither side has a project root", () => {
+    expect(
+      filterEditorPipelineRuns(runs, { id: "solo" }).map((run) => run.run_id),
+    ).toEqual(["f"]);
+  });
+
+  it("does not match a rooted pipeline to a run with no root", () => {
+    expect(
+      filterEditorPipelineRuns(
+        [{ run_id: "z", pipeline_id: "solo" }],
+        { id: "solo", project_root: "/repo" },
+      ),
+    ).toEqual([]);
   });
 });
 

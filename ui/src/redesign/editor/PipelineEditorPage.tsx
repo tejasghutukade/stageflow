@@ -18,6 +18,7 @@ import {
   type TaskListing,
   type ValidationFinding,
 } from "../../api";
+import { useRunCatalog } from "../../catalog/useRunCatalog";
 import { newRunPath, workshopPath } from "../../routes";
 import { showToast } from "../../toast";
 import { ProblemsPanel } from "../ProblemsPanel";
@@ -32,6 +33,7 @@ import type { StageFocusRequest } from "../workshop/inspector/WorkshopStageInspe
 import {
   editorTabSpecs,
   editorValidationPills,
+  filterEditorPipelineRuns,
   findingDedupeKey,
   focusEditorFinding,
   isDraftDirty,
@@ -40,6 +42,7 @@ import {
   type EditorTabId,
 } from "./pipelineEditorModel";
 import { PipelineEditorGraph } from "./PipelineEditorGraph";
+import { PipelineEditorRuns } from "./PipelineEditorRuns";
 import { PipelineEditorInspector } from "./PipelineEditorInspector";
 import { yamlPathForSelectedStage } from "./draftYaml";
 import { YamlPanel } from "./YamlPanel";
@@ -106,6 +109,19 @@ export function PipelineEditorPage({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dirty = isDraftDirty(draft, baseline);
+  const {
+    snapshot: runSnapshot,
+    error: runsError,
+    loading: runsLoading,
+  } = useRunCatalog();
+  const pipelineRuns = useMemo(
+    () =>
+      filterEditorPipelineRuns(runSnapshot.runs, {
+        id: pipeline.id,
+        project_root: pipeline.project_root,
+      }),
+    [pipeline.id, pipeline.project_root, runSnapshot.runs],
+  );
 
   const reloadDraft = useCallback(async () => {
     setLoading(true);
@@ -457,7 +473,9 @@ export function PipelineEditorPage({
       <div className="relative">
         <FilterTabs
           variant="underline"
-          tabs={editorTabSpecs(0)}
+          tabs={editorTabSpecs(
+            runsLoading ? undefined : pipelineRuns.length,
+          )}
           activeId={editorTab}
           onChange={(id) => {
             if (isEditorTabId(id)) setEditorTab(id);
@@ -490,18 +508,11 @@ export function PipelineEditorPage({
         </button>
       </div>
       {editorTab === "runs" ? (
-        <div
-          role="tabpanel"
-          aria-label="Runs"
-          className="flex min-h-0 flex-1 flex-col"
-        >
-          <div className="flex h-9 items-center gap-6 border-b border-b-[#ffffff12] px-5 text-[11px] uppercase tracking-[0.04em] text-[var(--sf-text-3)]">
-            <span className="w-40">Run</span>
-            <span className="w-28">Status</span>
-            <span>Task</span>
-          </div>
-          <p className="px-5 py-6 text-[13px] text-[var(--sf-text-3)]">No runs</p>
-        </div>
+        <PipelineEditorRuns
+          runs={pipelineRuns}
+          loading={runsLoading}
+          error={runsError}
+        />
       ) : null}
       {editorTab === "history" ? (
         <div

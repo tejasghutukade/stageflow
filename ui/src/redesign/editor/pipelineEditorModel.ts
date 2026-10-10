@@ -79,6 +79,19 @@ function sameCatalogRoot(left?: string, right?: string): boolean {
   return a === b;
 }
 
+export function filterEditorPipelineRuns<
+  T extends { pipeline_id: string; project_root?: string },
+>(
+  runs: readonly T[],
+  pipeline: { id: string; project_root?: string },
+): T[] {
+  return runs.filter(
+    (run) =>
+      run.pipeline_id === pipeline.id &&
+      sameCatalogRoot(run.project_root, pipeline.project_root),
+  );
+}
+
 function sameStagePath(left: string, right: string): boolean {
   const a = normalizeCatalogPath(left);
   const b = normalizeCatalogPath(right);
@@ -107,10 +120,12 @@ export function stageUsedByCount(
   return ids.size;
 }
 
-export function editorTabSpecs(runsCount: number): EditorTabSpec[] {
+export function editorTabSpecs(runsCount?: number): EditorTabSpec[] {
+  const runs: EditorTabSpec = { id: "runs", label: "Runs" };
+  if (runsCount != null) runs.count = runsCount;
   return [
     { id: "editor", label: "Editor" },
-    { id: "runs", label: "Runs", count: runsCount },
+    runs,
     { id: "history", label: "History" },
   ];
 }
