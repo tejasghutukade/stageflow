@@ -71,6 +71,18 @@ On `status: "failure"`, the envelope is accepted. Catalog wiring is `route` on t
 
 Every stage body declares `io.output.schema`. On success, `payload` is validated against that JSON Schema subset — see [io schemas](#io-schemas).
 
+### When the agent stops without emitting {#emit-reminders}
+
+An invalid emit returns an error to the agent and the session continues, so the agent can fix the envelope and call the tool again. If the agent ends its turn with no accepted envelope (it replied with text, or gave up after a rejected emit), Stageflow sends up to two short reminder turns asking it to finish and emit, quoting the last rejection when there was one. Both agent backends do this: Pi continues the same session; the Claude backend resumes the same Claude session (`resume: <session_id>`) for each reminder. The stage fails as `missing emit_stage_envelope` only after those reminders go unanswered.
+
+No reminder is sent when:
+
+- the turn ended on a provider error. Both backends already retry transient errors (rate limits, overloads, server errors); what is left is usually setup (an invalid or missing key, an unavailable model). The stage fails with `provider error: <message>` instead of `missing emit_stage_envelope`. On the Claude backend this is a `result` message with `is_error` (the API error text and HTTP status) or an error subtype with its `errors`.
+- the turn was aborted (stage timeout or cancel), or the stage is closing or parked on `ask_operator`.
+- the agent emitted `status: "failure"`. That is the agent's decision and ends the stage.
+
+On Pi, reminders run inside the stage attempt's `timeout_ms` budget; on the Claude backend each reminder is its own `query()` turn with the same per-turn budget as an operator-answer resume. Reminders are recorded in the transcript as user messages.
+
 ### Fork stages
 
 Catalog YAML `route` does **not** use `fork_choice`. Listed `to:` targets stay on the DAG; optional `if` can skip an edge. There is no agent exclusive pick. Do not emit `fork_choice` to select YAML successors. `fork_choice` is only validated when the resolved DAG node has a `fork` field (constructed DAGs, not catalog YAML).

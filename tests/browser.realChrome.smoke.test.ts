@@ -89,6 +89,7 @@ describe.skipIf(!enabled)("real Chrome smoke (STAGEFLOW_BROWSER_SMOKE=1)", () =>
     const env = await resolveStageBrowserEnv(support, {
       runId: run.runId,
       stageId,
+      scope: LOCAL_BROWSER_SCOPE,
       runDir,
       browser: { profile: "smoke", headed: false },
     });

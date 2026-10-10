@@ -22,7 +22,7 @@ import {
   createSealedResourceLoader,
   resolveWorkshopToolNames,
 } from "../agent/piSessionFactory.js";
-import { cursorBridgePrompt } from "../agent/cursorProvider.js";
+import { bindCursorApiKey, cursorBridgePrompt } from "../agent/cursorProvider.js";
 import { findProviderSupport } from "../agent/providerSupport.js";
 import "../agent/cursorProvider.js";
 import { logger as rootLogger } from "../logging/logger.js";
@@ -365,16 +365,22 @@ function extractAssistantText(message: {
 async function openDefaultPiSession(
   input: PiOperatorOpenSessionInput,
 ): Promise<PiOperatorSessionHandle> {
-  if (!isUsableAuthFile(input.authPath)) {
+  const provider = findProviderSupport(input.modelId);
+  if (!provider && !isUsableAuthFile(input.authPath)) {
     throw authNotConfiguredError(input.authPath);
   }
-
-  const provider = findProviderSupport(input.modelId);
   const additionalExtensionPaths: string[] = [];
   let restoreProvider: (() => void) | undefined;
+  let restoreCursorKey: (() => void) | undefined;
+  const bindCursor = (modelId: string) => {
+    const restore = bindCursorApiKey(modelId);
+    if (restore) restoreCursorKey = restore;
+  };
+  bindCursor(input.modelId);
   if (provider) {
     const prepared = provider.prepare(input.modelId);
     if (prepared.error) {
+      restoreCursorKey?.();
       throw new Error(prepared.error);
     }
     additionalExtensionPaths.push(...prepared.extensionPaths);
@@ -451,6 +457,7 @@ async function openDefaultPiSession(
     let currentModelId = input.modelId;
     const applyModel = async (modelId: string): Promise<void> => {
       if (modelId === currentModelId) return;
+      bindCursor(modelId);
       const provider = findProviderSupport(modelId);
       if (provider) {
         const prepared = provider.prepare(modelId);
@@ -485,6 +492,7 @@ async function openDefaultPiSession(
         } catch {
           // best-effort
         }
+        restoreCursorKey?.();
         restoreProvider?.();
       },
     };
@@ -494,6 +502,7 @@ async function openDefaultPiSession(
     } catch {
       // best-effort
     }
+    restoreCursorKey?.();
     restoreProvider?.();
     throw err;
   }

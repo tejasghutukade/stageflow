@@ -247,6 +247,7 @@ export type MultiQuestionItem = {
   id: string;
 };
 
+/** `live_view.url` is an http(s) URL or a root-relative path such as `/api/runs/<id>/stages/<id>/live-view`. */
 export type GateHandoff =
   | { kind: "local_window" }
   | { kind: "live_view"; url: string };

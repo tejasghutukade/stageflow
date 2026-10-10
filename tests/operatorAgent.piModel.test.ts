@@ -26,6 +26,7 @@ import {
   WORKSHOP_AUTHOR_PROFILE_ID,
 } from "../src/operatorAgent/index.js";
 import { resolveWorkshopToolNames } from "../src/agent/piSessionFactory.js";
+import { registerProviderSupport } from "../src/agent/providerSupport.js";
 import { WORKSHOP_AUTHOR_TOOL_NAMES } from "../src/operatorAgent/profiles/workshopAuthor.js";
 
 const tempHandles: PiOperatorSessionHandle[] = [];
@@ -486,6 +487,33 @@ describe("createPiOperatorAgentModel", () => {
       expect(error.message).toMatch(/sf providers/i);
     }
 
+    session.close();
+  });
+
+  it("a provider-backed model (its own login, e.g. Cursor) does not need the Pi auth file", async () => {
+    registerProviderSupport({
+      id: "workshop-own-login",
+      matches: (ref) => ref === "own-login/model",
+      prepare: () => ({ extensionPaths: [], error: "provider prepared without auth.json" }),
+    });
+    const host = createLiveWorkshopOperatorHost({
+      cwd: process.cwd(),
+      authPath: "/tmp/stageflow-missing-workshop-auth.json",
+      resolveModelId: () => "own-login/model",
+    });
+    const session = host.openSession({
+      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+    });
+
+    const events = await session.send("hello");
+    const error = events.find((e) => e.type === "error");
+    // The auth-file gate is skipped; the provider's own prepare step runs instead.
+    expect(error?.type).toBe("error");
+    if (error?.type === "error") {
+      expect(error.message).not.toMatch(/provider auth is not configured/i);
+      expect(error.message).toMatch(/provider prepared without auth\.json/);
+    }
     session.close();
   });
 

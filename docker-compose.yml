@@ -11,6 +11,10 @@
 # command is `sf ui` intentionally (console + MCP on the same Host).
 # Image CMD remains `sf mcp`; override only for a UI-less Host.
 
+# Optional browser stages: build the recipe in docker/Dockerfile.browser on top
+# of this image and bind-mount docker/browser.config.example.yaml at
+# /data/config.yaml. See docs/docker.md#browser-stages.
+
 services:
   stageflow:
     build:

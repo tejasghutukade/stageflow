@@ -7,6 +7,16 @@ export const BROWSER_TOOL_NAME = "agent-browser";
 const ALLOWED_KEYS = new Set(["profile", "headed", "allow_domains", "login_url", "check"]);
 const CHECK_KEYS = new Set(["url", "logged_in_url", "logged_out_url"]);
 const REJECTED_KEYS = new Set(["path", "scope", "secret"]);
+const HOST_ONLY_KEYS = new Set([
+  "launch_args",
+  "args",
+  "executable_path",
+  "executable",
+  "display",
+  "headless",
+  "xvfb",
+  "env",
+]);
 const PROFILE_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const DOMAIN =
   /^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
@@ -101,6 +111,13 @@ export function parseStageBrowser(
         label,
         stageId,
         `"${key}" is not allowed (the Host chooses profile location and scope)`,
+      );
+    }
+    if (HOST_ONLY_KEYS.has(key)) {
+      return fail(
+        label,
+        stageId,
+        `"${key}" is not allowed (browser launch options are Host config: browser.launch_args and browser.executable_path in $STAGEFLOW_HOME/config.yaml)`,
       );
     }
     if (!ALLOWED_KEYS.has(key)) {

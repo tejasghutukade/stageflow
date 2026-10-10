@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-07
+
+### Added
+
+- **Live view for human login gates.** When a Host has no window an operator can see, the console shows the stage's browser inside the login gate and forwards mouse, keyboard, paste and touch input to it, so a person can log in (password, two-factor code, popup sign-ins) from the console. It uses agent-browser's built-in stream relayed by the Host; no new dependency. See `docs/browser.md` (Live view) and `docs/browser-internals.md`.
+  - The gate handoff is now capability-driven: `local_window` on a desktop, `live_view` (a stable path, never a credential) on a Host with a virtual display or headless-only with the relay. A Host with no screen and no live view still fails the login stage early.
+  - Console API under `/api/runs/:run/stages/:stage/live-view`: single-use, short-lived tickets (`view` or `control`) redeemed into a path-scoped cookie, an event stream, ordered input, and a dialog answer route. Control works only while the stage waits at a live view gate and is revoked when the gate is answered, abandoned or cancelled. Input and frames are never logged or stored.
+  - Popups and new tabs are followed automatically; `confirm` and `prompt` dialogs can be answered in the viewer; `alert` and `beforeunload` are handled by agent-browser. Unanswered dialogs are dismissed after `browser.dialog_timeout_seconds` (default 60).
+  - "Reopen browser tab" fallback in the viewer's "Page seems stuck?" section (`POST .../live-view/reopen-tab`, relay `reopenTab()`): replaces a tab that stopped accepting input with a fresh one at the same URL in the same browser, moves the stage session and stream to it, then closes the old tab.
+  - Virtual display support: a Linux Host without a display but with `Xvfb` runs the browser headed. Host config keys `browser.launch_args` and `browser.executable_path` (never in YAML) for launch options and distribution Chromium on ARM.
+  - `docker/Dockerfile.browser` recipe that extends the runtime image with Chromium, Xvfb and agent-browser (`docs/docker.md`).
+  - Provider-neutral ports with in-tree fakes (browser host capabilities, sandbox orchestrator, live view relay, live view source) as seams for container and provider browser hosts.
+  - Opt-in smokes: `STAGEFLOW_BROWSER_SMOKE=1` (real Chrome, console API, popups, dialogs) and `STAGEFLOW_DOCKER_SMOKE=1` (browser recipe image).
+
+### Changed
+
+- Browser permission prompts (camera, microphone, location, notifications, clipboard) are denied by default for every browser session the Host launches (`--deny-permission-prompts`).
+- Browser teardown first closes any live view for the stage or run (bounded wait), then runs the existing tab, session and anchor order.
+
 ## [0.33.0] - 2026-10-07
 
 ### Added

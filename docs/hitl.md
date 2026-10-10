@@ -79,7 +79,7 @@ For a stage with a `browser`, the Host adds optional fields to every pending pro
 
 | Field | Meaning |
 |-------|---------|
-| `handoff` | `{ kind: "local_window" }` (the operator uses the browser window on the Host's screen) or `{ kind: "live_view", url }` (reserved for a later remote view; accepted by the schema today) |
+| `handoff` | `{ kind: "local_window" }` (the operator uses the browser window on the Host's screen) or `{ kind: "live_view", url }` (the console shows the browser in the gate; `url` is a stable path under `/api/runs/<run>/stages/<stage>/live-view`, never a token). See [Browser sessions: live view](browser.md#live-view). |
 | `site` | Host of `browser.check.url`, else the first `allow_domains` entry, else the host of `browser.login_url` |
 | `profile` | Browser profile name (never a path) |
 

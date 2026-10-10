@@ -177,6 +177,24 @@ export const cursorProviderSupport: StageProviderSupport = {
 
 const CURSOR_API_KEY_FILE_NAME = "cursor-api-key";
 
+export function cursorCredentialMissingReason(): string {
+  return "Cursor API key is missing from the credential root. Configure credentials via `sf providers` / the operator console Providers page, then retry.";
+}
+
+/** Publish the credential-root Cursor key onto the process for a cursor/* model. */
+export function bindCursorApiKey(modelId: string): (() => void) | undefined {
+  if (!isCursorModelRef(modelId)) return undefined;
+  const key = readCursorApiKey();
+  if (!key) {
+    throw new Error(cursorCredentialMissingReason());
+  }
+  if (process.env.CURSOR_API_KEY?.trim()) return undefined;
+  process.env.CURSOR_API_KEY = key;
+  return () => {
+    delete process.env.CURSOR_API_KEY;
+  };
+}
+
 export function readCursorApiKey(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {

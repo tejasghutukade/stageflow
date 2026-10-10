@@ -3,7 +3,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  bindCursorApiKey,
   cursorBridgePrompt,
+  cursorCredentialMissingReason,
   cursorExtensionEntryInPackage,
   isCursorModelRef,
   readCursorApiKey,
@@ -212,6 +214,28 @@ describe("readCursorApiKey credential root", () => {
       await writeFile(dataKey, "cursor-key-from-data-dir\n");
 
       expect(readCursorApiKey()).toBeUndefined();
+    });
+  });
+
+  it("publishes the credential-root key for a cursor model and leaves other models alone", async () => {
+    await withDistinctRoots(async ({ creds }) => {
+      const credentialKey = path.join(creds, "agent", "cursor-api-key");
+      await mkdir(path.dirname(credentialKey), { recursive: true });
+      await writeFile(credentialKey, "cursor-key-from-credential-root\n");
+
+      expect(bindCursorApiKey("anthropic/claude-sonnet-4-5")).toBeUndefined();
+      expect(process.env.CURSOR_API_KEY).toBeUndefined();
+
+      const restore = bindCursorApiKey("cursor/auto");
+      expect(process.env.CURSOR_API_KEY).toBe("cursor-key-from-credential-root");
+      restore?.();
+      expect(process.env.CURSOR_API_KEY).toBeUndefined();
+    });
+  });
+
+  it("refuses a cursor model when the credential root has no key", async () => {
+    await withDistinctRoots(async () => {
+      expect(() => bindCursorApiKey("cursor/auto")).toThrow(cursorCredentialMissingReason());
     });
   });
 });

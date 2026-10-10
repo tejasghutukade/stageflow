@@ -14,6 +14,15 @@ import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { handleTriggerRoutes } from "./triggerRoutes.js";
 import { readCatalogFileForHttp } from "./readCatalogFile.js";
+import {
+  applyLiveViewHeaders,
+  createLiveViewRoutes,
+  isLiveViewDialogPath,
+  isLiveViewInputPath,
+  isLiveViewPath,
+  isLiveViewReopenTabPath,
+  type LiveViewRoutesOptions,
+} from "./liveViewRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import { createTask, parseCreateTaskBody } from "../config/createTask.js";
@@ -158,6 +167,7 @@ import {
 } from "../runtime/startPayload.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { TaskFile } from "../types/task.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { emailHostFor, releaseEmailHost } from "../email/host.js";
 import { handleEmailRoutes } from "./emailRoutes.js";
 import { EmailTriggers } from "../email/triggers.js";
@@ -224,6 +234,7 @@ export type UiServerOptions = {
   runChangeBus?: RunChangeBus;
   allowedHosts?: AllowedHosts;
   controlTokens?: ControlTokens;
+  browser?: StageBrowserSupport;
   /** Optional AgentPort. Workshop is the caller today; tests inject a fake. */
   workshopOperatorHost?: AgentPort;
 };
@@ -329,6 +340,9 @@ async function serveStatic(
 function isCredentialMutatingApi(method: string, pathname: string): boolean {
   if (method !== "POST") return false;
   return (
+    isLiveViewInputPath(method, pathname) ||
+    isLiveViewDialogPath(method, pathname) ||
+    isLiveViewReopenTabPath(method, pathname) ||
     /^\/api\/providers\/[^/]+\/login$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/answer$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/cancel$/.test(pathname) ||
@@ -355,6 +369,8 @@ export type OperatorRouteDeps = {
   uiDistDir?: string;
   allowedHosts?: AllowedHosts;
   controlTokens?: ControlTokens;
+  /** Test seams for live view (fake relay, clock, audit sink); production builds everything from persisted state. */
+  liveView?: Omit<LiveViewRoutesOptions, "store" | "controlTokens">;
   /** Live shutdown controller; set after listen so restore can beginDrain. */
   getShutdown?: () => import("./shutdown.js").ShutdownController | undefined;
   /**
@@ -377,9 +393,12 @@ export type OperatorRouteDeps = {
  * `startMcpServer` (headless global-service daemon) — both need the REST
  * API; only the former needs the UI files.
  */
-export function createOperatorRoutes(
-  deps: OperatorRouteDeps,
-): (ctx: HttpHostRouteContext) => Promise<boolean | void> {
+export type OperatorRoutes = ((ctx: HttpHostRouteContext) => Promise<boolean | void>) & {
+  /** Ends live view streams, credentials and relay sessions. Browsers are not torn down. */
+  dispose(): Promise<void>;
+};
+
+export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
   const {
     manager,
     store,
@@ -404,7 +423,10 @@ export function createOperatorRoutes(
   const workshopBuildStoreRoot = (): string => resolveWorkshopBuildStoreRoot();
   const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = deps.controlTokens ?? loadControlTokens();
-  return async ({ req, res, url, pathname, method, boot }) => {
+  const liveView = createLiveViewRoutes({ ...deps.liveView, store, controlTokens });
+  liveView.attach(manager);
+  const handler = async ({ req, res, url, pathname, method, boot }: HttpHostRouteContext) => {
+      if (isLiveViewPath(pathname)) applyLiveViewHeaders(res);
       if (boot.serveBlocked !== undefined && pathname.startsWith("/api/")) {
         json(res, 503, {
           error: boot.serveBlocked.reason,
@@ -440,6 +462,8 @@ export function createOperatorRoutes(
 
       async function handleOperatorRequest(): Promise<boolean> {
       try {
+        if (await liveView.handle(req, res)) return true;
+
         if (pathname.startsWith("/api/email/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: ["POST", "PATCH", "DELETE"].includes(method) })) return true;
           const email = boot.email;
@@ -3214,6 +3238,7 @@ export function createOperatorRoutes(
       }
       }
   };
+  return Object.assign(handler, { dispose: () => liveView.dispose() });
 }
 
 export async function startUiServer(
@@ -3229,7 +3254,7 @@ export async function startUiServer(
   const controlTokens = options.controlTokens ?? loadControlTokens();
 
   let shutdown: ShutdownController | undefined;
-  const routes =
+  const routes: OperatorRoutes | ((ctx: HttpHostRouteContext) => Promise<boolean>) =
     boot.serveBlocked !== undefined ||
     boot.manager === undefined ||
     boot.store === undefined
@@ -3267,6 +3292,7 @@ export async function startUiServer(
   });
   envelope.server.on("close", () => {
     shutdown?.uninstall();
+    if ("dispose" in routes) void routes.dispose();
   });
   return { ...envelope, shutdown };
 }

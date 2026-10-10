@@ -136,13 +136,13 @@ async function withSplitCredentialRoot<T>(
   }
 }
 
-function stageInput(roots: StageRoots): StageRunInput {
+function stageInput(roots: StageRoots, model = "anthropic/claude-sonnet-4-5"): StageRunInput {
   return {
     roots,
     stage: {
       id: "clarify",
       system_prompt: "x",
-      model: "anthropic/claude-sonnet-4-5",
+      model,
     },
     task: { id: "t", goal: "g" },
     priorEnvelope: null,
@@ -296,4 +296,50 @@ describe("stage worker opens the host-stamped auth file", () => {
       });
     },
   );
+
+  it("does not require the Pi auth file for a cursor stage when the credential-root key is set", async () => {
+    await withSplitCredentialRoot(async ({ data, attempt, hostAuth }) => {
+      process.env.CURSOR_API_KEY = "cursor-key-from-env";
+      enterWorker(attempt, hostAuth);
+      const roots = workerRoots(data);
+      const spy = vi
+        .spyOn(ModelRuntime, "create")
+        .mockRejectedValue(new Error("halt-after-create"));
+      try {
+        const result = await new PiAgentAdapter().runStage(
+          stageInput(roots, "cursor/auto"),
+        );
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.reason).not.toContain("auth file");
+          expect(result.reason).not.toContain("STAGEFLOW_AGENT_AUTH_PATH");
+        }
+      } finally {
+        spy.mockRestore();
+        delete process.env.CURSOR_API_KEY;
+      }
+    });
+  });
+
+  it("fails a cursor stage on the missing credential-root key", async () => {
+    await withSplitCredentialRoot(async ({ data, attempt, hostAuth }) => {
+      delete process.env.CURSOR_API_KEY;
+      enterWorker(attempt, hostAuth);
+      const roots = workerRoots(data);
+      const spy = vi.spyOn(ModelRuntime, "create");
+      try {
+        const result = await new PiAgentAdapter().runStage(
+          stageInput(roots, "cursor/auto"),
+        );
+        expect(spy).not.toHaveBeenCalled();
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.reason).toContain("Cursor API key missing");
+          expect(result.reason).not.toContain("auth file");
+        }
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
 });

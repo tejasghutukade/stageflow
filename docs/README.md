@@ -29,7 +29,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Verified Stage Execution](verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
 | [Workshop Author](workshop.md) | Chat-draft a pipeline at `#/workshop`, save it into the catalog, and run it |
-| [Browser sessions](browser.md) | Stage `browser` field, saved logins (profiles), login check and human login pattern, queueing, teardown, headed vs headless, Docker limit |
+| [Browser sessions](browser.md) | Stage `browser` field, saved logins (profiles), login check and human login pattern, queueing, teardown, headed vs headless, live view and watch-the-agent for Hosts with no screen, container browser host (development), Host config keys, what is not built |
 | [Browser sessions internals](browser-internals.md) | For contributors: module map, lifecycle, file layout, env contract, invariants, seams, extension recipes, test and debug guide for browser sessions |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
 
@@ -38,7 +38,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | Doc | What you'll learn |
 |-----|-------------------|
 | [Data directory](data-directory.md) | Durable root layout, keep vs disposable, image user, version support |
-| [Docker and self-hosting](docker.md) | Local Compose try (`.env.example`, control token, providers), pull/run, never mount docker.sock, backup/restore, provenance, hardened egress (docs-only) |
+| [Docker and self-hosting](docker.md) | Local Compose try (`.env.example`, control token, providers), pull/run, never mount docker.sock, browser image recipes (`Dockerfile.browser`, `Dockerfile.browser-sandbox`) and container browser host config, backup/restore, provenance, hardened egress (docs-only) |
 | [Operator console](operator-console.md) | Spatial stage map, gated workspace, navigation, settings |
 | [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running, including standalone `run_stage` |
 | [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC, plus the wildcard-access `run_stage` operation |

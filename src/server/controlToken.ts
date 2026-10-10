@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
 import { isLoopbackHostname } from "./allowedHosts.js";
+import { matchLiveViewRoute } from "./liveViewPath.js";
 
 export type ControlScope = "read" | "drive";
 
@@ -222,6 +223,15 @@ function isTriggerWebhookRoute(method: string, pathname: string): boolean {
   return method === "POST" && /^\/api\/triggers\/[^/]+\/webhook$/.test(pathname);
 }
 
+/**
+ * Live view routes authenticate themselves: the ticket route checks the bearer
+ * scope for the requested mode, and the browser's event stream and input posts
+ * carry a ticket-derived cookie instead of a bearer token.
+ */
+function isLiveViewRoute(pathname: string): boolean {
+  return matchLiveViewRoute(pathname) !== null;
+}
+
 export function requiredScopeFor(
   method: string,
   pathname: string,
@@ -229,6 +239,7 @@ export function requiredScopeFor(
   if (pathname === "/mcp") return "drive";
   if (!pathname.startsWith("/api/")) return null;
   if (isTriggerWebhookRoute(method, pathname)) return null;
+  if (isLiveViewRoute(pathname)) return null;
   if (pathname === "/api/backup" || pathname.startsWith("/api/backup/")) {
     return "drive";
   }

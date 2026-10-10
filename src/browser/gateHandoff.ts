@@ -20,6 +20,7 @@ export function parseGateHandoff(value: unknown): GateHandoff | undefined {
   const record = value as Record<string, unknown>;
   if (record.kind === "local_window") return { kind: "local_window" };
   if (record.kind === "live_view" && typeof record.url === "string") {
+    if (isRootRelativePath(record.url)) return { kind: "live_view", url: record.url };
     try {
       const url = new URL(record.url);
       if (url.protocol === "https:" || url.protocol === "http:") {
@@ -30,6 +31,10 @@ export function parseGateHandoff(value: unknown): GateHandoff | undefined {
     }
   }
   return undefined;
+}
+
+function isRootRelativePath(value: string): boolean {
+  return value.startsWith("/") && !value.startsWith("//") && !value.includes("\\");
 }
 
 /** Reads the Host-owned fields off a stored or live wait request; unknown shapes yield nothing. */
@@ -67,19 +72,6 @@ export function browserSite(browser: StageBrowserConfig): string | undefined {
   if (first !== undefined) return first.replace(/^\*\./, "");
   if (browser.login_url !== undefined) return hostOf(browser.login_url);
   return undefined;
-}
-
-/** What the Host stamps on every gate of a browser stage; the agent cannot supply it. */
-export function hostGateContextFor(
-  browser: StageBrowserConfig | undefined,
-): HostGateContext | undefined {
-  if (browser === undefined) return undefined;
-  const site = browserSite(browser);
-  return {
-    handoff: { kind: "local_window" },
-    ...(site !== undefined ? { site } : {}),
-    ...(browser.profile !== undefined ? { profile: browser.profile } : {}),
-  };
 }
 
 /**

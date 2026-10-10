@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+#
+# Browser-capable Stageflow image. Extends the runtime image with Chromium,
+# Xvfb and agent-browser so human login stages work on a Host with no screen
+# (live view). The published image has no browser; see docs/docker.md.
+#
+#   docker build --target runtime -t stageflow:local .
+#   docker build -f docker/Dockerfile.browser --build-arg BASE_IMAGE=stageflow:local -t stageflow:browser .
+#
+# Or extend a published release (prefer a digest pin):
+#   docker build -f docker/Dockerfile.browser \
+#     --build-arg BASE_IMAGE=ghcr.io/tejasghutukade/stageflow:x.y.z -t stageflow:browser .
+#
+# Host launch options (executable path, --no-sandbox) go in $STAGEFLOW_HOME/config.yaml;
+# copy docker/browser.config.example.yaml. No secrets are baked in.
+
+ARG BASE_IMAGE=ghcr.io/tejasghutukade/stageflow:local
+FROM ${BASE_IMAGE}
+
+ARG AGENT_BROWSER_VERSION=0.38.2
+
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    chromium xvfb xauth \
+    fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install -g "agent-browser@${AGENT_BROWSER_VERSION}" \
+  && npm cache clean --force
+
+USER stageflow:stageflow
