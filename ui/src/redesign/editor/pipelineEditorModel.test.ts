@@ -270,6 +270,38 @@ describe("mergeEditorFindings", () => {
     expect(findingDedupeKey(draftError)).toBe(findingDedupeKey(catalogDuplicate));
   });
 
+  it("collapses basename and project-relative paths and keeps the draft finding", () => {
+    const catalogBasename = finding({
+      ...draftError,
+      path: "plan.yaml",
+      severity: "warning",
+    });
+    const catalogDotSlash = finding({
+      ...draftError,
+      path: "./stages/plan.yaml",
+      severity: "warning",
+    });
+    const catalogSuffix = finding({
+      ...draftError,
+      path: "repo/stages/plan.yaml",
+      severity: "warning",
+    });
+    expect(mergeEditorFindings([draftError], [catalogBasename])).toEqual([draftError]);
+    expect(mergeEditorFindings([draftError], [catalogDotSlash])).toEqual([draftError]);
+    expect(mergeEditorFindings([draftError], [catalogSuffix])).toEqual([draftError]);
+    expect(findingDedupeKey(draftError)).toBe(findingDedupeKey(catalogBasename));
+    expect(findingDedupeKey(draftError)).toBe(findingDedupeKey(catalogDotSlash));
+    expect(findingDedupeKey(draftError)).toBe(findingDedupeKey(catalogSuffix));
+  });
+
+  it("does not collapse findings whose file names differ", () => {
+    const otherFile = finding({
+      ...draftError,
+      path: "stages/other.yaml",
+    });
+    expect(mergeEditorFindings([draftError], [otherFile])).toEqual([draftError, otherFile]);
+  });
+
   it("does not invent info findings", () => {
     const merged = mergeEditorFindings([draftError], [catalogWarning]);
     expect(merged.map((row) => row.severity)).toEqual(["error", "warning"]);

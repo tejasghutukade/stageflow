@@ -7,4 +7,10 @@ describe("formatFindingLocation", () => {
       "pipelines/foo.yaml",
     );
   });
+
+  it("appends the line when one is set", () => {
+    expect(formatFindingLocation("pipelines/foo.yaml", 12)).toBe(
+      "pipelines/foo.yaml:12",
+    );
+  });
 });

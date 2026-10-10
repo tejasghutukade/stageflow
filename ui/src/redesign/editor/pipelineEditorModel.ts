@@ -130,8 +130,14 @@ export function editorTabSpecs(runsCount?: number): EditorTabSpec[] {
   ];
 }
 
+function findingPathKey(path: string): string {
+  const normalized = normalizeCatalogPath(path);
+  const slash = normalized.lastIndexOf("/");
+  return slash === -1 ? normalized : normalized.slice(slash + 1);
+}
+
 export function findingDedupeKey(finding: ValidationFinding): string {
-  return `${finding.code}\0${finding.path}\0${finding.message}`;
+  return `${finding.code}\0${findingPathKey(finding.path)}\0${finding.message}`;
 }
 
 export function mergeEditorFindings(

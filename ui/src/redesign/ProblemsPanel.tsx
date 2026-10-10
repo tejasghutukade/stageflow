@@ -45,9 +45,9 @@ function FindingRow({
       </span>
       <span
         className="w-40 shrink-0 truncate font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-2)]"
-        title={formatFindingLocation(finding.path)}
+        title={formatFindingLocation(finding.path, finding.line)}
       >
-        {formatFindingLocation(finding.path)}
+        {formatFindingLocation(finding.path, finding.line)}
       </span>
       <span
         className="min-w-0 flex-1 truncate text-xs text-[var(--sf-text-2)]"

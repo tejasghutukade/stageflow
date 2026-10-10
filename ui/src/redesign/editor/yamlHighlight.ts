@@ -1,4 +1,4 @@
-export type YamlTokenKind = "plain" | "key" | "string" | "comment";
+export type YamlTokenKind = "plain" | "key" | "punct" | "string" | "comment";
 
 export type YamlToken = {
   kind: YamlTokenKind;
@@ -16,18 +16,22 @@ export function highlightYamlLine(line: string): YamlToken[] {
   const tokens: YamlToken[] = [];
   let i = 0;
 
+  function eatSpaces(kind: YamlTokenKind) {
+    while (i < line.length && line[i] === " ") {
+      pushToken(tokens, kind, " ");
+      i += 1;
+    }
+  }
+
   while (i < line.length && (line[i] === " " || line[i] === "\t")) {
     pushToken(tokens, "plain", line[i]!);
     i += 1;
   }
 
-  if (line[i] === "-" && (line[i + 1] === " " || line[i + 1] === undefined)) {
-    pushToken(tokens, "plain", "-");
+  while (line[i] === "-" && (line[i + 1] === " " || line[i + 1] === undefined)) {
+    pushToken(tokens, "punct", "-");
     i += 1;
-    while (i < line.length && line[i] === " ") {
-      pushToken(tokens, "plain", line[i]!);
-      i += 1;
-    }
+    eatSpaces("punct");
   }
 
   if (line[i] === "#") {
@@ -35,16 +39,19 @@ export function highlightYamlLine(line: string): YamlToken[] {
     return tokens;
   }
 
-  const keyMatch = /^([A-Za-z_][A-Za-z0-9_-]*)(:)/.exec(line.slice(i));
+  const keyMatch = /^([A-Za-z_][A-Za-z0-9_-]*)(:)(?=\s|$)/.exec(line.slice(i));
   if (keyMatch) {
     pushToken(tokens, "key", keyMatch[1]!);
-    pushToken(tokens, "plain", ":");
+    pushToken(tokens, "punct", ":");
     i += keyMatch[0].length;
+    eatSpaces("punct");
   }
 
+  let depth = 0;
+  let valueStart = true;
   while (i < line.length) {
     const ch = line[i]!;
-    if (ch === '"' || ch === "'") {
+    if ((ch === '"' || ch === "'") && valueStart) {
       const quote = ch;
       let j = i + 1;
       while (j < line.length) {
@@ -60,13 +67,38 @@ export function highlightYamlLine(line: string): YamlToken[] {
       }
       pushToken(tokens, "string", line.slice(i, j));
       i = j;
+      valueStart = false;
       continue;
     }
     if (ch === "#" && (i === 0 || line[i - 1] === " ")) {
       pushToken(tokens, "comment", line.slice(i));
       break;
     }
+    if ((ch === "[" || ch === "{") && (valueStart || depth > 0)) {
+      pushToken(tokens, "punct", ch);
+      depth += 1;
+      i += 1;
+      valueStart = true;
+      continue;
+    }
+    if ((ch === "]" || ch === "}") && depth > 0) {
+      pushToken(tokens, "punct", ch);
+      depth -= 1;
+      i += 1;
+      continue;
+    }
+    if (
+      depth > 0 &&
+      (ch === "," || (ch === ":" && (line[i + 1] === " " || line[i + 1] === undefined)))
+    ) {
+      pushToken(tokens, "punct", ch);
+      i += 1;
+      eatSpaces("punct");
+      valueStart = true;
+      continue;
+    }
     pushToken(tokens, "plain", ch);
+    if (ch !== " ") valueStart = false;
     i += 1;
   }
 

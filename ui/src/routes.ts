@@ -10,7 +10,7 @@ export type Route =
   | { name: "today" }
   | { name: "inbox"; tab?: InboxTabId }
   | { name: "runs" }
-  | { name: "new"; pipelineId?: string; taskPath?: string }
+  | { name: "new"; pipelineId?: string; taskPath?: string; projectRoot?: string }
   | { name: "detail"; runId: string; view: DetailView }
   | { name: "pipelines" }
   | { name: "pipeline"; pipelineId: string; projectRoot?: string }
@@ -143,10 +143,12 @@ export function inboxPath(tab?: InboxTabId): string {
 export function newRunPath(opts?: {
   pipeline?: string;
   task?: string;
+  project_root?: string;
 }): string {
   const params = new URLSearchParams();
   if (opts?.pipeline) params.set("pipeline", opts.pipeline);
   if (opts?.task) params.set("task", opts.task);
+  if (opts?.project_root) params.set("project_root", opts.project_root);
   const query = params.toString();
   return query ? `/new?${query}` : "/new";
 }
@@ -180,10 +182,12 @@ export function parseHash(hash = window.location.hash): Route {
   if (path === "new") {
     const pipelineId = params.get("pipeline") ?? undefined;
     const taskPath = params.get("task") ?? undefined;
+    const projectRoot = params.get("project_root") ?? undefined;
     return {
       name: "new",
       ...(pipelineId ? { pipelineId } : {}),
       ...(taskPath ? { taskPath } : {}),
+      ...(projectRoot ? { projectRoot } : {}),
     };
   }
   if (path === "pipelines") return { name: "pipelines" };

@@ -156,6 +156,17 @@ describe("parseHash", () => {
       pipelineId: "pipelines/demo.pipeline.yaml",
       taskPath: "pipelines/demo.task.yaml",
     });
+    const rooted = newRunPath({
+      pipeline: "pipelines/demo.pipeline.yaml",
+      task: "pipelines/demo.task.yaml",
+      project_root: "/repo/examples",
+    });
+    expect(parseHash(`#${rooted}`)).toEqual({
+      name: "new",
+      pipelineId: "pipelines/demo.pipeline.yaml",
+      taskPath: "pipelines/demo.task.yaml",
+      projectRoot: "/repo/examples",
+    });
   });
 });
 

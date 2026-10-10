@@ -29,6 +29,7 @@ export type StartRunDialogProps = {
   onStarted: (runId: string) => void;
   initialTaskPath?: string;
   initialPipelinePath?: string;
+  initialProjectRoot?: string;
 };
 
 export function StartRunDialog({
@@ -37,6 +38,7 @@ export function StartRunDialog({
   onStarted,
   initialTaskPath,
   initialPipelinePath,
+  initialProjectRoot,
 }: StartRunDialogProps) {
   const { snapshot, error: catalogError } = useRunCatalog();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -46,6 +48,7 @@ export function StartRunDialog({
     catalogError,
     initialTaskPath,
     initialPipelinePath,
+    initialProjectRoot,
     onStarted: (id) => {
       onStarted(id);
       onClose();
@@ -162,15 +165,17 @@ export function StartRunDialog({
               </div>
               <div className="max-h-[min(320px,calc(900px-28rem))] min-h-0 overflow-y-auto">
                 {form.filteredTasks.map((t) => {
-                  const selected = form.task === t.path;
+                  const selected =
+                    form.selectedTask?.path === t.path &&
+                    form.selectedTask?.project_root === t.project_root;
                   const last = lastRunAtForTask(snapshot.runs, t.path);
                   if (selected) {
                     return (
                       <button
-                        key={t.path}
+                        key={`${t.path}\0${t.project_root ?? ""}`}
                         type="button"
                         className="flex w-full items-start gap-2.5 bg-[var(--sf-raised)] px-3 py-[9px] text-left shadow-[inset_2px_0px_0px_rgb(236,237,238)]"
-                        onClick={() => form.setTask(t.path)}
+                        onClick={() => form.setTask(t.path, t.project_root)}
                       >
                         <span className="mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-full bg-[var(--sf-text-1)]">
                           <span className="size-1.5 rounded-full bg-[var(--sf-ground)]" />
@@ -194,10 +199,10 @@ export function StartRunDialog({
                   }
                   return (
                     <button
-                      key={t.path}
+                      key={`${t.path}\0${t.project_root ?? ""}`}
                       type="button"
                       className="flex h-9 w-full items-center gap-2.5 border-t border-t-[#ffffff0d] px-3 py-0 text-left"
-                      onClick={() => form.setTask(t.path)}
+                      onClick={() => form.setTask(t.path, t.project_root)}
                     >
                       <span className="size-3.5 shrink-0 rounded-full border border-[#ffffff2e]" />
                       <span className="w-[150px] shrink-0 truncate font-['Geist_Mono',monospace] text-[13px] text-[var(--sf-text-1)]">
@@ -225,12 +230,15 @@ export function StartRunDialog({
             <div className="flex w-full snap-x snap-mandatory gap-2.5 overflow-x-auto pb-1">
               {form.pipelines.map((p) => (
                 <PipelineRunCard
-                  key={p.path}
+                  key={`${p.path}\0${p.project_root ?? ""}`}
                   className="w-[220px] shrink-0 snap-start"
                   pipeline={p}
                   runs={snapshot.runs}
-                  selected={form.pipeline === p.path}
-                  onSelect={() => form.setPipeline(p.path)}
+                  selected={
+                    form.selectedPipeline?.path === p.path &&
+                    form.selectedPipeline?.project_root === p.project_root
+                  }
+                  onSelect={() => form.setPipeline(p.path, p.project_root)}
                 />
               ))}
             </div>

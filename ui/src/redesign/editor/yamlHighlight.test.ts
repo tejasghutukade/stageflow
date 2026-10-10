@@ -5,14 +5,15 @@ describe("highlightYamlLine", () => {
   it("tints a mapping key", () => {
     expect(highlightYamlLine("id: feature-loop")).toEqual([
       { kind: "key", text: "id" },
-      { kind: "plain", text: ": feature-loop" },
+      { kind: "punct", text: ": " },
+      { kind: "plain", text: "feature-loop" },
     ]);
   });
 
   it("tints a double-quoted string and leaves the key separate", () => {
     expect(highlightYamlLine('model: "pi"')).toEqual([
       { kind: "key", text: "model" },
-      { kind: "plain", text: ": " },
+      { kind: "punct", text: ": " },
       { kind: "string", text: '"pi"' },
     ]);
   });
@@ -20,7 +21,7 @@ describe("highlightYamlLine", () => {
   it("tints a single-quoted string", () => {
     expect(highlightYamlLine("skill: 'review'")).toEqual([
       { kind: "key", text: "skill" },
-      { kind: "plain", text: ": " },
+      { kind: "punct", text: ": " },
       { kind: "string", text: "'review'" },
     ]);
   });
@@ -35,7 +36,8 @@ describe("highlightYamlLine", () => {
   it("tints an inline comment outside quotes", () => {
     expect(highlightYamlLine("id: foo # keep")).toEqual([
       { kind: "key", text: "id" },
-      { kind: "plain", text: ": foo " },
+      { kind: "punct", text: ": " },
+      { kind: "plain", text: "foo " },
       { kind: "comment", text: "# keep" },
     ]);
   });
@@ -48,10 +50,49 @@ describe("highlightYamlLine", () => {
 
   it("tints a key on a list item", () => {
     expect(highlightYamlLine("  - id: decide")).toEqual([
-      { kind: "plain", text: "  - " },
+      { kind: "plain", text: "  " },
+      { kind: "punct", text: "- " },
       { kind: "key", text: "id" },
-      { kind: "plain", text: ": decide" },
+      { kind: "punct", text: ": " },
+      { kind: "plain", text: "decide" },
     ]);
+  });
+
+  it("tints flow sequence brackets and commas as punctuation", () => {
+    expect(highlightYamlLine("    gate_kinds: [confirm, artifact_backed]")).toEqual([
+      { kind: "plain", text: "    " },
+      { kind: "key", text: "gate_kinds" },
+      { kind: "punct", text: ": [" },
+      { kind: "plain", text: "confirm" },
+      { kind: "punct", text: ", " },
+      { kind: "plain", text: "artifact_backed" },
+      { kind: "punct", text: "]" },
+    ]);
+  });
+
+  it("tints a bare list dash and keeps plain commas outside flow", () => {
+    expect(highlightYamlLine("  - plan")).toEqual([
+      { kind: "plain", text: "  " },
+      { kind: "punct", text: "- " },
+      { kind: "plain", text: "plan" },
+    ]);
+    expect(highlightYamlLine("note: a, b [c]")).toEqual([
+      { kind: "key", text: "note" },
+      { kind: "punct", text: ": " },
+      { kind: "plain", text: "a, b [c]" },
+    ]);
+  });
+
+  it("does not start a string on an apostrophe inside a plain value", () => {
+    expect(highlightYamlLine("note: don't stop")).toEqual([
+      { kind: "key", text: "note" },
+      { kind: "punct", text: ": " },
+      { kind: "plain", text: "don't stop" },
+    ]);
+  });
+
+  it("does not treat a colon without a following space as a key", () => {
+    expect(highlightYamlLine("http://x")).toEqual([{ kind: "plain", text: "http://x" }]);
   });
 });
 

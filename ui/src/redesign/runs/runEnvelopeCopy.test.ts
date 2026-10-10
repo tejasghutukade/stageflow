@@ -26,7 +26,7 @@ const run = {
     edges: [{ from: "plan", to: "review" }],
   },
   feedback_loops: [],
-} as RunDetail;
+} as unknown as RunDetail;
 
 describe("runEnvelopeCopy", () => {
   it("labels first-stage inbound as no predecessor", () => {

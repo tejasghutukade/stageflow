@@ -76,6 +76,7 @@ export function ConsoleOverlays({
     route.name,
     route.name === "new" ? route.taskPath : undefined,
     route.name === "new" ? route.pipelineId : undefined,
+    route.name === "new" ? route.projectRoot : undefined,
     rememberFocus,
   ]);
 
@@ -121,6 +122,8 @@ export function ConsoleOverlays({
   const initialTaskPath = route.name === "new" ? route.taskPath : undefined;
   const initialPipelinePath =
     route.name === "new" ? route.pipelineId : undefined;
+  const initialProjectRoot =
+    route.name === "new" ? route.projectRoot : undefined;
 
   return (
     <>
@@ -137,6 +140,7 @@ export function ConsoleOverlays({
         onStarted={onStarted}
         initialTaskPath={initialTaskPath}
         initialPipelinePath={initialPipelinePath}
+        initialProjectRoot={initialProjectRoot}
       />
     </>
   );

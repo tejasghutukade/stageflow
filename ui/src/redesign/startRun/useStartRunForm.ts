@@ -28,8 +28,39 @@ export type UseStartRunFormOptions = {
   catalogError: string | null;
   initialTaskPath?: string;
   initialPipelinePath?: string;
+  initialProjectRoot?: string;
   onStarted: (runId: string) => void;
 };
+
+function preferCatalogRow<T extends { path: string; project_root?: string }>(
+  rows: readonly T[],
+  path: string | undefined,
+  projectRoot: string | undefined,
+): T | undefined {
+  if (path && projectRoot) {
+    const exact = rows.find(
+      (row) => row.path === path && row.project_root === projectRoot,
+    );
+    if (exact) return exact;
+  }
+  if (path) {
+    const byPath = rows.find((row) => row.path === path);
+    if (byPath) return byPath;
+  }
+  return rows[0];
+}
+
+function selectedCatalogRow<T extends { path: string; project_root?: string }>(
+  rows: readonly T[],
+  path: string,
+  projectRoot: string | undefined,
+): T | null {
+  if (!path) return null;
+  return (
+    rows.find((row) => row.path === path && row.project_root === projectRoot) ??
+    null
+  );
+}
 
 export function useStartRunForm({
   open,
@@ -37,12 +68,15 @@ export function useStartRunForm({
   catalogError,
   initialTaskPath,
   initialPipelinePath,
+  initialProjectRoot,
   onStarted,
 }: UseStartRunFormOptions) {
   const [tasks, setTasks] = useState<TaskListing[]>([]);
   const [pipelines, setPipelines] = useState<PipelineListing[]>([]);
-  const [task, setTask] = useState("");
-  const [pipeline, setPipeline] = useState("");
+  const [task, setTaskPath] = useState("");
+  const [taskRoot, setTaskRoot] = useState<string | undefined>(undefined);
+  const [pipeline, setPipelinePath] = useState("");
+  const [pipelineRoot, setPipelineRoot] = useState<string | undefined>(undefined);
   const [taskQuery, setTaskQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -84,17 +118,20 @@ export function useStartRunForm({
         } else {
           setAuthGateMessage(null);
         }
-        const preferredTask =
-          initialTaskPath && t.tasks.some((item) => item.path === initialTaskPath)
-            ? initialTaskPath
-            : (t.tasks[0]?.path ?? "");
-        const preferredPipeline =
-          initialPipelinePath &&
-          p.pipelines.some((item) => item.path === initialPipelinePath)
-            ? initialPipelinePath
-            : (p.pipelines[0]?.path ?? "");
-        setTask(preferredTask);
-        setPipeline(preferredPipeline);
+        const preferredTask = preferCatalogRow(
+          t.tasks,
+          initialTaskPath,
+          initialProjectRoot,
+        );
+        const preferredPipeline = preferCatalogRow(
+          p.pipelines,
+          initialPipelinePath,
+          initialProjectRoot,
+        );
+        setTaskPath(preferredTask?.path ?? "");
+        setTaskRoot(preferredTask?.project_root);
+        setPipelinePath(preferredPipeline?.path ?? "");
+        setPipelineRoot(preferredPipeline?.project_root);
         setError(null);
         setStartFailure(null);
       } catch (err) {
@@ -108,10 +145,20 @@ export function useStartRunForm({
     return () => {
       cancelled = true;
     };
-  }, [open, initialTaskPath, initialPipelinePath]);
+  }, [open, initialTaskPath, initialPipelinePath, initialProjectRoot]);
 
-  const selectedTask = tasks.find((t) => t.path === task) ?? null;
-  const selectedPipeline = pipelines.find((p) => p.path === pipeline) ?? null;
+  const selectedTask = selectedCatalogRow(tasks, task, taskRoot);
+  const selectedPipeline = selectedCatalogRow(pipelines, pipeline, pipelineRoot);
+
+  const setTask = useCallback((path: string, projectRoot?: string) => {
+    setTaskPath(path);
+    setTaskRoot(projectRoot);
+  }, []);
+
+  const setPipeline = useCallback((path: string, projectRoot?: string) => {
+    setPipelinePath(path);
+    setPipelineRoot(projectRoot);
+  }, []);
 
   const filteredTasks = useMemo(() => {
     const q = taskQuery.trim().toLowerCase();

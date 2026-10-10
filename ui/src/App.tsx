@@ -186,6 +186,7 @@ function ConsoleRoot() {
         onStarted={(id) => go(runStreamPath(id))}
         initialPipelinePath={route.pipelineId}
         initialTaskPath={route.taskPath}
+        initialProjectRoot={route.projectRoot}
       />
     );
   } else if (route.name === "detail") {

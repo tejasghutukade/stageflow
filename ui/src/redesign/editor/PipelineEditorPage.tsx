@@ -1,14 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  LuFolder,
-  LuPlay,
-  LuSquareArrowOutUpRight,
-  LuTriangleAlert,
-} from "react-icons/lu";
-import {
   fetchCatalogValidate,
   fetchModels,
   fetchSettings,
+  fetchSkills,
   openDraftPackage,
   overwriteDraftPackageWithDetails,
   validateDraftPackage,
@@ -21,32 +16,45 @@ import {
 import { useRunCatalog } from "../../catalog/useRunCatalog";
 import { newRunPath, workshopPath } from "../../routes";
 import { showToast } from "../../toast";
-import { ProblemsPanel } from "../ProblemsPanel";
-import { Keycap } from "../Keycap";
-import { StatusPill } from "../StatusPill";
 import { useHotkeys } from "../keys";
-import { FilterTabs } from "../shell/FilterTabs";
 import { cloneDraft } from "./draftMutators";
 import { addStage, renameStage } from "../workshop/stageMutators";
 import { stagePathLabel } from "../workshop/inspector/stageFields";
 import type { StageFocusRequest } from "../workshop/inspector/WorkshopStageInspector";
 import {
-  editorTabSpecs,
-  editorValidationPills,
   filterEditorPipelineRuns,
-  findingDedupeKey,
-  focusEditorFinding,
   isDraftDirty,
-  isEditorTabId,
   mergeEditorFindings,
   type EditorHistorySessionEvent,
   type EditorTabId,
 } from "./pipelineEditorModel";
 import { PipelineEditorGraph } from "./PipelineEditorGraph";
+import { PipelineEditorHeader } from "./PipelineEditorHeader";
 import { PipelineEditorHistory } from "./PipelineEditorHistory";
 import { PipelineEditorRuns } from "./PipelineEditorRuns";
 import { PipelineEditorInspector } from "./PipelineEditorInspector";
-import { yamlPathForSelectedStage } from "./draftYaml";
+import { EditorProblemsPanel } from "./EditorProblemsPanel";
+import {
+  normalizeYamlPath,
+  yamlPathForSelectedStage,
+  yamlPathsMatch,
+} from "./draftYaml";
+import { unsavedChangeCount } from "./editorHeaderModel";
+import {
+  draftSchemaCount,
+  editorDirtyPaths,
+  editorFindingTarget,
+  editorHeaderPills,
+  editorPanelFindings,
+  editorStageFindings,
+} from "./editorPageModel";
+import {
+  editorFindingKey,
+  quickFixLabel,
+  type EditorFinding,
+} from "./editorProblemsModel";
+import { useEditorStageStats } from "./useEditorStageStats";
+import { isPipelineYamlPath, type YamlParseError } from "./yamlEditorModel";
 import { YamlPanel } from "./YamlPanel";
 
 function editorPipelineKey(pipeline: {
@@ -113,6 +121,10 @@ export function PipelineEditorPage({
   const [loading, setLoading] = useState(true);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
   const [yamlPath, setYamlPath] = useState<string | null>(pipeline.path);
+  const [openPaths, setOpenPaths] = useState<string[]>([pipeline.path]);
+  const [yamlParseError, setYamlParseError] = useState<YamlParseError | null>(null);
+  const [yamlKey, setYamlKey] = useState(0);
+  const [formatNonce, setFormatNonce] = useState(0);
   const [editorTab, setEditorTab] = useState<EditorTabId>("editor");
   const [autoValidate, setAutoValidate] = useState(true);
   const [draftValidation, setDraftValidation] =
@@ -123,6 +135,7 @@ export function PipelineEditorPage({
   const [validating, setValidating] = useState(false);
   const [validateError, setValidateError] = useState<string | null>(null);
   const [validatedMs, setValidatedMs] = useState<number | null>(null);
+  const [validatedAt, setValidatedAt] = useState<number | null>(null);
   const [problemsCollapsed, setProblemsCollapsed] = useState(false);
   const [selectedProblemKey, setSelectedProblemKey] = useState<string | null>(null);
   const [fieldFocus, setFieldFocus] = useState<
@@ -137,9 +150,18 @@ export function PipelineEditorPage({
   const pipelineKey = editorPipelineKey(pipeline);
   const [models, setModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
+  const [skills, setSkills] = useState<string[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftValidateGen = useRef(0);
+  const catalogValidateGen = useRef(0);
 
+  const pipelinePath = pipeline.path;
   const dirty = isDraftDirty(draft, baseline);
+  const unsavedCount = unsavedChangeCount(draft, baseline);
+  const dirtyPaths = useMemo(
+    () => editorDirtyPaths(draft, baseline, pipelinePath),
+    [baseline, draft, pipelinePath],
+  );
   const {
     snapshot: runSnapshot,
     error: runsError,
@@ -153,6 +175,7 @@ export function PipelineEditorPage({
       }),
     [pipeline.id, pipeline.project_root, runSnapshot.runs],
   );
+  const { stageStats, p50Ms } = useEditorStageStats(pipelineRuns);
   const historyEvents = useMemo(
     () => sessionEvents.filter((event) => event.pipelineKey === pipelineKey),
     [pipelineKey, sessionEvents],
@@ -177,6 +200,16 @@ export function PipelineEditorPage({
   );
 
   const reloadDraft = useCallback(async () => {
+    draftValidateGen.current += 1;
+    catalogValidateGen.current += 1;
+    setDraftValidation(null);
+    setCatalogFindings([]);
+    setValidateError(null);
+    setSelectedProblemKey(null);
+    setYamlParseError(null);
+    setYamlKey((key) => key + 1);
+    setOpenPaths([pipeline.path]);
+    setYamlPath(pipeline.path);
     setLoading(true);
     setLoadError(null);
     const opened = await openDraftPackage({
@@ -193,7 +226,6 @@ export function PipelineEditorPage({
     setDraft(opened.draft);
     setBaseline(cloneDraft(opened.draft));
     setDestination(opened.destination);
-    setYamlPath(opened.pipelinePath);
   }, [pipeline.path, pipeline.project_root]);
 
   useEffect(() => {
@@ -223,7 +255,21 @@ export function PipelineEditorPage({
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetchSkills().then(
+      (listed) => {
+        if (!cancelled) setSkills(listed.skills.map((skill) => skill.name));
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const runCatalogValidate = useCallback(async () => {
+    const generation = ++catalogValidateGen.current;
     setValidating(true);
     setValidateError(null);
     try {
@@ -235,25 +281,31 @@ export function PipelineEditorPage({
           ? { project_root: pipeline.project_root }
           : {}),
       });
+      if (generation !== catalogValidateGen.current) return;
       setCatalogFindings(result.findings);
       setValidatedMs(Date.now() - started);
+      setValidatedAt(Date.now());
       appendSession("Validated", historyValidationDetail("catalog", result));
     } catch (err) {
+      if (generation !== catalogValidateGen.current) return;
       setValidateError(err instanceof Error ? err.message : String(err));
     } finally {
-      setValidating(false);
+      if (generation === catalogValidateGen.current) setValidating(false);
     }
   }, [appendSession, pipeline.path, pipeline.project_root]);
 
   const runDraftValidate = useCallback(
     async (nextDraft: DraftPackagePayload) => {
+      const generation = ++draftValidateGen.current;
       const started = Date.now();
       const result = await validateDraftPackage(
         nextDraft,
         pipeline.project_root,
       );
+      if (generation !== draftValidateGen.current) return;
       setDraftValidation(result);
       setValidatedMs(Date.now() - started);
+      setValidatedAt(Date.now());
       appendSession("Validated", historyValidationDetail("draft", result));
     },
     [appendSession, pipeline.project_root],
@@ -280,8 +332,9 @@ export function PipelineEditorPage({
 
   const onDiscard = useCallback(() => {
     void reloadDraft();
+    void runCatalogValidate();
     showToast("Discarded local edits");
-  }, [reloadDraft]);
+  }, [reloadDraft, runCatalogValidate]);
 
   const onSave = useCallback(async () => {
     if (!draft || !destination) return;
@@ -313,14 +366,49 @@ export function PipelineEditorPage({
     void runCatalogValidate();
   }, [appendSession, destination, draft, pipeline.project_root, runCatalogValidate]);
 
+  const openYamlPath = useCallback((path: string) => {
+    setOpenPaths((current) =>
+      current.some((open) => normalizeYamlPath(open) === normalizeYamlPath(path))
+        ? current
+        : [...current, path],
+    );
+    setYamlPath(path);
+  }, []);
+
+  const showStageYaml = useCallback(
+    (nextDraft: DraftPackagePayload, stageId: string) => {
+      const path = yamlPathForSelectedStage(nextDraft, stageId);
+      if (path) openYamlPath(path);
+      else setYamlPath(pipelinePath);
+    },
+    [openYamlPath, pipelinePath],
+  );
+
+  const onClosePath = useCallback(
+    (path: string) => {
+      const key = normalizeYamlPath(path);
+      setOpenPaths((current) => current.filter((open) => normalizeYamlPath(open) !== key));
+      setYamlPath((active) =>
+        active && normalizeYamlPath(active) === key ? pipelinePath : active,
+      );
+    },
+    [pipelinePath],
+  );
+
+  const onOpenYaml = useCallback(
+    (path: string) => {
+      if (!path || isPipelineYamlPath(path, pipelinePath)) setYamlPath(pipelinePath);
+      else openYamlPath(path);
+    },
+    [openYamlPath, pipelinePath],
+  );
+
   const onSelectStage = useCallback(
     (stageId: string) => {
       setSelectedStageId(stageId);
-      if (!draft) return;
-      const path = yamlPathForSelectedStage(draft, stageId);
-      if (path) setYamlPath(path);
+      if (draft) showStageYaml(draft, stageId);
     },
-    [draft],
+    [draft, showStageYaml],
   );
 
   const onAddStage = useCallback(() => {
@@ -328,9 +416,8 @@ export function PipelineEditorPage({
     const result = addStage(draft);
     setDraft(result.draft);
     setSelectedStageId(result.stageId);
-    const path = yamlPathForSelectedStage(result.draft, result.stageId);
-    if (path) setYamlPath(path);
-  }, [draft]);
+    showStageYaml(result.draft, result.stageId);
+  }, [draft, showStageYaml]);
 
   const onRenameStage = useCallback(
     (fromId: string, toId: string) => {
@@ -342,36 +429,73 @@ export function PipelineEditorPage({
       setDraft(next);
       setSelectedStageId((current) => (current === fromId ? toId : current));
       if (previousPath && nextPath && previousPath !== nextPath) {
-        setYamlPath((active) => (active === previousPath ? nextPath : active));
+        setOpenPaths((current) =>
+          current.map((open) => (yamlPathsMatch(open, previousPath) ? nextPath : open)),
+        );
+        setYamlPath((active) =>
+          active && yamlPathsMatch(active, previousPath) ? nextPath : active,
+        );
       }
     },
     [draft],
   );
 
-  const findings = useMemo(
+  const backendFindings = useMemo(
     () => mergeEditorFindings(draftValidation?.findings ?? [], catalogFindings),
     [catalogFindings, draftValidation],
   );
+  const findings = useMemo(
+    () =>
+      draft ? editorPanelFindings(draft, pipelinePath, backendFindings, yamlParseError) : [],
+    [backendFindings, draft, pipelinePath, yamlParseError],
+  );
+  const stageFindings = useMemo(() => editorStageFindings(findings), [findings]);
+  const selectedFinding = selectedProblemKey
+    ? (findings.find((row) => editorFindingKey(row) === selectedProblemKey) ?? null)
+    : null;
 
-  const activateFinding = useCallback(
-    (finding: ValidationFinding) => {
-      setSelectedProblemKey(findingDedupeKey(finding));
+  const quickFixFor = useCallback(
+    (finding: EditorFinding) => (draft ? quickFixLabel(finding, draft) : undefined),
+    [draft],
+  );
+
+  const selectFinding = useCallback(
+    (finding: EditorFinding) => {
+      setSelectedProblemKey(editorFindingKey(finding));
+      if (!draft) return;
+      const target = editorFindingTarget(finding, draft);
+      if (target) {
+        setSelectedStageId(target.stageId);
+        showStageYaml(draft, target.stageId);
+      }
+      if (isPipelineYamlPath(finding.path, pipelinePath)) {
+        setYamlPath(pipelinePath);
+        return;
+      }
+      const file = (draft.stages ?? []).find((entry) => yamlPathsMatch(entry.path, finding.path));
+      if (file) openYamlPath(file.path);
+    },
+    [draft, openYamlPath, pipelinePath, showStageYaml],
+  );
+
+  const applyQuickFix = useCallback(
+    (finding: EditorFinding) => {
+      selectFinding(finding);
       setProblemsCollapsed(false);
       if (!draft) return;
-      const focus = focusEditorFinding(finding, draft);
-      if (focus.kind !== "stage") return;
-      setSelectedStageId(focus.stageId);
-      const path = yamlPathForSelectedStage(draft, focus.stageId);
-      if (path) setYamlPath(path);
+      const target = editorFindingTarget(finding, draft);
+      if (!target?.field) return;
       focusNonce.current += 1;
       setFieldFocus({
-        stageId: focus.stageId,
-        field: focus.field,
+        stageId: target.stageId,
+        field: target.field,
         nonce: focusNonce.current,
       });
     },
-    [draft],
+    [draft, selectFinding],
   );
+
+  const saveDisabled = !dirty || saving || loading || !draft || yamlParseError !== null;
 
   useHotkeys(
     [
@@ -381,7 +505,7 @@ export function PipelineEditorPage({
         allowInInput: true,
         handler: (event) => {
           event.preventDefault();
-          if (!dirty || saving || !draft) return;
+          if (saveDisabled) return;
           void onSave();
         },
       },
@@ -395,18 +519,29 @@ export function PipelineEditorPage({
         },
       },
       {
+        key: "alt+shift+f",
+        scope: "pipelines",
+        allowInInput: true,
+        when: () => editorTab === "editor" && !!draft && !loading,
+        handler: (event) => {
+          event.preventDefault();
+          if (yamlParseError) return;
+          setFormatNonce((nonce) => nonce + 1);
+        },
+      },
+      {
         key: "mod+.",
         scope: "pipelines",
         allowInInput: true,
         when: () => editorTab === "editor" && !loading,
         handler: (event) => {
           event.preventDefault();
-          const selected = selectedProblemKey
-            ? findings.find((row) => findingDedupeKey(row) === selectedProblemKey)
-            : null;
-          const target = selected ?? findings[0];
+          const target =
+            selectedFinding && quickFixFor(selectedFinding)
+              ? selectedFinding
+              : findings.find((row) => quickFixFor(row));
           if (!target) return;
-          activateFinding(target);
+          applyQuickFix(target);
         },
       },
     ],
@@ -414,8 +549,11 @@ export function PipelineEditorPage({
   );
 
   const defaultTask = defaultTaskForPipeline(pipeline, tasks);
-  const pills = editorValidationPills(draftValidation);
-  const saveDisabled = !dirty || saving || loading || !draft;
+  const pills = editorHeaderPills(draftValidation, yamlParseError !== null);
+  const workshopHref = `#${workshopPath({
+    pipeline: pipeline.path,
+    ...(pipeline.project_root ? { project_root: pipeline.project_root } : {}),
+  })}`;
 
   const copyPath = useCallback(() => {
     void navigator.clipboard.writeText(pipeline.path).then(
@@ -424,158 +562,64 @@ export function PipelineEditorPage({
     );
   }, [pipeline.path]);
 
+  const selectedFixLabel = selectedFinding ? quickFixFor(selectedFinding) : undefined;
+  const yamlFinding =
+    selectedFinding && selectedFinding.severity !== "info"
+      ? {
+          path: selectedFinding.path,
+          message: selectedFinding.message,
+          severity: selectedFinding.severity,
+          code: selectedFinding.code,
+          ...(selectedFinding.line !== undefined ? { line: selectedFinding.line } : {}),
+          ...(selectedFinding.column !== undefined ? { column: selectedFinding.column } : {}),
+          ...(selectedFixLabel ? { quickFixLabel: selectedFixLabel } : {}),
+        }
+      : null;
+  const infoRange =
+    selectedFinding?.severity === "info" && selectedFinding.line !== undefined
+      ? { start: selectedFinding.line, end: selectedFinding.lineEnd ?? selectedFinding.line }
+      : undefined;
+
   return (
-    <div className="flex min-h-screen min-w-0 flex-col">
-      <div className="flex w-full shrink-0 items-center justify-between gap-3 border-b border-b-[#ffffff12] px-5 py-2">
-        <div className="flex min-w-0 flex-col justify-center gap-1">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <a
-              href="#/pipelines"
-              className="text-[13px] text-[var(--sf-text-2)] hover:text-[var(--sf-text-1)]"
-            >
-              Pipelines
-            </a>
-            <span className="text-[13px] text-[var(--sf-text-3)]">/</span>
-            <span className="truncate text-[13px] font-medium text-[var(--sf-text-1)]">
-              {pipelineId}
-            </span>
-          </div>
-          <div className="flex min-w-0 items-center gap-2">
-            <h1 className="truncate text-[18px] font-semibold tracking-[-0.4px] text-[var(--sf-text-1)]">
-              {pipelineId}
-            </h1>
-            <button
-              type="button"
-              onClick={copyPath}
-              title={pipeline.path}
-              className="inline-flex max-w-[360px] min-w-0 items-center gap-1.5 rounded-md border border-[#ffffff1a] bg-[var(--sf-raised)] px-2 py-0.5 font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-2)] hover:text-[var(--sf-text-1)]"
-            >
-              <LuFolder className="size-3 shrink-0" aria-hidden />
-              <span className="truncate">{pipeline.path}</span>
-            </button>
-            {dirty ? (
-              <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-[#f5b544]">
-                <span className="size-1.5 rounded-full bg-[#f5b544]" aria-hidden />
-                Unsaved changes
-              </span>
-            ) : null}
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {pills ? (
-            <>
-              <StatusPill signal={pills.strictSignal} label={pills.strictLabel} />
-              <span
-                className={`flex h-6 items-center gap-[5px] rounded-full px-2 ${
-                  pills.warningSignal === "needs"
-                    ? "border border-[#f5b5444d] bg-[#f5b5441f] text-[var(--sf-needs)]"
-                    : "bg-[var(--sf-raised)] text-[var(--sf-text-3)]"
-                }`}
-                aria-label={pills.warningLabel}
-              >
-                {pills.warningCount > 0 ? (
-                  <LuTriangleAlert className="size-3 shrink-0 text-[#f5b544]" aria-hidden />
-                ) : null}
-                <span className="font-sans text-xs font-medium">{pills.warningLabel}</span>
-              </span>
-            </>
-          ) : null}
-          <button
-            type="button"
-            className="sf-btn sf-btn--ghost"
-            disabled={!dirty || loading}
-            onClick={onDiscard}
-          >
-            Discard
-          </button>
-          <a
-            className="sf-btn sf-btn--secondary"
-            href={`#${workshopPath({
+    <div className="flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
+      <PipelineEditorHeader
+        pipelineId={pipelineId}
+        filePath={pipeline.path}
+        unsavedCount={unsavedCount}
+        pills={pills}
+        discardDisabled={loading || (unsavedCount === 0 && yamlParseError === null)}
+        saveDisabled={saveDisabled}
+        saving={saving}
+        workshopHref={workshopHref}
+        onDiscard={onDiscard}
+        onStartRun={() =>
+          onNew(
+            newRunPath({
               pipeline: pipeline.path,
-              ...(pipeline.project_root
-                ? { project_root: pipeline.project_root }
-                : {}),
-            })}`}
-          >
-            <LuSquareArrowOutUpRight className="size-3.5" aria-hidden />
-            Open in Workshop
-          </a>
-          <button
-            type="button"
-            className="sf-btn sf-btn--secondary"
-            onClick={() =>
-              onNew(
-                newRunPath({
-                  pipeline: pipeline.path,
-                  ...(defaultTask ? { task: defaultTask } : {}),
-                }),
-              )
-            }
-          >
-            <LuPlay className="size-3.5" aria-hidden />
-            Start a run
-          </button>
-          <button
-            type="button"
-            className="sf-btn sf-btn--primary"
-            disabled={saveDisabled}
-            onClick={() => void onSave()}
-          >
-            Save
-            <Keycap className="border-[#0c0d0f33] text-[#5a5e66]">⌘S</Keycap>
-          </button>
-        </div>
-      </div>
-      <div className="relative">
-        <FilterTabs
-          variant="underline"
-          tabs={editorTabSpecs(
-            runsLoading ? undefined : pipelineRuns.length,
-          )}
-          activeId={editorTab}
-          onChange={(id) => {
-            if (isEditorTabId(id)) setEditorTab(id);
-          }}
-        />
-        <button
-          type="button"
-          role="switch"
-          aria-checked={autoValidate}
-          aria-label="Auto-validate"
-          onClick={() => setAutoValidate((on) => !on)}
-          className="absolute right-7 top-1/2 flex -translate-y-1/2 items-center gap-[7px] rounded-md py-1 pr-1"
-        >
-          <span
-            className={`flex h-4 w-[26px] items-center rounded-full px-0.5 ${
-              autoValidate ? "bg-[var(--sf-text-1)]" : "bg-[var(--sf-raised)]"
-            }`}
-          >
-            <span
-              className={`block size-3 rounded-full transition-transform ${
-                autoValidate
-                  ? "translate-x-[10px] bg-[var(--sf-ground)]"
-                  : "bg-[var(--sf-text-3)]"
-              }`}
-            />
-          </span>
-          <span className="whitespace-nowrap text-xs text-[var(--sf-text-2)]">
-            Auto-validate
-          </span>
-        </button>
-      </div>
+              ...(defaultTask ? { task: defaultTask } : {}),
+              ...(pipeline.project_root ? { project_root: pipeline.project_root } : {}),
+            }),
+          )
+        }
+        onSave={() => void onSave()}
+        onCopyPath={copyPath}
+        activeTab={editorTab}
+        onTabChange={setEditorTab}
+        runsCount={runsLoading ? null : pipelineRuns.length}
+        autoValidate={autoValidate}
+        onAutoValidateChange={setAutoValidate}
+        onFormat={() => setFormatNonce((nonce) => nonce + 1)}
+        formatDisabled={yamlParseError !== null || !draft || loading}
+      />
       {editorTab === "runs" ? (
-        <PipelineEditorRuns
-          runs={pipelineRuns}
-          loading={runsLoading}
-          error={runsError}
-        />
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <PipelineEditorRuns runs={pipelineRuns} loading={runsLoading} error={runsError} />
+        </div>
       ) : null}
       {editorTab === "history" ? (
-        <PipelineEditorHistory
-          events={historyEvents}
-          runs={pipelineRuns}
-          loading={runsLoading}
-        />
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <PipelineEditorHistory events={historyEvents} runs={pipelineRuns} loading={runsLoading} />
+        </div>
       ) : null}
       {editorTab === "editor" && loadError ? (
         <p className="px-5 pt-3 text-[13px] text-[var(--sf-fail)]">{loadError}</p>
@@ -586,31 +630,53 @@ export function PipelineEditorPage({
         </p>
       ) : null}
       {editorTab === "editor" && !loading && draft ? (
-        <div className="flex min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Editor">
-          <div className="flex min-h-0 w-full min-w-0 flex-1 overflow-hidden">
+        <>
+          <div className="flex min-h-0 flex-1" role="tabpanel" aria-label="Editor">
             <YamlPanel
+              key={yamlKey}
               draft={draft}
-              pipelinePath={pipeline.path}
+              pipelinePath={pipelinePath}
               activePath={yamlPath}
               onActivePathChange={setYamlPath}
+              openPaths={openPaths}
+              onClosePath={onClosePath}
+              dirtyPaths={dirtyPaths}
+              highlightRange={infoRange}
+              selectedStageId={selectedStageId}
+              activeFinding={yamlFinding}
+              onQuickFix={() => {
+                if (selectedFinding) applyQuickFix(selectedFinding);
+              }}
+              onDraftChange={onDraftChange}
+              onParseError={setYamlParseError}
+              formatNonce={formatNonce}
+              readOnly={false}
             />
             <PipelineEditorGraph
               draft={draft}
               selectedStageId={selectedStageId}
               onSelectStage={onSelectStage}
               onAddStage={onAddStage}
+              defaultModel={defaultModel}
+              stageFindings={stageFindings}
+              stageStats={stageStats}
+              p50Ms={p50Ms}
             />
             <PipelineEditorInspector
               draft={draft}
               baseline={baseline}
               selectedStageId={selectedStageId}
-              findings={findings}
+              findings={backendFindings}
               models={models}
               defaultModel={defaultModel}
+              skills={skills}
               pipelines={pipelines}
+              currentPipelineId={pipeline.id}
               projectRoot={pipeline.project_root}
+              workshopHref={workshopHref}
               onDraftChange={onDraftChange}
               onRenameStage={onRenameStage}
+              onOpenYaml={onOpenYaml}
               focusRequest={
                 fieldFocus && fieldFocus.stageId === selectedStageId
                   ? { field: fieldFocus.field, nonce: fieldFocus.nonce }
@@ -618,23 +684,28 @@ export function PipelineEditorPage({
               }
             />
           </div>
-          <ProblemsPanel
+          <EditorProblemsPanel
             findings={findings}
             activeFilePath={yamlPath}
             loading={validating}
             error={validateError}
-            collapsible
             collapsed={problemsCollapsed}
             onCollapsedChange={setProblemsCollapsed}
             selectedKey={selectedProblemKey}
-            onSelectFinding={activateFinding}
-            validatedMs={validatedMs}
+            onSelectFinding={selectFinding}
+            onQuickFix={applyQuickFix}
             onValidate={() => {
               void runCatalogValidate();
               if (draft) void runDraftValidate(draft);
             }}
+            validatedAt={validatedAt}
+            validatedMs={validatedMs}
+            stageCount={draft.pipeline.stages.length}
+            schemaCount={draftSchemaCount(draft)}
+            findingKey={editorFindingKey}
+            quickFixFor={quickFixFor}
           />
-        </div>
+        </>
       ) : null}
     </div>
   );

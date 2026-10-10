@@ -22,4 +22,9 @@ describe("normalizeHotkeyKey", () => {
   it("prefixes mod for meta or control", () => {
     expect(normalizeHotkeyKey(fakeKey("k", { metaKey: true }))).toBe("mod+k");
   });
+
+  it("uses the physical letter when alt changes the produced key", () => {
+    const event = { ...fakeKey("Ï", { altKey: true, shiftKey: true }), code: "KeyF" } as KeyboardEvent;
+    expect(normalizeHotkeyKey(event)).toBe("alt+shift+f");
+  });
 });

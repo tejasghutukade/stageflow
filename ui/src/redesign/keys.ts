@@ -49,7 +49,12 @@ export function normalizeHotkeyKey(e: KeyboardEvent): string {
   if (e.metaKey || e.ctrlKey) parts.push("mod");
   if (e.altKey) parts.push("alt");
   if (e.shiftKey) parts.push("shift");
-  const base = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
+  const base =
+    e.altKey && typeof e.code === "string" && /^Key[A-Z]$/.test(e.code)
+      ? e.code.slice(3).toLowerCase()
+      : e.key.length === 1
+        ? e.key.toLowerCase()
+        : e.key.toLowerCase();
   parts.push(base);
   return parts.join("+");
 }
