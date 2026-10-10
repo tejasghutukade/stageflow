@@ -939,6 +939,7 @@ describe("localhost HTTP API", () => {
             "artifact_backed",
           ],
           uses_path: "stages/hitl-four-kinds.yaml",
+          model: "anthropic/claude-sonnet-4-5",
         },
       ]);
     } finally {

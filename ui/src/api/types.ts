@@ -401,6 +401,8 @@ export type PipelineStageListing = {
   gate_kinds?: StageGateKind[];
   uses_path?: string;
   inline?: boolean;
+  model?: string;
+  skill?: string;
 };
 
 export type PipelineListing = {

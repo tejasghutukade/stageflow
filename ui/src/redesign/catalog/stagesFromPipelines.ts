@@ -1,4 +1,8 @@
-import type { PipelineListing, StageGateKind } from "../../api";
+import type {
+  PipelineListing,
+  PipelineStageListing,
+  StageGateKind,
+} from "../../api";
 
 export type StageRowFromPipelines = {
   rowKey: string;
@@ -7,15 +11,29 @@ export type StageRowFromPipelines = {
   gate_kinds?: StageGateKind[];
   used_by_pipeline_ids: string[];
   project_root?: string;
+  model?: string;
+  skill?: string;
 };
+
+type StageListingWithExtras = PipelineStageListing & {
+  model?: string;
+  skill?: string;
+};
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
 
 export function stagesFromPipelines(
   pipelines: PipelineListing[],
 ): StageRowFromPipelines[] {
   const map = new Map<string, StageRowFromPipelines>();
   for (const pipeline of pipelines) {
-    for (const stage of pipeline.stages) {
+    for (const rawStage of pipeline.stages) {
+      const stage = rawStage as StageListingWithExtras;
       const rowKey = `${pipeline.project_root ?? ""}:${stage.id}`;
+      const model = nonEmpty(stage.model);
+      const skill = nonEmpty(stage.skill);
       const existing = map.get(rowKey);
       if (existing) {
         if (!existing.used_by_pipeline_ids.includes(pipeline.id)) {
@@ -24,6 +42,8 @@ export function stagesFromPipelines(
         if (!existing.uses_path && stage.uses_path) {
           existing.uses_path = stage.uses_path;
         }
+        if (!existing.model && model) existing.model = model;
+        if (!existing.skill && skill) existing.skill = skill;
         if (
           existing.gate_kinds === undefined &&
           stage.gate_kinds !== undefined
@@ -39,6 +59,8 @@ export function stagesFromPipelines(
           ...(stage.gate_kinds !== undefined
             ? { gate_kinds: [...stage.gate_kinds] }
             : {}),
+          ...(model ? { model } : {}),
+          ...(skill ? { skill } : {}),
           used_by_pipeline_ids: [pipeline.id],
         });
       }

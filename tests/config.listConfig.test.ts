@@ -109,6 +109,7 @@ describe("listConfig manifest-driven", () => {
       expect(demo?.stages[0]).toMatchObject({
         id: "step",
         uses_path: "pipelines/step.yaml",
+        model: "cursor/auto",
       });
       const fork = pipelines.find((p) => p.id === "fork-demo");
       expect(fork?.stages.some((s) => s.uses_path?.includes("decide.yaml"))).toBe(true);

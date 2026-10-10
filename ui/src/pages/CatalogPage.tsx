@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchExtensions,
   fetchPipelines,
@@ -12,6 +12,9 @@ import { CatalogHeaderBar } from "../redesign/catalog/CatalogHeaderBar";
 import { CatalogStagesTab } from "../redesign/catalog/CatalogStagesTab";
 import { CatalogSkillsTab } from "../redesign/catalog/CatalogSkillsTab";
 import type { CatalogTabId } from "../redesign/catalog/CatalogTabs";
+import { NewStageDialog } from "../redesign/catalog/NewStageDialog";
+import type { NewStageInitial } from "../redesign/catalog/catalogStageModel";
+import { useHotkeys } from "../redesign/keys";
 
 export function CatalogPage({
   tab = "stages",
@@ -50,6 +53,11 @@ function CatalogPageMain({
   tab: CatalogTabId;
   skillName?: string;
 }) {
+  const [query, setQuery] = useState("");
+  const [stageDialog, setStageDialog] = useState<{
+    initial: NewStageInitial | null;
+  } | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   const [stageCount, setStageCount] = useState<number>();
   const [skillCount, setSkillCount] = useState<number>();
   const [extensionCount, setExtensionCount] = useState<number>();
@@ -83,26 +91,72 @@ function CatalogPageMain({
     void loadCounts();
   }, [loadCounts]);
 
+  const openNewStage = useCallback((initial?: NewStageInitial) => {
+    setStageDialog({ initial: initial ?? null });
+  }, []);
+  const closeNewStage = useCallback(() => setStageDialog(null), []);
+
+  useHotkeys(
+    [
+      {
+        key: "/",
+        scope: "catalog",
+        handler: (e) => {
+          e.preventDefault();
+          searchRef.current?.focus();
+          searchRef.current?.select();
+        },
+      },
+      {
+        key: "n",
+        scope: "catalog",
+        when: () => tab === "stages" && stageDialog === null,
+        handler: (e) => {
+          e.preventDefault();
+          openNewStage();
+        },
+      },
+    ],
+    "catalog",
+  );
+
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--sf-ground)]">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[#0c0d0f]">
       <CatalogHeaderBar
         active={tab}
         stageCount={stageCount}
         skillCount={skillCount}
         extensionCount={extensionCount}
+        query={query}
+        onQueryChange={setQuery}
+        searchRef={searchRef}
+        onNewStage={() => openNewStage()}
       />
       <div className="flex min-h-0 flex-1 flex-col">
-        {tab === "stages" ? <CatalogStagesTab /> : null}
-        {tab === "skills" ? (
-          <CatalogSkillsTab skillName={skillName} />
+        {tab === "stages" ? (
+          <CatalogStagesTab query={query} onNewStage={openNewStage} />
         ) : null}
-        {tab === "extensions" ? <CatalogExtensionsTab /> : null}
+        {tab === "skills" ? (
+          <CatalogSkillsTab skillName={skillName} query={query} />
+        ) : null}
+        {tab === "extensions" ? <CatalogExtensionsTab query={query} /> : null}
       </div>
+      <NewStageDialog
+        open={stageDialog !== null}
+        initial={stageDialog?.initial ?? null}
+        onClose={closeNewStage}
+      />
     </div>
   );
 }
 
-function CatalogExtensionsTab() {
+function matchesQuery(query: string, ...values: (string | null | undefined)[]): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return values.some((value) => value?.toLowerCase().includes(q));
+}
+
+function CatalogExtensionsTab({ query }: { query: string }) {
   const [packages, setPackages] = useState<PackageListing[]>([]);
   const [extensions, setExtensions] = useState<ExtensionFileListing[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +180,25 @@ function CatalogExtensionsTab() {
   }, [load]);
 
   const empty = !loading && packages.length === 0 && extensions.length === 0;
+  const visiblePackages = useMemo(
+    () =>
+      packages.filter((pkg) =>
+        matchesQuery(query, pkg.source, pkg.scope, pkg.installedPath),
+      ),
+    [packages, query],
+  );
+  const visibleExtensions = useMemo(
+    () =>
+      extensions.filter((ext) =>
+        matchesQuery(query, ext.name, ext.source, ext.path),
+      ),
+    [extensions, query],
+  );
+  const noMatches =
+    !loading &&
+    !empty &&
+    visiblePackages.length === 0 &&
+    visibleExtensions.length === 0;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -143,7 +216,12 @@ function CatalogExtensionsTab() {
           .pi/extensions, or packages in Pi settings.
         </p>
       ) : null}
-      {!loading && packages.length > 0 ? (
+      {noMatches ? (
+        <p className="px-4 py-3 text-xs text-[var(--sf-text-3)]">
+          No extensions match “{query}”.
+        </p>
+      ) : null}
+      {!loading && visiblePackages.length > 0 ? (
         <>
           <div className="flex h-8 shrink-0 items-center border-b border-b-[#ffffff12] px-4 text-[13px] font-semibold text-[var(--sf-text-1)]">
             Packages
@@ -159,7 +237,7 @@ function CatalogExtensionsTab() {
               Installed
             </div>
           </div>
-          {packages.map((pkg) => (
+          {visiblePackages.map((pkg) => (
             <div
               key={`${pkg.scope}:${pkg.source}`}
               className="flex h-10 shrink-0 items-center gap-2.5 border-b border-b-[#ffffff12] px-4 py-0"
@@ -182,7 +260,7 @@ function CatalogExtensionsTab() {
           ))}
         </>
       ) : null}
-      {!loading && extensions.length > 0 ? (
+      {!loading && visibleExtensions.length > 0 ? (
         <>
           <div className="flex h-8 shrink-0 items-center border-b border-b-[#ffffff12] px-4 text-[13px] font-semibold text-[var(--sf-text-1)]">
             Files
@@ -201,7 +279,7 @@ function CatalogExtensionsTab() {
               Origin
             </div>
           </div>
-          {extensions.map((ext) => (
+          {visibleExtensions.map((ext) => (
             <div
               key={`${ext.scope}:${ext.path}`}
               className="flex h-10 shrink-0 items-center gap-2.5 border-b border-b-[#ffffff12] px-4 py-0"
