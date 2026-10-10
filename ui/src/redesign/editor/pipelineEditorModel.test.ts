@@ -3,12 +3,18 @@ import type {
   DraftPackagePayload,
   DraftValidationResult,
   PipelineListing,
+  ValidationFinding,
 } from "../../api";
 import {
   editorTabSpecs,
   editorValidationPills,
+  findingDedupeKey,
+  focusEditorFinding,
   isDraftDirty,
   isEditorTabId,
+  lastValidatedFooter,
+  mergeEditorFindings,
+  problemCounts,
   stageUsedByCount,
   type EditorTabId,
 } from "./pipelineEditorModel";
@@ -170,5 +176,111 @@ describe("editor tabs", () => {
       { id: "runs", label: "Runs", count: 0 },
       { id: "history", label: "History" },
     ]);
+  });
+});
+
+function finding(
+  partial: Partial<ValidationFinding> & Pick<ValidationFinding, "code" | "message">,
+): ValidationFinding {
+  return {
+    severity: "error",
+    path: "pipelines/feature-ship.pipeline.yaml",
+    category: "pipeline",
+    ...partial,
+  };
+}
+
+describe("mergeEditorFindings", () => {
+  const draftError = finding({
+    code: "stage.missing_model",
+    path: "stages/plan.yaml",
+    message: 'Stage "plan": model is required',
+    category: "stage",
+    stageId: "plan",
+  });
+  const catalogWarning = finding({
+    severity: "warning",
+    code: "pipeline.model_applies",
+    path: "pipelines/feature-ship.pipeline.yaml",
+    message: "model applies to every stage",
+  });
+  const catalogDuplicate = finding({
+    ...draftError,
+    severity: "warning",
+  });
+
+  it("keeps live draft findings and disk findings that are not the same problem", () => {
+    expect(mergeEditorFindings([draftError], [catalogWarning])).toEqual([
+      draftError,
+      catalogWarning,
+    ]);
+  });
+
+  it("drops a disk finding that matches a draft finding on code, path, and message", () => {
+    expect(mergeEditorFindings([draftError], [catalogDuplicate, catalogWarning])).toEqual([
+      draftError,
+      catalogWarning,
+    ]);
+    expect(findingDedupeKey(draftError)).toBe(findingDedupeKey(catalogDuplicate));
+  });
+
+  it("does not invent info findings", () => {
+    const merged = mergeEditorFindings([draftError], [catalogWarning]);
+    expect(merged.map((row) => row.severity)).toEqual(["error", "warning"]);
+    expect(problemCounts(merged)).toEqual({ errors: 1, warnings: 1 });
+  });
+});
+
+describe("focusEditorFinding", () => {
+  const draft: DraftPackagePayload = {
+    pipeline: {
+      id: "feature-ship",
+      stages: [{ id: "plan", uses: "./stages/plan.yaml" }],
+    },
+    stages: [
+      {
+        path: "stages/plan.yaml",
+        body: { id: "plan", system_prompt: "Plan it." },
+      },
+    ],
+  };
+
+  it("selects the stage field locateFindingField resolves", () => {
+    expect(
+      focusEditorFinding(
+        finding({
+          code: "stage.missing_model",
+          path: "stages/plan.yaml",
+          category: "stage",
+          stageId: "plan",
+          message: 'Stage "plan": model is required',
+        }),
+        draft,
+      ),
+    ).toEqual({ kind: "stage", stageId: "plan", field: "model" });
+  });
+
+  it("leaves pipeline and catalog findings that do not locate a stage on the row", () => {
+    expect(
+      focusEditorFinding(
+        finding({
+          code: "catalog.duplicate_pipeline_id",
+          category: "catalog",
+          message: "Duplicate pipeline id feature-ship",
+        }),
+        draft,
+      ),
+    ).toEqual({ kind: "row" });
+  });
+});
+
+describe("lastValidatedFooter", () => {
+  it("names strict validate and the client duration", () => {
+    expect(lastValidatedFooter(null)).toBe(
+      "Last validated · sf validate --strict · —",
+    );
+    expect(lastValidatedFooter(18.4)).toBe(
+      "Last validated · sf validate --strict · 18ms",
+    );
   });
 });

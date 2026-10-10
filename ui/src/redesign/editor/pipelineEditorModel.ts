@@ -2,7 +2,9 @@ import type {
   DraftPackagePayload,
   DraftValidationResult,
   PipelineListing,
+  ValidationFinding,
 } from "../../api";
+import { locateFindingField } from "../workshop/inspector/stageFields";
 
 export const EDITOR_TAB_IDS = ["editor", "runs", "history"] as const;
 
@@ -111,4 +113,59 @@ export function editorTabSpecs(runsCount: number): EditorTabSpec[] {
     { id: "runs", label: "Runs", count: runsCount },
     { id: "history", label: "History" },
   ];
+}
+
+export function findingDedupeKey(finding: ValidationFinding): string {
+  return `${finding.code}\0${finding.path}\0${finding.message}`;
+}
+
+export function mergeEditorFindings(
+  draftFindings: readonly ValidationFinding[],
+  catalogFindings: readonly ValidationFinding[],
+): ValidationFinding[] {
+  const seen = new Set<string>();
+  const merged: ValidationFinding[] = [];
+  for (const finding of [...draftFindings, ...catalogFindings]) {
+    const key = findingDedupeKey(finding);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(finding);
+  }
+  return merged;
+}
+
+export function problemCounts(findings: readonly ValidationFinding[]): {
+  errors: number;
+  warnings: number;
+} {
+  let errors = 0;
+  let warnings = 0;
+  for (const finding of findings) {
+    if (finding.severity === "error") errors += 1;
+    else if (finding.severity === "warning") warnings += 1;
+  }
+  return { errors, warnings };
+}
+
+export type EditorFindingFocus =
+  | { kind: "stage"; stageId: string; field: string }
+  | { kind: "row" };
+
+export function focusEditorFinding(
+  finding: ValidationFinding,
+  draft: DraftPackagePayload,
+): EditorFindingFocus {
+  const located = locateFindingField(finding, draft);
+  if (located) {
+    return { kind: "stage", stageId: located.stageId, field: located.field };
+  }
+  return { kind: "row" };
+}
+
+export function lastValidatedFooter(elapsedMs: number | null): string {
+  const timing =
+    elapsedMs === null || !Number.isFinite(elapsedMs)
+      ? "—"
+      : `${Math.max(0, Math.round(elapsedMs))}ms`;
+  return `Last validated · sf validate --strict · ${timing}`;
 }

@@ -3,7 +3,10 @@ import type {
   PipelineListing,
   ValidationFinding,
 } from "../../api";
-import { WorkshopStageInspector } from "../workshop/inspector/WorkshopStageInspector";
+import {
+  WorkshopStageInspector,
+  type StageFocusRequest,
+} from "../workshop/inspector/WorkshopStageInspector";
 import { getStageForm } from "../workshop/inspector/stageFields";
 import { stageUsedByCount } from "./pipelineEditorModel";
 
@@ -18,6 +21,7 @@ export type PipelineEditorInspectorProps = {
   projectRoot?: string;
   onDraftChange: (draft: DraftPackagePayload) => void;
   onRenameStage: (fromId: string, toId: string) => void;
+  focusRequest?: StageFocusRequest | null;
 };
 
 export function PipelineEditorInspector({
@@ -31,6 +35,7 @@ export function PipelineEditorInspector({
   projectRoot,
   onDraftChange,
   onRenameStage,
+  focusRequest = null,
 }: PipelineEditorInspectorProps) {
   const form = selectedStageId ? getStageForm(draft, selectedStageId) : null;
 
@@ -75,6 +80,7 @@ export function PipelineEditorInspector({
           onDraftChange={onDraftChange}
           onRenameStage={onRenameStage}
           usedByCount={usedByCount}
+          focusRequest={focusRequest}
         />
       </div>
     </aside>

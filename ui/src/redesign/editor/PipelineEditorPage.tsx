@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LuFolder,
   LuPlay,
@@ -28,11 +28,15 @@ import { FilterTabs } from "../shell/FilterTabs";
 import { cloneDraft } from "./draftMutators";
 import { addStage, renameStage } from "../workshop/stageMutators";
 import { stagePathLabel } from "../workshop/inspector/stageFields";
+import type { StageFocusRequest } from "../workshop/inspector/WorkshopStageInspector";
 import {
   editorTabSpecs,
   editorValidationPills,
+  findingDedupeKey,
+  focusEditorFinding,
   isDraftDirty,
   isEditorTabId,
+  mergeEditorFindings,
   type EditorTabId,
 } from "./pipelineEditorModel";
 import { PipelineEditorGraph } from "./PipelineEditorGraph";
@@ -89,6 +93,13 @@ export function PipelineEditorPage({
   );
   const [validating, setValidating] = useState(false);
   const [validateError, setValidateError] = useState<string | null>(null);
+  const [validatedMs, setValidatedMs] = useState<number | null>(null);
+  const [problemsCollapsed, setProblemsCollapsed] = useState(false);
+  const [selectedProblemKey, setSelectedProblemKey] = useState<string | null>(null);
+  const [fieldFocus, setFieldFocus] = useState<
+    (StageFocusRequest & { stageId: string }) | null
+  >(null);
+  const focusNonce = useRef(0);
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
@@ -147,6 +158,7 @@ export function PipelineEditorPage({
     setValidating(true);
     setValidateError(null);
     try {
+      const started = Date.now();
       const result = await fetchCatalogValidate({
         pipeline: pipeline.path,
         strict: true,
@@ -155,6 +167,7 @@ export function PipelineEditorPage({
           : {}),
       });
       setCatalogFindings(result.findings);
+      setValidatedMs(Date.now() - started);
     } catch (err) {
       setValidateError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -164,11 +177,13 @@ export function PipelineEditorPage({
 
   const runDraftValidate = useCallback(
     async (nextDraft: DraftPackagePayload) => {
+      const started = Date.now();
       const result = await validateDraftPackage(
         nextDraft,
         pipeline.project_root,
       );
       setDraftValidation(result);
+      setValidatedMs(Date.now() - started);
     },
     [pipeline.project_root],
   );
@@ -261,6 +276,31 @@ export function PipelineEditorPage({
     [draft],
   );
 
+  const findings = useMemo(
+    () => mergeEditorFindings(draftValidation?.findings ?? [], catalogFindings),
+    [catalogFindings, draftValidation],
+  );
+
+  const activateFinding = useCallback(
+    (finding: ValidationFinding) => {
+      setSelectedProblemKey(findingDedupeKey(finding));
+      setProblemsCollapsed(false);
+      if (!draft) return;
+      const focus = focusEditorFinding(finding, draft);
+      if (focus.kind !== "stage") return;
+      setSelectedStageId(focus.stageId);
+      const path = yamlPathForSelectedStage(draft, focus.stageId);
+      if (path) setYamlPath(path);
+      focusNonce.current += 1;
+      setFieldFocus({
+        stageId: focus.stageId,
+        field: focus.field,
+        nonce: focusNonce.current,
+      });
+    },
+    [draft],
+  );
+
   useHotkeys(
     [
       {
@@ -280,6 +320,21 @@ export function PipelineEditorPage({
         handler: (event) => {
           event.preventDefault();
           onAddStage();
+        },
+      },
+      {
+        key: "mod+.",
+        scope: "pipelines",
+        allowInInput: true,
+        when: () => editorTab === "editor" && !loading,
+        handler: (event) => {
+          event.preventDefault();
+          const selected = selectedProblemKey
+            ? findings.find((row) => findingDedupeKey(row) === selectedProblemKey)
+            : null;
+          const target = selected ?? findings[0];
+          if (!target) return;
+          activateFinding(target);
         },
       },
     ],
@@ -484,20 +539,31 @@ export function PipelineEditorPage({
               draft={draft}
               baseline={baseline}
               selectedStageId={selectedStageId}
-              findings={draftValidation?.findings ?? []}
+              findings={findings}
               models={models}
               defaultModel={defaultModel}
               pipelines={pipelines}
               projectRoot={pipeline.project_root}
               onDraftChange={onDraftChange}
               onRenameStage={onRenameStage}
+              focusRequest={
+                fieldFocus && fieldFocus.stageId === selectedStageId
+                  ? { field: fieldFocus.field, nonce: fieldFocus.nonce }
+                  : null
+              }
             />
           </div>
           <ProblemsPanel
-            findings={catalogFindings}
+            findings={findings}
             activeFilePath={yamlPath}
             loading={validating}
             error={validateError}
+            collapsible
+            collapsed={problemsCollapsed}
+            onCollapsedChange={setProblemsCollapsed}
+            selectedKey={selectedProblemKey}
+            onSelectFinding={activateFinding}
+            validatedMs={validatedMs}
             onValidate={() => {
               void runCatalogValidate();
               if (draft) void runDraftValidate(draft);
