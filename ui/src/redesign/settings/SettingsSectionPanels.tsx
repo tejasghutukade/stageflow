@@ -7,10 +7,7 @@ import { SettingsAppearance } from "../../components/SettingsAppearance";
 import { cursorMcpConfigJson, mcpEndpointUrl } from "../../mcpConnect";
 import type { ThemeMode } from "../../themePreference";
 import type { NotifyPreference } from "../../useWaitingNotifications";
-import {
-  computeConcurrencySlots,
-  isLoopbackHost,
-} from "./settingsConcurrency";
+import { computeConcurrencySlots } from "./settingsConcurrency";
 import {
   LuCheck,
   LuCopy,
@@ -291,7 +288,6 @@ export function SettingsMcpPanel() {
     viteDev: import.meta.env.DEV,
   });
   const snippet = cursorMcpConfigJson(url);
-  const showToken = !isLoopbackHost(window.location.hostname);
   const [token, setToken] = useState(() => getControlToken());
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedConfig, setCopiedConfig] = useState(false);
@@ -359,25 +355,24 @@ export function SettingsMcpPanel() {
             {snippet}
           </pre>
         </div>
-        {showToken ? (
-          <label className="flex flex-col gap-1.5">
-            <span className="font-sans text-[13px] font-medium text-[var(--sf-text-1)]">
-              Control token
-            </span>
-            <span className="font-sans text-xs text-[var(--sf-text-3)]">
-              Stored in this browser only. Send as Authorization Bearer for
-              off-loopback hosts.
-            </span>
-            <input
-              type="password"
-              autoComplete="off"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="STAGEFLOW_CONTROL_TOKEN"
-              className="h-8 rounded-lg border border-[#ffffff1a] bg-[var(--sf-raised)] px-2.5 font-['Geist_Mono',monospace] text-[13px] text-[var(--sf-text-1)] outline-none"
-            />
-          </label>
-        ) : null}
+        <label className="flex flex-col gap-1.5">
+          <span className="font-sans text-[13px] font-medium text-[var(--sf-text-1)]">
+            Control token
+          </span>
+          <span className="font-sans text-xs text-[var(--sf-text-3)]">
+            Stored in this browser only. Paste the Host&apos;s
+            STAGEFLOW_CONTROL_TOKEN, including Docker on localhost. Leave empty
+            when the Host has no token.
+          </span>
+          <input
+            type="password"
+            autoComplete="off"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="STAGEFLOW_CONTROL_TOKEN"
+            className="h-8 rounded-lg border border-[#ffffff1a] bg-[var(--sf-raised)] px-2.5 font-['Geist_Mono',monospace] text-[13px] text-[var(--sf-text-1)] outline-none"
+          />
+        </label>
         {import.meta.env.DEV ? (
           <p className="font-sans text-xs text-[var(--sf-text-3)]">
             Vite hot-reload cannot serve MCP. This snippet uses the default sf

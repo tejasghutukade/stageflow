@@ -123,7 +123,7 @@ Do not invent compose flags or env names. See Stageflow docs: Docker and self-ho
 
 1. From a Stageflow checkout (or image + compose that matches shipped contracts), copy `.env.example` → `.env`. Do not commit `.env`.
 
-2. Set `STAGEFLOW_CONTROL_TOKEN` to ≥32 characters, no whitespace (e.g. `openssl rand -hex 32`). Required when the image binds non-loopback.
+2. The shipped Compose file sets `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` and publishes `127.0.0.1:3847` only, so no control token is required. If you remove that opt-in, set `STAGEFLOW_CONTROL_TOKEN` to ≥32 characters, no whitespace (e.g. `openssl rand -hex 32`).
 
 3. Set Host boot providers as `STAGEFLOW_PROVIDER_<ID>_API_KEY` or `_FILE` (e.g. `STAGEFLOW_PROVIDER_OPENROUTER_API_KEY`). Not bare `OPENROUTER_API_KEY` alone.
 

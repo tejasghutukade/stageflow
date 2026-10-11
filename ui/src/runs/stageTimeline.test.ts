@@ -106,6 +106,43 @@ describe("stageTimeline", () => {
     ]);
   });
 
+  it("extends the bar through post-answer work until succeeded", () => {
+    const st = stage({
+      stage_id: "decide",
+      status: "succeeded",
+      events: [
+        { event: "started", at: "2026-10-05T12:00:00.000Z" },
+        { event: "waiting_for_input", at: "2026-10-05T12:00:10.000Z" },
+        { event: "operator_answer", at: "2026-10-05T12:02:00.000Z" },
+        { event: "succeeded", at: "2026-10-05T12:02:30.000Z" },
+      ],
+    });
+    expect(visibleStageBars(st, now)).toEqual([
+      {
+        kind: "succeeded",
+        startMs: Date.parse("2026-10-05T12:00:00.000Z"),
+        endMs: Date.parse("2026-10-05T12:02:30.000Z"),
+      },
+    ]);
+  });
+
+  it("extends post-answer running to now while the stage resumes", () => {
+    const resumeNow = Date.parse("2026-10-05T12:03:00.000Z");
+    const st = stage({
+      stage_id: "decide",
+      status: "running",
+      events: [
+        { event: "started", at: "2026-10-05T12:00:00.000Z" },
+        { event: "waiting_for_input", at: "2026-10-05T12:00:10.000Z" },
+        { event: "operator_answer", at: "2026-10-05T12:02:00.000Z" },
+      ],
+    });
+    const bars = visibleStageBars(st, resumeNow);
+    expect(bars.map((bar) => bar.kind)).toEqual(["running", "waiting", "running"]);
+    expect(bars[2]?.startMs).toBe(Date.parse("2026-10-05T12:02:00.000Z"));
+    expect(bars[2]?.endMs).toBe(resumeNow);
+  });
+
   it("keeps agent work blue and the open gate orange through now", () => {
     const st = stage({
       stage_id: "review",

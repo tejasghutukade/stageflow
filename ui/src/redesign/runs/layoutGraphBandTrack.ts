@@ -10,6 +10,7 @@ export const GRAPH_BAND_ROW_STEP = 72;
 export const GRAPH_BAND_PAD_X = 40;
 export const GRAPH_BAND_PAD_Y = 48;
 export const GRAPH_BAND_MIN_HEIGHT = 160;
+export const GRAPH_BAND_NODE_ANCHOR_Y = 24;
 
 export type GraphBandNodeBox = {
   stageId: string;
@@ -51,13 +52,15 @@ export function layoutGraphBandTrack(spatial: SpatialTrackLayout): GraphBandLayo
   };
 }
 
-export function graphBandEdgeSegment(
+export function graphBandEdgePath(
   from: GraphBandNodeBox,
   to: GraphBandNodeBox,
-): { left: number; top: number; width: number } | null {
-  const top = from.y + 24;
-  const left = from.x + from.width;
-  const width = to.x - left;
-  if (width <= 0) return null;
-  return { left, top, width };
+): string | null {
+  const x1 = from.x + from.width;
+  const y1 = from.y + GRAPH_BAND_NODE_ANCHOR_Y;
+  const x2 = to.x;
+  const y2 = to.y + GRAPH_BAND_NODE_ANCHOR_Y;
+  if (x2 <= x1) return null;
+  const bend = Math.max(16, (x2 - x1) / 2);
+  return `M${x1} ${y1} C${x1 + bend} ${y1} ${x2 - bend} ${y2} ${x2} ${y2}`;
 }

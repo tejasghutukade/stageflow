@@ -23,14 +23,9 @@ The compose service runs `command: ["sf", "ui"]` on purpose: operator console **
 
 ### Checklist
 
-1. **Generate a control token** (≥32 characters, no whitespace). Required when the image binds non-loopback:
+1. **No control token for this compose file.** It publishes `127.0.0.1:3847:3847` and sets `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs, and with the opt-in it starts without a bearer. Keep the publish address on `127.0.0.1`. To require a token again, remove the opt-in and set `STAGEFLOW_CONTROL_TOKEN` (≥32 characters, no whitespace).
 
-   ```bash
-   openssl rand -hex 32
-   # or: python3 -c 'import secrets; print(secrets.token_hex(32))'
-   ```
-
-2. **Create `.env` from [`.env.example`](../.env.example)** at the repo root. Paste the token into `STAGEFLOW_CONTROL_TOKEN=…`. Fill provider and GitHub vars as needed (see below). Compose loads `.env` automatically; do not commit `.env`.
+2. **Create `.env` from [`.env.example`](../.env.example)** at the repo root. Fill provider and GitHub vars as needed (see below). Compose loads `.env` automatically; do not commit `.env`.
 
 3. **Shell env overrides Compose `.env`.** If you have empty `GITHUB_TOKEN` / `GH_TOKEN` (or other keys) exported in your shell, Compose substitutes those empties and **blanks** the container value. Unset them for the compose invocation when the file should win:
 
@@ -46,7 +41,7 @@ The compose service runs `command: ["sf", "ui"]` on purpose: operator console **
    # → {"ok":true,"status":"live",…}
    ```
 
-5. **Open the console** at [http://127.0.0.1:3847](http://127.0.0.1:3847) and paste the same control token under **Settings** (drive bearer for API/MCP).
+5. **Open the console** at [http://127.0.0.1:3847](http://127.0.0.1:3847). With the shipped compose file, API calls do not need a bearer.
 
 Prefer a file secret when the token must not appear in the process environment on the host:
 

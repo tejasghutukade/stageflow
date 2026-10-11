@@ -102,7 +102,7 @@ export function RunGroup({
       >
         {meta.Icon ? (
           <meta.Icon
-            className={`size-[13px] shrink-0${groupId === "needs_you" ? " text-[var(--sf-needs)]" : groupId === "running" ? " text-[var(--sf-running)]" : " text-[var(--sf-text-3)]"}`}
+            className={`size-[13px] shrink-0${groupId === "needs_you" ? " text-[var(--sf-needs)]" : groupId === "running" ? " animate-spin text-[var(--sf-running)]" : " text-[var(--sf-text-3)]"}`}
             aria-hidden="true"
           />
         ) : null}

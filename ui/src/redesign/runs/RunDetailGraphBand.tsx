@@ -2,13 +2,13 @@ import { useMemo } from "react";
 import type { RunDetail } from "../../api";
 import type { SpatialTrackLayout } from "../../track/layoutPipelineTrack";
 import type { WorkspaceTrackStage } from "../../workspace/resolveRunWorkspace";
-import { signalIcon } from "../statusSignal";
+import { signalIcon, signalIconMotionClass } from "../statusSignal";
 import {
   buildRunGraphBandView,
   graphBandSelectedHint,
 } from "./buildRunGraphBandView";
 import {
-  graphBandEdgeSegment,
+  graphBandEdgePath,
   layoutGraphBandTrack,
   type GraphBandNodeBox,
 } from "./layoutGraphBandTrack";
@@ -82,7 +82,7 @@ function GraphBandNodeCard({
     >
       <span className="flex items-center gap-1.5">
         <Icon
-          className={`size-3.5 shrink-0 ${signalIconClass(node.signal)}`}
+          className={`size-3.5 shrink-0 ${signalIconClass(node.signal)}${signalIconMotionClass(node.signal) ? ` ${signalIconMotionClass(node.signal)}` : ""}`}
           aria-hidden="true"
         />
         <span
@@ -169,25 +169,29 @@ export function RunDetailGraphBand({
             minHeight: bandLayout.height,
           }}
         >
-          {bandLayout.edges.map((edge) => {
-            const from = boxByStageId.get(edge.from);
-            const to = boxByStageId.get(edge.to);
-            if (!from || !to) return null;
-            const segment = graphBandEdgeSegment(from, to);
-            if (!segment) return null;
-            return (
-              <span
-                key={`${edge.from}-${edge.to}`}
-                className="pointer-events-none absolute block h-px bg-[#ffffff1f]"
-                style={{
-                  left: segment.left,
-                  top: segment.top,
-                  width: segment.width,
-                }}
-                aria-hidden="true"
-              />
-            );
-          })}
+          <svg
+            className="pointer-events-none absolute left-0 top-0 overflow-visible"
+            width={bandLayout.width}
+            height={bandLayout.height}
+            aria-hidden="true"
+          >
+            {bandLayout.edges.map((edge) => {
+              const from = boxByStageId.get(edge.from);
+              const to = boxByStageId.get(edge.to);
+              if (!from || !to) return null;
+              const d = graphBandEdgePath(from, to);
+              if (!d) return null;
+              return (
+                <path
+                  key={`${edge.from}-${edge.to}`}
+                  d={d}
+                  fill="none"
+                  stroke="#ffffff1f"
+                  strokeWidth={1}
+                />
+              );
+            })}
+          </svg>
           {bandLayout.nodes.map((box) => {
             const node = nodeByStageId.get(box.stageId);
             if (!node) return null;

@@ -4057,6 +4057,35 @@ describe("HTTP console foundation BF-1–BF-6", () => {
     }
   });
 
+  it("resolves a seeded pipeline against the examples root, not the host cwd", async () => {
+    const bootCwd = await mkdtemp(path.join(tmpdir(), "sf-http-validate-cwd-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-validate-store-"));
+    const store = createRunStore({ rootDir: storeRoot });
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: bootCwd,
+    });
+    try {
+      const res = await jsonFetch(`${base}/api/catalog/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: "ci-validate/ci-demo.pipeline.yaml",
+          project_root: "examples",
+          strict: true,
+        }),
+      });
+      expect(res.status).toBe(200);
+      const findings = (res.body.findings ?? []) as Array<{ message?: string }>;
+      const messages = findings.map((finding) => finding.message ?? "").join("\n");
+      expect(messages).not.toContain("Pipeline file not found");
+      expect(messages).not.toContain(bootCwd);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("BF-2 GET /api/catalog/file reads catalog YAML", async () => {
     const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-"));
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf2-store-"));

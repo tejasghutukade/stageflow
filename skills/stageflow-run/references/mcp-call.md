@@ -10,7 +10,7 @@ Default `--base-url` is `http://127.0.0.1:3847`. `--args` defaults to `{}`.
 
 ## Auth
 
-When `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_TOKEN_FILE` is set, the script sends `Authorization: Bearer <token>` on every `/mcp` request (initialize, tools/call, session DELETE). Docker Compose and any non-loopback Host require a drive token — set the same env in the harness before calling. Loopback with no token stays unauthenticated. `/api/health` (detect-host) does not need a bearer.
+When `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_TOKEN_FILE` is set, the script sends `Authorization: Bearer <token>` on every `/mcp` request (initialize, tools/call, session DELETE). A non-loopback Host requires a drive token unless `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` (the shipped local Compose file sets that). When a token is set, put the same env in the harness before calling. Loopback with no token stays unauthenticated. `/api/health` (detect-host) does not need a bearer.
 
 ## Session
 

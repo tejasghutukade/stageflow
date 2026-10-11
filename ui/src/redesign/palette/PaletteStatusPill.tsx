@@ -1,5 +1,5 @@
 import type { StatusSignal } from "../statusSignal";
-import { signalIcon, signalLabel } from "../statusSignal";
+import { signalIcon, signalIconMotionClass, signalLabel } from "../statusSignal";
 
 const PILL_CLASS: Record<StatusSignal, string> = {
   fail: "bg-[#f2645a1a] text-[var(--sf-fail)]",
@@ -27,7 +27,10 @@ export function PaletteStatusPill({
     <span
       className={`flex h-[22px] min-w-[92px] w-fit shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-[7px] py-0 font-sans text-xs font-medium ${PILL_CLASS[signal]}${className ? ` ${className}` : ""}`}
     >
-      <Icon className="size-3 shrink-0" aria-hidden="true" />
+      <Icon
+        className={`size-3 shrink-0${signalIconMotionClass(signal) ? ` ${signalIconMotionClass(signal)}` : ""}`}
+        aria-hidden="true"
+      />
       <span>{text}</span>
     </span>
   );

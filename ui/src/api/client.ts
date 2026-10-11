@@ -82,7 +82,7 @@ import type {
   WorkshopBuildRecord,
   WorkshopPickerRow,
 } from "./types";
-import { authorizationHeaders } from "./controlToken";
+import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -94,6 +94,9 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   const body = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (res.status === 401) {
+    notifyControlTokenRequired();
+  }
   if (!res.ok) {
     throw new Error(body.error ?? `Request failed (${res.status})`);
   }

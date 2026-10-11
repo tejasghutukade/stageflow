@@ -1390,20 +1390,59 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           }
           if (body !== null && typeof body === "object" && !Array.isArray(body)) {
             const record = body as Record<string, unknown>;
-            const pipeline =
+            let pipeline =
               typeof record.pipeline === "string" ? record.pipeline : undefined;
-            const task = typeof record.task === "string" ? record.task : undefined;
+            let task = typeof record.task === "string" ? record.task : undefined;
             const strict = record.strict === true;
+            const projectRoot =
+              typeof record.project_root === "string" && record.project_root.trim()
+                ? record.project_root.trim()
+                : undefined;
             if (pipeline !== undefined && task !== undefined) {
               json(res, 400, {
                 error: "Use at most one of pipeline or task",
               });
               return true;
             }
+            let validateCwd = cwd;
+            if (pipeline !== undefined || task !== undefined) {
+              try {
+                const { wireRoot, roots } = await resolveCatalogStartInput(
+                  { store, bootCwd: cwd },
+                  projectRoot,
+                );
+                validateCwd = wireRoot.path;
+                if (pipeline !== undefined) {
+                  pipeline = resolveCatalogRelativePath({
+                    inputPath: pipeline.trim(),
+                    projectRoot: wireRoot.project_root,
+                    roots,
+                    fieldName: "pipeline",
+                  }).absolutePath;
+                }
+                if (task !== undefined) {
+                  task = resolveCatalogRelativePath({
+                    inputPath: task.trim(),
+                    projectRoot: wireRoot.project_root,
+                    roots,
+                    fieldName: "task",
+                  }).absolutePath;
+                }
+              } catch (err) {
+                if (err instanceof CatalogPathError) {
+                  json(res, 400, catalogPathErrorBody(err));
+                  return true;
+                }
+                throw err;
+              }
+            }
             const scope = pipeline ? "pipeline" : task ? "task" : "full";
             const result = await validateCatalog({
               scope,
-              cwd,
+              cwd: validateCwd,
+              ...(pipeline !== undefined || task !== undefined
+                ? { projectRoot: validateCwd }
+                : {}),
               pipeline,
               task,
               strict,

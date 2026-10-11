@@ -21,6 +21,7 @@ import {
 } from "../../runs/stageTrackNode";
 import {
   signalIcon,
+  signalIconMotionClass,
   statusSignalFromReadiness,
   statusSignalFromStageStatus,
 } from "../statusSignal";
@@ -241,7 +242,10 @@ export function RunTimelineGantt({
                 className="flex w-[140px] min-w-0 shrink-0 items-center gap-2 overflow-hidden"
                 style={{ width: 140 }}
               >
-                <Icon className={`size-3.5 shrink-0 ${iconColor}`} aria-hidden="true" />
+                <Icon
+                  className={`size-3.5 shrink-0 ${iconColor}${signalIconMotionClass(signal) ? ` ${signalIconMotionClass(signal)}` : ""}`}
+                  aria-hidden="true"
+                />
                 <span
                   className={`truncate font-sans text-[13px] leading-normal${
                     selected && !mutedLabel ? " font-medium" : ""

@@ -37,7 +37,7 @@ node ../stageflow/scripts/detect-host.mjs --base-url http://127.0.0.1:3847
 | `up <baseUrl>` … | [MCP path](#mcp-path) |
 | `down <baseUrl>` | [CLI path](#cli-path) |
 
-Optional trailing `bearer` means `STAGEFLOW_CONTROL_TOKEN` (or `_FILE`) is set in this environment — send it on MCP via [`mcp-call.md`](references/mcp-call.md) (Compose / non-loopback Hosts require a token). `/api/health` stays unauthenticated; the probe does not break loopback.
+Optional trailing `bearer` means `STAGEFLOW_CONTROL_TOKEN` (or `_FILE`) is set in this environment — send it on MCP via [`mcp-call.md`](references/mcp-call.md). A non-loopback Host requires a token unless `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. `/api/health` stays unauthenticated; the probe does not break loopback.
 
 **Done when** you have `up` or `down` and the base URL.
 

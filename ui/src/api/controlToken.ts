@@ -1,5 +1,26 @@
 const CONTROL_TOKEN_KEY = "stageflow.controlToken";
 
+export const CONTROL_TOKEN_REQUIRED_EVENT = "sf-control-token-required";
+
+let controlTokenRequired = false;
+const controlTokenRequiredListeners = new Set<() => void>();
+
+export function wasControlTokenRequired(): boolean {
+  return controlTokenRequired;
+}
+
+export function subscribeControlTokenRequired(listener: () => void): () => void {
+  controlTokenRequiredListeners.add(listener);
+  return () => controlTokenRequiredListeners.delete(listener);
+}
+
+export function notifyControlTokenRequired(): void {
+  controlTokenRequired = true;
+  for (const listener of controlTokenRequiredListeners) listener();
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(CONTROL_TOKEN_REQUIRED_EVENT));
+}
+
 export function getControlToken(): string {
   if (typeof localStorage === "undefined") return "";
   try {

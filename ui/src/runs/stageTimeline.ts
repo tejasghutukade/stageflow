@@ -129,6 +129,25 @@ export function stageSegments(
     });
   }
 
+  if (
+    waitingAt !== undefined &&
+    answeredAt !== undefined &&
+    answeredAt >= waitingAt
+  ) {
+    const postAnswerEnd =
+      succeededAt ??
+      failedAt ??
+      skippedAt ??
+      (stage.status === "running" ? now : undefined);
+    if (postAnswerEnd !== undefined && postAnswerEnd > answeredAt) {
+      segments.push({
+        kind: "running",
+        startMs: answeredAt,
+        endMs: postAnswerEnd,
+      });
+    }
+  }
+
   if (stage.status === "succeeded" || succeededAt !== undefined) {
     const tStart = succeededAt ?? lastEventAt(events, ["started"]) ?? now;
     const tEnd = succeededAt ?? tStart;

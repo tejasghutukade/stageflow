@@ -104,6 +104,10 @@ export function signalLabel(signal: StatusSignal): string {
   }
 }
 
+export function signalIconMotionClass(signal: StatusSignal): string {
+  return signal === "running" ? "animate-spin" : "";
+}
+
 export function signalIcon(signal: StatusSignal): IconType {
   switch (signal) {
     case "needs":

@@ -45,6 +45,7 @@ import {
 import { AppShell as RedesignAppShell } from "./redesign/shell/AppShell";
 import { AppRail as RedesignAppRail } from "./redesign/shell/AppRail";
 import { ConsoleOverlays } from "./redesign/ConsoleOverlays";
+import { ControlTokenGate } from "./redesign/ControlTokenGate";
 import { workspaceLabelFromSnapshot } from "./redesign/inbox/inboxViews";
 import { readThemePreference, type ThemeMode } from "./themePreference";
 import {
@@ -371,6 +372,7 @@ export function App() {
 
   return (
     <RunCatalogProvider catalog={catalog}>
+      <ControlTokenGate />
       <ConsoleRoot />
     </RunCatalogProvider>
   );

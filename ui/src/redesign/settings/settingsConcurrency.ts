@@ -38,12 +38,3 @@ export function computeConcurrencySlots(
     slotStates,
   };
 }
-
-export function isLoopbackHost(hostname: string): boolean {
-  return (
-    hostname === "127.0.0.1" ||
-    hostname === "localhost" ||
-    hostname === "::1" ||
-    hostname === "[::1]"
-  );
-}

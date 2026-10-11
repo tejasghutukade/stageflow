@@ -5,6 +5,7 @@ import { useRedesign } from "../redesign/flag";
 import { StatusPill } from "../redesign/StatusPill";
 import {
   signalIcon,
+  signalIconMotionClass,
   stageStatusPillLabel,
   statusSignalFromReadiness,
   statusSignalFromStageStatus,
@@ -140,7 +141,10 @@ export function TrackDetailList({
                   : undefined
               }
             >
-              <Icon className={`size-3.5 shrink-0 ${iconColor}`} aria-hidden="true" />
+              <Icon
+                className={`size-3.5 shrink-0 ${iconColor}${signalIconMotionClass(signal) ? ` ${signalIconMotionClass(signal)}` : ""}`}
+                aria-hidden="true"
+              />
               <span
                 className={`w-[100px] shrink-0 truncate font-sans text-[13px] leading-normal ${
                   blocked

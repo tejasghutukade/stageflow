@@ -875,7 +875,7 @@ On first SIGTERM/SIGINT the Host drains: stop accepting new starts, signal activ
 
 `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` is a test/debug escape hatch that disables MCP sessions. See [MCP](mcp.md).
 
-**Access control.** Non-loopback binds require `STAGEFLOW_CONTROL_TOKEN` (or `_FILE`); otherwise the process refuses to start (exit `1`) before `listen`. See [MCP — access control](mcp.md#access-control).
+**Access control.** Non-loopback binds require `STAGEFLOW_CONTROL_TOKEN` (or `_FILE`); otherwise the process refuses to start (exit `1`) before `listen`. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` skips that refusal. The shipped Compose file sets it and publishes `127.0.0.1:3847:3847` for local try. Do not set it when the port is reachable beyond this machine. See [MCP — access control](mcp.md#access-control).
 
 Run **either** `sf ui` **or** `sf mcp` at a time — both bind the same default port (`3847`) on the shared global service, so running both together is a port collision, not a store conflict (they already share the same global store). `sf run` / `sf run-stage` / mutating `sf runs` verbs also auto-start this service headlessly if nothing is listening yet, so starting `sf ui` first avoids racing a later headless auto-start for the port.
 
@@ -954,6 +954,7 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_LEGACY_YAML` | Only if you still have pre-`io` catalogs: load adapter for legacy authoring keys (on by default). Set `0` to reject legacy authoring keys; [`sf migrate-yaml`](#sf-migrate-yaml) still reads legacy |
 | `STAGEFLOW_MCP_STATELESS` | Disable MCP sessions (test/debug); same as `--mcp-stateless` |
 | `STAGEFLOW_BIND` | Listen address for `sf ui` / `sf mcp` (overridden by `--host`) |
+| `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` | Set to `1` to start a non-loopback bind with no control token. Local Compose only; leave unset when the port is reachable beyond this machine |
 | `STAGEFLOW_NO_OPEN` | Skip browser open for `sf ui` (overridden by `--no-open`) |
 | `STAGEFLOW_ALLOWED_HOSTS` | Comma-separated Host/Origin allow-list (loopback always allowed); reject `*` |
 | `STAGEFLOW_CONTROL_TOKEN` / `_FILE` | Drive-scoped bearer token (min 32 chars); required for non-loopback bind; `caller_id` `default` |

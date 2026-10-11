@@ -3,6 +3,7 @@ import type { RunSummary } from "../api";
 import { runDisplayStatus } from "../status/runStatus";
 import {
   runStatusPillLabel,
+  signalIconMotionClass,
   signalLabel,
   statusSignalFromReadiness,
   statusSignalFromRun,
@@ -21,6 +22,14 @@ function summary(
     ...overrides,
   };
 }
+
+describe("signalIconMotionClass", () => {
+  it("spins only while running", () => {
+    expect(signalIconMotionClass("running")).toBe("animate-spin");
+    expect(signalIconMotionClass("ok")).toBe("");
+    expect(signalIconMotionClass("needs")).toBe("");
+  });
+});
 
 describe("statusSignalFromRunStatus", () => {
   it("maps run display statuses", () => {

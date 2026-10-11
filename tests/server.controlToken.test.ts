@@ -97,8 +97,22 @@ describe("resolveClientBearerToken", () => {
 describe("assertBindAllowed", () => {
   it("refuses non-loopback without drive", () => {
     const tokens = loadControlTokens({});
-    expect(() => assertBindAllowed("0.0.0.0", tokens)).toThrow(BindRefusedError);
+    expect(() => assertBindAllowed("0.0.0.0", tokens, {})).toThrow(BindRefusedError);
     expect(refuseBindMessage("0.0.0.0")).toContain("bind 0.0.0.0");
+  });
+
+  it("allows non-loopback without a token only when the local opt-in is exactly 1", () => {
+    const tokens = loadControlTokens({});
+    expect(() =>
+      assertBindAllowed("0.0.0.0", tokens, {
+        STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND: "1",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertBindAllowed("0.0.0.0", tokens, {
+        STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND: "true",
+      }),
+    ).toThrow(BindRefusedError);
   });
 
   it("allows loopback without token including 127.0.0.2", () => {

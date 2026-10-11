@@ -194,10 +194,18 @@ Set one of:
   STAGEFLOW_CONTROL_TOKEN_<NAME>=<at least 32 characters>
 
 Or bind to loopback instead:
-  --host 127.0.0.1   (or unset STAGEFLOW_BIND)`;
+  --host 127.0.0.1   (or unset STAGEFLOW_BIND)
+
+Or, only when the published port stays on this machine:
+  STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`;
 }
 
-export function assertBindAllowed(bind: string, tokens: ControlTokens): void {
+export function assertBindAllowed(
+  bind: string,
+  tokens: ControlTokens,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (env.STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND === "1") return;
   if (!isLoopbackBind(bind) && !hasDriveToken(tokens)) {
     throw new BindRefusedError(refuseBindMessage(bind));
   }

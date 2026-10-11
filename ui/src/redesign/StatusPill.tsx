@@ -1,5 +1,5 @@
 import type { StatusSignal } from "./statusSignal";
-import { signalIcon, signalLabel } from "./statusSignal";
+import { signalIcon, signalIconMotionClass, signalLabel } from "./statusSignal";
 import { useRedesign } from "./flag";
 
 export type StatusPillProps = {
@@ -30,11 +30,13 @@ function redesignPillClasses(signal: StatusSignal): string {
 }
 
 function redesignIconClass(signal: StatusSignal): string {
-  if (signal === "needs") return "size-3 shrink-0 text-[#f5b544]";
-  if (signal === "running") return "size-3 shrink-0 text-[var(--sf-running)]";
-  if (signal === "ok") return "size-3 shrink-0 text-[#4cc38a]";
-  if (signal === "fail") return "size-3 shrink-0 text-[#f2645a]";
-  return "size-3 shrink-0";
+  const spin = signalIconMotionClass(signal);
+  const motion = spin ? ` ${spin}` : "";
+  if (signal === "needs") return `size-3 shrink-0 text-[#f5b544]${motion}`;
+  if (signal === "running") return `size-3 shrink-0 text-[var(--sf-running)]${motion}`;
+  if (signal === "ok") return `size-3 shrink-0 text-[#4cc38a]${motion}`;
+  if (signal === "fail") return `size-3 shrink-0 text-[#f2645a]${motion}`;
+  return `size-3 shrink-0${motion}`;
 }
 
 export function StatusPill({
@@ -46,6 +48,7 @@ export function StatusPill({
   const redesign = useRedesign();
   const text = label ?? signalLabel(signal);
   const Icon = signalIcon(signal);
+  const motionClass = signalIconMotionClass(signal);
 
   if (redesign) {
     return (
@@ -70,7 +73,10 @@ export function StatusPill({
 
   return (
     <span className={classes} aria-label={text}>
-      <Icon className="sf-pill__icon" aria-hidden="true" />
+      <Icon
+        className={`sf-pill__icon${motionClass ? ` ${motionClass}` : ""}`}
+        aria-hidden="true"
+      />
       <span className="sf-pill__label">{text}</span>
       {elapsed ? <span className="sf-pill__elapsed sf-mono">{elapsed}</span> : null}
     </span>
