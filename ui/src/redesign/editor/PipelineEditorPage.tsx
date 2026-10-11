@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  createDraftPackageWithDetails,
   fetchCatalogValidate,
   fetchModels,
   fetchSettings,
@@ -19,6 +20,13 @@ import { showToast } from "../../toast";
 import { useHotkeys } from "../keys";
 import { cloneDraft } from "./draftMutators";
 import { addStage, renameStage } from "../workshop/stageMutators";
+import {
+  DEFAULT_WRITE_CATALOG_WIRE_ID,
+  defaultPackageDirectory,
+  draftOriginFromResponse,
+  omitDefaultWriteProjectRoot,
+  type DraftOrigin,
+} from "../workshop/workshopPageModel";
 import { stagePathLabel } from "../workshop/inspector/stageFields";
 import type { StageFocusRequest } from "../workshop/inspector/WorkshopStageInspector";
 import {
@@ -39,7 +47,11 @@ import {
   yamlPathForSelectedStage,
   yamlPathsMatch,
 } from "./draftYaml";
-import { unsavedChangeCount } from "./editorHeaderModel";
+import {
+  editorReadOnlyNotice,
+  editorSaveLabel,
+  unsavedChangeCount,
+} from "./editorHeaderModel";
 import { EditorColumnResizeHandle } from "./EditorColumnResizeHandle";
 import {
   EDITOR_INSPECTOR_DEFAULT_WIDTH,
@@ -161,6 +173,9 @@ export function PipelineEditorPage({
   >([]);
   const sessionSeq = useRef(0);
   const pipelineKey = editorPipelineKey(pipeline);
+  const [sourceOrigin, setSourceOrigin] = useState<DraftOrigin | null>(null);
+  const catalogProjectRoot = pipeline.project_root;
+  const readOnlySource = sourceOrigin?.readOnly === true;
   const [models, setModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
   const [skills, setSkills] = useState<string[]>([]);
@@ -169,6 +184,7 @@ export function PipelineEditorPage({
   const catalogValidateGen = useRef(0);
 
   const pipelinePath = pipeline.path;
+
   const dirty = isDraftDirty(draft, baseline);
   const unsavedCount = unsavedChangeCount(draft, baseline);
   const dirtyPaths = useMemo(
@@ -227,7 +243,7 @@ export function PipelineEditorPage({
     setLoadError(null);
     const opened = await openDraftPackage({
       path: pipeline.path,
-      ...(pipeline.project_root ? { project_root: pipeline.project_root } : {}),
+      ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
     });
     setLoading(false);
     if (!opened.ok) {
@@ -236,10 +252,12 @@ export function PipelineEditorPage({
       setBaseline(null);
       return;
     }
+    const origin = draftOriginFromResponse(opened);
+    if (origin) setSourceOrigin(origin);
     setDraft(opened.draft);
     setBaseline(cloneDraft(opened.draft));
     setDestination(opened.destination);
-  }, [pipeline.path, pipeline.project_root]);
+  }, [catalogProjectRoot, pipeline.path]);
 
   useEffect(() => {
     void reloadDraft();
@@ -290,9 +308,7 @@ export function PipelineEditorPage({
       const result = await fetchCatalogValidate({
         pipeline: pipeline.path,
         strict: true,
-        ...(pipeline.project_root
-          ? { project_root: pipeline.project_root }
-          : {}),
+        ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
       });
       if (generation !== catalogValidateGen.current) return;
       setCatalogFindings(result.findings);
@@ -305,23 +321,20 @@ export function PipelineEditorPage({
     } finally {
       if (generation === catalogValidateGen.current) setValidating(false);
     }
-  }, [appendSession, pipeline.path, pipeline.project_root]);
+  }, [appendSession, catalogProjectRoot, pipeline.path]);
 
   const runDraftValidate = useCallback(
     async (nextDraft: DraftPackagePayload) => {
       const generation = ++draftValidateGen.current;
       const started = Date.now();
-      const result = await validateDraftPackage(
-        nextDraft,
-        pipeline.project_root,
-      );
+      const result = await validateDraftPackage(nextDraft, catalogProjectRoot);
       if (generation !== draftValidateGen.current) return;
       setDraftValidation(result);
       setValidatedMs(Date.now() - started);
       setValidatedAt(Date.now());
       appendSession("Validated", historyValidationDetail("draft", result));
     },
-    [appendSession, pipeline.project_root],
+    [appendSession, catalogProjectRoot],
   );
 
   useEffect(() => {
@@ -350,14 +363,50 @@ export function PipelineEditorPage({
   }, [reloadDraft, runCatalogValidate]);
 
   const onSave = useCallback(async () => {
-    if (!draft || !destination) return;
+    if (!draft) return;
     setSaving(true);
-    const result = await overwriteDraftPackageWithDetails({
-      directory: destination.directory,
-      pipelineFilename: destination.pipelineFilename,
-      draft,
-      ...(pipeline.project_root ? { project_root: pipeline.project_root } : {}),
-    });
+    let result;
+    if (readOnlySource) {
+      const directory = defaultPackageDirectory("workspace", draft.pipeline.id);
+      result = await createDraftPackageWithDetails({
+        directory,
+        pipelineFilename: destination?.pipelineFilename,
+        draft,
+        ...omitDefaultWriteProjectRoot(
+          DEFAULT_WRITE_CATALOG_WIRE_ID,
+          DEFAULT_WRITE_CATALOG_WIRE_ID,
+        ),
+      });
+      if (!result.ok && result.status === 409) {
+        const nextId = window.prompt(
+          "A pipeline with this id already exists in Workspace. Enter a new pipeline id:",
+          `${draft.pipeline.id}-copy`,
+        );
+        if (nextId?.trim()) {
+          const renamed = { ...draft, pipeline: { ...draft.pipeline, id: nextId.trim() } };
+          result = await createDraftPackageWithDetails({
+            directory: defaultPackageDirectory("workspace", nextId.trim()),
+            draft: renamed,
+            ...omitDefaultWriteProjectRoot(
+              DEFAULT_WRITE_CATALOG_WIRE_ID,
+              DEFAULT_WRITE_CATALOG_WIRE_ID,
+            ),
+          });
+          if (result.ok) setDraft(renamed);
+        }
+      }
+    } else {
+      if (!destination) {
+        setSaving(false);
+        return;
+      }
+      result = await overwriteDraftPackageWithDetails({
+        directory: destination.directory,
+        pipelineFilename: destination.pipelineFilename,
+        draft,
+        ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
+      });
+    }
     setSaving(false);
     if (!result.ok) {
       showToast(result.error ?? "Save failed");
@@ -373,11 +422,20 @@ export function PipelineEditorPage({
       });
       return;
     }
+    const nextOrigin = draftOriginFromResponse(result);
+    if (nextOrigin) setSourceOrigin(nextOrigin);
     setBaseline(cloneDraft(draft));
-    showToast("Saved");
-    appendSession("Saved");
+    showToast(readOnlySource ? "Saved copy to Workspace" : "Saved");
+    appendSession(readOnlySource ? "Saved copy" : "Saved");
     void runCatalogValidate();
-  }, [appendSession, destination, draft, pipeline.project_root, runCatalogValidate]);
+  }, [
+    appendSession,
+    catalogProjectRoot,
+    destination,
+    draft,
+    readOnlySource,
+    runCatalogValidate,
+  ]);
 
   const openYamlPath = useCallback((path: string) => {
     setOpenPaths((current) =>
@@ -508,7 +566,8 @@ export function PipelineEditorPage({
     [draft, selectFinding],
   );
 
-  const saveDisabled = !dirty || saving || loading || !draft || yamlParseError !== null;
+  const saveDisabled =
+    !dirty || saving || loading || !draft || yamlParseError !== null;
 
   useHotkeys(
     [
@@ -565,7 +624,7 @@ export function PipelineEditorPage({
   const pills = editorHeaderPills(draftValidation, yamlParseError !== null);
   const workshopHref = `#${workshopPath({
     pipeline: pipeline.path,
-    ...(pipeline.project_root ? { project_root: pipeline.project_root } : {}),
+    ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
   })}`;
 
   const copyPath = useCallback(() => {
@@ -604,13 +663,15 @@ export function PipelineEditorPage({
         saveDisabled={saveDisabled}
         saving={saving}
         workshopHref={workshopHref}
+        readOnlyNotice={editorReadOnlyNotice(readOnlySource)}
+        saveLabel={editorSaveLabel(readOnlySource, dirty)}
         onDiscard={onDiscard}
         onStartRun={() =>
           onNew(
             newRunPath({
               pipeline: pipeline.path,
               ...(defaultTask ? { task: defaultTask } : {}),
-              ...(pipeline.project_root ? { project_root: pipeline.project_root } : {}),
+              ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
             }),
           )
         }
@@ -703,7 +764,7 @@ export function PipelineEditorPage({
               skills={skills}
               pipelines={pipelines}
               currentPipelineId={pipeline.id}
-              projectRoot={pipeline.project_root}
+              projectRoot={catalogProjectRoot}
               workshopHref={workshopHref}
               onDraftChange={onDraftChange}
               onRenameStage={onRenameStage}

@@ -105,6 +105,72 @@ describe("createLiveChatModel model posting", () => {
     expect(parts).toEqual([{ content: [{ type: "text", text: "ok" }] }]);
   });
 
+  it("omits project_root when the save target is the default workspace", async () => {
+    const draft: DraftPackagePayload = {
+      pipeline: { id: "untitled", stages: [] },
+    };
+    const refs: LiveChatRefs = {
+      sessionId: refOf<string | null>("sess-1"),
+      draft: refOf(draft),
+      model: refOf("cursor/auto"),
+      selectedBuildId: refOf<string | null>(null),
+      setDraft: vi.fn(),
+      registerMutations: vi.fn(),
+      pushActivity: vi.fn(),
+      clearActivity: vi.fn(),
+      stop: { current: null },
+      saveTargetWireId: refOf(undefined),
+      defaultWriteWireId: refOf("workspace"),
+    };
+    vi.mocked(sendWorkshopChatTurnStreaming).mockResolvedValue({
+      ok: true,
+      sessionId: "sess-1",
+      events: [],
+      draft,
+      pending: null,
+      autoApply: false,
+      model: "cursor/auto",
+    });
+    await drainRun(refs);
+    expect(sendWorkshopChatTurnStreaming).toHaveBeenCalledWith(
+      expect.not.objectContaining({ project_root: expect.anything() }),
+      expect.any(Object),
+    );
+  });
+
+  it("sends project_root when a non-default save root is selected", async () => {
+    const draft: DraftPackagePayload = {
+      pipeline: { id: "untitled", stages: [] },
+    };
+    const refs: LiveChatRefs = {
+      sessionId: refOf<string | null>("sess-1"),
+      draft: refOf(draft),
+      model: refOf("cursor/auto"),
+      selectedBuildId: refOf<string | null>(null),
+      setDraft: vi.fn(),
+      registerMutations: vi.fn(),
+      pushActivity: vi.fn(),
+      clearActivity: vi.fn(),
+      stop: { current: null },
+      saveTargetWireId: refOf("/data/catalog"),
+      defaultWriteWireId: refOf("workspace"),
+    };
+    vi.mocked(sendWorkshopChatTurnStreaming).mockResolvedValue({
+      ok: true,
+      sessionId: "sess-1",
+      events: [],
+      draft,
+      pending: null,
+      autoApply: false,
+      model: "cursor/auto",
+    });
+    await drainRun(refs);
+    expect(sendWorkshopChatTurnStreaming).toHaveBeenCalledWith(
+      expect.objectContaining({ project_root: "/data/catalog" }),
+      expect.any(Object),
+    );
+  });
+
   it("stop interrupts the stream and keeps the composer reply", async () => {
     const draft: DraftPackagePayload = {
       pipeline: { id: "untitled", stages: [] },
@@ -280,6 +346,35 @@ describe("createLiveChatModel studio drafts", () => {
 
     await startStopAndFinish(refs);
 
+    expect(setDraft).not.toHaveBeenCalled();
+  });
+
+  it("a done draft adopts the server build when the studio has no selected build yet", async () => {
+    const setDraft = vi.fn();
+    const onPointerChange = vi.fn();
+    const refs = liveRefs(null, setDraft);
+    refs.onPointerChange = onPointerChange;
+    const withTask: DraftPackagePayload = {
+      pipeline: { id: "demo", stages: [{ id: "a" }] },
+      task: { filename: "demo.task.yaml", body: { id: "demo", goal: "g" } },
+    };
+    vi.mocked(sendWorkshopChatTurnStreaming).mockResolvedValue({
+      ok: true,
+      sessionId: "sess-1",
+      events: [{ type: "message", role: "assistant", text: "task added" }],
+      draft: withTask,
+      pending: null,
+      autoApply: false,
+      model: "cursor/auto",
+      buildId: "build-new",
+    });
+
+    await drainRun(refs);
+
+    expect(onPointerChange).toHaveBeenCalledWith({
+      buildId: "build-new",
+      draft: withTask,
+    });
     expect(setDraft).not.toHaveBeenCalled();
   });
 

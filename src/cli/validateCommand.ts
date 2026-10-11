@@ -7,9 +7,10 @@ import {
   formatValidationHuman,
   formatValidationJson,
 } from "./validateOutput.js";
+import { resolveCliProjectRootLocal } from "./resolveCliProjectRoot.js";
 
 export const VALIDATE_USAGE = `Usage:
-  sf validate [--pipeline <path>] [--task <path>] [--trigger <path>] [--strict] [--json]
+  sf validate [--project-root <id-or-path>] [--pipeline <path>] [--task <path>] [--trigger <path>] [--strict] [--json]
 
   With no flags, validates all pipelines and tasks declared in stageflow.yaml (manifest-all).
   --pipeline validates one pipeline file (includes uses:/include: transitively).
@@ -28,6 +29,7 @@ const defaultIo: ValidateCommandIo = {
 
 type ParsedValidateArgs = {
   help: boolean;
+  projectRoot?: string;
   pipeline?: string;
   task?: string;
   trigger?: string;
@@ -43,6 +45,7 @@ function parseValidateArgs(args: string[]): ParsedValidateArgs {
     return { help: true, strict: false, json: false };
   }
 
+  let projectRoot: string | undefined;
   let pipeline: string | undefined;
   let task: string | undefined;
   let trigger: string | undefined;
@@ -54,6 +57,12 @@ function parseValidateArgs(args: string[]): ParsedValidateArgs {
     const arg = args[i];
     if (arg === "--help" || arg === "-h") {
       help = true;
+    } else if (arg === "--project-root") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --project-root");
+      }
+      projectRoot = value;
     } else if (arg === "--pipeline") {
       const value = args[++i];
       if (value === undefined || value.length === 0) {
@@ -88,7 +97,7 @@ function parseValidateArgs(args: string[]): ParsedValidateArgs {
     throw new Error("Use at most one of --pipeline, --task, or --trigger");
   }
 
-  return { help, pipeline, task, trigger, strict, json };
+  return { help, projectRoot, pipeline, task, trigger, strict, json };
 }
 
 export async function runValidateCommand(
@@ -102,8 +111,7 @@ export async function runValidateCommand(
     ) => Promise<ValidationResult>;
   } = {},
 ): Promise<number> {
-  const cwd = options.cwd ?? process.cwd();
-  const projectRoot = options.projectRoot ?? cwd;
+  const shellCwd = options.cwd ?? process.cwd();
   const out: ValidateCommandIo = { ...defaultIo, ...options.io };
   const validateCatalogFn = options.validateCatalog ?? defaultValidateCatalog;
 
@@ -112,6 +120,17 @@ export async function runValidateCommand(
     if (parsed.help) {
       out.error(VALIDATE_USAGE);
       return 0;
+    }
+
+    let cwd = shellCwd;
+    let projectRoot = options.projectRoot ?? shellCwd;
+    if (parsed.projectRoot !== undefined) {
+      const resolved = resolveCliProjectRootLocal(parsed.projectRoot);
+      if (!resolved) {
+        throw new Error(`Unknown project_root: ${parsed.projectRoot.trim()}`);
+      }
+      cwd = resolved.rootPath;
+      projectRoot = resolved.rootPath;
     }
 
     const scope = parsed.pipeline

@@ -9,6 +9,7 @@ export type SaveToastProps = {
   onOpenCatalog: () => void;
   onDismiss: () => void;
   autoDismissMs?: number;
+  taskMissingWarning?: string;
 };
 
 export function SaveToast({
@@ -19,6 +20,7 @@ export function SaveToast({
   onOpenCatalog,
   onDismiss,
   autoDismissMs = 8000,
+  taskMissingWarning,
 }: SaveToastProps) {
   const [paused, setPaused] = useState(false);
   const dismissRef = useRef(onDismiss);
@@ -55,6 +57,9 @@ export function SaveToast({
             </span>
           </div>
           <span className="text-xs text-[#8b8f98]">Autosave cleared. You are still in Workshop.</span>
+          {taskMissingWarning ? (
+            <span className="text-xs text-[#e8b86d]">{taskMissingWarning}</span>
+          ) : null}
         </div>
         <button
           type="button"

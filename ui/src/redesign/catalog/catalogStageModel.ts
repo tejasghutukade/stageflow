@@ -161,6 +161,33 @@ export function pipelineDirectoryOptions(
   return [...seen.values()].sort((a, b) => a.directory.localeCompare(b.directory));
 }
 
+export function mergePipelineDirectoryOptionsWithCatalogRoots(
+  pipelines: readonly PipelineListing[],
+  roots: readonly {
+    project_root: string;
+    kind: string;
+    read_only: boolean;
+    available?: boolean;
+  }[],
+): PipelineDirectoryOption[] {
+  const options = pipelineDirectoryOptions(pipelines);
+  const seenRoots = new Set(
+    options.map((option) => option.project_root).filter(Boolean),
+  );
+  for (const root of roots) {
+    if (root.read_only || root.available === false) continue;
+    if (seenRoots.has(root.project_root)) continue;
+    const directory = root.kind === "workspace" ? "workspace" : ".";
+    options.push({
+      key: `${root.project_root}:${directory}`,
+      directory,
+      project_root: root.project_root,
+    });
+    seenRoots.add(root.project_root);
+  }
+  return options.sort((a, b) => a.directory.localeCompare(b.directory));
+}
+
 export type RunStatusPill = { label: string; color: string };
 
 export function latestRunForPipeline(

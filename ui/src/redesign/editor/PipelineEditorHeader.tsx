@@ -32,6 +32,8 @@ export type PipelineEditorHeaderProps = {
   onAutoValidateChange(next: boolean): void;
   onFormat(): void;
   formatDisabled: boolean;
+  readOnlyNotice?: string | null;
+  saveLabel?: string;
 };
 
 const actionBtn =
@@ -66,9 +68,16 @@ export function PipelineEditorHeader({
   onAutoValidateChange,
   onFormat,
   formatDisabled,
+  readOnlyNotice,
+  saveLabel = "Save",
 }: PipelineEditorHeaderProps) {
   return (
     <div className="flex h-fit w-full shrink-0 flex-col border-b border-b-[#ffffff12]">
+      {readOnlyNotice ? (
+        <p className="border-b border-b-[#ffffff12] bg-[#f5b54414] px-5 py-2 text-[13px] text-[#f5b544]">
+          {readOnlyNotice}
+        </p>
+      ) : null}
       <div className="flex h-16 w-full items-center gap-4 px-5 py-0">
         <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
           <div className="flex items-center gap-1.5">
@@ -170,7 +179,7 @@ export function PipelineEditorHeader({
             disabled={saveDisabled}
             onClick={onSave}
           >
-            {saving ? "Saving…" : "Save"}
+            {saving ? "Saving…" : saveLabel}
             <Keycap className="border-[#0c0d0f2e] text-[#4a4d55]">⌘S</Keycap>
           </button>
         </div>

@@ -577,6 +577,21 @@ export type DraftValidationResult = {
 
 export type CatalogValidationResult = DraftValidationResult;
 
+export type CatalogRootKind = "registered" | "seeded" | "workspace";
+
+export type CatalogRoot = {
+  project_root: string;
+  kind: CatalogRootKind;
+  label: string;
+  read_only: boolean;
+  available: boolean;
+  unavailable_reason?: string;
+};
+
+export type CatalogRootsResult = {
+  roots: CatalogRoot[];
+};
+
 export type CatalogFileResult = {
   path: string;
   content: string;
@@ -609,6 +624,10 @@ export type CreateDraftPackageResult =
       pipeline: PipelineListing;
       pipelinePath: string;
       stagePaths: string[];
+      project_root?: string;
+      catalog_root_path?: string;
+      root_kind?: CatalogRootKind;
+      read_only?: boolean;
       taskPath?: string;
     }
   | {
@@ -660,6 +679,9 @@ export type OpenDraftPackageResult =
       draft: DraftPackagePayload;
       destination: { directory: string; pipelineFilename: string };
       pipelinePath: string;
+      project_root?: string;
+      root_kind?: CatalogRootKind;
+      read_only?: boolean;
       taskPath?: string;
     }
   | {
@@ -705,6 +727,7 @@ export type WorkshopAutosavePayload = {
   savedPath?: string | null;
   savedTaskPath?: string | null;
   diskFingerprints?: Record<string, string>;
+  projectRoot?: string | null;
 };
 
 export type GetWorkshopAutosaveResult =
@@ -788,6 +811,7 @@ export type WorkshopChatTurnInput = {
   stream?: boolean;
   attachments?: WorkshopChatAttachment[];
   context?: { docs?: boolean };
+  project_root?: string;
 };
 
 export type WorkshopChatTurnResult =

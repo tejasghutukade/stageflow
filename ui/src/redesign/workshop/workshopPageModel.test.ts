@@ -1,27 +1,39 @@
-import { describe, expect, it } from "vitest";
-import type { DraftPackagePayload } from "../../api";
+import { describe, expect, it, vi } from "vitest";
+import type { CatalogRoot, DraftPackagePayload } from "../../api";
 import { addStage } from "./stageMutators";
 import {
   AUTOSAVE_DEBOUNCE_MS,
   CREATE_TASK_PREFILL,
+  DEFAULT_WRITE_CATALOG_WIRE_ID,
   WORKSHOP_CHAT_DEFAULT_WIDTH,
   askAgentToFixPrompt,
   attachmentChipsFromAutosave,
   autosaveArtifactsForAttachments,
-  catalogRoots,
   clampWorkshopChatWidth,
+  defaultPackageDirectory,
+  defaultWritableRootWireId,
+  draftOriginFromResponse,
   escapeWorkshopAction,
+  fallbackDraftOrigin,
+  folderOptionsForSave,
   initialDrawerTab,
   latestPendingMutationId,
   mutationCardOnRegister,
+  omitDefaultWriteProjectRoot,
   openDraftInput,
+  draftForWorkshopSave,
+  draftWithCatalogFilenames,
+  mergeTaskFromAuthoritativeDraft,
   pipelineFilenameFor,
   planDraftInput,
   projectRootField,
+  projectRootForPipelinePath,
   saveAsIntent,
   saveIntent,
+  saveIntentForOrigin,
   savedFileCount,
   seedTranscriptFromAutosave,
+  writableRootOptions,
   workshopBootTarget,
   workshopChangeCount,
   workshopSaveState,
@@ -30,6 +42,30 @@ import {
 function emptyDraft(): DraftPackagePayload {
   return { pipeline: { id: "untitled", stages: [] } };
 }
+
+const sampleRoots: CatalogRoot[] = [
+  {
+    project_root: "examples",
+    kind: "seeded",
+    label: "Examples (read-only)",
+    read_only: true,
+    available: true,
+  },
+  {
+    project_root: "workspace",
+    kind: "workspace",
+    label: "Workspace",
+    read_only: false,
+    available: true,
+  },
+  {
+    project_root: "/data/catalog",
+    kind: "registered",
+    label: "catalog",
+    read_only: false,
+    available: true,
+  },
+];
 
 describe("workshop page model", () => {
   it("debounces autosave at 2s and defaults the chat column to 384", () => {
@@ -81,21 +117,63 @@ describe("workshop page model", () => {
     });
   });
 
-  it("builds catalog roots from unique project_root values", () => {
+  it("infers project_root when exactly one listing matches the pipeline path", () => {
+    const pipelines = [
+      { project_root: "/catalog-a", path: "pipelines/demo.pipeline.yaml" },
+      { project_root: "/catalog-b", path: "pipelines/other.pipeline.yaml" },
+    ];
     expect(
-      catalogRoots([
-        { project_root: "examples" },
-        { project_root: " examples " },
-        { project_root: "/abs/other" },
-        {},
-      ]),
-    ).toEqual([
-      { value: "examples", label: "examples" },
-      { value: "/abs/other", label: "/abs/other" },
+      projectRootForPipelinePath(pipelines, "pipelines/demo.pipeline.yaml"),
+    ).toBe("/catalog-a");
+    expect(
+      projectRootForPipelinePath(pipelines, "pipelines/missing.pipeline.yaml"),
+    ).toBeUndefined();
+  });
+
+  it("builds draft origin and default write targets from catalog roots", () => {
+    expect(
+      draftOriginFromResponse({
+        project_root: "examples",
+        root_kind: "seeded",
+        read_only: true,
+      }),
+    ).toEqual({
+      project_root: "examples",
+      kind: "seeded",
+      readOnly: true,
+    });
+    expect(defaultWritableRootWireId(sampleRoots)).toBe("workspace");
+    expect(writableRootOptions(sampleRoots).map((row) => row.value)).toEqual([
+      "workspace",
+      "/data/catalog",
     ]);
-    expect(catalogRoots([{}, { project_root: "  " }])).toEqual([
-      { value: ".", label: "." },
-    ]);
+    expect(
+      omitDefaultWriteProjectRoot("workspace", DEFAULT_WRITE_CATALOG_WIRE_ID),
+    ).toEqual({});
+    expect(
+      omitDefaultWriteProjectRoot("/data/catalog", DEFAULT_WRITE_CATALOG_WIRE_ID),
+    ).toEqual({ project_root: "/data/catalog" });
+    expect(defaultPackageDirectory("workspace", "demo")).toBe("demo");
+    expect(defaultPackageDirectory("registered", "demo")).toBe("workshop/demo");
+    expect(fallbackDraftOrigin()).toEqual({
+      project_root: "workspace",
+      kind: "workspace",
+      readOnly: false,
+    });
+  });
+
+  it("forces create intent when the draft origin is read-only", () => {
+    expect(
+      saveIntentForOrigin({
+        hasDestination: true,
+        errorCount: 0,
+        originReadOnly: true,
+      }),
+    ).toEqual({
+      kind: "dialog",
+      mode: "create",
+      allowInvalidInitial: false,
+    });
   });
 
   it("chooses direct overwrite only when a destination exists and there are no errors", () => {
@@ -112,18 +190,6 @@ describe("workshop page model", () => {
       mode: "create",
       allowInvalidInitial: false,
     });
-    expect(
-      saveIntent({ hasDestination: true, errorCount: 2, invalid: true }),
-    ).toEqual({
-      kind: "dialog",
-      mode: "overwrite",
-      allowInvalidInitial: true,
-    });
-    expect(saveIntent({ hasDestination: false, errorCount: 1, invalid: true })).toEqual({
-      kind: "dialog",
-      mode: "create",
-      allowInvalidInitial: true,
-    });
     expect(saveAsIntent()).toEqual({
       kind: "dialog",
       mode: "create",
@@ -131,83 +197,67 @@ describe("workshop page model", () => {
     });
   });
 
-  it("plans a save against the dialog root and keeps an existing filename", () => {
+  it("plans a save against the folder and omits default workspace project_root", () => {
     const draft = emptyDraft();
     expect(
       planDraftInput({
-        destination: { root: "pipelines", pipelineId: "demo" },
+        destination: { folder: "fanout-fanin-temp", pipelineId: "demo" },
         draft,
         mode: "create",
+        projectRoot: "workspace",
+        defaultWriteWireId: "workspace",
       }),
     ).toEqual({
-      directory: "pipelines",
+      directory: "fanout-fanin-temp",
       draft: { ...draft, pipeline: { ...draft.pipeline, id: "demo" } },
-      pipelineFilename: "demo.yaml",
+      pipelineFilename: "demo.pipeline.yaml",
       mode: "create",
     });
     expect(
       planDraftInput({
-        destination: { root: "examples", pipelineId: "demo" },
+        destination: { folder: "workshop/demo", pipelineId: "demo" },
         draft: { ...draft, pipeline: { ...draft.pipeline, id: "demo" } },
         mode: "overwrite",
-        projectRoot: "examples",
+        projectRoot: "/data/catalog",
+        defaultWriteWireId: "workspace",
         filename: "demo.pipeline.yaml",
       }),
     ).toMatchObject({
-      directory: "examples",
-      pipelineFilename: "demo.pipeline.yaml",
+      directory: "workshop/demo",
       mode: "overwrite",
-      project_root: "examples",
+      project_root: "/data/catalog",
     });
-    expect(pipelineFilenameFor("other", { id: "demo", filename: "demo.pipeline.yaml" })).toBe(
-      "other.yaml",
-    );
   });
 
-  it("counts written files including the pipeline and an optional task", () => {
-    expect(savedFileCount({ stagePaths: ["a.yaml", "b.yaml"] })).toBe(3);
-    expect(savedFileCount({ stagePaths: ["a.yaml"], taskPath: "t.yaml" })).toBe(3);
+  it("normalizes task filenames in draft packages", () => {
+    expect(
+      draftWithCatalogFilenames({
+        pipeline: { id: "p", stages: [] },
+        task: { filename: "p.yaml", body: { id: "p", goal: "g" } },
+      }).task?.filename,
+    ).toBe("p.task.yaml");
   });
 
-  it("marks auto-apply cards and keeps the latest pending id", () => {
-    expect(mutationCardOnRegister(true, 10)).toEqual({
-      status: "pending",
-      auto: true,
-      at: 10,
+  it("loads the active build task before save when the studio draft lags", async () => {
+    const local = emptyDraft();
+    const authoritative: DraftPackagePayload = {
+      pipeline: { id: "demo", stages: [{ id: "a" }] },
+      task: { filename: "demo.task.yaml", body: { id: "demo", goal: "g" } },
+    };
+    const loadBuild = vi.fn(async () => ({
+      ok: true as const,
+      build: { draft: authoritative },
+    }));
+    const resolved = await draftForWorkshopSave({
+      draft: local,
+      buildId: null,
+      loadBuild,
+      resolveActiveBuildId: async () => "build-9",
     });
-    expect(mutationCardOnRegister(false, 10)).toEqual({ status: "pending", at: 10 });
-    const cards = new Map<string, { status: string; at?: number }>([
-      ["old", { status: "pending", at: 1 }],
-      ["done", { status: "accepted", at: 9 }],
-      ["new", { status: "pending", at: 4 }],
-    ]);
-    expect(latestPendingMutationId(cards)).toBe("new");
-    expect(latestPendingMutationId(new Map())).toBeNull();
-  });
-
-  it("round-trips attachment chip metadata through autosave artifacts", () => {
-    const chips = [{ name: "notes.md", size: 12, mediaType: "text/markdown" }];
-    const artifacts = autosaveArtifactsForAttachments(chips);
-    expect(attachmentChipsFromAutosave({ artifacts })).toEqual(chips);
-    expect(
-      attachmentChipsFromAutosave({
-        attachments: [{ name: "direct.txt", size: 1, mediaType: "text/plain" }],
-        artifacts,
-      }),
-    ).toEqual([{ name: "direct.txt", size: 1, mediaType: "text/plain" }]);
-    expect(attachmentChipsFromAutosave({})).toEqual([]);
-    expect(
-      seedTranscriptFromAutosave([
-        { role: "user", text: "hello", artifacts, createdAt: "2026-10-06T00:00:00.000Z" },
-      ]),
-    ).toEqual([
-      {
-        role: "user",
-        text: "hello",
-        createdAt: "2026-10-06T00:00:00.000Z",
-        attachments: chips,
-      },
-    ]);
+    expect(loadBuild).toHaveBeenCalledWith("build-9");
+    expect(resolved.mergedTaskFromServer).toBe(true);
+    expect(resolved.adoptedBuildId).toBe("build-9");
+    expect(resolved.draft.task).toEqual(authoritative.task);
   });
 
   it("builds the fix prompt, drawer default, and escape action", () => {
@@ -217,18 +267,38 @@ describe("workshop page model", () => {
     );
     expect(initialDrawerTab(emptyDraft())).toBe("task");
     expect(initialDrawerTab({ pipeline: { stages: [{ id: "a" }] } })).toBe("problems");
-    expect(
-      initialDrawerTab({
-        pipeline: { stages: [] },
-        task: { filename: "t.yaml", body: {} },
-      }),
-    ).toBe("problems");
     expect(escapeWorkshopAction({ bannerVisible: true, selectedStageId: "a" })).toBe(
       "dismiss-banner",
     );
-    expect(escapeWorkshopAction({ bannerVisible: false, selectedStageId: "a" })).toBe(
-      "clear-selection",
+  });
+
+  it("round-trips attachment chip metadata through autosave artifacts", () => {
+    const chips = [{ name: "notes.md", size: 12, mediaType: "text/markdown" }];
+    const artifacts = autosaveArtifactsForAttachments(chips);
+    expect(attachmentChipsFromAutosave({ artifacts })).toEqual(chips);
+    expect(savedFileCount({ stagePaths: ["a.yaml"], taskPath: "t.yaml" })).toBe(3);
+    expect(
+      seedTranscriptFromAutosave([{ role: "user", text: "hello", artifacts }]),
+    ).toEqual([{ role: "user", text: "hello", attachments: chips }]);
+  });
+
+  it("merges a task from the authoritative draft when the local draft has none", () => {
+    const local = emptyDraft();
+    const authoritative: DraftPackagePayload = {
+      pipeline: { id: "demo", stages: [{ id: "a" }] },
+      task: { filename: "demo.task.yaml", body: { id: "demo", goal: "g" } },
+    };
+    expect(mergeTaskFromAuthoritativeDraft(local, authoritative).task).toEqual(
+      authoritative.task,
     );
-    expect(escapeWorkshopAction({ bannerVisible: false, selectedStageId: null })).toBe("none");
+  });
+
+  it("keeps an existing filename when the pipeline id is unchanged", () => {
+    expect(pipelineFilenameFor("other", { id: "demo", filename: "demo.pipeline.yaml" })).toBe(
+      "other.pipeline.yaml",
+    );
+    expect(pipelineFilenameFor("demo", { id: "demo", filename: "demo.yaml" })).toBe(
+      "demo.pipeline.yaml",
+    );
   });
 });

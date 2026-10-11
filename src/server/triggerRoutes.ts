@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fireTrigger } from "../runtime/triggerRunner.js";
-import { findTriggerDefinition } from "../runtime/triggerCatalog.js";
 import { matchesEventFilter } from "../runtime/triggerEventMatch.js";
 import { verifyHmacSignature } from "../runtime/webhookSignature.js";
 import { mapStartFailure } from "./operatorResults.js";
@@ -12,13 +11,19 @@ import {
 } from "./requestAuthContext.js";
 import type { RunManager } from "../runtime/runManager.js";
 import type { RunStore } from "../runstore/port.js";
-import { loadCatalogTriggers, type TriggerListItem } from "../config/triggerCatalog.js";
+import {
+  findCatalogTrigger,
+  loadCatalogTriggers,
+  triggerStoreId,
+  type TriggerListItem,
+} from "../config/triggerCatalog.js";
 import { createTrigger, parseCreateTriggerBody } from "../config/createTrigger.js";
 import {
   parsePatchTriggerBody,
   parsePutTriggerBody,
   updateTriggerDefinition,
   updateTriggerEnabled,
+  projectRootFilterFromBody,
 } from "../config/updateTrigger.js";
 import {
   readTriggerAdapterStatus,
@@ -44,6 +49,38 @@ async function enrichTriggerListItem(
 ): Promise<TriggerListItem & { adapter_status: TriggerAdapterStatus }> {
   const adapter_status = await readTriggerAdapterStatus(item, store);
   return { ...item, adapter_status };
+}
+
+function resolveListedTrigger(
+  items: TriggerListItem[],
+  id: string,
+  projectRootWire?: string,
+):
+  | TriggerListItem
+  | { error: string; status: 404 | 409; project_roots?: string[] } {
+  if (projectRootWire) {
+    const found = items.find(
+      (item) => item.id === id && item.project_root === projectRootWire,
+    );
+    if (!found) {
+      return { error: `Trigger not found: ${id}`, status: 404 };
+    }
+    return found;
+  }
+  const matches = items.filter((item) => item.id === id);
+  if (matches.length === 0) {
+    return { error: `Trigger not found: ${id}`, status: 404 };
+  }
+  if (matches.length > 1) {
+    return {
+      error: `Trigger id is ambiguous across catalog roots: ${id}`,
+      status: 409,
+      project_roots: [...new Set(matches.map((m) => m.project_root))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    };
+  }
+  return matches[0]!;
 }
 
 export type TriggerRoutesCtx = {
@@ -129,11 +166,7 @@ export async function handleTriggerRoutes(
   }
 
   if (method === "GET" && pathname === "/api/triggers") {
-    const items = await loadCatalogTriggers(cwd, store);
-    if (items === undefined) {
-      json(res, 404, { error: "No Stageflow catalog found" });
-      return true;
-    }
+    const items = await loadCatalogTriggers({ store, bootCwd: cwd });
     const triggers = await Promise.all(items.map((item) => enrichTriggerListItem(item, store)));
     json(res, 200, { triggers });
     return true;
@@ -160,8 +193,14 @@ export async function handleTriggerRoutes(
       }
     }
     const id = decodeURIComponent(fireMatch[1] ?? "");
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const projectRootWire = url.searchParams.get("project_root") ?? undefined;
     const callerId = callerIdFromRequestAuth();
-    const result = await fireTrigger(id, store, manager, { cwd, task });
+    const result = await fireTrigger(id, store, manager, {
+      cwd,
+      task,
+      ...(projectRootWire ? { project_root: projectRootWire } : {}),
+    });
     if (!result.ok) {
       writeAudit(auditLog, {
         caller_id: callerId,
@@ -200,16 +239,32 @@ export async function handleTriggerRoutes(
     const id = decodeURIComponent(webhookMatch[1] ?? "");
     const callerId = callerIdFromRequestAuth();
 
-    const catalogCtx = catalogContextFromStageflow(await resolveStageflowContext(cwd));
-    const scanPaths = await getCatalogScanPaths(catalogCtx);
-    const found = scanPaths
-      ? await findTriggerDefinition(scanPaths.triggerPaths, id)
-      : undefined;
-    if (!found) {
-      json(res, 404, { error: `Trigger not found: ${id}` });
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const projectRootWire = url.searchParams.get("project_root") ?? undefined;
+    const located = await findCatalogTrigger({
+      store,
+      bootCwd: cwd,
+      triggerId: id,
+      ...(projectRootWire ? { projectRootFilter: projectRootWire } : {}),
+    });
+    if (!located.ok) {
+      if (located.status === 409 && located.code === "ambiguous_trigger") {
+        json(res, located.status, {
+          error: located.reason,
+          code: located.code,
+          project_roots: located.project_roots,
+        });
+      } else if (located.status === 400 && located.code === "unknown_project_root") {
+        json(res, located.status, {
+          error: located.reason,
+          code: located.code,
+        });
+      } else {
+        json(res, located.status, { error: located.reason });
+      }
       return true;
     }
-    const { definition: trigger } = found;
+    const trigger = located.match.definition;
 
     const config = trigger.event?.config;
     const secretRef = typeof config?.secretRef === "string" ? config.secretRef : undefined;
@@ -277,7 +332,11 @@ export async function handleTriggerRoutes(
           }
         : undefined;
 
-    const result = await fireTrigger(id, store, manager, { cwd, task });
+    const result = await fireTrigger(id, store, manager, {
+      cwd,
+      task,
+      project_root: located.match.project_root,
+    });
     if (!result.ok) {
       writeAudit(auditLog, {
         caller_id: callerId,
@@ -315,14 +374,12 @@ export async function handleTriggerRoutes(
   const statusMatch = pathname.match(/^\/api\/triggers\/([^/]+)\/status$/);
   if (method === "GET" && statusMatch) {
     const id = decodeURIComponent(statusMatch[1] ?? "");
-    const items = await loadCatalogTriggers(cwd, store);
-    if (items === undefined) {
-      json(res, 404, { error: "No Stageflow catalog found" });
-      return true;
-    }
-    const found = items.find((item) => item.id === id);
-    if (!found) {
-      json(res, 404, { error: `Trigger not found: ${id}` });
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const projectRootWire = url.searchParams.get("project_root") ?? undefined;
+    const items = await loadCatalogTriggers({ store, bootCwd: cwd });
+    const found = resolveListedTrigger(items, id, projectRootWire);
+    if ("error" in found) {
+      json(res, found.status, { error: found.error, ...(found.project_roots ? { project_roots: found.project_roots } : {}) });
       return true;
     }
     const adapter_status = await readTriggerAdapterStatus(found, store);
@@ -333,17 +390,18 @@ export async function handleTriggerRoutes(
   const firesMatch = pathname.match(/^\/api\/triggers\/([^/]+)\/fires$/);
   if (method === "GET" && firesMatch) {
     const id = decodeURIComponent(firesMatch[1] ?? "");
-    const items = await loadCatalogTriggers(cwd, store);
-    if (items === undefined) {
-      json(res, 404, { error: "No Stageflow catalog found" });
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const projectRootWire = url.searchParams.get("project_root") ?? undefined;
+    const items = await loadCatalogTriggers({ store, bootCwd: cwd });
+    const found = resolveListedTrigger(items, id, projectRootWire);
+    if ("error" in found) {
+      json(res, found.status, { error: found.error, ...(found.project_roots ? { project_roots: found.project_roots } : {}) });
       return true;
     }
-    const found = items.find((item) => item.id === id);
-    if (!found) {
-      json(res, 404, { error: `Trigger not found: ${id}` });
-      return true;
-    }
-    const fires = await store.listTriggerFires(id, 20);
+    const fires = await store.listTriggerFires(
+      triggerStoreId(found.project_root, found.id),
+      20,
+    );
     json(res, 200, { fires });
     return true;
   }
@@ -363,8 +421,11 @@ export async function handleTriggerRoutes(
       json(res, parsed.status, { error: parsed.error });
       return true;
     }
+    const projectRootFilter = projectRootFilterFromBody(body);
     const callerId = callerIdFromRequestAuth();
-    const result = await updateTriggerDefinition(cwd, store, id, parsed);
+    const result = await updateTriggerDefinition(cwd, store, id, parsed, {
+      projectRootFilter,
+    });
     if (!result.ok) {
       writeAudit(auditLog, {
         caller_id: callerId,
@@ -401,8 +462,11 @@ export async function handleTriggerRoutes(
       return true;
     }
     const id = decodeURIComponent(patchMatch[1] ?? "");
+    const projectRootFilter = projectRootFilterFromBody(body);
     const callerId = callerIdFromRequestAuth();
-    const result = await updateTriggerEnabled(cwd, store, id, parsed.enabled);
+    const result = await updateTriggerEnabled(cwd, store, id, parsed.enabled, {
+      projectRootFilter,
+    });
     if (!result.ok) {
       writeAudit(auditLog, {
         caller_id: callerId,
@@ -427,14 +491,12 @@ export async function handleTriggerRoutes(
   const idMatch = pathname.match(/^\/api\/triggers\/([^/]+)$/);
   if (method === "GET" && idMatch) {
     const id = decodeURIComponent(idMatch[1] ?? "");
-    const items = await loadCatalogTriggers(cwd, store);
-    if (items === undefined) {
-      json(res, 404, { error: "No Stageflow catalog found" });
-      return true;
-    }
-    const found = items.find((item) => item.id === id);
-    if (!found) {
-      json(res, 404, { error: `Trigger not found: ${id}` });
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const projectRootWire = url.searchParams.get("project_root") ?? undefined;
+    const items = await loadCatalogTriggers({ store, bootCwd: cwd });
+    const found = resolveListedTrigger(items, id, projectRootWire);
+    if ("error" in found) {
+      json(res, found.status, { error: found.error, ...(found.project_roots ? { project_roots: found.project_roots } : {}) });
       return true;
     }
     json(res, 200, await enrichTriggerListItem(found, store));

@@ -573,14 +573,14 @@ export function TasksRedesign({
   const openCreate = useCallback(() => {
     setDialog({
       mode: "create",
-      initial: { directory: "examples" },
+      initial: { directory: "tasks" },
     });
   }, []);
 
   const openImport = useCallback(() => {
     setDialog({
       mode: "import",
-      initial: { directory: "examples" },
+      initial: { directory: "tasks" },
     });
   }, []);
 

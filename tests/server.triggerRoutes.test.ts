@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,8 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { startTestService } from "./helpers/testInProcessService.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
+import { triggerStoreId } from "../src/config/triggerCatalog.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const triggerFixture = path.join(fixtures, "triggers", "manual-hello-world.trigger.yaml");
@@ -21,6 +23,13 @@ const stageFixture = path.join(fixtures, "stages", "clarify.yaml");
 
 function sign(secret: string, body: string): string {
   return createHmac("sha256", secret).update(body).digest("hex");
+}
+
+function triggerJson(
+  catalogRoot: string,
+  payload: Record<string, unknown>,
+): string {
+  return JSON.stringify({ project_root: catalogRoot, ...payload });
 }
 
 async function seedCatalog(root: string): Promise<void> {
@@ -60,6 +69,18 @@ function successEnvelope(summary: string) {
   };
 }
 
+async function triggerStoreRecord(
+  store: ReturnType<typeof createRunStore>,
+  catalogRoot: string,
+  triggerId: string,
+) {
+  const wire = await realpath(catalogRoot);
+  return (
+    (await store.getTrigger(triggerStoreId(wire, triggerId))) ??
+    (await store.getTrigger(triggerId))
+  );
+}
+
 async function withTriggerService(
   opts: {
     setup?: (root: string) => Promise<void>;
@@ -78,8 +99,9 @@ async function withTriggerService(
     await opts.setup?.(root);
     clearFindProjectRootCacheForTests();
     const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-"));
+    bindStageflowHomeForTests(homeRoot);
     const store = createRunStore({ rootDir: homeRoot });
-    if (opts.ensureProject) await store.ensureProject(root);
+    if (opts.ensureProject !== false) await store.ensureProject(root);
     const service = await startTestService(store, opts.agent ?? scriptedFakeAgent([]), root);
     try {
       await fn({ root, store, service });
@@ -133,7 +155,7 @@ describe("trigger HTTP routes", () => {
         const run = await store.readRun(fired.runId);
         expect(run.pipeline_id).toBe("hello");
 
-        const trigger = await store.getTrigger("manual-hello-world");
+        const trigger = await triggerStoreRecord(store, root, "manual-hello-world");
         expect(trigger?.last_run_id).toBe(fired.runId);
 
         const listAfterFireRes = await fetch(`${service.baseUrl}/api/triggers`);
@@ -240,7 +262,7 @@ describe("trigger HTTP routes", () => {
         const badBodyRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             pipeline: "hello",
             task: "my-task",
@@ -254,7 +276,7 @@ describe("trigger HTTP routes", () => {
         const danglingRefRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "dangling",
             pipeline: "no-such-pipeline",
@@ -269,7 +291,7 @@ describe("trigger HTTP routes", () => {
         const badCronRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "bad-cron",
             pipeline: "hello",
@@ -285,7 +307,7 @@ describe("trigger HTTP routes", () => {
         const duplicateRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "manual-hello-world",
             pipeline: "hello",
@@ -298,7 +320,7 @@ describe("trigger HTTP routes", () => {
         const createdRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "nightly-hello",
             pipeline: "hello",
@@ -335,7 +357,7 @@ describe("trigger HTTP routes", () => {
         const createdDynamicRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "dynamic-created",
             pipeline: "hello",
@@ -388,7 +410,7 @@ describe("trigger HTTP routes", () => {
         const body = (await fireRes.json()) as { error: string };
         expect(body.error).toMatch(/disabled/i);
 
-        expect(await store.getTrigger("manual-disabled")).toBeNull();
+        expect(await triggerStoreRecord(store, root, "manual-disabled")).toBeNull();
         expect((await store.listRuns()).length).toBe(0);
       },
     );
@@ -404,6 +426,7 @@ describe("trigger HTTP routes", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-create-webhook-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
       await store.ensureProject(root);
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
@@ -412,7 +435,7 @@ describe("trigger HTTP routes", () => {
         const createdRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "on-webhook",
             pipeline: "hello",
@@ -487,7 +510,7 @@ describe("trigger HTTP routes", () => {
         const createdRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "on-email",
             pipeline: "hello",
@@ -565,7 +588,9 @@ describe("trigger HTTP routes", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-webhook-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const agent = scriptedFakeAgent([
         successEnvelope("clarified"),
         successEnvelope("clarified"),
@@ -800,7 +825,9 @@ describe("trigger HTTP routes", () => {
         expect(onDisk).toContain("timezone: UTC");
         expect(onDisk).toContain("enabled: false");
         expect(onDisk).not.toContain("0 2 * * *");
-        expect((await store.getTrigger("nightly-hello"))?.enabled).toBe(false);
+        expect((await triggerStoreRecord(store, root, "nightly-hello"))?.enabled).toBe(
+          false,
+        );
 
         const danglingRes = await fetch(`${service.baseUrl}/api/triggers/nightly-hello`, {
           method: "PUT",
@@ -861,7 +888,7 @@ describe("trigger HTTP routes", () => {
   });
 
   it("GET /api/triggers/:id/fires returns recorded fires newest first", async () => {
-    await withTriggerService({}, async ({ store, service }) => {
+    await withTriggerService({}, async ({ root, store, service }) => {
       const missingRes = await fetch(`${service.baseUrl}/api/triggers/no-such-trigger/fires`);
       expect(missingRes.status).toBe(404);
       expect(((await missingRes.json()) as { error: string }).error).toBe(
@@ -872,8 +899,10 @@ describe("trigger HTTP routes", () => {
       expect(emptyRes.status).toBe(200);
       expect(await emptyRes.json()).toEqual({ fires: [] });
 
+      const wireRoot = await realpath(root);
+      const storeId = triggerStoreId(wireRoot, "manual-hello-world");
       await store.upsertTrigger({
-        id: "manual-hello-world",
+        id: storeId,
         definitionRef: "triggers/manual-hello-world.trigger.yaml",
         enabled: true,
       });
@@ -881,12 +910,12 @@ describe("trigger HTTP routes", () => {
         pipelineId: "hello",
         taskYaml: "id: t\ngoal: g\n",
       });
-      await store.recordTriggerFired("manual-hello-world", older);
+      await store.recordTriggerFired(storeId, older);
       const { runId: newer } = await store.createRun({
         pipelineId: "hello",
         taskYaml: "id: t2\ngoal: g\n",
       });
-      await store.recordTriggerFired("manual-hello-world", newer);
+      await store.recordTriggerFired(storeId, newer);
 
       const firesRes = await fetch(`${service.baseUrl}/api/triggers/manual-hello-world/fires`);
       expect(firesRes.status).toBe(200);

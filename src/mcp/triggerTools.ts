@@ -88,10 +88,7 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
       inputSchema: z.object({}),
     },
     async () => {
-      const items = await loadCatalogTriggers(cwd, store);
-      if (items === undefined) {
-        return textResult({ error: "No Stageflow catalog found", status: 404 }, true);
-      }
+      const items = await loadCatalogTriggers({ store, bootCwd: cwd });
       return textResult({ triggers: items });
     },
   );
@@ -106,10 +103,7 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
       }),
     },
     async ({ id }) => {
-      const items = await loadCatalogTriggers(cwd, store);
-      if (items === undefined) {
-        return textResult({ error: "No Stageflow catalog found", status: 404 }, true);
-      }
+      const items = await loadCatalogTriggers({ store, bootCwd: cwd });
       const found = items.find((item) => item.id === id);
       if (!found) {
         return textResult({ error: `Trigger not found: ${id}`, status: 404 }, true);

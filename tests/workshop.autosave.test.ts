@@ -53,9 +53,8 @@ describe("workshop autosave", () => {
       try {
         const storeRoot = resolveWorkshopAutosaveStoreRoot({
           projectRoot: root,
-          isGitProject: true,
         });
-        expect(storeRoot).toBe(path.join(root, ".stageflow"));
+        expect(storeRoot).toBe(resolveWorkshopAutosaveStoreRoot());
 
         const written = writeWorkshopAutosave(
           storeRoot,

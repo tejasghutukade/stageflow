@@ -16,6 +16,11 @@ import {
   type ValidationFinding,
   type ValidationResult,
 } from "./validateCatalog.js";
+import {
+  normalizeDraftCatalogFilenames,
+  taskIdFromDraftTask,
+} from "./workshopCatalogFilenames.js";
+import { reconcileWorkshopCatalogPackageDir } from "./workshopCatalogRepair.js";
 
 export type DraftStageArtifact = {
   path: string;
@@ -356,13 +361,17 @@ function resolveDraftWriteTarget(
     };
   }
 
-  const draft = input.draft;
-  if (!isPlainObject(draft?.pipeline) || typeof draft.pipeline.id !== "string") {
+  const rawDraft = input.draft;
+  if (!isPlainObject(rawDraft?.pipeline) || typeof rawDraft.pipeline.id !== "string") {
     return { ok: false, status: 400, error: "draft.pipeline.id is required" };
   }
 
-  const pipelineFilename =
-    input.pipelineFilename?.trim() || `${draft.pipeline.id}.pipeline.yaml`;
+  const normalized = normalizeDraftCatalogFilenames(
+    rawDraft,
+    input.pipelineFilename?.trim(),
+  );
+  const draft = normalized.draft;
+  const pipelineFilename = normalized.pipelineFilename;
   const pipelineAbsPath = path.join(packageDirectory, path.basename(pipelineFilename));
   const pipelineRelPath = path
     .relative(projectRoot, pipelineAbsPath)
@@ -499,6 +508,17 @@ async function writeDraftPackageFiles(
       };
     }
 
+    const taskId = draft.task ? taskIdFromDraftTask(draft.task) : null;
+    await reconcileWorkshopCatalogPackageDir(
+      packageDirectory,
+      draft.pipeline.id,
+      taskId,
+      {
+        pipelineBasename: path.basename(target.pipelineAbsPath),
+        taskBasename: draft.task ? path.basename(draft.task.filename) : null,
+      },
+    );
+
     return {
       ok: true,
       pipeline,
@@ -512,12 +532,38 @@ async function writeDraftPackageFiles(
   }
 }
 
+async function prepareDraftPackageDirectory(
+  target: ResolvedDraftWrite,
+): Promise<void> {
+  const taskId = target.draft.task
+    ? taskIdFromDraftTask(target.draft.task)
+    : null;
+  await reconcileWorkshopCatalogPackageDir(
+    target.packageDirectory,
+    target.draft.pipeline.id,
+    taskId,
+    {
+      pipelineBasename: path.basename(target.pipelineAbsPath),
+      taskBasename: target.draft.task
+        ? path.basename(
+            path.join(
+              target.packageDirectory,
+              path.basename(target.draft.task.filename),
+            ),
+          )
+        : null,
+    },
+  );
+}
+
 export async function overwriteDraftPackage(
   projectRoot: string,
   input: OverwriteDraftPackageInput,
 ): Promise<OverwriteDraftPackageResult> {
   const resolved = resolveDraftWriteTarget(projectRoot, input);
   if (!resolved.ok) return resolved;
+
+  await prepareDraftPackageDirectory(resolved.value);
 
   if (!(await fileExists(resolved.value.pipelineAbsPath))) {
     return {
@@ -543,6 +589,8 @@ export async function createDraftPackage(
 ): Promise<CreateDraftPackageResult> {
   const resolved = resolveDraftWriteTarget(projectRoot, input);
   if (!resolved.ok) return resolved;
+
+  await prepareDraftPackageDirectory(resolved.value);
 
   if (await fileExists(resolved.value.pipelineAbsPath)) {
     return {

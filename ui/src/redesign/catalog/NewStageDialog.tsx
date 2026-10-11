@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { LuX } from "react-icons/lu";
 import {
   createStageWithDetails,
+  fetchCatalogRoots,
   fetchPipelines,
   type CreateStageInput,
   type StageGateKind,
@@ -11,7 +12,7 @@ import { showToast } from "../../toast";
 import {
   GATE_KIND_OPTIONS,
   newStageFormFrom,
-  pipelineDirectoryOptions,
+  mergePipelineDirectoryOptionsWithCatalogRoots,
   validateNewStage,
   type NewStageErrors,
   type NewStageForm,
@@ -44,10 +45,10 @@ export function NewStageDialog({ open, initial, onClose }: NewStageDialogProps) 
     setErrors({});
     setBanner(null);
     let cancelled = false;
-    fetchPipelines()
-      .then(({ pipelines }) => {
+    Promise.all([fetchPipelines(), fetchCatalogRoots()])
+      .then(([{ pipelines }, { roots }]) => {
         if (cancelled) return;
-        const next = pipelineDirectoryOptions(pipelines);
+        const next = mergePipelineDirectoryOptionsWithCatalogRoots(pipelines, roots);
         setOptions(next);
         setForm((prev) =>
           prev.directoryKey && next.some((o) => o.key === prev.directoryKey)

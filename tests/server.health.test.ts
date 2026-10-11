@@ -131,7 +131,7 @@ describe("health surfaces", () => {
         expect(r).toEqual(
           expect.objectContaining({
             project_root: expect.any(String),
-            kind: expect.stringMatching(/^(registered|seeded)$/),
+            kind: expect.stringMatching(/^(registered|seeded|workspace)$/),
             read_only: expect.any(Boolean),
           }),
         );

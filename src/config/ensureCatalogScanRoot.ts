@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { isSeq, parseDocument } from "yaml";
 import { manifestPathForProject } from "./loadStageflowManifest.js";
+import type { CatalogRootKind } from "./resolveCatalogRoots.js";
 
 /** Directory scanned for workshop-authored pipelines and tasks. */
 export const WORKSHOP_PACKAGE_ROOT = "workshop";
@@ -12,13 +13,18 @@ export function normalizeCatalogDir(directory: string): string {
 /** Untitled workshop saves land here so Run can see them without a new catalog edit. */
 export function defaultWorkshopPackageDirectory(
   pipelineId: string | undefined,
+  catalogRootKind?: CatalogRootKind,
 ): string {
   const slug = (pipelineId ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
-  return `${WORKSHOP_PACKAGE_ROOT}/${slug || "untitled"}`;
+  const id = slug || "untitled";
+  if (catalogRootKind === "workspace") {
+    return id;
+  }
+  return `${WORKSHOP_PACKAGE_ROOT}/${id}`;
 }
 
 /**

@@ -29,6 +29,8 @@ type EditorTarget = {
 type RunTarget = {
   catalogPath: string;
   defaultTaskPath?: string;
+  project_root?: string;
+  pipeline?: { project_root?: string };
 };
 
 type WorkshopTarget = {
@@ -49,9 +51,11 @@ export function pipelineStartRunPath(
   row: RunTarget | null | undefined,
 ): string | null {
   if (!row) return null;
+  const root = row.project_root ?? row.pipeline?.project_root;
   return newRunPath({
     pipeline: row.catalogPath,
     ...(row.defaultTaskPath ? { task: row.defaultTaskPath } : {}),
+    ...(root ? { project_root: root } : {}),
   });
 }
 

@@ -1,10 +1,17 @@
+import path from "node:path";
 import { parse as parseYaml } from "yaml";
+import {
+  CatalogPathError,
+  resolveDefaultWriteRoot,
+} from "../../config/catalogRelativePath.js";
 import {
   validateDraftPackage,
   type DraftPackage,
 } from "../../config/draftPackage.js";
 import { defaultWorkshopPackageDirectory } from "../../config/ensureCatalogScanRoot.js";
 import { publishDraftPackage } from "../../config/publishDraftPackage.js";
+import type { CatalogRootKind } from "../../config/resolveCatalogRoots.js";
+import { globalStageflowHome } from "../../project/globalHome.js";
 import {
   emptyDraftPackage,
   isWorkshopDraftContext,
@@ -147,12 +154,14 @@ function readWorkshopContext(ctx: OperatorAgentToolContext): WorkshopDraftContex
 function resolveDestination(
   ctx: OperatorAgentToolContext,
   args: Record<string, unknown>,
+  catalogRootKind?: CatalogRootKind,
 ): { directory: string; pipelineFilename?: string } | null {
   const directory =
     stringArg(args, "directory") ??
     readWorkshopContext(ctx).destination?.directory ??
     defaultWorkshopPackageDirectory(
       readDraftFromContext(ctx.getContext()).pipeline.id,
+      catalogRootKind,
     );
   const pipelineFilename =
     stringArg(args, "pipelineFilename") ??
@@ -168,6 +177,73 @@ function resolveProjectRoot(
   // Never trust LLM tool args for the write root — only host-bound context
   // (or the profile/host default passed into createSaveTool).
   return readWorkshopContext(ctx).projectRoot ?? defaultProjectRoot ?? null;
+}
+
+type SaveWriteTarget = {
+  fsRoot: string;
+  wireProjectRoot: string;
+  catalogRootKind: CatalogRootKind;
+};
+
+async function resolveSaveWriteTarget(
+  ctx: OperatorAgentToolContext,
+  options: WorkshopAuthorToolOptions,
+): Promise<{ ok: true; target: SaveWriteTarget } | { ok: false; error: string }> {
+  const bound = resolveProjectRoot(ctx, options.projectRoot);
+  const live = liveWorkshopBinding(ctx);
+  const storeRoot = live?.storeRoot ?? globalStageflowHome();
+  const { createRunStore } = await import("../../runstore/createStore.js");
+  const store = createRunStore({ rootDir: storeRoot });
+  try {
+    if (bound) {
+      try {
+        const { wireRoot } = await resolveDefaultWriteRoot({ store }, bound);
+        return {
+          ok: true,
+          target: {
+            fsRoot: wireRoot.path,
+            wireProjectRoot: wireRoot.project_root,
+            catalogRootKind: wireRoot.kind,
+          },
+        };
+      } catch (err) {
+        if (
+          err instanceof CatalogPathError &&
+          err.code === "unknown_project_root"
+        ) {
+          const abs = path.resolve(bound);
+          return {
+            ok: true,
+            target: {
+              fsRoot: abs,
+              wireProjectRoot: abs,
+              catalogRootKind: "registered",
+            },
+          };
+        }
+        if (err instanceof CatalogPathError) {
+          return { ok: false, error: err.message };
+        }
+        throw err;
+      }
+    }
+    const { wireRoot } = await resolveDefaultWriteRoot({ store }, undefined);
+    return {
+      ok: true,
+      target: {
+        fsRoot: wireRoot.path,
+        wireProjectRoot: wireRoot.project_root,
+        catalogRootKind: wireRoot.kind,
+      },
+    };
+  } catch (err) {
+    if (err instanceof CatalogPathError) {
+      return { ok: false, error: err.message };
+    }
+    throw err;
+  } finally {
+    await store.close();
+  }
 }
 
 export function buildCreateStageDraft(
@@ -482,7 +558,7 @@ export function createWorkshopBuildTools(): OperatorAgentTool[] {
   const listBuildsTool: OperatorAgentTool = {
     name: "list_builds",
     description:
-      "List the same workshop rows as the studio picker (open builds and unbound disk pipelines). Does not create a build. Works when no build is focused.",
+      "List the same workshop rows as the studio picker (open builds and unbound disk pipelines). Each row includes catalogListed (whether Tasks/Pipelines would list that pipeline path). Does not create a build. Works when no build is focused.",
     async handler(_args, ctx): Promise<OperatorAgentToolResult> {
       const live = liveWorkshopBinding(ctx);
       if (!live) {
@@ -494,7 +570,20 @@ export function createWorkshopBuildTools(): OperatorAgentTool[] {
           live.storeRoot,
           catalog.pipelines,
           catalog.roots,
-        );
+        ).map((row) => {
+          if (!row.projectRoot || !row.relativePath) {
+            return { ...row, catalogListed: false };
+          }
+          const relPath = row.relativePath;
+          const normalize = (value: string) =>
+            value.replace(/\\/g, "/").replace(/^\.\//, "");
+          const listed = catalog.pipelines.some(
+            (pipeline) =>
+              pipeline.project_root === row.projectRoot &&
+              normalize(pipeline.path) === normalize(relPath),
+          );
+          return { ...row, catalogListed: listed };
+        });
         return { ok: true, content: { rows } };
       } catch (err) {
         return {
@@ -721,25 +810,29 @@ export function createSaveTool(
   return {
     name: "save",
     description:
-      "Validate-then-write the draft via catalog facades (createDraftPackage / overwriteDraftPackage). When directory is omitted, writes under workshop/<pipeline-id>, which the host adds to the catalog so Run can see the pipeline and task. Pass directory only when the operator names a folder. Soft undo does not reverse disk. Prefer mode auto; set allowInvalid only when the operator explicitly requests saving invalid YAML. Do not pass projectRoot — the host binds it.",
+      "Validate-then-write the draft via catalog facades (createDraftPackage / overwriteDraftPackage). When directory is omitted, writes under workshop/<pipeline-id> on registered catalogs (or <pipeline-id> on the workspace catalog). The host adds registered workshop paths to stageflow.yaml so Run can see them. Pass directory only when the operator names a folder. Soft undo does not reverse disk. Prefer mode auto; set allowInvalid only when the operator explicitly requests saving invalid YAML. Do not pass projectRoot — the host binds it.",
     async handler(args, ctx): Promise<OperatorAgentToolResult> {
-      const pinnedDestination = resolvePinnedSaveDestination(ctx.getContext());
-      const destination = pinnedDestination ?? resolveDestination(ctx, args);
+      const writeTarget = await resolveSaveWriteTarget(ctx, options);
+      if (!writeTarget.ok) {
+        return {
+          ok: false,
+          content: null,
+          error: writeTarget.error,
+        };
+      }
+      const { fsRoot, catalogRootKind, wireProjectRoot } = writeTarget.target;
+
+      const pinnedDestination = stringArg(args, "directory")
+        ? null
+        : resolvePinnedSaveDestination(ctx.getContext(), fsRoot);
+      const destination =
+        pinnedDestination ?? resolveDestination(ctx, args, catalogRootKind);
       if (!destination) {
         return {
           ok: false,
           content: null,
           error:
             "destination is required — set context.destination or pass directory (do not invent a disk path)",
-        };
-      }
-      const projectRoot = resolveProjectRoot(ctx, options.projectRoot);
-      if (!projectRoot) {
-        return {
-          ok: false,
-          content: null,
-          error:
-            "projectRoot is required — bind it on the draft context (host-owned; do not invent from tool args)",
         };
       }
 
@@ -760,7 +853,9 @@ export function createSaveTool(
         ...(allowInvalid ? { allowInvalid: true } : {}),
       };
 
-      const published = await publishDraftPackage(projectRoot, input, mode);
+      const published = await publishDraftPackage(fsRoot, input, mode, {
+        catalogRootKind,
+      });
       const result = published.write;
 
       if (result.ok) {
@@ -774,21 +869,35 @@ export function createSaveTool(
               ? { pipelineFilename: destination.pipelineFilename }
               : {}),
           },
-          projectRoot,
+          projectRoot: fsRoot,
         });
         recordPinnedWorkshopSave(ctx.getContext(), {
           directory: destination.directory,
           ...(destination.pipelineFilename
             ? { pipelineFilename: destination.pipelineFilename }
             : {}),
-          projectRoot,
+          projectRoot: fsRoot,
           draft,
+          relativePath: result.pipelinePath,
         });
       }
 
       return {
         ok: result.ok,
-        content: result,
+        content: result.ok
+          ? {
+              ...result,
+              published: {
+                project_root: wireProjectRoot,
+                project_root_path: fsRoot,
+                pipeline_path: result.pipelinePath,
+                stage_paths: result.stagePaths,
+                ...(result.taskPath !== undefined
+                  ? { task_path: result.taskPath }
+                  : { task_path: null }),
+              },
+            }
+          : result,
         ...(result.ok ? {} : { error: result.error }),
       };
     },

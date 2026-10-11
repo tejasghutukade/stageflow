@@ -59,7 +59,7 @@ const SUBMIT_LABELS: Record<TaskFormMode, string> = {
 
 function formFrom(initial: TaskFormInitial | null | undefined): TaskFormState {
   return {
-    directory: initial?.directory ?? "examples",
+    directory: initial?.directory ?? "tasks",
     id: initial?.id ?? "",
     goal: initial?.goal ?? "",
     context: initial?.context ?? "",
@@ -131,12 +131,17 @@ export function TaskFormDialog({ open, mode, initial, onClose, onSaved }: TaskFo
   const isEdit = mode === "edit";
   const isImport = mode === "import";
   const projectRoot = initial?.project_root;
+  const catalogReadOnly = isEdit && projectRoot === "examples";
 
   function set<K extends keyof TaskFormState>(key: K, value: TaskFormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
   async function submit() {
+    if (catalogReadOnly) {
+      setError("Tasks in the examples catalog are read-only. Duplicate into Workspace to edit.");
+      return;
+    }
     const problem = validate(mode, form);
     setError(problem);
     if (problem) return;

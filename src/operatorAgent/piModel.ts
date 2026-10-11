@@ -796,7 +796,7 @@ export function createLiveWorkshopOperatorHost(
     [
       createWorkshopAuthorProfile({
         retriever,
-        projectRoot: projectRoot ?? cwd,
+        ...(projectRoot !== undefined ? { projectRoot } : {}),
       }),
     ],
   );

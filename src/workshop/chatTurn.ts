@@ -5,6 +5,7 @@ import {
   isWorkshopDraftContext,
   readDraftFromContext,
   withDraft,
+  withProjectRoot,
   WORKSHOP_AUTHOR_PROFILE_ID,
   type OperatorAgentHost,
   type OperatorAgentProposal,
@@ -49,6 +50,7 @@ function markUnlinkedChatContext(
   current: unknown,
   sessionId: string,
   draft: DraftPackage,
+  projectRoot?: string,
 ): WorkshopDraftContext {
   const base: WorkshopDraftContext = isWorkshopDraftContext(current)
     ? { ...current, draft }
@@ -56,7 +58,19 @@ function markUnlinkedChatContext(
   delete base.buildId;
   base.chatSessionId = sessionId;
   base.draft = draft;
+  if (projectRoot?.trim()) {
+    base.projectRoot = projectRoot.trim();
+  }
   return base;
+}
+
+function bindChatProjectRoot(
+  context: WorkshopDraftContext,
+  projectRoot?: string,
+): WorkshopDraftContext {
+  const trimmed = projectRoot?.trim();
+  if (!trimmed || context.projectRoot) return context;
+  return withProjectRoot(context, trimmed);
 }
 
 /**
@@ -120,6 +134,8 @@ export type WorkshopChatTurnInput = {
   onActivity?: (update: WorkshopToolActivityUpdate) => void;
   /** Fired when this turn changes the session pointer. */
   onPointerChange?: (frame: WorkshopPointerChange) => void;
+  /** Writable catalog root (absolute path) for agent save; host-resolved. */
+  projectRoot?: string;
 };
 
 export type WorkshopChatTurnResult = {
@@ -478,14 +494,25 @@ export async function runWorkshopChatTurn(
     );
     if (pinnedBuild) {
       agentSession.setContext(
-        bindPinnedBuildContext(agentSession.getContext(), pinnedBuild, sessionId),
+        bindChatProjectRoot(
+          bindPinnedBuildContext(
+            agentSession.getContext(),
+            pinnedBuild,
+            sessionId,
+          ),
+          input.projectRoot,
+        ),
       );
     } else {
       agentSession.setContext(
-        markUnlinkedChatContext(
-          agentSession.getContext(),
-          sessionId,
-          draftForOpen,
+        bindChatProjectRoot(
+          markUnlinkedChatContext(
+            agentSession.getContext(),
+            sessionId,
+            draftForOpen,
+            input.projectRoot,
+          ),
+          input.projectRoot,
         ),
       );
     }

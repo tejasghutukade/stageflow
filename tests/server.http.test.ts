@@ -33,6 +33,7 @@ import {
   setBareCacheRemoteUrlOverrideForTests,
 } from "../src/git/cache.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
 import { validateCatalog } from "../src/config/validateCatalog.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -198,6 +199,7 @@ async function withServer(
   opts: { maxConcurrent?: number; cwd?: string; agentDir?: string; providerAuthContext?: Parameters<typeof startUiServer>[0]["providerAuthContext"] } = {},
 ) {
   const cwd = opts.cwd ?? catalogRoot;
+  bindStageflowHomeForTests(root);
   await store.ensureProject(cwd);
   const started = await startUiServer({
     agent,
@@ -461,6 +463,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          project_root: repoRoot,
           pipeline_directory: "pipelines",
           filename: "fresh-stage.yaml",
           id: "fresh-stage",
@@ -506,6 +509,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          project_root: repoRoot,
           pipeline_directory: "pipelines",
           filename: "inherit-model.yaml",
           id: "inherit-model",
@@ -590,6 +594,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          project_root: repoRoot,
           directory: "pipelines",
           id: "fresh-pipeline",
           stages: [
@@ -616,6 +621,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          project_root: repoRoot,
           directory: "pipelines",
           id: "missing-ref",
           stages: [
@@ -646,6 +652,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          project_root: repoRoot,
           directory: "pipelines",
           id: "inherit-inline",
           stages: [
@@ -711,8 +718,8 @@ describe("localhost HTTP API", () => {
           stages: [{ id: "alpha", uses: "./alpha.yaml" }],
         }),
       });
-      expect(omitted.status).toBe(400);
-      expect(omitted.body.code).toBe("unknown_project_root");
+      expect(omitted.status).toBe(422);
+      expect(String(omitted.body.error)).toMatch(/missing stage file|stage file/);
 
       const unknown = await jsonFetch(`${base}/api/pipelines`, {
         method: "POST",
@@ -2146,10 +2153,8 @@ describe("localhost HTTP API", () => {
   });
 
   it("GET /api/health reads maxConcurrent from settings.json when not injected", async () => {
-    const previousHome = process.env.HOME;
-    const home = await mkdtemp(path.join(tmpdir(), "sf-http-settings-boot-home-"));
-    process.env.HOME = home;
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-boot-"));
+    bindStageflowHomeForTests(root);
     await mkdir(path.dirname(globalSettingsFilePath()), { recursive: true });
     await writeFile(
       globalSettingsFilePath(),
@@ -2169,11 +2174,7 @@ describe("localhost HTTP API", () => {
       expect(health.body.slotsAvailable).toBe(6);
     } finally {
       await closeServer(server);
-      if (previousHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previousHome;
-      }
+      resetGlobalStageflowHomeForTests();
     }
   });
 
@@ -3241,15 +3242,15 @@ describe("localhost HTTP API", () => {
     });
 
     it("detect and list leave a missing operator auth file missing, and login writes that file", async () => {
-      const data = process.env.STAGEFLOW_HOME;
-      if (!data) throw new Error("STAGEFLOW_HOME missing");
+      const root = await mkdtemp(path.join(tmpdir(), "sf-http-providers-roots-"));
+      bindStageflowHomeForTests(root);
+      const data = root;
       const creds = await mkdtemp(path.join(tmpdir(), "sf-http-cred-"));
       const prevCursor = process.env.CURSOR_API_KEY;
       const prevCursorFile = process.env.CURSOR_API_KEY_FILE;
       delete process.env.CURSOR_API_KEY;
       delete process.env.CURSOR_API_KEY_FILE;
       process.env.STAGEFLOW_CREDENTIAL_HOME = creds;
-      resetGlobalStageflowHomeForTests();
 
       const operatorAuth = path.join(creds, "agent", "auth.json");
       const dataAuth = path.join(data, "agent", "auth.json");
@@ -3260,7 +3261,6 @@ describe("localhost HTTP API", () => {
       await writeFile(dataAuth, dataBody);
       await writeFile(path.join(data, "agent", "cursor-api-key"), "cursor-data-only\n");
 
-      const root = await mkdtemp(path.join(tmpdir(), "sf-http-providers-roots-"));
       const { server, base } = await withServer(
         root,
         scriptedFakeAgent([]),
@@ -4290,6 +4290,27 @@ describe("HTTP console foundation BF-1–BF-6", () => {
     }
   });
 
+  it("BF-3 GET /api/tasks/:id returns 400 for unknown project_root filter", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf3-filter-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf3-filter-store-"));
+    await seedHttpCatalogRepo(repoRoot);
+    const store = createRunStore({ rootDir: storeRoot });
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoRoot,
+    });
+    try {
+      const res = await jsonFetch(
+        `${base}/api/tasks/sample?project_root=${encodeURIComponent("/no/such/root")}`,
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("unknown_project_root");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("BF-4 PATCH /api/triggers/:id toggles enabled in YAML and store", async () => {
     const repoRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf4-"));
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-bf4-store-"));
@@ -4311,7 +4332,10 @@ describe("HTTP console foundation BF-1–BF-6", () => {
         "utf8",
       );
       expect(onDisk).toContain("enabled: false");
-      const record = await store.getTrigger("manual-fire");
+      const wireRoot = await realpath(repoRoot);
+      const record =
+        (await store.getTrigger(`${wireRoot}::manual-fire`)) ??
+        (await store.getTrigger("manual-fire"));
       expect(record?.enabled).toBe(false);
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -4442,6 +4466,59 @@ describe("HTTP console foundation BF-1–BF-6", () => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
     }
+  });
+});
+
+describe("GET /api/catalog/roots (U6)", () => {
+  afterEach(() => {
+    resetGlobalStageflowHomeForTests();
+  });
+
+  it("lists examples, workspace, and registered roots with labels", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-http-roots-home-"));
+    await withEnv({ STAGEFLOW_HOME: home }, async () => {
+      resetGlobalStageflowHomeForTests();
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-roots-store-"));
+      const store = createRunStore({ rootDir: storeRoot });
+      const { server, base } = await withServer(
+        storeRoot,
+        scriptedFakeAgent([]),
+        store,
+        { cwd: catalogRoot },
+      );
+      try {
+        const res = await jsonFetch(`${base}/api/catalog/roots`);
+        expect(res.status).toBe(200);
+        expect(Array.isArray(res.body.roots)).toBe(true);
+        const examples = res.body.roots.find(
+          (row: { project_root: string }) => row.project_root === "examples",
+        );
+        const workspace = res.body.roots.find(
+          (row: { project_root: string }) => row.project_root === "workspace",
+        );
+        const registered = res.body.roots.find(
+          (row: { kind: string }) => row.kind === "registered",
+        );
+        expect(examples).toMatchObject({
+          label: "Examples (read-only)",
+          read_only: true,
+          available: true,
+        });
+        expect(workspace).toMatchObject({
+          kind: "workspace",
+          label: "Workspace",
+          read_only: false,
+          available: true,
+        });
+        expect(registered).toMatchObject({
+          read_only: false,
+          available: true,
+        });
+        expect(typeof registered.label).toBe("string");
+      } finally {
+        await closeServer(server);
+      }
+    });
   });
 });
 

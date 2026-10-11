@@ -9,6 +9,9 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { startTestService } from "./helpers/testInProcessService.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
+import { triggerStoreId } from "../src/config/triggerCatalog.js";
+import { realpath } from "node:fs/promises";
 import { mcpCall } from "./helpers/mcpCall.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -65,7 +68,9 @@ describe("MCP trigger tools", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-trigger-home-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const service = await startTestService(store, scriptedFakeAgent([]), root);
       try {
         const listed = await mcpCall(service.baseUrl, "list_triggers");
@@ -106,7 +111,9 @@ describe("MCP trigger tools", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-trigger-fire-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
       const service = await startTestService(store, agent, root);
       try {
@@ -119,7 +126,10 @@ describe("MCP trigger tools", () => {
         const run = await store.readRun(fired.payload.runId);
         expect(run.pipeline_id).toBe("hello");
 
-        const trigger = await store.getTrigger("manual-hello-world");
+        const wireRoot = await realpath(root);
+        const trigger =
+          (await store.getTrigger(triggerStoreId(wireRoot, "manual-hello-world"))) ??
+          (await store.getTrigger("manual-hello-world"));
         expect(trigger?.last_run_id).toBe(fired.payload.runId);
 
         const missing = await mcpCall(service.baseUrl, "fire_trigger", {
@@ -147,7 +157,9 @@ describe("MCP trigger tools", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-trigger-dynamic-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const agent = scriptedFakeAgent([successEnvelope("clarified"), successEnvelope("clarified")]);
       const service = await startTestService(store, agent, root);
       try {
@@ -196,11 +208,13 @@ describe("MCP trigger tools", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-trigger-create-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
       await store.ensureProject(root);
       const service = await startTestService(store, scriptedFakeAgent([]), root);
       try {
         const danglingRef = await mcpCall(service.baseUrl, "create_trigger", {
+          project_root: root,
           directory: "triggers",
           id: "dangling",
           pipeline: "no-such-pipeline",
@@ -212,6 +226,7 @@ describe("MCP trigger tools", () => {
         expect(danglingRef.payload.error).toMatch(/unknown pipeline/);
 
         const badCron = await mcpCall(service.baseUrl, "create_trigger", {
+          project_root: root,
           directory: "triggers",
           id: "bad-cron",
           pipeline: "hello",
@@ -224,6 +239,7 @@ describe("MCP trigger tools", () => {
         expect(badCron.payload.error).toMatch(/Invalid schedule.cron/);
 
         const duplicate = await mcpCall(service.baseUrl, "create_trigger", {
+          project_root: root,
           directory: "triggers",
           id: "manual-hello-world",
           pipeline: "hello",
@@ -234,6 +250,7 @@ describe("MCP trigger tools", () => {
         expect(duplicate.payload.status).toBe(409);
 
         const created = await mcpCall(service.baseUrl, "create_trigger", {
+          project_root: root,
           directory: "triggers",
           id: "nightly-hello",
           pipeline: "hello",
@@ -261,6 +278,7 @@ describe("MCP trigger tools", () => {
         );
 
         const createdDynamic = await mcpCall(service.baseUrl, "create_trigger", {
+          project_root: root,
           directory: "triggers",
           id: "dynamic-created",
           pipeline: "hello",
@@ -297,12 +315,14 @@ describe("MCP trigger tools", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-trigger-create-webhook-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
       await store.ensureProject(root);
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
       const service = await startTestService(store, agent, root);
       try {
         const created = await mcpCall(service.baseUrl, "create_trigger", {
+          project_root: root,
           directory: "triggers",
           id: "mcp-on-webhook",
           pipeline: "hello",
@@ -355,12 +375,14 @@ describe("MCP trigger tools", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-trigger-create-email-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
       await store.ensureProject(root);
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
       const service = await startTestService(store, agent, root);
       try {
         const created = await mcpCall(service.baseUrl, "create_trigger", {
+          project_root: root,
           directory: "triggers",
           id: "mcp-on-email",
           pipeline: "hello",
@@ -424,7 +446,9 @@ describe("MCP trigger tools", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-trigger-disabled-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const service = await startTestService(store, scriptedFakeAgent([]), root);
       try {
         const fired = await mcpCall(service.baseUrl, "fire_trigger", {

@@ -349,7 +349,12 @@ function PipelineDetail({
           <div className="page-head__actions">
             <a
               className="btn"
-              href={`#${workshopPath({ pipeline: pipeline.path })}`}
+              href={`#${workshopPath({
+                pipeline: pipeline.path,
+                ...(pipeline.project_root
+                  ? { project_root: pipeline.project_root }
+                  : {}),
+              })}`}
             >
               Open in Workshop
             </a>
@@ -360,6 +365,9 @@ function PipelineDetail({
                   newRunPath({
                     pipeline: pipeline.path,
                     ...(defaultTask ? { task: defaultTask } : {}),
+                    ...(pipeline.project_root
+                      ? { project_root: pipeline.project_root }
+                      : {}),
                   }),
                 )
               }

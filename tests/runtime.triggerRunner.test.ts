@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
+import { triggerStoreId } from "../src/config/triggerCatalog.js";
 import { fireTrigger } from "../src/runtime/triggerRunner.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
@@ -66,11 +67,13 @@ describe("fireTrigger", () => {
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-home-"));
       const store = createRunStore({ rootDir: homeRoot });
+      const wireRoot = await store.ensureProject(root);
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
       const runManager = new RunManager({ agent, cwd: root, store });
 
       const result = await fireTrigger("manual-hello-world", store, runManager, {
         cwd: root,
+        project_root: wireRoot,
       });
 
       expect(result.ok).toBe(true);
@@ -78,7 +81,7 @@ describe("fireTrigger", () => {
 
       await result.done;
 
-      const trigger = await store.getTrigger("manual-hello-world");
+      const trigger = await store.getTrigger(triggerStoreId(wireRoot, "manual-hello-world"));
       expect(trigger?.last_run_id).toBe(result.runId);
       expect(trigger?.last_fired_at).toEqual(expect.any(String));
 
@@ -128,11 +131,13 @@ describe("fireTrigger", () => {
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-home-"));
       const store = createRunStore({ rootDir: homeRoot });
+      const wireRoot = await store.ensureProject(root);
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
       const runManager = new RunManager({ agent, cwd: root, store });
 
       const result = await fireTrigger("dynamic-hello", store, runManager, {
         cwd: root,
+        project_root: wireRoot,
         task: { id: "inline-task", goal: "Say hello dynamically" },
       });
 
@@ -141,7 +146,7 @@ describe("fireTrigger", () => {
 
       await result.done;
 
-      const trigger = await store.getTrigger("dynamic-hello");
+      const trigger = await store.getTrigger(triggerStoreId(wireRoot, "dynamic-hello"));
       expect(trigger?.last_run_id).toBe(result.runId);
 
       const run = await store.readRun(result.runId);
@@ -165,13 +170,17 @@ describe("fireTrigger", () => {
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-home-"));
       const store = createRunStore({ rootDir: homeRoot });
+      const wireRoot = await store.ensureProject(root);
       const runManager = new RunManager({
         agent: scriptedFakeAgent([]),
         cwd: root,
         store,
       });
 
-      const result = await fireTrigger("dynamic-hello", store, runManager, { cwd: root });
+      const result = await fireTrigger("dynamic-hello", store, runManager, {
+        cwd: root,
+        project_root: wireRoot,
+      });
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.status).toBe(422);
@@ -191,6 +200,7 @@ describe("fireTrigger", () => {
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-home-"));
       const store = createRunStore({ rootDir: homeRoot });
+      const wireRoot = await store.ensureProject(root);
       const runManager = new RunManager({
         agent: scriptedFakeAgent([]),
         cwd: root,
@@ -199,6 +209,7 @@ describe("fireTrigger", () => {
 
       const result = await fireTrigger("manual-hello-world", store, runManager, {
         cwd: root,
+        project_root: wireRoot,
         task: { id: "inline-task", goal: "Say hello dynamically" },
       });
       expect(result.ok).toBe(false);

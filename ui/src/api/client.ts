@@ -61,6 +61,7 @@ import type {
   PlanDraftPackageResult,
   PutWorkshopAutosaveResult,
   CatalogFileResult,
+  CatalogRootsResult,
   CatalogValidationResult,
   ValidationFinding,
   WorkshopAutosavePayload,
@@ -371,6 +372,13 @@ export function fetchExtensions(): Promise<{
 
 export function fetchHealth(): Promise<CapacityHealth> {
   return api("/api/health");
+}
+
+export function postEnsureProject(projectRoot: string): Promise<{ project_root: string }> {
+  return api("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({ project_root: projectRoot }),
+  });
 }
 
 export function postSettings(maxConcurrent: number): Promise<CapacityHealth> {
@@ -926,6 +934,8 @@ export async function createDraftPackageWithDetails(
       pipeline?: PipelineListing;
       pipelinePath?: string;
       stagePaths?: string[];
+      project_root?: string;
+      catalog_root_path?: string;
       taskPath?: string;
       error?: string;
       findings?: ValidationFinding[];
@@ -941,6 +951,12 @@ export async function createDraftPackageWithDetails(
         pipeline: body.pipeline,
         pipelinePath: body.pipelinePath,
         stagePaths: body.stagePaths,
+        ...(typeof body.project_root === "string"
+          ? { project_root: body.project_root }
+          : {}),
+        ...(typeof body.catalog_root_path === "string"
+          ? { catalog_root_path: body.catalog_root_path }
+          : {}),
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
       };
     }
@@ -972,6 +988,8 @@ export async function overwriteDraftPackageWithDetails(
       pipeline?: PipelineListing;
       pipelinePath?: string;
       stagePaths?: string[];
+      project_root?: string;
+      catalog_root_path?: string;
       taskPath?: string;
       error?: string;
       findings?: ValidationFinding[];
@@ -987,10 +1005,16 @@ export async function overwriteDraftPackageWithDetails(
         pipeline: body.pipeline,
         pipelinePath: body.pipelinePath,
         stagePaths: body.stagePaths,
+        ...(typeof body.project_root === "string"
+          ? { project_root: body.project_root }
+          : {}),
+        ...(typeof body.catalog_root_path === "string"
+          ? { catalog_root_path: body.catalog_root_path }
+          : {}),
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
       };
     }
-    return {
+  return {
       ok: false,
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
@@ -1058,6 +1082,7 @@ export async function openDraftPackage(
       draft?: DraftPackagePayload;
       destination?: { directory: string; pipelineFilename: string };
       pipelinePath?: string;
+      project_root?: string;
       taskPath?: string;
       error?: string;
     };
@@ -1072,6 +1097,9 @@ export async function openDraftPackage(
         draft: body.draft,
         destination: body.destination,
         pipelinePath: body.pipelinePath,
+        ...(typeof body.project_root === "string"
+          ? { project_root: body.project_root }
+          : {}),
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
       };
     }
@@ -1368,6 +1396,55 @@ export async function listWorkshopPicker(): Promise<ListWorkshopPickerResult> {
   }
 }
 
+export async function putWorkshopBuild(
+  buildId: string,
+  input: {
+    draft?: DraftPackagePayload;
+    projectRoot?: string | null;
+    relativePath?: string | null;
+  },
+): Promise<GetWorkshopBuildResult> {
+  try {
+    const res = await fetch(
+      `/api/workshop/builds/${encodeURIComponent(buildId)}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...authorizationHeaders(),
+        },
+        body: JSON.stringify({
+          ...(input.draft !== undefined ? { draft: input.draft } : {}),
+          ...(input.projectRoot !== undefined
+            ? { projectRoot: input.projectRoot }
+            : {}),
+          ...(input.relativePath !== undefined
+            ? { relativePath: input.relativePath }
+            : {}),
+        }),
+      },
+    );
+    const body = (await res.json().catch(() => ({}))) as {
+      build?: WorkshopBuildRecord;
+      error?: string;
+    };
+    if (res.ok && body.build) {
+      return { ok: true, build: body.build };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export async function getWorkshopBuild(
   buildId: string,
 ): Promise<GetWorkshopBuildResult> {
@@ -1639,6 +1716,7 @@ export async function sendWorkshopChatTurn(
         ...(input.model !== undefined ? { model: input.model } : {}),
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(input.context ? { context: input.context } : {}),
+        ...(input.project_root ? { project_root: input.project_root } : {}),
         stream: false,
       }),
     });
@@ -1728,6 +1806,7 @@ export async function sendWorkshopChatTurnStreaming(
         ...(input.model !== undefined ? { model: input.model } : {}),
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(input.context ? { context: input.context } : {}),
+        ...(input.project_root ? { project_root: input.project_root } : {}),
         stream: true,
       }),
       ...(handlers.signal ? { signal: handlers.signal } : {}),
@@ -1851,6 +1930,10 @@ export async function sendWorkshopChatTurnStreaming(
     }
     return sendWorkshopChatTurn(input);
   }
+}
+
+export function fetchCatalogRoots(): Promise<CatalogRootsResult> {
+  return api("/api/catalog/roots");
 }
 
 export async function fetchCatalogValidate(input: {

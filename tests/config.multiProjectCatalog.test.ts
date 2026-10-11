@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { listPipelinesMultiProject } from "../src/config/multiProjectCatalog.js";
 import { resolveCatalogRoots } from "../src/config/resolveCatalogRoots.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
+import { WORKSPACE_CATALOG_ID } from "../src/project/workspaceCatalog.js";
 
 const temps: string[] = [];
 
@@ -40,9 +42,10 @@ function writeMinimalCatalog(root: string, pipelineId = "hello"): void {
 }
 
 describe("resolveCatalogRoots + multiProjectCatalog", () => {
-  it("cold Host has no boot root (seeded ∪ registered only)", async () => {
+  it("cold Host exposes workspace without boot root", async () => {
     const home = tempDir("sf-cat-home-");
     const boot = tempDir("sf-cat-boot-");
+    bindStageflowHomeForTests(home);
     const store = createRunStore({ rootDir: home });
     const roots = await resolveCatalogRoots({
       store,
@@ -50,7 +53,13 @@ describe("resolveCatalogRoots + multiProjectCatalog", () => {
       seededRoots: [],
     });
     expect(roots.some((r) => (r.kind as string) === "boot")).toBe(false);
-    expect(roots).toEqual([]);
+    expect(roots).toEqual([
+      expect.objectContaining({
+        project_root: WORKSPACE_CATALOG_ID,
+        kind: "workspace",
+        read_only: false,
+      }),
+    ]);
   });
 
   it("unknown project_root filter returns coded error", async () => {
@@ -194,6 +203,7 @@ describe("resolveCatalogRoots + multiProjectCatalog", () => {
 
   it("seeded root with manifest lists under symbolic project_root", async () => {
     const home = tempDir("sf-cat-seeded-");
+    bindStageflowHomeForTests(home);
     const boot = tempDir("sf-cat-boot-seeded-");
     const seeded = tempDir("sf-cat-seeded-path-");
     writeMinimalCatalog(seeded, "seeded-hello");

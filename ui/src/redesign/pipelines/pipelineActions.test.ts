@@ -52,13 +52,18 @@ describe("pipeline navigation paths", () => {
     const withTask = pipelineStartRunPath({
       catalogPath,
       defaultTaskPath: "pipelines/demo.task.yaml",
+      pipeline: { project_root: "workspace" },
     });
-    const withoutTask = pipelineStartRunPath({ catalogPath });
+    const withoutTask = pipelineStartRunPath({
+      catalogPath,
+      pipeline: { project_root: "workspace" },
+    });
     expect(decodeURIComponent(withTask!)).toContain(catalogPath);
     expect(decodeURIComponent(withTask!)).toContain("pipelines/demo.task.yaml");
     expect(withTask).toContain("task=");
     expect(decodeURIComponent(withoutTask!)).toContain(catalogPath);
     expect(withoutTask).not.toContain("task=");
+    expect(decodeURIComponent(withTask!)).toContain("project_root=workspace");
   });
 
   it("builds a workshop path from the catalog path and project_root", () => {

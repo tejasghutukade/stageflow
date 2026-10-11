@@ -150,15 +150,70 @@ export function selectCatalogRootForStart(
   if (roots.length === 1) {
     return roots[0]!;
   }
-  const writable = roots.filter((r) => r.kind !== "seeded");
-  if (writable.length === 1) {
-    return writable[0]!;
+  const registeredOnly = roots.filter((r) => r.kind === "registered");
+  if (registeredOnly.length === 1) {
+    return registeredOnly[0]!;
   }
+  const nonSeeded = roots.filter((r) => r.kind !== "seeded");
+  if (nonSeeded.length === 1) {
+    return nonSeeded[0]!;
+  }
+  const ids = roots.map((r) => r.project_root).join(", ");
   throw new CatalogPathError(
-    "project_root is required when multiple catalog roots are configured",
+    `project_root is required when multiple catalog roots are configured (${ids})`,
     "unknown_project_root",
     registered,
   );
+}
+
+function workspaceRoot(roots: CatalogRoot[]): CatalogRoot | undefined {
+  return roots.find((r) => r.kind === "workspace");
+}
+
+export async function resolveDefaultWriteRoot(
+  options: ResolveCatalogRootsOptions,
+  projectRoot?: string,
+): Promise<{ roots: CatalogRoot[]; wireRoot: CatalogRoot }> {
+  const roots = await resolveCatalogRoots(options);
+  const registered = roots.map((r) => r.project_root);
+
+  if (projectRoot !== undefined) {
+    const found = findCatalogRoot(roots, projectRoot);
+    if (found === undefined) {
+      throw new CatalogPathError(
+        `Unknown project_root: ${projectRoot}`,
+        "unknown_project_root",
+        registered,
+      );
+    }
+    if (found.read_only) {
+      throw new CatalogPathError(
+        `Catalog root ${found.project_root} is read-only`,
+        "catalog_root_read_only",
+        registered,
+      );
+    }
+    if (found.kind === "workspace" && found.available === false) {
+      throw new CatalogPathError(
+        found.unavailable_reason ??
+          `Workspace catalog is not writable (${found.path})`,
+        "unknown_project_root",
+        registered,
+      );
+    }
+    return { roots, wireRoot: found };
+  }
+
+  const ws = workspaceRoot(roots);
+  if (ws === undefined || ws.available === false) {
+    throw new CatalogPathError(
+      ws?.unavailable_reason ??
+        "Workspace catalog is unavailable; set project_root explicitly",
+      "unknown_project_root",
+      registered,
+    );
+  }
+  return { roots, wireRoot: ws };
 }
 
 /**
@@ -182,15 +237,7 @@ export async function resolveWritableCatalogRoot(
   options: ResolveCatalogRootsOptions,
   projectRoot?: string,
 ): Promise<{ roots: CatalogRoot[]; wireRoot: CatalogRoot }> {
-  const { roots, wireRoot } = await resolveCatalogStartInput(options, projectRoot);
-  if (wireRoot.read_only) {
-    throw new CatalogPathError(
-      `Catalog root ${wireRoot.project_root} is read-only`,
-      "catalog_root_read_only",
-      roots.map((r) => r.project_root),
-    );
-  }
-  return { roots, wireRoot };
+  return resolveDefaultWriteRoot(options, projectRoot);
 }
 
 /**

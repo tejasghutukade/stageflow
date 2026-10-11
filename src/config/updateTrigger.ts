@@ -1,13 +1,18 @@
 import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { parseDocument } from "yaml";
 import type { RunStore } from "../runstore/port.js";
 import type { TriggerEvent, TriggerSchedule } from "../types/trigger.js";
-import { loadCatalogTriggers, type TriggerListItem } from "./triggerCatalog.js";
+import {
+  findCatalogTrigger,
+  loadCatalogTriggers,
+  triggerStoreId,
+  type CatalogTriggerMatch,
+  type TriggerListItem,
+} from "./triggerCatalog.js";
+import { resolveCatalogRoots, findCatalogRoot } from "./resolveCatalogRoots.js";
 import { loadTriggerFromYamlOutcome } from "./loadTrigger.js";
-import { findTriggerDefinition } from "../runtime/triggerCatalog.js";
-import { getCatalogScanPaths } from "./browseCatalog.js";
 import { catalogContextFromStageflow } from "./resolveCatalogContext.js";
+import { getCatalogScanPaths } from "./browseCatalog.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import {
   parseEventField,
@@ -122,33 +127,71 @@ export function parsePutTriggerBody(
 
 export type UpdateTriggerResult =
   | { ok: true; trigger: TriggerListItem }
-  | { ok: false; status: 404 | 400 | 422 | 500; error: string };
+  | { ok: false; status: 403 | 404 | 409 | 400 | 422 | 500; error: string; project_roots?: string[] };
+
+function projectRootFilterFromBody(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const wire = (body as { project_root?: unknown }).project_root;
+  return typeof wire === "string" && wire.trim().length > 0 ? wire.trim() : undefined;
+}
+
+async function locateWritableTrigger(
+  cwd: string,
+  store: RunStore,
+  triggerId: string,
+  projectRootFilter?: string,
+): Promise<
+  | { ok: true; match: CatalogTriggerMatch }
+  | { ok: false; status: 403 | 404 | 409 | 400; error: string; project_roots?: string[] }
+> {
+  const located = await findCatalogTrigger({
+    store,
+    bootCwd: cwd,
+    triggerId,
+    projectRootFilter,
+  });
+  if (!located.ok) {
+    return {
+      ok: false,
+      status: located.status,
+      error: located.reason,
+      ...(located.status === 409 ? { project_roots: located.project_roots } : {}),
+    };
+  }
+  const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
+  const root = findCatalogRoot(roots, located.match.project_root);
+  if (root?.read_only) {
+    return { ok: false, status: 403, error: "catalog_root_read_only" };
+  }
+  return { ok: true, match: located.match };
+}
 
 export async function updateTriggerEnabled(
   cwd: string,
   store: RunStore,
   triggerId: string,
   enabled: boolean,
+  options: { projectRootFilter?: string } = {},
 ): Promise<UpdateTriggerResult> {
-  const ctx = catalogContextFromStageflow(await resolveStageflowContext(cwd));
-  const scanPaths = await getCatalogScanPaths(ctx);
-  if (!scanPaths) {
-    return { ok: false, status: 404, error: "No Stageflow catalog found" };
+  const located = await locateWritableTrigger(
+    cwd,
+    store,
+    triggerId,
+    options.projectRootFilter,
+  );
+  if (!located.ok) {
+    return located;
   }
+  const { match } = located;
 
-  const found = await findTriggerDefinition(scanPaths.triggerPaths, triggerId);
-  if (!found) {
-    return { ok: false, status: 404, error: `Trigger not found: ${triggerId}` };
-  }
-
-  const yamlText = await readFile(found.path, "utf8");
+  const yamlText = await readFile(match.path, "utf8");
   const doc = parseDocument(yamlText);
   if (!doc.contents || typeof doc.contents !== "object") {
     return { ok: false, status: 500, error: "Trigger YAML must be an object" };
   }
   doc.set("enabled", enabled);
   const patched = doc.toString();
-  const loadOutcome = loadTriggerFromYamlOutcome(patched, found.path);
+  const loadOutcome = loadTriggerFromYamlOutcome(patched, match.path);
   if (!loadOutcome.ok) {
     return {
       ok: false,
@@ -157,21 +200,18 @@ export async function updateTriggerEnabled(
     };
   }
 
-  await writeFile(found.path, patched, "utf8");
+  await writeFile(match.path, patched, "utf8");
 
-  const projectRoot = ctx.projectRoot ?? undefined;
-  const definitionRef =
-    projectRoot !== undefined
-      ? path.relative(projectRoot, found.path).replace(/\\/g, "/")
-      : found.path;
   await store.upsertTrigger({
-    id: loadOutcome.value.id,
-    definitionRef,
+    id: triggerStoreId(match.project_root, loadOutcome.value.id),
+    definitionRef: match.definition_ref,
     enabled: loadOutcome.value.enabled,
   });
 
-  const items = await loadCatalogTriggers(cwd, store);
-  const item = items?.find((row) => row.id === triggerId);
+  const items = await loadCatalogTriggers({ store, bootCwd: cwd });
+  const item = items.find(
+    (row) => row.id === triggerId && row.project_root === match.project_root,
+  );
   if (!item) {
     return { ok: false, status: 500, error: "Trigger updated but not listed" };
   }
@@ -183,16 +223,25 @@ export async function updateTriggerDefinition(
   store: RunStore,
   triggerId: string,
   input: PutTriggerInput,
+  options: { projectRootFilter?: string } = {},
 ): Promise<UpdateTriggerResult> {
-  const ctx = catalogContextFromStageflow(await resolveStageflowContext(cwd));
+  const located = await locateWritableTrigger(
+    cwd,
+    store,
+    triggerId,
+    options.projectRootFilter,
+  );
+  if (!located.ok) {
+    return located;
+  }
+  const { match } = located;
+
+  const ctx = catalogContextFromStageflow(
+    await resolveStageflowContext(match.rootPath),
+  );
   const scanPaths = await getCatalogScanPaths(ctx);
   if (!scanPaths) {
     return { ok: false, status: 404, error: "No Stageflow catalog found" };
-  }
-
-  const found = await findTriggerDefinition(scanPaths.triggerPaths, triggerId);
-  if (!found) {
-    return { ok: false, status: 404, error: `Trigger not found: ${triggerId}` };
   }
 
   const refError = await triggerReferenceError(scanPaths, input.pipeline, input.task);
@@ -210,7 +259,7 @@ export async function updateTriggerDefinition(
     }
   }
 
-  const yamlText = await readFile(found.path, "utf8");
+  const yamlText = await readFile(match.path, "utf8");
   const doc = parseDocument(yamlText);
   if (!doc.contents || typeof doc.contents !== "object") {
     return { ok: false, status: 500, error: "Trigger YAML must be an object" };
@@ -240,7 +289,7 @@ export async function updateTriggerDefinition(
   doc.set("enabled", input.enabled);
 
   const patched = doc.toString();
-  const loadOutcome = loadTriggerFromYamlOutcome(patched, found.path);
+  const loadOutcome = loadTriggerFromYamlOutcome(patched, match.path);
   if (!loadOutcome.ok) {
     return {
       ok: false,
@@ -249,23 +298,22 @@ export async function updateTriggerDefinition(
     };
   }
 
-  await writeFile(found.path, patched, "utf8");
+  await writeFile(match.path, patched, "utf8");
 
-  const projectRoot = ctx.projectRoot ?? undefined;
-  const definitionRef =
-    projectRoot !== undefined
-      ? path.relative(projectRoot, found.path).replace(/\\/g, "/")
-      : found.path;
   await store.upsertTrigger({
-    id: loadOutcome.value.id,
-    definitionRef,
+    id: triggerStoreId(match.project_root, loadOutcome.value.id),
+    definitionRef: match.definition_ref,
     enabled: loadOutcome.value.enabled,
   });
 
-  const items = await loadCatalogTriggers(cwd, store);
-  const item = items?.find((row) => row.id === triggerId);
+  const items = await loadCatalogTriggers({ store, bootCwd: cwd });
+  const item = items.find(
+    (row) => row.id === triggerId && row.project_root === match.project_root,
+  );
   if (!item) {
     return { ok: false, status: 500, error: "Trigger updated but not listed" };
   }
   return { ok: true, trigger: item };
 }
+
+export { projectRootFilterFromBody };

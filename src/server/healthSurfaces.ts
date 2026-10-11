@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { BootProviderResult } from "../agent/bootProviderConfig.js";
 import {
@@ -7,7 +8,11 @@ import {
 import { PACKAGE_VERSION, BUILD_SHA } from "../package-meta.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { redactHostConfig } from "../config/hostConfig.js";
-import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
+import {
+  resolveCatalogRoots,
+  type CatalogRoot,
+  type ResolveCatalogRootsOptions,
+} from "../config/resolveCatalogRoots.js";
 import type { StageflowHostBootstrap } from "./bootstrap.js";
 import { json } from "./createHttpHost.js";
 import {
@@ -18,6 +23,42 @@ import {
 } from "../diagnostics/checks.js";
 import { buildEgressHealth } from "../net/proxy.js";
 import { toolchainHealthMap } from "../preflight/toolchain.js";
+
+export type CatalogRootApiRecord = {
+  project_root: string;
+  kind: CatalogRoot["kind"];
+  label: string;
+  read_only: boolean;
+  available: boolean;
+  unavailable_reason?: string;
+};
+
+export function catalogRootLabel(root: CatalogRoot): string {
+  if (root.kind === "workspace") return "Workspace";
+  if (root.kind === "seeded") return "Examples (read-only)";
+  const base = path.basename(root.path.replace(/\\/g, "/"));
+  return base || root.project_root;
+}
+
+export function mapCatalogRootForApi(root: CatalogRoot): CatalogRootApiRecord {
+  return {
+    project_root: root.project_root,
+    kind: root.kind,
+    label: catalogRootLabel(root),
+    read_only: root.read_only,
+    available: root.available !== false,
+    ...(root.available === false && root.unavailable_reason
+      ? { unavailable_reason: root.unavailable_reason }
+      : {}),
+  };
+}
+
+export async function listCatalogRootsForApi(
+  options: ResolveCatalogRootsOptions,
+): Promise<CatalogRootApiRecord[]> {
+  const roots = await resolveCatalogRoots(options);
+  return roots.map(mapCatalogRootForApi);
+}
 
 function bootProvidersSnapshot(
   providerBoot: BootProviderResult | undefined,
@@ -134,11 +175,7 @@ export async function buildRichHealthPayload(
     toolchain: toolchainHealthMap(),
     store_filesystem: boot.storeFilesystem ?? null,
     egress: buildEgressHealth(),
-    catalog_roots: catalogRoots.map((r) => ({
-      project_root: r.project_root,
-      kind: r.kind,
-      read_only: r.read_only,
-    })),
+    catalog_roots: catalogRoots.map(mapCatalogRootForApi),
     boot_providers,
     providers_live,
     providers: boot_providers,

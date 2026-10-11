@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { DraftPackagePayload } from "../api/types";
 import {
   chooseStudioRow,
+  draftFrameAction,
+  draftFrameApplies,
   historyBuildName,
   mutationMapAfterChange,
   openSessionStudio,
@@ -39,6 +41,29 @@ function selection(partial: Partial<StudioSelection> = {}): StudioSelection {
     error: partial.error ?? null,
   };
 }
+
+describe("draft frame gating", () => {
+  const serverDraft: DraftPackagePayload = {
+    pipeline: { id: "demo", stages: [{ id: "a" }] },
+    task: { filename: "demo.task.yaml", body: { id: "demo", goal: "ship" } },
+  };
+
+  it("applies a server frame when no build is selected yet", () => {
+    expect(draftFrameApplies(null, "build-1")).toBe(true);
+    expect(draftFrameAction(null, "build-1", serverDraft)).toEqual({
+      kind: "adopt-pointer",
+      buildId: "build-1",
+      draft: serverDraft,
+    });
+  });
+
+  it("ignores a frame for a different selected build", () => {
+    expect(draftFrameApplies("build-a", "build-b")).toBe(false);
+    expect(draftFrameAction("build-a", "build-b", serverDraft)).toEqual({
+      kind: "ignore",
+    });
+  });
+});
 
 describe("workshop studio selection", () => {
   it("starting a new chat applies an empty studio and does not add a list row for that empty package", () => {

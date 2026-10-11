@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import {
 import type { TriggerFireEvent } from "../src/runtime/triggerPort.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const stageFixture = path.join(fixtures, "stages", "clarify.yaml");
@@ -44,6 +45,14 @@ async function seedCatalog(root: string, triggerFixtureNames: string[]): Promise
 
 async function mkdtempHome(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), "sf-email-source-home-"));
+}
+
+async function storeForCatalog(catalogRoot: string) {
+  const home = await mkdtempHome();
+  bindStageflowHomeForTests(home);
+  const store = createRunStore({ rootDir: home });
+  await store.ensureProject(catalogRoot);
+  return store;
 }
 
 function makeMessage(overrides: Partial<NormalizedEmailMessage> & { uid: number }): NormalizedEmailMessage {
@@ -119,7 +128,7 @@ describe("EmailSource", () => {
       await seedCatalog(root, ["email-dynamic.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const message = makeMessage({ uid: 5, from: "alice@example.com", subject: "Hello", text: "Hi there" });
       const fake = makeFakeClient({ uidNext: 5, fetchImpl: () => [message] });
 
@@ -159,7 +168,7 @@ describe("EmailSource", () => {
       await seedCatalog(root, ["email-match-invoice.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const message = makeMessage({ uid: 3, subject: "Meeting notes" });
       const fake = makeFakeClient({ uidNext: 3, fetchImpl: () => [message] });
 
@@ -190,7 +199,7 @@ describe("EmailSource", () => {
       await seedCatalog(root, ["email-catalog.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const message = makeMessage({ uid: 7 });
       const fake = makeFakeClient({ uidNext: 7, fetchImpl: () => [message] });
 
@@ -206,7 +215,10 @@ describe("EmailSource", () => {
       fake.emitExists();
       await vi.waitFor(() => expect(onFire).toHaveBeenCalledTimes(1));
 
-      expect(onFire.mock.calls[0][0]).toEqual({ triggerId: "email-catalog" });
+      expect(onFire.mock.calls[0][0]).toMatchObject({
+        triggerId: "email-catalog",
+        project_root: await realpath(root),
+      });
 
       await source.stop();
     } finally {
@@ -221,7 +233,7 @@ describe("EmailSource", () => {
       await seedCatalog(root, ["email-match-invoice.trigger.yaml", "email-match-boss.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const invoiceMessage = makeMessage({ uid: 10, subject: "Invoice", from: "billing@example.com" });
       const bossMessage = makeMessage({ uid: 11, subject: "Standup notes", from: "boss@example.com" });
       const fake = makeFakeClient({ uidNext: 9, fetchImpl: () => [invoiceMessage, bossMessage] });
@@ -263,7 +275,7 @@ describe("EmailSource", () => {
       await seedCatalog(root, ["email-dynamic.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
 
       let connectCallCount = 0;
       let current: FakeClientHandle | undefined;
@@ -318,7 +330,7 @@ describe("EmailSource", () => {
       await seedCatalog(root, ["email-missing-secret.trigger.yaml", "email-valid-secondary.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const fake = makeFakeClient({ uidNext: 1, fetchImpl: () => [] });
       const logError = vi.fn();
 
@@ -349,7 +361,7 @@ describe("EmailSource", () => {
       await seedCatalog(root, ["email-dynamic.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       let connectCallCount = 0;
       let current: FakeClientHandle | undefined;
       const createEmailClient = () => {

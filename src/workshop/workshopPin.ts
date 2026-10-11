@@ -196,9 +196,10 @@ export function rejectUnlinkedWorkshopDraftTool(
   };
 }
 
-/** Tied builds save to the stored path. Untitled builds keep the caller's destination. */
+/** Tied builds save to the stored path when the write root matches the build tie. */
 export function resolvePinnedSaveDestination(
   context: unknown,
+  writeProjectRoot?: string | null,
 ): { directory: string; pipelineFilename: string } | null {
   if (
     !isWorkshopDraftContext(context) ||
@@ -211,10 +212,21 @@ export function resolvePinnedSaveDestination(
   if (!live) return null;
   const build = readWorkshopBuild(live.storeRoot, context.buildId);
   if (!build?.projectRoot || !build.relativePath) return null;
+  if (writeProjectRoot?.trim()) {
+    const tieRoot = path.resolve(build.projectRoot);
+    const writeRoot = path.resolve(writeProjectRoot.trim());
+    if (tieRoot !== writeRoot) return null;
+  }
   return destinationFromRelativePath(build.relativePath);
 }
 
-/** A successful save of an untitled build records the operator destination on that id. */
+function normalizeSavedRelativePath(value: string): string {
+  let trimmed = value.trim().replace(/\\/g, "/");
+  while (trimmed.startsWith("./")) trimmed = trimmed.slice(2);
+  return trimmed;
+}
+
+/** A successful catalog save updates the build tie and in-memory pointer. */
 export function recordPinnedWorkshopSave(
   context: unknown,
   saved: {
@@ -222,6 +234,7 @@ export function recordPinnedWorkshopSave(
     pipelineFilename?: string;
     projectRoot: string;
     draft: DraftPackage;
+    relativePath?: string;
   },
 ): void {
   if (
@@ -234,18 +247,25 @@ export function recordPinnedWorkshopSave(
   const live = liveBySession.get(context.chatSessionId);
   if (!live) return;
   const build = readWorkshopBuild(live.storeRoot, context.buildId);
-  if (!build || (build.projectRoot && build.relativePath)) return;
+  if (!build) return;
   const pipelineFilename =
     saved.pipelineFilename?.trim() ||
     `${saved.draft.pipeline.id}.pipeline.yaml`;
-  updateWorkshopBuild(live.storeRoot, build.id, {
+  const relativePath = saved.relativePath?.trim()
+    ? normalizeSavedRelativePath(saved.relativePath)
+    : relativePathFromDestination(saved.directory, pipelineFilename);
+  const updated = updateWorkshopBuild(live.storeRoot, build.id, {
     draft: saved.draft,
     projectRoot: path.resolve(saved.projectRoot),
-    relativePath: relativePathFromDestination(
-      saved.directory,
-      pipelineFilename,
-    ),
+    relativePath,
   });
+  const session = live.registry.get(context.chatSessionId);
+  if (session) {
+    session.setContext(
+      bindPinnedBuildContext(session.getContext(), updated, context.chatSessionId),
+    );
+  }
+  emitPointerChange(live.registry, context.chatSessionId, updated);
 }
 
 /**

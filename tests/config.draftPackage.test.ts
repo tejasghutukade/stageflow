@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import {
   createDraftPackage,
   loadDraftPackage,
@@ -11,7 +12,13 @@ import {
 } from "../src/config/draftPackage.js";
 import { createPipeline } from "../src/config/createPipeline.js";
 import { createStage } from "../src/config/createStage.js";
-import { initTempGitRepo } from "./helpers/projectContext.js";
+import { publishDraftPackage } from "../src/config/publishDraftPackage.js";
+import {
+  ensureWorkspaceCatalog,
+  resetWorkspaceProvisionForTests,
+  workspaceCatalogPath,
+} from "../src/project/workspaceCatalog.js";
+import { initTempGitRepo, withIsolatedHome } from "./helpers/projectContext.js";
 
 const REQUIRED_IO = {
   io: {
@@ -198,7 +205,7 @@ describe("overwriteDraftPackage", () => {
       draft.stages![0]!.body.system_prompt = "New clarify prompt";
       draft.stages![1]!.body.system_prompt = "New decide prompt";
       draft.task = {
-        filename: "demo.task.yaml",
+        filename: "demo-task.task.yaml",
         body: { id: "demo-task", goal: "Run the demo package" },
       };
 
@@ -210,7 +217,7 @@ describe("overwriteDraftPackage", () => {
       expect(result.stagePaths).toEqual(
         expect.arrayContaining(["pipelines/clarify.yaml", "pipelines/decide.yaml"]),
       );
-      expect(result.taskPath).toBe("pipelines/demo.task.yaml");
+      expect(result.taskPath).toBe("pipelines/demo-task.task.yaml");
 
       expect(await readFile(path.join(dir, "clarify.yaml"), "utf8")).toContain(
         "New clarify prompt",
@@ -218,7 +225,7 @@ describe("overwriteDraftPackage", () => {
       expect(await readFile(path.join(dir, "decide.yaml"), "utf8")).toContain(
         "New decide prompt",
       );
-      expect(await readFile(path.join(dir, "demo.task.yaml"), "utf8")).toContain(
+      expect(await readFile(path.join(dir, "demo-task.task.yaml"), "utf8")).toContain(
         "Run the demo package",
       );
       const pipelineYaml = await readFile(path.join(dir, "demo.pipeline.yaml"), "utf8");
@@ -271,6 +278,25 @@ describe("overwriteDraftPackage", () => {
         allowInvalid: true,
       });
       expect(seed.ok).toBe(true);
+
+      const normalized = await createDraftPackage(root, {
+        directory: "workshop",
+        pipelineFilename: "fanout-fanin-temp.yaml",
+        draft: {
+          pipeline: { id: "fanout-fanin-temp", stages: [{ id: "start", entry: true }] },
+          task: {
+            filename: "fanout-fanin-temp.yaml",
+            body: { id: "fanout-fanin-temp", goal: "Try fanout" },
+          },
+        },
+        allowInvalid: true,
+      });
+      expect(normalized.ok).toBe(true);
+      if (!normalized.ok) return;
+      expect(normalized.pipelinePath).toBe("workshop/fanout-fanin-temp.pipeline.yaml");
+      expect(normalized.taskPath).toBe("workshop/fanout-fanin-temp.task.yaml");
+      await access(path.join(root, "workshop/fanout-fanin-temp.pipeline.yaml"));
+      await access(path.join(root, "workshop/fanout-fanin-temp.task.yaml"));
 
       const escaped: DraftPackage = {
         pipeline: {
@@ -469,6 +495,38 @@ describe("open → edit → overwrite (draft/catalog seam)", () => {
     }));
 });
 
+function useStageflowHome(home: string): string {
+  process.env.STAGEFLOW_HOME = home;
+  resetGlobalStageflowHomeForTests();
+  resetWorkspaceProvisionForTests();
+  return home;
+}
+
+describe("publishDraftPackage workspace catalog", () => {
+  it("writes under a slug directory without editing stageflow.yaml", async () =>
+    withIsolatedHome(async (home) => {
+      const sfHome = useStageflowHome(home);
+      expect(ensureWorkspaceCatalog(sfHome).ok).toBe(true);
+      const ws = workspaceCatalogPath(sfHome);
+      const manifestBefore = await readFile(path.join(ws, "stageflow.yaml"), "utf8");
+      const published = await publishDraftPackage(
+        ws,
+        {
+          directory: "ws-slug",
+          draft: validInlineDraft({ id: "ws-slug" }),
+        },
+        "create",
+        { catalogRootKind: "workspace" },
+      );
+      expect(published.write.ok).toBe(true);
+      expect(published.catalogChanged).toBe(false);
+      expect(await readFile(path.join(ws, "stageflow.yaml"), "utf8")).toBe(
+        manifestBefore,
+      );
+      await access(path.join(ws, "ws-slug", "ws-slug.pipeline.yaml"));
+    }));
+});
+
 describe("Workshop Author save tool facade", () => {
   it("save tool validate-then-writes and defaults an omitted directory", async () => {
     const { root, cleanup } = await initTempGitRepo();
@@ -615,4 +673,27 @@ describe("Workshop Author save tool facade", () => {
       await cleanup();
     }
   });
+
+  it("save without a bound projectRoot uses the workspace catalog", async () =>
+    withIsolatedHome(async (home) => {
+      const sfHome = useStageflowHome(home);
+      expect(ensureWorkspaceCatalog(sfHome).ok).toBe(true);
+      const ws = workspaceCatalogPath(sfHome);
+      const { createSaveTool, createWorkshopDraftContext } = await import(
+        "../src/operatorAgent/index.js"
+      );
+      const save = createSaveTool();
+      const draft = validInlineDraft({ id: "ws-save" });
+      let context: unknown = createWorkshopDraftContext(draft);
+      const ctx = {
+        getContext: () => context,
+        setContext: (next: unknown) => {
+          context = next;
+        },
+        emitProposal: () => {},
+      };
+      const written = await save.handler({ mode: "create" }, ctx);
+      expect(written.ok).toBe(true);
+      await access(path.join(ws, "ws-save", "ws-save.pipeline.yaml"));
+    }));
 });

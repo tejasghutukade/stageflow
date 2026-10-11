@@ -40,12 +40,10 @@ services:
       CURSOR_API_KEY: ${CURSOR_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
+      STAGEFLOW_ENSURE_PROJECT_ROOTS: /catalog
     volumes:
       - stageflow-data:/data
-      # Optional: mount a consumer catalog, then register/ensure that absolute
-      # path with the Host (POST /api/projects or local sf run). Examples are
-      # already baked at /opt/stageflow/examples.
-      # - /abs/path/to/your-catalog:/catalog:ro
+      - /Users/tejasghutukade/Projects/software-factory-redesign:/catalog
     restart: unless-stopped
 
 volumes:

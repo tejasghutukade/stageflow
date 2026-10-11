@@ -1,11 +1,14 @@
-import path from "node:path";
 import { catalogContextFromStageflow } from "../config/resolveCatalogContext.js";
 import { getCatalogScanPaths } from "../config/browseCatalog.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager, StartRunResult } from "./runManager.js";
 import type { TaskFile } from "../types/task.js";
-import { findCatalogPathById, findTriggerDefinition } from "./triggerCatalog.js";
+import { findCatalogPathById } from "./triggerCatalog.js";
+import {
+  findCatalogTrigger,
+  triggerStoreId,
+} from "../config/triggerCatalog.js";
 
 /**
  * Resolves a trigger id to its `*.trigger.yaml` catalog definition, resolves its
@@ -21,20 +24,24 @@ export async function fireTrigger(
   triggerId: string,
   store: RunStore,
   runManager: RunManager,
-  options: { cwd?: string; task?: TaskFile } = {},
+  options: { cwd?: string; project_root?: string; task?: TaskFile } = {},
 ): Promise<StartRunResult> {
-  const cwd = options.cwd ?? process.cwd();
-  const ctx = catalogContextFromStageflow(await resolveStageflowContext(cwd));
-  const scanPaths = await getCatalogScanPaths(ctx);
-  if (!scanPaths) {
-    return { ok: false, reason: "No Stageflow catalog found", status: 404 };
+  const bootCwd = options.cwd ?? process.cwd();
+  const located = await findCatalogTrigger({
+    store,
+    bootCwd,
+    triggerId,
+    projectRootFilter: options.project_root,
+  });
+  if (!located.ok) {
+    return {
+      ok: false,
+      reason: located.reason,
+      status: located.status,
+    };
   }
-
-  const found = await findTriggerDefinition(scanPaths.triggerPaths, triggerId);
-  if (!found) {
-    return { ok: false, reason: `Trigger not found: ${triggerId}`, status: 404 };
-  }
-  const { path: triggerPath, definition: trigger } = found;
+  const { match } = located;
+  const trigger = match.definition;
 
   if (!trigger.enabled) {
     return { ok: false, reason: `Trigger is disabled: ${triggerId}`, status: 409 };
@@ -56,6 +63,14 @@ export async function fireTrigger(
       status: 422,
       code: "trigger.task_required",
     };
+  }
+
+  const ctx = catalogContextFromStageflow(
+    await resolveStageflowContext(match.rootPath),
+  );
+  const scanPaths = await getCatalogScanPaths(ctx);
+  if (!scanPaths) {
+    return { ok: false, reason: "No Stageflow catalog found", status: 404 };
   }
 
   const pipelinePath = await findCatalogPathById(scanPaths.pipelinePaths, trigger.pipeline);
@@ -82,26 +97,21 @@ export async function fireTrigger(
     taskInput = suppliedTask as TaskFile;
   }
 
-  const projectRoot = ctx.projectRoot ?? undefined;
-  const definitionRef =
-    projectRoot !== undefined
-      ? path.relative(projectRoot, triggerPath).replace(/\\/g, "/")
-      : triggerPath;
-
+  const storeId = triggerStoreId(match.project_root, trigger.id);
   await store.upsertTrigger({
-    id: triggerId,
-    definitionRef,
+    id: storeId,
+    definitionRef: match.definition_ref,
     enabled: trigger.enabled,
   });
 
   const started = await runManager.startRun({
     pipeline: pipelinePath,
     task: taskInput,
-    ...(projectRoot !== undefined ? { projectRoot } : {}),
+    projectRoot: match.rootPath,
   });
 
   if (started.ok) {
-    await store.recordTriggerFired(triggerId, started.runId);
+    await store.recordTriggerFired(storeId, started.runId);
   }
 
   return started;

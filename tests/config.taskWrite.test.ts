@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { createRunStore } from "../src/runstore/createStore.js";
 import { createTask, parseCreateTaskBody } from "../src/config/createTask.js";
 import {
   importTaskFromIssue,
@@ -101,27 +103,45 @@ describe("createTask", () => {
 describe("updateTask", () => {
   it("changes goal, keeps comments, and restores the file when the binding is invalid", () =>
     withCatalog(async (root) => {
-      const updated = await updateTask(root, "my-task", {
-        goal: "A new goal",
-        optional: {},
-      });
-      expect(updated.ok).toBe(true);
-      if (!updated.ok) return;
-      expect(updated.task.goal).toBe("A new goal");
-      expect(updated.task.context).toBe("keep this");
-      expect(updated.task.id).toBe("my-task");
-      const onDisk = await readFile(path.join(root, "tasks/my-task.task.yaml"), "utf8");
-      expect(onDisk).toContain("# operator note");
-      expect(onDisk).toContain("goal: A new goal");
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-update-task-store-"));
+      try {
+        const store = createRunStore({ rootDir: storeRoot });
+        await store.ensureProject(root);
+        const rootWire = await realpath(root);
+        const updated = await updateTask({
+          store,
+          taskId: "my-task",
+          input: {
+            goal: "A new goal",
+            optional: {},
+          },
+          projectRootFilter: rootWire,
+        });
+        expect(updated.ok).toBe(true);
+        if (!updated.ok) return;
+        expect(updated.task.goal).toBe("A new goal");
+        expect(updated.task.context).toBe("keep this");
+        expect(updated.task.id).toBe("my-task");
+        const onDisk = await readFile(path.join(root, "tasks/my-task.task.yaml"), "utf8");
+        expect(onDisk).toContain("# operator note");
+        expect(onDisk).toContain("goal: A new goal");
 
-      const invalid = await updateTask(root, "my-task", {
-        goal: "A new goal",
-        optional: { checkout: "local", repository: "acme/api", ref: "main" },
-      });
-      expect(invalid).toMatchObject({ ok: false, status: 400 });
-      const restored = await readFile(path.join(root, "tasks/my-task.task.yaml"), "utf8");
-      expect(restored).toContain("# operator note");
-      expect(restored).not.toContain("repository:");
+        const invalid = await updateTask({
+          store,
+          taskId: "my-task",
+          input: {
+            goal: "A new goal",
+            optional: { checkout: "local", repository: "acme/api", ref: "main" },
+          },
+          projectRootFilter: rootWire,
+        });
+        expect(invalid).toMatchObject({ ok: false, status: 400 });
+        const restored = await readFile(path.join(root, "tasks/my-task.task.yaml"), "utf8");
+        expect(restored).toContain("# operator note");
+        expect(restored).not.toContain("repository:");
+      } finally {
+        await rm(storeRoot, { recursive: true, force: true });
+      }
     }));
 });
 

@@ -34,13 +34,24 @@ import {
   type SavePlanRow,
 } from "./savePlanView";
 
-export type SaveDestination = { root: string; pipelineId: string };
+export type SaveDestination = {
+  catalogRoot: string;
+  folder: string;
+  pipelineId: string;
+};
 
 export type SaveToCatalogDialogV2Props = {
   open: boolean;
   draft: DraftPackagePayload;
-  roots: Array<{ value: string; label: string }>;
-  initialRoot: string;
+  catalogRoots: Array<{
+    value: string;
+    label: string;
+    available?: boolean;
+    unavailableReason?: string;
+  }>;
+  initialCatalogRoot: string;
+  folderOptions: Array<{ value: string; label: string }>;
+  initialFolder: string;
   initialPipelineId: string;
   mode: SaveDialogMode;
   plan: DraftPlanResult | null;
@@ -137,8 +148,10 @@ function SkeletonRow() {
 
 function DialogBody({
   draft,
-  roots,
-  initialRoot,
+  catalogRoots,
+  initialCatalogRoot,
+  folderOptions,
+  initialFolder,
   initialPipelineId,
   mode,
   plan,
@@ -154,16 +167,27 @@ function DialogBody({
   onCancel,
   onFixInWorkshop,
 }: Omit<SaveToCatalogDialogV2Props, "open">) {
-  const [root, setRoot] = useState(initialRoot);
+  const [catalogRoot, setCatalogRoot] = useState(initialCatalogRoot);
+  const [folder, setFolder] = useState(initialFolder);
   const [pipelineId, setPipelineId] = useState(initialPipelineId);
   const [allowInvalid, setAllowInvalid] = useState(Boolean(allowInvalidInitial));
-  const sentRef = useRef<SaveDestination>({ root: initialRoot, pipelineId: initialPipelineId });
+  const sentRef = useRef<SaveDestination>({
+    catalogRoot: initialCatalogRoot,
+    folder: initialFolder,
+    pipelineId: initialPipelineId,
+  });
   const changeRef = useRef(onChangeDestination);
   changeRef.current = onChangeDestination;
 
   const sendDestination = (next: SaveDestination) => {
     const sent = sentRef.current;
-    if (sent.root === next.root && sent.pipelineId === next.pipelineId) return;
+    if (
+      sent.catalogRoot === next.catalogRoot &&
+      sent.folder === next.folder &&
+      sent.pipelineId === next.pipelineId
+    ) {
+      return;
+    }
     sentRef.current = next;
     changeRef.current(next);
   };
@@ -173,14 +197,23 @@ function DialogBody({
 
   useEffect(() => {
     const id = window.setTimeout(
-      () => sendRef.current({ root, pipelineId: pipelineId.trim() }),
+      () =>
+        sendRef.current({
+          catalogRoot,
+          folder,
+          pipelineId: pipelineId.trim(),
+        }),
       ID_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(id);
-  }, [pipelineId, root]);
+  }, [catalogRoot, folder, pipelineId]);
 
   const destination = (): SaveDestination => {
-    const next = { root, pipelineId: pipelineId.trim() };
+    const next = {
+      catalogRoot,
+      folder,
+      pipelineId: pipelineId.trim(),
+    };
     sendDestination(next);
     return next;
   };
@@ -188,17 +221,26 @@ function DialogBody({
   const findings = useMemo(() => validation?.findings ?? [], [validation]);
   const view = useMemo(() => validationView(validation), [validation]);
   const rows = useMemo(
-    () => (plan ? planRows(plan, draft, findings) : fallbackRows(draft, root, pipelineId, findings)),
-    [draft, findings, pipelineId, plan, root],
+    () =>
+      plan
+        ? planRows(plan, draft, findings)
+        : fallbackRows(draft, folder, pipelineId, findings),
+    [draft, findings, folder, pipelineId, plan],
   );
   const footnote = useMemo(() => unrewrittenStagesFootnote(draft), [draft]);
   const hint = pipelineIdHint({ pipelineId, initialPipelineId, mode, plan, planLoading });
-  const enabled = canSave({ validation: view, allowInvalid, saving, pipelineId });
+  const catalogRootOptions = catalogRoots.some((option) => option.value === catalogRoot)
+    ? catalogRoots
+    : [{ value: catalogRoot, label: catalogRoot || "." }, ...catalogRoots];
+  const folderSelectOptions = folderOptions.some((option) => option.value === folder)
+    ? folderOptions
+    : [{ value: folder, label: folder || "." }, ...folderOptions];
+  const selectedCatalogRoot = catalogRootOptions.find((option) => option.value === catalogRoot);
+  const catalogRootUnavailable = selectedCatalogRoot?.available === false;
+  const enabled =
+    canSave({ validation: view, allowInvalid, saving, pipelineId }) &&
+    !catalogRootUnavailable;
   const failed = view.status === "failed";
-
-  const rootOptions = roots.some((option) => option.value === root)
-    ? roots
-    : [{ value: root, label: root || "." }, ...roots];
 
   const submit = () => {
     if (!enabled) return;
@@ -269,32 +311,80 @@ function DialogBody({
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="flex w-full flex-col gap-2 px-5 pb-4">
             <span className={SECTION_LABEL}>Destination</span>
+            <div className="flex w-full flex-col gap-2.5">
+              <div className="flex w-full gap-2.5">
+                <label className="flex min-w-0 flex-1 flex-col gap-1.5">
+                  <span className="text-xs text-[#a7aab2]">Save to</span>
+                  <span className="relative flex h-[34px] items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-2.5 focus-within:border-[#ffffff33] focus-within:shadow-[0px_0px_0px_3px_rgba(236,237,238,0.06)]">
+                    <LuFolder className="size-3.5 shrink-0 text-[#8b8f98]" aria-hidden />
+                    <select
+                      value={catalogRoot}
+                      disabled={saving}
+                      onChange={(event) => {
+                        setCatalogRoot(event.target.value);
+                        sendDestination({
+                          catalogRoot: event.target.value,
+                          folder,
+                          pipelineId: pipelineId.trim(),
+                        });
+                      }}
+                      className={`min-w-0 flex-1 cursor-pointer appearance-none truncate bg-transparent pr-5 ${MONO} text-xs text-[#ecedee] outline-none`}
+                    >
+                      {catalogRootOptions.map((option) => (
+                        <option
+                          key={option.value}
+                          value={option.value}
+                          disabled={option.available === false}
+                          className="bg-[#1a1c21]"
+                        >
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <LuChevronDown
+                      className="pointer-events-none absolute right-2.5 size-3.5 text-[#8b8f98]"
+                      aria-hidden
+                    />
+                  </span>
+                </label>
+                <label className="flex min-w-0 flex-1 flex-col gap-1.5">
+                  <span className="text-xs text-[#a7aab2]">Folder</span>
+                  <span className="relative flex h-[34px] items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-2.5 focus-within:border-[#ffffff33] focus-within:shadow-[0px_0px_0px_3px_rgba(236,237,238,0.06)]">
+                    <LuGitBranch className="size-3.5 shrink-0 text-[#8b8f98]" aria-hidden />
+                    <select
+                      value={folder}
+                      disabled={saving}
+                      onChange={(event) => {
+                        setFolder(event.target.value);
+                        sendDestination({
+                          catalogRoot,
+                          folder: event.target.value,
+                          pipelineId: pipelineId.trim(),
+                        });
+                      }}
+                      className={`min-w-0 flex-1 cursor-pointer appearance-none truncate bg-transparent pr-5 ${MONO} text-xs text-[#ecedee] outline-none`}
+                    >
+                      {folderSelectOptions.map((option) => (
+                        <option key={option.value} value={option.value} className="bg-[#1a1c21]">
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <LuChevronDown
+                      className="pointer-events-none absolute right-2.5 size-3.5 text-[#8b8f98]"
+                      aria-hidden
+                    />
+                  </span>
+                </label>
+              </div>
+              {catalogRootUnavailable ? (
+                <p className="text-[11px] leading-[1.4] text-[#f2645a]">
+                  {selectedCatalogRoot?.unavailableReason ??
+                    "This catalog root is unavailable for writes."}
+                </p>
+              ) : null}
+            </div>
             <div className="flex w-full gap-2.5">
-              <label className="flex w-[260px] shrink-0 flex-col gap-1.5">
-                <span className="text-xs text-[#a7aab2]">Catalog root</span>
-                <span className="relative flex h-[34px] items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-2.5 focus-within:border-[#ffffff33] focus-within:shadow-[0px_0px_0px_3px_rgba(236,237,238,0.06)]">
-                  <LuFolder className="size-3.5 shrink-0 text-[#8b8f98]" aria-hidden />
-                  <select
-                    value={root}
-                    disabled={saving}
-                    onChange={(event) => {
-                      setRoot(event.target.value);
-                      sendDestination({ root: event.target.value, pipelineId: pipelineId.trim() });
-                    }}
-                    className={`min-w-0 flex-1 cursor-pointer appearance-none truncate bg-transparent pr-5 ${MONO} text-xs text-[#ecedee] outline-none`}
-                  >
-                    {rootOptions.map((option) => (
-                      <option key={option.value} value={option.value} className="bg-[#1a1c21]">
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <LuChevronDown
-                    className="pointer-events-none absolute right-2.5 size-3.5 text-[#8b8f98]"
-                    aria-hidden
-                  />
-                </span>
-              </label>
               <label className="flex min-w-0 flex-1 flex-col gap-1.5">
                 <span className="text-xs text-[#a7aab2]">Pipeline id</span>
                 <span className="flex h-[34px] items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-2.5 focus-within:border-[#ffffff33] focus-within:shadow-[0px_0px_0px_3px_rgba(236,237,238,0.06)]">

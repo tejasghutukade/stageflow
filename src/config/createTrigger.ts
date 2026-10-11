@@ -294,6 +294,7 @@ export async function createTrigger(
     trigger: {
       ...loadOutcome.value,
       definition_ref: relPath,
+      project_root: projectRoot,
     },
   };
 }

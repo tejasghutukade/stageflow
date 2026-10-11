@@ -3,7 +3,12 @@ import type {
   DraftPackagePayload,
   DraftValidationResult,
 } from "../../api";
-import { headerPills, unsavedChangeCount } from "./editorHeaderModel";
+import {
+  editorReadOnlyNotice,
+  editorSaveLabel,
+  headerPills,
+  unsavedChangeCount,
+} from "./editorHeaderModel";
 
 function draft(
   pipelinePrompt: string,
@@ -121,5 +126,20 @@ describe("headerPills", () => {
   it("labels warnings with singular or plural counts", () => {
     expect(headerPills(validation(0, 1))?.warningLabel).toBe("1 warning");
     expect(headerPills(validation(0, 2))?.warningLabel).toBe("2 warnings");
+  });
+});
+
+describe("editorReadOnlyNotice", () => {
+  it("shows a workspace copy hint for read-only origins", () => {
+    expect(editorReadOnlyNotice(true)).toContain("Workspace");
+    expect(editorReadOnlyNotice(false)).toBeNull();
+  });
+});
+
+describe("editorSaveLabel", () => {
+  it("uses Save copy when editing a read-only catalog draft", () => {
+    expect(editorSaveLabel(true, true)).toBe("Save copy to Workspace");
+    expect(editorSaveLabel(true, false)).toBe("Save");
+    expect(editorSaveLabel(false, true)).toBe("Save");
   });
 });

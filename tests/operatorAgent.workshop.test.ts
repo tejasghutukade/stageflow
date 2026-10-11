@@ -39,6 +39,12 @@ import {
   resolveWorkshopSessionStoreRoot,
   updateWorkshopSessionActiveBuildId,
 } from "../src/workshop/sessionStore.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import {
+  ensureWorkspaceCatalog,
+  resetWorkspaceProvisionForTests,
+  workspaceCatalogPath,
+} from "../src/project/workspaceCatalog.js";
 import { initTempGitRepo, withIsolatedHome } from "./helpers/projectContext.js";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -174,6 +180,47 @@ describe("Operator Agent Host — Workshop Author", () => {
     } finally {
       await cleanup();
     }
+  });
+
+  it("save without projectRoot writes a slug folder on the workspace catalog", async () => {
+    await withIsolatedHome(async (home) => {
+      process.env.STAGEFLOW_HOME = home;
+      resetGlobalStageflowHomeForTests();
+      resetWorkspaceProvisionForTests();
+      expect(ensureWorkspaceCatalog(home).ok).toBe(true);
+      const ws = workspaceCatalogPath(home);
+      const draft: DraftPackage = {
+        pipeline: {
+          id: "ws-demo",
+          stages: [
+            {
+              id: "plan",
+              entry: true,
+              system_prompt: "Plan the work.",
+              model: MODEL,
+              ...REQUIRED_IO,
+            },
+          ],
+        },
+      };
+      const host = createWorkshopOperatorHost([
+        { type: "call_tool", name: "save", args: {} },
+      ]);
+      const session = host.openSession({
+        profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+        context: createWorkshopDraftContext(draft),
+      });
+      const events = await session.send("save");
+      const toolEvent = events.find((e) => e.type === "tool_result");
+      expect(toolEvent?.type).toBe("tool_result");
+      if (toolEvent?.type !== "tool_result") return;
+      expect(toolEvent.result.ok).toBe(true);
+      const pipeline = await readFile(
+        path.join(ws, "ws-demo", "ws-demo.pipeline.yaml"),
+        "utf8",
+      );
+      expect(pipeline).toContain("id: ws-demo");
+    });
   });
 
   it("save without a folder writes under workshop/ and lists it for Run", async () => {
@@ -710,16 +757,34 @@ describe("Workshop Author build tools", () => {
         await catalog.ensureProject(fixture.root);
         const listed = await listPipelinesMultiProject({ store: catalog });
         await catalog.close();
-        const expected = listWorkshopPickerRows(
+        const pickerRows = listWorkshopPickerRows(
           storeRoot,
           resolvePickerCatalogPipelines(listed.items, listed.roots),
           listed.roots,
         );
+        const pipelines = resolvePickerCatalogPipelines(
+          listed.items,
+          listed.roots,
+        );
+        const expected = pickerRows.map((row) => {
+          if (!row.projectRoot || !row.relativePath) {
+            return { ...row, catalogListed: false };
+          }
+          const normalize = (value: string) =>
+            value.replace(/\\/g, "/").replace(/^\.\//, "");
+          const catalogListed = pipelines.some(
+            (pipeline) =>
+              pipeline.project_root === row.projectRoot &&
+              normalize(pipeline.path) === normalize(row.relativePath!),
+          );
+          return { ...row, catalogListed };
+        });
         expect(expected).toContainEqual({
           id: untitled.id,
           name: "notes",
           projectRoot: null,
           relativePath: null,
+          catalogListed: false,
         });
         expect(
           expected.some(

@@ -44,11 +44,30 @@ export function draftFrameApplies(
   selectedBuildId: string | null,
   frameBuildId: string | null | undefined,
 ): boolean {
-  return (
-    typeof frameBuildId === "string" &&
-    frameBuildId.length > 0 &&
-    frameBuildId === selectedBuildId
-  );
+  if (typeof frameBuildId !== "string" || frameBuildId.length === 0) {
+    return false;
+  }
+  if (selectedBuildId === null) return true;
+  return frameBuildId === selectedBuildId;
+}
+
+export type DraftFrameAction =
+  | { kind: "ignore" }
+  | { kind: "set-draft"; draft: DraftPackagePayload }
+  | { kind: "adopt-pointer"; buildId: string; draft: DraftPackagePayload };
+
+export function draftFrameAction(
+  selectedBuildId: string | null,
+  frameBuildId: string | null | undefined,
+  draft: DraftPackagePayload,
+): DraftFrameAction {
+  if (!draftFrameApplies(selectedBuildId, frameBuildId)) {
+    return { kind: "ignore" };
+  }
+  if (selectedBuildId === null) {
+    return { kind: "adopt-pointer", buildId: frameBuildId!, draft };
+  }
+  return { kind: "set-draft", draft };
 }
 
 export function startNewChatStudio(

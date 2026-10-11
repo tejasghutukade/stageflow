@@ -102,13 +102,15 @@ import {
   CatalogPathError,
   resolveCatalogRelativePath,
   resolveCatalogStartInput,
+  resolveDefaultWriteRoot,
   resolveWritableCatalogRoot,
 } from "../config/catalogRelativePath.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
-import { findTaskInCatalog } from "../config/findTaskInCatalog.js";
+import { findTaskInCatalogMulti } from "../config/findTaskInCatalog.js";
 import { buildSkillUsageIndex } from "../config/skillUsageIndex.js";
 import { validateCatalog } from "../config/validateCatalog.js";
+import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import {
   artifactMediaType,
   classifyArtifactContent,
@@ -194,7 +196,7 @@ import {
   type HttpHostEnvelope,
   type HttpHostRouteContext,
 } from "./createHttpHost.js";
-import { handleApiHealth } from "./healthSurfaces.js";
+import { handleApiHealth, listCatalogRootsForApi } from "./healthSurfaces.js";
 import {
   mapRetryStageFailure,
   mapStartFailure,
@@ -216,6 +218,18 @@ import {
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 
 const auditLog = rootLogger.child({ component: "audit" });
+
+function draftCatalogRootWire(root: CatalogRoot): {
+  project_root: string;
+  root_kind: CatalogRoot["kind"];
+  read_only: boolean;
+} {
+  return {
+    project_root: root.project_root,
+    root_kind: root.kind,
+    read_only: root.read_only,
+  };
+}
 
 export type UiServerOptions = {
   agent: StagePort;
@@ -1380,6 +1394,12 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           return true;
         }
 
+        if (method === "GET" && pathname === "/api/catalog/roots") {
+          const roots = await listCatalogRootsForApi({ store, bootCwd: cwd });
+          json(res, 200, { roots });
+          return true;
+        }
+
         if (method === "POST" && pathname === "/api/catalog/validate") {
           let body: unknown;
           try {
@@ -1587,17 +1607,41 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         const taskDetailMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
         if (method === "GET" && taskDetailMatch) {
           const taskId = decodeURIComponent(taskDetailMatch[1] ?? "");
-          const task = await findTaskInCatalog(cwd, taskId);
-          if (task === null) {
-            json(res, 404, { error: `Task not found: ${taskId}` });
+          const projectRootFilter =
+            url.searchParams.get("project_root") ?? undefined;
+          const lookup = await findTaskInCatalogMulti({
+            store,
+            bootCwd: cwd,
+            taskId,
+            projectRootFilter,
+          });
+          if (!lookup.ok) {
+            if (lookup.status === 409) {
+              json(res, 409, {
+                error: lookup.error,
+                code: lookup.code,
+                project_roots: lookup.project_roots,
+              });
+              return true;
+            }
+            if (lookup.status === 400) {
+              json(res, 400, {
+                error: lookup.error,
+                code: lookup.code,
+              });
+              return true;
+            }
+            json(res, 404, { error: lookup.error });
             return true;
           }
-          json(res, 200, { task });
+          json(res, 200, { task: lookup.task });
           return true;
         }
 
         if (method === "PUT" && taskDetailMatch) {
           const taskId = decodeURIComponent(taskDetailMatch[1] ?? "");
+          const projectRootFilter =
+            url.searchParams.get("project_root") ?? undefined;
           let body: unknown;
           try {
             body = await readJsonBody(req);
@@ -1610,9 +1654,21 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             json(res, parsed.status, { error: parsed.error });
             return true;
           }
-          const result = await updateTask(cwd, taskId, parsed);
+          const result = await updateTask({
+            store,
+            bootCwd: cwd,
+            taskId,
+            input: parsed,
+            projectRootFilter,
+          });
           if (!result.ok) {
-            json(res, result.status, { error: result.error });
+            json(res, result.status, {
+              error: result.error,
+              ...(result.code !== undefined ? { code: result.code } : {}),
+              ...(result.project_roots !== undefined
+                ? { project_roots: result.project_roots }
+                : {}),
+            });
             return true;
           }
           json(res, 200, { task: result.task });
@@ -1798,25 +1854,23 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             typeof (body as { project_root?: unknown }).project_root === "string"
               ? (body as { project_root: string }).project_root
               : undefined;
-          let validateRoot = cwd;
-          if (writeRoot) {
-            try {
-              const { wireRoot: selected } = await resolveWritableCatalogRoot(
-                { store, bootCwd: cwd },
-                writeRoot,
+          let validateRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveDefaultWriteRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            validateRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
               );
-              validateRoot = selected.path;
-            } catch (err) {
-              if (err instanceof CatalogPathError) {
-                json(
-                  res,
-                  err.code === "catalog_root_read_only" ? 403 : 400,
-                  catalogPathErrorBody(err),
-                );
-                return true;
-              }
-              throw err;
+              return true;
             }
+            throw err;
           }
           const ctx = await resolveStageflowContext(validateRoot);
           const result = await validateDraftPackage(draftParsed, {
@@ -1844,12 +1898,14 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               ? (body as { project_root: string }).project_root
               : undefined;
           let draftWriteRoot: string;
+          let draftWriteWireRoot: CatalogRoot;
           try {
             const { wireRoot: selected } = await resolveWritableCatalogRoot(
               { store, bootCwd: cwd },
               writeRoot,
             );
             draftWriteRoot = selected.path;
+            draftWriteWireRoot = selected;
           } catch (err) {
             if (err instanceof CatalogPathError) {
               json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
@@ -1863,15 +1919,16 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             return true;
           }
           const ctx = await resolveStageflowContext(draftWriteRoot);
-          if (!ctx.isGitProject) {
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }
           const result = (
-            await publishDraftPackage(ctx.projectRoot, parsed, "create")
+            await publishDraftPackage(ctx.projectRoot, parsed, "create", {
+              catalogRootKind: draftWriteWireRoot.kind,
+            })
           ).write;
           if (!result.ok) {
             json(res, result.status, {
@@ -1884,6 +1941,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             pipeline: result.pipeline,
             pipelinePath: result.pipelinePath,
             stagePaths: result.stagePaths,
+            catalog_root_path: ctx.projectRoot,
+            ...draftCatalogRootWire(draftWriteWireRoot),
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
           });
           return true;
@@ -1905,12 +1964,14 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               ? (body as { project_root: string }).project_root
               : undefined;
           let draftWriteRoot: string;
+          let draftWriteWireRoot: CatalogRoot;
           try {
             const { wireRoot: selected } = await resolveWritableCatalogRoot(
               { store, bootCwd: cwd },
               writeRoot,
             );
             draftWriteRoot = selected.path;
+            draftWriteWireRoot = selected;
           } catch (err) {
             if (err instanceof CatalogPathError) {
               json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
@@ -1924,15 +1985,16 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             return true;
           }
           const ctx = await resolveStageflowContext(draftWriteRoot);
-          if (!ctx.isGitProject) {
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }
           const result = (
-            await publishDraftPackage(ctx.projectRoot, parsed, "overwrite")
+            await publishDraftPackage(ctx.projectRoot, parsed, "overwrite", {
+              catalogRootKind: draftWriteWireRoot.kind,
+            })
           ).write;
           if (!result.ok) {
             json(res, result.status, {
@@ -1945,6 +2007,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             pipeline: result.pipeline,
             pipelinePath: result.pipelinePath,
             stagePaths: result.stagePaths,
+            catalog_root_path: ctx.projectRoot,
+            ...draftCatalogRootWire(draftWriteWireRoot),
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
           });
           return true;
@@ -1985,10 +2049,9 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             return true;
           }
           const ctx = await resolveStageflowContext(draftWriteRoot);
-          if (!ctx.isGitProject) {
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }
@@ -2083,6 +2146,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             draft: result.draft,
             destination: result.destination,
             pipelinePath: result.pipelinePath,
+            ...draftCatalogRootWire(wireRoot),
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
           });
           return true;
@@ -2158,25 +2222,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           const key = workshopAutosaveSlotKey(keyParam);
           const writeRoot =
             url.searchParams.get("project_root") ?? undefined;
-          let storeRoot: string;
           try {
-            if (writeRoot) {
-              const { wireRoot } = await resolveCatalogStartInput(
-                { store, bootCwd: cwd },
-                writeRoot,
-              );
-              const ctx = await resolveStageflowContext(wireRoot.path);
-              storeRoot = resolveWorkshopAutosaveStoreRoot({
-                projectRoot: ctx.projectRoot,
-                isGitProject: ctx.isGitProject,
-              });
-            } else {
-              const ctx = await resolveStageflowContext(cwd);
-              storeRoot = resolveWorkshopAutosaveStoreRoot({
-                projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
-                isGitProject: ctx.isGitProject,
-              });
-            }
+            await resolveDefaultWriteRoot({ store, bootCwd: cwd }, writeRoot);
           } catch (err) {
             if (err instanceof CatalogPathError) {
               json(
@@ -2188,6 +2235,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             }
             throw err;
           }
+          const storeRoot = resolveWorkshopAutosaveStoreRoot();
           const record = readWorkshopAutosave(storeRoot, key);
           json(res, 200, { key, autosave: record });
           return true;
@@ -2215,25 +2263,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             typeof body.project_root === "string"
               ? body.project_root
               : undefined;
-          let storeRoot: string;
           try {
-            if (writeRoot) {
-              const { wireRoot } = await resolveWritableCatalogRoot(
-                { store, bootCwd: cwd },
-                writeRoot,
-              );
-              const ctx = await resolveStageflowContext(wireRoot.path);
-              storeRoot = resolveWorkshopAutosaveStoreRoot({
-                projectRoot: ctx.projectRoot,
-                isGitProject: ctx.isGitProject,
-              });
-            } else {
-              const ctx = await resolveStageflowContext(cwd);
-              storeRoot = resolveWorkshopAutosaveStoreRoot({
-                projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
-                isGitProject: ctx.isGitProject,
-              });
-            }
+            await resolveDefaultWriteRoot({ store, bootCwd: cwd }, writeRoot);
           } catch (err) {
             if (err instanceof CatalogPathError) {
               json(
@@ -2245,6 +2276,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             }
             throw err;
           }
+          const storeRoot = resolveWorkshopAutosaveStoreRoot();
           const candidate: WorkshopAutosaveRecord = {
             version: 1,
             key,
@@ -2279,6 +2311,9 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
                     body.diskFingerprints as Record<string, string>,
                 }
               : {}),
+            ...(body.projectRoot === null || typeof body.projectRoot === "string"
+              ? { projectRoot: body.projectRoot }
+              : {}),
           };
           const parsed = parseWorkshopAutosaveRecord(candidate);
           if (!parsed) {
@@ -2312,25 +2347,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             typeof body.project_root === "string"
               ? body.project_root
               : undefined;
-          let storeRoot: string;
           try {
-            if (writeRoot) {
-              const { wireRoot } = await resolveWritableCatalogRoot(
-                { store, bootCwd: cwd },
-                writeRoot,
-              );
-              const ctx = await resolveStageflowContext(wireRoot.path);
-              storeRoot = resolveWorkshopAutosaveStoreRoot({
-                projectRoot: ctx.projectRoot,
-                isGitProject: ctx.isGitProject,
-              });
-            } else {
-              const ctx = await resolveStageflowContext(cwd);
-              storeRoot = resolveWorkshopAutosaveStoreRoot({
-                projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
-                isGitProject: ctx.isGitProject,
-              });
-            }
+            await resolveDefaultWriteRoot({ store, bootCwd: cwd }, writeRoot);
           } catch (err) {
             if (err instanceof CatalogPathError) {
               json(
@@ -2342,6 +2360,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             }
             throw err;
           }
+          const storeRoot = resolveWorkshopAutosaveStoreRoot();
           const cleared = clearWorkshopAutosave(storeRoot, key);
           json(res, 200, { key, cleared });
           return true;
@@ -2844,6 +2863,32 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             body.stream === true ||
             accept.includes("application/x-ndjson") ||
             accept.includes("text/event-stream");
+          const projectRootWire =
+            typeof body.project_root === "string"
+              ? body.project_root.trim()
+              : typeof body.projectRoot === "string"
+                ? body.projectRoot.trim()
+                : "";
+          let chatProjectRoot: string | undefined;
+          if (projectRootWire) {
+            try {
+              const { wireRoot } = await resolveWritableCatalogRoot(
+                { store, bootCwd: cwd },
+                projectRootWire,
+              );
+              chatProjectRoot = wireRoot.path;
+            } catch (err) {
+              if (err instanceof CatalogPathError) {
+                json(
+                  res,
+                  err.code === "catalog_root_read_only" ? 403 : 400,
+                  catalogPathErrorBody(err),
+                );
+                return true;
+              }
+              throw err;
+            }
+          }
           const chatTurnBase = {
             sessionId: body.sessionId,
             draft: draftParsed,
@@ -2858,6 +2903,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             settingsDefault: settingsDefault ?? null,
             registry: workshopChatRegistry,
             storeRoot: workshopSessionStoreRoot(),
+            ...(chatProjectRoot ? { projectRoot: chatProjectRoot } : {}),
           };
 
           // Fail closed on missing sessions before opening an NDJSON body.

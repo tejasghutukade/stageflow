@@ -1,4 +1,13 @@
-import type { DraftPackagePayload, PlanDraftPackageInput } from "../../api";
+import {
+  normalizeDraftCatalogFilenames,
+  normalizePipelineCatalogFilename,
+} from "@stageflow/workshop-catalog-filenames";
+import type {
+  CatalogRoot,
+  CatalogRootKind,
+  DraftPackagePayload,
+  PlanDraftPackageInput,
+} from "../../api";
 import { attachmentMetaList } from "./chat/attachments";
 import { stageChangeStatus } from "./graph/workshopGraphModel";
 import { setPipelineId } from "./inspector/stageFields";
@@ -23,7 +32,22 @@ export type SaveIntent =
   | { kind: "overwrite-direct" }
   | { kind: "dialog"; mode: SaveDialogMode; allowInvalidInitial: boolean };
 
-export type CatalogRoot = { value: string; label: string };
+export type FolderOption = { value: string; label: string };
+
+export const DEFAULT_WRITE_CATALOG_WIRE_ID = "workspace";
+
+export type DraftOrigin = {
+  project_root: string;
+  kind: CatalogRootKind;
+  readOnly: boolean;
+};
+
+export type WritableRootOption = {
+  value: string;
+  label: string;
+  available: boolean;
+  unavailableReason?: string;
+};
 
 export type AttachmentChip = { name: string; size: number; mediaType: string };
 
@@ -66,6 +90,91 @@ export function projectRootField(
   return projectRoot ? { project_root: projectRoot } : {};
 }
 
+export function draftOriginFromResponse(input: {
+  project_root?: string;
+  root_kind?: CatalogRootKind;
+  read_only?: boolean;
+}): DraftOrigin | null {
+  const project_root = input.project_root?.trim();
+  if (!project_root) return null;
+  return {
+    project_root,
+    kind: input.root_kind ?? "registered",
+    readOnly: input.read_only === true,
+  };
+}
+
+export function fallbackDraftOrigin(): DraftOrigin {
+  return {
+    project_root: DEFAULT_WRITE_CATALOG_WIRE_ID,
+    kind: "workspace",
+    readOnly: false,
+  };
+}
+
+export function defaultWritableRootWireId(roots: readonly CatalogRoot[]): string {
+  const workspace = roots.find(
+    (root) => root.kind === "workspace" && root.available !== false && !root.read_only,
+  );
+  if (workspace) return workspace.project_root;
+  const writable = roots.find(
+    (root) => !root.read_only && root.available !== false,
+  );
+  return writable?.project_root ?? DEFAULT_WRITE_CATALOG_WIRE_ID;
+}
+
+export function writableRootOptions(roots: readonly CatalogRoot[]): WritableRootOption[] {
+  return roots
+    .filter((root) => !root.read_only)
+    .map((root) => ({
+      value: root.project_root,
+      label: root.label,
+      available: root.available !== false,
+      ...(root.unavailable_reason ? { unavailableReason: root.unavailable_reason } : {}),
+    }));
+}
+
+export function omitDefaultWriteProjectRoot(
+  chosenWireId: string | undefined,
+  defaultWireId: string,
+): { project_root?: string } {
+  const chosen = chosenWireId?.trim();
+  const fallback = defaultWireId.trim() || DEFAULT_WRITE_CATALOG_WIRE_ID;
+  if (!chosen || chosen === fallback) return {};
+  return { project_root: chosen };
+}
+
+export function defaultPackageDirectory(
+  rootKind: CatalogRootKind | undefined,
+  pipelineId: string,
+): string {
+  const id = pipelineId.trim() || "untitled";
+  if (rootKind === "workspace") return id;
+  return `workshop/${id}`;
+}
+
+export function folderOptionsForSave(
+  rootKind: CatalogRootKind | undefined,
+  pipelineId: string,
+  existingFolder?: string,
+): FolderOption[] {
+  const seen = new Set<string>();
+  const options: FolderOption[] = [];
+  const add = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    options.push({ value: trimmed, label: trimmed });
+  };
+  add(defaultPackageDirectory(rootKind, pipelineId));
+  if (existingFolder) add(existingFolder);
+  return options;
+}
+
+export function packageReadProjectRoot(origin: DraftOrigin | null | undefined): string | undefined {
+  return origin?.project_root;
+}
+
 export function openDraftInput(input: {
   path: string;
   task?: string;
@@ -78,19 +187,45 @@ export function openDraftInput(input: {
   };
 }
 
-export function catalogRoots(
-  pipelines: ReadonlyArray<{ project_root?: string }>,
-): CatalogRoot[] {
-  const seen = new Set<string>();
-  const roots: CatalogRoot[] = [];
-  for (const pipeline of pipelines) {
-    const root = pipeline.project_root?.trim();
-    if (!root || seen.has(root)) continue;
-    seen.add(root);
-    roots.push({ value: root, label: root });
+function normalizeCatalogPathForMatch(pathValue: string): string {
+  return pathValue.trim().replace(/\\/g, "/");
+}
+
+export function projectRootForPipelinePath(
+  pipelines: ReadonlyArray<{ project_root?: string; path?: string }>,
+  pipelinePath: string,
+): string | undefined {
+  const target = normalizeCatalogPathForMatch(pipelinePath);
+  if (!target) return undefined;
+  const matches = pipelines.filter(
+    (pipeline) =>
+      pipeline.path &&
+      normalizeCatalogPathForMatch(pipeline.path) === target,
+  );
+  const roots = [
+    ...new Set(
+      matches
+        .map((pipeline) => pipeline.project_root?.trim())
+        .filter((root): root is string => Boolean(root)),
+    ),
+  ];
+  return roots.length === 1 ? roots[0] : undefined;
+}
+
+export function saveIntentForOrigin(input: {
+  hasDestination: boolean;
+  errorCount: number;
+  invalid?: boolean;
+  originReadOnly?: boolean;
+}): SaveIntent {
+  if (input.originReadOnly) {
+    return {
+      kind: "dialog",
+      mode: "create",
+      allowInvalidInitial: Boolean(input.invalid),
+    };
   }
-  if (roots.length === 0) return [{ value: ".", label: "." }];
-  return roots;
+  return saveIntent(input);
 }
 
 export function saveIntent(input: {
@@ -128,31 +263,46 @@ export function pipelineFilenameFor(
   current: { id: string; filename?: string | null },
 ): string {
   const id = pipelineId.trim() || "untitled";
-  if (current.filename && current.id === id) return current.filename;
-  return `${id}.yaml`;
+  const keepFilename =
+    current.filename && current.id === id ? current.filename : null;
+  return normalizePipelineCatalogFilename(id, keepFilename);
+}
+
+export function draftWithCatalogFilenames(
+  draft: DraftPackagePayload,
+): DraftPackagePayload {
+  return normalizeDraftCatalogFilenames(draft).draft;
 }
 
 export function planDraftInput(input: {
-  destination: { root: string; pipelineId: string };
+  destination: { folder: string; pipelineId: string };
   draft: DraftPackagePayload;
   mode: SaveDialogMode;
   projectRoot?: string;
+  defaultWriteWireId?: string;
   filename?: string | null;
 }): PlanDraftPackageInput {
   const pipelineId = input.destination.pipelineId.trim() || input.draft.pipeline.id;
-  const draft =
+  const draftBeforeNames =
     pipelineId === input.draft.pipeline.id
       ? input.draft
       : setPipelineId(input.draft, pipelineId);
-  return {
-    directory: input.destination.root,
-    draft,
-    pipelineFilename: pipelineFilenameFor(pipelineId, {
+  const { draft, pipelineFilename } = normalizeDraftCatalogFilenames(
+    draftBeforeNames,
+    pipelineFilenameFor(pipelineId, {
       id: input.draft.pipeline.id,
       filename: input.filename,
     }),
+  );
+  return {
+    directory: input.destination.folder,
+    draft,
+    pipelineFilename,
     mode: input.mode,
-    ...projectRootField(input.projectRoot),
+    ...omitDefaultWriteProjectRoot(
+      input.projectRoot,
+      input.defaultWriteWireId ?? DEFAULT_WRITE_CATALOG_WIRE_ID,
+    ),
   };
 }
 
@@ -161,6 +311,61 @@ export function savedFileCount(result: {
   taskPath?: string;
 }): number {
   return 1 + result.stagePaths.length + (result.taskPath ? 1 : 0);
+}
+
+export function mergeTaskFromAuthoritativeDraft(
+  local: DraftPackagePayload,
+  authoritative: DraftPackagePayload | null | undefined,
+): DraftPackagePayload {
+  if (local.task || !authoritative?.task) return local;
+  return { ...local, task: authoritative.task };
+}
+
+export async function draftForWorkshopSave(input: {
+  draft: DraftPackagePayload;
+  buildId: string | null;
+  loadBuild: (
+    buildId: string,
+  ) => Promise<
+    | { ok: true; build: { draft: DraftPackagePayload } }
+    | { ok: false; error: string }
+  >;
+  resolveActiveBuildId?: () => Promise<string | null>;
+}): Promise<{
+  draft: DraftPackagePayload;
+  mergedTaskFromServer: boolean;
+  adoptedBuildId: string | null;
+}> {
+  let draft = input.draft;
+  let mergedTaskFromServer = false;
+  let adoptedBuildId: string | null = null;
+
+  if (draft.task) {
+    return { draft, mergedTaskFromServer, adoptedBuildId };
+  }
+
+  let targetBuildId = input.buildId;
+  if (!targetBuildId && input.resolveActiveBuildId) {
+    targetBuildId = await input.resolveActiveBuildId();
+  }
+  if (!targetBuildId) {
+    return { draft, mergedTaskFromServer, adoptedBuildId };
+  }
+
+  const loaded = await input.loadBuild(targetBuildId);
+  if (!loaded.ok) {
+    return { draft, mergedTaskFromServer, adoptedBuildId };
+  }
+
+  const merged = mergeTaskFromAuthoritativeDraft(draft, loaded.build.draft);
+  if (merged !== draft) {
+    draft = merged;
+    mergedTaskFromServer = true;
+  }
+  if (!input.buildId) {
+    adoptedBuildId = targetBuildId;
+  }
+  return { draft, mergedTaskFromServer, adoptedBuildId };
 }
 
 export function mutationCardOnRegister(

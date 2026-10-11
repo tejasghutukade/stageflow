@@ -66,6 +66,15 @@ function warningPillLabel(count: number): string {
   return count === 1 ? "1 warning" : `${count} warnings`;
 }
 
+export function editorReadOnlyNotice(readOnly: boolean): string | null {
+  return readOnly ? "Examples are read-only — Save copy to Workspace" : null;
+}
+
+export function editorSaveLabel(readOnly: boolean, dirty: boolean): string {
+  if (readOnly && dirty) return "Save copy to Workspace";
+  return "Save";
+}
+
 export function headerPills(
   result: DraftValidationResult | null,
 ): HeaderPills | null {
