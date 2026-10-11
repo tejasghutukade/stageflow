@@ -1,6 +1,6 @@
 import type { LoadedManifest } from "../types/stageflowManifest.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
-import { parseModelField } from "./modelField.js";
+import { isPlaceholderModel, parseModelField } from "./modelField.js";
 
 export type ModelSelection = {
   /** stageflow.yaml top-level `model`. */
@@ -51,6 +51,16 @@ export function resolveModelOutcome(
       {
         code: "stage.missing_model",
         message: `Stage "${ctx.stageId}" in pipeline "${ctx.pipelineId}": model is required (set on stage, pipeline, or stageflow.yaml)`,
+        category: "stage",
+        stageId: ctx.stageId,
+      },
+    ]);
+  }
+  if (isPlaceholderModel(parsed.value)) {
+    return loadFailure([
+      {
+        code: "stage.invalid_model",
+        message: `Stage "${ctx.stageId}" in pipeline "${ctx.pipelineId}": model "${parsed.value}" is a placeholder "sf init" left behind. Run "sf providers models" to see valid ids, then set this stage's (or the pipeline's/stageflow.yaml's) model to one of them`,
         category: "stage",
         stageId: ctx.stageId,
       },

@@ -62,7 +62,7 @@ stages:
     model: CHANGE_ME/<provider-model>
 ```
 
-`sf init` fills `model` from the single configured provider when one is logged in (for example `openrouter/auto` or `anthropic/claude-sonnet-4-5`). With none or more than one configured provider, it writes the loud placeholder `CHANGE_ME/<provider-model>` — replace it before running.
+`sf init` fills `model` from the single configured provider when one is logged in (for example `openrouter/auto` or `anthropic/claude-sonnet-4-5`) — run step 2 first and then `sf init` to get this written automatically. With none or more than one configured provider, it writes the loud placeholder `CHANGE_ME/<provider-model>`; `sf validate` and `sf run` both reject it. Run `sf providers models` to see valid ids, then edit the line.
 
 **`tasks/hello.task.yaml`**
 
@@ -73,17 +73,7 @@ goal: Run the hello pipeline scaffold.
 
 Stages are **object entries** with inline bodies or `uses:` paths — not bare string ids. Author contracts with `io` / `verify` / `on_verify_fail` — see [YAML catalog](yaml-catalog.md).
 
-## 2. Validate the catalog
-
-```bash
-sf validate --strict
-```
-
-With no flags, `sf validate` checks all pipelines and tasks declared in `stageflow.yaml` (manifest-all), plus the stages those pipelines reference. `--strict` promotes manifest warnings (missing manifest, empty catalog) to errors.
-
-It does not prove provider auth or checkout paths.
-
-## 3. Connect a provider
+## 2. Connect a provider
 
 Either open the operator console:
 
@@ -98,7 +88,17 @@ sf providers list
 sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
 ```
 
-See [Providers](providers.md) for `pi_home` vs `sf_owned` credential storage.
+See [Providers](providers.md) for `pi_home` vs `sf_owned` credential storage. If you ran `sf init` before this step, re-run it (it skips existing files, so edit `pipelines/hello.pipeline.yaml`'s `model:` field by hand instead — see `sf providers models` above).
+
+## 3. Validate the catalog
+
+```bash
+sf validate --strict
+```
+
+With no flags, `sf validate` checks all pipelines and tasks declared in `stageflow.yaml` (manifest-all), plus the stages those pipelines reference. `--strict` promotes manifest warnings (missing manifest, empty catalog) to errors. It also rejects a placeholder `model:` left over from `sf init` — this is where that shows up if step 2 didn't make it into the YAML.
+
+It does not prove provider auth or checkout paths.
 
 ## 4. Run the pipeline
 
@@ -114,7 +114,7 @@ sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 
 With `sf ui` running (default `http://127.0.0.1:3847`):
 
-Start `sf ui` before running any pipeline if you want the console open: `sf run` (or any mutating `sf runs` command) auto-starts the same global service headlessly the first time it's needed, and a second process can't then bind the console to that already-occupied port. Running `sf ui` first — as in step 3 above — avoids this; it becomes the one running instance everything else talks to.
+Start `sf ui` before running any pipeline if you want the console open: `sf run` (or any mutating `sf runs` command) auto-starts the same global service headlessly the first time it's needed, and a second process can't then bind the console to that already-occupied port. Running `sf ui` first — as in step 2 above — avoids this; it becomes the one running instance everything else talks to.
 
 - **Runs** — see active and recent runs
 - **Run detail** — spatial stage map; select a stage for transcripts, envelopes, and HITL

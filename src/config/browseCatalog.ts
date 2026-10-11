@@ -3,6 +3,7 @@ import type { StageGateKind } from "../types/stage.js";
 import type { LoadedManifest } from "../types/stageflowManifest.js";
 import type { PipelineStageSource } from "../types/pipeline.js";
 import type { LoadIssue } from "./loadOutcome.js";
+import { isPlaceholderModel } from "./modelField.js";
 import { loadPipeline } from "./loadPipeline.js";
 import { loadTask } from "./loadTask.js";
 import type { CatalogContext } from "./resolveCatalogContext.js";
@@ -59,6 +60,7 @@ const BAKED_MODEL_IDS = [
   "anthropic/claude-sonnet-4-5",
   "cursor/auto",
   "cursor/composer-2-5",
+  "openrouter/auto",
 ] as const;
 
 function repoRelPath(projectRoot: string, absPath: string): string {
@@ -191,7 +193,7 @@ async function listModelsFromManifest(
     try {
       const loaded = await loadPipeline(filePath, { cwd: projectRoot });
       for (const stage of loaded.stages) {
-        if (stage.model?.trim()) {
+        if (stage.model?.trim() && !isPlaceholderModel(stage.model)) {
           models.add(stage.model);
         }
       }

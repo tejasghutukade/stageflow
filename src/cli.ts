@@ -97,6 +97,7 @@ const USAGE = `Usage:
   sf providers source [get | set sf_owned]
   sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
   sf providers logout <providerId>
+  sf providers models
   sf skills list
   sf skills install --from-path <dir> [--skill-name <name>]
   sf skills install --from-zip <url-or-path> [--skill-name <name>] [--checksum sha256:<hex>]

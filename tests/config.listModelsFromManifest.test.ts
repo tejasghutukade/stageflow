@@ -45,6 +45,7 @@ describe("listModelsFromManifest", () => {
       "anthropic/claude-sonnet-4-5",
       "cursor/auto",
       "cursor/composer-2-5",
+      "openrouter/auto",
     ]);
   });
 });

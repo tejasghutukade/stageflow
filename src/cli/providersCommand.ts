@@ -14,6 +14,7 @@ import {
   type ProviderSummary,
 } from "../agent/providerAuth.js";
 import { mapProviderAuthError } from "../agent/providerInspect.js";
+import { listModels } from "../config/listConfig.js";
 import { createTerminalAuthInteraction } from "./terminalAuthInteraction.js";
 import { promptSecret, readApiKeyFromEnv } from "./terminalSecret.js";
 
@@ -23,7 +24,8 @@ export const PROVIDERS_USAGE = `Usage:
   sf providers detect
   sf providers source [get | set sf_owned]
   sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
-  sf providers logout <providerId>`;
+  sf providers logout <providerId>
+  sf providers models`;
 
 export type ProvidersCommandIo = {
   log: (line: string) => void;
@@ -288,6 +290,13 @@ export async function runProvidersCommand(
         } finally {
           process.removeListener("SIGINT", onSigInt);
         }
+      }
+      case "models": {
+        const models = await listModels(cwd);
+        for (const model of models) {
+          out.log(model);
+        }
+        return 0;
       }
       case "logout": {
         const providerId = parsed.positionals[0];

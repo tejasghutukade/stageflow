@@ -39,6 +39,12 @@ describe("resolveInitDefaultModel", () => {
       LOUD_MODEL_PLACEHOLDER,
     );
   });
+
+  it("uses a provider-scoped placeholder for a single unknown provider", () => {
+    expect(resolveInitDefaultModel(["omniroute"])).toBe(
+      "CHANGE_ME/omniroute-model",
+    );
+  });
 });
 
 describe("runInitCommand", () => {
@@ -66,11 +72,15 @@ describe("runInitCommand", () => {
         expect(await readFile(path.join(repoRoot, "tasks/hello.task.yaml"), "utf8")).toBe(
           HELLO_TASK_YAML,
         );
+        expect(logs.some((line) => line.includes("sf providers models"))).toBe(
+          true,
+        );
         const validated = runCli(
           ["validate", "--pipeline", "pipelines/hello.pipeline.yaml", "--strict"],
           repoRoot,
         );
-        expect(validated.status).toBe(0);
+        expect(validated.status).toBe(1);
+        expect(validated.stdout).toMatch(/sf providers models/);
         await access(path.join(home, ".stageflow", "agent"));
       } finally {
         await cleanup();
@@ -82,9 +92,10 @@ describe("runInitCommand", () => {
     await withIsolatedHome(async () => {
       const { root: repoRoot, cleanup } = await initTempGitRepo();
       try {
+        const logs: string[] = [];
         const code = await runInitCommand([], {
           cwd: repoRoot,
-          io: { log: () => undefined, error: () => undefined },
+          io: { log: (line) => logs.push(line), error: () => undefined },
           resolveConfiguredProviderIds: async () => ["openrouter"],
         });
         expect(code).toBe(0);
@@ -94,6 +105,52 @@ describe("runInitCommand", () => {
         );
         expect(yaml).toBe(helloPipelineYaml("openrouter/auto"));
         expect(yaml).not.toMatch(/anthropic\/claude-sonnet-4-5/);
+        expect(logs.some((line) => line.includes("placeholder"))).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  it("warns at init time when an unknown single provider yields a placeholder model", async () => {
+    await withIsolatedHome(async () => {
+      const { root: repoRoot, cleanup } = await initTempGitRepo();
+      try {
+        const logs: string[] = [];
+        const code = await runInitCommand([], {
+          cwd: repoRoot,
+          io: { log: (line) => logs.push(line), error: () => undefined },
+          resolveConfiguredProviderIds: async () => ["omniroute"],
+        });
+        expect(code).toBe(0);
+        const yaml = await readFile(
+          path.join(repoRoot, "pipelines/hello.pipeline.yaml"),
+          "utf8",
+        );
+        expect(yaml).toBe(helloPipelineYaml("CHANGE_ME/omniroute-model"));
+        expect(logs.some((line) => line.includes("sf providers models"))).toBe(
+          true,
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  it("warns at init time with zero configured providers", async () => {
+    await withIsolatedHome(async () => {
+      const { root: repoRoot, cleanup } = await initTempGitRepo();
+      try {
+        const logs: string[] = [];
+        const code = await runInitCommand([], {
+          cwd: repoRoot,
+          io: { log: (line) => logs.push(line), error: () => undefined },
+          resolveConfiguredProviderIds: async () => [],
+        });
+        expect(code).toBe(0);
+        expect(
+          logs.some((line) => line.includes("sf providers login")),
+        ).toBe(true);
       } finally {
         await cleanup();
       }

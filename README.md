@@ -84,18 +84,26 @@ Then ask the agent to set up Stageflow. Details: [docs/skills-suite.md](docs/ski
 
 In a project directory (preferably a git repo):
 
-```bash
-sf init
-```
+1. Connect a model provider first (see [Connect a model provider](#connect-a-model-provider) below), e.g.:
 
-This scaffolds `stageflow.yaml`, `pipelines/hello.pipeline.yaml` (inline stage), and `tasks/hello.task.yaml`.
+   ```bash
+   sf providers login anthropic --type api_key
+   ```
 
-Run (after connecting a provider — see below):
+2. Scaffold the project — this picks up the provider you just connected:
 
-```bash
-sf ui                          # operator console at http://127.0.0.1:3847
-sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
-```
+   ```bash
+   sf init
+   ```
+
+   This writes `stageflow.yaml`, `pipelines/hello.pipeline.yaml` (inline stage), and `tasks/hello.task.yaml`. If no provider (or more than one) was connected yet, the stage's `model:` field is left as a placeholder — run `sf providers models` to see valid ids, then edit that line before the next step.
+
+3. Run it:
+
+   ```bash
+   sf ui                          # operator console at http://127.0.0.1:3847
+   sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
+   ```
 
 **Workshop** (rail → `#/workshop`) drafts a pipeline in chat and saves it under `workshop/<pipeline-id>/` so it shows up on Run. Guide: [docs/workshop.md](docs/workshop.md).
 

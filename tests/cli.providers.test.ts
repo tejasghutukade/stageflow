@@ -11,7 +11,7 @@ import {
 import { runProvidersCommand } from "../src/cli/providersCommand.js";
 import { writeCredentialSourceToFile } from "../src/runtime/settingsFile.js";
 import { readCredentialSourceFromFile } from "../src/runtime/settingsFile.js";
-import { withIsolatedHome } from "./helpers/projectContext.js";
+import { initTempGitRepo, withIsolatedHome } from "./helpers/projectContext.js";
 
 function fakeProvider(partial: {
   id: string;
@@ -401,6 +401,20 @@ describe("CLI providers", () => {
     expect(code).toBe(1);
     expect(cap.combined()).not.toContain(marker);
     expect(cap.combined()).toMatch(/redacted|failed|login/i);
+  });
+
+  it("models prints baked ids and never the sf init placeholder", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const cap = captureIo();
+      const code = await runProvidersCommand(["models"], root, cap.io);
+      expect(code).toBe(0);
+      expect(cap.combined()).toMatch(/anthropic\/claude-sonnet-4-5/);
+      expect(cap.combined()).toMatch(/openrouter\/auto/);
+      expect(cap.combined()).not.toMatch(/CHANGE_ME/);
+    } finally {
+      await cleanup();
+    }
   });
 
   it("dual-capable provider without --type exits non-zero", async () => {
