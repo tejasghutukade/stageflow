@@ -180,7 +180,6 @@ const STAGE_BODY_ORDER = [
 const PIPELINE_WIRING_ORDER = [
   "id",
   "uses",
-  "skill",
   "mcp",
   "needs",
   "fork",

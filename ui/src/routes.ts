@@ -26,6 +26,7 @@ export type Route =
       tab?: "stages" | "skills" | "extensions";
       skillName?: string;
     }
+  | { name: "stage"; path: string; projectRoot?: string }
   | { name: "extensions" }
   | {
       name: "extensionPackage";
@@ -107,6 +108,17 @@ export function catalogPath(opts?: {
   if (opts?.skill) params.set("skill", opts.skill);
   const query = params.toString();
   return query ? `/catalog?${query}` : "/catalog";
+}
+
+export function stagePath(
+  stageFilePath: string,
+  opts?: { project_root?: string },
+): string {
+  const base = `/stages/${encodeURIComponent(stageFilePath)}`;
+  if (!opts?.project_root) return base;
+  const params = new URLSearchParams();
+  params.set("project_root", opts.project_root);
+  return `${base}?${params.toString()}`;
 }
 
 export function extensionPackagePath(
@@ -228,6 +240,17 @@ export function parseHash(hash = window.location.hash): Route {
       tab,
       ...(skillName ? { skillName } : {}),
     };
+  }
+  if (path.startsWith("stages/")) {
+    const filePath = decodeURIComponent(path.slice("stages/".length));
+    if (filePath) {
+      const projectRoot = params.get("project_root") ?? undefined;
+      return {
+        name: "stage",
+        path: filePath,
+        ...(projectRoot ? { projectRoot } : {}),
+      };
+    }
   }
   if (path === "skills") return { name: "skills" };
   if (path.startsWith("skills/")) {

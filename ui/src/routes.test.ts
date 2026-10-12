@@ -8,6 +8,7 @@ import {
   parseHash,
   pipelinePath,
   runStagePath,
+  stagePath,
   workshopPath,
 } from "./routes";
 
@@ -53,6 +54,22 @@ describe("parseHash", () => {
     expect(parseHash(`#${extensionFilePath(filePath)}`)).toEqual({
       name: "extensionFile",
       path: filePath,
+    });
+  });
+
+  it("parses a stage file editor route with optional project_root", () => {
+    const filePath = "pipelines/step.yaml";
+    const root = "/Users/me/project-a";
+    expect(parseHash(`#${stagePath(filePath)}`)).toEqual({
+      name: "stage",
+      path: filePath,
+    });
+    expect(
+      parseHash(`#${stagePath(filePath, { project_root: root })}`),
+    ).toEqual({
+      name: "stage",
+      path: filePath,
+      projectRoot: root,
     });
   });
 

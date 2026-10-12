@@ -1,3 +1,5 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
 import type { TriggerFile } from "../types/trigger.js";
@@ -110,7 +112,7 @@ export type ValidationFinding = {
   column?: number;
 };
 
-export type ValidationScope = "full" | "pipeline" | "task" | "trigger";
+export type ValidationScope = "full" | "pipeline" | "task" | "trigger" | "stage";
 
 export type ValidateCatalogOptions = {
   cwd?: string;
@@ -119,6 +121,8 @@ export type ValidateCatalogOptions = {
   pipeline?: string;
   task?: string;
   trigger?: string;
+  stage?: string;
+  stageContent?: string;
   strict?: boolean;
 };
 
@@ -1083,6 +1087,36 @@ async function validateSingleTask(
   return [];
 }
 
+async function validateSingleStage(
+  invocationCwd: string,
+  stageArg: string,
+  stageContent?: string,
+): Promise<ValidationFinding[]> {
+  const ctx = await resolveCatalogContext(invocationCwd);
+  const relCwd = ctx.projectRoot ?? invocationCwd;
+  const stagePath = path.resolve(invocationCwd, stageArg);
+  if (stageContent === undefined) {
+    return validateStageFile(relCwd, stagePath);
+  }
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "sf-stage-validate-"));
+  const tmpPath = path.join(tmpDir, path.basename(stagePath));
+  try {
+    await writeFile(tmpPath, stageContent, "utf8");
+    const findings = await validateStageFile(relCwd, tmpPath);
+    const displayPath = relPath(relCwd, stagePath);
+    const tmpRel = relPath(relCwd, tmpPath);
+    return findings.map((finding) =>
+      finding.path === tmpRel ||
+      finding.path === tmpPath ||
+      finding.path.includes(tmpDir)
+        ? { ...finding, path: displayPath }
+        : finding,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
 async function validateSingleTrigger(
   invocationCwd: string,
   triggerArg: string,
@@ -1124,6 +1158,9 @@ export async function validateCatalog(
   if (options.scope === "trigger" && !options.trigger) {
     throw new Error("validateCatalog: trigger is required when scope is \"trigger\"");
   }
+  if (options.scope === "stage" && !options.stage) {
+    throw new Error("validateCatalog: stage is required when scope is \"stage\"");
+  }
 
   const allFindings: ValidationFinding[] = [];
 
@@ -1138,6 +1175,10 @@ export async function validateCatalog(
     allFindings.push(...(await validateSingleTask(cwd, options.task!)));
   } else if (options.scope === "trigger") {
     allFindings.push(...(await validateSingleTrigger(cwd, options.trigger!)));
+  } else if (options.scope === "stage") {
+    allFindings.push(
+      ...(await validateSingleStage(cwd, options.stage!, options.stageContent)),
+    );
   } else {
     allFindings.push(...(await validateManifestAll(cwd)));
   }

@@ -389,6 +389,74 @@ describe("validateCatalog task scope", () => {
   });
 });
 
+describe("validateCatalog stage scope", () => {
+  it("valid stage file passes with scope stage", async () => {
+    const stagePath = path.join(fixtures, "stages/clarify.yaml");
+    const result = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: fixtures,
+    });
+    expect(result.scope).toBe("stage");
+    expect(result.ok).toBe(true);
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("invalid shape produces stage finding", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-"));
+    const stagePath = path.join(root, "bad.yaml");
+    await writeFile(stagePath, "id: bad\n");
+    const result = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: root,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.findings.some((f) => f.code === "stage.invalid_shape")).toBe(true);
+  });
+
+  it("throws when stage scope omits stage path", async () => {
+    await expect(validateCatalog({ scope: "stage", cwd: fixtures })).rejects.toThrow(
+      /stage is required/i,
+    );
+  });
+
+  it("stageContent validates the buffer, not the on-disk file", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-buf-"));
+    const stagePath = path.join(root, "ok.yaml");
+    await writeFile(
+      stagePath,
+      [
+        "id: ok",
+        "system_prompt: valid on disk",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const bad = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: root,
+      stageContent: "id: ok\n",
+    });
+    expect(bad.ok).toBe(false);
+    expect(bad.findings.some((f) => f.code === "stage.invalid_shape")).toBe(true);
+    const good = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: root,
+    });
+    expect(good.ok).toBe(true);
+  });
+});
+
 describe("validateCatalog legacy fixtures", () => {
   it("full scope on project without manifest emits manifest_missing", async () => {
     clearFindProjectRootCacheForTests();

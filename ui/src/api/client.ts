@@ -2000,6 +2000,8 @@ export function fetchCatalogRoots(): Promise<CatalogRootsResult> {
 export async function fetchCatalogValidate(input: {
   pipeline?: string;
   task?: string;
+  stage?: string;
+  content?: string;
   strict?: boolean;
   project_root?: string;
 }): Promise<CatalogValidationResult> {
@@ -2008,6 +2010,8 @@ export async function fetchCatalogValidate(input: {
     body: JSON.stringify({
       ...(input.pipeline ? { pipeline: input.pipeline } : {}),
       ...(input.task ? { task: input.task } : {}),
+      ...(input.stage ? { stage: input.stage } : {}),
+      ...(input.content !== undefined ? { content: input.content } : {}),
       ...(input.strict === true ? { strict: true } : {}),
       ...(input.project_root ? { project_root: input.project_root } : {}),
     }),
@@ -2021,4 +2025,54 @@ export async function fetchCatalogFile(input: {
   const params = new URLSearchParams({ path: input.path });
   if (input.project_root) params.set("project_root", input.project_root);
   return api(`/api/catalog/file?${params}`);
+}
+
+export type WriteCatalogFileResult =
+  | { ok: true; path: string; content: string }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      findings?: ValidationFinding[];
+    };
+
+export async function writeCatalogFile(input: {
+  path: string;
+  content: string;
+  project_root?: string;
+}): Promise<WriteCatalogFileResult> {
+  const res = await fetch("/api/catalog/file", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...authorizationHeaders(),
+    },
+    body: JSON.stringify({
+      path: input.path,
+      content: input.content,
+      ...(input.project_root ? { project_root: input.project_root } : {}),
+    }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    path?: string;
+    content?: string;
+    error?: string;
+    findings?: ValidationFinding[];
+  };
+  if (res.status === 401) {
+    notifyControlTokenRequired();
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+      ...(body.findings ? { findings: body.findings } : {}),
+    };
+  }
+  return {
+    ok: true,
+    path: body.path ?? input.path,
+    content: body.content ?? input.content,
+  };
 }

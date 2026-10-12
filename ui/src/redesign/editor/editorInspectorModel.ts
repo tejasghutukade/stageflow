@@ -143,12 +143,8 @@ export function applyGateKindToggle(
 }
 
 export function readStageSkill(draft: DraftPackagePayload, stageId: string): string {
-  const ref = stageRefFor(draft, stageId);
-  const fromEntry = skillText(ref?.skill);
-  if (fromEntry) return fromEntry;
   const body = stageBodyFor(draft, stageId);
-  if (!body || body === ref) return "";
-  return skillText(body.skill) ?? "";
+  return skillText(body?.skill) ?? "";
 }
 
 export function writeStageSkill(
@@ -157,9 +153,8 @@ export function writeStageSkill(
   skill: string,
 ): DraftPackagePayload {
   const value = skill.trim() ? skill.trim() : undefined;
-  const withEntry = setStageRefValue(draft, stageId, ["skill"], value);
-  if (value !== undefined) return withEntry;
-  return setStageBodyValue(withEntry, stageId, ["skill"], undefined);
+  const withoutRef = setStageRefValue(draft, stageId, ["skill"], undefined);
+  return setStageBodyValue(withoutRef, stageId, ["skill"], value);
 }
 
 export function payloadSchemaLabel(source: PayloadSchemaSource): string {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createDraftPackageWithDetails,
+  fetchCatalogFile,
   fetchCatalogValidate,
   fetchModels,
   fetchSettings,
@@ -8,12 +9,14 @@ import {
   openDraftPackage,
   overwriteDraftPackageWithDetails,
   validateDraftPackage,
+  writeCatalogFile,
   type DraftPackagePayload,
   type DraftValidationResult,
   type PipelineListing,
   type TaskListing,
   type ValidationFinding,
 } from "../../api";
+import { displayCatalogPath } from "../../catalog/displayCatalogPath";
 import { useRunCatalog } from "../../catalog/useRunCatalog";
 import { newRunPath, workshopPath } from "../../routes";
 import { showToast } from "../../toast";
@@ -43,7 +46,9 @@ import { PipelineEditorRuns } from "./PipelineEditorRuns";
 import { PipelineEditorInspector } from "./PipelineEditorInspector";
 import { EditorProblemsPanel } from "./EditorProblemsPanel";
 import {
+  draftFileYaml,
   normalizeYamlPath,
+  serializeYamlDocument,
   yamlPathForSelectedStage,
   yamlPathsMatch,
 } from "./draftYaml";
@@ -74,6 +79,7 @@ import {
   quickFixLabel,
   type EditorFinding,
 } from "./editorProblemsModel";
+import { buildStageDraftPackage } from "./stageDraftPackage";
 import { useEditorStageStats } from "./useEditorStageStats";
 import { isPipelineYamlPath, type YamlParseError } from "./yamlEditorModel";
 import { YamlPanel } from "./YamlPanel";
@@ -123,7 +129,21 @@ export type PipelineEditorPageProps = {
   pipelines?: readonly PipelineListing[] | null;
   tasks: TaskListing[];
   onNew: (path: string) => void;
+  mode?: "pipeline" | "stage";
+  stagePath?: string;
+  projectRoot?: string;
 };
+
+function stageBufferYaml(
+  draft: DraftPackagePayload,
+  stageFilePath: string,
+): string {
+  const file = (draft.stages ?? []).find((entry) =>
+    yamlPathsMatch(entry.path, stageFilePath),
+  );
+  if (file) return serializeYamlDocument(file.body);
+  return draftFileYaml(draft, stageFilePath, null);
+}
 
 export function PipelineEditorPage({
   pipelineId,
@@ -131,7 +151,14 @@ export function PipelineEditorPage({
   pipelines = null,
   tasks,
   onNew,
+  mode = "pipeline",
+  stagePath: stagePathProp,
+  projectRoot: projectRootProp,
 }: PipelineEditorPageProps) {
+  const stageMode = mode === "stage";
+  const stageFilePath = stagePathProp
+    ? normalizeYamlPath(stagePathProp)
+    : normalizeYamlPath(pipeline.path);
   const [draft, setDraft] = useState<DraftPackagePayload | null>(null);
   const [baseline, setBaseline] = useState<DraftPackagePayload | null>(null);
   const [destination, setDestination] = useState<{
@@ -141,8 +168,12 @@ export function PipelineEditorPage({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
-  const [yamlPath, setYamlPath] = useState<string | null>(pipeline.path);
-  const [openPaths, setOpenPaths] = useState<string[]>([pipeline.path]);
+  const [yamlPath, setYamlPath] = useState<string | null>(
+    stageMode ? stageFilePath : pipeline.path,
+  );
+  const [openPaths, setOpenPaths] = useState<string[]>(
+    stageMode ? [stageFilePath] : [pipeline.path],
+  );
   const [yamlParseError, setYamlParseError] = useState<YamlParseError | null>(null);
   const [yamlKey, setYamlKey] = useState(0);
   const [formatNonce, setFormatNonce] = useState(0);
@@ -174,8 +205,8 @@ export function PipelineEditorPage({
   const sessionSeq = useRef(0);
   const pipelineKey = editorPipelineKey(pipeline);
   const [sourceOrigin, setSourceOrigin] = useState<DraftOrigin | null>(null);
-  const catalogProjectRoot = pipeline.project_root;
-  const readOnlySource = sourceOrigin?.readOnly === true;
+  const catalogProjectRoot = projectRootProp ?? pipeline.project_root;
+  const readOnlySource = !stageMode && sourceOrigin?.readOnly === true;
   const [models, setModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
   const [skills, setSkills] = useState<string[]>([]);
@@ -183,7 +214,16 @@ export function PipelineEditorPage({
   const draftValidateGen = useRef(0);
   const catalogValidateGen = useRef(0);
 
-  const pipelinePath = pipeline.path;
+  // Must not equal the stage file path — YamlPanel routes pipeline vs stage edits by path.
+  const pipelinePath = stageMode
+    ? `${stageFilePath}.stage-editor.pipeline.yaml`
+    : pipeline.path;
+  const headerId = stageMode
+    ? (selectedStageId ?? draft?.pipeline.id ?? pipelineId)
+    : pipelineId;
+  const headerFilePath = stageMode
+    ? displayCatalogPath(stageFilePath, catalogProjectRoot)
+    : pipeline.path;
 
   const dirty = isDraftDirty(draft, baseline);
   const unsavedCount = unsavedChangeCount(draft, baseline);
@@ -237,10 +277,37 @@ export function PipelineEditorPage({
     setSelectedProblemKey(null);
     setYamlParseError(null);
     setYamlKey((key) => key + 1);
-    setOpenPaths([pipeline.path]);
-    setYamlPath(pipeline.path);
     setLoading(true);
     setLoadError(null);
+    if (stageMode) {
+      setOpenPaths([stageFilePath]);
+      setYamlPath(stageFilePath);
+      try {
+        const file = await fetchCatalogFile({
+          path: stageFilePath,
+          ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
+        });
+        const pkg = buildStageDraftPackage(
+          stageFilePath,
+          file.content,
+          catalogProjectRoot,
+        );
+        setDraft(pkg.draft);
+        setBaseline(cloneDraft(pkg.draft));
+        setDestination(null);
+        setSourceOrigin(null);
+        setSelectedStageId(pkg.stageId);
+        setLoading(false);
+      } catch (err) {
+        setLoadError(err instanceof Error ? err.message : String(err));
+        setDraft(null);
+        setBaseline(null);
+        setLoading(false);
+      }
+      return;
+    }
+    setOpenPaths([pipeline.path]);
+    setYamlPath(pipeline.path);
     const opened = await openDraftPackage({
       path: pipeline.path,
       ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
@@ -257,7 +324,7 @@ export function PipelineEditorPage({
     setDraft(opened.draft);
     setBaseline(cloneDraft(opened.draft));
     setDestination(opened.destination);
-  }, [catalogProjectRoot, pipeline.path]);
+  }, [catalogProjectRoot, pipeline.path, stageFilePath, stageMode]);
 
   useEffect(() => {
     void reloadDraft();
@@ -300,6 +367,7 @@ export function PipelineEditorPage({
   }, []);
 
   const runCatalogValidate = useCallback(async () => {
+    if (stageMode) return;
     const generation = ++catalogValidateGen.current;
     setValidating(true);
     setValidateError(null);
@@ -321,10 +389,36 @@ export function PipelineEditorPage({
     } finally {
       if (generation === catalogValidateGen.current) setValidating(false);
     }
-  }, [appendSession, catalogProjectRoot, pipeline.path]);
+  }, [appendSession, catalogProjectRoot, pipeline.path, stageMode]);
 
   const runDraftValidate = useCallback(
     async (nextDraft: DraftPackagePayload) => {
+      if (stageMode) {
+        const generation = ++catalogValidateGen.current;
+        setValidating(true);
+        setValidateError(null);
+        try {
+          const started = Date.now();
+          const result = await fetchCatalogValidate({
+            stage: stageFilePath,
+            content: stageBufferYaml(nextDraft, stageFilePath),
+            strict: true,
+            ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
+          });
+          if (generation !== catalogValidateGen.current) return;
+          setCatalogFindings(result.findings);
+          setDraftValidation(result);
+          setValidatedMs(Date.now() - started);
+          setValidatedAt(Date.now());
+          appendSession("Validated", historyValidationDetail("catalog", result));
+        } catch (err) {
+          if (generation !== catalogValidateGen.current) return;
+          setValidateError(err instanceof Error ? err.message : String(err));
+        } finally {
+          if (generation === catalogValidateGen.current) setValidating(false);
+        }
+        return;
+      }
       const generation = ++draftValidateGen.current;
       const started = Date.now();
       const result = await validateDraftPackage(nextDraft, catalogProjectRoot);
@@ -334,12 +428,13 @@ export function PipelineEditorPage({
       setValidatedAt(Date.now());
       appendSession("Validated", historyValidationDetail("draft", result));
     },
-    [appendSession, catalogProjectRoot],
+    [appendSession, catalogProjectRoot, stageFilePath, stageMode],
   );
 
   useEffect(() => {
+    if (stageMode) return;
     void runCatalogValidate();
-  }, [runCatalogValidate]);
+  }, [runCatalogValidate, stageMode]);
 
   useEffect(() => {
     if (!autoValidate || !draft) return;
@@ -358,13 +453,62 @@ export function PipelineEditorPage({
 
   const onDiscard = useCallback(() => {
     void reloadDraft();
-    void runCatalogValidate();
+    if (!stageMode) void runCatalogValidate();
     showToast("Discarded local edits");
-  }, [reloadDraft, runCatalogValidate]);
+  }, [reloadDraft, runCatalogValidate, stageMode]);
 
   const onSave = useCallback(async () => {
     if (!draft) return;
     setSaving(true);
+    if (stageMode) {
+      const content = stageBufferYaml(draft, stageFilePath);
+      const result = await writeCatalogFile({
+        path: stageFilePath,
+        content,
+        ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
+      });
+      setSaving(false);
+      if (!result.ok) {
+        showToast(result.error ?? "Save failed");
+        if (result.findings) {
+          setCatalogFindings(result.findings);
+          setDraftValidation({
+            scope: "full",
+            ok: false,
+            summary: {
+              errors: result.findings.filter((f) => f.severity === "error")
+                .length,
+              warnings: result.findings.filter((f) => f.severity === "warning")
+                .length,
+            },
+            findings: result.findings,
+          });
+          setProblemsCollapsed(false);
+        }
+        return;
+      }
+      let nextDraft = draft;
+      try {
+        const pkg = buildStageDraftPackage(
+          stageFilePath,
+          result.content,
+          catalogProjectRoot,
+        );
+        nextDraft = pkg.draft;
+        setDraft(pkg.draft);
+        setBaseline(cloneDraft(pkg.draft));
+        setSelectedStageId(pkg.stageId);
+        setOpenPaths([stageFilePath]);
+        setYamlPath(stageFilePath);
+        setYamlKey((key) => key + 1);
+      } catch {
+        setBaseline(cloneDraft(draft));
+      }
+      showToast("Saved");
+      appendSession("Saved");
+      void runDraftValidate(nextDraft);
+      return;
+    }
     let result;
     if (readOnlySource) {
       const directory = defaultPackageDirectory("workspace", draft.pipeline.id);
@@ -435,6 +579,9 @@ export function PipelineEditorPage({
     draft,
     readOnlySource,
     runCatalogValidate,
+    runDraftValidate,
+    stageFilePath,
+    stageMode,
   ]);
 
   const openYamlPath = useCallback((path: string) => {
@@ -457,13 +604,14 @@ export function PipelineEditorPage({
 
   const onClosePath = useCallback(
     (path: string) => {
+      if (stageMode && yamlPathsMatch(path, stageFilePath)) return;
       const key = normalizeYamlPath(path);
       setOpenPaths((current) => current.filter((open) => normalizeYamlPath(open) !== key));
       setYamlPath((active) =>
         active && normalizeYamlPath(active) === key ? pipelinePath : active,
       );
     },
-    [pipelinePath],
+    [pipelinePath, stageFilePath, stageMode],
   );
 
   const onOpenYaml = useCallback(
@@ -584,7 +732,8 @@ export function PipelineEditorPage({
       {
         key: "a",
         scope: "pipelines",
-        when: () => editorTab === "editor" && !!draft && !loading,
+        when: () =>
+          !stageMode && editorTab === "editor" && !!draft && !loading,
         handler: (event) => {
           event.preventDefault();
           onAddStage();
@@ -622,17 +771,20 @@ export function PipelineEditorPage({
 
   const defaultTask = defaultTaskForPipeline(pipeline, tasks);
   const pills = editorHeaderPills(draftValidation, yamlParseError !== null);
-  const workshopHref = `#${workshopPath({
-    pipeline: pipeline.path,
-    ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
-  })}`;
+  const workshopHref = stageMode
+    ? ""
+    : `#${workshopPath({
+        pipeline: pipeline.path,
+        ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
+      })}`;
 
   const copyPath = useCallback(() => {
-    void navigator.clipboard.writeText(pipeline.path).then(
+    const path = stageMode ? stageFilePath : pipeline.path;
+    void navigator.clipboard.writeText(path).then(
       () => showToast("Copied path"),
       () => showToast("Could not copy path"),
     );
-  }, [pipeline.path]);
+  }, [pipeline.path, stageFilePath, stageMode]);
 
   const selectedFixLabel = selectedFinding ? quickFixFor(selectedFinding) : undefined;
   const yamlFinding =
@@ -655,8 +807,9 @@ export function PipelineEditorPage({
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
       <PipelineEditorHeader
-        pipelineId={pipelineId}
-        filePath={pipeline.path}
+        mode={mode}
+        pipelineId={headerId}
+        filePath={headerFilePath}
         unsavedCount={unsavedCount}
         pills={pills}
         discardDisabled={loading || (unsavedCount === 0 && yamlParseError === null)}
@@ -685,12 +838,12 @@ export function PipelineEditorPage({
         onFormat={() => setFormatNonce((nonce) => nonce + 1)}
         formatDisabled={yamlParseError !== null || !draft || loading}
       />
-      {editorTab === "runs" ? (
+      {!stageMode && editorTab === "runs" ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           <PipelineEditorRuns runs={pipelineRuns} loading={runsLoading} error={runsError} />
         </div>
       ) : null}
-      {editorTab === "history" ? (
+      {!stageMode && editorTab === "history" ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           <PipelineEditorHistory events={historyEvents} runs={pipelineRuns} loading={runsLoading} />
         </div>
@@ -700,7 +853,7 @@ export function PipelineEditorPage({
       ) : null}
       {editorTab === "editor" && loading ? (
         <p className="px-5 py-4 text-[13px] text-[var(--sf-text-3)]">
-          Loading package…
+          {stageMode ? "Loading stage…" : "Loading package…"}
         </p>
       ) : null}
       {editorTab === "editor" && !loading && draft ? (
@@ -743,6 +896,7 @@ export function PipelineEditorPage({
               stageFindings={stageFindings}
               stageStats={stageStats}
               p50Ms={p50Ms}
+              hideAddStage={stageMode}
             />
             <EditorColumnResizeHandle
               label="Resize stage inspector"
@@ -765,7 +919,7 @@ export function PipelineEditorPage({
               pipelines={pipelines}
               currentPipelineId={pipeline.id}
               projectRoot={catalogProjectRoot}
-              workshopHref={workshopHref}
+              workshopHref={stageMode ? undefined : workshopHref}
               onDraftChange={onDraftChange}
               onRenameStage={onRenameStage}
               onOpenYaml={onOpenYaml}
@@ -788,6 +942,10 @@ export function PipelineEditorPage({
             onSelectFinding={selectFinding}
             onQuickFix={applyQuickFix}
             onValidate={() => {
+              if (stageMode) {
+                if (draft) void runDraftValidate(draft);
+                return;
+              }
               void runCatalogValidate();
               if (draft) void runDraftValidate(draft);
             }}

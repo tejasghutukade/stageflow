@@ -16,4 +16,3 @@ stages:
       include_failed_checks: true
   - id: author-diagrams
     uses: ./author-diagrams.yaml
-    skill: archify

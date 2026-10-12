@@ -14,7 +14,7 @@ Upgrading older YAML: [`sf migrate-yaml`](../docs/cli-reference.md#sf-migrate-ya
 
 - **Route `if`** — `detect-changes` emits `author_diagrams` and skips `author-diagrams` when the PR diff has no diagram-relevant types
 - **Multi-type output** — one pipeline authors 1–5 Archify diagram specs (`architecture`, `workflow`, `sequence`, `dataflow`, `lifecycle`)
-- **Skill binding** — `skill: archify` on the pipeline stage entry; GHA provisions the skill via `sf skills install`
+- **Skill binding** — `skill: archify` on the stage file; GHA provisions the skill via `sf skills install`
 - **Deterministic handoff** — agents emit JSON specs; GHA runs `sf envelope get --format handoff` and Archify `deliver` outside the agent
 - **Real automation** — [`.github/workflows/archify-pr-diagrams.yml`](../.github/workflows/archify-pr-diagrams.yml) posts sticky PR comments with browser-viewable HTML artifacts
 

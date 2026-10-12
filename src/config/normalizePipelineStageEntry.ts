@@ -62,7 +62,6 @@ function hasBodyKey(raw: Record<string, unknown>): boolean {
   return Object.keys(raw).some(
     (key) =>
       BODY_KEYS.has(key) &&
-      key !== "skill" &&
       key !== "mcp" &&
       key !== "secrets" &&
       key !== "requires" &&
@@ -151,6 +150,16 @@ export function normalizePipelineStageEntries(
       return skillOutcome;
     }
     const skill = skillOutcome?.ok ? skillOutcome.value : undefined;
+    if (uses && skill !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.stage_wrapper_skill_rejected",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage entry at index ${index} sets skill: on a uses: wrapper; put skill: on the stage file (${uses}) instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
     const mcpOutcome = parseStageMcp(
       raw.mcp,
       `entry at index ${index} in ${declaringPath}`,

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: stage `skill:` is body-only.** `skill:` on a pipeline `uses:` wrapper is rejected (`pipeline.stage_wrapper_skill_rejected`). Put `skill:` on the external stage file or inline stage body. The console inspector and draft overwrite strip wrapper `skill`. In-repo examples (`archify-on-pr`, `oss-issue-contribution`) were migrated. See [Skill binding](docs/yaml-catalog.md#skill-binding).
+
 ## [0.34.0] - 2026-10-07
 
 ### Added

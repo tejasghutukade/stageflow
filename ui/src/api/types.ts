@@ -583,7 +583,7 @@ export type ValidationFinding = {
 };
 
 export type DraftValidationResult = {
-  scope: "full" | "pipeline" | "task";
+  scope: "full" | "pipeline" | "task" | "stage";
   ok: boolean;
   summary: { errors: number; warnings: number };
   findings: ValidationFinding[];

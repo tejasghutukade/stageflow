@@ -37,7 +37,7 @@ import {
 } from "../../api";
 import { displayCatalogPath } from "../../catalog/displayCatalogPath";
 import { useRunCatalog } from "../../catalog/useRunCatalog";
-import { catalogPath, navigate, pipelinePath } from "../../routes";
+import { catalogPath, navigate, stagePath } from "../../routes";
 import { showToast } from "../../toast";
 import { summaryStageStats, type StageStats } from "../editor/editorStageStats";
 import { formatDurationShort } from "../editor/editorGraphLayout";
@@ -176,9 +176,9 @@ export function CatalogStagesTab({ query, onNewStage }: CatalogStagesTabProps) {
     () => (selected ? pipelineForRow(selected, pipelines) : null),
     [selected, pipelines],
   );
-  const editorHref = selectedPipeline
-    ? `#${pipelinePath(selectedPipeline.id, {
-        project_root: selectedPipeline.project_root,
+  const editorHref = selected?.uses_path
+    ? `#${stagePath(selected.uses_path, {
+        project_root: selected.project_root,
       })}`
     : null;
 
@@ -347,7 +347,7 @@ function InfoStrip() {
       </div>
       <button
         type="button"
-        onClick={() => showToast("Set skill: on the pipeline stage entry. See docs/yaml-catalog.md.")}
+        onClick={() => showToast("Set skill: on the stage file (or inline stage body). See docs/yaml-catalog.md.")}
         className="flex shrink-0 items-center gap-1 text-[#a7aab2] hover:text-[#ecedee]"
       >
         <span className="font-sans text-xs font-medium leading-normal">Learn how</span>

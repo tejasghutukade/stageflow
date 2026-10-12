@@ -13,7 +13,10 @@ import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { handleTriggerRoutes } from "./triggerRoutes.js";
-import { readCatalogFileForHttp } from "./readCatalogFile.js";
+import {
+  readCatalogFileForHttp,
+  writeCatalogFileForHttp,
+} from "./readCatalogFile.js";
 import {
   applyLiveViewHeaders,
   createLiveViewRoutes,
@@ -1417,19 +1420,24 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             let pipeline =
               typeof record.pipeline === "string" ? record.pipeline : undefined;
             let task = typeof record.task === "string" ? record.task : undefined;
+            let stage =
+              typeof record.stage === "string" ? record.stage : undefined;
             const strict = record.strict === true;
             const projectRoot =
               typeof record.project_root === "string" && record.project_root.trim()
                 ? record.project_root.trim()
                 : undefined;
-            if (pipeline !== undefined && task !== undefined) {
+            const scopedCount = [pipeline, task, stage].filter(
+              (v) => v !== undefined,
+            ).length;
+            if (scopedCount > 1) {
               json(res, 400, {
-                error: "Use at most one of pipeline or task",
+                error: "Use at most one of pipeline, task, or stage",
               });
               return true;
             }
             let validateCwd = cwd;
-            if (pipeline !== undefined || task !== undefined) {
+            if (pipeline !== undefined || task !== undefined || stage !== undefined) {
               try {
                 const { wireRoot, roots } = await resolveCatalogStartInput(
                   { store, bootCwd: cwd },
@@ -1452,6 +1460,14 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
                     fieldName: "task",
                   }).absolutePath;
                 }
+                if (stage !== undefined) {
+                  stage = resolveCatalogRelativePath({
+                    inputPath: stage.trim(),
+                    projectRoot: wireRoot.project_root,
+                    roots,
+                    fieldName: "stage",
+                  }).absolutePath;
+                }
               } catch (err) {
                 if (err instanceof CatalogPathError) {
                   json(res, 400, catalogPathErrorBody(err));
@@ -1460,15 +1476,33 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
                 throw err;
               }
             }
-            const scope = pipeline ? "pipeline" : task ? "task" : "full";
+            const scope = pipeline
+              ? "pipeline"
+              : task
+                ? "task"
+                : stage
+                  ? "stage"
+                  : "full";
+            const stageContent =
+              typeof record.content === "string" ? record.content : undefined;
+            if (stageContent !== undefined && stage === undefined) {
+              json(res, 400, {
+                error: "content is only supported with stage",
+              });
+              return true;
+            }
             const result = await validateCatalog({
               scope,
               cwd: validateCwd,
-              ...(pipeline !== undefined || task !== undefined
+              ...(pipeline !== undefined ||
+              task !== undefined ||
+              stage !== undefined
                 ? { projectRoot: validateCwd }
                 : {}),
               pipeline,
               task,
+              stage,
+              ...(stageContent !== undefined ? { stageContent } : {}),
               strict,
             });
             json(res, 200, result);
@@ -1502,6 +1536,70 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           } catch (err) {
             if (err instanceof CatalogPathError) {
               json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+        }
+
+        if (method === "PUT" && pathname === "/api/catalog/file") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (body === null || typeof body !== "object" || Array.isArray(body)) {
+            json(res, 400, { error: "Request body must be an object" });
+            return true;
+          }
+          const record = body as Record<string, unknown>;
+          const relPath =
+            typeof record.path === "string" ? record.path.trim() : "";
+          if (!relPath) {
+            json(res, 400, { error: "path is required" });
+            return true;
+          }
+          if (typeof record.content !== "string") {
+            json(res, 400, { error: "content must be a string" });
+            return true;
+          }
+          const writeRoot =
+            typeof record.project_root === "string"
+              ? record.project_root
+              : undefined;
+          try {
+            const { wireRoot, roots } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            const result = await writeCatalogFileForHttp({
+              inputPath: relPath,
+              content: record.content,
+              projectRoot: wireRoot.project_root,
+              roots,
+              fieldName: "path",
+            });
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+                ...(result.findings !== undefined
+                  ? { findings: result.findings }
+                  : {}),
+              });
+              return true;
+            }
+            json(res, 200, { path: result.path, content: result.content });
+            return true;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
               return true;
             }
             throw err;

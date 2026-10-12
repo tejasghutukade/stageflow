@@ -7,6 +7,7 @@ import {
   LuTriangleAlert,
   LuWandSparkles,
 } from "react-icons/lu";
+import { catalogPath } from "../../routes";
 import { Keycap } from "../Keycap";
 import type { HeaderPills } from "./editorHeaderModel";
 
@@ -34,6 +35,7 @@ export type PipelineEditorHeaderProps = {
   formatDisabled: boolean;
   readOnlyNotice?: string | null;
   saveLabel?: string;
+  mode?: "pipeline" | "stage";
 };
 
 const actionBtn =
@@ -70,7 +72,9 @@ export function PipelineEditorHeader({
   formatDisabled,
   readOnlyNotice,
   saveLabel = "Save",
+  mode = "pipeline",
 }: PipelineEditorHeaderProps) {
+  const stageMode = mode === "stage";
   return (
     <div className="flex h-fit w-full shrink-0 flex-col border-b border-b-[#ffffff12]">
       {readOnlyNotice ? (
@@ -81,16 +85,37 @@ export function PipelineEditorHeader({
       <div className="flex h-16 w-full items-center gap-4 px-5 py-0">
         <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
           <div className="flex items-center gap-1.5">
-            <a
-              href="#/pipelines"
-              className="text-xs leading-normal text-[#8b8f98] hover:text-[#ecedee]"
-            >
-              Pipelines
-            </a>
-            <span className="text-xs leading-normal text-[#8b8f98]">/</span>
-            <span className="text-xs leading-normal text-[#a7aab2]">
-              {pipelineId}
-            </span>
+            {stageMode ? (
+              <>
+                <a
+                  href={`#${catalogPath({ tab: "stages" })}`}
+                  className="text-xs leading-normal text-[#8b8f98] hover:text-[#ecedee]"
+                >
+                  Catalog
+                </a>
+                <span className="text-xs leading-normal text-[#8b8f98]">/</span>
+                <span className="text-xs leading-normal text-[#a7aab2]">
+                  Stages
+                </span>
+                <span className="text-xs leading-normal text-[#8b8f98]">/</span>
+                <span className="text-xs leading-normal text-[#a7aab2]">
+                  {pipelineId}
+                </span>
+              </>
+            ) : (
+              <>
+                <a
+                  href="#/pipelines"
+                  className="text-xs leading-normal text-[#8b8f98] hover:text-[#ecedee]"
+                >
+                  Pipelines
+                </a>
+                <span className="text-xs leading-normal text-[#8b8f98]">/</span>
+                <span className="text-xs leading-normal text-[#a7aab2]">
+                  {pipelineId}
+                </span>
+              </>
+            )}
           </div>
           <div className="flex min-w-0 items-center gap-2.5">
             <h1 className="shrink-0 text-xl font-semibold leading-[1.2] tracking-[-0.4px] text-[#ecedee]">
@@ -161,18 +186,28 @@ export function PipelineEditorHeader({
           >
             Discard
           </button>
-          <a href={workshopHref} className={`${actionBtn} gap-1.5`}>
-            <LuHammer className="size-3.5 shrink-0 text-[#a7aab2]" aria-hidden />
-            Open in Workshop
-          </a>
-          <button
-            type="button"
-            className={`${actionBtn} gap-1.5`}
-            onClick={onStartRun}
-          >
-            <LuPlay className="size-3.5 shrink-0 text-[#a7aab2]" aria-hidden />
-            Start a run
-          </button>
+          {!stageMode ? (
+            <>
+              <a href={workshopHref} className={`${actionBtn} gap-1.5`}>
+                <LuHammer
+                  className="size-3.5 shrink-0 text-[#a7aab2]"
+                  aria-hidden
+                />
+                Open in Workshop
+              </a>
+              <button
+                type="button"
+                className={`${actionBtn} gap-1.5`}
+                onClick={onStartRun}
+              >
+                <LuPlay
+                  className="size-3.5 shrink-0 text-[#a7aab2]"
+                  aria-hidden
+                />
+                Start a run
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-[#ecedee] px-3 font-sans text-[13px] font-medium text-[#0c0d0f] hover:bg-white disabled:cursor-default disabled:opacity-50"
@@ -194,29 +229,33 @@ export function PipelineEditorHeader({
         >
           Editor
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "runs"}
-          className={`${tabClass(activeTab === "runs")} gap-1.5`}
-          onClick={() => onTabChange("runs")}
-        >
-          Runs
-          {runsCount != null ? (
-            <span className="rounded-sm bg-[#1a1c21] px-[5px] font-['Geist_Mono',monospace] text-[11px] leading-[1.45455] text-[#a7aab2]">
-              {runsCount}
-            </span>
-          ) : null}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "history"}
-          className={tabClass(activeTab === "history")}
-          onClick={() => onTabChange("history")}
-        >
-          History
-        </button>
+        {!stageMode ? (
+          <>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "runs"}
+              className={`${tabClass(activeTab === "runs")} gap-1.5`}
+              onClick={() => onTabChange("runs")}
+            >
+              Runs
+              {runsCount != null ? (
+                <span className="rounded-sm bg-[#1a1c21] px-[5px] font-['Geist_Mono',monospace] text-[11px] leading-[1.45455] text-[#a7aab2]">
+                  {runsCount}
+                </span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "history"}
+              className={tabClass(activeTab === "history")}
+              onClick={() => onTabChange("history")}
+            >
+              History
+            </button>
+          </>
+        ) : null}
         <div className="block flex-1" aria-hidden />
         {activeTab === "editor" ? (
           <div className="flex h-[38px] items-center gap-3.5">

@@ -27,6 +27,7 @@ export type PipelineEditorGraphProps = {
   stageFindings?: Map<string, "error" | "warning">;
   stageStats?: Map<string, StageStats>;
   p50Ms?: number | null;
+  hideAddStage?: boolean;
 };
 
 const NO_FINDINGS = new Map<string, "error" | "warning">();
@@ -63,6 +64,7 @@ export function PipelineEditorGraph({
   stageFindings = NO_FINDINGS,
   stageStats = NO_STATS,
   p50Ms = null,
+  hideAddStage = false,
 }: PipelineEditorGraphProps) {
   const graph = useMemo(() => buildEditorLiveGraph(draft), [draft]);
   const layout = useMemo(
@@ -203,23 +205,30 @@ export function PipelineEditorGraph({
                   ) : null}
                 </div>
               ))}
-              <div
-                className="flex justify-center"
-                style={{ width: layout.rowsWidth || undefined, marginRight: railGutter || undefined }}
-              >
-                <button
-                  type="button"
-                  className="mt-3.5 flex h-7 items-center gap-1.5 rounded-lg border border-dashed border-[#ffffff24] px-2.5 hover:bg-[#ffffff08]"
-                  onClick={onAddStage}
-                  aria-keyshortcuts="A"
+              {!hideAddStage ? (
+                <div
+                  className="flex justify-center"
+                  style={{
+                    width: layout.rowsWidth || undefined,
+                    marginRight: railGutter || undefined,
+                  }}
                 >
-                  <LuPlus aria-hidden className="size-3 text-[#8b8f98]" />
-                  <span className="whitespace-nowrap text-xs text-[#a7aab2]">Add stage</span>
-                  <span className="rounded-sm border border-[#ffffff1a] bg-[#1a1c21] px-[5px] font-['Geist_Mono',monospace] text-[11px] leading-[1.45455] text-[#8b8f98]">
-                    A
-                  </span>
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    className="mt-3.5 flex h-7 items-center gap-1.5 rounded-lg border border-dashed border-[#ffffff24] px-2.5 hover:bg-[#ffffff08]"
+                    onClick={onAddStage}
+                    aria-keyshortcuts="A"
+                  >
+                    <LuPlus aria-hidden className="size-3 text-[#8b8f98]" />
+                    <span className="whitespace-nowrap text-xs text-[#a7aab2]">
+                      Add stage
+                    </span>
+                    <span className="rounded-sm border border-[#ffffff1a] bg-[#1a1c21] px-[5px] font-['Geist_Mono',monospace] text-[11px] leading-[1.45455] text-[#8b8f98]">
+                      A
+                    </span>
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>

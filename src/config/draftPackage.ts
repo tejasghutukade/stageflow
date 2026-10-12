@@ -135,10 +135,20 @@ function pipelineHasExternalUses(pipeline: DraftPackage["pipeline"]): boolean {
   );
 }
 
+function stripUsesWrapperSkill(
+  stages: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return stages.map((stage) => {
+    if (typeof stage.uses !== "string" || stage.skill === undefined) return stage;
+    const { skill: _skill, ...rest } = stage;
+    return rest;
+  });
+}
+
 function pipelineDocument(pipeline: DraftPackage["pipeline"]): Record<string, unknown> {
   const doc: Record<string, unknown> = {
     id: pipeline.id,
-    stages: pipeline.stages,
+    stages: stripUsesWrapperSkill(pipeline.stages),
   };
   if (pipeline.agent !== undefined) doc.agent = pipeline.agent;
   if (pipeline.model !== undefined) doc.model = pipeline.model;

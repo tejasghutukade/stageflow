@@ -168,22 +168,24 @@ describe("toggleGateKind", () => {
 });
 
 describe("readStageSkill / writeStageSkill", () => {
-  it("prefers the pipeline entry skill over the stage file", () => {
-    expect(readStageSkill(stageDraft(), "review")).toBe("from-pipeline");
-    const fileOnly: DraftPackagePayload = {
+  it("reads skill from the stage body only", () => {
+    expect(readStageSkill(stageDraft(), "review")).toBe("from-file");
+    const entryOnly: DraftPackagePayload = {
       ...stageDraft(),
-      pipeline: {
-        id: "feature-ship",
-        stages: [{ id: "review", uses: "stages/review.yaml" }],
-      },
+      stages: [
+        {
+          path: "stages/review.yaml",
+          body: { id: "review", system_prompt: "Review the change." },
+        },
+      ],
     };
-    expect(readStageSkill(fileOnly, "review")).toBe("from-file");
+    expect(readStageSkill(entryOnly, "review")).toBe("");
   });
 
-  it("writes skill on the pipeline entry and clears both sides for none", () => {
+  it("writes skill on the stage body and clears wrapper skill", () => {
     const next = writeStageSkill(stageDraft(), "review", "code-review");
-    expect(next.pipeline.stages[0]?.skill).toBe("code-review");
-    expect(next.stages?.[0]?.body.skill).toBe("from-file");
+    expect(next.pipeline.stages[0]?.skill).toBeUndefined();
+    expect(next.stages?.[0]?.body.skill).toBe("code-review");
     expect(readStageSkill(next, "review")).toBe("code-review");
     const cleared = writeStageSkill(next, "review", "");
     expect(cleared.pipeline.stages[0]?.skill).toBeUndefined();

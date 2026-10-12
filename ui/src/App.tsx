@@ -42,6 +42,7 @@ import {
   useRedesign,
   writeRedesignPreference,
 } from "./redesign/flag";
+import { StageEditorPage } from "./redesign/editor/StageEditorPage";
 import { AppShell as RedesignAppShell } from "./redesign/shell/AppShell";
 import { AppRail as RedesignAppRail } from "./redesign/shell/AppRail";
 import { ConsoleOverlays } from "./redesign/ConsoleOverlays";
@@ -62,7 +63,7 @@ function railActiveId(route: Route, redesignOn: boolean): string {
   if (route.name === "task") return "tasks";
   if (route.name === "trigger") return "triggers";
   if (redesignOn) {
-    if (route.name === "catalog") return "catalog";
+    if (route.name === "catalog" || route.name === "stage") return "catalog";
     if (route.name === "skill" || route.name === "skills") return "catalog";
     if (
       route.name === "extensions" ||
@@ -234,6 +235,13 @@ function ConsoleRoot() {
   } else if (route.name === "catalog") {
     content = (
       <CatalogPage tab={route.tab} skillName={route.skillName} />
+    );
+  } else if (route.name === "stage") {
+    content = (
+      <StageEditorPage
+        stagePath={route.path}
+        projectRoot={route.projectRoot}
+      />
     );
   } else if (route.name === "skills") {
     content = <SkillsPage />;

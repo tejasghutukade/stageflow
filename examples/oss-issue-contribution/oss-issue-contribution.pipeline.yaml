@@ -13,7 +13,6 @@ stages:
       include_failed_checks: true
   - id: oss-explain-issue
     uses: ./oss-explain-issue.yaml
-    skill: ce-explain
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -85,7 +84,6 @@ stages:
       include_failed_checks: true
   - id: oss-explain-fix
     uses: ./oss-explain-fix.yaml
-    skill: ce-explain
     on_verify_fail:
       mode: repair
       max_attempts: 3

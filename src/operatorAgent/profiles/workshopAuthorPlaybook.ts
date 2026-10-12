@@ -51,6 +51,7 @@ Bad: a paragraph of pipeline theory, a numbered plan, and three questions at onc
 
 ## Core: prompts
 - Required system_prompt. Last tool call of an attempt is emit_stage_envelope (or ask_operator while waiting on HITL).
+- Optional skill: belongs on the stage body (create_stage / edit_stage body or stage file) — never on a uses: wrapper.
 - Name required io.output.schema fields in the prompt. summary/payload carry outcomes and artifact pointers only.
 - Land required files with write_stage_artifact (attempt dir). Checkout edits are not after-phase artifact proof.
 - Gated sequence: write artifact → ask_operator → emit only after accept; revise on reject in the same attempt.

@@ -493,6 +493,52 @@ describe("open → edit → overwrite (draft/catalog seam)", () => {
       const pipelineYaml = await readFile(path.join(dir, "demo.pipeline.yaml"), "utf8");
       expect(pipelineYaml).toContain("to: ship");
     }));
+
+  it("strips skill from uses wrappers on overwrite", () =>
+    withRepo(async (root) => {
+      const dir = await seedPackage(root, {
+        prompts: { clarify: "Clarify" },
+        stages: [{ id: "clarify", uses: "./clarify.yaml", entry: true }],
+      });
+      const opened = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(opened.ok).toBe(true);
+      if (!opened.ok) return;
+
+      const draft: DraftPackage = {
+        ...opened.draft,
+        stages: (opened.draft.stages ?? []).map((stage) =>
+          stage.body.id === "clarify"
+            ? { ...stage, body: { ...stage.body, skill: "archify" } }
+            : stage,
+        ),
+        pipeline: {
+          ...opened.draft.pipeline,
+          stages: [
+            {
+              id: "clarify",
+              uses: "./clarify.yaml",
+              entry: true,
+              skill: "should-not-persist",
+            },
+          ],
+        },
+      };
+
+      const saved = await overwriteDraftPackage(root, {
+        directory: opened.destination.directory,
+        draft,
+        pipelineFilename: opened.destination.pipelineFilename,
+      });
+      expect(saved.ok).toBe(true);
+      if (!saved.ok) return;
+
+      const pipelineYaml = await readFile(path.join(dir, "demo.pipeline.yaml"), "utf8");
+      expect(pipelineYaml).not.toContain("should-not-persist");
+      expect(pipelineYaml).not.toMatch(/skill:\s/);
+      expect(await readFile(path.join(dir, "clarify.yaml"), "utf8")).toContain(
+        "skill: archify",
+      );
+    }));
 });
 
 function useStageflowHome(home: string): string {

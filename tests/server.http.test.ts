@@ -549,6 +549,168 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("POST /api/catalog/validate stage scope ok and invalid", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-validate-stage-"));
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    const manifestCatalog = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/manifest-catalog",
+    );
+    await cp(manifestCatalog, repoRoot, { recursive: true });
+    clearFindProjectRootCacheForTests();
+
+    const { server, base } = await withServer(
+      storeRoot,
+      scriptedFakeAgent([]),
+      undefined,
+      { cwd: repoRoot },
+    );
+
+    try {
+      const ok = await jsonFetch(`${base}/api/catalog/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stage: "pipelines/step.yaml",
+          project_root: repoRoot,
+          strict: true,
+        }),
+      });
+      expect(ok.status).toBe(200);
+      expect(ok.body.scope).toBe("stage");
+      expect(ok.body.ok).toBe(true);
+
+      await writeFile(
+        path.join(repoRoot, "pipelines/step.yaml"),
+        "id: step\n",
+      );
+      const bad = await jsonFetch(`${base}/api/catalog/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stage: "pipelines/step.yaml",
+          project_root: repoRoot,
+        }),
+      });
+      expect(bad.status).toBe(200);
+      expect(bad.body.scope).toBe("stage");
+      expect(bad.body.ok).toBe(false);
+      expect(
+        bad.body.findings.some(
+          (f: { code: string }) => f.code === "stage.invalid_shape",
+        ),
+      ).toBe(true);
+
+      const both = await jsonFetch(`${base}/api/catalog/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stage: "pipelines/step.yaml",
+          pipeline: "pipelines/demo.pipeline.yaml",
+        }),
+      });
+      expect(both.status).toBe(400);
+      expect(both.body.error).toMatch(/at most one/i);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await closeServer(server);
+      await cleanup();
+    }
+  });
+
+  it("PUT /api/catalog/file writes stage YAML and rolls back invalid content", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-put-catalog-"));
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    const manifestCatalog = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/manifest-catalog",
+    );
+    await cp(manifestCatalog, repoRoot, { recursive: true });
+    clearFindProjectRootCacheForTests();
+    const stageRel = "pipelines/step.yaml";
+    const stageAbs = path.join(repoRoot, stageRel);
+    const original = await readFile(stageAbs, "utf8");
+
+    const { server, base } = await withServer(
+      storeRoot,
+      scriptedFakeAgent([]),
+      undefined,
+      { cwd: repoRoot },
+    );
+
+    try {
+      const next = [
+        "id: step",
+        "system_prompt: |",
+        "  Updated prompt.",
+        "model: cursor/auto",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n");
+      const saved = await jsonFetch(`${base}/api/catalog/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: stageRel,
+          content: next,
+          project_root: repoRoot,
+        }),
+      });
+      expect(saved.status).toBe(200);
+      expect(saved.body.path).toBe(stageRel);
+      expect(saved.body.content).toBe(next);
+      expect(await readFile(stageAbs, "utf8")).toBe(next);
+
+      const invalid = await jsonFetch(`${base}/api/catalog/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: stageRel,
+          content: "id: step\n",
+          project_root: repoRoot,
+        }),
+      });
+      expect(invalid.status).toBe(400);
+      expect(invalid.body.code).toBe("stage_invalid");
+      expect(Array.isArray(invalid.body.findings)).toBe(true);
+      expect(await readFile(stageAbs, "utf8")).toBe(next);
+
+      const escape = await jsonFetch(`${base}/api/catalog/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: "../outside.yaml",
+          content: original,
+          project_root: repoRoot,
+        }),
+      });
+      expect(escape.status).toBe(400);
+      expect(escape.body.code).toMatch(/path_outside|absolute_path/);
+
+      const nonYaml = await jsonFetch(`${base}/api/catalog/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: "pipelines/step.txt",
+          content: "nope",
+          project_root: repoRoot,
+        }),
+      });
+      expect(nonYaml.status).toBe(400);
+      expect(nonYaml.body.code).toBe("unsupported_file_type");
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await closeServer(server);
+      await cleanup();
+    }
+  });
+
   it("POST /api/pipelines creates pipeline-owned YAML", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-post-pipeline-"));
     const { root: repoRoot, cleanup } = await initTempGitRepo();

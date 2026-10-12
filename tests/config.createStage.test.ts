@@ -140,6 +140,34 @@ describe("parseCreateStageBody", () => {
       error: "id must be lowercase kebab-case",
     });
   });
+
+  it("accepts optional skill and rejects empty skill", () => {
+    expect(
+      parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "with-skill.yaml",
+        id: "with-skill",
+        system_prompt: "x",
+        skill: "archify",
+      }),
+    ).toMatchObject({
+      id: "with-skill",
+      skill: "archify",
+    });
+    expect(
+      parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "bad-skill.yaml",
+        id: "bad-skill",
+        system_prompt: "x",
+        skill: "   ",
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "skill must be a non-empty string",
+    });
+  });
 });
 
 describe("stageConfigToYaml", () => {
@@ -165,6 +193,16 @@ describe("stageConfigToYaml", () => {
         "",
       ].join("\n"),
     );
+  });
+
+  it("emits skill on the stage body", () => {
+    const yaml = stageConfigToYaml({
+      id: "author",
+      system_prompt: "Write diagrams.",
+      skill: "archify",
+    });
+    expect(yaml).toContain("skill: archify");
+    expect(yaml.indexOf("skill:")).toBeLessThan(yaml.indexOf("io:"));
   });
 
   it("writes empty gate_kinds as [] and omits the key when undefined (KTD1)", () => {
