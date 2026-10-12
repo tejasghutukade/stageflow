@@ -11,7 +11,7 @@ import {
   setStageRefValue,
   type GateKind,
 } from "../workshop/inspector/stageFields";
-import { stageBodyFor, stageRefFor } from "../workshop/stageMutators";
+import { stageBodyFor } from "../workshop/stageMutators";
 
 export const INSPECTOR_GATE_ORDER = [
   "confirm",

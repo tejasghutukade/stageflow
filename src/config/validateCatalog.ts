@@ -42,6 +42,7 @@ export type ValidationFindingCode =
   | "pipeline.stage_uses_inline_conflict"
   | "pipeline.stage_missing_body"
   | "pipeline.stage_id_mismatch"
+  | "pipeline.stage_wrapper_skill_rejected"
   | "pipeline.invalid_completion"
   | "catalog.path_case_mismatch"
   | "pipeline.invalid_recovery"

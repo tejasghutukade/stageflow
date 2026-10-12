@@ -427,7 +427,7 @@ function resolveDraftWriteTarget(
     input.pipelineFilename?.trim(),
   );
   const draft = hoistUsesWrapperSkills(normalized.draft);
-  const pipelineFilename = normalized.pipelineFilename
+  const pipelineFilename = normalized.pipelineFilename;
   const pipelineAbsPath = path.join(packageDirectory, path.basename(pipelineFilename));
   const pipelineRelPath = path
     .relative(projectRoot, pipelineAbsPath)
