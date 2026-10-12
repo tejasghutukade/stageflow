@@ -16,7 +16,6 @@ COPY ui ./ui
 COPY scripts ./scripts
 COPY skills ./skills
 COPY builtin-skills ./builtin-skills
-COPY examples ./examples
 COPY README.md LICENSE ./
 RUN npm run build \
   && npm run ui:build \
@@ -39,7 +38,6 @@ COPY --from=build --chown=stageflow:stageflow /src/node_modules ./node_modules
 COPY --from=build --chown=stageflow:stageflow /src/dist ./dist
 COPY --from=build --chown=stageflow:stageflow /src/skills ./skills
 COPY --from=build --chown=stageflow:stageflow /src/builtin-skills ./builtin-skills
-COPY --from=build --chown=stageflow:stageflow /src/examples ./examples
 COPY --from=build --chown=stageflow:stageflow /src/README.md /src/LICENSE ./
 COPY --from=build /src/scripts/generate-toolchain-manifest.mjs ./scripts/generate-toolchain-manifest.mjs
 RUN node ./scripts/generate-toolchain-manifest.mjs /etc/stageflow/toolchain.json \

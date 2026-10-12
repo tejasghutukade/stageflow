@@ -76,7 +76,7 @@ The published image does **not** install the GitHub CLI. Catalogs that `requires
 
 ### Catalog in the container
 
-Shipped examples are baked at `/opt/stageflow/examples` (seeded `project_root` id `examples`). For your own catalog, bind-mount it into the container and **register / ensure** that absolute path with the Host (`POST /api/projects`, or local `sf run` ensure-then-start). Remotes cannot invent unknown absolute `project_root` values. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root). Compose has a commented volume-mount example in [`docker-compose.yml`](../docker-compose.yml).
+The image does **not** ship the repo `examples/` tree. Workshop saves and the default writable **workspace** catalog live under `/data` (`$STAGEFLOW_HOME/workspace`). For an external catalog, bind-mount it into the container and **register / ensure** that absolute path with the Host (`STAGEFLOW_ENSURE_PROJECT_ROOTS`, `POST /api/projects`, or local `sf run` ensure-then-start). Remotes cannot invent unknown absolute `project_root` values. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root). Compose has a commented volume-mount pattern in [`docker-compose.yml`](../docker-compose.yml).
 
 ### Repo-bound run (brief) {#repo-bound-run}
 

@@ -41,8 +41,6 @@ const FIELD_CHIP = `inline-flex h-[22px] shrink-0 items-center whitespace-nowrap
 const STAGE_CHIP = `${ROW_CHIP} border-[#ffffff24] bg-[#1a1c21] text-[#ecedee]`;
 const FOOTER_KEYCAP = `rounded-sm border border-[#ffffff1a] bg-[#1a1c21] px-[5px] ${MONO} text-[11px] leading-normal text-[#8b8f98]`;
 
-const CLI_FROM_PATH = "sf skills install --from-path ./my-skill";
-const CLI_FROM_ZIP = "sf skills install --from-zip <url> --checksum sha256:…";
 const CLI_LIST = "sf skills list";
 
 function scopeChipClass(scope: SkillScopeLabel): string {
@@ -355,76 +353,6 @@ function GroupHeading({
       <span className={`${MONO} text-xs text-[#8b8f98]`}>{count}</span>
       <span className="flex-1" />
       <span className="truncate text-xs text-[#8b8f98]">{hint}</span>
-    </div>
-  );
-}
-
-function InstallStrip() {
-  return (
-    <div data-install-strip className="flex w-full shrink-0 flex-col gap-2 border-t border-t-[#ffffff12] px-4 py-2.5">
-      <div className="flex items-center gap-2">
-        <span className={`whitespace-nowrap ${EYEBROW}`}>Install a skill</span>
-        <span className="rounded-sm border border-dashed border-[#ffffff2e] px-1 text-[10px] leading-normal text-[#8b8f98]">
-          proposed
-        </span>
-        <span className="flex-1" />
-        <span className="truncate text-xs text-[#8b8f98]">
-          Runs the same install as the CLI, into
-        </span>
-        <span className={`whitespace-nowrap ${MONO} text-xs text-[#a7aab2]`}>
-          .pi/skills/
-        </span>
-      </div>
-      <div className="flex w-full gap-2">
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[10px] border border-[#ffffff12] bg-[#131418] px-2.5 py-2">
-          <div className="flex size-7 shrink-0 items-center justify-center rounded-md border border-[#ffffff1a] bg-[#1a1c21] text-[#a7aab2]">
-            <Icon>
-              <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-            </Icon>
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="text-[13px] font-medium text-[#ecedee]">
-              From folder
-            </span>
-            <span
-              className={`truncate ${MONO} text-[11px] text-[#8b8f98]`}
-              title={CLI_FROM_PATH}
-            >
-              {CLI_FROM_PATH}
-            </span>
-          </div>
-          <CopyButton text={CLI_FROM_PATH} label="Copy install from folder command" />
-        </div>
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[10px] border border-[#ffffff12] bg-[#131418] px-2.5 py-2">
-          <div className="flex size-7 shrink-0 items-center justify-center rounded-md border border-[#ffffff1a] bg-[#1a1c21] text-[#a7aab2]">
-            <Icon>
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-            </Icon>
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <div className="flex items-center gap-1.5">
-              <span className="whitespace-nowrap text-[13px] font-medium text-[#ecedee]">
-                From zip URL
-              </span>
-              <span className="flex items-center gap-[3px] text-[11px] text-[#8b8f98]">
-                <Icon className="size-[11px]">
-                  <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
-                  <path d="m9 12 2 2 4-4" />
-                </Icon>
-                with checksum
-              </span>
-            </div>
-            <span
-              className={`truncate ${MONO} text-[11px] text-[#8b8f98]`}
-              title={CLI_FROM_ZIP}
-            >
-              {CLI_FROM_ZIP}
-            </span>
-          </div>
-          <CopyButton text={CLI_FROM_ZIP} label="Copy install from zip command" />
-        </div>
-      </div>
     </div>
   );
 }
@@ -747,9 +675,11 @@ function SkillInspector({
 export function CatalogSkillsTab({
   skillName,
   query = "",
+  reloadNonce = 0,
 }: {
   skillName?: string;
   query?: string;
+  reloadNonce?: number;
 }) {
   const [skills, setSkills] = useState<SkillListing[]>([]);
   const [diagnostics, setDiagnostics] = useState<SkillDiagnostic[]>([]);
@@ -793,8 +723,9 @@ export function CatalogSkillsTab({
   }, []);
 
   useEffect(() => {
+    setLoading(true);
     void load();
-  }, [load]);
+  }, [load, reloadNonce]);
 
   useEffect(() => {
     if (skillName) setSelectedName(skillName);
@@ -935,7 +866,6 @@ export function CatalogSkillsTab({
             </div>
           ))}
         </div>
-        <InstallStrip />
         <SkillsFooter
           folder={visible.length > 0 ? skillsFolderLabel(visible) : ".pi/skills"}
           total={visible.length}

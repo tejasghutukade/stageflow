@@ -37,6 +37,7 @@ export type Route =
   | { name: "connect" }
   | {
       name: "workshop";
+      sessionId?: string;
       pipelinePath?: string;
       taskPath?: string;
       projectRoot?: string;
@@ -120,11 +121,13 @@ export function extensionFilePath(filePath: string): string {
 }
 
 export function workshopPath(opts?: {
+  session?: string;
   pipeline?: string;
   task?: string;
   project_root?: string;
 }): string {
   const params = new URLSearchParams();
+  if (opts?.session) params.set("session", opts.session);
   if (opts?.pipeline) params.set("pipeline", opts.pipeline);
   if (opts?.task) params.set("task", opts.task);
   if (opts?.project_root) params.set("project_root", opts.project_root);
@@ -255,11 +258,13 @@ export function parseHash(hash = window.location.hash): Route {
   if (path === "settings") return { name: "settings" };
   if (path === "connect") return { name: "connect" };
   if (path === "workshop" || path === "workshop-lab") {
+    const sessionId = params.get("session") ?? undefined;
     const pipelinePath = params.get("pipeline") ?? undefined;
     const taskPath = params.get("task") ?? undefined;
     const projectRoot = params.get("project_root") ?? undefined;
     return {
       name: "workshop",
+      ...(sessionId ? { sessionId } : {}),
       ...(pipelinePath ? { pipelinePath } : {}),
       ...(taskPath ? { taskPath } : {}),
       ...(projectRoot ? { projectRoot } : {}),

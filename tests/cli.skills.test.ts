@@ -119,6 +119,33 @@ describe("sf skills", () => {
     }
   });
 
+  it("skills install succeeds without doctor when bin entrypoint is missing", async () => {
+    const repo = await initTempGitRepo();
+    const mdOnly = path.join(root, "tests", "fixtures", "skills", "md-only-skill");
+    let doctorCalls = 0;
+    try {
+      const code = await runSkillsCommand(
+        ["install", "--from-path", mdOnly, "--skill-name", "md-only-skill"],
+        {
+          cwd: repo.root,
+          projectRoot: repo.root,
+          io: {
+            log: () => undefined,
+            error: () => undefined,
+            runDoctor: () => {
+              doctorCalls += 1;
+              return 1;
+            },
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(doctorCalls).toBe(0);
+      await access(path.join(repo.root, ".pi", "skills", "md-only-skill", "SKILL.md"));
+    } finally {
+      await repo.cleanup();
+    }
+  });
   it("second install from same source is idempotent", async () => {
     const repo = await initTempGitRepo();
     try {

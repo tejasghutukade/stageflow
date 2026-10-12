@@ -149,7 +149,7 @@ function ConsoleRoot() {
     } else if (route.name === "skill") {
       go(catalogPath({ tab: "skills", skill: route.skillName }));
     } else if (route.name === "extensions") {
-      go(catalogPath({ tab: "extensions" }));
+      go(catalogPath({ tab: "stages" }));
     }
   }, [redesignOn, route, go]);
 
@@ -286,6 +286,7 @@ function ConsoleRoot() {
   } else if (route.name === "workshop") {
     content = (
       <WorkshopPage
+        sessionId={route.sessionId}
         pipelinePath={route.pipelinePath}
         taskPath={route.taskPath}
         projectRoot={route.projectRoot}

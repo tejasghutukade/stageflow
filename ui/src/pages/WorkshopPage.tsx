@@ -144,7 +144,7 @@ import {
   workshopSaveState,
   type DraftOrigin,
 } from "../redesign/workshop/workshopPageModel";
-import { navigate, newRunPath, pipelinePath } from "../routes";
+import { navigate, newRunPath, pipelinePath, workshopPath } from "../routes";
 
 const CHAT_DEFAULT_W = 420;
 const CHAT_MIN_W = 280;
@@ -199,6 +199,7 @@ export type LiveChatRefs = {
   autoApply?: MutableRefObject<boolean>;
   saveTargetWireId?: MutableRefObject<string | undefined>;
   defaultWriteWireId?: MutableRefObject<string>;
+  ensureChatSession?: () => Promise<string | null>;
 };
 
 export type { WorkshopToolActivityRow };
@@ -437,13 +438,16 @@ export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
 
       refs.clearActivity();
 
-      const sessionId = refs.sessionId.current;
+      let sessionId = refs.sessionId.current;
+      if (!sessionId && refs.ensureChatSession) {
+        sessionId = await refs.ensureChatSession();
+      }
       if (!sessionId) {
         yield {
           content: [
             {
               type: "text",
-              text: "Workshop session is still starting. Try again in a moment.",
+              text: "Could not start a workshop chat session. Try again.",
             },
           ],
         };
@@ -1058,10 +1062,12 @@ function WorkshopModelPicker({
 }
 
 export function WorkshopPage({
+  sessionId: linkedSessionId,
   pipelinePath: linkedPipelinePath,
   taskPath: linkedTaskPath,
   projectRoot: linkedProjectRoot,
 }: {
+  sessionId?: string;
   pipelinePath?: string;
   taskPath?: string;
   projectRoot?: string;
@@ -1178,6 +1184,7 @@ export function WorkshopPage({
   const pickerRowsRef = useRef<StudioPickerRow[]>([]);
   const selectionRef = useRef<StudioSelection>(startNewChatStudio([]));
   const studioRequestRef = useRef(0);
+  const idleStudioBootRef = useRef(false);
   const onPointerChangeRef = useRef<
     (frame: { buildId: string; draft: DraftPackagePayload }) => void
   >(() => {});
@@ -1260,32 +1267,6 @@ export function WorkshopPage({
     [],
   );
 
-  const liveRefs = useMemo<LiveChatRefs>(
-    () => ({
-      sessionId: sessionIdRef,
-      draft: draftRef,
-      model: modelRef,
-      selectedBuildId: selectedBuildIdRef,
-      setDraft: applyDraft,
-      onPointerChange: (frame) => onPointerChangeRef.current(frame),
-      registerMutations,
-      pushActivity,
-      clearActivity,
-      stop: stopChatRef,
-      attachments: attachmentsRef,
-      docsContext: docsContextRef,
-      autoApply: autoApplyRef,
-      saveTargetWireId: saveTargetWireIdRef,
-      defaultWriteWireId: defaultWriteWireIdRef,
-    }),
-    [applyDraft, registerMutations, pushActivity, clearActivity],
-  );
-
-  const chatAdapter = useMemo(
-    () => createLiveChatModel(liveRefs),
-    [liveRefs],
-  );
-
   onPointerChangeRef.current = (frame) => {
     const previous = {
       sessionId: sessionIdRef.current,
@@ -1330,45 +1311,105 @@ export function WorkshopPage({
     };
   }, []);
 
-  const startNewSession = useCallback(async (opts?: { keepBootError?: boolean }) => {
-    const request = ++studioRequestRef.current;
-    if (!opts?.keepBootError) setBootError(null);
-    setHistoryOpen(false);
-    const previous = {
-      sessionId: sessionIdRef.current,
-      buildId: cardsBuildIdRef.current,
-    };
+  const syncWorkshopUrl = useCallback(
+    (session: string | null) => {
+      navigate(
+        workshopPath({
+          ...(session ? { session } : {}),
+          ...(linkedPipelinePath ? { pipeline: linkedPipelinePath } : {}),
+          ...(linkedTaskPath ? { task: linkedTaskPath } : {}),
+          ...(linkedProjectRoot ? { project_root: linkedProjectRoot } : {}),
+        }),
+      );
+    },
+    [linkedPipelinePath, linkedProjectRoot, linkedTaskPath],
+  );
+
+  const applyIdleStudio = useCallback(
+    (opts?: { keepBootError?: boolean }) => {
+      if (!opts?.keepBootError) setBootError(null);
+      setHistoryOpen(false);
+      const previous = {
+        sessionId: sessionIdRef.current,
+        buildId: cardsBuildIdRef.current,
+      };
+      sessionIdRef.current = null;
+      setSessionId(null);
+      const next = startNewChatStudio(pickerRowsRef.current);
+      applyStudio(next);
+      setMutationCards((cards) =>
+        mutationMapAfterChange(
+          previous,
+          { sessionId: null, buildId: null },
+          cards,
+        ),
+      );
+      setSelectedStageId(null);
+      setSeedMessages(emptySeedMessages());
+      setThreadEpoch((n) => n + 1);
+      setBaseline(null);
+      setSavedPipelinePath(null);
+      setSavedTaskPath(null);
+      setSaveDestination(null);
+      setDraftOrigin(null);
+      setSaveTargetWireId(undefined);
+      setAttachments([]);
+      setAutosavedAt(null);
+      setDrawerTab("task");
+      setFocusField(null);
+    },
+    [applyStudio],
+  );
+
+  const startNewSession = useCallback(
+    (opts?: { keepBootError?: boolean }) => {
+      ++studioRequestRef.current;
+      idleStudioBootRef.current = true;
+      applyIdleStudio(opts);
+      syncWorkshopUrl(null);
+    },
+    [applyIdleStudio, syncWorkshopUrl],
+  );
+
+  const ensureChatSession = useCallback(async (): Promise<string | null> => {
+    if (sessionIdRef.current) return sessionIdRef.current;
     const created = await createWorkshopSession();
-    if (studioRequestRef.current !== request) return;
     if (!created.ok) {
       setBootError(created.error);
-      return;
+      return null;
     }
     sessionIdRef.current = created.session.id;
-    const next = startNewChatStudio(pickerRowsRef.current);
-    applyStudio(next);
     setSessionId(created.session.id);
-    setMutationCards((cards) =>
-      mutationMapAfterChange(
-        previous,
-        { sessionId: created.session.id, buildId: null },
-        cards,
-      ),
-    );
-    setSelectedStageId(null);
-    setSeedMessages(emptySeedMessages());
-    setThreadEpoch((n) => n + 1);
-    setBaseline(null);
-    setSavedPipelinePath(null);
-    setSavedTaskPath(null);
-    setSaveDestination(null);
-    setDraftOrigin(null);
-    setSaveTargetWireId(undefined);
-    setAttachments([]);
-    setAutosavedAt(null);
-    setDrawerTab("task");
-    setFocusField(null);
-  }, [applyStudio]);
+    syncWorkshopUrl(created.session.id);
+    return created.session.id;
+  }, [syncWorkshopUrl]);
+
+  const liveRefs = useMemo<LiveChatRefs>(
+    () => ({
+      sessionId: sessionIdRef,
+      draft: draftRef,
+      model: modelRef,
+      selectedBuildId: selectedBuildIdRef,
+      setDraft: applyDraft,
+      onPointerChange: (frame) => onPointerChangeRef.current(frame),
+      registerMutations,
+      pushActivity,
+      clearActivity,
+      stop: stopChatRef,
+      attachments: attachmentsRef,
+      docsContext: docsContextRef,
+      autoApply: autoApplyRef,
+      saveTargetWireId: saveTargetWireIdRef,
+      defaultWriteWireId: defaultWriteWireIdRef,
+      ensureChatSession,
+    }),
+    [applyDraft, registerMutations, pushActivity, clearActivity, ensureChatSession],
+  );
+
+  const chatAdapter = useMemo(
+    () => createLiveChatModel(liveRefs),
+    [liveRefs],
+  );
 
   const bootOpenedPackage = useCallback(
     async (path: string, task?: string, root?: string) => {
@@ -1420,79 +1461,28 @@ export function WorkshopPage({
           : null);
       if (origin) setDraftOrigin(origin);
       setSaveTargetWireId(undefined);
+      syncWorkshopUrl(created.session.id);
     },
-    [applyDraft, startNewSession],
+    [applyDraft, startNewSession, syncWorkshopUrl],
   );
 
-  useEffect(() => {
-    if (workshopBootTarget(linkedPipelinePath) !== "package" || !linkedPipelinePath) {
-      void startNewSession();
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      let root = linkedProjectRoot?.trim() || undefined;
-      if (!root) {
-        try {
-          const listed = await fetchPipelines();
-          if (cancelled) return;
-          root = projectRootForPipelinePath(listed.pipelines, linkedPipelinePath);
-        } catch {
-          // open may fail without a resolvable catalog root
-        }
-      }
-      if (cancelled) return;
-      void bootOpenedPackage(linkedPipelinePath, linkedTaskPath, root);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    bootOpenedPackage,
-    linkedPipelinePath,
-    linkedProjectRoot,
-    linkedTaskPath,
-    startNewSession,
-  ]);
-
-  const openHistory = useCallback(async () => {
-    setHistoryOpen(true);
-    setHistoryLoading(true);
-    setHistoryError(null);
-    const [listed, picker] = await Promise.all([
-      listWorkshopSessions(),
-      listWorkshopPicker(),
-    ]);
-    setHistoryLoading(false);
-    if (picker.ok) {
-      const selected =
-        selectionRef.current.rows.find(
-          (row) => row.id != null && row.id === selectedBuildIdRef.current,
-        ) ?? null;
-      replacePickerRows(rowsAfterPickerLoad(picker.rows, selected));
-    }
-    if (!listed.ok) {
-      setHistoryError(listed.error);
-      setHistorySessions([]);
-      return;
-    }
-    setHistorySessions(listed.sessions);
-  }, [replacePickerRows]);
-
-  const openSession = useCallback(
-    async (id: string) => {
+  const loadWorkshopSession = useCallback(
+    async (id: string, opts?: { fromHistory?: boolean }) => {
       const request = ++studioRequestRef.current;
-      setHistoryLoading(true);
-      setHistoryError(null);
+      if (opts?.fromHistory) {
+        setHistoryLoading(true);
+        setHistoryError(null);
+      }
       const previous = {
         sessionId: sessionIdRef.current,
         buildId: cardsBuildIdRef.current,
       };
       const got = await getWorkshopSession(id);
       if (studioRequestRef.current !== request) return;
-      setHistoryLoading(false);
+      if (opts?.fromHistory) setHistoryLoading(false);
       if (!got.ok) {
-        setHistoryError(got.error);
+        if (opts?.fromHistory) setHistoryError(got.error);
+        else setBootError(got.error);
         return;
       }
       sessionIdRef.current = got.session.id;
@@ -1535,15 +1525,87 @@ export function WorkshopPage({
           : transcriptToSeedMessages(got.session.transcript),
       );
       setThreadEpoch((n) => n + 1);
-      setHistoryOpen(false);
+      if (opts?.fromHistory) setHistoryOpen(false);
       setBaseline(null);
       setSavedPipelinePath(null);
       setSavedTaskPath(null);
       setSaveDestination(null);
       setAttachments([]);
       setFocusField(null);
+      syncWorkshopUrl(got.session.id);
     },
-    [applyStudio, redesignOn],
+    [applyStudio, redesignOn, syncWorkshopUrl],
+  );
+
+  useEffect(() => {
+    if (workshopBootTarget(linkedPipelinePath) === "package" && linkedPipelinePath) {
+      let cancelled = false;
+      void (async () => {
+        let root = linkedProjectRoot?.trim() || undefined;
+        if (!root) {
+          try {
+            const listed = await fetchPipelines();
+            if (cancelled) return;
+            root = projectRootForPipelinePath(listed.pipelines, linkedPipelinePath);
+          } catch {
+            // open may fail without a resolvable catalog root
+          }
+        }
+        if (cancelled) return;
+        void bootOpenedPackage(linkedPipelinePath, linkedTaskPath, root);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+    const linked = linkedSessionId?.trim();
+    if (linked) {
+      if (sessionIdRef.current === linked) return;
+      void loadWorkshopSession(linked);
+      return;
+    }
+    if (sessionIdRef.current || idleStudioBootRef.current) return;
+    idleStudioBootRef.current = true;
+    applyIdleStudio();
+  }, [
+    applyIdleStudio,
+    bootOpenedPackage,
+    linkedPipelinePath,
+    linkedProjectRoot,
+    linkedTaskPath,
+    linkedSessionId,
+    loadWorkshopSession,
+  ]);
+
+  const openHistory = useCallback(async () => {
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setHistoryError(null);
+    const [listed, picker] = await Promise.all([
+      listWorkshopSessions(),
+      listWorkshopPicker(),
+    ]);
+    setHistoryLoading(false);
+    if (picker.ok) {
+      const selected =
+        selectionRef.current.rows.find(
+          (row) => row.id != null && row.id === selectedBuildIdRef.current,
+        ) ?? null;
+      replacePickerRows(rowsAfterPickerLoad(picker.rows, selected));
+    }
+    if (!listed.ok) {
+      setHistoryError(listed.error);
+      setHistorySessions([]);
+      return;
+    }
+    setHistorySessions(listed.sessions);
+  }, [replacePickerRows]);
+
+  const openSession = useCallback(
+    async (id: string) => {
+      await loadWorkshopSession(id, { fromHistory: true });
+    },
+    [loadWorkshopSession],
   );
 
   const pickStudioRow = useCallback(
@@ -2407,8 +2469,8 @@ export function WorkshopPage({
         adapter={chatAdapter}
         toolActivity={toolActivity}
         onStop={() => stopChatRef.current?.()}
-        threadKey={`${sessionId ?? ""}:${threadEpoch}`}
-        ready={Boolean(sessionId)}
+        threadKey={`${sessionId ?? "draft"}:${threadEpoch}`}
+        ready
         bootError={bootError}
         sessionTitle={sessionTitle}
         chatCards={chatCards}
@@ -2724,30 +2786,23 @@ export function WorkshopPage({
           ) : null}
           <div className="workshop-lab__chat-body">
             <WorkshopMutationContext.Provider value={mutationApi}>
-              {sessionId ? (
-                <WorkshopChatIsland
-                  key={`${sessionId}:${threadEpoch}`}
-                  seedMessages={seedMessages}
-                  adapter={chatAdapter}
-                  greeting={GREETING}
-                  toolActivity={toolActivity}
-                  MutationCard={MutationCardToolUI}
-                  onStop={() => stopChatRef.current?.()}
-                  composerActions={
-                    <WorkshopModelPicker
-                      model={chatModel}
-                      models={availableModels}
-                      settingsDefault={settingsDefault}
-                      onChange={setChatModel}
-                    />
-                  }
-                />
-              ) : (
-                <div className="workshop-lab__welcome">
-                  <div className="eyebrow">Workshop</div>
-                  <p>Starting session…</p>
-                </div>
-              )}
+              <WorkshopChatIsland
+                key={`${sessionId ?? "draft"}:${threadEpoch}`}
+                seedMessages={seedMessages}
+                adapter={chatAdapter}
+                greeting={GREETING}
+                toolActivity={toolActivity}
+                MutationCard={MutationCardToolUI}
+                onStop={() => stopChatRef.current?.()}
+                composerActions={
+                  <WorkshopModelPicker
+                    model={chatModel}
+                    models={availableModels}
+                    settingsDefault={settingsDefault}
+                    onChange={setChatModel}
+                  />
+                }
+              />
             </WorkshopMutationContext.Provider>
           </div>
         </section>

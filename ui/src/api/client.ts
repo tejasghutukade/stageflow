@@ -22,6 +22,8 @@ import type {
   StageVerificationHistory,
   SettingsSnapshot,
   SkillDiagnostic,
+  SkillInstallInput,
+  SkillInstallResult,
   SkillListing,
   StageAnswer,
   StartRunResult,
@@ -352,15 +354,74 @@ export async function createStageWithDetails(
   }
 }
 
-export function fetchSkills(): Promise<{
+function skillsQuery(project_root?: string): string {
+  if (!project_root) return "";
+  return `?${new URLSearchParams({ project_root })}`;
+}
+
+export function fetchSkills(project_root?: string): Promise<{
   skills: SkillListing[];
   diagnostics: SkillDiagnostic[];
 }> {
-  return api("/api/skills");
+  return api(`/api/skills${skillsQuery(project_root)}`);
 }
 
-export function fetchSkillUsage(): Promise<SkillUsageIndex> {
-  return api("/api/skills/usage");
+export function fetchSkillUsage(project_root?: string): Promise<SkillUsageIndex> {
+  return api(`/api/skills/usage${skillsQuery(project_root)}`);
+}
+
+export async function installSkill(
+  input: SkillInstallInput,
+): Promise<SkillInstallResult> {
+  try {
+    const res = await fetch("/api/skills/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify({ command: input.command }),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      skill_name?: string;
+      dest_path?: string;
+      skillName?: string;
+      destPath?: string;
+      message?: string;
+      error?: string;
+    };
+    const skillName =
+      typeof body.skill_name === "string"
+        ? body.skill_name
+        : typeof body.skillName === "string"
+          ? body.skillName
+          : undefined;
+    const destPath =
+      typeof body.dest_path === "string"
+        ? body.dest_path
+        : typeof body.destPath === "string"
+          ? body.destPath
+          : undefined;
+    if (res.ok && skillName !== undefined && destPath !== undefined) {
+      return {
+        ok: true,
+        skillName,
+        destPath,
+        message:
+          typeof body.message === "string"
+            ? body.message
+            : `Installed ${skillName}`,
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 export function fetchExtensions(): Promise<{

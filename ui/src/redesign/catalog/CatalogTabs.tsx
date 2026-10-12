@@ -16,7 +16,6 @@ export function CatalogTabs({ active }: CatalogTabsProps) {
       tabs={[
         { id: "stages", label: "Stages" },
         { id: "skills", label: "Skills" },
-        { id: "extensions", label: "Extensions" },
       ]}
     />
   );

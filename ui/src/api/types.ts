@@ -535,6 +535,20 @@ export type CreateStageResult =
   | { ok: true; stage: CreatedStageListing }
   | { ok: false; status: number; error: string };
 
+export type SkillInstallInput = {
+  command: string;
+};
+
+export type SkillInstallOk = {
+  skillName: string;
+  destPath: string;
+  message: string;
+};
+
+export type SkillInstallResult =
+  | ({ ok: true } & SkillInstallOk)
+  | { ok: false; status?: number; error: string };
+
 export type CreatePipelineStageRef = {
   id: string;
   needs?: string;

@@ -40,10 +40,11 @@ services:
       CURSOR_API_KEY: ${CURSOR_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
-      STAGEFLOW_ENSURE_PROJECT_ROOTS: /catalog
     volumes:
       - stageflow-data:/data
-      - /Users/tejasghutukade/Projects/software-factory-redesign:/catalog
+      # Optional: bind-mount your catalog and register it, e.g.
+      # STAGEFLOW_ENSURE_PROJECT_ROOTS: /catalog
+      # - ./my-catalog:/catalog
     restart: unless-stopped
 
 volumes:

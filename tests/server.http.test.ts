@@ -2287,6 +2287,119 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("GET /api/skills and /api/skills/usage without project_root return 200 under multi-root", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-skills-multiroot-"));
+    const { root: repoA, cleanup: cleanupA } = await initTempGitRepo();
+    const { root: repoB, cleanup: cleanupB } = await initTempGitRepo();
+    clearFindProjectRootCacheForTests();
+    for (const repo of [repoA, repoB]) {
+      await writeFile(
+        path.join(repo, "stageflow.yaml"),
+        [
+          "version: 1",
+          "catalog:",
+          "  pipelines:",
+          "    - .",
+          "  tasks:",
+          "    - .",
+          "",
+        ].join("\n"),
+      );
+    }
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoB);
+    const { server, base } = await withServer(
+      storeRoot,
+      scriptedFakeAgent([]),
+      store,
+      { cwd: repoA },
+    );
+    try {
+      const roots = await jsonFetch(`${base}/api/catalog/roots`);
+      expect(roots.status).toBe(200);
+      const registered = (roots.body.roots as { kind: string }[]).filter(
+        (r) => r.kind === "registered",
+      );
+      expect(registered.length).toBeGreaterThanOrEqual(2);
+
+      const skills = await jsonFetch(`${base}/api/skills`);
+      expect(skills.status).toBe(200);
+      expect(skills.body.skills).toEqual(expect.any(Array));
+
+      const usage = await jsonFetch(`${base}/api/skills/usage`);
+      expect(usage.status).toBe(200);
+      expect(usage.body.usages).toEqual(expect.any(Object));
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await closeServer(server);
+      await cleanupA();
+      await cleanupB();
+    }
+  });
+
+  it("POST /api/skills/install installs from file: command into workspace write root", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-skill-install-"));
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    clearFindProjectRootCacheForTests();
+    const skillSource = path.join(fixtures, "skills", "test-skill-source");
+    const { server, base } = await withServer(
+      storeRoot,
+      scriptedFakeAgent([]),
+      undefined,
+      { cwd: repoRoot },
+    );
+    try {
+      const missing = await jsonFetch(`${base}/api/skills/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(missing.status).toBe(400);
+      expect(missing.body.error).toMatch(/command must be a non-empty string/);
+
+      const badCommand = await jsonFetch(`${base}/api/skills/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "npx skills add --skill only" }),
+      });
+      expect(badCommand.status).toBe(400);
+      expect(badCommand.body.error).toMatch(/missing skill source/);
+
+      const installed = await jsonFetch(`${base}/api/skills/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          command: `npx skills add ${pathToFileURL(skillSource).href} --skill test-skill`,
+        }),
+      });
+      expect(installed.status).toBe(201);
+      expect(installed.body.ok).toBe(true);
+      expect(installed.body.skill_name).toBe("test-skill");
+      const workspaceRoot = path.join(storeRoot, "workspace");
+      const expectedDest = path.join(
+        await realpath(workspaceRoot),
+        ".pi",
+        "skills",
+        "test-skill",
+      );
+      expect(await realpath(installed.body.dest_path)).toBe(expectedDest);
+      expect(await realpath(installed.body.project_root)).toBe(
+        await realpath(workspaceRoot),
+      );
+      await access(path.join(workspaceRoot, ".pi", "skills", "test-skill", "SKILL.md"));
+
+      const listed = await jsonFetch(
+        `${base}/api/skills?project_root=${encodeURIComponent("workspace")}`,
+      );
+      expect(listed.status).toBe(200);
+      const names = (listed.body.skills as { name: string }[]).map((s) => s.name);
+      expect(names).toContain("test-skill");
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await closeServer(server);
+      await cleanup();
+    }
+  });
   describe("POST stage retry", () => {
     it.each([
       { name: "succeeds (AE1)", second: "success" as const, finalStatus: "succeeded" },
@@ -4451,11 +4564,14 @@ describe("HTTP console foundation BF-1–BF-6", () => {
     );
     clearFindProjectRootCacheForTests();
     const store = createRunStore({ rootDir: storeRoot });
+    const registeredRoot = await store.ensureProject(repoRoot);
     const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
       cwd: repoRoot,
     });
     try {
-      const res = await jsonFetch(`${base}/api/skills/usage`);
+      const res = await jsonFetch(
+        `${base}/api/skills/usage?project_root=${encodeURIComponent(registeredRoot)}`,
+      );
       expect(res.status).toBe(200);
       expect(res.body.usages["code-review"]).toEqual({
         stage_ids: ["review"],

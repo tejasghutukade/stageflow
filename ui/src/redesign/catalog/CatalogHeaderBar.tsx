@@ -6,21 +6,20 @@ import type { CatalogTabId } from "./CatalogTabs";
 const MONO = "[font-family:'Geist_Mono',_monospace]";
 const PRIMARY_KEYCAP = `rounded-sm border border-[#0c0d0f2e] px-[5px] py-0 ${MONO} text-[11px] leading-normal text-[#5a5d66]`;
 
-const PLACEHOLDERS: Record<CatalogTabId, string> = {
+const PLACEHOLDERS: Record<"stages" | "skills", string> = {
   stages: "Filter stages…",
   skills: "Filter skills…",
-  extensions: "Filter extensions…",
 };
 
 export type CatalogHeaderBarProps = {
   active: CatalogTabId;
   stageCount?: number;
   skillCount?: number;
-  extensionCount?: number;
   query: string;
   onQueryChange: (value: string) => void;
   searchRef?: RefObject<HTMLInputElement | null>;
   onNewStage?: () => void;
+  onInstallSkill?: () => void;
 };
 
 function SegmentedTab({
@@ -62,13 +61,16 @@ export function CatalogHeaderBar({
   active,
   stageCount,
   skillCount,
-  extensionCount,
   query,
   onQueryChange,
   searchRef,
   onNewStage,
+  onInstallSkill,
 }: CatalogHeaderBarProps) {
-  function go(tab: CatalogTabId) {
+  const visibleTab: "stages" | "skills" =
+    active === "skills" ? "skills" : "stages";
+
+  function go(tab: "stages" | "skills") {
     navigate(catalogPath({ tab }));
   }
 
@@ -82,22 +84,16 @@ export function CatalogHeaderBar({
         role="tablist"
       >
         <SegmentedTab
-          active={active === "stages"}
+          active={visibleTab === "stages"}
           label="Stages"
           count={stageCount}
           onClick={() => go("stages")}
         />
         <SegmentedTab
-          active={active === "skills"}
+          active={visibleTab === "skills"}
           label="Skills"
           count={skillCount}
           onClick={() => go("skills")}
-        />
-        <SegmentedTab
-          active={active === "extensions"}
-          label="Extensions"
-          count={extensionCount}
-          onClick={() => go("extensions")}
         />
       </div>
       <span className="block min-w-0 flex-1" />
@@ -115,8 +111,8 @@ export function CatalogHeaderBar({
               e.currentTarget.blur();
             }
           }}
-          placeholder={PLACEHOLDERS[active]}
-          aria-label={PLACEHOLDERS[active]}
+          placeholder={PLACEHOLDERS[visibleTab]}
+          aria-label={PLACEHOLDERS[visibleTab]}
           autoComplete="off"
           spellCheck={false}
           className="min-w-0 flex-1 bg-transparent font-sans text-[13px] leading-normal text-[#ecedee] outline-none placeholder:text-[#8b8f98]"
@@ -141,25 +137,17 @@ export function CatalogHeaderBar({
         </button>
       ) : null}
       {active === "skills" ? (
-        <div className="flex shrink-0 items-center gap-1.5">
-          <span className="rounded-sm border border-dashed border-[#ffffff2e] px-1 py-0 font-sans text-[10px] leading-normal text-[#8b8f98]">
-            proposed
+        <button
+          type="button"
+          onClick={onInstallSkill}
+          className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-[#ecedee] px-3 py-0"
+        >
+          <LuDownload className="size-3.5 text-[#0c0d0f]" aria-hidden />
+          <span className="font-sans text-[13px] font-medium leading-normal text-[#0c0d0f]">
+            Install skill
           </span>
-          <button
-            type="button"
-            title="Install skills with the CLI shown below the list"
-            onClick={() =>
-              document.querySelector("[data-install-strip]")?.scrollIntoView({ block: "nearest" })
-            }
-            className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-[#ecedee] px-3 py-0"
-          >
-            <LuDownload className="size-3.5 text-[#0c0d0f]" aria-hidden />
-            <span className="font-sans text-[13px] font-medium leading-normal text-[#0c0d0f]">
-              Install skill
-            </span>
-            <span className={PRIMARY_KEYCAP}>I</span>
-          </button>
-        </div>
+          <span className={PRIMARY_KEYCAP}>I</span>
+        </button>
       ) : null}
     </div>
   );

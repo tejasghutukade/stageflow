@@ -96,6 +96,14 @@ describe("parseHash", () => {
 
   it("parses the workshop route", () => {
     expect(parseHash("#/workshop")).toEqual({ name: "workshop" });
+    expect(parseHash("#/workshop?session=sess-abc")).toEqual({
+      name: "workshop",
+      sessionId: "sess-abc",
+    });
+    expect(parseHash(`#${workshopPath({ session: "sess-abc" })}`)).toEqual({
+      name: "workshop",
+      sessionId: "sess-abc",
+    });
   });
 
   it("redirects workshop-lab hash to workshop route", () => {

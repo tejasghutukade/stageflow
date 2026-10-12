@@ -109,6 +109,10 @@ import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import { findTaskInCatalogMulti } from "../config/findTaskInCatalog.js";
 import { buildSkillUsageIndex } from "../config/skillUsageIndex.js";
+import {
+  installSkillFromCommand,
+  parseInstallSkillBody,
+} from "../config/installSkillRequest.js";
 import { validateCatalog } from "../config/validateCatalog.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import {
@@ -3189,7 +3193,32 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         }
 
         if (method === "GET" && pathname === "/api/skills/usage") {
-          const usages = await buildSkillUsageIndex(cwd);
+          const projectRoot = url.searchParams.get("project_root") ?? undefined;
+          let usageRoot: string;
+          try {
+            const { wireRoot } =
+              projectRoot === undefined
+                ? await resolveWritableCatalogRoot(
+                    { store, bootCwd: cwd },
+                    undefined,
+                  )
+                : await resolveCatalogStartInput(
+                    { store, bootCwd: cwd },
+                    projectRoot,
+                  );
+            usageRoot = wireRoot.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const usages = await buildSkillUsageIndex(usageRoot);
           if (usages === null) {
             json(res, 404, { error: "No Stageflow catalog found" });
             return true;
@@ -3199,7 +3228,85 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         }
 
         if (method === "GET" && pathname === "/api/skills") {
-          json(res, 200, await listSkills({ cwd, agentDir }));
+          const projectRoot = url.searchParams.get("project_root") ?? undefined;
+          try {
+            const { wireRoot } =
+              projectRoot === undefined
+                ? await resolveWritableCatalogRoot(
+                    { store, bootCwd: cwd },
+                    undefined,
+                  )
+                : await resolveCatalogStartInput(
+                    { store, bootCwd: cwd },
+                    projectRoot,
+                  );
+            json(res, 200, await listSkills({ cwd: wireRoot.path, agentDir }));
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/skills/install") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseInstallSkillBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          let skillWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              undefined,
+            );
+            skillWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const stageflowCtx = await resolveStageflowContext(skillWriteRoot);
+          if (stageflowCtx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const result = await installSkillFromCommand({
+            projectRoot: stageflowCtx.projectRoot,
+            command: parsed.command,
+          });
+          if (!result.ok) {
+            json(res, result.status ?? 400, { error: result.error });
+            return true;
+          }
+          json(res, 201, {
+            ok: true,
+            skill_name: result.skill_name,
+            dest_path: result.dest_path,
+            project_root: result.project_root,
+          });
           return true;
         }
 

@@ -105,6 +105,44 @@ describe("createLiveChatModel model posting", () => {
     expect(parts).toEqual([{ content: [{ type: "text", text: "ok" }] }]);
   });
 
+  it("binds a session via ensureChatSession before the first turn", async () => {
+    const draft: DraftPackagePayload = {
+      pipeline: { id: "untitled", stages: [] },
+    };
+    const sessionId = refOf<string | null>(null);
+    const ensureChatSession = vi.fn(async () => {
+      sessionId.current = "sess-new";
+      return "sess-new";
+    });
+    const refs: LiveChatRefs = {
+      sessionId,
+      draft: refOf(draft),
+      model: refOf("cursor/auto"),
+      selectedBuildId: refOf<string | null>(null),
+      setDraft: vi.fn(),
+      registerMutations: vi.fn(),
+      pushActivity: vi.fn(),
+      clearActivity: vi.fn(),
+      stop: { current: null },
+      ensureChatSession,
+    };
+    vi.mocked(sendWorkshopChatTurnStreaming).mockResolvedValue({
+      ok: true,
+      sessionId: "sess-new",
+      events: [{ type: "message", role: "assistant", text: "hi" }],
+      draft,
+      pending: null,
+      autoApply: false,
+      model: "cursor/auto",
+    });
+    await drainRun(refs, "hello");
+    expect(ensureChatSession).toHaveBeenCalledTimes(1);
+    expect(sendWorkshopChatTurnStreaming).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "sess-new", message: "hello" }),
+      expect.any(Object),
+    );
+  });
+
   it("omits project_root when the save target is the default workspace", async () => {
     const draft: DraftPackagePayload = {
       pipeline: { id: "untitled", stages: [] },
