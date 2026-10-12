@@ -258,6 +258,27 @@ describe("stageConfigToYaml", () => {
 });
 
 describe("createStage", () => {
+  it("persists skill on the stage file when provided", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+
+    try {
+      const created = await createStage(root, {
+        pipeline_directory: "pipelines",
+        filename: "with-skill.yaml",
+        id: "with-skill",
+        system_prompt: "Use the skill.",
+        skill: "archify",
+      });
+      expect(created.ok).toBe(true);
+      const yaml = await readFile(path.join(root, "pipelines/with-skill.yaml"), "utf8");
+      expect(yaml).toMatch(/^skill: archify$/m);
+      const loaded = await loadStage(path.join(root, "pipelines/with-skill.yaml"));
+      expect(loaded.skill).toBe("archify");
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("creates stage file beside pipeline directory", async () => {
     const { root, cleanup } = await initTempGitRepo();
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import {
   createDraftPackage,
+  hoistUsesWrapperSkills,
   loadDraftPackage,
   loadTaskArtifact,
   overwriteDraftPackage,
@@ -431,6 +432,118 @@ describe("loadDraftPackage", () => {
       expect(loaded.ok).toBe(false);
       if (loaded.ok) return;
       expect(loaded.status).toBe(404);
+    }));
+
+  it("hoists uses-wrapper skill onto the stage body on load", () =>
+    withRepo(async (root) => {
+      const dir = path.join(root, "pipelines");
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        path.join(dir, "clarify.yaml"),
+        [
+          "id: clarify",
+          "system_prompt: Clarify",
+          "model: anthropic/claude-sonnet-4-5",
+          "io:",
+          "  input:",
+          "    schema:",
+          "      type: object",
+          "  output:",
+          "    schema:",
+          "      type: object",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(
+        path.join(dir, "demo.pipeline.yaml"),
+        [
+          "id: demo",
+          "stages:",
+          "  - id: clarify",
+          "    uses: ./clarify.yaml",
+          "    skill: archify",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+      expect(loaded.draft.pipeline.stages[0]?.skill).toBeUndefined();
+      expect(loaded.draft.stages?.[0]?.body.skill).toBe("archify");
+    }));
+});
+
+describe("hoistUsesWrapperSkills", () => {
+  it("copies wrapper skill to body when body lacks skill, then clears wrapper", () => {
+    const next = hoistUsesWrapperSkills({
+      pipeline: {
+        id: "demo",
+        stages: [{ id: "clarify", uses: "./clarify.yaml", skill: "archify" }],
+      },
+      stages: [
+        {
+          path: "./clarify.yaml",
+          body: { id: "clarify", system_prompt: "Clarify" },
+        },
+      ],
+    });
+    expect(next.pipeline.stages[0]?.skill).toBeUndefined();
+    expect(next.stages?.[0]?.body.skill).toBe("archify");
+  });
+
+  it("does not overwrite an existing body skill", () => {
+    const next = hoistUsesWrapperSkills({
+      pipeline: {
+        id: "demo",
+        stages: [{ id: "clarify", uses: "./clarify.yaml", skill: "from-wrapper" }],
+      },
+      stages: [
+        {
+          path: "./clarify.yaml",
+          body: { id: "clarify", skill: "from-file" },
+        },
+      ],
+    });
+    expect(next.pipeline.stages[0]?.skill).toBeUndefined();
+    expect(next.stages?.[0]?.body.skill).toBe("from-file");
+  });
+
+  it("overwrite migrates wrapper skill onto the stage file", () =>
+    withRepo(async (root) => {
+      const draft: DraftPackage = {
+        pipeline: {
+          id: "demo",
+          stages: [{ id: "clarify", uses: "./clarify.yaml", skill: "archify" }],
+        },
+        stages: [
+          {
+            path: "./clarify.yaml",
+            body: {
+              id: "clarify",
+              system_prompt: "Clarify",
+              model: MODEL,
+              ...REQUIRED_IO,
+            },
+          },
+        ],
+      };
+      const created = await createDraftPackage(root, {
+        directory: "pipelines",
+        draft,
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+
+      const pipelineYaml = await readFile(
+        path.join(root, "pipelines/demo.pipeline.yaml"),
+        "utf8",
+      );
+      expect(pipelineYaml).not.toMatch(/skill:\s*archify/);
+      const stageYaml = await readFile(path.join(root, "pipelines/clarify.yaml"), "utf8");
+      expect(stageYaml).toMatch(/^skill: archify$/m);
     }));
 });
 

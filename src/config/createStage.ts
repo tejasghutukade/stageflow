@@ -277,6 +277,7 @@ export async function createStage(
         system_prompt: input.system_prompt,
         ...(input.model !== undefined && input.model.length > 0 ? { model: input.model } : {}),
         ...(input.gate_kinds !== undefined ? { gate_kinds: input.gate_kinds } : {}),
+        ...(input.skill !== undefined && input.skill.length > 0 ? { skill: input.skill } : {}),
       }),
       "utf8",
     );

@@ -145,6 +145,51 @@ function stripUsesWrapperSkill(
   });
 }
 
+/** Move uses-wrapper skill: onto the matching stage artifact body, then clear the wrapper. */
+export function hoistUsesWrapperSkills(draft: DraftPackage): DraftPackage {
+  const artifacts = draft.stages ? [...draft.stages] : [];
+  const byPath = new Map(
+    artifacts.map((artifact, index) => [
+      normalizeStageRelPath(artifact.path),
+      index,
+    ]),
+  );
+
+  const stages = draft.pipeline.stages.map((stage) => {
+    if (typeof stage.uses !== "string" || stage.skill === undefined) return stage;
+    const skill =
+      typeof stage.skill === "string" && stage.skill.trim()
+        ? stage.skill.trim()
+        : undefined;
+    if (skill === undefined) {
+      const { skill: _skill, ...rest } = stage;
+      return rest;
+    }
+    const key = normalizeStageRelPath(stage.uses);
+    const index = byPath.get(key);
+    if (index !== undefined) {
+      const current = artifacts[index]!;
+      const bodySkill = current.body.skill;
+      const bodyHasSkill =
+        typeof bodySkill === "string" && bodySkill.trim().length > 0;
+      if (!bodyHasSkill) {
+        artifacts[index] = {
+          ...current,
+          body: { ...current.body, skill },
+        };
+      }
+    }
+    const { skill: _skill, ...rest } = stage;
+    return rest;
+  });
+
+  return {
+    ...draft,
+    pipeline: { ...draft.pipeline, stages },
+    ...(artifacts.length > 0 ? { stages: artifacts } : {}),
+  };
+}
+
 function pipelineDocument(pipeline: DraftPackage["pipeline"]): Record<string, unknown> {
   const doc: Record<string, unknown> = {
     id: pipeline.id,
@@ -180,14 +225,15 @@ async function materializeDraft(
   dir: string,
   pipelineFilename: string,
 ): Promise<void> {
+  const migrated = hoistUsesWrapperSkills(draft);
   await mkdir(dir, { recursive: true });
   await writeFile(
     path.join(dir, pipelineFilename),
-    stringifyTargetYaml(pipelineDocument(draft.pipeline)),
+    stringifyTargetYaml(pipelineDocument(migrated.pipeline)),
     "utf8",
   );
 
-  for (const stage of draft.stages ?? []) {
+  for (const stage of migrated.stages ?? []) {
     const rel = normalizeStageRelPath(stage.path);
     const stagePath = path.join(dir, rel);
     await mkdir(path.dirname(stagePath), { recursive: true });
@@ -380,8 +426,8 @@ function resolveDraftWriteTarget(
     rawDraft,
     input.pipelineFilename?.trim(),
   );
-  const draft = normalized.draft;
-  const pipelineFilename = normalized.pipelineFilename;
+  const draft = hoistUsesWrapperSkills(normalized.draft);
+  const pipelineFilename = normalized.pipelineFilename
   const pipelineAbsPath = path.join(packageDirectory, path.basename(pipelineFilename));
   const pipelineRelPath = path
     .relative(projectRoot, pipelineAbsPath)
@@ -1018,9 +1064,11 @@ export async function loadDraftPackage(
     attachedTaskPath = loaded.taskPath;
   }
 
+  const migrated = hoistUsesWrapperSkills(draft);
+
   return {
     ok: true,
-    draft,
+    draft: migrated,
     destination: { directory, pipelineFilename },
     pipelinePath,
     ...(attachedTaskPath !== undefined ? { taskPath: attachedTaskPath } : {}),
