@@ -1,4 +1,5 @@
 id: oss-explain-fix
+skill: ce-explain
 system_prompt: |
   Compose fix-explainer.html teaching the operator how the verified working-tree
   change fixes the issue, grounded in real quoted diff lines. This stage is a
