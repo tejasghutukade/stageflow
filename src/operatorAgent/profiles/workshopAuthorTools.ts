@@ -822,9 +822,10 @@ export function createSaveTool(
       }
       const { fsRoot, catalogRootKind, wireProjectRoot } = writeTarget.target;
 
-      const pinnedDestination = stringArg(args, "directory")
-        ? null
-        : resolvePinnedSaveDestination(ctx.getContext(), fsRoot);
+      const pinnedDestination = resolvePinnedSaveDestination(
+        ctx.getContext(),
+        fsRoot,
+      );
       const destination =
         pinnedDestination ?? resolveDestination(ctx, args, catalogRootKind);
       if (!destination) {

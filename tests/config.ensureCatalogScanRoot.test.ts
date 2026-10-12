@@ -266,6 +266,7 @@ describe("draft HTTP catalog scan", () => {
       expect(res.status).toBe(200);
       expect(body.catalogChanged).toBeUndefined();
       expect(Object.keys(body).sort()).toEqual([
+        "catalog_root_path",
         "pipeline",
         "pipelinePath",
         "project_root",
@@ -273,6 +274,7 @@ describe("draft HTTP catalog scan", () => {
         "root_kind",
         "stagePaths",
       ]);
+      expect(realpathSync(String(body.catalog_root_path))).toBe(realpathSync(root));
       expect(realpathSync(String(body.project_root))).toBe(realpathSync(root));
       expect(body.root_kind).toBe("registered");
       expect(body.read_only).toBe(false);
