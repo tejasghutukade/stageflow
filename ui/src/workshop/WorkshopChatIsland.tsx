@@ -289,7 +289,7 @@ function WorkshopAstryxColumn({
 
 /**
  * Stageflow-owned runtime + Astryx chat column (inline, not `.aui-root` modal).
- * Remount via parent `key={`${sessionId}:${threadEpoch}`}`.
+ * Remount via parent `key={workshopChatThreadRemountKey(threadEpoch)}` (epoch only).
  */
 export function WorkshopChatIsland({
   seedMessages,

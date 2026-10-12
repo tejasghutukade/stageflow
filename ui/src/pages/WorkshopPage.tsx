@@ -106,6 +106,7 @@ import { WorkshopChangeCard } from "../redesign/workshop/WorkshopChangeCard";
 import { WorkshopRedesignView } from "../redesign/workshop/WorkshopRedesignView";
 import { addStage, deleteStage, renameStage } from "../redesign/workshop/stageMutators";
 import { workshopAutosaveKey } from "../redesign/workshop/workshopAutosaveKey";
+import { workshopChatThreadRemountKey } from "../redesign/workshop/workshopChatThreadRemountKey";
 import {
   AUTOSAVE_DEBOUNCE_MS,
   CREATE_TASK_PREFILL,
@@ -2469,7 +2470,7 @@ export function WorkshopPage({
         adapter={chatAdapter}
         toolActivity={toolActivity}
         onStop={() => stopChatRef.current?.()}
-        threadKey={`${sessionId ?? "draft"}:${threadEpoch}`}
+        threadKey={workshopChatThreadRemountKey(threadEpoch)}
         ready
         bootError={bootError}
         sessionTitle={sessionTitle}
@@ -2787,7 +2788,7 @@ export function WorkshopPage({
           <div className="workshop-lab__chat-body">
             <WorkshopMutationContext.Provider value={mutationApi}>
               <WorkshopChatIsland
-                key={`${sessionId ?? "draft"}:${threadEpoch}`}
+                key={workshopChatThreadRemountKey(threadEpoch)}
                 seedMessages={seedMessages}
                 adapter={chatAdapter}
                 greeting={GREETING}
