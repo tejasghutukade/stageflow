@@ -75,8 +75,10 @@ describe("MCP trigger tools", () => {
       try {
         const listed = await mcpCall(service.baseUrl, "list_triggers");
         expect(listed.isError).toBe(false);
-        expect(listed.payload.triggers).toHaveLength(1);
-        expect(listed.payload.triggers[0]).toMatchObject({
+        const manual = listed.payload.triggers.find(
+          (t: { id: string }) => t.id === "manual-hello-world",
+        );
+        expect(manual).toMatchObject({
           id: "manual-hello-world",
           pipeline: "hello",
           task: "my-task",

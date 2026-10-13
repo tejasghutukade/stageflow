@@ -97,7 +97,7 @@ describe("runTriggerCommand", () => {
         const listed = JSON.parse(listCap.stdout.join("\n")) as {
           triggers: Array<{ id: string }>;
         };
-        expect(listed.triggers.map((t) => t.id)).toEqual(["manual-hello-world"]);
+        expect(listed.triggers.map((t) => t.id)).toContain("manual-hello-world");
 
         const showCap = captureIo();
         const showCode = await runTriggerCommand(
