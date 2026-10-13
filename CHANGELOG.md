@@ -7,23 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-13
+
 ### Added
 
-- **Wonder-layout operator console (opt-in redesign).** Inbox, pipelines list, pipeline editor (live DAG, inspector, YAML, Problems, session history), catalog, tasks, triggers, Workshop, and run detail (timeline / graph / list) follow the Wonder layout when Settings → UI redesign is on.
+- **Operator console.** Inbox, pipelines list, pipeline editor (live DAG, inspector, YAML, Problems, session history), catalog, tasks, triggers, Workshop, and run detail (timeline / graph / list) are the console. There is no second UI and no theme picker; the console is dark.
 - **Workspace catalog as the default write root.** Omitted `project_root` resolves to a Host-provisioned writable workspace under `$STAGEFLOW_HOME`, so Workshop and catalog saves work without a git checkout or multi-root picker.
 - **Catalog paste-install for skills.** Install a skill tree into the workspace `.pi/skills` root from the Catalog UI (`npx skills add` wrapper), without requiring a project_root when the Host has multiple roots.
 - **Stage-file editor from Catalog.** Edit a single external stage file in the full pipeline editor chrome (graph + inspector + YAML).
+- **Triggers readiness catalog.** `examples/triggers-readiness/` ships one trigger per kind (manual, schedule, GitHub pull request, webhook, email, dynamic manual) and is registered in the local Docker image.
 
 ### Changed
 
 - **Breaking: stage `skill:` is body-only.** `skill:` on a pipeline `uses:` wrapper is rejected (`pipeline.stage_wrapper_skill_rejected`). Put `skill:` on the external stage file or inline stage body. The console inspector and draft overwrite strip wrapper `skill`. In-repo examples (`archify-on-pr`, `oss-issue-contribution`) were migrated. See [Skill binding](docs/yaml-catalog.md#skill-binding).
 - **Credential root separate from run data.** Stage workers and Workshop resolve provider auth from `STAGEFLOW_CREDENTIAL_HOME` (default `~/.stageflow`); run SQLite stays under `$STAGEFLOW_HOME`. Cursor models use the credential-root key; other models still require a usable `auth.json` there and fail closed.
-- **Docker console image no longer bakes `examples/`.** Local Compose expects a mounted or workspace catalog; the image starts empty of first-party example YAML.
+- **Docker console image.** The image does not bake the full `examples/` tree. Compose registers `/opt/stageflow/catalog/triggers-readiness` so the readiness triggers are listed on a local Host.
 
 ### Fixed
 
 - Workshop saves use `.pipeline.yaml` / `.task.yaml`, re-pin build ties to the catalog save root, and stop claiming paths under a stale image-root examples tree.
 - `createStage` persists `skill` on the stage file; draft load/overwrite hoists legacy wrapper `skill` onto the stage body so save cannot drop the binding.
+- Workshop mutation cards survive a reload because the transcript stores the draft, not only the summary.
+- Run detail header and the stage inspector share one rule for showing Retry, Resume, and Abandon.
 
 ## [0.34.0] - 2026-10-07
 

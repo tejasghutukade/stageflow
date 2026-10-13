@@ -209,24 +209,41 @@ export function fetchEmailTrigger(id: string): Promise<EmailTriggerRule> {
   return api(`/api/email/triggers/${encodeURIComponent(id)}`);
 }
 
-export function fetchTrigger(id: string): Promise<TriggerListItem> {
-  return api(`/api/triggers/${encodeURIComponent(id)}`);
+function triggerRootQuery(projectRoot?: string): string {
+  if (!projectRoot) return "";
+  return `?${new URLSearchParams({ project_root: projectRoot })}`;
+}
+
+export function fetchTrigger(
+  id: string,
+  projectRoot?: string,
+): Promise<TriggerListItem> {
+  return api(
+    `/api/triggers/${encodeURIComponent(id)}${triggerRootQuery(projectRoot)}`,
+  );
 }
 
 export function fetchTriggerFires(
   id: string,
+  projectRoot?: string,
 ): Promise<{ fires: TriggerFireRecord[] }> {
-  return api(`/api/triggers/${encodeURIComponent(id)}/fires`);
+  return api(
+    `/api/triggers/${encodeURIComponent(id)}/fires${triggerRootQuery(projectRoot)}`,
+  );
 }
 
 export function patchTrigger(
   id: string,
   body: { enabled: boolean },
+  projectRoot?: string,
 ): Promise<TriggerListItem> {
-  return api(`/api/triggers/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
+  return api(
+    `/api/triggers/${encodeURIComponent(id)}${triggerRootQuery(projectRoot)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 export function updateTrigger(
@@ -243,24 +260,32 @@ export function updateTrigger(
     } | null;
     enabled: boolean;
   },
+  projectRoot?: string,
 ): Promise<TriggerListItem> {
-  return api(`/api/triggers/${encodeURIComponent(id)}`, {
-    method: "PUT",
-    body: JSON.stringify(body),
-  });
+  return api(
+    `/api/triggers/${encodeURIComponent(id)}${triggerRootQuery(projectRoot)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 export function fireTrigger(
   id: string,
+  projectRoot?: string,
 ): Promise<{
   runId: string;
   queued?: boolean;
   queuePosition?: number;
   queuedCode?: string;
 }> {
-  return api(`/api/triggers/${encodeURIComponent(id)}/fire`, {
-    method: "POST",
-  });
+  return api(
+    `/api/triggers/${encodeURIComponent(id)}/fire${triggerRootQuery(projectRoot)}`,
+    {
+      method: "POST",
+    },
+  );
 }
 
 export async function createTriggerWithDetails(

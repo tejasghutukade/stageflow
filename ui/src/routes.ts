@@ -18,7 +18,7 @@ export type Route =
   | { name: "task"; taskId: string }
   | { name: "triggers" }
   | { name: "connections" }
-  | { name: "trigger"; triggerId: string }
+  | { name: "trigger"; triggerId: string; projectRoot?: string }
   | { name: "skills" }
   | { name: "skill"; skillName: string }
   | {
@@ -91,8 +91,10 @@ export function taskPath(taskId: string): string {
   return `/tasks/${encodeURIComponent(taskId)}`;
 }
 
-export function triggerPath(triggerId: string): string {
-  return `/triggers/${encodeURIComponent(triggerId)}`;
+export function triggerPath(triggerId: string, projectRoot?: string): string {
+  const base = `/triggers/${encodeURIComponent(triggerId)}`;
+  if (!projectRoot) return base;
+  return `${base}?${new URLSearchParams({ project_root: projectRoot })}`;
 }
 
 export function skillPath(name: string): string {
@@ -226,7 +228,14 @@ export function parseHash(hash = window.location.hash): Route {
   if (path === "connections") return { name: "connections" };
   if (path.startsWith("triggers/")) {
     const triggerId = firstSegment(path.slice("triggers/".length));
-    if (triggerId) return { name: "trigger", triggerId };
+    if (triggerId) {
+      const projectRoot = params.get("project_root") ?? undefined;
+      return {
+        name: "trigger",
+        triggerId,
+        ...(projectRoot ? { projectRoot } : {}),
+      };
+    }
   }
   if (path === "catalog") {
     const tabRaw = params.get("tab");
@@ -296,7 +305,7 @@ export function parseHash(hash = window.location.hash): Route {
   if (path.startsWith("runs/")) {
     const parts = path.slice("runs/".length).split("/");
     const runId = decodeURIComponent(parts[0] ?? "");
-    if (!runId) return { name: "today" };
+    if (!runId) return { name: "inbox" };
     if (
       parts[1] === "stages" &&
       parts[3] === "envelope" &&
@@ -337,5 +346,5 @@ export function parseHash(hash = window.location.hash): Route {
     }
     return { name: "detail", runId, view: { kind: "stream" } };
   }
-  return { name: "today" };
+  return { name: "inbox" };
 }

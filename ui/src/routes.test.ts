@@ -164,16 +164,16 @@ describe("parseHash", () => {
     expect(parseHash("#/today")).toEqual({ name: "inbox" });
   });
 
-  it("falls aui sample hash through to today", () => {
-    expect(parseHash("#/aui")).toEqual({ name: "today" });
+  it("falls aui sample hash through to inbox", () => {
+    expect(parseHash("#/aui")).toEqual({ name: "inbox" });
   });
 
-  it("falls astryx sample hash through to today", () => {
-    expect(parseHash("#/astryx")).toEqual({ name: "today" });
+  it("falls astryx sample hash through to inbox", () => {
+    expect(parseHash("#/astryx")).toEqual({ name: "inbox" });
   });
 
-  it("falls unknown hashes through to today", () => {
-    expect(parseHash("#/not-a-real-route")).toEqual({ name: "today" });
+  it("falls unknown hashes through to inbox", () => {
+    expect(parseHash("#/not-a-real-route")).toEqual({ name: "inbox" });
   });
 
   it("parses New Run query params used by the Workshop Run shortcut", () => {

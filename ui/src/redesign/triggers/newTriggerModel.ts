@@ -46,6 +46,7 @@ export type NewTriggerInitial = {
   };
   directory?: string;
   path?: string;
+  project_root?: string;
 };
 
 export type NewTriggerForm = {
@@ -305,11 +306,13 @@ export function directoryForPipeline(
 export function buildCreateTriggerBody(
   form: NewTriggerForm,
   directory: string,
+  projectRoot?: string,
 ): CreateTriggerInput {
   return {
     directory,
     id: form.id.trim(),
     pipeline: form.pipeline,
+    ...(projectRoot ? { project_root: projectRoot } : {}),
     ...(form.taskMode === "catalog" ? { task: form.task } : {}),
     kind: form.kind,
     ...(form.kind === "schedule" ? { schedule: buildSchedule(form) } : {}),

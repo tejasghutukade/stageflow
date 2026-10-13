@@ -22,24 +22,22 @@ On start, Stageflow prints the console URL and MCP endpoint, then opens your def
 
 ## Navigation (app rail)
 
-Left rail items (`ui/src/components/AppRail.tsx`):
+Left rail items (`ui/src/redesign/shell/navConfig.ts`):
 
 | Rail id | Route | Purpose |
 |---------|-------|---------|
-| **Today** | `#/today` | Triage home — waiting, in flight, broken, finished. Eligible waiting cards can Accept from Today. |
-| **Runs** | `#/runs` | All runs, filterable All / Waiting / Running / Failed / Finished |
-| **Workshop** | `#/workshop` | Author pipelines interactively with the Workshop Author agent (Operator Agent Host) |
-| **Pipelines** | `#/pipelines` | Browse manifest-declared pipeline files; scaffold a new pipeline or stage into the catalog |
-| **Tasks** | `#/tasks` | Browse manifest-declared task files |
-| **Skills** | `#/skills` | Browse Pi skills for stages — not the [harness skills suite](skills-suite.md) |
-| **Extensions** | `#/extensions` | Browse Pi extensions for stages |
-| **Settings** | `#/settings` | Appearance, Providers, MCP how-to, Concurrency (session slots), waiting notifications, Workshop model default |
+| **Inbox** | `#/inbox` | Triage home — waiting, in flight, failed, done |
+| **Runs** | `#/runs` | All runs |
+| **Pipelines** | `#/pipelines` | Browse pipeline files; open one in the editor |
+| **Workshop** | `#/workshop` | Author pipelines with the Workshop Author agent |
+| **Tasks** | `#/tasks` | Browse task files |
+| **Catalog** | `#/catalog` | Stages and skills. `#/skills` redirects here |
+| **Triggers** | `#/triggers` | Catalog triggers |
+| **Settings** | `#/settings` | General, Providers, MCP, Concurrency, Project MCP, Notifications |
 
-**Start a run** — primary button in the rail → `#/new` (optional `?pipeline=` and `?task=` query params with filesystem paths).
+**Start a run** — `#/new` opens the Start Run dialog (optional `?pipeline=` and `?task=` query params).
 
-Brand click returns to Today.
-
-Waiting runs show a count badge on Today when gates need replies.
+Waiting runs show a count badge on Inbox.
 
 Runs and Pipelines list rows stack identity above a full-width mini track so catalog paths stay readable.
 
@@ -75,7 +73,7 @@ Hash-based routing (`ui/src/routes.ts`):
 
 | Path | View |
 |------|------|
-| `#/today` | Triage dashboard (waiting / in flight / broken / finished) |
+| `#/inbox` | Triage home (waiting / in flight / failed / done). `#/today` opens Inbox |
 | `#/runs` | Runs index (All / Waiting / Running / Failed / Finished) |
 | `#/runs/<runId>` | Run detail — spatial stage map; select a node for the workspace |
 | `#/runs/<runId>/stages/<stageId>` | Deep link — select that stage on the map and open its workspace |
@@ -90,7 +88,7 @@ Hash-based routing (`ui/src/routes.ts`):
 | `#/extensions` | Extensions index |
 | `#/extensions/packages/<scope>/<source>` | Extension package detail |
 | `#/extensions/files/<path>` | Extension file viewer |
-| `#/settings` | Settings (Appearance, Providers, MCP, Concurrency, waiting notifications, Workshop model) |
+| `#/settings` | Settings (General, Providers, MCP, Concurrency, Project MCP, Notifications) |
 | `#/workshop` | Workshop Author — draft + chat via Operator Agent Host |
 | `#/connect` | Provider connect flow |
 
@@ -128,9 +126,7 @@ The rail footer can show active run count vs soft max (`get_health` semantics) �
 
 ## Settings
 
-**Appearance** — theme for this machine.
-
-**Providers** — connect, disconnect, and inspect Pi model providers (`pi_home` vs `sf_owned`). See [Providers](providers.md).
+**Providers** — connect, disconnect, and inspect Pi model providers (`pi_home` vs `sf_owned`). See [Providers](providers.md). The console is dark; there is no theme picker.
 
 **MCP** — how to point a client at this console process (`/mcp` while `sf ui` is running).
 

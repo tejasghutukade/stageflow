@@ -336,7 +336,11 @@ export function NewTriggerModal({
     setSubmitting(true);
     if (isEdit) {
       try {
-        const trigger = await updateTrigger(initial?.id ?? form.id, buildUpdateTriggerBody(form));
+        const trigger = await updateTrigger(
+          initial?.id ?? form.id,
+          buildUpdateTriggerBody(form),
+          initial?.project_root,
+        );
         setSubmitting(false);
         onCreated(trigger);
         onClose();
@@ -346,8 +350,11 @@ export function NewTriggerModal({
       }
       return;
     }
+    const pipeline = (pipelines ?? []).find((item) => item.id === form.pipeline);
     const directory = directoryForPipeline(pipelines ?? [], form.pipeline);
-    const result = await createTriggerWithDetails(buildCreateTriggerBody(form, directory));
+    const result = await createTriggerWithDetails(
+      buildCreateTriggerBody(form, directory, pipeline?.project_root),
+    );
     setSubmitting(false);
     if (result.ok) {
       onCreated(result.trigger);

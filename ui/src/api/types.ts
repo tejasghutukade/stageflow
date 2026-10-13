@@ -1188,6 +1188,7 @@ export type TriggerAdapterStatus = {
 
 export type TriggerListItem = {
   id: string;
+  project_root?: string;
   pipeline: string;
   task?: string;
   kind: "manual" | "schedule" | "event";
@@ -1221,6 +1222,7 @@ export type CreateTriggerInput = {
   schedule?: TriggerSchedule;
   event?: TriggerEvent;
   enabled?: boolean;
+  project_root?: string;
 };
 
 export type CreateTriggerResult =

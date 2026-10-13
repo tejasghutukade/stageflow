@@ -108,14 +108,24 @@ function FilterChip({
   );
 }
 
-export function TriggersRedesign({ triggerId }: { triggerId?: string }) {
+function triggerKey(trigger: { id: string; project_root?: string }): string {
+  return `${trigger.project_root ?? ""}\0${trigger.id}`;
+}
+
+export function TriggersRedesign({
+  triggerId,
+  projectRoot,
+}: {
+  triggerId?: string;
+  projectRoot?: string;
+}) {
   const { snapshot } = useRunCatalog();
   const [triggers, setTriggers] = useState<TriggerListItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TriggerFilterTab>("all");
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(triggerId ?? null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(null);
   const [stageCounts, setStageCounts] = useState<Map<string, number>>(new Map());
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -159,8 +169,14 @@ export function TriggersRedesign({ triggerId }: { triggerId?: string }) {
   }, []);
 
   useEffect(() => {
-    if (triggerId) setSelectedId(triggerId);
-  }, [triggerId]);
+    if (!triggerId) return;
+    const match = triggers.find(
+      (trigger) =>
+        trigger.id === triggerId &&
+        (projectRoot === undefined || trigger.project_root === projectRoot),
+    );
+    if (match) setSelectedKey(triggerKey(match));
+  }, [triggerId, projectRoot, triggers]);
 
   const groups = useMemo(() => {
     const byTab = filterTriggersByTab(triggers, tab).filter((t) =>
@@ -174,13 +190,13 @@ export function TriggersRedesign({ triggerId }: { triggerId?: string }) {
   useEffect(() => {
     if (loading) return;
     if (ordered.length === 0) {
-      setSelectedId(null);
+      setSelectedKey(null);
       return;
     }
-    if (!selectedId || !ordered.some((t) => t.id === selectedId)) {
-      setSelectedId(ordered[0]!.id);
+    if (!selectedKey || !ordered.some((t) => triggerKey(t) === selectedKey)) {
+      setSelectedKey(triggerKey(ordered[0]!));
     }
-  }, [ordered, selectedId, loading]);
+  }, [ordered, selectedKey, loading]);
 
   const runsById = useMemo(() => {
     const map = new Map<string, RunSummary>();
@@ -188,14 +204,14 @@ export function TriggersRedesign({ triggerId }: { triggerId?: string }) {
     return map;
   }, [snapshot.runs]);
 
-  const selected = ordered.find((t) => t.id === selectedId) ?? null;
+  const selected = ordered.find((t) => triggerKey(t) === selectedKey) ?? null;
   const selectedIndex = selected ? ordered.indexOf(selected) : -1;
   const folder = triggerFolderLabel(triggers);
   const hostReady = !loading && !error;
 
-  function selectTrigger(id: string) {
-    setSelectedId(id);
-    navigate(triggerPath(id));
+  function selectTrigger(trigger: TriggerListItem) {
+    setSelectedKey(triggerKey(trigger));
+    navigate(triggerPath(trigger.id, trigger.project_root));
   }
 
   async function onSaved(trigger: TriggerListItem) {
@@ -203,15 +219,21 @@ export function TriggersRedesign({ triggerId }: { triggerId?: string }) {
     setModal(null);
     await load();
     showToast(`${edited ? "Trigger updated" : "Trigger created"} · ${trigger.id}`);
-    selectTrigger(trigger.id);
+    selectTrigger(trigger);
   }
 
   async function toggleTrigger(trigger: TriggerListItem) {
     if (togglingId) return;
-    setTogglingId(trigger.id);
+    setTogglingId(triggerKey(trigger));
     try {
-      const updated = await patchTrigger(trigger.id, { enabled: !trigger.enabled });
-      setTriggers((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      const updated = await patchTrigger(
+        trigger.id,
+        { enabled: !trigger.enabled },
+        trigger.project_root,
+      );
+      setTriggers((prev) =>
+        prev.map((t) => (triggerKey(t) === triggerKey(updated) ? updated : t)),
+      );
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err));
     } finally {
@@ -221,9 +243,9 @@ export function TriggersRedesign({ triggerId }: { triggerId?: string }) {
 
   async function fireOne(trigger: TriggerListItem) {
     if (firingId || !triggerFireState(trigger).enabled) return;
-    setFiringId(trigger.id);
+    setFiringId(triggerKey(trigger));
     try {
-      const result = await fireTrigger(trigger.id);
+      const result = await fireTrigger(trigger.id, trigger.project_root);
       showToast(
         result.queued
           ? `Trigger queued · ${trigger.id}`
@@ -276,7 +298,7 @@ export function TriggersRedesign({ triggerId }: { triggerId?: string }) {
             selectedIndex < 0 ? 0 : selectedIndex + 1,
             ordered.length - 1,
           );
-          selectTrigger(ordered[next]!.id);
+          selectTrigger(ordered[next]!);
         },
       },
       {
@@ -285,7 +307,7 @@ export function TriggersRedesign({ triggerId }: { triggerId?: string }) {
         handler: () => {
           if (ordered.length === 0) return;
           const next = Math.max(selectedIndex <= 0 ? 0 : selectedIndex - 1, 0);
-          selectTrigger(ordered[next]!.id);
+          selectTrigger(ordered[next]!);
         },
       },
       {
@@ -489,16 +511,16 @@ export function TriggersRedesign({ triggerId }: { triggerId?: string }) {
                     </div>
                     {group.items.map((trigger) => (
                       <TriggerListRow
-                        key={trigger.id}
+                        key={triggerKey(trigger)}
                         trigger={trigger}
-                        selected={selectedId === trigger.id}
+                        selected={selectedKey === triggerKey(trigger)}
                         lastRun={
                           trigger.last_run_id ? runsById.get(trigger.last_run_id) : undefined
                         }
                         now={now}
-                        toggling={togglingId === trigger.id}
-                        firing={firingId === trigger.id}
-                        onSelect={() => selectTrigger(trigger.id)}
+                        toggling={togglingId === triggerKey(trigger)}
+                        firing={firingId === triggerKey(trigger)}
+                        onSelect={() => selectTrigger(trigger)}
                         onToggle={() => void toggleTrigger(trigger)}
                         onFire={() => void fireOne(trigger)}
                       />

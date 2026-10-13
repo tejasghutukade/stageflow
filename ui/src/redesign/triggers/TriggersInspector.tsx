@@ -91,7 +91,7 @@ export function TriggersInspector({
   useEffect(() => {
     let cancelled = false;
     setFires({ status: "loading" });
-    fetchTriggerFires(trigger.id).then(
+    fetchTriggerFires(trigger.id, trigger.project_root).then(
       (result) => {
         if (cancelled) return;
         setFires({
@@ -106,7 +106,7 @@ export function TriggersInspector({
     return () => {
       cancelled = true;
     };
-  }, [trigger.id, trigger.last_fired_at]);
+  }, [trigger.id, trigger.project_root, trigger.last_fired_at]);
 
   const runsById = useMemo(() => {
     const map = new Map<string, RunSummary>();

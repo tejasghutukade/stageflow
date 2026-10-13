@@ -49,12 +49,14 @@ export function triggerTaskSummary(task?: string): string {
 
 export function TriggersPage({
   triggerId,
+  projectRoot,
 }: {
   triggerId?: string;
+  projectRoot?: string;
 }) {
   const redesignOn = useRedesign();
   if (redesignOn) {
-    return <TriggersRedesign triggerId={triggerId} />;
+    return <TriggersRedesign triggerId={triggerId} projectRoot={projectRoot} />;
   }
   return <TriggersPageLegacy triggerId={triggerId} />;
 }

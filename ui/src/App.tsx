@@ -13,7 +13,6 @@ import { AppRail as LegacyAppRail } from "./components/AppRail";
 import { RunsPage } from "./pages/RunsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { NewRunPage } from "./pages/NewRunPage";
-import { TodayPage } from "./pages/TodayPage";
 import { InboxPage } from "./pages/InboxPage";
 import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
@@ -52,7 +51,7 @@ import {
 function railActiveId(route: Route, redesignOn: boolean): string {
   if (route.name === "connect") return "settings";
   if (route.name === "detail") return "runs";
-  if (route.name === "new") return "today";
+  if (route.name === "new") return "inbox";
   if (route.name === "pipeline") return "pipelines";
   if (route.name === "task") return "tasks";
   if (route.name === "trigger") return "triggers";
@@ -217,7 +216,12 @@ function ConsoleRoot() {
   } else if (route.name === "connections") {
     content = <ConnectionsPage />;
   } else if (route.name === "trigger") {
-    content = <TriggersPage triggerId={route.triggerId} />;
+    content = (
+      <TriggersPage
+        triggerId={route.triggerId}
+        projectRoot={route.projectRoot}
+      />
+    );
   } else if (route.name === "catalog") {
     content = (
       <CatalogPage tab={route.tab} skillName={route.skillName} />
@@ -281,11 +285,10 @@ function ConsoleRoot() {
     );
   } else {
     content = (
-      <TodayPage
+      <InboxPage
         onOpen={(id) => go(runStreamPath(id))}
-        onOpenArtifact={(id, path) => go(runArtifactPath(id, path))}
         onNew={() => go("/new")}
-        onSeeRuns={() => go("/runs")}
+        onOpenRuns={() => go("/runs")}
       />
     );
   }
