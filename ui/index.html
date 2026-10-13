@@ -5,11 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script>
       try {
-        var t = localStorage.getItem("sf-theme");
-        if (t && t !== "system") document.documentElement.setAttribute("data-theme", t);
-        if (localStorage.getItem("sf-ui-redesign") === "on") {
-          document.documentElement.setAttribute("data-redesign", "on");
-        }
+        document.documentElement.setAttribute("data-theme", "dark");
+        document.documentElement.setAttribute("data-redesign", "on");
       } catch (e) {}
     </script>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

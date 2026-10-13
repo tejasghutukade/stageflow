@@ -159,6 +159,11 @@ describe("parseHash", () => {
     });
   });
 
+  it("opens inbox for an empty hash and for #/today", () => {
+    expect(parseHash("")).toEqual({ name: "inbox" });
+    expect(parseHash("#/today")).toEqual({ name: "inbox" });
+  });
+
   it("falls aui sample hash through to today", () => {
     expect(parseHash("#/aui")).toEqual({ name: "today" });
   });

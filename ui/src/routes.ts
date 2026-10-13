@@ -186,7 +186,7 @@ function firstSegment(rest: string): string {
 
 export function parseHash(hash = window.location.hash): Route {
   const { path, params } = splitHash(hash);
-  if (!path || path === "today") return { name: "today" };
+  if (!path || path === "today") return { name: "inbox" };
   if (path === "inbox") {
     const tabRaw = params.get("tab");
     const tab: InboxTabId | undefined =

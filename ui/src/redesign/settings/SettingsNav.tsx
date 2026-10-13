@@ -2,7 +2,6 @@ import {
   LuBell,
   LuBraces,
   LuGauge,
-  LuPalette,
   LuPlug,
   LuServer,
   LuSlidersHorizontal,
@@ -15,8 +14,7 @@ export type SettingsSection =
   | "concurrency"
   | "mcp"
   | "project-mcp"
-  | "notifications"
-  | "appearance";
+  | "notifications";
 
 export const SETTINGS_SECTIONS: {
   id: SettingsSection;
@@ -29,7 +27,6 @@ export const SETTINGS_SECTIONS: {
   { id: "mcp", label: "MCP server", icon: LuServer },
   { id: "project-mcp", label: "Project MCP", icon: LuBraces },
   { id: "notifications", label: "Notifications", icon: LuBell },
-  { id: "appearance", label: "Appearance", icon: LuPalette },
 ];
 
 export function sectionLabel(section: SettingsSection): string {
@@ -109,8 +106,7 @@ export function parseSettingsSection(hash = window.location.hash): SettingsSecti
     raw === "concurrency" ||
     raw === "mcp" ||
     raw === "project-mcp" ||
-    raw === "notifications" ||
-    raw === "appearance"
+    raw === "notifications"
   ) {
     return raw;
   }

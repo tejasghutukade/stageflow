@@ -3,9 +3,7 @@ import type { CapacityHealth } from "../../api";
 import { getControlToken, setControlToken } from "../../api/controlToken";
 import type { CatalogSnapshot } from "../../catalog/source";
 import { heldWaitingCount } from "../../catalog/views";
-import { SettingsAppearance } from "../../components/SettingsAppearance";
 import { cursorMcpConfigJson, mcpEndpointUrl } from "../../mcpConnect";
-import type { ThemeMode } from "../../themePreference";
 import type { NotifyPreference } from "../../useWaitingNotifications";
 import { computeConcurrencySlots } from "./settingsConcurrency";
 import {
@@ -380,33 +378,6 @@ export function SettingsMcpPanel() {
             on boot.
           </p>
         ) : null}
-    </div>
-  );
-}
-
-export function SettingsAppearancePanel({
-  themeMode,
-  onThemeChange,
-  redesignOn,
-  onRedesignChange,
-}: {
-  themeMode: ThemeMode;
-  onThemeChange: (mode: ThemeMode) => void;
-  redesignOn: boolean;
-  onRedesignChange: (on: boolean) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-2.5">
-      <SettingsEyebrow>Appearance</SettingsEyebrow>
-      <div className="flex flex-col gap-4 overflow-clip rounded-xl border border-[#ffffff12] bg-[var(--sf-panel)] p-4">
-        <SettingsAppearance
-          variant="redesign"
-          value={themeMode}
-          onChange={onThemeChange}
-          redesignOn={redesignOn}
-          onRedesignChange={onRedesignChange}
-        />
-      </div>
     </div>
   );
 }

@@ -32,7 +32,6 @@ export type { MiniTrackProps, MiniStage } from "./MiniTrack";
 export {
   applyRedesignAttribute,
   Keycap,
-  readRedesignPreference,
   StatusPill,
   runStatusPillLabel,
   signalIcon,
@@ -43,7 +42,6 @@ export {
   statusSignalFromRunStatus,
   statusSignalFromStageStatus,
   useRedesign,
-  writeRedesignPreference,
 } from "../redesign";
 export type {
   KeycapProps,
@@ -77,9 +75,6 @@ export type { NewPipelinePanelProps } from "./NewPipelinePanel";
 
 export { NewStagePanel } from "./NewStagePanel";
 export type { NewStagePanelProps } from "./NewStagePanel";
-
-export { SettingsAppearance } from "./SettingsAppearance";
-export type { SettingsAppearanceProps } from "./SettingsAppearance";
 
 export { SettingsProviders } from "./SettingsProviders";
 

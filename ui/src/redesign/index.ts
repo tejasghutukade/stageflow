@@ -1,10 +1,4 @@
-export {
-  applyRedesignAttribute,
-  readRedesignPreference,
-  REDESIGN_STORAGE_EVENT,
-  useRedesign,
-  writeRedesignPreference,
-} from "./flag";
+export { applyRedesignAttribute, useRedesign } from "./flag";
 export { Keycap } from "./Keycap";
 export type { KeycapProps } from "./Keycap";
 export { StatusPill } from "./StatusPill";

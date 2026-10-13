@@ -36,19 +36,13 @@ import {
   catalogPath,
   type Route,
 } from "./routes";
-import {
-  applyRedesignAttribute,
-  readRedesignPreference,
-  useRedesign,
-  writeRedesignPreference,
-} from "./redesign/flag";
+import { applyRedesignAttribute, useRedesign } from "./redesign/flag";
 import { StageEditorPage } from "./redesign/editor/StageEditorPage";
 import { AppShell as RedesignAppShell } from "./redesign/shell/AppShell";
 import { AppRail as RedesignAppRail } from "./redesign/shell/AppRail";
 import { ConsoleOverlays } from "./redesign/ConsoleOverlays";
 import { ControlTokenGate } from "./redesign/ControlTokenGate";
 import { workspaceLabelFromSnapshot } from "./redesign/inbox/inboxViews";
-import { readThemePreference, type ThemeMode } from "./themePreference";
 import {
   readNotifyPreference,
   useWaitingNotifications,
@@ -87,8 +81,6 @@ function railActiveId(route: Route, redesignOn: boolean): string {
 function ConsoleRoot() {
   const redesignOn = useRedesign();
   const [route, setRoute] = useState<Route>(() => parseHash());
-  const [themeMode, setThemeMode] = useState<ThemeMode>(readThemePreference);
-  const [redesignPref, setRedesignPref] = useState(readRedesignPreference);
   const [notifyPreference, setNotifyPreference] =
     useState<NotifyPreference>(readNotifyPreference);
   const [authBoot, setAuthBoot] = useState<
@@ -98,14 +90,14 @@ function ConsoleRoot() {
   const paletteOpenRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    applyRedesignAttribute(readRedesignPreference());
+    applyRedesignAttribute();
   }, []);
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash());
     window.addEventListener("hashchange", onHash);
     if (!window.location.hash) {
-      window.location.hash = readRedesignPreference() ? "#/inbox" : "#/today";
+      window.location.hash = "#/inbox";
     }
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -138,12 +130,6 @@ function ConsoleRoot() {
   }, []);
 
   useEffect(() => {
-    if (!redesignOn && route.name === "inbox") {
-      go("/today");
-    }
-  }, [redesignOn, route.name, go]);
-
-  useEffect(() => {
     if (!redesignOn) return;
     if (route.name === "skills") {
       go(catalogPath({ tab: "skills" }));
@@ -165,7 +151,7 @@ function ConsoleRoot() {
     [go],
   );
 
-  const homeAfterConnect = redesignOn ? "/inbox" : "/today";
+  const homeAfterConnect = "/inbox";
 
   let content;
   if (route.name === "inbox") {
@@ -271,13 +257,6 @@ function ConsoleRoot() {
   } else if (route.name === "settings") {
     content = (
       <SettingsPage
-        themeMode={themeMode}
-        onThemeChange={setThemeMode}
-        redesignOn={redesignPref}
-        onRedesignChange={(on) => {
-          writeRedesignPreference(on);
-          setRedesignPref(on);
-        }}
         notifyPreference={notifyPreference}
         onNotifyChange={setNotifyPreference}
       />
@@ -328,7 +307,7 @@ function ConsoleRoot() {
 
   if (redesignOn) {
     return (
-      <Theme theme={neutralTheme} mode={themeMode}>
+      <Theme theme={neutralTheme} mode="dark">
         <RedesignAppShell
           rail={
             <RedesignAppRail
@@ -360,7 +339,7 @@ function ConsoleRoot() {
   }
 
   return (
-    <Theme theme={neutralTheme} mode={themeMode}>
+    <Theme theme={neutralTheme} mode="dark">
       <div className="app">
         <LegacyAppRail
           activeId={railActiveId(route, false)}

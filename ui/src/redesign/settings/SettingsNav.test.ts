@@ -23,9 +23,7 @@ describe("parseSettingsSection", () => {
     expect(parseSettingsSection("#/settings?section=notifications")).toBe(
       "notifications",
     );
-    expect(parseSettingsSection("#/settings?section=appearance")).toBe(
-      "appearance",
-    );
+    expect(parseSettingsSection("#/settings?section=appearance")).toBe("general");
   });
 });
 

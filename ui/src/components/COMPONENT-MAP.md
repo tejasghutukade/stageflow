@@ -9,7 +9,7 @@ Inventory mapping prototype concepts to React modules.
 | TodayTriage | `components/TodayTriage.tsx` | wired | Four zones: waiting / inFlight / broken / finished. Native `.zone` + `.zone__head` (dot + eyebrow + rule + count) ported from prototype CSS (Phase 6). Used by TodayPage. |
 | Placeholder library pages | `pages/PlaceholderPages.tsx` | removed | Settings stub replaced in Phase 5. |
 | Settings page | `pages/SettingsPage.tsx` | wired | Legacy stacked cards when redesign off. Redesign: `redesign/settings/*` — single stacked scroll (General, Providers, Concurrency \| MCP, Project MCP, Notifications, Appearance) with sidebar jump-nav and scroll spy. |
-| SettingsAppearance | `components/SettingsAppearance.tsx` | wired | Theme picker (System / Light / Dark) via `.theme-picks` / `.theme-pick` swatch cards ported from prototype CSS (Phase 6). |
+| SettingsAppearance | — | removed | The console is dark only. Settings no longer has an Appearance section. |
 | SettingsProviders | `components/SettingsProviders.tsx` | wired | Live Pi provider list, API-key + OAuth connect/disconnect, credential source (`pi_home` \| `sf_owned`). OAuth uses `ProviderOAuthSession` AuthInteraction bridge. |
 | ProviderOAuthSession | `components/ProviderOAuthSession.tsx` | wired | Interactive OAuth login session: auth_url / device_code / prompts, paste fallback, cancel. Used by Settings + first-run. |
 | SettingsMcp | `components/SettingsMcp.tsx` | wired | Operator-host Streamable HTTP MCP how-to: endpoint URL, Cursor `.cursor/mcp.json` snippet, tools, HITL submit via `answer_gate` and `decide_feedback_loop`. Distinct from SettingsProjectMcp. |
@@ -48,7 +48,7 @@ Inventory mapping prototype concepts to React modules.
 | SkillList | `pages/SkillsPage.tsx` | wired | Pi skill catalog table + detail at `#/skills/:name`. One-shot `GET /api/skills`; stages stay sealed. |
 | ExtensionList | `pages/ExtensionsPage.tsx` | wired | Pi package + extension-file catalog at `#/extensions`. Package detail `#/extensions/packages/:scope/:source`; file detail `#/extensions/files/:path`. One-shot `GET /api/extensions`; stages stay sealed. |
 | Mini-track | `components/MiniTrack.tsx` | wired | Default: `.mini` ring nodes on Runs and Pipelines. When `useRedesign()` (or `variant="bar"`): `sf-track` bar segments via `statusSignalFromStageStatus`. Today in-flight uses `MiniTrack` when redesign is on; legacy `.track-mini` when off. |
-| Console redesign flag | `redesign/flag.ts` | wired | `localStorage` key `sf-ui-redesign` = `"on"`. `readRedesignPreference`, `writeRedesignPreference`, `applyRedesignAttribute`, `useRedesign`. Bootstrap in `ui/index.html`; Settings → Appearance toggle. |
+| Console redesign flag | `redesign/flag.ts` | wired | `useRedesign()` is always true. `applyRedesignAttribute` sets `data-redesign="on"`. `ui/index.html` sets that attribute before paint. There is no settings toggle. |
 | Status signals | `redesign/statusSignal.ts` | wired | `statusSignalFromRunStatus`, `statusSignalFromStageStatus`, `statusSignalFromReadiness`, `statusSignalFromRun`, `signalLabel`, `signalIcon`. `interrupted` → `fail` (label "Interrupted" via `stageStatusPillLabel`). |
 | StatusPill | `redesign/StatusPill.tsx` | wired | `sf-pill` + six signal modifiers. Runs row status and Today waiting meta when redesign on. |
 | Keycap | `redesign/Keycap.tsx` | wired | `sf-kcap` for shortcut hints (Slice 5 palette). |

@@ -10,7 +10,6 @@ import {
 import { SettingsProvidersPanel } from "../redesign/settings/SettingsProvidersPanel";
 import { SettingsProjectMcpPanel } from "../redesign/settings/SettingsProjectMcpPanel";
 import {
-  SettingsAppearancePanel,
   SettingsConcurrencyPanel,
   SettingsGeneralPanel,
   SettingsMcpPanel,
@@ -27,8 +26,6 @@ import {
   useRunCatalog,
   useRunCatalogHandle,
 } from "../catalog/useRunCatalog";
-import type { ThemeMode } from "../themePreference";
-import { SettingsAppearance } from "../components/SettingsAppearance";
 import { SettingsMcp } from "../components/SettingsMcp";
 import { SettingsProjectMcp } from "../components/SettingsProjectMcp";
 import { SettingsProviders } from "../components/SettingsProviders";
@@ -71,20 +68,13 @@ function formatDiskBytes(bytes: number): string {
 }
 
 export function SettingsPage({
-  themeMode,
-  onThemeChange,
-  redesignOn,
-  onRedesignChange,
   notifyPreference,
   onNotifyChange,
 }: {
-  themeMode: ThemeMode;
-  onThemeChange: (mode: ThemeMode) => void;
-  redesignOn: boolean;
-  onRedesignChange: (on: boolean) => void;
   notifyPreference: NotifyPreference;
   onNotifyChange: (value: NotifyPreference) => void;
 }) {
+  const redesignOn = true;
   const { snapshot, loading } = useRunCatalog();
   const catalog = useRunCatalogHandle();
   const health = snapshot.health;
@@ -306,14 +296,6 @@ export function SettingsPage({
             onNotifySelect={(v) => void onNotifySelect(v)}
           />
         </section>
-        <section id={settingsSectionDomId("appearance")} className="scroll-mt-1">
-          <SettingsAppearancePanel
-            themeMode={themeMode}
-            onThemeChange={onThemeChange}
-            redesignOn={redesignOn}
-            onRedesignChange={onRedesignChange}
-          />
-        </section>
         <div className="min-h-[45vh] shrink-0" aria-hidden="true" />
       </SettingsLayout>
     );
@@ -327,13 +309,6 @@ export function SettingsPage({
           <p>Local to this machine. Nothing here is shared, because Stageflow runs as one operator's CLI.</p>
         </div>
       </div>
-
-      <SettingsAppearance
-        value={themeMode}
-        onChange={onThemeChange}
-        redesignOn={redesignOn}
-        onRedesignChange={onRedesignChange}
-      />
 
       <SettingsProviders />
 
