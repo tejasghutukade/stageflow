@@ -17,8 +17,24 @@ import {
 } from "../routes";
 import { StatusDot } from "../StatusLabel";
 import { runDisplayStatus } from "../status/runStatus";
+import { useRedesign } from "../redesign/flag";
+import { TasksRedesign } from "../redesign/tasks/TasksRedesign";
 
 export function TasksPage({
+  taskId,
+  onNew,
+}: {
+  taskId?: string;
+  onNew: (path: string) => void;
+}) {
+  const redesignOn = useRedesign();
+  if (redesignOn) {
+    return <TasksRedesign taskId={taskId} onNew={onNew} />;
+  }
+  return <TasksPageLegacy taskId={taskId} onNew={onNew} />;
+}
+
+function TasksPageLegacy({
   taskId,
   onNew,
 }: {
@@ -87,7 +103,7 @@ export function TasksPage({
         ) : null}
 
         {!loading && tasks.length > 0 ? (
-          <table className="table">
+          <table className="data-table">
             <thead>
               <tr>
                 <th>Task</th>
@@ -267,7 +283,7 @@ function TaskDetail({
                 No runs of this task yet.
               </p>
             ) : (
-              <table className="table">
+              <table className="data-table">
                 <thead>
                   <tr>
                     <th>Run</th>

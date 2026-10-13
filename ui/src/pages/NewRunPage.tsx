@@ -19,19 +19,41 @@ import { waitingRunsAmongView } from "../catalog/views";
 import { PipelineTrack, type TrackStage } from "../components/PipelineTrack";
 import { loadProviderAuthReadiness } from "../providers/readiness";
 
+function preferCatalogRow<T extends { path: string; project_root?: string }>(
+  rows: readonly T[],
+  path: string | undefined,
+  projectRoot: string | undefined,
+): T | undefined {
+  if (path && projectRoot) {
+    const exact = rows.find(
+      (row) => row.path === path && row.project_root === projectRoot,
+    );
+    if (exact) return exact;
+  }
+  if (path) {
+    const byPath = rows.find((row) => row.path === path);
+    if (byPath) return byPath;
+  }
+  return rows[0];
+}
+
 export function NewRunPage({
   onStarted,
   initialPipelinePath,
   initialTaskPath,
+  initialProjectRoot,
 }: {
   onStarted: (runId: string) => void;
   initialPipelinePath?: string;
   initialTaskPath?: string;
+  initialProjectRoot?: string;
 }) {
   const [tasks, setTasks] = useState<TaskListing[]>([]);
   const [pipelines, setPipelines] = useState<PipelineListing[]>([]);
   const [task, setTask] = useState<string>("");
+  const [taskRoot, setTaskRoot] = useState<string | undefined>(undefined);
   const [pipeline, setPipeline] = useState<string>("");
+  const [pipelineRoot, setPipelineRoot] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startFailure, setStartFailure] = useState<Extract<
@@ -48,24 +70,33 @@ export function NewRunPage({
         const [t, p] = await Promise.all([fetchTasks(), fetchPipelines()]);
         setTasks(t.tasks);
         setPipelines(p.pipelines);
-        const preferredTask =
-          initialTaskPath && t.tasks.some((item) => item.path === initialTaskPath)
-            ? initialTaskPath
-            : (t.tasks[0]?.path ?? "");
-        const preferredPipeline =
-          initialPipelinePath &&
-          p.pipelines.some((item) => item.path === initialPipelinePath)
-            ? initialPipelinePath
-            : (p.pipelines[0]?.path ?? "");
-        setTask(preferredTask);
-        setPipeline(preferredPipeline);
+        const preferredTask = preferCatalogRow(
+          t.tasks,
+          initialTaskPath,
+          initialProjectRoot,
+        );
+        const preferredPipeline = preferCatalogRow(
+          p.pipelines,
+          initialPipelinePath,
+          initialProjectRoot,
+        );
+        setTask(preferredTask?.path ?? "");
+        setTaskRoot(preferredTask?.project_root);
+        setPipeline(preferredPipeline?.path ?? "");
+        setPipelineRoot(preferredPipeline?.project_root);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     })();
-  }, [initialPipelinePath, initialTaskPath]);
+  }, [initialPipelinePath, initialTaskPath, initialProjectRoot]);
 
-  const selectedPipeline = pipelines.find((p) => p.path === pipeline) ?? null;
+  const selectedTask =
+    tasks.find((item) => item.path === task && item.project_root === taskRoot) ??
+    null;
+  const selectedPipeline =
+    pipelines.find(
+      (item) => item.path === pipeline && item.project_root === pipelineRoot,
+    ) ?? null;
   const previewStages: TrackStage[] = useMemo(() => {
     if (!selectedPipeline) return [];
     return selectedPipeline.stages.map((s) => ({
@@ -110,7 +141,11 @@ export function NewRunPage({
       setStarting(false);
       return;
     }
-    const result = await startRunWithDetails(task, pipeline);
+    const result = await startRunWithDetails(
+      task,
+      pipeline,
+      selectedPipeline?.project_root ?? selectedTask?.project_root,
+    );
     setStarting(false);
     if (result.ok) {
       onStarted(result.runId);
@@ -170,8 +205,16 @@ export function NewRunPage({
             <div className="card__head"><h2>Task</h2></div>
             <div className="pick">
               {tasks.map(t => (
-                <label key={t.path} className="pick__opt">
-                  <input type="radio" name="task" checked={task === t.path} onChange={() => setTask(t.path)} />
+                <label key={`${t.path}\0${t.project_root ?? ""}`} className="pick__opt">
+                  <input
+                    type="radio"
+                    name="task"
+                    checked={selectedTask?.path === t.path && selectedTask?.project_root === t.project_root}
+                    onChange={() => {
+                      setTask(t.path);
+                      setTaskRoot(t.project_root);
+                    }}
+                  />
                   <span>
                     <strong>{t.id}</strong>
                     <span>{t.goal}</span>
@@ -187,8 +230,16 @@ export function NewRunPage({
             <div className="card__head"><h2>Pipeline</h2></div>
             <div className="pick">
               {pipelines.map(p => (
-                <label key={p.path} className="pick__opt">
-                  <input type="radio" name="pipeline" checked={pipeline === p.path} onChange={() => setPipeline(p.path)} />
+                <label key={`${p.path}\0${p.project_root ?? ""}`} className="pick__opt">
+                  <input
+                    type="radio"
+                    name="pipeline"
+                    checked={selectedPipeline?.path === p.path && selectedPipeline?.project_root === p.project_root}
+                    onChange={() => {
+                      setPipeline(p.path);
+                      setPipelineRoot(p.project_root);
+                    }}
+                  />
                   <span>
                     <strong>{p.id}</strong>
                     <span>{p.stages.length} stages</span>

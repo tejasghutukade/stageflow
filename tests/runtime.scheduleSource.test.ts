@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { triggerStoreId } from "../src/config/triggerCatalog.js";
 import { ScheduleSource } from "../src/runtime/scheduleSource.js";
 import type { TriggerFireEvent } from "../src/runtime/triggerPort.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
@@ -59,6 +60,7 @@ describe("ScheduleSource", () => {
       clearFindProjectRootCacheForTests();
 
       const store = createRunStore({ rootDir: await mkdtempHome() });
+      const wireRoot = await store.ensureProject(root);
       const clock = makeClock("2026-01-01T00:00:00.000Z");
       const source = new ScheduleSource({ store, cwd: root, now: clock.now });
       const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
@@ -66,7 +68,7 @@ describe("ScheduleSource", () => {
       await source.tick(onFire);
 
       expect(onFire).not.toHaveBeenCalled();
-      const record = await store.getTrigger("schedule-every-minute");
+      const record = await store.getTrigger(triggerStoreId(wireRoot, "schedule-every-minute"));
       expect(record?.next_run_at).toBeDefined();
       expect(new Date(record!.next_run_at!).getTime()).toBeGreaterThan(clock.now().getTime());
     } finally {
@@ -82,6 +84,7 @@ describe("ScheduleSource", () => {
       clearFindProjectRootCacheForTests();
 
       const store = createRunStore({ rootDir: await mkdtempHome() });
+      const wireRoot = await store.ensureProject(root);
       const clock = makeClock("2026-01-01T00:00:00.000Z");
       const source = new ScheduleSource({ store, cwd: root, now: clock.now });
       const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
@@ -90,14 +93,20 @@ describe("ScheduleSource", () => {
       expect(onFire).not.toHaveBeenCalled();
 
       // Force the seeded next_run_at far into the past to simulate a due fire.
-      await store.setTriggerNextRun("schedule-every-minute", "2025-01-01T00:00:00.000Z");
+      await store.setTriggerNextRun(
+        triggerStoreId(wireRoot, "schedule-every-minute"),
+        "2025-01-01T00:00:00.000Z",
+      );
       clock.set("2026-06-01T12:00:00.000Z");
 
       await source.tick(onFire);
 
       expect(onFire).toHaveBeenCalledTimes(1);
-      expect(onFire).toHaveBeenCalledWith({ triggerId: "schedule-every-minute" });
-      const record = await store.getTrigger("schedule-every-minute");
+      expect(onFire).toHaveBeenCalledWith({
+        triggerId: "schedule-every-minute",
+        project_root: wireRoot,
+      });
+      const record = await store.getTrigger(triggerStoreId(wireRoot, "schedule-every-minute"));
       expect(new Date(record!.next_run_at!).getTime()).toBeGreaterThan(clock.now().getTime());
     } finally {
       clearFindProjectRootCacheForTests();
@@ -112,19 +121,20 @@ describe("ScheduleSource", () => {
       clearFindProjectRootCacheForTests();
 
       const store = createRunStore({ rootDir: await mkdtempHome() });
+      const wireRoot = await store.ensureProject(root);
       const clock = makeClock("2026-01-01T00:00:00.000Z");
       const source = new ScheduleSource({ store, cwd: root, now: clock.now });
       const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
 
       await source.tick(onFire);
-      const seeded = await store.getTrigger("schedule-every-minute");
+      const seeded = await store.getTrigger(triggerStoreId(wireRoot, "schedule-every-minute"));
       expect(seeded?.next_run_at).toBeDefined();
 
       clock.set("2026-01-01T00:00:10.000Z"); // still within the same minute
       await source.tick(onFire);
 
       expect(onFire).not.toHaveBeenCalled();
-      const record = await store.getTrigger("schedule-every-minute");
+      const record = await store.getTrigger(triggerStoreId(wireRoot, "schedule-every-minute"));
       expect(record?.next_run_at).toBe(seeded?.next_run_at);
     } finally {
       clearFindProjectRootCacheForTests();
@@ -139,6 +149,7 @@ describe("ScheduleSource", () => {
       clearFindProjectRootCacheForTests();
 
       const store = createRunStore({ rootDir: await mkdtempHome() });
+      const wireRoot = await store.ensureProject(root);
       const clock = makeClock("2026-01-01T00:00:00.000Z");
       const source = new ScheduleSource({ store, cwd: root, now: clock.now });
       const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
@@ -160,6 +171,7 @@ describe("ScheduleSource", () => {
       clearFindProjectRootCacheForTests();
 
       const store = createRunStore({ rootDir: await mkdtempHome() });
+      const wireRoot = await store.ensureProject(root);
       const clock = makeClock("2026-01-01T00:00:00.000Z");
       const source = new ScheduleSource({ store, cwd: root, now: clock.now });
       const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
@@ -179,7 +191,7 @@ describe("ScheduleSource", () => {
       await source.tick(onFire); // fires once more, next -> 00:03:00
       expect(onFire).toHaveBeenCalledTimes(2);
 
-      const record = await store.getTrigger("schedule-every-minute");
+      const record = await store.getTrigger(triggerStoreId(wireRoot, "schedule-every-minute"));
       expect(record?.next_run_at).toBe("2026-01-01T00:03:00.000Z");
     } finally {
       clearFindProjectRootCacheForTests();

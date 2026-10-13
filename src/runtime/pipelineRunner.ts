@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { RunSubmission } from "../runstore/submission.js";
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
 import {
   buildValidationResult,
   loadPipelineValidated,
@@ -130,7 +130,7 @@ export type PreparedPipeline = {
   task: TaskFile;
   loaded: LoadedPipeline;
   run: { runId: string; workspaceDir: string; created?: boolean };
-  agent: AgentPort;
+  agent: StagePort;
   store: RunStore;
   cwd: string;
   projectRoot: string;
@@ -165,7 +165,7 @@ function resolveStageProcessLauncher(
 async function preparePipeline(options: {
   dispatchKey?: string;
   submission?: RunSubmission;
-  agent: AgentPort;
+  agent: StagePort;
   store: RunStore;
   taskPath?: string;
   taskYaml?: string;
@@ -457,7 +457,7 @@ export async function executeStages(
 }
 
 export async function runPipeline(options: {
-  agent: AgentPort;
+  agent: StagePort;
   store: RunStore;
   taskPath?: string;
   taskYaml?: string;
@@ -502,7 +502,7 @@ export async function runPipeline(options: {
 export async function startPipeline(options: {
   dispatchKey?: string;
   submission?: RunSubmission;
-  agent: AgentPort;
+  agent: StagePort;
   store: RunStore;
   taskPath?: string;
   taskYaml?: string;

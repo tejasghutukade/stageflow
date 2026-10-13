@@ -92,7 +92,9 @@ describe("loadHostConfig", () => {
         homeDir: home,
         env: {
           STAGEFLOW_HOME: home,
+          STAGEFLOW_CREDENTIAL_HOME: home,
           STAGEFLOW_BIND: "0.0.0.0",
+          STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND: "1",
           STAGEFLOW_NO_AUTOSTART: "1",
           STAGEFLOW_NO_OPEN: "1",
           STAGEFLOW_BUILD_SHA: "abc123def456",

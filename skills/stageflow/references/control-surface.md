@@ -15,7 +15,7 @@ The script `GET`s `{baseUrl}/api/health` (default `http://127.0.0.1:3847`, 1500 
 
 Stdout is one line: `up <baseUrl>` or `down <baseUrl>`, with an optional trailing `bearer` when `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_TOKEN_FILE` is set in this environment (MCP/Compose need `Authorization: Bearer` — see [`../../stageflow-run/references/mcp-call.md`](../../stageflow-run/references/mcp-call.md)). Exit `0` when up, `1` when down, `2` on usage error.
 
-**Health is not auth.** `GET /api/health` is ungated (Host/Origin only — no bearer). Do **not** treat a health 200 as authenticated MCP. Non-loopback and Compose Hosts require a drive bearer (`STAGEFLOW_CONTROL_TOKEN`); MCP and protected API calls need `Authorization: Bearer <drive-token>` when a control token is set. See Stageflow docs: MCP (Access control); Docker and self-hosting — Local try.
+**Health is not auth.** `GET /api/health` is ungated (Host/Origin only — no bearer). Do **not** treat a health 200 as authenticated MCP. Non-loopback Hosts require a drive bearer (`STAGEFLOW_CONTROL_TOKEN`) unless `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` (the shipped local Compose file sets that and publishes `127.0.0.1` only). MCP and protected API calls need `Authorization: Bearer <drive-token>` when a control token is set. See Stageflow docs: MCP (Access control); Docker and self-hosting — Local try.
 
 Start a host with `sf ui` or `sf mcp` when the user wants MCP. Do not auto-start one. Compose local try is the standing-Host path — see `stageflow-setup` and Stageflow docs: Docker and self-hosting.
 

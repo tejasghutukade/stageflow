@@ -1,4 +1,4 @@
-import { resolveAgentPort } from "../agent/resolveAgentPort.js";
+import { resolveStagePort } from "../agent/resolveStagePort.js";
 import { asAgentBackendId } from "../agent/agentBackend.js";
 import { loadStageflowManifestOutcome } from "../config/loadStageflowManifest.js";
 import { loadNamedSecretsFromAttemptDir } from "../logging/namedSecrets.js";
@@ -57,7 +57,7 @@ export async function runStageWorker(
   const dag = meta.pipeline_dag ?? loaded.dag;
 
   const manifestOutcome = await loadStageflowManifestOutcome(input.rootDir);
-  const agent = resolveAgentPort({
+  const agent = resolveStagePort({
     global: manifestOutcome.ok
       ? asAgentBackendId(manifestOutcome.value.manifest.agent)
       : undefined,

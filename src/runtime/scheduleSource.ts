@@ -1,9 +1,9 @@
-import path from "node:path";
 import { Cron } from "croner";
-import { getCatalogScanPaths } from "../config/browseCatalog.js";
-import { loadTriggerOutcome } from "../config/loadTrigger.js";
-import { catalogContextFromStageflow } from "../config/resolveCatalogContext.js";
-import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
+import {
+  listCatalogTriggerMatches,
+  readTriggerStoreRecord,
+  triggerStoreId,
+} from "../config/triggerCatalog.js";
 import type { RunStore } from "../runstore/port.js";
 import type { TriggerSchedule } from "../types/trigger.js";
 import type { TriggerFireEvent, TriggerSourcePort } from "./triggerPort.js";
@@ -94,17 +94,15 @@ export class ScheduleSource implements TriggerSourcePort {
    * against an injected clock instead of waiting on real interval timers.
    */
   async tick(onFire: (event: TriggerFireEvent) => Promise<void>): Promise<void> {
-    const ctx = catalogContextFromStageflow(await resolveStageflowContext(this.cwd));
-    const scanPaths = await getCatalogScanPaths(ctx);
-    if (!scanPaths) return;
-
     const now = this.now();
-    const projectRoot = ctx.projectRoot ?? undefined;
+    const catalogTriggers = await listCatalogTriggerMatches({
+      store: this.store,
+      bootCwd: this.cwd,
+      sourceRootsOnly: true,
+    });
 
-    for (const triggerPath of scanPaths.triggerPaths) {
-      const outcome = await loadTriggerOutcome(triggerPath);
-      if (!outcome.ok) continue;
-      const definition = outcome.value;
+    for (const match of catalogTriggers) {
+      const definition = match.definition;
       if (definition.kind !== "schedule" || !definition.enabled || !definition.schedule) {
         continue;
       }
@@ -121,26 +119,27 @@ export class ScheduleSource implements TriggerSourcePort {
         continue;
       }
 
-      const definitionRef =
-        projectRoot !== undefined
-          ? path.relative(projectRoot, triggerPath).replace(/\\/g, "/")
-          : triggerPath;
+      const storeId = triggerStoreId(match.project_root, definition.id);
       await this.store.upsertTrigger({
-        id: definition.id,
-        definitionRef,
+        id: storeId,
+        definitionRef: match.definition_ref,
         enabled: true,
       });
 
-      const record = await this.store.getTrigger(definition.id);
+      const record = await readTriggerStoreRecord(
+        this.store,
+        match.project_root,
+        definition.id,
+      );
       if (!record?.next_run_at) {
-        if (next) await this.store.setTriggerNextRun(definition.id, next.toISOString());
+        if (next) await this.store.setTriggerNextRun(storeId, next.toISOString());
         continue;
       }
 
       const dueAt = new Date(record.next_run_at);
       if (dueAt.getTime() <= now.getTime()) {
-        await onFire({ triggerId: definition.id });
-        if (next) await this.store.setTriggerNextRun(definition.id, next.toISOString());
+        await onFire({ triggerId: definition.id, project_root: match.project_root });
+        if (next) await this.store.setTriggerNextRun(storeId, next.toISOString());
       }
     }
   }

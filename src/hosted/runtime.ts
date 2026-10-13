@@ -2,7 +2,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { mkdir, realpath } from "node:fs/promises";
 import type { StageLogLine } from "../agent/activity.js";
-import type { AgentPort, StageHandle, StageHandleEvent } from "../agent/port.js";
+import type { StagePort, StageHandle, StageHandleEvent } from "../agent/port.js";
 import { loadPipelineValidated } from "../config/validateCatalog.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import { redactString } from "../logging/redact.js";
@@ -51,7 +51,7 @@ export type HostedRuntime = {
 };
 
 export function createHostedRuntime(dependencies: {
-  agent: AgentPort;
+  agent: StagePort;
   localStore: RunStore;
   eventSink: HostedEventSink;
   eventDeliveryTimeoutMs?: number;
@@ -593,7 +593,7 @@ class ActiveHandles {
   }
 }
 
-function wrapAgent(agent: AgentPort, handles: ActiveHandles): AgentPort {
+function wrapAgent(agent: StagePort, handles: ActiveHandles): StagePort {
   return {
     openStage(input) {
       const inner = agent.openStage(input);

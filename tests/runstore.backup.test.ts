@@ -7,9 +7,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { mkdtemp, mkdir } from "node:fs/promises";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import {
   BackupError,
   assertBackupOutPathAllowed,
@@ -20,7 +21,57 @@ import {
 } from "../src/runstore/backup.js";
 import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
 import { storeRootFor } from "../src/runstore/paths.js";
+import { extractVerifiedArchive } from "../src/runstore/restore.js";
 import { CURRENT_SCHEMA_VERSION } from "../src/runstore/sqlite/migrations/index.js";
+
+const CREDENTIAL_HOME_ENV = "STAGEFLOW_CREDENTIAL_HOME";
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+
+async function withCredentialRoots<T>(
+  roots: { data: string; creds: string },
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prevHome = process.env.STAGEFLOW_HOME;
+  const prevCreds = process.env[CREDENTIAL_HOME_ENV];
+  process.env.STAGEFLOW_HOME = roots.data;
+  process.env[CREDENTIAL_HOME_ENV] = roots.creds;
+  resetGlobalStageflowHomeForTests();
+  try {
+    return await fn();
+  } finally {
+    restoreEnv("STAGEFLOW_HOME", prevHome);
+    restoreEnv(CREDENTIAL_HOME_ENV, prevCreds);
+    resetGlobalStageflowHomeForTests();
+  }
+}
+
+async function manifestOf(archivePath: string): Promise<{
+  credentials_included?: boolean;
+  secret_warning?: string;
+  contents?: string[];
+  authPacked: boolean;
+}> {
+  const verified = await extractVerifiedArchive(archivePath);
+  try {
+    const manifest = verified.manifest as {
+      credentials_included?: boolean;
+      secret_warning?: string;
+      contents?: string[];
+    } | null;
+    return {
+      credentials_included: manifest?.credentials_included,
+      secret_warning: manifest?.secret_warning,
+      contents: manifest?.contents,
+      authPacked: existsSync(path.join(verified.stagingDir, "agent", "auth.json")),
+    };
+  } finally {
+    await rm(verified.stagingDir, { recursive: true, force: true });
+  }
+}
 
 describe("createBackup", () => {
   it("VACUUM INTO snapshot includes recent rows and has no WAL sidecars", async () => {
@@ -106,38 +157,42 @@ describe("createBackup", () => {
       mode: 0o600,
     });
 
-    const full = await createBackup({
-      store,
-      homeDir: home,
-      outPath: path.join(home, "backups", "full.tar.gz"),
-    });
-    expect(full.contents).toEqual(
-      expect.arrayContaining([
-        "state.db",
-        "settings.json",
-        "agent/auth.json",
-        "manifest.json",
-      ]),
-    );
-    expect(statSync(full.path).mode & 0o777).toBe(0o600);
+    try {
+      await withCredentialRoots({ data: home, creds: home }, async () => {
+        const full = await createBackup({
+          store,
+          homeDir: home,
+          outPath: path.join(home, "backups", "full.tar.gz"),
+        });
+        expect(full.contents).toEqual(
+          expect.arrayContaining([
+            "state.db",
+            "settings.json",
+            "agent/auth.json",
+            "manifest.json",
+          ]),
+        );
+        expect(statSync(full.path).mode & 0o777).toBe(0o600);
 
-    const noCred = await createBackup({
-      store,
-      homeDir: home,
-      outPath: path.join(home, "backups", "nocred.tar.gz"),
-      noCredentials: true,
-    });
-    expect(noCred.contents).not.toContain("agent/auth.json");
+        const noCred = await createBackup({
+          store,
+          homeDir: home,
+          outPath: path.join(home, "backups", "nocred.tar.gz"),
+          noCredentials: true,
+        });
+        expect(noCred.contents).not.toContain("agent/auth.json");
 
-    const dbOnly = await createBackup({
-      store,
-      homeDir: home,
-      outPath: path.join(home, "backups", "only.db"),
-      dbOnly: true,
-    });
-    expect(dbOnly.contents).toEqual(["state.db"]);
-
-    await store.close();
+        const dbOnly = await createBackup({
+          store,
+          homeDir: home,
+          outPath: path.join(home, "backups", "only.db"),
+          dbOnly: true,
+        });
+        expect(dbOnly.contents).toEqual(["state.db"]);
+      });
+    } finally {
+      await store.close();
+    }
   });
 
   it("interrupted partial may remain without final target", async () => {
@@ -180,5 +235,105 @@ describe("resolveBackupDownloadPath", () => {
     await expect(resolveBackupDownloadPath(linkName, home)).rejects.toMatchObject({
       code: "backup_out_denied",
     });
+  });
+});
+
+describe("backup credential root", () => {
+  it("packs a usable auth file when the archive directory is the credential root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-backup-cred-root-"));
+    const { store } = createRunStoreWithConnection({
+      rootDir: root,
+      openerMode: "migrate",
+    });
+    const home = storeRootFor(root);
+    mkdirSync(path.join(home, "agent"), { recursive: true });
+    writeFileSync(path.join(home, "agent", "auth.json"), '{"k":"usable"}\n', {
+      mode: 0o600,
+    });
+    writeFileSync(path.join(home, "agent", "models.json"), '{"models":[]}\n');
+    writeFileSync(path.join(home, "agent", "cursor-api-key"), "cursor-secret\n");
+
+    try {
+      await withCredentialRoots({ data: home, creds: home }, async () => {
+        const full = await createBackup({
+          store,
+          homeDir: home,
+          outPath: path.join(home, "backups", "cred-root.tar.gz"),
+        });
+        expect(full.contents).toContain("agent/auth.json");
+        expect(full.contents).not.toContain("models.json");
+        expect(full.contents).not.toContain("cursor-api-key");
+        const manifest = await manifestOf(full.path);
+        expect(manifest.credentials_included).toBe(true);
+        expect(manifest.authPacked).toBe(true);
+        expect(manifest.secret_warning).toMatch(/credential/i);
+      });
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("omits a leftover empty auth file when the data directory is not the credential root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-backup-cred-split-"));
+    const creds = await mkdtemp(path.join(tmpdir(), "sf-backup-cred-store-"));
+    const { store } = createRunStoreWithConnection({
+      rootDir: root,
+      openerMode: "migrate",
+    });
+    const home = storeRootFor(root);
+    mkdirSync(path.join(home, "agent"), { recursive: true });
+    writeFileSync(path.join(home, "agent", "auth.json"), "{}\n", { mode: 0o600 });
+    mkdirSync(path.join(creds, "agent"), { recursive: true });
+    writeFileSync(
+      path.join(creds, "agent", "auth.json"),
+      '{"operator":"keep-me"}\n',
+      { mode: 0o600 },
+    );
+
+    try {
+      await withCredentialRoots({ data: home, creds }, async () => {
+        const result = await createBackup({
+          store,
+          homeDir: home,
+          outPath: path.join(home, "backups", "process.tar.gz"),
+        });
+        expect(result.contents).not.toContain("agent/auth.json");
+        const manifest = await manifestOf(result.path);
+        expect(manifest.credentials_included).toBe(false);
+        expect(manifest.authPacked).toBe(false);
+        expect(manifest.secret_warning ?? "").not.toMatch(/credential/i);
+      });
+    } finally {
+      await store.close();
+      await rm(creds, { recursive: true, force: true });
+    }
+  });
+
+  it("omits an unusable auth file when the archive directory is the credential root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-backup-cred-empty-"));
+    const { store } = createRunStoreWithConnection({
+      rootDir: root,
+      openerMode: "migrate",
+    });
+    const home = storeRootFor(root);
+    mkdirSync(path.join(home, "agent"), { recursive: true });
+    writeFileSync(path.join(home, "agent", "auth.json"), "{}\n", { mode: 0o600 });
+
+    try {
+      await withCredentialRoots({ data: home, creds: home }, async () => {
+        const result = await createBackup({
+          store,
+          homeDir: home,
+          outPath: path.join(home, "backups", "empty-auth.tar.gz"),
+        });
+        expect(result.contents).not.toContain("agent/auth.json");
+        const manifest = await manifestOf(result.path);
+        expect(manifest.credentials_included).toBe(false);
+        expect(manifest.authPacked).toBe(false);
+        expect(manifest.secret_warning ?? "").not.toMatch(/credential/i);
+      });
+    } finally {
+      await store.close();
+    }
   });
 });

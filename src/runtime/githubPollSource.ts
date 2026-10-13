@@ -1,10 +1,10 @@
-import path from "node:path";
 import { Octokit } from "octokit";
-import { getCatalogScanPaths } from "../config/browseCatalog.js";
-import { loadTriggerOutcome } from "../config/loadTrigger.js";
-import { catalogContextFromStageflow } from "../config/resolveCatalogContext.js";
+import {
+  listCatalogTriggerMatches,
+  triggerStoreId,
+  type CatalogTriggerMatch,
+} from "../config/triggerCatalog.js";
 import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
-import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
 import type { TaskFile } from "../types/task.js";
 import type { TriggerFile } from "../types/trigger.js";
@@ -227,22 +227,18 @@ export class GithubPollSource implements TriggerSourcePort {
    * instead of waiting on real interval timers.
    */
   async tick(onFire: (event: TriggerFireEvent) => Promise<void>): Promise<void> {
-    const ctx = catalogContextFromStageflow(await resolveStageflowContext(this.cwd));
-    const scanPaths = await getCatalogScanPaths(ctx);
-    if (!scanPaths) return;
-
-    const projectRoot = ctx.projectRoot ?? undefined;
-    const groups = await this.discover(scanPaths.triggerPaths);
+    const catalogTriggers = await listCatalogTriggerMatches({
+      store: this.store,
+      bootCwd: this.cwd,
+      sourceRootsOnly: true,
+    });
+    const groups = this.discover(catalogTriggers);
 
     for (const [repo, matches] of groups) {
       for (const match of matches) {
-        const definitionRef =
-          projectRoot !== undefined
-            ? path.relative(projectRoot, match.path).replace(/\\/g, "/")
-            : match.path;
         await this.store.upsertTrigger({
-          id: match.definition.id,
-          definitionRef,
+          id: triggerStoreId(match.project_root, match.definition.id),
+          definitionRef: match.definition_ref,
           enabled: true,
         });
       }
@@ -250,14 +246,12 @@ export class GithubPollSource implements TriggerSourcePort {
     }
   }
 
-  private async discover(
-    triggerPaths: string[],
-  ): Promise<Map<string, Array<{ path: string; definition: TriggerFile }>>> {
-    const groups = new Map<string, Array<{ path: string; definition: TriggerFile }>>();
-    for (const triggerPath of triggerPaths) {
-      const outcome = await loadTriggerOutcome(triggerPath);
-      if (!outcome.ok) continue;
-      const definition = outcome.value;
+  private discover(
+    catalogTriggers: CatalogTriggerMatch[],
+  ): Map<string, CatalogTriggerMatch[]> {
+    const groups = new Map<string, CatalogTriggerMatch[]>();
+    for (const match of catalogTriggers) {
+      const definition = match.definition;
       if (definition.kind !== "event" || !definition.enabled) continue;
       const source = definition.event?.source;
       if (typeof source !== "string" || !source.startsWith("github.")) continue;
@@ -272,7 +266,7 @@ export class GithubPollSource implements TriggerSourcePort {
       }
 
       const list = groups.get(repo) ?? [];
-      list.push({ path: triggerPath, definition });
+      list.push(match);
       groups.set(repo, list);
     }
     return groups;
@@ -280,7 +274,7 @@ export class GithubPollSource implements TriggerSourcePort {
 
   private async pollRepo(
     repo: string,
-    matches: Array<{ path: string; definition: TriggerFile }>,
+    matches: CatalogTriggerMatch[],
     onFire: (event: TriggerFireEvent) => Promise<void>,
   ): Promise<void> {
     const secretRef = firstSecretRef(matches) ?? DEFAULT_GITHUB_TOKEN_SECRET;
@@ -347,9 +341,10 @@ export class GithubPollSource implements TriggerSourcePort {
 
     for (const item of newItems) {
       const summary = normalizeGithubItem(item, repo);
-      for (const { definition } of matches) {
+      for (const match of matches) {
+        const { definition } = match;
         if (!matchesEventFilter(definition.event?.match, summary as unknown as Record<string, unknown>)) continue;
-        await this.fireSafely(onFire, definition, summary);
+        await this.fireSafely(onFire, match, summary);
       }
     }
 
@@ -362,12 +357,13 @@ export class GithubPollSource implements TriggerSourcePort {
 
   private async fireSafely(
     onFire: (event: TriggerFireEvent) => Promise<void>,
-    definition: TriggerFile,
+    match: CatalogTriggerMatch,
     summary: NormalizedGithubEvent,
   ): Promise<void> {
+    const definition = match.definition;
     try {
       if (definition.task !== undefined) {
-        await onFire({ triggerId: definition.id });
+        await onFire({ triggerId: definition.id, project_root: match.project_root });
         return;
       }
       const task: TaskFile = {
@@ -375,7 +371,7 @@ export class GithubPollSource implements TriggerSourcePort {
         goal: `Handle PR #${summary.number}: ${summary.title}`,
         input: summary as unknown as Record<string, unknown>,
       };
-      await onFire({ triggerId: definition.id, task });
+      await onFire({ triggerId: definition.id, project_root: match.project_root, task });
     } catch (err) {
       this.logError(
         `github poll: firing trigger "${definition.id}" failed: ${

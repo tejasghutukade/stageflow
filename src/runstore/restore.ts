@@ -19,7 +19,8 @@ import { pipeline } from "node:stream/promises";
 import { createWriteStream } from "node:fs";
 import Database from "better-sqlite3";
 import { PACKAGE_VERSION } from "../package-meta.js";
-import { globalStageflowHome } from "../project/globalHome.js";
+import { globalCredentialRoot, globalStageflowHome } from "../project/globalHome.js";
+import { isUsableAuthFile } from "../runtime/credentialBinding.js";
 import { CURRENT_SCHEMA_VERSION } from "./sqlite/migrations/index.js";
 import { StoreSchemaError } from "./sqlite/storeSchemaError.js";
 import { assertStoreQuickCheck } from "./sqlite/applyStorePragmas.js";
@@ -361,7 +362,10 @@ export async function applyRestoreArchive(options: {
         if (existsSync(settingsSrc)) {
           copyFileSync(settingsSrc, path.join(homeDir, "settings.json"));
         }
-        if (existsSync(authSrc)) {
+        const restoreAuth =
+          path.resolve(homeDir) === path.resolve(globalCredentialRoot()) &&
+          isUsableAuthFile(authSrc);
+        if (restoreAuth) {
           const agentDir = path.join(homeDir, "agent");
           mkdirSync(agentDir, { recursive: true });
           try {

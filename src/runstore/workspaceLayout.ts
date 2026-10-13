@@ -1,5 +1,8 @@
 import { access, lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import { globalCredentialRoot } from "../project/globalHome.js";
+import { STAGEFLOW_AGENT_AUTH_PATH_ENV } from "../runtime/credentialBinding.js";
+import { SF_STAGE_WORKER } from "../runtime/stageWorkerProtocol.js";
 
 export { stageDir } from "./paths.js";
 
@@ -178,6 +181,15 @@ export async function resolveEffectiveRealPath(
   }
 }
 
+function credentialRootForFileToolDenial(): string | undefined {
+  if (process.env[SF_STAGE_WORKER] === "1") {
+    const stamped = process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV]?.trim();
+    if (!stamped) return undefined;
+    return path.resolve(path.dirname(stamped), "..");
+  }
+  return globalCredentialRoot();
+}
+
 export async function durableRootFileToolDenial(
   candidatePath: string,
   runWorkspaceDir: string,
@@ -218,6 +230,23 @@ export async function durableRootFileToolDenial(
   }
   if (isInsideDir(fileReal, durableReal)) {
     return STAGEFLOW_PATH_DENIED;
+  }
+
+  const credentialRoot = credentialRootForFileToolDenial();
+  if (credentialRoot !== undefined) {
+    let credentialReal: string;
+    try {
+      credentialReal = await realpath(credentialRoot);
+    } catch {
+      credentialReal = path.resolve(credentialRoot);
+    }
+    if (
+      credentialReal !== durableReal &&
+      !isInsideDir(credentialReal, durableReal) &&
+      isInsideDir(fileReal, credentialReal)
+    ) {
+      return STAGEFLOW_PATH_DENIED;
+    }
   }
   return undefined;
 }

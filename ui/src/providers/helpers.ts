@@ -6,7 +6,7 @@ import type {
 } from "../api";
 
 export const PROVIDERS_PI_COPY =
-  "Connect model providers here. Credentials are stored under your Stageflow home ($STAGEFLOW_HOME/agent/auth.json).";
+  "Connect model providers here. Stageflow stores credentials in the operator auth file (~/.stageflow/agent/auth.json). Override the directory with STAGEFLOW_CREDENTIAL_HOME.";
 
 export function cursorModelReady(detect: ProvidersDetectResult): boolean {
   return (

@@ -8,6 +8,7 @@ import type {
   StageflowManifestCatalog,
 } from "../types/stageflowManifest.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
+import { yamlParsePosition } from "./yamlParsePosition.js";
 import { parseModelField } from "./modelField.js";
 
 const DEFAULT_PIPELINE_PATTERN = "*.pipeline.yaml";
@@ -130,7 +131,9 @@ export function parseStageflowManifestOutcome(
     raw = parseYaml(yamlText);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return loadFailure([catalogIssue("catalog.manifest_load_error", message)]);
+    return loadFailure([
+      { ...catalogIssue("catalog.manifest_load_error", message), ...yamlParsePosition(err) },
+    ]);
   }
 
   const issues: LoadIssue[] = [];

@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { startTestService } from "./helpers/testInProcessService.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
+import { triggerStoreId } from "../src/config/triggerCatalog.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const triggerFixture = path.join(fixtures, "triggers", "manual-hello-world.trigger.yaml");
@@ -21,6 +23,13 @@ const stageFixture = path.join(fixtures, "stages", "clarify.yaml");
 
 function sign(secret: string, body: string): string {
   return createHmac("sha256", secret).update(body).digest("hex");
+}
+
+function triggerJson(
+  catalogRoot: string,
+  payload: Record<string, unknown>,
+): string {
+  return JSON.stringify({ project_root: catalogRoot, ...payload });
 }
 
 async function seedCatalog(root: string): Promise<void> {
@@ -60,11 +69,23 @@ function successEnvelope(summary: string) {
   };
 }
 
+async function triggerStoreRecord(
+  store: ReturnType<typeof createRunStore>,
+  catalogRoot: string,
+  triggerId: string,
+) {
+  const wire = await realpath(catalogRoot);
+  return (
+    (await store.getTrigger(triggerStoreId(wire, triggerId))) ??
+    (await store.getTrigger(triggerId))
+  );
+}
+
 async function withTriggerService(
   opts: {
     setup?: (root: string) => Promise<void>;
     ensureProject?: boolean;
-    agent?: AgentPort;
+    agent?: StagePort;
   },
   fn: (ctx: {
     root: string;
@@ -78,8 +99,9 @@ async function withTriggerService(
     await opts.setup?.(root);
     clearFindProjectRootCacheForTests();
     const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-"));
+    bindStageflowHomeForTests(homeRoot);
     const store = createRunStore({ rootDir: homeRoot });
-    if (opts.ensureProject) await store.ensureProject(root);
+    if (opts.ensureProject !== false) await store.ensureProject(root);
     const service = await startTestService(store, opts.agent ?? scriptedFakeAgent([]), root);
     try {
       await fn({ root, store, service });
@@ -104,15 +126,15 @@ describe("trigger HTTP routes", () => {
         const listed = (await listRes.json()) as {
           triggers: Array<{ id: string; kind: string; enabled: boolean }>;
         };
-        expect(listed.triggers).toHaveLength(1);
-        expect(listed.triggers[0]).toMatchObject({
+        const manual = listed.triggers.find((t) => t.id === "manual-hello-world");
+        expect(manual).toMatchObject({
           id: "manual-hello-world",
           pipeline: "hello",
           task: "my-task",
           kind: "manual",
           enabled: true,
         });
-        expect(listed.triggers[0]!.last_fired_at).toBeUndefined();
+        expect(manual!.last_fired_at).toBeUndefined();
 
         const showRes = await fetch(`${service.baseUrl}/api/triggers/manual-hello-world`);
         expect(showRes.status).toBe(200);
@@ -133,7 +155,7 @@ describe("trigger HTTP routes", () => {
         const run = await store.readRun(fired.runId);
         expect(run.pipeline_id).toBe("hello");
 
-        const trigger = await store.getTrigger("manual-hello-world");
+        const trigger = await triggerStoreRecord(store, root, "manual-hello-world");
         expect(trigger?.last_run_id).toBe(fired.runId);
 
         const listAfterFireRes = await fetch(`${service.baseUrl}/api/triggers`);
@@ -240,7 +262,7 @@ describe("trigger HTTP routes", () => {
         const badBodyRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             pipeline: "hello",
             task: "my-task",
@@ -254,7 +276,7 @@ describe("trigger HTTP routes", () => {
         const danglingRefRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "dangling",
             pipeline: "no-such-pipeline",
@@ -269,7 +291,7 @@ describe("trigger HTTP routes", () => {
         const badCronRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "bad-cron",
             pipeline: "hello",
@@ -285,7 +307,7 @@ describe("trigger HTTP routes", () => {
         const duplicateRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "manual-hello-world",
             pipeline: "hello",
@@ -298,7 +320,7 @@ describe("trigger HTTP routes", () => {
         const createdRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "nightly-hello",
             pipeline: "hello",
@@ -335,7 +357,7 @@ describe("trigger HTTP routes", () => {
         const createdDynamicRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "dynamic-created",
             pipeline: "hello",
@@ -388,7 +410,7 @@ describe("trigger HTTP routes", () => {
         const body = (await fireRes.json()) as { error: string };
         expect(body.error).toMatch(/disabled/i);
 
-        expect(await store.getTrigger("manual-disabled")).toBeNull();
+        expect(await triggerStoreRecord(store, root, "manual-disabled")).toBeNull();
         expect((await store.listRuns()).length).toBe(0);
       },
     );
@@ -404,6 +426,7 @@ describe("trigger HTTP routes", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-create-webhook-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
       await store.ensureProject(root);
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
@@ -412,7 +435,7 @@ describe("trigger HTTP routes", () => {
         const createdRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "on-webhook",
             pipeline: "hello",
@@ -487,7 +510,7 @@ describe("trigger HTTP routes", () => {
         const createdRes = await fetch(`${service.baseUrl}/api/triggers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: triggerJson(root, {
             directory: "triggers",
             id: "on-email",
             pipeline: "hello",
@@ -565,7 +588,9 @@ describe("trigger HTTP routes", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-webhook-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const agent = scriptedFakeAgent([
         successEnvelope("clarified"),
         successEnvelope("clarified"),
@@ -697,5 +722,208 @@ describe("trigger HTTP routes", () => {
       clearFindProjectRootCacheForTests();
       await cleanup();
     }
+  });
+
+  it("PUT /api/triggers/:id rewrites cron and enabled; PATCH still rejects extra keys", async () => {
+    await withTriggerService(
+      {
+        setup: async (root) => {
+          await writeFile(
+            path.join(root, "triggers", "nightly-hello.trigger.yaml"),
+            [
+              "# keep-me",
+              "id: nightly-hello",
+              "pipeline: hello",
+              "task: my-task",
+              "kind: schedule",
+              "schedule:",
+              '  cron: "0 2 * * *"',
+              "enabled: true",
+              "",
+            ].join("\n"),
+          );
+        },
+      },
+      async ({ root, store, service }) => {
+        const triggerPath = path.join(root, "triggers", "nightly-hello.trigger.yaml");
+        const patchRes = await fetch(`${service.baseUrl}/api/triggers/nightly-hello`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: false, schedule: { cron: "0 4 * * *" } }),
+        });
+        expect(patchRes.status).toBe(400);
+        const patchBody = (await patchRes.json()) as { error: string };
+        expect(patchBody.error).toBe("Only enabled is allowed in the request body");
+        expect(await readFile(triggerPath, "utf8")).toContain('cron: "0 2 * * *"');
+
+        const idRes = await fetch(`${service.baseUrl}/api/triggers/nightly-hello`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: "other-trigger",
+            pipeline: "hello",
+            task: "my-task",
+            kind: "schedule",
+            schedule: { cron: "0 4 * * *" },
+            enabled: true,
+          }),
+        });
+        expect(idRes.status).toBe(400);
+        expect(((await idRes.json()) as { error: string }).error).toBe("id cannot be changed");
+
+        const badCronRes = await fetch(`${service.baseUrl}/api/triggers/nightly-hello`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pipeline: "hello",
+            task: "my-task",
+            kind: "schedule",
+            schedule: { cron: "not-a-cron" },
+            enabled: true,
+          }),
+        });
+        expect(badCronRes.status).toBe(422);
+        expect(((await badCronRes.json()) as { error: string }).error).toMatch(
+          /Invalid schedule\.cron/,
+        );
+        expect(await readFile(triggerPath, "utf8")).toContain("enabled: true");
+
+        const putRes = await fetch(`${service.baseUrl}/api/triggers/nightly-hello`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: "nightly-hello",
+            pipeline: "hello",
+            task: "my-task",
+            kind: "schedule",
+            schedule: { cron: "0 3 * * *", timezone: "UTC" },
+            enabled: false,
+          }),
+        });
+        expect(putRes.status).toBe(200);
+        const updated = (await putRes.json()) as {
+          id: string;
+          schedule?: { cron: string; timezone?: string };
+          enabled: boolean;
+          adapter_status?: { adapter: string; state: string };
+        };
+        expect(updated).toMatchObject({
+          id: "nightly-hello",
+          pipeline: "hello",
+          task: "my-task",
+          kind: "schedule",
+          schedule: { cron: "0 3 * * *", timezone: "UTC" },
+          enabled: false,
+          adapter_status: { adapter: "schedule", state: "disabled" },
+        });
+        const shownRes = await fetch(`${service.baseUrl}/api/triggers/nightly-hello`);
+        expect(await shownRes.json()).toEqual(updated);
+
+        const onDisk = await readFile(triggerPath, "utf8");
+        expect(onDisk).toContain("# keep-me");
+        expect(onDisk).toContain("0 3 * * *");
+        expect(onDisk).toContain("timezone: UTC");
+        expect(onDisk).toContain("enabled: false");
+        expect(onDisk).not.toContain("0 2 * * *");
+        expect((await triggerStoreRecord(store, root, "nightly-hello"))?.enabled).toBe(
+          false,
+        );
+
+        const danglingRes = await fetch(`${service.baseUrl}/api/triggers/nightly-hello`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pipeline: "missing-pipeline",
+            task: "my-task",
+            kind: "schedule",
+            schedule: { cron: "0 4 * * *" },
+            enabled: true,
+          }),
+        });
+        expect(danglingRes.status).toBe(422);
+        expect(((await danglingRes.json()) as { error: string }).error).toBe(
+          'Trigger references unknown pipeline "missing-pipeline"',
+        );
+        expect(await readFile(triggerPath, "utf8")).toContain("0 3 * * *");
+
+        const manualRes = await fetch(`${service.baseUrl}/api/triggers/nightly-hello`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pipeline: "hello",
+            task: null,
+            kind: "manual",
+            enabled: true,
+          }),
+        });
+        expect(manualRes.status).toBe(200);
+        const manual = (await manualRes.json()) as {
+          kind: string;
+          task?: string;
+          schedule?: unknown;
+          enabled: boolean;
+        };
+        expect(manual.kind).toBe("manual");
+        expect(manual.task).toBeUndefined();
+        expect(manual.schedule).toBeUndefined();
+        expect(manual.enabled).toBe(true);
+        const manualDisk = await readFile(triggerPath, "utf8");
+        expect(manualDisk).toContain("# keep-me");
+        expect(manualDisk).toContain("kind: manual");
+        expect(manualDisk).not.toContain("schedule:");
+        expect(manualDisk).not.toContain("task:");
+
+        const missingRes = await fetch(`${service.baseUrl}/api/triggers/no-such-trigger`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pipeline: "hello",
+            kind: "manual",
+            enabled: true,
+          }),
+        });
+        expect(missingRes.status).toBe(404);
+      },
+    );
+  });
+
+  it("GET /api/triggers/:id/fires returns recorded fires newest first", async () => {
+    await withTriggerService({}, async ({ root, store, service }) => {
+      const missingRes = await fetch(`${service.baseUrl}/api/triggers/no-such-trigger/fires`);
+      expect(missingRes.status).toBe(404);
+      expect(((await missingRes.json()) as { error: string }).error).toBe(
+        "Trigger not found: no-such-trigger",
+      );
+
+      const emptyRes = await fetch(`${service.baseUrl}/api/triggers/manual-hello-world/fires`);
+      expect(emptyRes.status).toBe(200);
+      expect(await emptyRes.json()).toEqual({ fires: [] });
+
+      const wireRoot = await realpath(root);
+      const storeId = triggerStoreId(wireRoot, "manual-hello-world");
+      await store.upsertTrigger({
+        id: storeId,
+        definitionRef: "triggers/manual-hello-world.trigger.yaml",
+        enabled: true,
+      });
+      const { runId: older } = await store.createRun({
+        pipelineId: "hello",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.recordTriggerFired(storeId, older);
+      const { runId: newer } = await store.createRun({
+        pipelineId: "hello",
+        taskYaml: "id: t2\ngoal: g\n",
+      });
+      await store.recordTriggerFired(storeId, newer);
+
+      const firesRes = await fetch(`${service.baseUrl}/api/triggers/manual-hello-world/fires`);
+      expect(firesRes.status).toBe(200);
+      const body = (await firesRes.json()) as {
+        fires: Array<{ fired_at: string; run_id: string }>;
+      };
+      expect(body.fires.map((row) => row.run_id)).toEqual([newer, older]);
+      expect(Object.keys(body.fires[0]!).sort()).toEqual(["fired_at", "run_id"]);
+    });
   });
 });

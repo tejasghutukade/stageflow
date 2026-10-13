@@ -1,10 +1,10 @@
-import path from "node:path";
 import { ImapFlow } from "imapflow";
-import { getCatalogScanPaths } from "../config/browseCatalog.js";
-import { loadTriggerOutcome } from "../config/loadTrigger.js";
-import { catalogContextFromStageflow } from "../config/resolveCatalogContext.js";
+import {
+  listCatalogTriggerMatches,
+  triggerStoreId,
+  type CatalogTriggerMatch,
+} from "../config/triggerCatalog.js";
 import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
-import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
 import type { TaskFile } from "../types/task.js";
 import type { TriggerFile } from "../types/trigger.js";
@@ -136,7 +136,7 @@ function errMsg(err: unknown): string {
 
 type MailboxGroup = {
   config: MailboxConfig;
-  matches: Array<{ path: string; definition: TriggerFile }>;
+  matches: CatalogTriggerMatch[];
 };
 
 type MailboxConnection = {
@@ -195,22 +195,18 @@ export class EmailSource implements TriggerSourcePort {
 
   async start(onFire: (event: TriggerFireEvent) => Promise<void>): Promise<void> {
     this.stopped = false;
-    const ctx = catalogContextFromStageflow(await resolveStageflowContext(this.cwd));
-    const scanPaths = await getCatalogScanPaths(ctx);
-    if (!scanPaths) return;
-
-    const projectRoot = ctx.projectRoot ?? undefined;
-    const groups = await this.discover(scanPaths.triggerPaths);
+    const catalogTriggers = await listCatalogTriggerMatches({
+      store: this.store,
+      bootCwd: this.cwd,
+      sourceRootsOnly: true,
+    });
+    const groups = this.discover(catalogTriggers);
 
     for (const [mailboxKey, group] of groups) {
       for (const match of group.matches) {
-        const definitionRef =
-          projectRoot !== undefined
-            ? path.relative(projectRoot, match.path).replace(/\\/g, "/")
-            : match.path;
         await this.store.upsertTrigger({
-          id: match.definition.id,
-          definitionRef,
+          id: triggerStoreId(match.project_root, match.definition.id),
+          definitionRef: match.definition_ref,
           enabled: true,
         });
       }
@@ -237,12 +233,10 @@ export class EmailSource implements TriggerSourcePort {
     this.connections.clear();
   }
 
-  private async discover(triggerPaths: string[]): Promise<Map<string, MailboxGroup>> {
+  private discover(catalogTriggers: CatalogTriggerMatch[]): Map<string, MailboxGroup> {
     const groups = new Map<string, MailboxGroup>();
-    for (const triggerPath of triggerPaths) {
-      const outcome = await loadTriggerOutcome(triggerPath);
-      if (!outcome.ok) continue;
-      const definition = outcome.value;
+    for (const match of catalogTriggers) {
+      const definition = match.definition;
       if (definition.kind !== "event" || !definition.enabled) continue;
       const source = definition.event?.source;
       if (typeof source !== "string" || !source.startsWith("email.")) continue;
@@ -258,7 +252,7 @@ export class EmailSource implements TriggerSourcePort {
 
       const mailboxKey = mailboxKeyFor(config);
       const group = groups.get(mailboxKey) ?? { config, matches: [] };
-      group.matches.push({ path: triggerPath, definition });
+      group.matches.push(match);
       groups.set(mailboxKey, group);
     }
     return groups;
@@ -358,9 +352,10 @@ export class EmailSource implements TriggerSourcePort {
         date: message.date,
         text: message.text,
       };
-      for (const { definition } of conn.group.matches) {
+      for (const match of conn.group.matches) {
+        const { definition } = match;
         if (!matchesEventFilter(definition.event?.match, summary)) continue;
-        await this.fireSafely(conn.onFire, definition, message, summary);
+        await this.fireSafely(conn.onFire, match, message, summary);
       }
     }
 
@@ -371,13 +366,14 @@ export class EmailSource implements TriggerSourcePort {
 
   private async fireSafely(
     onFire: (event: TriggerFireEvent) => Promise<void>,
-    definition: TriggerFile,
+    match: CatalogTriggerMatch,
     message: NormalizedEmailMessage,
     summary: Record<string, unknown>,
   ): Promise<void> {
+    const definition = match.definition;
     try {
       if (definition.task !== undefined) {
-        await onFire({ triggerId: definition.id });
+        await onFire({ triggerId: definition.id, project_root: match.project_root });
         return;
       }
       const task: TaskFile = {
@@ -385,7 +381,7 @@ export class EmailSource implements TriggerSourcePort {
         goal: `Handle email: ${message.subject}`,
         input: summary,
       };
-      await onFire({ triggerId: definition.id, task });
+      await onFire({ triggerId: definition.id, project_root: match.project_root, task });
     } catch (err) {
       this.logError(`email: firing trigger "${definition.id}" failed: ${errMsg(err)}`);
     }

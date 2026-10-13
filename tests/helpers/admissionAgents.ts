@@ -1,6 +1,6 @@
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../../src/agent/port.js";
 import { okEnvelope } from "./envelopes.js";
@@ -11,7 +11,7 @@ function runIdOf(input: StageRunInput): string {
   return (input as WithRunId).runId;
 }
 
-export function gatedAgent(gate: Promise<void>): AgentPort {
+export function gatedAgent(gate: Promise<void>): StagePort {
   return {
     openStage(input: StageRunInput) {
       return createCompletedOnlyStageHandle({
@@ -29,7 +29,7 @@ export function gatedAgent(gate: Promise<void>): AgentPort {
   };
 }
 
-export function recordingAgent(starts: string[]): AgentPort {
+export function recordingAgent(starts: string[]): StagePort {
   return {
     openStage(input: StageRunInput) {
       starts.push(runIdOf(input));

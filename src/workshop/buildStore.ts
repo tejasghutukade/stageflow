@@ -276,6 +276,8 @@ export type WorkshopPickerRow = {
   name: string;
   projectRoot: string | null;
   relativePath: string | null;
+  /** True when this row's pipeline path appears in the catalog scan (Tasks/Pipelines lists). */
+  catalogListed?: boolean;
 };
 
 export type FocusUnboundWorkshopBuildInput = {

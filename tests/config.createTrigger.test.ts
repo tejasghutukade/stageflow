@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createTrigger, parseCreateTriggerBody } from "../src/config/createTrigger.js";
 import { loadTriggerOutcome } from "../src/config/loadTrigger.js";
@@ -150,16 +150,16 @@ describe("createTrigger", () => {
         kind: "manual",
       });
 
-      expect(created).toEqual({
-        ok: true,
-        trigger: {
-          id: "manual-new",
-          pipeline: "hello",
-          task: "my-task",
-          kind: "manual",
-          enabled: true,
-          definition_ref: "triggers/manual-new.trigger.yaml",
-        },
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      expect(created.trigger).toMatchObject({
+        id: "manual-new",
+        pipeline: "hello",
+        task: "my-task",
+        kind: "manual",
+        enabled: true,
+        definition_ref: "triggers/manual-new.trigger.yaml",
+        project_root: await realpath(root),
       });
 
       const filePath = path.join(root, "triggers", "manual-new.trigger.yaml");
@@ -212,15 +212,15 @@ describe("createTrigger", () => {
         kind: "manual",
       });
 
-      expect(created).toEqual({
-        ok: true,
-        trigger: {
-          id: "dynamic-hello",
-          pipeline: "hello",
-          kind: "manual",
-          enabled: true,
-          definition_ref: "triggers/dynamic-hello.trigger.yaml",
-        },
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      expect(created.trigger).toMatchObject({
+        id: "dynamic-hello",
+        pipeline: "hello",
+        kind: "manual",
+        enabled: true,
+        definition_ref: "triggers/dynamic-hello.trigger.yaml",
+        project_root: await realpath(root),
       });
 
       const filePath = path.join(root, "triggers", "dynamic-hello.trigger.yaml");

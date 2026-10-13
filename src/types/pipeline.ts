@@ -11,7 +11,7 @@ import type { ToolRequirement } from "../config/toolRequires.js";
 export type PipelineConfig = {
   id: string;
   stages: string[];
-  /** Selects the AgentPort backend for every stage in this pipeline; overrides the global default. */
+  /** Selects the StagePort backend for every stage in this pipeline; overrides the global default. */
   agent?: string;
   /** Default LLM model id for every stage in this pipeline; overrides the global default. */
   model?: string;

@@ -11,7 +11,7 @@ export const DEFAULT_EVENT_DELIVERY_TIMEOUT_MS = 10_000;
 
 /**
  * After cancellation or timeout, Core waits at most this long for in-flight
- * stage work to stop. `AgentPort` handles must stop inside `close()`.
+ * stage work to stop. `StagePort` handles must stop inside `close()`.
  */
 export const HOSTED_CANCEL_GRACE_MS = 5_000;
 

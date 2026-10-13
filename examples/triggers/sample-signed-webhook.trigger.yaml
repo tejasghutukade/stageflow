@@ -1,0 +1,11 @@
+id: sample-signed-webhook
+pipeline: hello
+task: my-task
+kind: event
+enabled: false
+event:
+  source: webhook
+  config:
+    secretRef: WEBHOOK_SECRET
+    header: x-hub-signature-256
+    scheme: hex

@@ -2,7 +2,7 @@
 
 Open-source runtime for **configurable multi-stage agent workflows** with typed handoffs, DAG execution, human gates, MCP, CI, and a local operator console.
 
-[![Site](https://stage-flow.dev)](stage-flow.dev)
+[![Website](https://img.shields.io/badge/website-stage--flow.dev-111111)](https://stage-flow.dev)
 [![npm version](https://img.shields.io/npm/v/stageflow)](https://www.npmjs.com/package/stageflow)
 [![npm downloads](https://img.shields.io/npm/dm/stageflow)](https://www.npmjs.com/package/stageflow)
 ![Node >=20](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)
@@ -46,7 +46,7 @@ The same pipeline runs three ways without rewriting anything:
 
 ![Stageflow architecture: pipeline definitions and operator interfaces drive the orchestration runtime, which coordinates agent execution and persisted state](docs/img/stageflow-architecture.svg)
 
-The scheduler owns orchestration semantics: DAG readiness, bounded parallelism, fan-out/join, conditional routing, retries, skipped branches, and resumable human gates. Agent execution sits behind `AgentPort`; Pi supplies the current coding-agent session, while Stageflow owns pipeline state, stage workspaces, handoff validation, and the interfaces used by the CLI, console, MCP, and CI.
+The scheduler owns orchestration semantics: DAG readiness, bounded parallelism, fan-out/join, conditional routing, retries, skipped branches, and resumable human gates. Agent execution sits behind `StagePort`; Pi supplies the current coding-agent session, while Stageflow owns pipeline state, stage workspaces, handoff validation, and the interfaces used by the CLI, console, MCP, and CI.
 
 See [Architecture](docs/architecture.md) for component boundaries, execution flow, persistence, recovery behavior, and the tradeoffs behind fresh sessions and explicit handoffs.
 
@@ -101,7 +101,7 @@ sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 
 Expanded walkthrough: [docs/quickstart.md](docs/quickstart.md)
 
-**Docker Compose** (UI + MCP in one Host): copy [`.env.example`](.env.example) → `.env`, set `STAGEFLOW_CONTROL_TOKEN`, then `docker compose up --build -d`. Checklist: [docs/docker.md](docs/docker.md#local-try-compose).
+**Docker Compose** (UI + MCP in one Host): copy [`.env.example`](.env.example) → `.env`, then `docker compose up --build -d`. The shipped compose file publishes port 3847 on localhost only and does not require a control token. Checklist: [docs/docker.md](docs/docker.md#local-try-compose).
 
 ## Connect a model provider
 

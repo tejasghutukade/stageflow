@@ -29,7 +29,8 @@ io:
   output:
     schema:
       type: object
-      required: [branch]
+      required:
+        - branch
       properties:
         branch:
           type: string

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../src/agent/port.js";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
@@ -31,7 +31,7 @@ afterEach(() => {
   }
 });
 
-function gatedAgent(gate: Promise<void>): AgentPort {
+function gatedAgent(gate: Promise<void>): StagePort {
   return {
     openStage(input: StageRunInput) {
       return createCompletedOnlyStageHandle({

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
+import type { StagePort, StageRunInput } from "../src/agent/port.js";
 import { runRunsCommand } from "../src/cli/runsCommand.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
@@ -31,7 +31,7 @@ type FakeAgentBehavior =
 
 function stageKeyedAgent(
   behaviorsByStage: Record<string, FakeAgentBehavior[]>,
-): AgentPort {
+): StagePort {
   const stageIndex = new Map<string, number>();
   return {
     openStage(input: StageRunInput) {
@@ -83,7 +83,7 @@ async function waitFor(
   throw new Error("timeout waiting for condition");
 }
 
-function parkAgent(): AgentPort {
+function parkAgent(): StagePort {
   return stageKeyedAgent({
     plan: [{ type: "emit", envelope: { status: "success", summary: "plan-ok", artifacts: [] } }],
     implement: [
@@ -98,7 +98,7 @@ function parkAgent(): AgentPort {
   });
 }
 
-function continueAgent(): AgentPort {
+function continueAgent(): StagePort {
   return stageKeyedAgent({
     plan: [{ type: "emit", envelope: { status: "success", summary: "plan-ok", artifacts: [] } }],
     implement: [

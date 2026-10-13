@@ -7,6 +7,7 @@ import {
   catalogPathErrorBody,
   resolveCatalogRelativePath,
   relativizeLocalPathForNetwork,
+  resolveDefaultWriteRoot,
   selectCatalogRootForStart,
 } from "../src/config/catalogRelativePath.js";
 import type { CatalogRoot } from "../src/config/resolveCatalogRoots.js";
@@ -263,6 +264,49 @@ describe("findCatalogRoot", () => {
   });
 });
 
+const workspaceRoot: CatalogRoot = {
+  project_root: "workspace",
+  path: "/data/workspace",
+  kind: "workspace",
+  read_only: false,
+};
+
+describe("resolveDefaultWriteRoot", () => {
+  it("omitted project_root selects workspace when multiple roots exist", async () => {
+    const multi: CatalogRoot[] = [
+      ...roots,
+      workspaceRoot,
+      {
+        project_root: "/proj/b",
+        path: "/proj/b",
+        kind: "registered",
+        read_only: false,
+      },
+    ];
+    const fakeStore = {
+      listRegisteredProjects: async () => ["/proj/a", "/proj/b"],
+    };
+    const { wireRoot } = await resolveDefaultWriteRoot(
+      { store: fakeStore as never, seededRoots: [] },
+      undefined,
+    );
+    expect(wireRoot.project_root).toBe("workspace");
+  });
+
+  it("rejects explicit read-only examples", async () => {
+    const fakeStore = { listRegisteredProjects: async () => [] as string[] };
+    await expect(
+      resolveDefaultWriteRoot(
+        {
+          store: fakeStore as never,
+          seededRoots: [{ id: "examples", path: "/opt/stageflow/examples" }],
+        },
+        "examples",
+      ),
+    ).rejects.toMatchObject({ code: "catalog_root_read_only" });
+  });
+});
+
 describe("selectCatalogRootForStart", () => {
   it("maps wire project_root to absolute CatalogRoot.path", () => {
     const selected = selectCatalogRootForStart(roots, "examples");
@@ -276,9 +320,26 @@ describe("selectCatalogRootForStart", () => {
     expect(selected.path).toBe("/proj/a");
   });
 
+  it("prefers sole registered root when workspace is also present", () => {
+    const withWorkspace: CatalogRoot[] = [
+      roots[1]!,
+      workspaceRoot,
+      roots[0]!,
+    ];
+    const selected = selectCatalogRootForStart(withWorkspace);
+    expect(selected.project_root).toBe("/proj/a");
+  });
+
+  it("selects workspace when only seeded and workspace exist", () => {
+    const seededPlusWs: CatalogRoot[] = [roots[1]!, workspaceRoot];
+    const selected = selectCatalogRootForStart(seededPlusWs);
+    expect(selected.project_root).toBe("workspace");
+  });
+
   it("requires explicit project_root when multiple writable roots", () => {
     const multi: CatalogRoot[] = [
       ...roots,
+      workspaceRoot,
       {
         project_root: "/proj/b",
         path: "/proj/b",

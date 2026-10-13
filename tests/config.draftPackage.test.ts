@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import {
   createDraftPackage,
+  hoistUsesWrapperSkills,
   loadDraftPackage,
   loadTaskArtifact,
   overwriteDraftPackage,
@@ -11,7 +13,13 @@ import {
 } from "../src/config/draftPackage.js";
 import { createPipeline } from "../src/config/createPipeline.js";
 import { createStage } from "../src/config/createStage.js";
-import { initTempGitRepo } from "./helpers/projectContext.js";
+import { publishDraftPackage } from "../src/config/publishDraftPackage.js";
+import {
+  ensureWorkspaceCatalog,
+  resetWorkspaceProvisionForTests,
+  workspaceCatalogPath,
+} from "../src/project/workspaceCatalog.js";
+import { initTempGitRepo, withIsolatedHome } from "./helpers/projectContext.js";
 
 const REQUIRED_IO = {
   io: {
@@ -198,7 +206,7 @@ describe("overwriteDraftPackage", () => {
       draft.stages![0]!.body.system_prompt = "New clarify prompt";
       draft.stages![1]!.body.system_prompt = "New decide prompt";
       draft.task = {
-        filename: "demo.task.yaml",
+        filename: "demo-task.task.yaml",
         body: { id: "demo-task", goal: "Run the demo package" },
       };
 
@@ -210,7 +218,7 @@ describe("overwriteDraftPackage", () => {
       expect(result.stagePaths).toEqual(
         expect.arrayContaining(["pipelines/clarify.yaml", "pipelines/decide.yaml"]),
       );
-      expect(result.taskPath).toBe("pipelines/demo.task.yaml");
+      expect(result.taskPath).toBe("pipelines/demo-task.task.yaml");
 
       expect(await readFile(path.join(dir, "clarify.yaml"), "utf8")).toContain(
         "New clarify prompt",
@@ -218,7 +226,7 @@ describe("overwriteDraftPackage", () => {
       expect(await readFile(path.join(dir, "decide.yaml"), "utf8")).toContain(
         "New decide prompt",
       );
-      expect(await readFile(path.join(dir, "demo.task.yaml"), "utf8")).toContain(
+      expect(await readFile(path.join(dir, "demo-task.task.yaml"), "utf8")).toContain(
         "Run the demo package",
       );
       const pipelineYaml = await readFile(path.join(dir, "demo.pipeline.yaml"), "utf8");
@@ -271,6 +279,25 @@ describe("overwriteDraftPackage", () => {
         allowInvalid: true,
       });
       expect(seed.ok).toBe(true);
+
+      const normalized = await createDraftPackage(root, {
+        directory: "workshop",
+        pipelineFilename: "fanout-fanin-temp.yaml",
+        draft: {
+          pipeline: { id: "fanout-fanin-temp", stages: [{ id: "start", entry: true }] },
+          task: {
+            filename: "fanout-fanin-temp.yaml",
+            body: { id: "fanout-fanin-temp", goal: "Try fanout" },
+          },
+        },
+        allowInvalid: true,
+      });
+      expect(normalized.ok).toBe(true);
+      if (!normalized.ok) return;
+      expect(normalized.pipelinePath).toBe("workshop/fanout-fanin-temp.pipeline.yaml");
+      expect(normalized.taskPath).toBe("workshop/fanout-fanin-temp.task.yaml");
+      await access(path.join(root, "workshop/fanout-fanin-temp.pipeline.yaml"));
+      await access(path.join(root, "workshop/fanout-fanin-temp.task.yaml"));
 
       const escaped: DraftPackage = {
         pipeline: {
@@ -406,6 +433,118 @@ describe("loadDraftPackage", () => {
       if (loaded.ok) return;
       expect(loaded.status).toBe(404);
     }));
+
+  it("hoists uses-wrapper skill onto the stage body on load", () =>
+    withRepo(async (root) => {
+      const dir = path.join(root, "pipelines");
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        path.join(dir, "clarify.yaml"),
+        [
+          "id: clarify",
+          "system_prompt: Clarify",
+          "model: anthropic/claude-sonnet-4-5",
+          "io:",
+          "  input:",
+          "    schema:",
+          "      type: object",
+          "  output:",
+          "    schema:",
+          "      type: object",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(
+        path.join(dir, "demo.pipeline.yaml"),
+        [
+          "id: demo",
+          "stages:",
+          "  - id: clarify",
+          "    uses: ./clarify.yaml",
+          "    skill: archify",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+      expect(loaded.draft.pipeline.stages[0]?.skill).toBeUndefined();
+      expect(loaded.draft.stages?.[0]?.body.skill).toBe("archify");
+    }));
+});
+
+describe("hoistUsesWrapperSkills", () => {
+  it("copies wrapper skill to body when body lacks skill, then clears wrapper", () => {
+    const next = hoistUsesWrapperSkills({
+      pipeline: {
+        id: "demo",
+        stages: [{ id: "clarify", uses: "./clarify.yaml", skill: "archify" }],
+      },
+      stages: [
+        {
+          path: "./clarify.yaml",
+          body: { id: "clarify", system_prompt: "Clarify" },
+        },
+      ],
+    });
+    expect(next.pipeline.stages[0]?.skill).toBeUndefined();
+    expect(next.stages?.[0]?.body.skill).toBe("archify");
+  });
+
+  it("does not overwrite an existing body skill", () => {
+    const next = hoistUsesWrapperSkills({
+      pipeline: {
+        id: "demo",
+        stages: [{ id: "clarify", uses: "./clarify.yaml", skill: "from-wrapper" }],
+      },
+      stages: [
+        {
+          path: "./clarify.yaml",
+          body: { id: "clarify", skill: "from-file" },
+        },
+      ],
+    });
+    expect(next.pipeline.stages[0]?.skill).toBeUndefined();
+    expect(next.stages?.[0]?.body.skill).toBe("from-file");
+  });
+
+  it("overwrite migrates wrapper skill onto the stage file", () =>
+    withRepo(async (root) => {
+      const draft: DraftPackage = {
+        pipeline: {
+          id: "demo",
+          stages: [{ id: "clarify", uses: "./clarify.yaml", skill: "archify" }],
+        },
+        stages: [
+          {
+            path: "./clarify.yaml",
+            body: {
+              id: "clarify",
+              system_prompt: "Clarify",
+              model: MODEL,
+              ...REQUIRED_IO,
+            },
+          },
+        ],
+      };
+      const created = await createDraftPackage(root, {
+        directory: "pipelines",
+        draft,
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+
+      const pipelineYaml = await readFile(
+        path.join(root, "pipelines/demo.pipeline.yaml"),
+        "utf8",
+      );
+      expect(pipelineYaml).not.toMatch(/skill:\s*archify/);
+      const stageYaml = await readFile(path.join(root, "pipelines/clarify.yaml"), "utf8");
+      expect(stageYaml).toMatch(/^skill: archify$/m);
+    }));
 });
 
 describe("open → edit → overwrite (draft/catalog seam)", () => {
@@ -466,6 +605,84 @@ describe("open → edit → overwrite (draft/catalog seam)", () => {
       expect(await readFile(path.join(dir, "ship.yaml"), "utf8")).toContain("Ship it");
       const pipelineYaml = await readFile(path.join(dir, "demo.pipeline.yaml"), "utf8");
       expect(pipelineYaml).toContain("to: ship");
+    }));
+
+  it("strips skill from uses wrappers on overwrite", () =>
+    withRepo(async (root) => {
+      const dir = await seedPackage(root, {
+        prompts: { clarify: "Clarify" },
+        stages: [{ id: "clarify", uses: "./clarify.yaml", entry: true }],
+      });
+      const opened = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(opened.ok).toBe(true);
+      if (!opened.ok) return;
+
+      const draft: DraftPackage = {
+        ...opened.draft,
+        stages: (opened.draft.stages ?? []).map((stage) =>
+          stage.body.id === "clarify"
+            ? { ...stage, body: { ...stage.body, skill: "archify" } }
+            : stage,
+        ),
+        pipeline: {
+          ...opened.draft.pipeline,
+          stages: [
+            {
+              id: "clarify",
+              uses: "./clarify.yaml",
+              entry: true,
+              skill: "should-not-persist",
+            },
+          ],
+        },
+      };
+
+      const saved = await overwriteDraftPackage(root, {
+        directory: opened.destination.directory,
+        draft,
+        pipelineFilename: opened.destination.pipelineFilename,
+      });
+      expect(saved.ok).toBe(true);
+      if (!saved.ok) return;
+
+      const pipelineYaml = await readFile(path.join(dir, "demo.pipeline.yaml"), "utf8");
+      expect(pipelineYaml).not.toContain("should-not-persist");
+      expect(pipelineYaml).not.toMatch(/skill:\s/);
+      expect(await readFile(path.join(dir, "clarify.yaml"), "utf8")).toContain(
+        "skill: archify",
+      );
+    }));
+});
+
+function useStageflowHome(home: string): string {
+  process.env.STAGEFLOW_HOME = home;
+  resetGlobalStageflowHomeForTests();
+  resetWorkspaceProvisionForTests();
+  return home;
+}
+
+describe("publishDraftPackage workspace catalog", () => {
+  it("writes under a slug directory without editing stageflow.yaml", async () =>
+    withIsolatedHome(async (home) => {
+      const sfHome = useStageflowHome(home);
+      expect(ensureWorkspaceCatalog(sfHome).ok).toBe(true);
+      const ws = workspaceCatalogPath(sfHome);
+      const manifestBefore = await readFile(path.join(ws, "stageflow.yaml"), "utf8");
+      const published = await publishDraftPackage(
+        ws,
+        {
+          directory: "ws-slug",
+          draft: validInlineDraft({ id: "ws-slug" }),
+        },
+        "create",
+        { catalogRootKind: "workspace" },
+      );
+      expect(published.write.ok).toBe(true);
+      expect(published.catalogChanged).toBe(false);
+      expect(await readFile(path.join(ws, "stageflow.yaml"), "utf8")).toBe(
+        manifestBefore,
+      );
+      await access(path.join(ws, "ws-slug", "ws-slug.pipeline.yaml"));
     }));
 });
 
@@ -615,4 +832,27 @@ describe("Workshop Author save tool facade", () => {
       await cleanup();
     }
   });
+
+  it("save without a bound projectRoot uses the workspace catalog", async () =>
+    withIsolatedHome(async (home) => {
+      const sfHome = useStageflowHome(home);
+      expect(ensureWorkspaceCatalog(sfHome).ok).toBe(true);
+      const ws = workspaceCatalogPath(sfHome);
+      const { createSaveTool, createWorkshopDraftContext } = await import(
+        "../src/operatorAgent/index.js"
+      );
+      const save = createSaveTool();
+      const draft = validInlineDraft({ id: "ws-save" });
+      let context: unknown = createWorkshopDraftContext(draft);
+      const ctx = {
+        getContext: () => context,
+        setContext: (next: unknown) => {
+          context = next;
+        },
+        emitProposal: () => {},
+      };
+      const written = await save.handler({ mode: "create" }, ctx);
+      expect(written.ok).toBe(true);
+      await access(path.join(ws, "ws-save", "ws-save.pipeline.yaml"));
+    }));
 });

@@ -17,6 +17,7 @@ import {
 } from "./legacyYaml.js";
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
+import { yamlParsePosition } from "./yamlParsePosition.js";
 import { z } from "zod";
 import { parseStageSecrets } from "../runtime/stageSecretDecl.js";
 import { parseToolRequires } from "./toolRequires.js";
@@ -512,6 +513,7 @@ export async function loadStageOutcome(
         code: "stage.load_error",
         message,
         category: "stage",
+        ...yamlParsePosition(err),
       },
     ]);
   }

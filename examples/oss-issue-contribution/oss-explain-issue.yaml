@@ -1,4 +1,5 @@
 id: oss-explain-issue
+skill: ce-explain
 system_prompt: |
   Produce one self-contained teaching artifact, issue-explainer.html, that
   explains this issue from the real checkout. This stage is a side teaching

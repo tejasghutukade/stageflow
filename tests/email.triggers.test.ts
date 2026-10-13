@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { request } from "node:http";
-import { createCompletedOnlyStageHandle, type AgentPort } from "../src/agent/port.js";
+import { createCompletedOnlyStageHandle, type StagePort } from "../src/agent/port.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
 import { EmailAccounts } from "../src/email/accounts.js";
 import { InMemoryEmailAdapter } from "../src/email/adapter.js";
@@ -36,7 +36,7 @@ async function setup(maxConcurrent = 8, queue?: ConstructorParameters<typeof Ema
   let executions = 0;
   let release: (() => void) | undefined;
   let gate = Promise.resolve();
-  const agent: AgentPort = {
+  const agent: StagePort = {
     openStage(input) {
       return createCompletedOnlyStageHandle({ stageId: input.stage.id, run: async () => {
         executions++; await gate;

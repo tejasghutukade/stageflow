@@ -5,7 +5,7 @@ title: Architecture
 
 # Architecture
 
-Stageflow is a local-first runtime for configurable multi-stage agent workflows. It separates **workflow orchestration** from **agent execution**: Stageflow owns the pipeline graph, scheduling, persisted state, handoff contracts, retries, human gates, and operator interfaces; agent execution runs behind `AgentPort`, with two selectable backends today — Pi (`@earendil-works/pi-coding-agent`, the default) and Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, opt-in per pipeline via an `agent:` field). Pipelines that don't opt in behave exactly as before; the two are additive, not a migration.
+Stageflow is a local-first runtime for configurable multi-stage agent workflows. It separates **workflow orchestration** from **agent execution**: Stageflow owns the pipeline graph, scheduling, persisted state, handoff contracts, retries, human gates, and operator interfaces; agent execution runs behind `StagePort`, with two selectable backends today — Pi (`@earendil-works/pi-coding-agent`, the default) and Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, opt-in per pipeline via an `agent:` field). Pipelines that don't opt in behave exactly as before; the two are additive, not a migration.
 
 ## System boundaries
 
@@ -18,7 +18,7 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 | DAG scheduler | Readiness, bounded parallelism, routing, fan-out/join, Clone Chain instances, failure propagation | `src/runtime/pipelineScheduler.ts` |
 | Stage runtime | Build attempt context, open the agent, validate handoff and optional after-phase `verify`, record activity, coordinate gates | `src/runtime/stageRunner.ts`, `src/runtime/verifiedStageExecution.ts`, `src/runtime/stageAttemptBootstrap.ts` |
 | Agent boundary | Stable stage input/result and live wait-or-complete session contract | `src/agent/port.ts` |
-| Backend selection | Resolves which adapter a stage runs on (stage > pipeline > global > Pi). **Model** (LLM id) resolves separately with the same tier order but no `"pi"` fallback — see [YAML catalog — Model defaults](yaml-catalog.md#model-defaults-and-precedence) | `src/agent/resolveAgentPort.ts`, `src/agent/agentBackend.ts`, `src/config/resolveModel.ts` |
+| Backend selection | Resolves which adapter a stage runs on (stage > pipeline > global > Pi). **Model** (LLM id) resolves separately with the same tier order but no `"pi"` fallback — see [YAML catalog — Model defaults](yaml-catalog.md#model-defaults-and-precedence) | `src/agent/resolveStagePort.ts`, `src/agent/agentBackend.ts`, `src/config/resolveModel.ts` |
 | Pi adapter | Translate Stageflow stage execution into Pi coding-agent sessions and tools | `src/agent/piAdapter.ts` |
 | Claude adapter | Translate Stageflow stage execution into Claude Agent SDK sessions and tools | `src/agent/claudeAdapter.ts`, `claudeTools.ts`, `claudeActivity.ts`, `claudeSession.ts` |
 | Persistence | Store run metadata, DAG snapshots, attempts, events, envelopes, artifacts, and projections | `src/runstore/` |
@@ -71,7 +71,7 @@ Persisted state lets the runtime reconstruct scheduler state for HITL resume and
 
 ## Human-in-the-loop lifecycle
 
-`AgentPort.openStage()` returns a live `StageHandle`. The runtime pulls either a completion or a `waiting_for_input` event. A waiting attempt is parked without converting the prompt into an unstructured failure. When the operator answers, Stageflow reconstructs the run context, delivers the opaque answer to the adapter, and continues the remaining DAG.
+`StagePort.openStage()` returns a live `StageHandle`. The runtime pulls either a completion or a `waiting_for_input` event. A waiting attempt is parked without converting the prompt into an unstructured failure. When the operator answers, Stageflow reconstructs the run context, delivers the opaque answer to the adapter, and continues the remaining DAG.
 
 How an adapter actually survives that park is adapter-internal and deliberately allowed to differ: Pi reopens its own on-disk session and splices the answer directly into the pending tool call, then resumes mid-thought. The Claude adapter never lets a tool call go dangling in the first place — `ask_operator` returns an immediate placeholder and the turn ends cleanly (via an `interrupt()` backstop), so parking has nothing to repair; answering resumes the same session as a new turn with the real prior conversation reloaded, not mid-thought. Both satisfy the same `StageHandle` contract from the runtime's point of view.
 
@@ -93,7 +93,7 @@ Workflow topology and stage configuration live with the consuming project, where
 
 ### Orchestration behind ports
 
-`AgentPort` keeps scheduling and persistence code independent of any one adapter's session mechanics — proven out by a second production implementation (Claude Agent SDK) alongside Pi, chosen via `resolveAgentPort()` and never affecting a stage that doesn't opt in. Model resolution (`resolveModel`) picks the LLM id string on a separate path from that backend choice. `RunStore` similarly keeps runtime call sites behind a persistence contract, even though SQLite is currently the only live adapter. These boundaries are extension seams, not promises that additional backends already exist — `AgentPort` already redeemed that promise once.
+`StagePort` keeps scheduling and persistence code independent of any one adapter's session mechanics — proven out by a second production implementation (Claude Agent SDK) alongside Pi, chosen via `resolveStagePort()` and never affecting a stage that doesn't opt in. Model resolution (`resolveModel`) picks the LLM id string on a separate path from that backend choice. `RunStore` similarly keeps runtime call sites behind a persistence contract, even though SQLite is currently the only live adapter. These boundaries are extension seams, not promises that additional backends already exist — `StagePort` already redeemed that promise once.
 
 ### Two backends, one contract
 

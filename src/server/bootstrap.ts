@@ -2,12 +2,17 @@ import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createA2aHost, type A2aHost } from "../a2a/server.js";
 import { A2aStore } from "../a2a/store.js";
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type Database from "better-sqlite3";
 import { createRunStoreWithConnection, type RunStoreKind } from "../runstore/createStore.js";
 import { resolveA2aConfigPath } from "../a2a/configDiscovery.js";
-import { ensureGlobalHome } from "../project/globalHome.js";
+import { ensureProjectRootsFromEnv } from "../project/ensureProjectRootsFromEnv.js";
+import { ensureGlobalHome, globalStageflowHome } from "../project/globalHome.js";
+import {
+  ensureWorkspaceCatalog,
+  type WorkspaceProvisionResult,
+} from "../project/workspaceCatalog.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { RunStore } from "../runstore/port.js";
@@ -65,7 +70,7 @@ import { logger as rootLogger } from "../logging/logger.js";
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
 
 export type StageflowHostOptions = {
-  agent: AgentPort;
+  agent: StagePort;
   cwd?: string;
   agentDir?: string;
   rootDir?: string;
@@ -103,6 +108,7 @@ export type StageflowHostBootstrap = {
   /** Periodic retention GC handle when enabled; already `.unref()`'d. */
   gcInterval?: NodeJS.Timeout;
   stopGcInterval: () => void;
+  workspaceCatalog?: WorkspaceProvisionResult;
   /** Stops the schedule-trigger tick loop started at boot. */
   stopScheduleSource: () => void;
   /** Stops the GitHub poll-trigger loop started at boot. */
@@ -192,6 +198,7 @@ export async function bootstrapStageflowHost(
   const invocationCwd = options.cwd ?? process.cwd();
   const ctx = await resolveStageflowContext(invocationCwd);
   const cwd = ctx.invocationCwd;
+  void globalStageflowHome();
   ensureGlobalHome();
   const cursorKey = readCursorApiKey(env);
   if (
@@ -357,6 +364,14 @@ export async function bootstrapStageflowHost(
   const runChangeBus =
     options.runChangeBus ?? boundBus ?? createRunChangeBus();
   const store = wrapRunStoreWithChangeBus(rawStore, runChangeBus);
+  await ensureProjectRootsFromEnv(env, store);
+  const workspaceCatalog = ensureWorkspaceCatalog(ctx.globalHome);
+  if (!workspaceCatalog.ok) {
+    bootLog.warn(
+      "workspace.provision_failed",
+      workspaceCatalog.reason ?? "unknown",
+    );
+  }
   const manager = new RunManager({
     agent: options.agent,
     cwd,
@@ -403,6 +418,9 @@ export async function bootstrapStageflowHost(
       const result = await fireTrigger(event.triggerId, store, manager, {
         cwd,
         task: event.task,
+        ...(event.project_root !== undefined
+          ? { project_root: event.project_root }
+          : {}),
       });
       if (!result.ok) {
         bootLog.error(
@@ -513,5 +531,6 @@ export async function bootstrapStageflowHost(
     stopEmailSource,
     email: { ...emailHost, triggers: emailTriggers, stop: stopAccountEmail },
     storeFilesystem,
+    workspaceCatalog,
   };
 }

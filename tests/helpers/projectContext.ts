@@ -10,10 +10,12 @@ export async function withIsolatedHome<T>(
   const prevHome = process.env.HOME;
   const prevUserProfile = process.env.USERPROFILE;
   const prevStageflowHome = process.env.STAGEFLOW_HOME;
+  const prevCredentialHome = process.env.STAGEFLOW_CREDENTIAL_HOME;
   process.env.HOME = home;
   process.env.USERPROFILE = home;
   delete process.env.STAGEFLOW_HOME;
   resetGlobalStageflowHomeForTests();
+  process.env.STAGEFLOW_CREDENTIAL_HOME = path.join(home, ".stageflow");
   try {
     return await fn(home);
   } finally {
@@ -31,6 +33,11 @@ export async function withIsolatedHome<T>(
       delete process.env.STAGEFLOW_HOME;
     } else {
       process.env.STAGEFLOW_HOME = prevStageflowHome;
+    }
+    if (prevCredentialHome === undefined) {
+      delete process.env.STAGEFLOW_CREDENTIAL_HOME;
+    } else {
+      process.env.STAGEFLOW_CREDENTIAL_HOME = prevCredentialHome;
     }
     resetGlobalStageflowHomeForTests();
     await rm(home, { recursive: true, force: true });

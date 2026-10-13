@@ -14,7 +14,7 @@ import {
 } from "../src/runstore/sqlite/applyStorePragmas.js";
 import { StoreOpenError } from "../src/runstore/sqlite/storeOpenError.js";
 import { bootstrapStageflowHost } from "../src/server/bootstrap.js";
-import { resolveAgentPort } from "../src/agent/resolveAgentPort.js";
+import { resolveStagePort } from "../src/agent/resolveStagePort.js";
 import { withIsolatedHome } from "./helpers/projectContext.js";
 import { globalStageflowHome } from "../src/project/globalHome.js";
 
@@ -121,7 +121,7 @@ describe("Host boot integrity", () => {
 
       await expect(
         bootstrapStageflowHost({
-          agent: resolveAgentPort(),
+          agent: resolveStagePort(),
           skipHostConfig: true,
           cwd: home,
         }),
@@ -138,7 +138,7 @@ describe("Host boot integrity", () => {
       });
 
       const boot = await bootstrapStageflowHost({
-        agent: resolveAgentPort(),
+        agent: resolveStagePort(),
         skipHostConfig: true,
         cwd: home,
       });

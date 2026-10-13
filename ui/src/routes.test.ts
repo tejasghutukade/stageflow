@@ -1,13 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
+  catalogPath,
   extensionFilePath,
   extensionPackagePath,
+  inboxPath,
   newRunPath,
   parseHash,
+  pipelinePath,
   runStagePath,
+  stagePath,
+  workshopPath,
 } from "./routes";
 
 describe("parseHash", () => {
+  it("parses the catalog route with default stages tab", () => {
+    expect(parseHash("#/catalog")).toEqual({ name: "catalog", tab: "stages" });
+  });
+
+  it("parses catalog skills tab and skill query", () => {
+    expect(parseHash(`#${catalogPath({ tab: "skills", skill: "code-review" })}`)).toEqual({
+      name: "catalog",
+      tab: "skills",
+      skillName: "code-review",
+    });
+  });
+
   it("parses the skills list", () => {
     expect(parseHash("#/skills")).toEqual({ name: "skills" });
   });
@@ -40,12 +57,70 @@ describe("parseHash", () => {
     });
   });
 
+  it("parses a stage file editor route with optional project_root", () => {
+    const filePath = "pipelines/step.yaml";
+    const root = "/Users/me/project-a";
+    expect(parseHash(`#${stagePath(filePath)}`)).toEqual({
+      name: "stage",
+      path: filePath,
+    });
+    expect(
+      parseHash(`#${stagePath(filePath, { project_root: root })}`),
+    ).toEqual({
+      name: "stage",
+      path: filePath,
+      projectRoot: root,
+    });
+  });
+
   it("parses the provider connect route", () => {
     expect(parseHash("#/connect")).toEqual({ name: "connect" });
   });
 
+  it("parses the inbox route", () => {
+    expect(parseHash("#/inbox")).toEqual({ name: "inbox" });
+  });
+
+  it("parses inbox tab query", () => {
+    expect(parseHash("#/inbox?tab=failed")).toEqual({
+      name: "inbox",
+      tab: "failed",
+    });
+    expect(parseHash("#/inbox?tab=done_today")).toEqual({
+      name: "inbox",
+      tab: "done_today",
+    });
+    expect(parseHash(`#${inboxPath("failed")}`)).toEqual({
+      name: "inbox",
+      tab: "failed",
+    });
+    expect(parseHash("#/inbox?tab=needs")).toEqual({ name: "inbox" });
+  });
+
+  it("parses pipeline detail with optional project_root query", () => {
+    const root = "/Users/me/project-a";
+    const hash = `#${pipelinePath("hello", { project_root: root })}`;
+    expect(parseHash(hash)).toEqual({
+      name: "pipeline",
+      pipelineId: "hello",
+      projectRoot: root,
+    });
+    expect(parseHash("#/pipelines/hello")).toEqual({
+      name: "pipeline",
+      pipelineId: "hello",
+    });
+  });
+
   it("parses the workshop route", () => {
     expect(parseHash("#/workshop")).toEqual({ name: "workshop" });
+    expect(parseHash("#/workshop?session=sess-abc")).toEqual({
+      name: "workshop",
+      sessionId: "sess-abc",
+    });
+    expect(parseHash(`#${workshopPath({ session: "sess-abc" })}`)).toEqual({
+      name: "workshop",
+      sessionId: "sess-abc",
+    });
   });
 
   it("redirects workshop-lab hash to workshop route", () => {
@@ -68,18 +143,37 @@ describe("parseHash", () => {
       pipelinePath: "pipelines/demo.pipeline.yaml",
       taskPath: "pipelines/demo.task.yaml",
     });
+    expect(
+      parseHash(
+        `#${workshopPath({
+          pipeline: "pipelines/demo.pipeline.yaml",
+          task: "pipelines/demo.task.yaml",
+          project_root: "examples",
+        })}`,
+      ),
+    ).toEqual({
+      name: "workshop",
+      pipelinePath: "pipelines/demo.pipeline.yaml",
+      taskPath: "pipelines/demo.task.yaml",
+      projectRoot: "examples",
+    });
   });
 
-  it("falls aui sample hash through to today", () => {
-    expect(parseHash("#/aui")).toEqual({ name: "today" });
+  it("opens inbox for an empty hash and for #/today", () => {
+    expect(parseHash("")).toEqual({ name: "inbox" });
+    expect(parseHash("#/today")).toEqual({ name: "inbox" });
   });
 
-  it("falls astryx sample hash through to today", () => {
-    expect(parseHash("#/astryx")).toEqual({ name: "today" });
+  it("falls aui sample hash through to inbox", () => {
+    expect(parseHash("#/aui")).toEqual({ name: "inbox" });
   });
 
-  it("falls unknown hashes through to today", () => {
-    expect(parseHash("#/not-a-real-route")).toEqual({ name: "today" });
+  it("falls astryx sample hash through to inbox", () => {
+    expect(parseHash("#/astryx")).toEqual({ name: "inbox" });
+  });
+
+  it("falls unknown hashes through to inbox", () => {
+    expect(parseHash("#/not-a-real-route")).toEqual({ name: "inbox" });
   });
 
   it("parses New Run query params used by the Workshop Run shortcut", () => {
@@ -91,6 +185,17 @@ describe("parseHash", () => {
       name: "new",
       pipelineId: "pipelines/demo.pipeline.yaml",
       taskPath: "pipelines/demo.task.yaml",
+    });
+    const rooted = newRunPath({
+      pipeline: "pipelines/demo.pipeline.yaml",
+      task: "pipelines/demo.task.yaml",
+      project_root: "/repo/examples",
+    });
+    expect(parseHash(`#${rooted}`)).toEqual({
+      name: "new",
+      pipelineId: "pipelines/demo.pipeline.yaml",
+      taskPath: "pipelines/demo.task.yaml",
+      projectRoot: "/repo/examples",
     });
   });
 });

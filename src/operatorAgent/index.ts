@@ -27,6 +27,14 @@ export {
   type WorkshopOperatorHostOptions,
 } from "./fakeHost.js";
 export {
+  AGENT_PORT_BACKENDS,
+  createPiAgentPort,
+  resolveAgentPort,
+  type AgentPortBackendId,
+  type AgentPort,
+  type AgentPortOptions,
+} from "./agentPort.js";
+export {
   createLiveWorkshopOperatorHost,
   createPiOperatorAgentModel,
   type LiveWorkshopOperatorHostOptions,

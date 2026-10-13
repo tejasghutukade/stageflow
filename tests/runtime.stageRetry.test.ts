@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../src/agent/port.js";
 import {
@@ -161,7 +161,7 @@ async function createRetryExecution(
 async function startRetryCoordinator(opts: {
   store: ReturnType<typeof createRunStore>;
   runId: string;
-  agent: AgentPort;
+  agent: StagePort;
   roots: Map<string, number>;
   onLoopTick?: () => Promise<void>;
   coordinator?: RunRetryCoordinator;

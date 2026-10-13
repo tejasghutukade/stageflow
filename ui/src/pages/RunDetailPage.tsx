@@ -69,17 +69,17 @@ import {
   type SessionChipKind,
 } from "../workspace/resolveRunWorkspace";
 import { resolveStreamRoute } from "../workspace/resolveStreamRoute";
+import { useRedesign } from "../redesign/flag";
+import { RunDetailPageRedesign } from "./runDetail/RunDetailPageRedesign";
+import {
+  clampWorkHeight,
+  MAP_MIN_H,
+  WORK_ARROW_STEP,
+  WORK_DEFAULT_H,
+  WORK_MIN_H,
+} from "./runDetail/runDetailPaneSplit";
 
-const WORK_DEFAULT_H = 300;
-const WORK_MIN_H = 200;
-const MAP_MIN_H = 140;
-const WORK_ARROW_STEP = 24;
-
-export function clampWorkHeight(requested: number, paneHeight: number): number {
-  const maxByMap = paneHeight - MAP_MIN_H;
-  if (paneHeight < 340) return Math.max(0, maxByMap);
-  return Math.max(WORK_MIN_H, Math.min(requested, maxByMap));
-}
+export { clampWorkHeight } from "./runDetail/runDetailPaneSplit";
 
 export function liveViewWorkHeight(paneHeight: number, headHeight: number): number {
   if (paneHeight <= 0) return WORK_DEFAULT_H;
@@ -125,6 +125,50 @@ function composerEl(
 }
 
 export function RunDetailPage({
+  runId,
+  view,
+  onBack,
+  onReran,
+  onOpenStream,
+  onOpenArtifact,
+  onOpenEnvelope,
+}: {
+  runId: string;
+  view: DetailView;
+  onBack: () => void;
+  onReran: (runId: string) => void;
+  onOpenStream: (stageId?: string) => void;
+  onOpenArtifact: (path: string) => void;
+  onOpenEnvelope: (stageId: string) => void;
+}) {
+  const redesign = useRedesign();
+  if (redesign) {
+    return (
+      <RunDetailPageRedesign
+        runId={runId}
+        view={view}
+        onBack={onBack}
+        onReran={onReran}
+        onOpenStream={onOpenStream}
+        onOpenArtifact={onOpenArtifact}
+        onOpenEnvelope={onOpenEnvelope}
+      />
+    );
+  }
+  return (
+    <RunDetailPageLegacy
+      runId={runId}
+      view={view}
+      onBack={onBack}
+      onReran={onReran}
+      onOpenStream={onOpenStream}
+      onOpenArtifact={onOpenArtifact}
+      onOpenEnvelope={onOpenEnvelope}
+    />
+  );
+}
+
+function RunDetailPageLegacy({
   runId,
   view,
   onBack,

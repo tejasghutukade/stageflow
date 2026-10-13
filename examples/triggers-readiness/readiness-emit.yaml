@@ -1,0 +1,18 @@
+id: readiness-emit
+system_prompt: |
+  You are a trigger smoke-test stage. Reply with one short acknowledgment, then call emit_stage_envelope once with
+  status: success, a non-empty summary, artifacts: [], and payload: { "trigger_test": true }.
+io:
+  input:
+    schema:
+      type: object
+      additionalProperties: true
+  output:
+    schema:
+      type: object
+      required:
+        - trigger_test
+      properties:
+        trigger_test:
+          type: boolean
+      additionalProperties: false

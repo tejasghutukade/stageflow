@@ -5,21 +5,23 @@ import {
   type StageGateKind,
   type CreatedStageListing,
 } from "../api";
+import {
+  createStageGateKindsPayload,
+  MODEL_INHERIT,
+  MODEL_OTHER,
+  optionalCreateStageSkill,
+  resolveNewStageModel,
+  validateNewStageFields,
+} from "../redesign/catalog/catalogStageModel";
 
 export type GateKindsMode = "all" | "none" | "allowlist";
 
-export function createStageGateKindsPayload(
-  mode: GateKindsMode,
-  selected: StageGateKind[],
-): { gate_kinds?: StageGateKind[] } {
-  if (mode === "all") return {};
-  if (mode === "none") return { gate_kinds: [] };
-  return { gate_kinds: selected };
-}
-
-const STAGE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
-export const MODEL_INHERIT = "__inherit__";
-export const MODEL_OTHER = "__other__";
+export {
+  createStageGateKindsPayload,
+  MODEL_INHERIT,
+  MODEL_OTHER,
+  resolveNewStageModel as resolveCreateStageModel,
+};
 
 const GATE_KINDS: StageGateKind[] = [
   "free_text",
@@ -44,42 +46,18 @@ export function validateFields(values: {
   modelSelect?: string;
   useDropdown?: boolean;
 }): FieldErrors {
+  const shared = validateNewStageFields({
+    id: values.id,
+    systemPrompt: values.system_prompt,
+    model: values.model,
+    modelSelect: values.modelSelect,
+    useDropdown: values.useDropdown,
+  });
   const errors: FieldErrors = {};
-  const id = values.id.trim();
-  if (!id) {
-    errors.id = "Id is required.";
-  } else if (id.length > 64 || !STAGE_ID_PATTERN.test(id)) {
-    errors.id = "Id must be lowercase kebab-case.";
-  }
-  if (
-    values.useDropdown &&
-    values.modelSelect === MODEL_OTHER &&
-    !values.model.trim()
-  ) {
-    errors.model = "Model is required when Other is selected.";
-  }
-  if (!values.system_prompt.trim()) {
-    errors.system_prompt = "System prompt is required.";
-  }
+  if (shared.id) errors.id = shared.id;
+  if (shared.systemPrompt) errors.system_prompt = shared.systemPrompt;
+  if (shared.model) errors.model = shared.model;
   return errors;
-}
-
-export function resolveCreateStageModel(options: {
-  useDropdown: boolean;
-  modelSelect: string;
-  customModel: string;
-  plainModel: string;
-}): string {
-  if (options.useDropdown) {
-    if (options.modelSelect === MODEL_INHERIT) {
-      return "";
-    }
-    if (options.modelSelect === MODEL_OTHER) {
-      return options.customModel.trim();
-    }
-    return options.modelSelect.trim();
-  }
-  return options.plainModel.trim();
 }
 
 function stageCreateBanner(status: number, serverError?: string): string {
@@ -99,6 +77,7 @@ const emptyForm = () => ({
   modelSelect: MODEL_INHERIT,
   customModel: "",
   plainModel: "",
+  skill: "",
 });
 
 export function NewStagePanel({
@@ -149,7 +128,7 @@ export function NewStagePanel({
   }, [isOpen, onClose]);
 
   function resolvedModel(): string {
-    return resolveCreateStageModel({
+    return resolveNewStageModel({
       useDropdown,
       modelSelect: form.modelSelect,
       customModel: form.customModel,
@@ -190,6 +169,7 @@ export function NewStagePanel({
       system_prompt: payload.system_prompt,
       ...(model.length > 0 ? { model } : {}),
       ...createStageGateKindsPayload(form.gateMode, form.gateKinds),
+      ...optionalCreateStageSkill(form.skill),
     });
     setSubmitting(false);
     if (result.ok) {
@@ -336,6 +316,21 @@ export function NewStagePanel({
             {fieldErrors.system_prompt ? (
               <p className="field-error">{fieldErrors.system_prompt}</p>
             ) : null}
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="new-stage-skill">Skill</label>
+            <input
+              id="new-stage-skill"
+              className="input"
+              value={form.skill}
+              onChange={(e) => setForm((prev) => ({ ...prev, skill: e.target.value }))}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
+              Optional. Omitted when empty.
+            </p>
           </div>
 
           <div className="form-field">

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
+import type { StagePort, StageRunInput } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
 import { assertRequiredEnvelope } from "../src/envelope/check.js";
@@ -45,7 +45,7 @@ function schedulerStageId(input: StageRunInput): string {
 
 function stageKeyedFakeAgent(
   behaviorsByStage: Record<string, FakeAgentBehavior[]>,
-): AgentPort & { openCounts: Map<string, number> } {
+): StagePort & { openCounts: Map<string, number> } {
   const openCounts = new Map<string, number>();
   const stageIndex = new Map<string, number>();
   return {
@@ -73,7 +73,7 @@ function stageKeyedFakeAgent(
 
 async function prepareCloneChainRun(
   root: string,
-  agent: AgentPort,
+  agent: StagePort,
   pipelineStem: string,
 ) {
   const store = createRunStore({ rootDir: root });

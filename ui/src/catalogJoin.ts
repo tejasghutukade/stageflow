@@ -18,9 +18,52 @@ export function gateCount(
   return stages.filter((stage) => stageMayAsk(stage.gate_kinds)).length;
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function runShortId(runId: string): string {
+  if (UUID_RE.test(runId)) return runId.slice(0, 8);
+  if (/^\d{4}-\d{2}-\d{2}/.test(runId)) {
+    const suffix = runId.replace(/^\d{4}-\d{2}-\d{2}[T\-_:.Z]*/i, "").replace(/[^\w]/g, "");
+    if (suffix.length >= 4) return suffix.slice(0, 8);
+    const parsed = Date.parse(runId);
+    if (Number.isFinite(parsed)) {
+      const d = new Date(parsed);
+      const hex = parsed.toString(36).replace(/[^\w]/g, "");
+      if (hex.length >= 4) return hex.slice(-8);
+      return `${d.getUTCMonth() + 1}${d.getUTCDate()}${d.getUTCHours()}${d.getUTCMinutes()}`.slice(0, 8);
+    }
+  }
+  if (runId.length <= 8) return runId;
+  return runId.slice(-8);
+}
+
+export function formatRunShortTimestamp(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return runShortId(iso);
+  const d = new Date(t);
+  const month = d.toLocaleString(undefined, { month: "short" });
+  const day = d.getDate();
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return `${month} ${day} · ${time}`;
+}
+
+export function runAnsweredGateLabel(run: RunSummary): string {
+  if (run.waiting_stage_id) return run.waiting_stage_id;
+  const stages = run.stages ?? [];
+  const lastSucceeded = [...stages].reverse().find((s) => s.status === "succeeded");
+  if (lastSucceeded) return lastSucceeded.id;
+  if (run.failed_stage_id) return run.failed_stage_id;
+  return runShortId(run.run_id);
+}
+
 export function relativeTime(iso: string, now = Date.now()): string {
   const then = Date.parse(iso);
-  if (!Number.isFinite(then)) return iso;
+  if (!Number.isFinite(then)) return runShortId(iso);
   const ms = Math.max(0, now - then);
   const sec = Math.floor(ms / 1000);
   if (sec < 60) return "just now";

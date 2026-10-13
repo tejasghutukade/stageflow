@@ -16,7 +16,7 @@ COPY ui ./ui
 COPY scripts ./scripts
 COPY skills ./skills
 COPY builtin-skills ./builtin-skills
-COPY examples ./examples
+COPY examples/triggers-readiness ./examples/triggers-readiness
 COPY README.md LICENSE ./
 RUN npm run build \
   && npm run ui:build \
@@ -39,7 +39,7 @@ COPY --from=build --chown=stageflow:stageflow /src/node_modules ./node_modules
 COPY --from=build --chown=stageflow:stageflow /src/dist ./dist
 COPY --from=build --chown=stageflow:stageflow /src/skills ./skills
 COPY --from=build --chown=stageflow:stageflow /src/builtin-skills ./builtin-skills
-COPY --from=build --chown=stageflow:stageflow /src/examples ./examples
+COPY --from=build --chown=stageflow:stageflow /src/examples/triggers-readiness ./catalog/triggers-readiness
 COPY --from=build --chown=stageflow:stageflow /src/README.md /src/LICENSE ./
 COPY --from=build /src/scripts/generate-toolchain-manifest.mjs ./scripts/generate-toolchain-manifest.mjs
 RUN node ./scripts/generate-toolchain-manifest.mjs /etc/stageflow/toolchain.json \
@@ -49,6 +49,7 @@ RUN node ./scripts/generate-toolchain-manifest.mjs /etc/stageflow/toolchain.json
   && chmod 755 /opt/stageflow/dist/cli.js
 
 ENV STAGEFLOW_HOME=/data \
+  STAGEFLOW_CREDENTIAL_HOME=/data \
   STAGEFLOW_BIND=0.0.0.0 \
   STAGEFLOW_NO_AUTOSTART=1 \
   STAGEFLOW_NO_OPEN=1 \

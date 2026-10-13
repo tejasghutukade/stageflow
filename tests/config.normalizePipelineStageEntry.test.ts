@@ -250,6 +250,26 @@ describe("normalizePipelineStageEntries", () => {
     expect(outcome.issues[0]?.code).toBe("pipeline.stage_uses_inline_conflict");
   });
 
+  it("rejects skill on a uses wrapper", () => {
+    const outcome = normalizePipelineStageEntries(
+      [
+        {
+          raw: {
+            id: "x",
+            uses: "./x.yaml",
+            skill: "archify",
+          },
+          declaringPath: "/tmp/pipeline.yaml",
+        },
+      ],
+      ctx,
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("pipeline.stage_wrapper_skill_rejected");
+    expect(outcome.issues[0]?.message).toMatch(/stage file \(\.\/x\.yaml\)/);
+  });
+
   it("rejects mixed payload_schema and io on one entry", () => {
     const outcome = normalizePipelineStageEntries(
       [

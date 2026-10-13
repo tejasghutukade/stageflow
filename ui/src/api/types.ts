@@ -314,6 +314,19 @@ export type StageSnapshot = {
   pending_prompt?: PendingPrompt;
   attempt_count: number;
   cost_usd?: number;
+  usage?: {
+    costUsd: number;
+    models: Record<
+      string,
+      {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadInputTokens: number;
+        cacheCreationInputTokens: number;
+        costUsd: number;
+      }
+    >;
+  };
 };
 
 export type VerificationCheckStatus =
@@ -383,11 +396,62 @@ export type TaskListing = {
   project_root?: string;
 };
 
+export type TaskDetailFile = {
+  path: string;
+  id: string;
+  goal: string;
+  context?: string;
+  constraints?: string;
+  checkout?: string;
+  repository?: string;
+  ref?: string;
+  run_branch_template?: string;
+  git_identity?: { name?: string; email?: string };
+  input?: Record<string, unknown>;
+};
+
+export type CreateTaskInput = {
+  directory: string;
+  id: string;
+  goal: string;
+  context?: string;
+  constraints?: string;
+  checkout?: string;
+  repository?: string;
+  ref?: string;
+  project_root?: string;
+};
+
+export type UpdateTaskBody = {
+  goal: string;
+  context?: string | null;
+  constraints?: string | null;
+  checkout?: string | null;
+  repository?: string | null;
+  ref?: string | null;
+  directory?: string;
+  id?: string;
+  project_root?: string;
+};
+
+export type ImportTaskFromIssueInput = {
+  repo: string;
+  number: number;
+  directory: string;
+  project_root?: string;
+};
+
+export type TaskWriteResult =
+  | { ok: true; task: TaskDetailFile }
+  | { ok: false; status: number; error: string };
+
 export type PipelineStageListing = {
   id: string;
   gate_kinds?: StageGateKind[];
   uses_path?: string;
   inline?: boolean;
+  model?: string;
+  skill?: string;
 };
 
 export type PipelineListing = {
@@ -459,6 +523,7 @@ export type CreateStageInput = {
   system_prompt: string;
   model?: string;
   gate_kinds?: StageGateKind[];
+  skill?: string;
 };
 
 export type CreatedStageListing = {
@@ -470,6 +535,20 @@ export type CreatedStageListing = {
 export type CreateStageResult =
   | { ok: true; stage: CreatedStageListing }
   | { ok: false; status: number; error: string };
+
+export type SkillInstallInput = {
+  command: string;
+};
+
+export type SkillInstallOk = {
+  skillName: string;
+  destPath: string;
+  message: string;
+};
+
+export type SkillInstallResult =
+  | ({ ok: true } & SkillInstallOk)
+  | { ok: false; status?: number; error: string };
 
 export type CreatePipelineStageRef = {
   id: string;
@@ -500,13 +579,37 @@ export type ValidationFinding = {
   category: string;
   pipelineId?: string;
   stageId?: string;
+  line?: number;
+  column?: number;
 };
 
 export type DraftValidationResult = {
-  scope: "full" | "pipeline" | "task";
+  scope: "full" | "pipeline" | "task" | "stage";
   ok: boolean;
   summary: { errors: number; warnings: number };
   findings: ValidationFinding[];
+};
+
+export type CatalogValidationResult = DraftValidationResult;
+
+export type CatalogRootKind = "registered" | "seeded" | "workspace";
+
+export type CatalogRoot = {
+  project_root: string;
+  kind: CatalogRootKind;
+  label: string;
+  read_only: boolean;
+  available: boolean;
+  unavailable_reason?: string;
+};
+
+export type CatalogRootsResult = {
+  roots: CatalogRoot[];
+};
+
+export type CatalogFileResult = {
+  path: string;
+  content: string;
 };
 
 export type DraftPackagePayload = {
@@ -536,6 +639,10 @@ export type CreateDraftPackageResult =
       pipeline: PipelineListing;
       pipelinePath: string;
       stagePaths: string[];
+      project_root?: string;
+      catalog_root_path?: string;
+      root_kind?: CatalogRootKind;
+      read_only?: boolean;
       taskPath?: string;
     }
   | {
@@ -547,6 +654,33 @@ export type CreateDraftPackageResult =
 
 export type OverwriteDraftPackageInput = CreateDraftPackageInput;
 export type OverwriteDraftPackageResult = CreateDraftPackageResult;
+
+export type PlanDraftPackageInput = {
+  directory: string;
+  draft: DraftPackagePayload;
+  pipelineFilename?: string;
+  project_root?: string;
+  mode?: "create" | "overwrite";
+};
+
+export type DraftPlanFile = {
+  path: string;
+  kind: "pipeline" | "stage" | "task";
+  action: "new" | "overwrite" | "unchanged";
+  added: number;
+  removed: number;
+};
+
+export type DraftPlanResult = {
+  pipelinePath: string;
+  directory: string;
+  files: DraftPlanFile[];
+  pipelineIdTaken: boolean;
+};
+
+export type PlanDraftPackageResult =
+  | ({ ok: true } & DraftPlanResult)
+  | { ok: false; status: number; error: string };
 
 export type OpenDraftPackageInput = {
   path: string;
@@ -560,6 +694,9 @@ export type OpenDraftPackageResult =
       draft: DraftPackagePayload;
       destination: { directory: string; pipelineFilename: string };
       pipelinePath: string;
+      project_root?: string;
+      root_kind?: CatalogRootKind;
+      read_only?: boolean;
       taskPath?: string;
     }
   | {
@@ -605,6 +742,7 @@ export type WorkshopAutosavePayload = {
   savedPath?: string | null;
   savedTaskPath?: string | null;
   diskFingerprints?: Record<string, string>;
+  projectRoot?: string | null;
 };
 
 export type GetWorkshopAutosaveResult =
@@ -672,6 +810,13 @@ export type WorkshopChatTurnPayload = {
   buildId?: string | null;
 };
 
+export type WorkshopChatAttachment = {
+  name: string;
+  mediaType: string;
+  size: number;
+  content: string;
+};
+
 export type WorkshopChatTurnInput = {
   sessionId: string;
   message: string;
@@ -679,6 +824,9 @@ export type WorkshopChatTurnInput = {
   autoApply?: boolean;
   model?: string | null;
   stream?: boolean;
+  attachments?: WorkshopChatAttachment[];
+  context?: { docs?: boolean };
+  project_root?: string;
 };
 
 export type WorkshopChatTurnResult =
@@ -708,11 +856,31 @@ export type WorkshopChatStreamFrame =
   | { type: "event"; event: WorkshopChatWireEvent }
   | ({ type: "done" } & WorkshopChatTurnPayload);
 
+export type WorkshopSessionAttachment = {
+  name: string;
+  size: number;
+  mediaType: string;
+};
+
+export type WorkshopSessionMutationSnapshot = {
+  id: string;
+  summary: string;
+  affectedStageIds: string[];
+  artifacts: WorkshopChatProposalPayload["artifacts"];
+  status: "accepted" | "rejected";
+  autoApplied?: boolean;
+  baseDraft?: DraftPackagePayload;
+  nextDraft?: DraftPackagePayload;
+  baseFingerprint?: string;
+};
+
 export type WorkshopSessionMessage = {
   id: string;
   role: "assistant" | "user" | "system";
   text: string;
   createdAt: string;
+  attachments?: WorkshopSessionAttachment[];
+  mutations?: WorkshopSessionMutationSnapshot[];
 };
 
 export type WorkshopSessionRecord = {
@@ -1006,10 +1174,21 @@ export type ConnectionListing = {
 export type TriggerEvent = {
   source: string;
   match?: Record<string, unknown>;
+  config?: Record<string, unknown>;
+};
+
+export type TriggerAdapterStatus = {
+  adapter: string;
+  state: string;
+  detail?: string;
+  last_poll_at?: string;
+  last_seen_at?: string;
+  last_error?: string;
 };
 
 export type TriggerListItem = {
   id: string;
+  project_root?: string;
   pipeline: string;
   task?: string;
   kind: "manual" | "schedule" | "event";
@@ -1020,6 +1199,18 @@ export type TriggerListItem = {
   last_fired_at?: string;
   last_run_id?: string;
   next_run_at?: string;
+  adapter_status?: TriggerAdapterStatus;
+};
+
+export type TriggerFireRecord = { fired_at: string; run_id: string };
+
+export type SkillUsageEntry = {
+  stage_ids: string[];
+  pipeline_ids: string[];
+};
+
+export type SkillUsageIndex = {
+  usages: Record<string, SkillUsageEntry>;
 };
 
 export type CreateTriggerInput = {
@@ -1031,6 +1222,7 @@ export type CreateTriggerInput = {
   schedule?: TriggerSchedule;
   event?: TriggerEvent;
   enabled?: boolean;
+  project_root?: string;
 };
 
 export type CreateTriggerResult =

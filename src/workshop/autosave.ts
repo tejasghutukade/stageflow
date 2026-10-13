@@ -8,7 +8,6 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { storeRootFor } from "../runstore/paths.js";
 import type { DraftPackage } from "../config/draftPackage.js";
 
 export const WORKSHOP_UNTITLED_AUTOSAVE_KEY = "__untitled__";
@@ -37,6 +36,7 @@ export type WorkshopAutosaveRecord = {
   savedPath?: string | null;
   savedTaskPath?: string | null;
   diskFingerprints?: Record<string, string>;
+  projectRoot?: string | null;
 };
 
 export function workshopAutosaveSlotKey(
@@ -47,14 +47,9 @@ export function workshopAutosaveSlotKey(
   return trimmed.replace(/\\/g, "/");
 }
 
-export function resolveWorkshopAutosaveStoreRoot(options: {
+export function resolveWorkshopAutosaveStoreRoot(_options?: {
   projectRoot?: string | null;
-  isGitProject?: boolean;
 }): string {
-  const root = options.projectRoot?.trim();
-  if (root && options.isGitProject !== false) {
-    return storeRootFor(path.resolve(root));
-  }
   return globalStageflowHome();
 }
 
@@ -159,6 +154,9 @@ export function parseWorkshopAutosaveRecord(
       fps[k] = v;
     }
     record.diskFingerprints = fps;
+  }
+  if (value.projectRoot === null || typeof value.projectRoot === "string") {
+    record.projectRoot = value.projectRoot;
   }
 
   return record;

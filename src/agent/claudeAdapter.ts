@@ -1,5 +1,5 @@
 /**
- * Claude Agent SDK implementation of AgentPort.
+ * Claude Agent SDK implementation of StagePort.
  *
  * One turn = one streaming-input `query()` call, spawned as a subprocess by
  * the SDK. The session is sealed the same way Pi's sealed stage session is:
@@ -70,7 +70,7 @@ import {
   DEFAULT_STAGE_TIMEOUT_MS,
   runStageViaOpen,
   runtimeStageId,
-  type AgentPort,
+  type StagePort,
   type OpaqueAnswer,
   type StageHandle,
   type StageHandleCloseOptions,
@@ -468,7 +468,7 @@ function resumePromptText(answer: AskOperatorAnswer): string {
   ].join("\n");
 }
 
-export class ClaudeAgentAdapter implements AgentPort {
+export class ClaudeAgentAdapter implements StagePort {
   openStage(input: StageRunInput): StageHandle {
     const stageId = runtimeStageId(input);
     const markerPath = claudeSessionMarkerPath(input);

@@ -368,10 +368,92 @@ describe("validateCatalog task scope", () => {
     expect(result.findings.some((f) => f.code === "task.load_error")).toBe(true);
   });
 
+  it("malformed YAML produces load_error finding with line", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-task-"));
+    const taskPath = path.join(root, "bad.task.yaml");
+    await writeFile(taskPath, "id: [\n  - unclosed\n");
+    const result = await validateCatalog({
+      scope: "task",
+      task: taskPath,
+      cwd: root,
+    });
+    const finding = result.findings.find((f) => f.code === "task.load_error");
+    expect(finding?.line).toBe(2);
+    expect(finding?.column).toBe(3);
+  });
+
   it("throws when task scope omits task path", async () => {
     await expect(validateCatalog({ scope: "task", cwd: fixtures })).rejects.toThrow(
       /task is required/i,
     );
+  });
+});
+
+describe("validateCatalog stage scope", () => {
+  it("valid stage file passes with scope stage", async () => {
+    const stagePath = path.join(fixtures, "stages/clarify.yaml");
+    const result = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: fixtures,
+    });
+    expect(result.scope).toBe("stage");
+    expect(result.ok).toBe(true);
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("invalid shape produces stage finding", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-"));
+    const stagePath = path.join(root, "bad.yaml");
+    await writeFile(stagePath, "id: bad\n");
+    const result = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: root,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.findings.some((f) => f.code === "stage.invalid_shape")).toBe(true);
+  });
+
+  it("throws when stage scope omits stage path", async () => {
+    await expect(validateCatalog({ scope: "stage", cwd: fixtures })).rejects.toThrow(
+      /stage is required/i,
+    );
+  });
+
+  it("stageContent validates the buffer, not the on-disk file", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-buf-"));
+    const stagePath = path.join(root, "ok.yaml");
+    await writeFile(
+      stagePath,
+      [
+        "id: ok",
+        "system_prompt: valid on disk",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const bad = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: root,
+      stageContent: "id: ok\n",
+    });
+    expect(bad.ok).toBe(false);
+    expect(bad.findings.some((f) => f.code === "stage.invalid_shape")).toBe(true);
+    const good = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: root,
+    });
+    expect(good.ok).toBe(true);
   });
 });
 

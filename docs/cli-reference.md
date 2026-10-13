@@ -11,10 +11,11 @@ The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for 
 
 | Path | Purpose |
 |------|---------|
-| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`, including the projects registry), run workspaces (`runs/`), `sf_owned` auth (`agent/auth.json`), global `settings.json`, `service.log`, Workshop builds (`workshop/builds/`) and chat sessions (`workshop/sessions/`) |
+| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`, including the projects registry), run workspaces (`runs/`), global `settings.json`, `service.log`, Workshop builds (`workshop/builds/`) and chat sessions (`workshop/sessions/`) |
+| Operator auth file | `<credential-root>/agent/auth.json`. `STAGEFLOW_CREDENTIAL_HOME` sets the root to a directory. When it is unset, the root is the host user's `~/.stageflow` (`~/.stageflow/agent/auth.json`). `models.json` sits beside that file. The Cursor key file is `<credential-root>/agent/cursor-api-key`. |
 | `<git-root>/.stageflow/settings.json` | Per-project settings (`maxConcurrent`, `credentialSource`) when run from inside a git repo; not the run store |
 
-Override the durable root with `STAGEFLOW_HOME`. See [Data directory](data-directory.md) for the full tree (keep vs disposable), image user, and version support.
+Override the durable root with `STAGEFLOW_HOME`. A job-local or Docker data directory is its own operator when `STAGEFLOW_CREDENTIAL_HOME` is set to that directory. Docker and the release and publish workflows set the override. [`scripts/start-ui-local.sh`](../scripts/start-ui-local.sh) leaves it unset, so that server shares the machine operator store. When an existing login lives under a non-default data directory, set `STAGEFLOW_CREDENTIAL_HOME` to that directory. See [Data directory](data-directory.md) for the full tree (keep vs disposable), image user, and version support.
 
 Store backend: `SF_STORE=sqlite` only; `SF_STORE=disk` is rejected. If SQLite has no runs yet, a disk-era nested `runs` tree may be imported; if a project `.stageflow` is missing and `.software-factory` exists, the next project-settings open renames it.
 
@@ -874,7 +875,7 @@ On first SIGTERM/SIGINT the Host drains: stop accepting new starts, signal activ
 
 `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` is a test/debug escape hatch that disables MCP sessions. See [MCP](mcp.md).
 
-**Access control.** Non-loopback binds require `STAGEFLOW_CONTROL_TOKEN` (or `_FILE`); otherwise the process refuses to start (exit `1`) before `listen`. See [MCP — access control](mcp.md#access-control).
+**Access control.** Non-loopback binds require `STAGEFLOW_CONTROL_TOKEN` (or `_FILE`); otherwise the process refuses to start (exit `1`) before `listen`. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` skips that refusal. The shipped Compose file sets it and publishes `127.0.0.1:3847:3847` for local try. Do not set it when the port is reachable beyond this machine. See [MCP — access control](mcp.md#access-control).
 
 Run **either** `sf ui` **or** `sf mcp` at a time — both bind the same default port (`3847`) on the shared global service, so running both together is a port collision, not a store conflict (they already share the same global store). `sf run` / `sf run-stage` / mutating `sf runs` verbs also auto-start this service headlessly if nothing is listening yet, so starting `sf ui` first avoids racing a later headless auto-start for the port.
 
@@ -953,6 +954,7 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_LEGACY_YAML` | Only if you still have pre-`io` catalogs: load adapter for legacy authoring keys (on by default). Set `0` to reject legacy authoring keys; [`sf migrate-yaml`](#sf-migrate-yaml) still reads legacy |
 | `STAGEFLOW_MCP_STATELESS` | Disable MCP sessions (test/debug); same as `--mcp-stateless` |
 | `STAGEFLOW_BIND` | Listen address for `sf ui` / `sf mcp` (overridden by `--host`) |
+| `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` | Set to `1` to start a non-loopback bind with no control token. Local Compose only; leave unset when the port is reachable beyond this machine |
 | `STAGEFLOW_NO_OPEN` | Skip browser open for `sf ui` (overridden by `--no-open`) |
 | `STAGEFLOW_ALLOWED_HOSTS` | Comma-separated Host/Origin allow-list (loopback always allowed); reject `*` |
 | `STAGEFLOW_CONTROL_TOKEN` / `_FILE` | Drive-scoped bearer token (min 32 chars); required for non-loopback bind; `caller_id` `default` |

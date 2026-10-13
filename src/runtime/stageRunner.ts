@@ -1,5 +1,5 @@
 import type {
-  AgentPort,
+  StagePort,
   FeedbackLoopContext,
   StageHandle,
   StageRunResult,
@@ -47,7 +47,7 @@ export function isRunStageWaiting(
 }
 
 export type RunStageOptions = {
-  agent: AgentPort;
+  agent: StagePort;
   store: RunStore;
   runId: string;
   stage: LoadedStageConfig;

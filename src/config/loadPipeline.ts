@@ -365,7 +365,6 @@ async function buildLoadedPipelineFromMerge(
     const stage: StageConfig = {
       ...stageOutcome.value,
       ...(browser !== undefined ? { browser } : {}),
-      ...(entry.skill !== undefined ? { skill: entry.skill } : {}),
       ...(entry.mcp !== undefined ? { mcp: entry.mcp } : {}),
       ...(entry.secrets !== undefined ? { secrets: entry.secrets } : {}),
       ...(stageRequires !== undefined ? { requires: stageRequires } : {}),

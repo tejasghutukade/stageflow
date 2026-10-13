@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { RunSubmissionExistsError, type RunSubmission, type RunSubmissionRecord } from "../runstore/submission.js";
 import { access, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
-import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
+import type { StagePort, OpaqueAnswer } from "../agent/port.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
@@ -591,7 +591,7 @@ export class RunManager {
 
   constructor(
     private readonly options: {
-      agent: AgentPort;
+      agent: StagePort;
       store: RunStore;
       cwd?: string;
       projectRoot?: string;

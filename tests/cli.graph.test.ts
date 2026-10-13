@@ -319,7 +319,7 @@ describe("sf graph integration", { timeout: 30_000 }, () => {
     expect(byId.decompose).toMatchObject({ clone_cap: 8, clone_mode: "parallel", entry: true });
     expect(byId.align).toMatchObject({ clone_cap: 8, clone_mode: "sequential" });
     expect(byId["address-feedback"]).toMatchObject({
-      feedback_loop: { target: "review", max_replays: 2 },
+      feedback_loop: { target: "feature-review", max_replays: 2 },
     });
   });
 

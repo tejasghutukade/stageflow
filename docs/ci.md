@@ -40,7 +40,7 @@ sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
 sf run --task examples/hello-world/my-task.task.yaml --pipeline examples/hello-world/hello.pipeline.yaml --json
 ```
 
-Provider login stores credentials in the job environment (prefer `--api-key-env` over prompts).
+Provider login writes the operator auth file (prefer `--api-key-env` over prompts). A job-local data directory is its own operator when `STAGEFLOW_CREDENTIAL_HOME` is set to that directory. The release and publish workflows set both `STAGEFLOW_HOME` and `STAGEFLOW_CREDENTIAL_HOME` to the workspace `.stageflow` directory. When an existing login lives under a non-default data directory, set `STAGEFLOW_CREDENTIAL_HOME` to that directory.
 
 ### Exit codes
 
@@ -348,7 +348,7 @@ Adjust task, pipeline, and secrets for your project. Dogfood release automation 
 
 ## State in CI
 
-Runs write under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/` on the runner). Set `STAGEFLOW_HOME` to a job-local path and cache or artifact that directory if you need post-job inspection; ephemeral runners can discard it. See [Data directory](data-directory.md).
+Runs write under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/` on the runner). Set `STAGEFLOW_HOME` to a job-local path and cache or artifact that directory if you need post-job inspection; ephemeral runners can discard it. That directory is the operator store when `STAGEFLOW_CREDENTIAL_HOME` is set to the same path. The release and publish workflows set both. See [Data directory](data-directory.md).
 
 ## PR diagrams (Archify) {#pr-diagrams-archify}
 

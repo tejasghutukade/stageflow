@@ -24,13 +24,18 @@ export {
   isAdvancingEnvelope,
 } from "./envelope/check.js";
 export type {
-  AgentPort,
+  StagePort,
   StageHandle,
   StageHandleEvent,
   StageRunInput,
   StageRunResult,
 } from "./agent/port.js";
-export { createPiAgentPort } from "./agent/resolveAgentPort.js";
+export { createPiStagePort } from "./agent/resolveStagePort.js";
+export {
+  createPiAgentPort,
+  resolveAgentPort,
+  type AgentPort,
+} from "./operatorAgent/agentPort.js";
 export { configurePiProviderApiKey } from "./agent/providerAuth.js";
 export type { StageActivityEvent, StageLogLine } from "./agent/activity.js";
 export type { StageRoots } from "./runtime/stageRoots.js";

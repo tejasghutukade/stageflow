@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeAgent } from "../src/agent/fakeAgent.js";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import { runStageViaOpen } from "../src/agent/port.js";
 import type { BrowserRunner, StageBrowserSupport } from "../src/browser/browserHost.js";
 import { createLocalBrowserHost } from "../src/browser/localBrowserHost.js";
@@ -53,8 +53,8 @@ function runnerFor(finalUrl: string, calls: Call[]): BrowserRunner {
 
 type Scripted = Record<string, unknown>;
 
-function agentFor(emits: Scripted, prompts: Record<string, string>): AgentPort {
-  const agent: AgentPort = {
+function agentFor(emits: Scripted, prompts: Record<string, string>): StagePort {
+  const agent: StagePort = {
     openStage(input) {
       prompts[input.stageId ?? input.stage.id] = input.stage.system_prompt;
       const envelope = emits[input.stageId ?? input.stage.id];

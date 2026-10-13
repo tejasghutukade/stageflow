@@ -38,13 +38,17 @@ export function registerGetStartedTool(server: McpServer, deps: McpToolDeps): vo
         task_count: tasks.items.filter((t) => t.project_root === root.project_root)
           .length,
       }));
-      const firstRoot =
-        catalog_roots.find((r) => r.kind === "seeded") ?? catalog_roots[0];
+      const authoringRoot =
+        catalog_roots.find((r) => r.kind === "workspace" && r.read_only !== true) ??
+        catalog_roots.find((r) => r.kind === "registered") ??
+        catalog_roots[0];
+      const browseRoot =
+        catalog_roots.find((r) => r.kind === "seeded") ?? authoringRoot;
       const samplePipeline = pipelines.items.find(
-        (p) => p.project_root === firstRoot?.project_root,
+        (p) => p.project_root === browseRoot?.project_root,
       );
       const sampleTask = tasks.items.find(
-        (t) => t.project_root === firstRoot?.project_root,
+        (t) => t.project_root === browseRoot?.project_root,
       );
       return textResult({
         host: { version: PACKAGE_VERSION },
@@ -56,16 +60,22 @@ export function registerGetStartedTool(server: McpServer, deps: McpToolDeps): vo
         next_steps: [
           {
             tool: "list_pipelines",
-            args: firstRoot ? { project_root: firstRoot.project_root } : {},
+            args: authoringRoot
+              ? { project_root: authoringRoot.project_root }
+              : {},
           },
           {
             tool: "list_tasks",
-            args: firstRoot ? { project_root: firstRoot.project_root } : {},
+            args: authoringRoot
+              ? { project_root: authoringRoot.project_root }
+              : {},
           },
           {
             tool: "start_run",
             args: {
-              ...(firstRoot ? { project_root: firstRoot.project_root } : {}),
+              ...(authoringRoot
+                ? { project_root: authoringRoot.project_root }
+                : {}),
               pipeline: samplePipeline?.path ?? "pipelines/demo.pipeline.yaml",
               task_path: sampleTask?.path ?? "tasks/demo.task.yaml",
             },

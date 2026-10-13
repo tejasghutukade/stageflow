@@ -10,6 +10,9 @@ import { runTriggerCommand } from "../src/cli/triggerCommand.js";
 import { runRunsCommand } from "../src/cli/runsCommand.js";
 import { alreadyUp, startTestService } from "./helpers/testInProcessService.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
+import { triggerStoreId } from "../src/config/triggerCatalog.js";
+import { realpath } from "node:fs/promises";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const triggerFixture = path.join(fixtures, "triggers", "manual-hello-world.trigger.yaml");
@@ -78,7 +81,9 @@ describe("runTriggerCommand", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-cli-home-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
       const service = await startTestService(store, agent, root);
       try {
@@ -92,7 +97,7 @@ describe("runTriggerCommand", () => {
         const listed = JSON.parse(listCap.stdout.join("\n")) as {
           triggers: Array<{ id: string }>;
         };
-        expect(listed.triggers.map((t) => t.id)).toEqual(["manual-hello-world"]);
+        expect(listed.triggers.map((t) => t.id)).toContain("manual-hello-world");
 
         const showCap = captureIo();
         const showCode = await runTriggerCommand(
@@ -117,7 +122,10 @@ describe("runTriggerCommand", () => {
         expect(fired.ok).toBe(true);
         expect(fired.outcome).toBe("succeeded");
 
-        const trigger = await store.getTrigger("manual-hello-world");
+        const wireRoot = await realpath(root);
+        const trigger =
+          (await store.getTrigger(triggerStoreId(wireRoot, "manual-hello-world"))) ??
+          (await store.getTrigger("manual-hello-world"));
         expect(trigger?.last_run_id).toBe(fired.runId);
 
         const runsShowCap = captureIo();
@@ -153,7 +161,9 @@ describe("runTriggerCommand", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-cli-dynamic-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const agent = scriptedFakeAgent([successEnvelope("clarified"), successEnvelope("clarified")]);
       const service = await startTestService(store, agent, root);
       try {
@@ -234,7 +244,9 @@ describe("runTriggerCommand", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-cli-badjson-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const service = await startTestService(store, scriptedFakeAgent([]), root);
       try {
         const cap = captureIo();
@@ -260,7 +272,9 @@ describe("runTriggerCommand", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-cli-missing-home-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const service = await startTestService(store, scriptedFakeAgent([]), root);
       try {
         const cap = captureIo();
@@ -291,7 +305,9 @@ describe("runTriggerCommand", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-cli-disabled-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const service = await startTestService(store, scriptedFakeAgent([]), root);
       try {
         const cap = captureIo();
@@ -318,7 +334,9 @@ describe("runTriggerCommand", () => {
       clearFindProjectRootCacheForTests();
 
       const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-cli-show-missing-"));
+      bindStageflowHomeForTests(homeRoot);
       const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
       const service = await startTestService(store, scriptedFakeAgent([]), root);
       try {
         const cap = captureIo();

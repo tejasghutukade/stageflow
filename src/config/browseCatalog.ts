@@ -24,6 +24,8 @@ export type PipelineStageListing = {
   gate_kinds?: StageGateKind[];
   uses_path?: string;
   inline?: boolean;
+  model?: string;
+  skill?: string;
 };
 
 export type PipelineListing = {
@@ -66,7 +68,7 @@ function repoRelPath(projectRoot: string, absPath: string): string {
 }
 
 function mapStageListing(
-  stage: { id: string; gate_kinds?: StageGateKind[] },
+  stage: { id: string; gate_kinds?: StageGateKind[]; model?: string; skill?: string },
   source: PipelineStageSource | undefined,
   projectRoot: string,
 ): PipelineStageListing {
@@ -78,6 +80,12 @@ function mapStageListing(
     listing.inline = true;
   } else if (source?.kind === "file") {
     listing.uses_path = repoRelPath(projectRoot, source.path);
+  }
+  if (typeof stage.model === "string" && stage.model.trim() !== "") {
+    listing.model = stage.model;
+  }
+  if (typeof stage.skill === "string" && stage.skill.trim() !== "") {
+    listing.skill = stage.skill;
   }
   return listing;
 }

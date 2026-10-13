@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -51,6 +52,9 @@ describe("ensureCatalogScanRoot", () => {
     expect(defaultWorkshopPackageDirectory("LinkedIn Candidate Search")).toBe(
       "workshop/linkedin-candidate-search",
     );
+    expect(
+      defaultWorkshopPackageDirectory("LinkedIn Candidate Search", "workspace"),
+    ).toBe("linkedin-candidate-search");
     expect(catalogScanRootForDirectory("workshop/linkedin-candidate-search")).toBe(
       "workshop",
     );
@@ -77,6 +81,28 @@ describe("ensureCatalogScanRoot", () => {
 });
 
 describe("publishDraftPackage catalog scan", () => {
+  it("skips stageflow.yaml edits for workspace catalog writes", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const manifestPath = path.join(root, "stageflow.yaml");
+      await writeFile(manifestPath, CATALOG_MANIFEST, "utf8");
+      const published = await publishDraftPackage(
+        root,
+        {
+          directory: "demo",
+          draft: catalogDraft("demo"),
+        },
+        "create",
+        { catalogRootKind: "workspace" },
+      );
+      expect(published.write.ok).toBe(true);
+      expect(published.catalogChanged).toBe(false);
+      expect(await readFile(manifestPath, "utf8")).toBe(CATALOG_MANIFEST);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("lists workshop after a successful create", async () => {
     const { root, cleanup } = await initTempGitRepo();
     try {
@@ -203,6 +229,9 @@ describe("draft HTTP catalog scan", () => {
           stagePaths: [],
         }),
       );
+      expect(realpathSync(String(body.project_root))).toBe(realpathSync(root));
+      expect(body.root_kind).toBe("registered");
+      expect(body.read_only).toBe(false);
       const text = await readFile(manifestPath, "utf8");
       expect(text).toMatch(/pipelines:[\s\S]*- workshop/);
       expect(text).toMatch(/tasks:[\s\S]*- workshop/);
@@ -237,10 +266,18 @@ describe("draft HTTP catalog scan", () => {
       expect(res.status).toBe(200);
       expect(body.catalogChanged).toBeUndefined();
       expect(Object.keys(body).sort()).toEqual([
+        "catalog_root_path",
         "pipeline",
         "pipelinePath",
+        "project_root",
+        "read_only",
+        "root_kind",
         "stagePaths",
       ]);
+      expect(realpathSync(String(body.catalog_root_path))).toBe(realpathSync(root));
+      expect(realpathSync(String(body.project_root))).toBe(realpathSync(root));
+      expect(body.root_kind).toBe("registered");
+      expect(body.read_only).toBe(false);
       const text = await readFile(manifestPath, "utf8");
       expect(text).toMatch(/pipelines:[\s\S]*- notes/);
       expect(text).toMatch(/tasks:[\s\S]*- notes/);

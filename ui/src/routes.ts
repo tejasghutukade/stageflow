@@ -1,3 +1,6 @@
+import type { InboxTabId } from "./redesign/inbox/inboxTab";
+import { inboxPath as inboxPathWithTab } from "./redesign/inbox/inboxTab";
+
 export type DetailView =
   | { kind: "stream"; stageId?: string }
   | { kind: "envelope"; stageId: string }
@@ -5,18 +8,25 @@ export type DetailView =
 
 export type Route =
   | { name: "today" }
+  | { name: "inbox"; tab?: InboxTabId }
   | { name: "runs" }
-  | { name: "new"; pipelineId?: string; taskPath?: string }
+  | { name: "new"; pipelineId?: string; taskPath?: string; projectRoot?: string }
   | { name: "detail"; runId: string; view: DetailView }
   | { name: "pipelines" }
-  | { name: "pipeline"; pipelineId: string }
+  | { name: "pipeline"; pipelineId: string; projectRoot?: string }
   | { name: "tasks" }
   | { name: "task"; taskId: string }
   | { name: "triggers" }
   | { name: "connections" }
-  | { name: "trigger"; triggerId: string }
+  | { name: "trigger"; triggerId: string; projectRoot?: string }
   | { name: "skills" }
   | { name: "skill"; skillName: string }
+  | {
+      name: "catalog";
+      tab?: "stages" | "skills" | "extensions";
+      skillName?: string;
+    }
+  | { name: "stage"; path: string; projectRoot?: string }
   | { name: "extensions" }
   | {
       name: "extensionPackage";
@@ -26,7 +36,13 @@ export type Route =
   | { name: "extensionFile"; path: string }
   | { name: "settings" }
   | { name: "connect" }
-  | { name: "workshop"; pipelinePath?: string; taskPath?: string };
+  | {
+      name: "workshop";
+      sessionId?: string;
+      pipelinePath?: string;
+      taskPath?: string;
+      projectRoot?: string;
+    };
 
 export function navigate(to: string): void {
   window.location.hash = to.startsWith("#") ? to : `#${to}`;
@@ -48,20 +64,63 @@ export function runEnvelopePath(runId: string, stageId: string): string {
   return `/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/envelope`;
 }
 
-export function pipelinePath(pipelineId: string): string {
-  return `/pipelines/${encodeURIComponent(pipelineId)}`;
+export function pipelinePath(
+  pipelineId: string,
+  opts?: { project_root?: string },
+): string {
+  const base = `/pipelines/${encodeURIComponent(pipelineId)}`;
+  if (!opts?.project_root) return base;
+  const params = new URLSearchParams();
+  params.set("project_root", opts.project_root);
+  return `${base}?${params.toString()}`;
+}
+
+export function resolvePipelineListing<
+  T extends { id: string; project_root?: string },
+>(pipelines: T[], pipelineId: string, projectRoot?: string): T | null {
+  if (projectRoot) {
+    const exact = pipelines.find(
+      (p) => p.id === pipelineId && p.project_root === projectRoot,
+    );
+    if (exact) return exact;
+  }
+  return pipelines.find((p) => p.id === pipelineId) ?? null;
 }
 
 export function taskPath(taskId: string): string {
   return `/tasks/${encodeURIComponent(taskId)}`;
 }
 
-export function triggerPath(triggerId: string): string {
-  return `/triggers/${encodeURIComponent(triggerId)}`;
+export function triggerPath(triggerId: string, projectRoot?: string): string {
+  const base = `/triggers/${encodeURIComponent(triggerId)}`;
+  if (!projectRoot) return base;
+  return `${base}?${new URLSearchParams({ project_root: projectRoot })}`;
 }
 
 export function skillPath(name: string): string {
   return `/skills/${encodeURIComponent(name)}`;
+}
+
+export function catalogPath(opts?: {
+  tab?: "stages" | "skills" | "extensions";
+  skill?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (opts?.tab) params.set("tab", opts.tab);
+  if (opts?.skill) params.set("skill", opts.skill);
+  const query = params.toString();
+  return query ? `/catalog?${query}` : "/catalog";
+}
+
+export function stagePath(
+  stageFilePath: string,
+  opts?: { project_root?: string },
+): string {
+  const base = `/stages/${encodeURIComponent(stageFilePath)}`;
+  if (!opts?.project_root) return base;
+  const params = new URLSearchParams();
+  params.set("project_root", opts.project_root);
+  return `${base}?${params.toString()}`;
 }
 
 export function extensionPackagePath(
@@ -76,12 +135,16 @@ export function extensionFilePath(filePath: string): string {
 }
 
 export function workshopPath(opts?: {
+  session?: string;
   pipeline?: string;
   task?: string;
+  project_root?: string;
 }): string {
   const params = new URLSearchParams();
+  if (opts?.session) params.set("session", opts.session);
   if (opts?.pipeline) params.set("pipeline", opts.pipeline);
   if (opts?.task) params.set("task", opts.task);
+  if (opts?.project_root) params.set("project_root", opts.project_root);
   const query = params.toString();
   return query ? `/workshop?${query}` : "/workshop";
 }
@@ -90,13 +153,19 @@ export function connectPath(): string {
   return "/connect";
 }
 
+export function inboxPath(tab?: InboxTabId): string {
+  return inboxPathWithTab(tab ?? "needs");
+}
+
 export function newRunPath(opts?: {
   pipeline?: string;
   task?: string;
+  project_root?: string;
 }): string {
   const params = new URLSearchParams();
   if (opts?.pipeline) params.set("pipeline", opts.pipeline);
   if (opts?.task) params.set("task", opts.task);
+  if (opts?.project_root) params.set("project_root", opts.project_root);
   const query = params.toString();
   return query ? `/new?${query}` : "/new";
 }
@@ -119,21 +188,36 @@ function firstSegment(rest: string): string {
 
 export function parseHash(hash = window.location.hash): Route {
   const { path, params } = splitHash(hash);
-  if (!path || path === "today") return { name: "today" };
+  if (!path || path === "today") return { name: "inbox" };
+  if (path === "inbox") {
+    const tabRaw = params.get("tab");
+    const tab: InboxTabId | undefined =
+      tabRaw === "failed" || tabRaw === "done_today" ? tabRaw : undefined;
+    return tab ? { name: "inbox", tab } : { name: "inbox" };
+  }
   if (path === "runs") return { name: "runs" };
   if (path === "new") {
     const pipelineId = params.get("pipeline") ?? undefined;
     const taskPath = params.get("task") ?? undefined;
+    const projectRoot = params.get("project_root") ?? undefined;
     return {
       name: "new",
       ...(pipelineId ? { pipelineId } : {}),
       ...(taskPath ? { taskPath } : {}),
+      ...(projectRoot ? { projectRoot } : {}),
     };
   }
   if (path === "pipelines") return { name: "pipelines" };
   if (path.startsWith("pipelines/")) {
     const pipelineId = firstSegment(path.slice("pipelines/".length));
-    if (pipelineId) return { name: "pipeline", pipelineId };
+    if (pipelineId) {
+      const projectRoot = params.get("project_root") ?? undefined;
+      return {
+        name: "pipeline",
+        pipelineId,
+        ...(projectRoot ? { projectRoot } : {}),
+      };
+    }
   }
   if (path === "tasks") return { name: "tasks" };
   if (path.startsWith("tasks/")) {
@@ -144,7 +228,38 @@ export function parseHash(hash = window.location.hash): Route {
   if (path === "connections") return { name: "connections" };
   if (path.startsWith("triggers/")) {
     const triggerId = firstSegment(path.slice("triggers/".length));
-    if (triggerId) return { name: "trigger", triggerId };
+    if (triggerId) {
+      const projectRoot = params.get("project_root") ?? undefined;
+      return {
+        name: "trigger",
+        triggerId,
+        ...(projectRoot ? { projectRoot } : {}),
+      };
+    }
+  }
+  if (path === "catalog") {
+    const tabRaw = params.get("tab");
+    const tab =
+      tabRaw === "skills" || tabRaw === "extensions" || tabRaw === "stages"
+        ? tabRaw
+        : "stages";
+    const skillName = params.get("skill") ?? undefined;
+    return {
+      name: "catalog",
+      tab,
+      ...(skillName ? { skillName } : {}),
+    };
+  }
+  if (path.startsWith("stages/")) {
+    const filePath = decodeURIComponent(path.slice("stages/".length));
+    if (filePath) {
+      const projectRoot = params.get("project_root") ?? undefined;
+      return {
+        name: "stage",
+        path: filePath,
+        ...(projectRoot ? { projectRoot } : {}),
+      };
+    }
   }
   if (path === "skills") return { name: "skills" };
   if (path.startsWith("skills/")) {
@@ -175,18 +290,22 @@ export function parseHash(hash = window.location.hash): Route {
   if (path === "settings") return { name: "settings" };
   if (path === "connect") return { name: "connect" };
   if (path === "workshop" || path === "workshop-lab") {
+    const sessionId = params.get("session") ?? undefined;
     const pipelinePath = params.get("pipeline") ?? undefined;
     const taskPath = params.get("task") ?? undefined;
+    const projectRoot = params.get("project_root") ?? undefined;
     return {
       name: "workshop",
+      ...(sessionId ? { sessionId } : {}),
       ...(pipelinePath ? { pipelinePath } : {}),
       ...(taskPath ? { taskPath } : {}),
+      ...(projectRoot ? { projectRoot } : {}),
     };
   }
   if (path.startsWith("runs/")) {
     const parts = path.slice("runs/".length).split("/");
     const runId = decodeURIComponent(parts[0] ?? "");
-    if (!runId) return { name: "today" };
+    if (!runId) return { name: "inbox" };
     if (
       parts[1] === "stages" &&
       parts[3] === "envelope" &&
@@ -227,5 +346,5 @@ export function parseHash(hash = window.location.hash): Route {
     }
     return { name: "detail", runId, view: { kind: "stream" } };
   }
-  return { name: "today" };
+  return { name: "inbox" };
 }

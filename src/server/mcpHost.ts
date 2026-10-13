@@ -1,5 +1,5 @@
+import type { StagePort } from "../agent/port.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
-import type { AgentPort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type { RunStoreKind } from "../runstore/createStore.js";
 import type { RunStore } from "../runstore/port.js";
@@ -26,7 +26,7 @@ import {
 } from "./shutdown.js";
 
 export type McpServerOptions = {
-  agent: AgentPort;
+  agent: StagePort;
   cwd?: string;
   agentDir?: string;
   rootDir?: string;

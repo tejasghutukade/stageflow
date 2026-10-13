@@ -3,7 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentPort, StageRunInput } from "../src/agent/port.js";
+import type { StagePort, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
@@ -30,7 +30,7 @@ type FakeAgentBehavior =
 
 function stageKeyedAgent(
   behaviorsByStage: Record<string, FakeAgentBehavior[]>,
-): AgentPort {
+): StagePort {
   const stageIndex = new Map<string, number>();
   return {
     openStage(input: StageRunInput) {
@@ -71,7 +71,7 @@ function stageEvents(detail: Awaited<ReturnType<typeof createRunStore>["readRun"
 describe("fork skip store persistence", () => {
   async function prepareInjectedForkRun(
     root: string,
-    agent: AgentPort,
+    agent: StagePort,
   ) {
     const store = createRunStore({ rootDir: root });
     const taskYaml = await readFile(SAMPLE_TASK, "utf8");

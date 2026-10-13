@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile, chmod, access } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -10,8 +11,8 @@ import type {
   AuthPrompt,
   Provider,
 } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import {
-  ensureSfOwnedAuthStore,
   parseCredentialSource,
   readCredentialSourceFromContext,
   resolveCredentialBinding,
@@ -126,7 +127,13 @@ export class ProviderAuthError extends Error {
 }
 
 const defaultCreateRuntime: CreateProviderAuthRuntime = async (authPath) =>
-  ModelRuntime.create({ authPath, refreshOnCreate: false });
+  ModelRuntime.create({
+    authPath,
+    // ModelRuntime otherwise reads models.json from PI_CODING_AGENT_DIR,
+    // which stays on the process data directory.
+    modelsPath: path.join(path.dirname(authPath), "models.json"),
+    refreshOnCreate: false,
+  });
 
 async function ensurePiAuthFile(authPath: string): Promise<string> {
   const resolved = path.resolve(authPath);
@@ -154,6 +161,38 @@ export async function openRuntime(
   ctx: ProviderAuthContext = defaultContext,
 ): Promise<ProviderAuthRuntime> {
   const binding = resolveCredentialBinding(cwd);
+  return ctx.createRuntime(binding.authPath);
+}
+
+function catalogRuntime(): ProviderAuthRuntime {
+  const providers = builtinProviders();
+  return {
+    getProviders: () => providers,
+    getProvider: (id) => providers.find((provider) => provider.id === id),
+    getProviderAuthStatus: () => ({ configured: false }),
+    listCredentials: async () => [],
+    checkAuth: async () => undefined,
+    login: async () => {
+      throw new ProviderAuthError("Provider login failed", 500);
+    },
+    logout: async () => {
+      throw new ProviderAuthError("Provider logout failed", 500);
+    },
+  };
+}
+
+async function openReadRuntime(
+  cwd: string,
+  ctx: ProviderAuthContext,
+): Promise<ProviderAuthRuntime> {
+  const binding = resolveCredentialBinding(cwd);
+  // ModelRuntime.create writes auth.json when that file is missing.
+  if (
+    ctx.createRuntime === defaultCreateRuntime &&
+    !existsSync(binding.authPath)
+  ) {
+    return catalogRuntime();
+  }
   return ctx.createRuntime(binding.authPath);
 }
 
@@ -265,7 +304,7 @@ export async function listProviders(
   cwd: string,
   ctx: ProviderAuthContext = defaultContext,
 ): Promise<ProvidersListResult> {
-  const runtime = await openRuntime(cwd, ctx);
+  const runtime = await openReadRuntime(cwd, ctx);
   return {
     authShell: "pi",
     via: "pi",
@@ -281,7 +320,7 @@ export async function getAuthStatus(
   providerId?: string,
   ctx: ProviderAuthContext = defaultContext,
 ): Promise<ProviderAuthStatus | ProviderAuthStatus[]> {
-  const runtime = await openRuntime(cwd, ctx);
+  const runtime = await openReadRuntime(cwd, ctx);
   if (providerId !== undefined) {
     if (!runtime.getProvider(providerId)) {
       throw new ProviderAuthError("Provider not found", 404);

@@ -5,8 +5,13 @@ import {
   type DraftPackageWriteResult,
 } from "./draftPackage.js";
 import { ensureCatalogScanRoot } from "./ensureCatalogScanRoot.js";
+import type { CatalogRootKind } from "./resolveCatalogRoots.js";
 
 export type PublishDraftPackageMode = "create" | "overwrite" | "auto";
+
+export type PublishDraftPackageOptions = {
+  catalogRootKind?: CatalogRootKind;
+};
 
 export type PublishDraftPackageResult = {
   write: DraftPackageWriteResult;
@@ -17,6 +22,7 @@ export async function publishDraftPackage(
   projectRoot: string,
   input: CreateDraftPackageInput,
   mode: PublishDraftPackageMode,
+  options: PublishDraftPackageOptions = {},
 ): Promise<PublishDraftPackageResult> {
   let write: DraftPackageWriteResult;
   if (mode === "create") {
@@ -33,6 +39,10 @@ export async function publishDraftPackage(
   }
 
   if (!write.ok) {
+    return { write, catalogChanged: false };
+  }
+
+  if (options.catalogRootKind === "workspace") {
     return { write, catalogChanged: false };
   }
 

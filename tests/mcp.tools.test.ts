@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import { PACKAGE_VERSION } from "../src/package-meta.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { projectRunDetail } from "../src/runstore/runProjection.js";
@@ -79,7 +79,7 @@ async function waitForActive(base: string, runId: string): Promise<void> {
   );
 }
 
-function successAgent(count = 12): AgentPort {
+function successAgent(count = 12): StagePort {
   return scriptedFakeAgent(
     Array.from({ length: count }, (_, i) => ({
       type: "emit" as const,
@@ -95,7 +95,7 @@ function successAgent(count = 12): AgentPort {
 
 async function withMcpServer(
   root: string,
-  agent: AgentPort,
+  agent: StagePort,
   store = createRunStore({ rootDir: root }),
   opts: { maxConcurrent?: number; cwd?: string; mcpStateless?: boolean } = {},
 ) {
@@ -124,7 +124,7 @@ async function withMcpServer(
 
 /** Fresh root + store (optionally seeded) + MCP server; always closed afterwards. */
 async function withMcp<S = undefined, R = void>(
-  agent: AgentPort,
+  agent: StagePort,
   fn: (ctx: {
     base: string;
     store: RunStore;

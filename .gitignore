@@ -81,5 +81,7 @@ software-factory-usecases-pitch-targets.md
 .stageflow-backup-test/
 .stageflow-ci-test/
 benchmarks/
-runs/
+# Local run output. Do not hide source trees whose path contains /runs/.
+/runs/
+**/.stageflow*/runs/
 /email.yaml

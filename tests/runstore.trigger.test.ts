@@ -93,6 +93,34 @@ describe("triggers registry", () => {
     const fired = await store.getTrigger("manual-hello-world");
     expect(fired?.last_run_id).toBe(runId);
     expect(fired?.last_fired_at).toEqual(expect.any(String));
+    expect(await store.listTriggerFires("manual-hello-world", 20)).toEqual([
+      { fired_at: fired?.last_fired_at, run_id: runId },
+    ]);
+  });
+
+  it("listTriggerFires returns newest fires first and honors limit", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "sf-trigger-fires-"));
+    const store = createRunStore({ rootDir: home });
+    await store.upsertTrigger({
+      id: "manual-hello-world",
+      definitionRef: "triggers/manual-hello-world.trigger.yaml",
+      enabled: true,
+    });
+    const { runId: older } = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    await store.recordTriggerFired("manual-hello-world", older);
+    const { runId: newer } = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t2\ngoal: g\n",
+    });
+    await store.recordTriggerFired("manual-hello-world", newer);
+
+    const fires = await store.listTriggerFires("manual-hello-world", 20);
+    expect(fires.map((row) => row.run_id)).toEqual([newer, older]);
+    expect(await store.listTriggerFires("manual-hello-world", 1)).toEqual([fires[0]]);
+    expect(await store.listTriggerFires("other-trigger", 20)).toEqual([]);
   });
 
   it("recordTriggerFired throws for an unknown trigger id", async () => {

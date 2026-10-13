@@ -12,7 +12,7 @@ This is the public contract for a private host such as Stageflow Cloud. The host
 import {
   configurePiProviderApiKey,
   createHostedRuntime,
-  createPiAgentPort,
+  createPiStagePort,
   createRunStore,
 } from "stageflow";
 import path from "node:path";
@@ -26,7 +26,7 @@ await configurePiProviderApiKey({
 process.env.STAGEFLOW_AGENT_AUTH_PATH = authPath;
 
 const runtime = createHostedRuntime({
-  agent: createPiAgentPort(),
+  agent: createPiStagePort(),
   localStore: createRunStore({ rootDir: sandboxWorkspace }),
   eventSink,
   eventDeliveryTimeoutMs: 10_000, // optional; default is 10 seconds
@@ -93,9 +93,9 @@ After the stop signal, Core waits up to `HOSTED_CANCEL_GRACE_MS` (5 seconds) for
 
 ## Credentials and package files
 
-`createPiAgentPort()` returns the existing Pi `AgentPort` (`PiAgentAdapter`). Hosted runs do not define another agent interface. Call `configurePiProviderApiKey` first to store a managed OpenRouter key in a Pi auth file, then set `STAGEFLOW_AGENT_AUTH_PATH` to that file before `runtime.run`. The key stays out of task YAML, pipeline YAML, events, and `attributes`. Event text still passes through Stageflow’s existing secret redaction.
+`createPiStagePort()` returns the existing Pi `StagePort` (`PiAgentAdapter`). Hosted runs do not define another agent interface. Call `configurePiProviderApiKey` first to store a managed OpenRouter key in a Pi auth file, then set `STAGEFLOW_AGENT_AUTH_PATH` to that file before `runtime.run`. The key stays out of task YAML, pipeline YAML, events, and `attributes`. Event text still passes through Stageflow’s existing secret redaction.
 
-Core does not create `~/.stageflow` for a hosted run. Without `STAGEFLOW_AGENT_AUTH_PATH`, stage roots point at `hosted-agent-auth.json` next to the local store. Tests can pass any other `AgentPort`; production hosted runs use the Pi one.
+Core does not create `~/.stageflow` for a hosted run. Without `STAGEFLOW_AGENT_AUTH_PATH`, stage roots point at `hosted-agent-auth.json` next to the local store. Tests can pass any other `StagePort`; production hosted runs use the Pi one.
 
 The package directory is read-only input. The local store and run workspace must be outside that directory. Cloud downloads the package, checks its integrity, and passes `packageRevision`. Stageflow does not.
 

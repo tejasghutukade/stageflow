@@ -2,24 +2,26 @@ import { describe, expect, it } from "vitest";
 import { readinessDetail } from "./readinessCopy";
 
 describe("readinessDetail", () => {
-  it("describes blocked stages with the first blocker", () => {
+  it("describes blocked stages with waits-on copy when labels are provided", () => {
     expect(
       readinessDetail({
         readiness: "blocked",
         blocked_by: ["improve-b"],
         status: "pending",
+        blockersLabel: (id) => id,
       }),
-    ).toBe("Blocked on improve-b");
+    ).toBe("waits on improve-b");
   });
 
-  it("lists every unresolved parent in blocked copy", () => {
+  it("lists every unresolved parent in waits-on copy", () => {
     expect(
       readinessDetail({
         readiness: "blocked",
         blocked_by: ["research", "validation"],
         status: "pending",
+        blockersLabel: (id) => id,
       }),
-    ).toBe("Blocked on research, validation");
+    ).toBe("waits on research, validation");
   });
 
   it("returns Skipped for skipped readiness", () => {

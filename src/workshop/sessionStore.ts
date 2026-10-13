@@ -8,16 +8,28 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  parseWorkshopSessionMutationSnapshot,
+  type WorkshopSessionMutationSnapshot,
+} from "./sessionMutations.js";
 
 export const WORKSHOP_SESSION_TITLE_MAX_LENGTH = 80;
 
 export type WorkshopSessionMessageRole = "assistant" | "user" | "system";
+
+export type WorkshopSessionAttachment = {
+  name: string;
+  size: number;
+  mediaType: string;
+};
 
 export type WorkshopSessionMessage = {
   id: string;
   role: WorkshopSessionMessageRole;
   text: string;
   createdAt: string;
+  attachments?: WorkshopSessionAttachment[];
+  mutations?: WorkshopSessionMutationSnapshot[];
 };
 
 export type WorkshopSessionRecord = {
@@ -44,6 +56,8 @@ export type WorkshopSessionAppendMessage = {
   role: WorkshopSessionMessageRole;
   text: string;
   createdAt?: string;
+  attachments?: WorkshopSessionAttachment[];
+  mutations?: WorkshopSessionMutationSnapshot[];
 };
 
 export type WorkshopSessionStoreErrorCode = "workshop_session_not_found";
@@ -129,12 +143,39 @@ function parseMessage(value: unknown): WorkshopSessionMessage | null {
   }
   if (typeof value.text !== "string") return null;
   if (typeof value.createdAt !== "string" || !value.createdAt) return null;
+  const attachments = Array.isArray(value.attachments)
+    ? value.attachments.flatMap((entry) => {
+        const parsed = parseAttachment(entry);
+        return parsed ? [parsed] : [];
+      })
+    : [];
+  let mutations: WorkshopSessionMutationSnapshot[] | undefined;
+  if (value.mutations !== undefined) {
+    if (!Array.isArray(value.mutations)) return null;
+    const parsedMutations: WorkshopSessionMutationSnapshot[] = [];
+    for (const entry of value.mutations) {
+      const parsed = parseWorkshopSessionMutationSnapshot(entry);
+      if (!parsed) return null;
+      parsedMutations.push(parsed);
+    }
+    if (parsedMutations.length > 0) mutations = parsedMutations;
+  }
   return {
     id: value.id,
     role: value.role,
     text: value.text,
     createdAt: value.createdAt,
+    ...(attachments.length > 0 ? { attachments } : {}),
+    ...(mutations ? { mutations } : {}),
   };
+}
+
+function parseAttachment(value: unknown): WorkshopSessionAttachment | null {
+  if (!isPlainObject(value)) return null;
+  if (typeof value.name !== "string" || !value.name) return null;
+  if (typeof value.size !== "number" || !Number.isFinite(value.size)) return null;
+  if (typeof value.mediaType !== "string") return null;
+  return { name: value.name, size: value.size, mediaType: value.mediaType };
 }
 
 export function parseWorkshopSessionRecord(
@@ -309,6 +350,24 @@ export function appendWorkshopSessionMessages(
       role: msg.role,
       text: msg.text,
       createdAt: msg.createdAt || now,
+      ...(msg.attachments && msg.attachments.length > 0
+        ? {
+            attachments: msg.attachments.map(({ name, size, mediaType }) => ({
+              name,
+              size,
+              mediaType,
+            })),
+          }
+        : {}),
+      ...(msg.mutations && msg.mutations.length > 0
+        ? {
+            mutations: msg.mutations.map((mutation) => ({
+              ...mutation,
+              affectedStageIds: [...mutation.affectedStageIds],
+              artifacts: mutation.artifacts.map((artifact) => ({ ...artifact })),
+            })),
+          }
+        : {}),
     };
     appended.push(entry);
     if (!title && entry.role === "user" && entry.text.trim()) {

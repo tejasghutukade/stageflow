@@ -88,53 +88,50 @@ const envelope = {
 };
 
 describe("stage selection", () => {
-  it.each([
-    {
-      name: "succeeded stages, no pick, no wait",
-      stages: [
-        stage({ stage_id: "intake", status: "succeeded" }),
-        stage({ stage_id: "review", status: "succeeded" }),
-      ],
-      sel: selection(),
-    },
-    {
-      name: "running-only stream is not auto-selected",
-      stages: [
-        stage({ stage_id: "intake", status: "succeeded" }),
-        stage({ stage_id: "build", status: "running" }),
-        stage({ stage_id: "review", status: "pending" }),
-      ],
-      sel: selection(),
-    },
-    {
-      name: "failed-only stream is not auto-selected",
-      stages: [
-        stage({ stage_id: "intake", status: "succeeded" }),
-        stage({ stage_id: "build", status: "failed" }),
-        stage({ stage_id: "review", status: "pending" }),
-      ],
-      sel: selection(),
-    },
-    {
-      name: "previous stage is dropped without a user pick",
-      stages: [
-        stage({ stage_id: "intake", status: "succeeded" }),
-        stage({ stage_id: "review", status: "succeeded" }),
-      ],
-      sel: selection({ previousStageId: "review" }),
-    },
-    {
-      name: "HITL-only pick is cleared when the wait ends",
-      stages: [
-        stage({ stage_id: "clarify", status: "succeeded" }),
-        stage({ stage_id: "review", status: "running" }),
-      ],
-      sel: selection({ previousStageId: "clarify", userPicked: false }),
-    },
-  ])("stream selects nothing: $name", ({ stages, sel }) => {
-    const workspace = resolveRunWorkspace(stream, detail(stages), sel);
-    expect(workspace.selectedStageId).toBeNull();
-    expect(workspace.kind).toBe("empty");
+  it("stream view with no pick auto-selects the last stage when idle", () => {
+    const run = detail([
+      stage({ stage_id: "intake", status: "succeeded" }),
+      stage({ stage_id: "review", status: "succeeded" }),
+    ]);
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.selectedStageId).toBe("review");
+    expect(workspace.kind).toBe("stream");
+  });
+
+  it("auto-selects a running stage on stream open", () => {
+    const run = detail([
+      stage({ stage_id: "intake", status: "succeeded" }),
+      stage({ stage_id: "build", status: "running" }),
+      stage({ stage_id: "review", status: "pending" }),
+    ]);
+    expect(
+      resolveRunWorkspace(stream, run, selection()).selectedStageId,
+    ).toBe("build");
+  });
+
+  it("auto-selects a failed stage on stream open", () => {
+    const run = detail([
+      stage({ stage_id: "intake", status: "succeeded" }),
+      stage({ stage_id: "build", status: "failed" }),
+      stage({ stage_id: "review", status: "pending" }),
+    ]);
+    expect(
+      resolveRunWorkspace(stream, run, selection()).selectedStageId,
+    ).toBe("build");
+  });
+
+  it("auto-selects without treating previousStageId as a user pick", () => {
+    const run = detail([
+      stage({ stage_id: "intake", status: "succeeded" }),
+      stage({ stage_id: "review", status: "succeeded" }),
+    ]);
+    expect(
+      resolveRunWorkspace(
+        stream,
+        run,
+        selection({ previousStageId: "review" }),
+      ).selectedStageId,
+    ).toBe("review");
   });
 
   it("selects waiting_stage_id when the wait is not dismissed", () => {
@@ -247,7 +244,7 @@ describe("stage selection", () => {
     expect(workspace.kind).toBe("stream");
   });
 
-  it("ignores an unknown stream stageId and stays map-only", () => {
+  it("ignores an unknown stream stageId and auto-selects a default stage", () => {
     const run = detail([stage({ stage_id: "design", status: "running" })]);
     const workspace = resolveRunWorkspace(
       { kind: "stream", stageId: "ghost" },
@@ -255,8 +252,8 @@ describe("stage selection", () => {
       selection(),
     );
     expect(stageIdKnown(run, "ghost")).toBe(false);
-    expect(workspace.selectedStageId).toBeNull();
-    expect(workspace.kind).toBe("empty");
+    expect(workspace.selectedStageId).toBe("design");
+    expect(workspace.kind).toBe("stream");
   });
 
   it("opens stream workspace for a pending planned stageId", () => {
@@ -299,6 +296,20 @@ describe("stage selection", () => {
         stream,
         run,
         selection({ previousStageId: "review", userPicked: true }),
+      ).selectedStageId,
+    ).toBe("review");
+  });
+
+  it("follows running stage when a dismissed HITL pick is stale", () => {
+    const run = detail([
+      stage({ stage_id: "clarify", status: "succeeded" }),
+      stage({ stage_id: "review", status: "running" }),
+    ]);
+    expect(
+      resolveRunWorkspace(
+        stream,
+        run,
+        selection({ previousStageId: "clarify", userPicked: false }),
       ).selectedStageId,
     ).toBe("review");
   });
@@ -609,7 +620,6 @@ describe("track stages", () => {
       selection(),
       planned,
     );
-    expect(workspace.selectedStageId).toBeNull();
     expect(
       workspace.trackStages.map(({ id, status, meta }) => ({ id, status, meta })),
     ).toEqual(expected);
@@ -786,7 +796,7 @@ describe("spatial track layout", () => {
     const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
       (c) => c.stageId === "report-b",
     );
-    expect(chrome?.readinessLine).toBe("Blocked on improve-b");
+    expect(chrome?.readinessLine).toBe("waits on improve-b");
   });
 
   it("passes attempt_count into node chrome", () => {

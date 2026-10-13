@@ -1,0 +1,5 @@
+id: sample-manual-hello
+pipeline: hello
+task: my-task
+kind: manual
+enabled: false

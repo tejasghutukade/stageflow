@@ -1,4 +1,5 @@
 id: author-diagrams
+skill: archify
 system_prompt: |
   Author Archify diagram specs for every diagram type selected by detect-changes.
 

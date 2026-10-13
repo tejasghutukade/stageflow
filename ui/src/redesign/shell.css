@@ -1,0 +1,10 @@
+@layer sf-components {
+html[data-redesign="on"] .app .main {
+  padding: 0;
+}
+
+html[data-redesign="on"] .sf-btn--selected {
+  background: var(--sf-raised);
+  border-color: var(--sf-hairline-strong);
+}
+}

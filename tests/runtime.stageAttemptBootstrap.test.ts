@@ -353,7 +353,7 @@ describe("openStageAttempt", () => {
     expect(opened).toHaveLength(0);
   });
 
-  it("forwards instance stageId into AgentPort input", async () => {
+  it("forwards instance stageId into StagePort input", async () => {
     const { open, opened } = await bootHarness("sf-boot-clone-id-", factoryCwd);
 
     const result = await open({

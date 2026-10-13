@@ -1,11 +1,16 @@
 import type { TaskFile } from "../types/task.js";
 
-export type TriggerFireEvent = { triggerId: string; task?: TaskFile };
+export type TriggerFireEvent = {
+  triggerId: string;
+  project_root?: string;
+  task?: TaskFile;
+};
 
 /**
- * Abstract seam for anything that decides "fire trigger X now" — a croner-backed
- * schedule loop, a GitHub/email poller, a webhook receiver. No adapter implements
- * this yet; it exists so those later adapters build against a locked contract.
+ * Long-running sources that decide "fire trigger X now". ScheduleSource,
+ * GithubPollSource, and EmailSource implement this. Webhook deliveries are
+ * request-driven: acceptWebhook shares TriggerFireEvent's optional task, and
+ * the HTTP route fires; a webhook is not a start/stop loop.
  */
 export interface TriggerSourcePort {
   start(onFire: (event: TriggerFireEvent) => Promise<void>): Promise<void>;

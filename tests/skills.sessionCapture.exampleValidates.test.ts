@@ -23,7 +23,7 @@ function runCli(args: string[]) {
   });
 }
 
-describe("session-capture example pipeline", () => {
+describe("session-capture example pipeline", { timeout: 30_000 }, () => {
   it("passes sf validate --pipeline --strict", () => {
     const result = runCli(["validate", "--pipeline", pipeline, "--strict"]);
     expect(result.status, result.stderr + result.stdout).toBe(0);

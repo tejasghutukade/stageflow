@@ -567,7 +567,7 @@ describe("runWorkshopChatTurn", () => {
     }
   });
 
-  it("save on an untitled build with no operator destination fails and stays untitled", async () => {
+  it("save on an untitled build with no operator destination writes to workspace", async () => {
     await withIsolatedHome(async () => {
       const storeRoot = resolveWorkshopSessionStoreRoot();
       createWorkshopSession(storeRoot, { id: "sess-untitled-save" });
@@ -595,11 +595,11 @@ describe("runWorkshopChatTurn", () => {
       const tool = result.events.find((event) => event.type === "tool_result");
       expect(tool?.type).toBe("tool_result");
       if (tool?.type !== "tool_result") return;
-      expect(tool.result.ok).toBe(false);
+      expect(tool.result.ok).toBe(true);
       const stored = getWorkshopBuild(storeRoot, "build-untitled");
       expect(stored.id).toBe("build-untitled");
-      expect(stored.projectRoot).toBeNull();
-      expect(stored.relativePath).toBeNull();
+      expect(stored.projectRoot).toBeTruthy();
+      expect(stored.relativePath).toMatch(/untitled-pipe\.pipeline\.yaml$/);
     });
   });
 
@@ -647,6 +647,56 @@ describe("runWorkshopChatTurn", () => {
           "utf8",
         );
         expect(yaml).toContain("saved-new");
+      });
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it("binds projectRoot on chat turns so agent save uses the catalog root", async () => {
+    const repo = await initTempGitRepo();
+    try {
+      await withIsolatedHome(async () => {
+        const storeRoot = resolveWorkshopSessionStoreRoot();
+        createWorkshopSession(storeRoot, { id: "sess-save-root" });
+        createWorkshopBuild(storeRoot, {
+          id: "build-chat-root",
+          draft: savableDraft("chat-save-root"),
+        });
+        updateWorkshopSessionActiveBuildId(
+          storeRoot,
+          "sess-save-root",
+          "build-chat-root",
+        );
+        const host = createWorkshopOperatorHost([
+          { type: "call_tool", name: "save", args: {} },
+        ]);
+        const registry = new WorkshopChatSessionRegistry(host);
+        const result = await runWorkshopChatTurn({
+          sessionId: "sess-save-root",
+          draft: emptyDraftPackage("posted"),
+          message: "save",
+          host,
+          registry,
+          storeRoot,
+          projectRoot: repo.root,
+        });
+        const tool = result.events.find((e) => e.type === "tool_result");
+        expect(tool?.type).toBe("tool_result");
+        if (tool?.type !== "tool_result") return;
+        expect(tool.result.ok).toBe(true);
+        const yaml = await readFile(
+          path.join(
+            repo.root,
+            "workshop",
+            "chat-save-root",
+            "chat-save-root.pipeline.yaml",
+          ),
+          "utf8",
+        );
+        expect(yaml).toContain("id: chat-save-root");
+        const stored = getWorkshopBuild(storeRoot, "build-chat-root");
+        expect(stored.projectRoot).toBe(path.resolve(repo.root));
       });
     } finally {
       await repo.cleanup();

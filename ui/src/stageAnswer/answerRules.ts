@@ -223,7 +223,7 @@ export type AnswerSession = {
   getState(): AnswerLockState;
   locked(): boolean;
   syncPending(): void;
-  submitIntent(intent: OperatorIntent, prompt?: PendingPrompt): Promise<void>;
+  submitIntent(intent: OperatorIntent, prompt?: PendingPrompt): Promise<boolean>;
 };
 
 export function createAnswerSession(deps: {
@@ -249,7 +249,7 @@ export function createAnswerSession(deps: {
       lock = idleLock();
     },
     async submitIntent(intent, prompt) {
-      if (isLocked(lock)) return;
+      if (isLocked(lock)) return false;
       const pending = deps.getPending();
       const { runId, stageId } = deps.getTarget();
       lock = beginSubmit(lock);
@@ -265,13 +265,14 @@ export function createAnswerSession(deps: {
       if (result.status === "posted") {
         lock = succeedSubmit();
         await deps.refresh?.();
-        return;
+        return true;
       }
       if (result.status === "failed") {
         lock = failSubmit(result.error);
-        return;
+        return false;
       }
       lock = idleLock();
+      return false;
     },
   };
 }

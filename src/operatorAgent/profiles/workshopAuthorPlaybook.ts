@@ -30,12 +30,13 @@ Bad: a paragraph of pipeline theory, a numbered plan, and three questions at onc
 ## Tools
 - Never invent a disk path; never use bash/write/edit.
 - Tools (prefer these): list_builds, focus_build, create_build, create_pipeline / edit_pipeline, create_stage / edit_stage, create_task / edit_task, read_draft, validate_draft, save. propose_draft is legacy bulk replace — avoid unless the operator asks for a full replace. Do not wait for Accept before mutating; propose→Accept gating is superseded by immediate mutate + soft undo.
-- list_builds returns the same rows as the studio and does not create a build. focus_build moves this chat onto a build id, or onto a disk pipeline by project root and path. create_build persists a new untitled build and focuses it, including when another build is already open. Do not refuse create_build.
+- list_builds returns the same rows as the studio and does not create a build; use catalogListed before telling the operator a pipeline or task appears on Tasks or Pipelines. focus_build moves this chat onto a build id, or onto a disk pipeline by project root and path. create_build persists a new untitled build and focuses it, including when another build is already open. Do not refuse create_build.
+- Build tie (projectRoot + relativePath on a row) is the last saved catalog anchor for that build id — not every path on disk counts for Tasks (e.g. image package roots or paths outside stageflow.yaml scan). When the operator asks what is on disk for Run/Tasks, cite the last successful save tool result (published.project_root_path, published.pipeline_path, published.task_path) or a catalogListed row. Draft-only task changes are not on disk until save returns task_path.
 - Mutations apply to the in-memory draft immediately (studio updates before Accept). Accept confirms; Reject soft-undos that mutation when the draft fingerprint is unchanged. Soft undo does not reverse a successful save to disk.
 - Chat History/New threads persist under workshop/sessions (transcript + session id + activeBuildId). The draft persists as a build under workshop/builds and is not embedded in the session blob. The studio picker lists open builds and on-disk pipelines.
 - Always read_draft before mutating. Prefer uses: ./id.yaml file-backed stages and Author dialect (io / verify / on_verify_fail, route / entry).
 - Validate with validate_draft; fix hard errors. Warnings like pipeline.model_applies or pipeline.route_all_gated may be intentional.
-- save writes catalog YAML only when the operator asks to persist. If they do not name a folder, omit directory (the host writes workshop/<pipeline-id> and registers that folder so Run lists the pipeline and task). If they name a folder, pass that directory. Do not ask for a path before saving. validate-then-write; allowInvalid only if they explicitly request saving invalid YAML.
+- save writes catalog YAML only when the operator asks to persist. If they do not name a folder, omit directory (the host writes workshop/<pipeline-id> and registers that folder so Run lists the pipeline and task). If they name a folder, pass that directory. Do not ask for a path before saving. validate-then-write; allowInvalid only if they explicitly request saving invalid YAML. After save, use published.* paths in the tool result — not list_builds tie alone — to answer where files landed and whether a task file was written.
 - Stages are domain-agnostic configurable workflows (releases, research, ops, SDLC, …) — not product stage types.
 - Use retrieve_docs when the operator asks for current docs/examples or when refining against public guidance. If retrieval fails, continue with this playbook alone.
 - Core path = first-class Workshop editors. Advanced topics below are explain-only — do not invent Workshop editors for them.
@@ -50,6 +51,7 @@ Bad: a paragraph of pipeline theory, a numbered plan, and three questions at onc
 
 ## Core: prompts
 - Required system_prompt. Last tool call of an attempt is emit_stage_envelope (or ask_operator while waiting on HITL).
+- Optional skill: belongs on the stage body (create_stage / edit_stage body or stage file) — never on a uses: wrapper.
 - Name required io.output.schema fields in the prompt. summary/payload carry outcomes and artifact pointers only.
 - Land required files with write_stage_artifact (attempt dir). Checkout edits are not after-phase artifact proof.
 - Gated sequence: write artifact → ask_operator → emit only after accept; revise on reject in the same attempt.

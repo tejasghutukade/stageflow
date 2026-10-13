@@ -1,3 +1,5 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
 import type { TriggerFile } from "../types/trigger.js";
@@ -40,6 +42,7 @@ export type ValidationFindingCode =
   | "pipeline.stage_uses_inline_conflict"
   | "pipeline.stage_missing_body"
   | "pipeline.stage_id_mismatch"
+  | "pipeline.stage_wrapper_skill_rejected"
   | "pipeline.invalid_completion"
   | "catalog.path_case_mismatch"
   | "pipeline.invalid_recovery"
@@ -106,9 +109,11 @@ export type ValidationFinding = {
   category: ValidationCategory;
   pipelineId?: string;
   stageId?: string;
+  line?: number;
+  column?: number;
 };
 
-export type ValidationScope = "full" | "pipeline" | "task" | "trigger";
+export type ValidationScope = "full" | "pipeline" | "task" | "trigger" | "stage";
 
 export type ValidateCatalogOptions = {
   cwd?: string;
@@ -117,6 +122,8 @@ export type ValidateCatalogOptions = {
   pipeline?: string;
   task?: string;
   trigger?: string;
+  stage?: string;
+  stageContent?: string;
   strict?: boolean;
 };
 
@@ -312,6 +319,15 @@ function findingCatalog(
   );
 }
 
+function withIssueLocation(finding: ValidationFinding, issue: LoadIssue): ValidationFinding {
+  if (issue.line === undefined && issue.column === undefined) return finding;
+  return {
+    ...finding,
+    ...(issue.line !== undefined ? { line: issue.line } : {}),
+    ...(issue.column !== undefined ? { column: issue.column } : {}),
+  };
+}
+
 export function findingsFromLoadIssues(
   cwd: string,
   absPath: string,
@@ -321,59 +337,74 @@ export function findingsFromLoadIssues(
     if (issue.category === "pipeline") {
       if (issue.code === "pipeline.model_applies" || issue.code === "pipeline.route_all_gated") {
         return [
-          baseFinding(
-            {
-              cwd,
-              absPath,
-              message: issue.message,
-              code: issue.code,
-              category: "pipeline",
-              pipelineId: issue.pipelineId,
-              stageId: issue.stageId,
-            },
-            "warning",
+          withIssueLocation(
+            baseFinding(
+              {
+                cwd,
+                absPath,
+                message: issue.message,
+                code: issue.code,
+                category: "pipeline",
+                pipelineId: issue.pipelineId,
+                stageId: issue.stageId,
+              },
+              "warning",
+            ),
+            issue,
           ),
         ];
       }
       return [
-        findingPipelineError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
-          issue.pipelineId,
-          issue.stageId,
+        withIssueLocation(
+          findingPipelineError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+            issue.pipelineId,
+            issue.stageId,
+          ),
+          issue,
         ),
       ];
     }
     if (issue.category === "stage") {
       return [
-        findingStageError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
-          issue.stageId,
+        withIssueLocation(
+          findingStageError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+            issue.stageId,
+          ),
+          issue,
         ),
       ];
     }
     if (issue.category === "task") {
       return [
-        findingTaskError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
+        withIssueLocation(
+          findingTaskError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+          ),
+          issue,
         ),
       ];
     }
     if (issue.category === "trigger") {
       return [
-        findingTriggerError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
+        withIssueLocation(
+          findingTriggerError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+          ),
+          issue,
         ),
       ];
     }
@@ -385,7 +416,7 @@ export function findingsFromLoadIssues(
         code === "catalog.legacy_yaml"
           ? "warning"
           : "error";
-      return [findingCatalog(cwd, absPath, issue.message, code, severity)];
+      return [withIssueLocation(findingCatalog(cwd, absPath, issue.message, code, severity), issue)];
     }
     return [];
   });
@@ -1057,6 +1088,36 @@ async function validateSingleTask(
   return [];
 }
 
+async function validateSingleStage(
+  invocationCwd: string,
+  stageArg: string,
+  stageContent?: string,
+): Promise<ValidationFinding[]> {
+  const ctx = await resolveCatalogContext(invocationCwd);
+  const relCwd = ctx.projectRoot ?? invocationCwd;
+  const stagePath = path.resolve(invocationCwd, stageArg);
+  if (stageContent === undefined) {
+    return validateStageFile(relCwd, stagePath);
+  }
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "sf-stage-validate-"));
+  const tmpPath = path.join(tmpDir, path.basename(stagePath));
+  try {
+    await writeFile(tmpPath, stageContent, "utf8");
+    const findings = await validateStageFile(relCwd, tmpPath);
+    const displayPath = relPath(relCwd, stagePath);
+    const tmpRel = relPath(relCwd, tmpPath);
+    return findings.map((finding) =>
+      finding.path === tmpRel ||
+      finding.path === tmpPath ||
+      finding.path.includes(tmpDir)
+        ? { ...finding, path: displayPath }
+        : finding,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
 async function validateSingleTrigger(
   invocationCwd: string,
   triggerArg: string,
@@ -1098,6 +1159,9 @@ export async function validateCatalog(
   if (options.scope === "trigger" && !options.trigger) {
     throw new Error("validateCatalog: trigger is required when scope is \"trigger\"");
   }
+  if (options.scope === "stage" && !options.stage) {
+    throw new Error("validateCatalog: stage is required when scope is \"stage\"");
+  }
 
   const allFindings: ValidationFinding[] = [];
 
@@ -1112,6 +1176,10 @@ export async function validateCatalog(
     allFindings.push(...(await validateSingleTask(cwd, options.task!)));
   } else if (options.scope === "trigger") {
     allFindings.push(...(await validateSingleTrigger(cwd, options.trigger!)));
+  } else if (options.scope === "stage") {
+    allFindings.push(
+      ...(await validateSingleStage(cwd, options.stage!, options.stageContent)),
+    );
   } else {
     allFindings.push(...(await validateManifestAll(cwd)));
   }

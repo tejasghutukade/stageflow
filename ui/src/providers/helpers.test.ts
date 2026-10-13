@@ -100,6 +100,10 @@ describe("provider helpers", () => {
       countConfigured([undefined, { providerId: "x", configured: true }]),
     ).toBe(1);
     expect(PROVIDERS_PI_COPY).toMatch(/Stageflow/);
+    expect(PROVIDERS_PI_COPY).toContain("~/.stageflow/agent/auth.json");
+    expect(PROVIDERS_PI_COPY).toMatch(/operator auth file/);
+    expect(PROVIDERS_PI_COPY).not.toMatch(/\$STAGEFLOW_HOME\/agent\/auth\.json/);
+    expect(PROVIDERS_PI_COPY).not.toMatch(/keychain/i);
     expect(PROVIDERS_PI_COPY).not.toMatch(/Software Factory/);
     expect(PROVIDERS_PI_COPY).not.toMatch(/software-factory/);
     expect(PROVIDERS_PI_COPY.toLowerCase()).not.toMatch(/non-pi llm stack/);

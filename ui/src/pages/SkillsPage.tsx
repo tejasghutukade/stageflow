@@ -62,7 +62,7 @@ export function SkillsPage({ skillName }: { skillName?: string }) {
       ) : null}
 
       {!loading && skills.length > 0 ? (
-        <table className="table">
+        <table className="data-table">
           <thead>
             <tr>
               <th>Skill</th>

@@ -12,10 +12,14 @@ import {
   relativeTime,
   stageIndexLabel,
 } from "../catalogJoin";
+import { MiniTrack } from "../components/MiniTrack";
 import { TodayTriage } from "../components/TodayTriage";
+import { useRedesign } from "../redesign/flag";
+import { StatusPill } from "../redesign/StatusPill";
+import { runStatusPillLabel, statusSignalFromRun } from "../redesign/statusSignal";
 import { isAcceptEligible } from "../stageAnswer/answerRules";
 import { useOperatorAnswer } from "../stageAnswer/useOperatorAnswer";
-import { trackSegmentToken, waitingOnYouTitle } from "../status/runStatus";
+import { runDisplayStatus, trackSegmentToken, waitingOnYouTitle } from "../status/runStatus";
 
 function attentionTitle(waitingCount: number): string {
   if (waitingCount === 0) return "Nothing needs you";
@@ -150,10 +154,12 @@ function WaitingCard({
   run,
   onOpen,
   onOpenArtifact,
+  redesign,
 }: {
   run: RunSummary;
   onOpen: (runId: string) => void;
   onOpenArtifact: (runId: string, path: string) => void;
+  redesign: boolean;
 }) {
   const kind = run.waiting_kind;
   const isFeedbackDecide = kind === "feedback_loop_decision";
@@ -182,16 +188,24 @@ function WaitingCard({
   }
 
   return (
-    <article className="block">
-      <div className="block__body">
-        <div className="block__meta">
-          <a className="block__pipeline" href={`#/pipelines/${run.pipeline_id}`}>{runLocatorSubtitle(run)}</a>
-          <span className="status status--waiting">{heldMeta(run)}</span>
+    <article className="run-block">
+      <div className="run-block__body">
+        <div className="run-block__meta">
+          <a className="run-block__pipeline" href={`#/pipelines/${run.pipeline_id}`}>{runLocatorSubtitle(run)}</a>
+          {redesign ? (
+            <StatusPill
+              signal={statusSignalFromRun(run)}
+              label={runStatusPillLabel(runDisplayStatus(run))}
+              elapsed={heldMeta(run)}
+            />
+          ) : (
+            <span className="status status--waiting">{heldMeta(run)}</span>
+          )}
         </div>
-        <p className="block__q">{run.waiting_summary ?? "Waiting for input"}</p>
-        <p className="block__sub">{waitingKindCopy(run)}</p>
+        <p className="run-block__q">{run.waiting_summary ?? "Waiting for input"}</p>
+        <p className="run-block__sub">{waitingKindCopy(run)}</p>
         {error ? <p style={{color:'var(--color-text-red)',fontSize:'var(--font-size-sm)'}}>Could not accept: {error}</p> : null}
-        <div className="block__actions">
+        <div className="run-block__actions">
           {isFeedbackDecide ? (
             <button className="btn btn--primary" onClick={() => onOpen(run.run_id)}>
               Decide on run
@@ -209,8 +223,8 @@ function WaitingCard({
           <button className="btn btn--ghost" onClick={() => onOpen(run.run_id)}>Open run</button>
         </div>
       </div>
-      <button className="block__peek" onClick={onPeek} aria-label={artifact ? `Open ${peek.name}` : "Open run"}>
-        <span className="block__peek-name"><span aria-hidden="true">{peek.icon}</span> {peek.name}</span>
+      <button className="run-block__peek" onClick={onPeek} aria-label={artifact ? `Open ${peek.name}` : "Open run"}>
+        <span className="run-block__peek-name"><span aria-hidden="true">{peek.icon}</span> {peek.name}</span>
         <PeekDoc run={run} />
       </button>
     </article>
@@ -229,6 +243,7 @@ export function TodayPage({
   onSeeRuns: () => void;
 }) {
   const { snapshot, error: catalogError, loading } = useRunCatalog();
+  const redesign = useRedesign();
   const [error, setError] = useState<string | null>(null);
   const [rerunningId, setRerunningId] = useState<string | null>(null);
 
@@ -285,6 +300,7 @@ export function TodayPage({
                     run={run}
                     onOpen={onOpen}
                     onOpenArtifact={onOpenArtifact}
+                    redesign={redesign}
                   />
                 ))
               ),
@@ -305,13 +321,25 @@ export function TodayPage({
                         <span className="run-row__name">{runTaskLabel(run)} <span>· {currentStageName(run)}</span></span>
                       </span>
                       <span>
-                        <span className="track-mini" aria-hidden="true">
-                          {run.stages.map((s) => {
-                            const seg = trackSegmentToken(s.status);
-                            return <i key={s.id} className="track-mini__seg" {...(seg ? {"data-s": seg} : {})}></i>;
-                          })}
-                        </span>
-                        <span className="track-mini__label">{miniTrackLabel(run)}</span>
+                        {redesign ? (
+                          <MiniTrack stages={run.stages} label={miniTrackLabel(run)} />
+                        ) : (
+                          <>
+                            <span className="track-mini" aria-hidden="true">
+                              {run.stages.map((s) => {
+                                const seg = trackSegmentToken(s.status);
+                                return (
+                                  <i
+                                    key={s.id}
+                                    className="track-mini__seg"
+                                    {...(seg ? { "data-s": seg } : {})}
+                                  />
+                                );
+                              })}
+                            </span>
+                            <span className="track-mini__label">{miniTrackLabel(run)}</span>
+                          </>
+                        )}
                       </span>
                       <span className="run-row__right">{relativeTime(run.updated_at ?? run.created_at)}</span>
                     </a>

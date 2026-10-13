@@ -72,13 +72,13 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill`, `mcp`, `browser`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding), [Stage MCP](#stage-mcp), [Stage browser](#stage-browser), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
+**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `mcp`, `browser`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Stage MCP](#stage-mcp), [Stage browser](#stage-browser), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `skill` is body-only — see [Skill binding](#skill-binding). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
 
 **Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `secrets`, `requires`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
 
 `gate_kinds` controls whether `ask_operator` is registered on the sealed stage session: omit or `gate_kinds: []` → tool **off**; a non-empty list → tool **on** with that kinds allowlist. See [HITL — Gate kinds](hitl.md#gate-kinds).
 
-`uses:` plus any body key except `skill`, `mcp`, `secrets`, and `requires` is rejected (`pipeline.stage_uses_inline_conflict`). `skill`, `mcp`, `secrets`, and `requires` may sit on the `uses:` wrapper.
+`uses:` plus any body key except `mcp`, `secrets`, and `requires` is rejected (`pipeline.stage_uses_inline_conflict`). `mcp`, `secrets`, and `requires` may sit on the `uses:` wrapper. `skill:` on a `uses:` wrapper is rejected (`pipeline.stage_wrapper_skill_rejected`) — put it on the stage file or inline body.
 
 `on_verify_fail` is pipeline-stage wiring. It may sit beside `uses:` because a reusable stage can recover differently in different pipelines. `verify` belongs on the body (the `uses:` target or the inline entry), not on the wrapper.
 
@@ -709,13 +709,21 @@ Walkthroughs: [`examples/feedback-loop/`](../examples/feedback-loop/), [`example
 
 ### Skill binding {#skill-binding}
 
-Bind a Pi skill to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The loader also accepts `skill:` in external stage files; a pipeline-entry `skill` overrides the file value on merge. Prefer the pipeline entry.
+Bind a Pi skill on the **stage body** — the external stage file or an inline stage mapping. Prefer the stage file for `uses:` stages. `skill:` on a `uses:` wrapper is rejected.
 
 ```yaml
+# author-diagrams.yaml
+id: author-diagrams
+skill: archify
+system_prompt: |
+  …
+```
+
+```yaml
+# pipeline
 stages:
   - id: author-diagrams
     uses: ./author-diagrams.yaml
-    skill: archify
 ```
 
 | Behavior | Detail |
@@ -958,7 +966,7 @@ Optional when a pipeline or manifest default can fill it:
 |-------|-------------|
 | `model` | Provider/model string; resolved via [Model defaults and precedence](#model-defaults-and-precedence) |
 
-Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.output.schema`. Optional body fields: `model` (when inherited from a higher default), `verify`, `gate_kinds`, `timeout_ms` — see [Envelopes — io schemas](envelopes.md#io-schemas) and [Verify](#verify). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `entry`, `on_verify_fail`, `needs`, `fork`, `route_select`, `allow_none`, `clonable`, `clone_cap`, `clone_mode`) are errors on an external stage file (body only — put wiring on the pipeline entry). `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes). When it elapses the attempt fails and the session is kept for `sf runs resume`.
+Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.output.schema`. Optional body fields: `model` (when inherited from a higher default), `verify`, `gate_kinds`, `timeout_ms`, `skill` — see [Envelopes — io schemas](envelopes.md#io-schemas), [Verify](#verify), and [Skill binding](#skill-binding). The loader also accepts `mcp:` here; prefer binding MCP on the pipeline entry (see [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `entry`, `on_verify_fail`, `needs`, `fork`, `route_select`, `allow_none`, `clonable`, `clone_cap`, `clone_mode`) are errors on an external stage file (body only — put wiring on the pipeline entry). `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes). When it elapses the attempt fails and the session is kept for `sf runs resume`.
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 

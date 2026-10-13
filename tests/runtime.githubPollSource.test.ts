@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ import type { TriggerFireEvent } from "../src/runtime/triggerPort.js";
 import { clearFindManifestRootCacheForTests } from "../src/project/findManifestRoot.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const stageFixture = path.join(fixtures, "stages", "clarify.yaml");
@@ -54,6 +55,14 @@ async function seedCatalog(root: string, triggerFixtureNames: string[]): Promise
 
 async function mkdtempHome(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), "sf-github-source-home-"));
+}
+
+async function storeForCatalog(catalogRoot: string) {
+  const home = await mkdtempHome();
+  bindStageflowHomeForTests(home);
+  const store = createRunStore({ rootDir: home });
+  await store.ensureProject(catalogRoot);
+  return store;
 }
 
 function makePr(overrides: Partial<GithubPullItem> & { number: number }): GithubPullItem {
@@ -90,7 +99,7 @@ describe("GithubPollSource", () => {
       await seedCatalog(root, ["github-dynamic.trigger.yaml", "github-catalog.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const seedPr = makePr({ number: 1, updated_at: "2026-01-01T00:00:00.000Z" });
       const newPr = makePr({
         number: 2,
@@ -128,7 +137,10 @@ describe("GithubPollSource", () => {
       });
 
       const catalogCall = onFire.mock.calls.find((call) => call[0].triggerId === "github-catalog");
-      expect(catalogCall?.[0]).toEqual({ triggerId: "github-catalog" });
+      expect(catalogCall?.[0]).toMatchObject({
+        triggerId: "github-catalog",
+        project_root: await realpath(root),
+      });
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
@@ -142,7 +154,7 @@ describe("GithubPollSource", () => {
       clearFindProjectRootCacheForTests();
       clearFindManifestRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const seedPr = makePr({ number: 1, updated_at: "2026-01-01T00:00:00.000Z" });
       const newPr = makePr({
         number: 2,
@@ -183,7 +195,7 @@ describe("GithubPollSource", () => {
       await seedCatalog(root, ["github-dynamic.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const seedPr = makePr({ number: 1 });
       const newPr = makePr({ number: 2, updated_at: "2026-01-02T00:00:00.000Z" });
 
@@ -221,7 +233,7 @@ describe("GithubPollSource", () => {
       await seedCatalog(root, ["github-match-closed.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const seedPr = makePr({ number: 1 });
       const openedPr = makePr({
         number: 2,
@@ -265,7 +277,7 @@ describe("GithubPollSource", () => {
       await seedCatalog(root, ["github-malformed-repo.trigger.yaml", "github-valid-repo.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const seedPr = makePr({ number: 1 });
       const { client, listPulls } = scriptedClient([
         { status: 200, etag: "W/\"etag-1\"", items: [seedPr] },
@@ -298,7 +310,7 @@ describe("GithubPollSource", () => {
       await seedCatalog(root, ["github-dynamic.trigger.yaml"]);
       clearFindProjectRootCacheForTests();
 
-      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const store = await storeForCatalog(root);
       const { client, listPulls } = scriptedClient([{ status: 200, items: [makePr({ number: 1 })] }]);
       const logError = vi.fn();
 

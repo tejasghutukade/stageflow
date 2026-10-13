@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { FakeAgent } from "../../../src/agent/fakeAgent.js";
-import { createCompletedOnlyStageHandle, runStageViaOpen, type AgentPort } from "../../../src/agent/port.js";
+import { createCompletedOnlyStageHandle, runStageViaOpen, type StagePort } from "../../../src/agent/port.js";
 import { attemptArtifactsDir } from "../../../src/runstore/workspaceLayout.js";
 
 /**
@@ -11,7 +11,7 @@ import { attemptArtifactsDir } from "../../../src/runstore/workspaceLayout.js";
  * Shared by every A2A test that runs the canonical supplier-assessment publication, so its
  * behavior only needs to match that fixture's stage IDs and gates in one place.
  */
-export function supplierAgent(): AgentPort {
+export function supplierAgent(): StagePort {
   return {
     openStage(input) {
       if (input.stage.id === "clarify") {
@@ -50,7 +50,7 @@ export function supplierAgent(): AgentPort {
  * `confirm` gate on the `approve` stage. Used to exercise the boundary that a caller can never
  * answer an operator-only gate, even with a forged handle — the run is never meant to finish here.
  */
-export function gatedAgent(): AgentPort {
+export function gatedAgent(): StagePort {
   const approve = new FakeAgent({
     type: "wait_then_emit",
     waitRequests: [{ kind: "confirm", message: "Approve this request?", id: "g-1" }],

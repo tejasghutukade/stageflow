@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createCompletedOnlyStageHandle,
-  type AgentPort,
+  type StagePort,
   type StageRunInput,
 } from "../src/agent/port.js";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
@@ -35,7 +35,7 @@ function gatedParallelAgent(options: {
     string,
     { summary: string; fail?: boolean }
   >;
-}): AgentPort & {
+}): StagePort & {
   openCounts: Map<string, number>;
   concurrent: number;
   maxConcurrent: number;
@@ -44,7 +44,7 @@ function gatedParallelAgent(options: {
   let concurrent = 0;
   let maxConcurrent = 0;
 
-  const agent: AgentPort & {
+  const agent: StagePort & {
     openCounts: Map<string, number>;
     concurrent: number;
     maxConcurrent: number;

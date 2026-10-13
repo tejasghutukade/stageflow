@@ -11,11 +11,17 @@ Provider management is via `sf providers` and the console **Settings → Provide
 
 ## Credential storage
 
-All provider credentials live in Stageflow’s global store:
+Provider credentials live in the operator auth file:
 
-`$STAGEFLOW_HOME/agent/auth.json` (default `~/.stageflow/agent/auth.json`)
+`<credential-root>/agent/auth.json`
 
-**Cursor models** use the **`pi-cursor-sdk`** npm package shipped as a Stageflow dependency (`npm i stageflow` / `npm ci` in the repo). You can still install a copy under `$STAGEFLOW_HOME/agent/npm/` via `pi install npm:pi-cursor-sdk` if you override the default. Stage workers receive the auth path through `STAGEFLOW_AGENT_AUTH_PATH` (Host passes `$STAGEFLOW_HOME/agent/auth.json`).
+`STAGEFLOW_CREDENTIAL_HOME` sets that root to a directory. When it is unset, the root is the host user's `~/.stageflow`, and the file is `~/.stageflow/agent/auth.json`. `models.json` sits beside the auth file. The Cursor key file is `<credential-root>/agent/cursor-api-key`.
+
+A job-local or Docker data directory is its own operator when `STAGEFLOW_CREDENTIAL_HOME` is set to that directory. The image, Compose, `scripts/docker-smoke.sh`, and the release and publish workflows already set the override. [`scripts/start-ui-local.sh`](../scripts/start-ui-local.sh) sets `STAGEFLOW_HOME` to the repo's `.stageflow-dev` and leaves the override unset, so that server shares the machine operator store.
+
+When an existing login lives under a non-default data directory, set `STAGEFLOW_CREDENTIAL_HOME` to that directory.
+
+**Cursor models** use the **`pi-cursor-sdk`** npm package shipped as a Stageflow dependency (`npm i stageflow` / `npm ci` in the repo). You can still install a copy under `$STAGEFLOW_HOME/agent/npm/` via `pi install npm:pi-cursor-sdk` if you override the default. Stage workers receive the auth path through `STAGEFLOW_AGENT_AUTH_PATH` (Host passes the operator auth file).
 
 Check binding:
 
@@ -112,7 +118,7 @@ Or omit it when a pipeline or manifest default fills the value. The provider mus
 
 Stageflow is a thin orchestration layer on Pi. You do **not** need Pi CLI `/login` as a hard prerequisite if you configure providers via `sf providers` or the console.
 
-**Cursor API key:** set `CURSOR_API_KEY` on the Host before `sf ui` / `sf mcp` starts, or put the key in `$STAGEFLOW_HOME/agent/cursor-api-key` (mode `0600`, no trailing newline). You can also use `CURSOR_API_KEY_FILE`. A key in `.zshrc` alone does not reach the Host if you start Stageflow from the IDE or another environment that never loads your shell profile.
+**Cursor API key:** set `CURSOR_API_KEY` on the Host before `sf ui` / `sf mcp` starts, or put the key in `<credential-root>/agent/cursor-api-key` (mode `0600`, no trailing newline). You can also use `CURSOR_API_KEY_FILE`. A key in `.zshrc` alone does not reach the Host if you start Stageflow from the IDE or another environment that never loads your shell profile.
 
 ## Console
 
