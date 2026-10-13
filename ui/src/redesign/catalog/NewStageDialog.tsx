@@ -15,9 +15,11 @@ import {
   GATE_KIND_OPTIONS,
   MODEL_INHERIT,
   MODEL_OTHER,
+  createStageGateKindsPayload,
   newStageFormFrom,
   newStageModelOptions,
   mergePipelineDirectoryOptionsWithCatalogRoots,
+  optionalCreateStageSkill,
   resolveNewStageModel,
   validateNewStage,
   withLoadedModels,
@@ -133,7 +135,8 @@ export function NewStageDialog({ open, initial, onClose }: NewStageDialogProps) 
       id: form.id.trim(),
       system_prompt: form.systemPrompt,
       ...(model ? { model } : {}),
-      ...(form.gateKinds.length > 0 ? { gate_kinds: form.gateKinds } : {}),
+      ...createStageGateKindsPayload("chips", form.gateKinds),
+      ...optionalCreateStageSkill(form.skill),
       ...(selectedOption.project_root ? { project_root: selectedOption.project_root } : {}),
     };
     const result = await createStageWithDetails(body);
@@ -297,6 +300,17 @@ export function NewStageDialog({ open, initial, onClose }: NewStageDialogProps) 
               Optional. Inherits pipeline then global default when omitted.
             </p>
           </div>
+          <label className="flex flex-col gap-[5px]">
+            <span className={FIELD_LABEL}>Skill (optional)</span>
+            <input
+              className={`${INPUT} ${MONO}`}
+              value={form.skill}
+              onChange={(e) => setForm((prev) => ({ ...prev, skill: e.target.value }))}
+              placeholder="code-review"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
           <div className="flex flex-col gap-[5px]">
             <span className={FIELD_LABEL}>Gate kinds</span>
             <div className="flex flex-wrap gap-1.5">

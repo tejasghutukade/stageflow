@@ -1,5 +1,6 @@
 import type { DraftPackagePayload, ValidationFinding } from "../../../api";
 import { cloneDraft, stageIdFromRef } from "../../editor/draftMutators";
+import { stageEditFingerprint } from "../graph/workshopGraphModel";
 
 export const GATE_KINDS = [
   "free_text",
@@ -409,6 +410,19 @@ export function setStageSystemPrompt(
   prompt: string,
 ): DraftPackagePayload {
   return setStageBodyValue(draft, stageId, ["system_prompt"], prompt);
+}
+
+export function writeStageSkill(
+  draft: DraftPackagePayload,
+  stageId: string,
+  skill: string,
+): DraftPackagePayload {
+  const value = skill.trim() ? skill.trim() : undefined;
+  return editBody(draft, stageId, (body, ref) => {
+    delete ref.skill;
+    if (value === undefined) delete body.skill;
+    else body.skill = value;
+  });
 }
 
 function ensureIoSchema(body: Obj, side: "input" | "output"): Obj {
@@ -827,25 +841,15 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-function stageSnapshot(draft: DraftPackagePayload, stageId: string): string | null {
-  const loc = locateStage(draft, stageId);
-  if (!loc) return null;
-  const ref: Obj = { ...loc.ref };
-  delete ref.route;
-  delete ref.entry;
-  const body = loc.fileIndex >= 0 ? draft.stages![loc.fileIndex]!.body : null;
-  return stableStringify({ ref, body });
-}
-
 export function stageChangeKind(
   draft: DraftPackagePayload,
   baseline: DraftPackagePayload | null,
   stageId: string,
 ): StageChangeKind {
   if (!baseline) return "new";
-  const before = stageSnapshot(baseline, stageId);
+  const before = stageEditFingerprint(baseline, stageId);
   if (before === null) return "new";
-  return before === stageSnapshot(draft, stageId) ? "unchanged" : "edited";
+  return before === stageEditFingerprint(draft, stageId) ? "unchanged" : "edited";
 }
 
 export function pipelineChanged(

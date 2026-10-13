@@ -523,6 +523,7 @@ export type CreateStageInput = {
   system_prompt: string;
   model?: string;
   gate_kinds?: StageGateKind[];
+  skill?: string;
 };
 
 export type CreatedStageListing = {
@@ -868,6 +869,9 @@ export type WorkshopSessionMutationSnapshot = {
   artifacts: WorkshopChatProposalPayload["artifacts"];
   status: "accepted" | "rejected";
   autoApplied?: boolean;
+  baseDraft?: DraftPackagePayload;
+  nextDraft?: DraftPackagePayload;
+  baseFingerprint?: string;
 };
 
 export type WorkshopSessionMessage = {

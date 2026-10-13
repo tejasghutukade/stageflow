@@ -1,6 +1,8 @@
 import type { ProposalArtifactDiff } from "../operatorAgent/proposals.js";
 import type { WorkshopChatProposalPayload } from "./chatTurn.js";
 
+type SnapshotDraft = WorkshopChatProposalPayload["baseDraft"];
+
 export type WorkshopSessionMutationSnapshot = {
   id: string;
   summary: string;
@@ -8,10 +10,44 @@ export type WorkshopSessionMutationSnapshot = {
   artifacts: ProposalArtifactDiff[];
   status: "accepted" | "rejected";
   autoApplied?: boolean;
+  baseDraft?: SnapshotDraft;
+  nextDraft?: SnapshotDraft;
+  baseFingerprint?: string;
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseDraft(value: unknown): SnapshotDraft | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const pipeline = value.pipeline;
+  if (!isPlainObject(pipeline)) return undefined;
+  if (typeof pipeline.id !== "string") return undefined;
+  if (!Array.isArray(pipeline.stages)) return undefined;
+  if (pipeline.stages.some((stage) => !isPlainObject(stage))) return undefined;
+  if (value.stages !== undefined) {
+    if (!Array.isArray(value.stages)) return undefined;
+    for (const entry of value.stages) {
+      if (
+        !isPlainObject(entry) ||
+        typeof entry.path !== "string" ||
+        !isPlainObject(entry.body)
+      ) {
+        return undefined;
+      }
+    }
+  }
+  if (value.task !== undefined) {
+    if (
+      !isPlainObject(value.task) ||
+      typeof value.task.filename !== "string" ||
+      !isPlainObject(value.task.body)
+    ) {
+      return undefined;
+    }
+  }
+  return structuredClone(value) as SnapshotDraft;
 }
 
 function parseArtifact(value: unknown): ProposalArtifactDiff | null {
@@ -51,6 +87,12 @@ export function parseWorkshopSessionMutationSnapshot(
     artifacts.push(parsed);
   }
   const status = value.status === "rejected" ? "rejected" : "accepted";
+  const baseDraft = parseDraft(value.baseDraft);
+  const nextDraft = parseDraft(value.nextDraft);
+  const baseFingerprint =
+    typeof value.baseFingerprint === "string" && value.baseFingerprint
+      ? value.baseFingerprint
+      : undefined;
   return {
     id: value.id,
     summary: value.summary,
@@ -58,6 +100,9 @@ export function parseWorkshopSessionMutationSnapshot(
     artifacts,
     status,
     ...(value.autoApplied === true ? { autoApplied: true } : {}),
+    ...(baseDraft ? { baseDraft } : {}),
+    ...(nextDraft ? { nextDraft } : {}),
+    ...(baseFingerprint ? { baseFingerprint } : {}),
   };
 }
 
@@ -70,7 +115,12 @@ export function mutationSnapshotsFromProposals(
     summary: proposal.summary,
     affectedStageIds: [...proposal.affectedStageIds],
     artifacts: proposal.artifacts.map((artifact) => ({ ...artifact })),
-    status: "accepted",
+    status: "accepted" as const,
+    baseDraft: structuredClone(proposal.baseDraft),
+    nextDraft: structuredClone(proposal.nextDraft),
+    ...(proposal.baseFingerprint
+      ? { baseFingerprint: proposal.baseFingerprint }
+      : {}),
     ...(autoApply ? { autoApplied: true } : {}),
   }));
 }

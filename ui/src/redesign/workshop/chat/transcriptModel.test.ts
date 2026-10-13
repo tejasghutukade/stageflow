@@ -154,10 +154,17 @@ describe("time and seeds", () => {
           {
             id: "mut-1",
             summary: "Add task",
-            affectedStageIds: [],
+            affectedStageIds: ["review"],
             artifacts: [{ path: "demo.task.yaml", kind: "added" }],
             status: "accepted",
             autoApplied: true,
+            baseDraft: {
+              pipeline: { id: "demo", stages: [{ id: "scan" }] },
+            },
+            nextDraft: {
+              pipeline: { id: "demo", stages: [{ id: "scan" }, { id: "review" }] },
+            },
+            baseFingerprint: "fp-1",
           },
         ],
       },

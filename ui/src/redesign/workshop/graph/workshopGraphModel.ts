@@ -131,6 +131,19 @@ function refSignature(ref: Record<string, unknown> | undefined): string {
   return stableStringify({ ...rest, loops });
 }
 
+export function stageEditFingerprint(
+  draft: DraftPackagePayload,
+  stageId: string,
+  inboundWiring?: string,
+): string | null {
+  const ref = stageRefFor(draft, stageId);
+  if (!ref) return null;
+  const body = stageBodyFor(draft, stageId);
+  const parts = [refSignature(ref), body === ref ? "" : stableStringify(body)];
+  if (inboundWiring !== undefined) parts.push(inboundWiring);
+  return parts.join("\n");
+}
+
 function inboundSignature(
   draft: DraftPackagePayload,
   stageId: string,
@@ -166,11 +179,8 @@ function snapshotStages(draft: DraftPackagePayload): Map<string, StageSnapshot> 
       ref,
       body,
       preds: list,
-      signature: [
-        refSignature(ref),
-        body === ref ? "" : stableStringify(body),
-        inboundSignature(draft, id, list),
-      ].join("\n"),
+      signature:
+        stageEditFingerprint(draft, id, inboundSignature(draft, id, list)) ?? "",
     });
   }
   return result;

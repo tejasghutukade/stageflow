@@ -126,15 +126,15 @@ describe("trigger HTTP routes", () => {
         const listed = (await listRes.json()) as {
           triggers: Array<{ id: string; kind: string; enabled: boolean }>;
         };
-        expect(listed.triggers).toHaveLength(1);
-        expect(listed.triggers[0]).toMatchObject({
+        const manual = listed.triggers.find((t) => t.id === "manual-hello-world");
+        expect(manual).toMatchObject({
           id: "manual-hello-world",
           pipeline: "hello",
           task: "my-task",
           kind: "manual",
           enabled: true,
         });
-        expect(listed.triggers[0]!.last_fired_at).toBeUndefined();
+        expect(manual!.last_fired_at).toBeUndefined();
 
         const showRes = await fetch(`${service.baseUrl}/api/triggers/manual-hello-world`);
         expect(showRes.status).toBe(200);

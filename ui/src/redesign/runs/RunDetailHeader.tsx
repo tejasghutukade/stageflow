@@ -14,7 +14,10 @@ import {
   canDeleteRun,
   isActiveRunStatus,
 } from "../../runLifecycle/runActions";
-import { canAbandon, canResumeTimedOut, canRetry } from "../../stageAction";
+import {
+  stageActionVisibility,
+  type StageActionVisibility,
+} from "./stageActionVisibility";
 import {
   LuChevronRight,
   LuCopy,
@@ -51,7 +54,7 @@ function stageDotClass(status: string): string {
 function StageActionGroup({
   stage,
   stageLabel,
-  retryBlocked,
+  visibility,
   onRetry,
   onResume,
   onAbandon,
@@ -62,7 +65,7 @@ function StageActionGroup({
 }: {
   stage: StageSnapshot;
   stageLabel: string;
-  retryBlocked: boolean;
+  visibility: StageActionVisibility;
   onRetry?: () => void;
   onResume?: () => void;
   onAbandon?: () => void;
@@ -71,9 +74,7 @@ function StageActionGroup({
   abandoning?: boolean;
   disabled?: boolean;
 }) {
-  const showRetry = canRetry(stage.status) && onRetry;
-  const showResume = canResumeTimedOut(stage) && onResume;
-  const showAbandon = canAbandon(stage.status) && onAbandon;
+  const { showRetry, showResume, showAbandon, retryDisabled } = visibility;
   if (!showRetry && !showResume && !showAbandon) return null;
   const busy = disabled || retrying || resuming || abandoning;
 
@@ -95,10 +96,10 @@ function StageActionGroup({
         <button
           type="button"
           className={`${STAGE_ACTION} bg-[#ffffff14] text-[#ecedee] hover:bg-[#ffffff1f]`}
-          disabled={busy || retryBlocked}
+          disabled={busy || retryDisabled}
           onClick={onRetry}
           title={
-            retryBlocked
+            retryDisabled
               ? "Answer the open gate before retrying"
               : "Start a new attempt of this stage; downstream stages continue from it"
           }
@@ -112,7 +113,7 @@ function StageActionGroup({
         <button
           type="button"
           className={`${STAGE_ACTION} text-[#ecedee] hover:bg-[#ffffff0f]`}
-          disabled={busy || retryBlocked}
+          disabled={busy || retryDisabled}
           onClick={onResume}
           title="Continue the interrupted attempt on the same agent session"
         >
@@ -339,11 +340,19 @@ export function RunDetailHeader({
   now?: number;
 }) {
   const runBusy = Boolean(rerunning || cancelling || deleting);
+  const stageActions = selectedStage
+    ? stageActionVisibility({
+        status: selectedStage.status,
+        events: selectedStage.events,
+        retryBlocked: Boolean(retryBlocked),
+        hasRetry: Boolean(onRetryStage),
+        hasResume: Boolean(onResumeStage),
+        hasAbandon: Boolean(onAbandonStage),
+      })
+    : null;
   const retryAvailable = Boolean(
-    selectedStage &&
-      canRetry(selectedStage.status) &&
-      onRetryStage &&
-      !retryBlocked &&
+    stageActions?.showRetry &&
+      !stageActions.retryDisabled &&
       !retrying &&
       !runBusy,
   );
@@ -471,11 +480,11 @@ export function RunDetailHeader({
         ) : null}
       </div>
       <div className="flex shrink-0 flex-nowrap items-center gap-2">
-        {selectedStage ? (
+        {selectedStage && stageActions ? (
           <StageActionGroup
             stage={selectedStage}
             stageLabel={selectedStageLabel ?? selectedStage.stage_id}
-            retryBlocked={Boolean(retryBlocked)}
+            visibility={stageActions}
             onRetry={onRetryStage}
             onResume={onResumeStage}
             onAbandon={onAbandonStage}

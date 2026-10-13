@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fireTrigger } from "../runtime/triggerRunner.js";
-import { matchesEventFilter } from "../runtime/triggerEventMatch.js";
-import { verifyHmacSignature } from "../runtime/webhookSignature.js";
+import { acceptWebhook } from "../runtime/webhookAccept.js";
 import { mapStartFailure } from "./operatorResults.js";
 import { writeAudit } from "../logging/audit.js";
 import type { Logger } from "../logging/logger.js";
@@ -37,7 +36,6 @@ import {
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import { catalogContextFromStageflow } from "../config/resolveCatalogContext.js";
 import { getCatalogScanPaths } from "../config/browseCatalog.js";
-import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
 import { coerceTaskFile } from "../config/loadTask.js";
 import type { TaskFile } from "../types/task.js";
 export type { TriggerListItem } from "../config/triggerCatalog.js";
@@ -264,36 +262,18 @@ export async function handleTriggerRoutes(
       }
       return true;
     }
-    const trigger = located.match.definition;
-
-    const config = trigger.event?.config;
-    const secretRef = typeof config?.secretRef === "string" ? config.secretRef : undefined;
-    const header = typeof config?.header === "string" ? config.header : undefined;
-    if (secretRef === undefined || header === undefined) {
-      json(res, 400, { error: "this trigger has no webhook signing configured" });
-      return true;
-    }
-    const scheme = config?.scheme === "base64" ? "base64" : "hex";
-
-    let secret: string | undefined;
-    try {
-      secret = readSecretFromEnvOrFile(process.env, secretRef);
-    } catch {
-      secret = undefined;
-    }
-    if (secret === undefined) {
-      json(res, 400, { error: "this trigger has no webhook signing configured" });
-      return true;
-    }
-
     const rawBody = await readRawBody(req);
-    const headerValue = req.headers[header.toLowerCase()];
-    const signature = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-    if (
-      typeof signature !== "string" ||
-      signature.length === 0 ||
-      !verifyHmacSignature(rawBody, signature, secret, scheme)
-    ) {
+    const accepted = acceptWebhook({
+      trigger: located.match.definition,
+      rawBody,
+      headers: req.headers,
+      env: process.env,
+    });
+    if (accepted.kind === "not_configured") {
+      json(res, 400, { error: "this trigger has no webhook signing configured" });
+      return true;
+    }
+    if (accepted.kind === "bad_signature") {
       writeAudit(auditLog, {
         caller_id: callerId,
         surface: "webhook",
@@ -304,37 +284,18 @@ export async function handleTriggerRoutes(
       json(res, 401, { error: "Invalid webhook signature" });
       return true;
     }
-
-    let payload: unknown;
-    try {
-      payload = rawBody.length === 0 ? {} : JSON.parse(rawBody.toString("utf8"));
-    } catch {
-      json(res, 400, { error: "Invalid JSON body" });
+    if (accepted.kind === "bad_json") {
+      json(res, 400, { error: accepted.error });
       return true;
     }
-    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
-      json(res, 400, { error: "Invalid JSON body: expected an object" });
-      return true;
-    }
-    const payloadRecord = payload as Record<string, unknown>;
-
-    if (!matchesEventFilter(trigger.event?.match, payloadRecord)) {
+    if (accepted.kind === "no_match") {
       json(res, 200, { fired: false });
       return true;
     }
 
-    const task: TaskFile | undefined =
-      trigger.task === undefined
-        ? {
-            id: `${id}-webhook-${Date.now()}`,
-            goal: `Handle webhook event for trigger "${id}"`,
-            input: payloadRecord,
-          }
-        : undefined;
-
     const result = await fireTrigger(id, store, manager, {
       cwd,
-      task,
+      task: accepted.task,
       project_root: located.match.project_root,
     });
     if (!result.ok) {

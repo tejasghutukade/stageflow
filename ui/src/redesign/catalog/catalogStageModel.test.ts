@@ -15,7 +15,10 @@ import {
   runStatusPill,
   skillStripEntries,
   stepSelection,
+  createStageGateKindsPayload,
+  optionalCreateStageSkill,
   validateNewStage,
+  validateNewStageFields,
   newStageFormFrom,
   modelFieldsForInitial,
   MODEL_INHERIT,
@@ -284,6 +287,50 @@ describe("new stage form", () => {
         directoryKey: "k",
       }),
     ).toEqual({});
+  });
+
+  it("shares id, prompt, and model-other checks", () => {
+    expect(validateNewStageFields({ id: "", systemPrompt: "  " })).toEqual({
+      id: "Stage id is required",
+      systemPrompt: "System prompt is required",
+    });
+    expect(
+      validateNewStageFields({
+        id: "hello",
+        systemPrompt: "Say hello.",
+        model: "   ",
+        useDropdown: true,
+        modelSelect: MODEL_OTHER,
+      }).model,
+    ).toBe("Model is required when Other is selected.");
+    expect(
+      validateNewStageFields({
+        id: "hello",
+        systemPrompt: "Say hello.",
+        model: "",
+        useDropdown: true,
+        modelSelect: MODEL_INHERIT,
+      }),
+    ).toEqual({});
+  });
+
+  it("encodes panel gate modes and dialog chips", () => {
+    expect(createStageGateKindsPayload("all", [])).toEqual({});
+    expect(createStageGateKindsPayload("none", ["confirm"])).toEqual({
+      gate_kinds: [],
+    });
+    expect(createStageGateKindsPayload("allowlist", ["confirm"])).toEqual({
+      gate_kinds: ["confirm"],
+    });
+    expect(createStageGateKindsPayload("chips", [])).toEqual({});
+    expect(createStageGateKindsPayload("chips", ["confirm"])).toEqual({
+      gate_kinds: ["confirm"],
+    });
+  });
+
+  it("omits a blank skill and trims a set one", () => {
+    expect(optionalCreateStageSkill("  ")).toEqual({});
+    expect(optionalCreateStageSkill(" code-review ")).toEqual({ skill: "code-review" });
   });
 
   it("dedupes pipeline directories per project root", () => {

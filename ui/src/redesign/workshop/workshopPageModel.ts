@@ -286,18 +286,23 @@ export function emptyDraftPackage(): DraftPackagePayload {
   return { pipeline: { id: "untitled", stages: [] } };
 }
 
+function draftFromSnapshot(
+  draft: DraftPackagePayload | undefined,
+): DraftPackagePayload {
+  return draft ? structuredClone(draft) : emptyDraftPackage();
+}
+
 export function proposalFromMutationSnapshot(
   snapshot: WorkshopSessionMutationSnapshot,
 ): WorkshopChatProposalPayload {
-  const empty = emptyDraftPackage();
   return {
     id: snapshot.id,
     summary: snapshot.summary,
     affectedStageIds: [...snapshot.affectedStageIds],
     artifacts: snapshot.artifacts.map((artifact) => ({ ...artifact })),
-    baseDraft: empty,
-    nextDraft: empty,
-    baseFingerprint: snapshot.id,
+    baseDraft: draftFromSnapshot(snapshot.baseDraft),
+    nextDraft: draftFromSnapshot(snapshot.nextDraft),
+    baseFingerprint: snapshot.baseFingerprint || snapshot.id,
   };
 }
 

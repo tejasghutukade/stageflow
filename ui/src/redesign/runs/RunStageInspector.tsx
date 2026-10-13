@@ -13,15 +13,11 @@ import {
 import type { CapacityHealth, RunDetail, StageSnapshot } from "../../api";
 import { formatDurationMs, formatRunCost } from "../../runs/formatRunMetrics";
 import { stageRowDurationMs } from "../../runs/stageTimeline";
-import {
-  canAbandon,
-  canRetry,
-  canResumeTimedOut,
-  isStageActionBusy,
-} from "../../stageAction";
+import { isStageActionBusy } from "../../stageAction";
 import { useHotkeys } from "../keys";
 import { stageCloneLabel } from "../../workspace/resolveRunWorkspace";
 import { retryBlockedByAnswerGate } from "./runInspectorFields";
+import { stageActionVisibility } from "./stageActionVisibility";
 import {
   formatTokenCount,
   formatWaitDuration,
@@ -165,7 +161,15 @@ export function RunStageInspector({
   const outbound = stage.envelope;
   const retryBlocked = retryBlockedByAnswerGate(run);
   const retryBusy = isStageActionBusy(actionBusy, stageId);
-  const showRetry = canRetry(stage.status) || retryBlocked;
+  const { showRetry, showResume, showAbandon, retryDisabled } =
+    stageActionVisibility({
+      status: stage.status,
+      events: stage.events,
+      retryBlocked,
+      hasRetry: true,
+      hasResume: true,
+      hasAbandon: true,
+    });
 
   const model = stagePrimaryModel(stage);
   const tokens = stageTokenTotals(stage);
@@ -271,26 +275,26 @@ export function RunStageInspector({
           <button
             type="button"
             className={ACTION_ROW}
-            disabled={retryBusy || retryBlocked}
+            disabled={retryBusy || retryDisabled}
             onClick={() => onRetry(stageId)}
           >
             <LuRotateCcw className="size-3.5 text-[#8b8f98]" aria-hidden />
             <span>Retry stage</span>
-            {retryBlocked ? (
+            {retryDisabled ? (
               <span className="ml-auto text-xs text-[#8b8f98]">answer gate first</span>
             ) : null}
           </button>
         ) : null}
-        {canResumeTimedOut(stage) ? (
+        {showResume ? (
           <button
             type="button"
             className={ACTION_ROW}
-            disabled={retryBusy || retryBlocked}
+            disabled={retryBusy || retryDisabled}
             onClick={() => onResume(stageId)}
           >
             <LuPlay className="size-3.5 text-[#8b8f98]" aria-hidden />
             <span>Resume stage</span>
-            {retryBlocked ? (
+            {retryDisabled ? (
               <span className="ml-auto text-xs text-[#8b8f98]">answer gate first</span>
             ) : null}
           </button>
@@ -308,7 +312,7 @@ export function RunStageInspector({
             <span>Open artifact</span>
           </button>
         ) : null}
-        {canAbandon(stage.status) ? (
+        {showAbandon ? (
           <button
             type="button"
             className={ACTION_ROW}

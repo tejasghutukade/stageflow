@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DraftPackagePayload, ValidationFinding } from "../../../api";
+import { stageChangeKind } from "../inspector/stageFields";
 import {
   buildWorkshopGraphModel,
   findingFieldPath,
@@ -101,6 +102,18 @@ describe("stageChangeStatus", () => {
     after.pipeline.stages = after.pipeline.stages.filter((stage) => stage.id !== "test");
     expect(stageChangeStatus(after, before).get("test")).toBe("removed");
     expect(stageChangeStatus(after, before).get("plan")).toBe("unchanged");
+  });
+
+  it("shares body and ref edits with the inspector and leaves wiring to the graph", () => {
+    const base = baseline();
+    const bodyEdit = baseline();
+    bodyEdit.stages![0]!.body = { ...bodyEdit.stages![0]!.body, model: "other" };
+    expect(stageChangeStatus(bodyEdit, base).get("plan")).toBe("edited");
+    expect(stageChangeKind(bodyEdit, base, "plan")).toBe("edited");
+    expect(stageChangeStatus(edited(), base).get("review")).toBe("edited");
+    expect(stageChangeKind(edited(), base, "review")).toBe("edited");
+    expect(stageChangeStatus(edited(), base).get("ship")).toBe("edited");
+    expect(stageChangeKind(edited(), base, "ship")).toBe("unchanged");
   });
 });
 

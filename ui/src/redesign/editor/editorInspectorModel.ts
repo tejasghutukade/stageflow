@@ -7,8 +7,8 @@ import {
   GATE_KINDS,
   getStageForm,
   normalizeStageFieldKey,
-  setStageBodyValue,
-  setStageRefValue,
+  setStageGateKinds,
+  writeStageSkill as writeStageSkillValue,
   type GateKind,
 } from "../workshop/inspector/stageFields";
 import { stageBodyFor } from "../workshop/stageMutators";
@@ -133,13 +133,7 @@ export function applyGateKindToggle(
 ): DraftPackagePayload {
   const form = getStageForm(draft, stageId);
   if (!form) return draft;
-  const next = toggleGateKind(form.gateKinds, kind);
-  return setStageBodyValue(
-    draft,
-    stageId,
-    ["gate_kinds"],
-    next.length > 0 ? next : undefined,
-  );
+  return setStageGateKinds(draft, stageId, toggleGateKind(form.gateKinds, kind));
 }
 
 export function readStageSkill(draft: DraftPackagePayload, stageId: string): string {
@@ -152,9 +146,7 @@ export function writeStageSkill(
   stageId: string,
   skill: string,
 ): DraftPackagePayload {
-  const value = skill.trim() ? skill.trim() : undefined;
-  const withoutRef = setStageRefValue(draft, stageId, ["skill"], undefined);
-  return setStageBodyValue(withoutRef, stageId, ["skill"], value);
+  return writeStageSkillValue(draft, stageId, skill);
 }
 
 export function payloadSchemaLabel(source: PayloadSchemaSource): string {

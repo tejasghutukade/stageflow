@@ -378,6 +378,7 @@ export type NewStageForm = {
   model: string;
   modelSelect: string;
   customModel: string;
+  skill: string;
   gateKinds: StageGateKind[];
 };
 
@@ -385,6 +386,7 @@ export type NewStageInitial = {
   id?: string;
   systemPrompt?: string;
   model?: string;
+  skill?: string;
   gateKinds?: StageGateKind[];
   directoryKey?: string;
 };
@@ -406,6 +408,7 @@ export function newStageFormFrom(initial?: NewStageInitial | null): NewStageForm
     model,
     modelSelect,
     customModel,
+    skill: initial?.skill ?? "",
     gateKinds: initial?.gateKinds ? [...initial.gateKinds] : [],
   };
 }
@@ -415,17 +418,62 @@ export function withLoadedModels(form: NewStageForm, models: readonly string[]):
   return { ...form, modelSelect, customModel };
 }
 
-export function validateNewStage(form: NewStageForm): NewStageErrors {
-  const errors: NewStageErrors = {};
-  const id = form.id.trim();
-  if (!form.directoryKey) errors.directory = "Pick a pipeline directory";
+export type NewStageFieldErrors = Partial<Record<"id" | "systemPrompt" | "model", string>>;
+
+export function validateNewStageFields(values: {
+  id: string;
+  systemPrompt: string;
+  model?: string;
+  modelSelect?: string;
+  useDropdown?: boolean;
+}): NewStageFieldErrors {
+  const errors: NewStageFieldErrors = {};
+  const id = values.id.trim();
   if (!id) errors.id = "Stage id is required";
   else if (id.length > 64) errors.id = "id must be 1-64 characters";
   else if (!STAGE_ID_PATTERN.test(id)) errors.id = "id must be lowercase kebab-case";
+  if (!values.systemPrompt.trim()) errors.systemPrompt = "System prompt is required";
+  if (
+    values.useDropdown &&
+    values.modelSelect === MODEL_OTHER &&
+    !(values.model ?? "").trim()
+  ) {
+    errors.model = "Model is required when Other is selected.";
+  }
+  return errors;
+}
+
+export type CreateStageGateMode = "all" | "none" | "allowlist" | "chips";
+
+export function createStageGateKindsPayload(
+  mode: CreateStageGateMode,
+  selected: readonly StageGateKind[],
+): { gate_kinds?: StageGateKind[] } {
+  if (mode === "all") return {};
+  if (mode === "none") return { gate_kinds: [] };
+  if (mode === "chips") {
+    return selected.length > 0 ? { gate_kinds: [...selected] } : {};
+  }
+  return { gate_kinds: [...selected] };
+}
+
+export function optionalCreateStageSkill(skill: string): { skill?: string } {
+  const trimmed = skill.trim();
+  return trimmed ? { skill: trimmed } : {};
+}
+
+export function validateNewStage(form: NewStageForm): NewStageErrors {
+  const errors: NewStageErrors = {};
+  const fields = validateNewStageFields({
+    id: form.id,
+    systemPrompt: form.systemPrompt,
+  });
+  if (!form.directoryKey) errors.directory = "Pick a pipeline directory";
+  if (fields.id) errors.id = fields.id;
   const filename = form.filename.trim();
   if (!filename) errors.filename = "Filename is required";
   else if (!/\.ya?ml$/.test(filename) || filename.includes("/"))
     errors.filename = "Filename must be a .yaml file name";
-  if (!form.systemPrompt.trim()) errors.systemPrompt = "System prompt is required";
+  if (fields.systemPrompt) errors.systemPrompt = fields.systemPrompt;
   return errors;
 }

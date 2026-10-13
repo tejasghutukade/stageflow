@@ -215,16 +215,25 @@ describe("workshop page model", () => {
   });
 
   it("rehydrates settled mutation cards from session transcript", () => {
+    const baseDraft: DraftPackagePayload = {
+      pipeline: { id: "demo", stages: [{ id: "scan" }] },
+    };
+    const nextDraft: DraftPackagePayload = {
+      pipeline: { id: "demo", stages: [{ id: "scan" }, { id: "review" }] },
+    };
     const cards = settledMutationCardsFromTranscript([
       {
         mutations: [
           {
             id: "mut-1",
             summary: "Add task",
-            affectedStageIds: ["scan"],
+            affectedStageIds: ["review"],
             artifacts: [{ path: "scan.stage.yaml", kind: "added" }],
             status: "accepted",
             autoApplied: true,
+            baseDraft,
+            nextDraft,
+            baseFingerprint: "fp-1",
           },
         ],
       },
@@ -235,9 +244,31 @@ describe("workshop page model", () => {
       proposal: {
         id: "mut-1",
         summary: "Add task",
-        affectedStageIds: ["scan"],
+        affectedStageIds: ["review"],
+        baseDraft,
+        nextDraft,
+        baseFingerprint: "fp-1",
       },
     });
+  });
+
+  it("falls back to an empty draft package for legacy mutation rows", () => {
+    const cards = settledMutationCardsFromTranscript([
+      {
+        mutations: [
+          {
+            id: "mut-old",
+            summary: "Add task",
+            affectedStageIds: ["scan"],
+            artifacts: [{ path: "scan.stage.yaml", kind: "added" }],
+            status: "accepted",
+          },
+        ],
+      },
+    ]);
+    expect(cards.get("mut-old")?.proposal.baseDraft).toEqual(emptyDraft());
+    expect(cards.get("mut-old")?.proposal.nextDraft).toEqual(emptyDraft());
+    expect(cards.get("mut-old")?.proposal.baseFingerprint).toBe("mut-old");
   });
 
   it("catalogSaveBindingFromRelativePath splits folder and filename", () => {
