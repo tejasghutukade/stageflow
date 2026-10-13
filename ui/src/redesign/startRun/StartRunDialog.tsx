@@ -23,9 +23,11 @@ import {
   LuX,
 } from "react-icons/lu";
 
+export type StartRunCloseReason = "dismiss" | "started";
+
 export type StartRunDialogProps = {
   open: boolean;
-  onClose: () => void;
+  onClose: (reason?: StartRunCloseReason) => void;
   onStarted: (runId: string) => void;
   initialTaskPath?: string;
   initialPipelinePath?: string;
@@ -51,7 +53,7 @@ export function StartRunDialog({
     initialProjectRoot,
     onStarted: (id) => {
       onStarted(id);
-      onClose();
+      onClose("started");
     },
   });
 
@@ -107,7 +109,7 @@ export function StartRunDialog({
     <div
       className={`${OVERLAY_SCRIM_CLASS} ${MODAL_SCRIM_PT}`}
       role="presentation"
-      onClick={onClose}
+      onClick={() => onClose()}
     >
       <div
         className="flex w-[720px] min-w-0 max-h-[min(900px,calc(100vh-2.75rem))] flex-col overflow-clip rounded-[14px] border border-[#ffffff1a] bg-[var(--sf-panel)] shadow-[0px_32px_96px_rgba(0,0,0,0.65),0px_8px_24px_rgba(0,0,0,0.45)]"
@@ -133,7 +135,7 @@ export function StartRunDialog({
             <button
               type="button"
               className="flex size-7 items-center justify-center rounded-lg"
-              onClick={onClose}
+              onClick={() => onClose()}
               aria-label="Close"
             >
               <LuX className="size-4 text-[var(--sf-text-2)]" aria-hidden="true" />
@@ -355,7 +357,7 @@ export function StartRunDialog({
           <button
             type="button"
             className="flex h-8 items-center gap-2 rounded-lg px-3 py-0"
-            onClick={onClose}
+            onClick={() => onClose()}
           >
             <span className="font-sans text-[13px] font-medium text-[var(--sf-text-2)]">
               Cancel

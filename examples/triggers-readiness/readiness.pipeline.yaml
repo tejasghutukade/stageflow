@@ -1,0 +1,4 @@
+id: readiness
+stages:
+  - id: readiness-emit
+    uses: ./readiness-emit.yaml

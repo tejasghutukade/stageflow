@@ -8,7 +8,7 @@ import {
   stageRefFor,
 } from "../stageMutators";
 
-export type StageChangeStatus = "new" | "edited" | "unchanged";
+export type StageChangeStatus = "new" | "edited" | "unchanged" | "removed";
 
 export type WorkshopGraphChipKind = "verify" | "on_fail" | "ask" | "no_gate" | "needs";
 
@@ -187,6 +187,11 @@ export function stageChangeStatus(
     const prior = before.get(id);
     if (!prior) result.set(id, "new");
     else result.set(id, prior.signature === snapshot.signature ? "unchanged" : "edited");
+  }
+  if (baseline) {
+    for (const id of before.keys()) {
+      if (!current.has(id)) result.set(id, "removed");
+    }
   }
   return result;
 }

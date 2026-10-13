@@ -1,0 +1,5 @@
+id: readiness-manual
+pipeline: readiness
+task: readiness-task
+kind: manual
+enabled: true

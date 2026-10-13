@@ -1,4 +1,6 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
+import type { WorkshopSessionMutationSnapshot } from "../../../api";
+import { buildDraftMutationToolParts } from "../../../workshop/draftMutationTools";
 import {
   CHAT_FAILED_PREFIX,
   interleaveAssistantTextWithTools,
@@ -155,7 +157,22 @@ export type WorkshopSeedTranscriptMessage = {
   text: string;
   createdAt?: string;
   attachments?: ReadonlyArray<{ name: string; size?: number; mediaType?: string }>;
+  mutations?: readonly WorkshopSessionMutationSnapshot[];
 };
+
+function seedContentForMessage(message: WorkshopSeedTranscriptMessage): string | ThreadMessageLike["content"] {
+  const mutations = message.mutations ?? [];
+  if (mutations.length === 0) return message.text;
+  const toolParts = buildDraftMutationToolParts(
+    mutations.map((mutation) => ({
+      id: mutation.id,
+      summary: mutation.summary,
+      affectedStageIds: mutation.affectedStageIds,
+    })),
+  );
+  if (!message.text.trim()) return toolParts;
+  return [{ type: "text", text: message.text }, ...toolParts];
+}
 
 export function workshopSeedMessages(
   transcript: readonly WorkshopSeedTranscriptMessage[],
@@ -169,7 +186,7 @@ export function workshopSeedMessages(
     const attachments = attachmentMetaList(message.attachments);
     return {
       role,
-      content: message.text,
+      content: seedContentForMessage(message),
       ...(createdAt ? { createdAt } : {}),
       ...(role === "user" && attachments.length > 0
         ? { metadata: { custom: { attachments } } }

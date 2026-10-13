@@ -144,4 +144,27 @@ describe("time and seeds", () => {
     expect(seeds[1]!.role).toBe("assistant");
     expect(seeds[2]!.createdAt).toBeUndefined();
   });
+
+  it("rehydrates draft_mutation tool-call parts from stored mutations", () => {
+    const seeds = workshopSeedMessages([
+      {
+        role: "assistant",
+        text: "Saved.",
+        mutations: [
+          {
+            id: "mut-1",
+            summary: "Add task",
+            affectedStageIds: [],
+            artifacts: [{ path: "demo.task.yaml", kind: "added" }],
+            status: "accepted",
+            autoApplied: true,
+          },
+        ],
+      },
+    ]);
+    expect(Array.isArray(seeds[0]!.content)).toBe(true);
+    const parts = seeds[0]!.content as Array<{ type: string; toolName?: string }>;
+    expect(parts.some((part) => part.type === "text")).toBe(true);
+    expect(parts.some((part) => part.toolName === "draft_mutation")).toBe(true);
+  });
 });

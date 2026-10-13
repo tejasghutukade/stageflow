@@ -17,6 +17,9 @@ import {
   stepSelection,
   validateNewStage,
   newStageFormFrom,
+  modelFieldsForInitial,
+  MODEL_INHERIT,
+  MODEL_OTHER,
 } from "./catalogStageModel";
 import { stagesFromPipelines, type StageRowFromPipelines } from "./stagesFromPipelines";
 
@@ -251,6 +254,19 @@ describe("skillStripEntries", () => {
       { name: "code-review", stageId: "review" },
       { name: "test-writer", stageId: "test" },
     ]);
+  });
+});
+
+describe("new stage model picker", () => {
+  it("maps initial model to catalog options or Other", () => {
+    expect(modelFieldsForInitial(undefined, ["cursor/auto"]).modelSelect).toBe(MODEL_INHERIT);
+    expect(modelFieldsForInitial("cursor/auto", ["cursor/auto"]).modelSelect).toBe(
+      "cursor/auto",
+    );
+    expect(modelFieldsForInitial("custom/x", ["cursor/auto"])).toEqual({
+      modelSelect: MODEL_OTHER,
+      customModel: "custom/x",
+    });
   });
 });
 

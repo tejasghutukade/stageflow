@@ -40,6 +40,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Data directory](data-directory.md) | Durable root layout, keep vs disposable, image user, version support |
 | [Docker and self-hosting](docker.md) | Local Compose try (`.env.example`, control token, providers), pull/run, never mount docker.sock, browser image recipes (`Dockerfile.browser`, `Dockerfile.browser-sandbox`) and container browser host config, backup/restore, provenance, hardened egress (docs-only) |
 | [Operator console](operator-console.md) | Spatial stage map, gated workspace, navigation, settings |
+| [Triggers readiness](triggers-readiness.md) | Checklist: which trigger kinds and console options the Host runs today vs manual-only |
 | [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running, including standalone `run_stage` |
 | [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC, plus the wildcard-access `run_stage` operation |
 | [CI / headless](ci.md) | `--json`, exit codes, GitHub Actions, PR diagram dogfood |

@@ -94,6 +94,14 @@ describe("stageChangeStatus", () => {
     reordered.stages![0]!.body = Object.fromEntries(Object.entries(body).reverse());
     expect(stageChangeStatus(reordered, baseline()).get("plan")).toBe("unchanged");
   });
+
+  it("marks stages removed from the draft against the baseline", () => {
+    const before = baseline();
+    const after = baseline();
+    after.pipeline.stages = after.pipeline.stages.filter((stage) => stage.id !== "test");
+    expect(stageChangeStatus(after, before).get("test")).toBe("removed");
+    expect(stageChangeStatus(after, before).get("plan")).toBe("unchanged");
+  });
 });
 
 describe("buildWorkshopGraphModel", () => {

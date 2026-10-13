@@ -40,10 +40,12 @@ services:
       CURSOR_API_KEY: ${CURSOR_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness
     volumes:
       - stageflow-data:/data
-      # Optional: bind-mount your catalog and register it, e.g.
-      # STAGEFLOW_ENSURE_PROJECT_ROOTS: /catalog
+      # Optional: bind-mount an extra catalog root (comma-separate in STAGEFLOW_ENSURE_PROJECT_ROOTS)
       # - ./my-catalog:/catalog
     restart: unless-stopped
 

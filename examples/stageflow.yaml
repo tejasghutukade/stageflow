@@ -21,6 +21,7 @@ catalog:
     - mcp-hitl-tour
     - feature-loop
     - ship-feature
+    - triggers-readiness
   tasks:
     - generic-fan-in
     - stage-mcp
@@ -42,9 +43,14 @@ catalog:
     - mcp-hitl-tour
     - feature-loop
     - ship-feature
+    - triggers-readiness
+  triggers:
+    - triggers
+    - triggers-readiness/triggers
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
+    trigger: "*.trigger.yaml"
   exclude:
     - route-wiring-smoke-test/rejected
     - stage-mcp/stage-mcp-dead.pipeline.yaml

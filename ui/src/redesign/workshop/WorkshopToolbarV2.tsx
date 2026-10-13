@@ -1,6 +1,7 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import { LuLoader, LuLoaderCircle, LuPencil, LuSave, LuX } from "react-icons/lu";
 import { Keycap } from "../Keycap";
+import { workshopPrimarySaveDisabled } from "./workshopPageModel";
 import { formatAgo, useNow, type TimeInput } from "./relativeTime";
 
 export type WorkshopSaveState = "new" | "dirty" | "clean";
@@ -191,8 +192,15 @@ export function WorkshopToolbarV2({
 }: WorkshopToolbarV2Props) {
   const empty = stageCount === 0;
   const validateDisabled = empty || validateBusy;
-  const saveDisabled = empty || saving;
-  const showSaveTooltip = errorCount > 0 && !saveDisabled;
+  const primarySaveDisabled = workshopPrimarySaveDisabled({
+    stageCount,
+    saving,
+    hasDestination,
+    saveState,
+  });
+  const saveAsDisabled = empty || saving;
+  const showSaveTooltip = errorCount > 0 && !primarySaveDisabled;
+  const inactivePrimary = empty || (hasDestination && saveState === "clean");
 
   const errorPillClass =
     "flex h-6 shrink-0 items-center gap-1 rounded-full border border-[#f2645a47] bg-[#f2645a1a] px-2";
@@ -277,17 +285,17 @@ export function WorkshopToolbarV2({
       {hasDestination ? (
         <button
           type="button"
-          disabled={saveDisabled}
+          disabled={saveAsDisabled}
           onClick={onSaveAs}
           className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 ${
-            saveDisabled
+            saveAsDisabled
               ? "cursor-not-allowed border-[#ffffff0d] bg-[#131418]"
               : "border-[#ffffff1a] bg-[#1a1c21] hover:bg-[#202228]"
           }`}
         >
           <span
             className={`whitespace-nowrap font-sans text-[13px] font-medium ${
-              saveDisabled ? "text-[#8b8f98]" : "text-[#ecedee]"
+              saveAsDisabled ? "text-[#8b8f98]" : "text-[#ecedee]"
             }`}
           >
             Save As…
@@ -306,22 +314,22 @@ export function WorkshopToolbarV2({
       <div className="group relative shrink-0">
         <button
           type="button"
-          disabled={saveDisabled}
+          disabled={primarySaveDisabled}
           onClick={onSave}
           className={`flex h-8 items-center rounded-lg px-3 ${
-            empty
+            inactivePrimary
               ? "cursor-not-allowed gap-2 bg-[#2a2d33]"
               : "gap-1.5 bg-[#ecedee] enabled:hover:bg-white"
           }`}
         >
           {saving ? (
             <LuLoaderCircle className="size-3.5 animate-spin text-[#0c0d0f]" aria-hidden />
-          ) : empty ? (
+          ) : inactivePrimary ? (
             <LuSave className="size-3.5 text-[#8b8f98]" aria-hidden />
           ) : null}
           <span
             className={`whitespace-nowrap font-sans text-[13px] font-medium ${
-              empty ? "text-[#8b8f98]" : "text-[#0c0d0f]"
+              inactivePrimary ? "text-[#8b8f98]" : "text-[#0c0d0f]"
             }`}
           >
             {saving ? "Saving…" : hasDestination ? "Save" : "Save…"}

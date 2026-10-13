@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CatalogRoot, DraftPackagePayload } from "../../api";
-import { addStage } from "./stageMutators";
+import { addStage, deleteStage } from "./stageMutators";
 import {
   AUTOSAVE_DEBOUNCE_MS,
   CREATE_TASK_PREFILL,
@@ -29,10 +29,13 @@ import {
   saveIntent,
   saveIntentForOrigin,
   savedFileCount,
+  catalogSaveBindingFromRelativePath,
+  settledMutationCardsFromTranscript,
   seedTranscriptFromAutosave,
   writableRootOptions,
   workshopBootTarget,
   workshopChangeCount,
+  workshopPrimarySaveDisabled,
   workshopSaveState,
 } from "./workshopPageModel";
 
@@ -83,11 +86,49 @@ describe("workshop page model", () => {
     expect(workshopChangeCount(second.draft, first.draft)).toBe(1);
   });
 
+  it("counts deleted stages against the baseline for save state", () => {
+    const first = addStage(emptyDraft());
+    const second = addStage(first.draft);
+    const base = second.draft;
+    const trimmed = deleteStage(base, first.stageId);
+    expect(workshopChangeCount(trimmed, base)).toBeGreaterThan(0);
+    expect(workshopSaveState("demo/demo.pipeline.yaml", workshopChangeCount(trimmed, base))).toBe(
+      "dirty",
+    );
+  });
+
   it("derives save state from the saved path and change count", () => {
     expect(workshopSaveState(null, 3)).toBe("new");
     expect(workshopSaveState(undefined, 0)).toBe("new");
     expect(workshopSaveState("pipelines/demo.yaml", 0)).toBe("clean");
     expect(workshopSaveState("pipelines/demo.yaml", 2)).toBe("dirty");
+  });
+
+  it("disables primary save when clean on disk but keeps new/dirty saves enabled", () => {
+    expect(
+      workshopPrimarySaveDisabled({
+        stageCount: 2,
+        saving: false,
+        hasDestination: true,
+        saveState: "clean",
+      }),
+    ).toBe(true);
+    expect(
+      workshopPrimarySaveDisabled({
+        stageCount: 2,
+        saving: false,
+        hasDestination: true,
+        saveState: "dirty",
+      }),
+    ).toBe(false);
+    expect(
+      workshopPrimarySaveDisabled({
+        stageCount: 2,
+        saving: false,
+        hasDestination: false,
+        saveState: "new",
+      }),
+    ).toBe(false);
   });
 
   it("opens a package only when the workshop route has a pipeline", () => {
@@ -171,6 +212,48 @@ describe("workshop page model", () => {
       mode: "create",
       allowInvalidInitial: false,
     });
+  });
+
+  it("rehydrates settled mutation cards from session transcript", () => {
+    const cards = settledMutationCardsFromTranscript([
+      {
+        mutations: [
+          {
+            id: "mut-1",
+            summary: "Add task",
+            affectedStageIds: ["scan"],
+            artifacts: [{ path: "scan.stage.yaml", kind: "added" }],
+            status: "accepted",
+            autoApplied: true,
+          },
+        ],
+      },
+    ]);
+    expect(cards.get("mut-1")).toMatchObject({
+      status: "accepted",
+      auto: true,
+      proposal: {
+        id: "mut-1",
+        summary: "Add task",
+        affectedStageIds: ["scan"],
+      },
+    });
+  });
+
+  it("catalogSaveBindingFromRelativePath splits folder and filename", () => {
+    expect(
+      catalogSaveBindingFromRelativePath(
+        "workshop/demo/demo.pipeline.yaml",
+        "demo",
+      ),
+    ).toEqual({
+      savedPipelinePath: "workshop/demo/demo.pipeline.yaml",
+      saveDestination: {
+        directory: "workshop/demo",
+        pipelineFilename: "demo.pipeline.yaml",
+      },
+    });
+    expect(catalogSaveBindingFromRelativePath("", "demo")).toBeNull();
   });
 
   it("chooses direct overwrite only when a destination exists and there are no errors", () => {

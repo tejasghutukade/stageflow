@@ -861,12 +861,22 @@ export type WorkshopSessionAttachment = {
   mediaType: string;
 };
 
+export type WorkshopSessionMutationSnapshot = {
+  id: string;
+  summary: string;
+  affectedStageIds: string[];
+  artifacts: WorkshopChatProposalPayload["artifacts"];
+  status: "accepted" | "rejected";
+  autoApplied?: boolean;
+};
+
 export type WorkshopSessionMessage = {
   id: string;
   role: "assistant" | "user" | "system";
   text: string;
   createdAt: string;
   attachments?: WorkshopSessionAttachment[];
+  mutations?: WorkshopSessionMutationSnapshot[];
 };
 
 export type WorkshopSessionRecord = {

@@ -324,6 +324,51 @@ export function skillStripEntries(
   return entries;
 }
 
+export const MODEL_INHERIT = "__inherit__";
+export const MODEL_OTHER = "__other__";
+
+export function modelFieldsForInitial(
+  model: string | undefined,
+  models: readonly string[],
+): { modelSelect: string; customModel: string } {
+  const trimmed = model?.trim() ?? "";
+  if (!trimmed) {
+    return { modelSelect: MODEL_INHERIT, customModel: "" };
+  }
+  if (models.length === 0 || models.includes(trimmed)) {
+    return { modelSelect: trimmed, customModel: "" };
+  }
+  return { modelSelect: MODEL_OTHER, customModel: trimmed };
+}
+
+export function resolveNewStageModel(options: {
+  useDropdown: boolean;
+  modelSelect: string;
+  customModel: string;
+  plainModel: string;
+}): string {
+  if (options.useDropdown) {
+    if (options.modelSelect === MODEL_INHERIT) return "";
+    if (options.modelSelect === MODEL_OTHER) return options.customModel.trim();
+    return options.modelSelect.trim();
+  }
+  return options.plainModel.trim();
+}
+
+export function newStageModelOptions(
+  models: readonly string[],
+  extra: readonly string[] = [],
+): Array<{ value: string; label: string }> {
+  const listed = Array.from(
+    new Set([...extra.map((m) => m.trim()).filter(Boolean), ...models]),
+  );
+  return [
+    { value: MODEL_INHERIT, label: "Inherits default" },
+    ...listed.map((m) => ({ value: m, label: m })),
+    { value: MODEL_OTHER, label: "Other…" },
+  ];
+}
+
 export type NewStageForm = {
   directoryKey: string;
   id: string;
@@ -331,6 +376,8 @@ export type NewStageForm = {
   filenameTouched: boolean;
   systemPrompt: string;
   model: string;
+  modelSelect: string;
+  customModel: string;
   gateKinds: StageGateKind[];
 };
 
@@ -348,15 +395,24 @@ export type NewStageErrors = Partial<
 
 export function newStageFormFrom(initial?: NewStageInitial | null): NewStageForm {
   const id = initial?.id ?? "";
+  const model = initial?.model ?? "";
+  const { modelSelect, customModel } = modelFieldsForInitial(model, []);
   return {
     directoryKey: initial?.directoryKey ?? "",
     id,
     filename: id ? `${id}.yaml` : "",
     filenameTouched: false,
     systemPrompt: initial?.systemPrompt ?? "",
-    model: initial?.model ?? "",
+    model,
+    modelSelect,
+    customModel,
     gateKinds: initial?.gateKinds ? [...initial.gateKinds] : [],
   };
+}
+
+export function withLoadedModels(form: NewStageForm, models: readonly string[]): NewStageForm {
+  const { modelSelect, customModel } = modelFieldsForInitial(form.model, models);
+  return { ...form, modelSelect, customModel };
 }
 
 export function validateNewStage(form: NewStageForm): NewStageErrors {

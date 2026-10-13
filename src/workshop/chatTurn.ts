@@ -23,12 +23,12 @@ import {
   type WorkshopChatAttachment,
   type WorkshopChatContext,
 } from "./chatAttachments.js";
+import { transcriptMessagesForTurn } from "./workshopTranscriptTurn.js";
 import {
   appendWorkshopSessionMessages,
   getWorkshopSession,
   resolveWorkshopSessionStoreRoot,
   WorkshopSessionStoreError,
-  type WorkshopSessionAppendMessage,
 } from "./sessionStore.js";
 import {
   bindPinnedBuildContext,
@@ -421,26 +421,6 @@ export function toWorkshopChatWireEvent(
   return { type: "error", message: event.message };
 }
 
-function transcriptMessagesForTurn(
-  userMessage: string,
-  attachments: readonly WorkshopChatAttachment[],
-  events: WorkshopChatWireEvent[],
-): WorkshopSessionAppendMessage[] {
-  const messages: WorkshopSessionAppendMessage[] = [
-    {
-      role: "user",
-      text: userMessage,
-      ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
-    },
-  ];
-  for (const event of events) {
-    if (event.type === "message") {
-      messages.push({ role: event.role, text: event.text });
-    }
-  }
-  return messages;
-}
-
 /**
  * One Workshop Author turn on a durable Operator Agent Host session.
  * Requires an existing session store record (New / POST sessions first).
@@ -571,7 +551,9 @@ export async function runWorkshopChatTurn(
       appendWorkshopSessionMessages(
         storeRoot,
         sessionId,
-        transcriptMessagesForTurn(message, attachments, events),
+        transcriptMessagesForTurn(message, attachments, events, {
+          autoApply: input.autoApply === true,
+        }),
       );
     });
 

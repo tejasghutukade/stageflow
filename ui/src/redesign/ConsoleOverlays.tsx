@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CommandPalette } from "./CommandPalette";
 import { useHotkeys } from "./keys";
-import { StartRunDialog } from "./startRun/StartRunDialog";
+import {
+  StartRunDialog,
+  type StartRunCloseReason,
+} from "./startRun/StartRunDialog";
 import { navigate, type Route } from "../routes";
 
 export type ConsoleOverlaysProps = {
@@ -54,13 +57,17 @@ export function ConsoleOverlays({
     setStartRunOpen(true);
   }, [rememberFocus]);
 
-  const closeStartRun = useCallback(() => {
-    setStartRunOpen(false);
-    restoreFocus();
-    if (route.name === "new") {
-      navigate(returnPathRef.current);
-    }
-  }, [route.name, restoreFocus]);
+  const closeStartRun = useCallback(
+    (reason?: StartRunCloseReason) => {
+      setStartRunOpen(false);
+      restoreFocus();
+      if (reason === "started") return;
+      if (route.name === "new") {
+        navigate(returnPathRef.current);
+      }
+    },
+    [route.name, restoreFocus],
+  );
 
   useEffect(() => {
     if (route.name !== "new") {

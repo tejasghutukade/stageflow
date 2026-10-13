@@ -143,6 +143,9 @@ import {
   workshopBootTarget,
   workshopChangeCount,
   workshopSaveState,
+  workshopPrimarySaveDisabled,
+  catalogSaveBindingFromRelativePath,
+  settledMutationCardsFromTranscript,
   type DraftOrigin,
 } from "../redesign/workshop/workshopPageModel";
 import { navigate, newRunPath, pipelinePath, workshopPath } from "../routes";
@@ -1531,8 +1534,60 @@ export function WorkshopPage({
       setSavedPipelinePath(null);
       setSavedTaskPath(null);
       setSaveDestination(null);
+      setSaveTargetWireId(undefined);
       setAttachments([]);
       setFocusField(null);
+
+      const tiedBuild =
+        build &&
+        build.relativePath?.trim() &&
+        build.projectRoot?.trim()
+          ? build
+          : null;
+      if (tiedBuild) {
+        const binding = catalogSaveBindingFromRelativePath(
+          tiedBuild.relativePath!,
+          tiedBuild.draft.pipeline.id,
+        );
+        if (binding) {
+          setSavedPipelinePath(binding.savedPipelinePath);
+          setSaveDestination(binding.saveDestination);
+        }
+        const tiedRow = next.rows.find((row) => row.id === tiedBuild.id);
+        const openRoot = tiedRow?.projectRoot ?? tiedBuild.projectRoot!;
+        void (async () => {
+          const opened = await openDraftPackage(
+            openDraftInput({
+              path: tiedBuild.relativePath!,
+              projectRoot: openRoot,
+            }),
+          );
+          if (studioRequestRef.current !== request) return;
+          if (opened.ok) {
+            setSavedPipelinePath(opened.pipelinePath);
+            setSaveDestination(opened.destination);
+            setSavedTaskPath(opened.taskPath ?? null);
+            setBaseline(cloneDraft(opened.draft));
+            setDraftOrigin(
+              draftOriginFromResponse(opened) ?? fallbackDraftOrigin(),
+            );
+            return;
+          }
+          setBaseline(cloneDraft(tiedBuild.draft));
+          const origin =
+            draftOriginFromResponse({ project_root: openRoot }) ??
+            (openRoot
+              ? {
+                  project_root: openRoot,
+                  kind: "registered" as const,
+                  readOnly: false,
+                }
+              : null);
+          if (origin) setDraftOrigin(origin);
+        })();
+      }
+
+      setMutationCards(settledMutationCardsFromTranscript(got.session.transcript));
       syncWorkshopUrl(got.session.id);
     },
     [applyStudio, redesignOn, syncWorkshopUrl],
@@ -2148,6 +2203,19 @@ export function WorkshopPage({
   const hasDestination = Boolean(savedPipelinePath);
 
   const onToolbarSave = useCallback(() => {
+    if (
+      workshopPrimarySaveDisabled({
+        stageCount: draftRef.current.pipeline.stages.length,
+        saving,
+        hasDestination,
+        saveState: workshopSaveState(
+          savedPipelinePath,
+          workshopChangeCount(draftRef.current, baseline),
+        ),
+      })
+    ) {
+      return;
+    }
     const intent = saveIntentForOrigin({
       hasDestination,
       errorCount,
@@ -2171,6 +2239,7 @@ export function WorkshopPage({
     }
     openSaveDialog(intent);
   }, [
+    baseline,
     commitSave,
     errorCount,
     hasDestination,
@@ -2178,8 +2247,10 @@ export function WorkshopPage({
     catalogRootsList,
     defaultWriteWireId,
     draftOrigin?.readOnly,
+    savedPipelinePath,
     saveDestination?.directory,
     saveTargetWireId,
+    saving,
   ]);
 
   const onToolbarSaveAs = useCallback(() => {
@@ -2425,7 +2496,14 @@ export function WorkshopPage({
           {
             key: "mod+s",
             scope: "workshop",
-            when: () => !saveOpen,
+            when: () =>
+              !saveOpen &&
+              !workshopPrimarySaveDisabled({
+                stageCount: draft.pipeline.stages.length,
+                saving,
+                hasDestination,
+                saveState,
+              }),
             handler: (event) => {
               event.preventDefault();
               onToolbarSave();

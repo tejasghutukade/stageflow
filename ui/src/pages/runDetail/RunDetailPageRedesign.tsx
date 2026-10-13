@@ -17,7 +17,6 @@ import { VerificationHistory } from "../../components/VerificationHistory";
 import type { DetailView } from "../../routes";
 import { useRunCancel, useRunDelete } from "../../runLifecycle/useRunLifecycle";
 import {
-  canAbandon,
   useStageAbandon,
   useStageResume,
   useStageRetry,
@@ -25,7 +24,9 @@ import {
 import {
   resolveRunWorkspace,
   runDetailShouldPoll,
+  stageCloneLabel,
 } from "../../workspace/resolveRunWorkspace";
+import { retryBlockedByAnswerGate } from "../../redesign/runs/runInspectorFields";
 import { resolveStreamRoute } from "../../workspace/resolveStreamRoute";
 import {
   RunDetailCenterTabs,
@@ -558,7 +559,9 @@ export function RunDetailPageRedesign({
         onBack={onBack}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
-        selectedStageStatus={stage?.status}
+        selectedStage={stage}
+        selectedStageLabel={stage ? stageCloneLabel(run, stage.stage_id) : undefined}
+        retryBlocked={retryBlockedByAnswerGate(run)}
         onCancel={() => {
           clearCancelError();
           cancel();
@@ -568,14 +571,14 @@ export function RunDetailPageRedesign({
           removeRun();
         }}
         onRerun={() => void onRerunClick()}
-        onAbandonStage={
-          stage && canAbandon(stage.status)
-            ? () => abandon(stage.stage_id)
-            : undefined
-        }
+        onRetryStage={stage ? () => retryAndSelect(stage.stage_id) : undefined}
+        onResumeStage={stage ? () => resumeAndSelect(stage.stage_id) : undefined}
+        onAbandonStage={stage ? () => abandon(stage.stage_id) : undefined}
         cancelling={cancelling}
         deleting={deleting}
         rerunning={rerunning}
+        retrying={stage ? retryingStageIds.has(stage.stage_id) : false}
+        resuming={stage ? resumingStageIds.has(stage.stage_id) : false}
         abandoning={abandoningStageId === stage?.stage_id}
         now={now}
       />

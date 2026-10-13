@@ -7,6 +7,8 @@ import type {
   CatalogRootKind,
   DraftPackagePayload,
   PlanDraftPackageInput,
+  WorkshopChatProposalPayload,
+  WorkshopSessionMutationSnapshot,
 } from "../../api";
 import { attachmentMetaList } from "./chat/attachments";
 import { stageChangeStatus } from "./graph/workshopGraphModel";
@@ -76,6 +78,16 @@ export function workshopSaveState(
   if (!savedPipelinePath) return "new";
   if (changeCount === 0) return "clean";
   return "dirty";
+}
+
+export function workshopPrimarySaveDisabled(input: {
+  stageCount: number;
+  saving: boolean;
+  hasDestination: boolean;
+  saveState: WorkshopSaveState;
+}): boolean {
+  if (input.stageCount === 0 || input.saving) return true;
+  return input.hasDestination && input.saveState === "clean";
 }
 
 export function workshopBootTarget(
@@ -255,6 +267,76 @@ export function saveAsIntent(): SaveIntent {
     kind: "dialog",
     mode: "create",
     allowInvalidInitial: false,
+  };
+}
+
+export type CatalogSaveBinding = {
+  savedPipelinePath: string;
+  saveDestination: { directory: string; pipelineFilename: string };
+};
+
+export type RehydratedMutationCard = {
+  proposal: WorkshopChatProposalPayload;
+  status: "accepted" | "rejected";
+  auto?: boolean;
+  at: number;
+};
+
+export function emptyDraftPackage(): DraftPackagePayload {
+  return { pipeline: { id: "untitled", stages: [] } };
+}
+
+export function proposalFromMutationSnapshot(
+  snapshot: WorkshopSessionMutationSnapshot,
+): WorkshopChatProposalPayload {
+  const empty = emptyDraftPackage();
+  return {
+    id: snapshot.id,
+    summary: snapshot.summary,
+    affectedStageIds: [...snapshot.affectedStageIds],
+    artifacts: snapshot.artifacts.map((artifact) => ({ ...artifact })),
+    baseDraft: empty,
+    nextDraft: empty,
+    baseFingerprint: snapshot.id,
+  };
+}
+
+export function settledMutationCardsFromTranscript(
+  transcript: readonly { mutations?: readonly WorkshopSessionMutationSnapshot[] }[],
+): Map<string, RehydratedMutationCard> {
+  const map = new Map<string, RehydratedMutationCard>();
+  let at = 0;
+  for (const message of transcript) {
+    for (const mutation of message.mutations ?? []) {
+      map.set(mutation.id, {
+        proposal: proposalFromMutationSnapshot(mutation),
+        status: mutation.status,
+        ...(mutation.autoApplied ? { auto: true } : {}),
+        at,
+      });
+      at += 1;
+    }
+  }
+  return map;
+}
+
+export function catalogSaveBindingFromRelativePath(
+  relativePath: string,
+  pipelineId: string,
+): CatalogSaveBinding | null {
+  const trimmed = relativePath.trim().replace(/\\/g, "/");
+  if (!trimmed) return null;
+  const segments = trimmed.split("/");
+  const leaf = segments.pop();
+  if (!leaf) return null;
+  const directory = segments.join("/") || ".";
+  const pipelineFilename = pipelineFilenameFor(pipelineId, {
+    id: pipelineId,
+    filename: leaf,
+  });
+  return {
+    savedPipelinePath: trimmed,
+    saveDestination: { directory, pipelineFilename },
   };
 }
 

@@ -5,6 +5,11 @@ import {
   type StageGateKind,
   type CreatedStageListing,
 } from "../api";
+import {
+  MODEL_INHERIT,
+  MODEL_OTHER,
+  resolveNewStageModel,
+} from "../redesign/catalog/catalogStageModel";
 
 export type GateKindsMode = "all" | "none" | "allowlist";
 
@@ -18,8 +23,7 @@ export function createStageGateKindsPayload(
 }
 
 const STAGE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
-export const MODEL_INHERIT = "__inherit__";
-export const MODEL_OTHER = "__other__";
+export { MODEL_INHERIT, MODEL_OTHER };
 
 const GATE_KINDS: StageGateKind[] = [
   "free_text",
@@ -70,16 +74,7 @@ export function resolveCreateStageModel(options: {
   customModel: string;
   plainModel: string;
 }): string {
-  if (options.useDropdown) {
-    if (options.modelSelect === MODEL_INHERIT) {
-      return "";
-    }
-    if (options.modelSelect === MODEL_OTHER) {
-      return options.customModel.trim();
-    }
-    return options.modelSelect.trim();
-  }
-  return options.plainModel.trim();
+  return resolveNewStageModel(options);
 }
 
 function stageCreateBanner(status: number, serverError?: string): string {
