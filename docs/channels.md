@@ -100,6 +100,7 @@ The operator console's **Connections** page lists the channels from `connections
 | `PATCH /api/connections/{id}` | Replace secrets, enable or disable, rename, change config. |
 | `DELETE /api/connections/{id}` | Disconnect: removes the entry, its stored secrets and a shared credential nothing else uses. |
 | `GET /api/connections` | `{ connections: [{ id, provider, displayName, enabled, identity?, credential?, secrets, health? }], limits: { channelsPerStage }, error? }`. `secrets` says only whether each field comes from the environment or the console store. `error` is a code when `connections.yaml` could not be loaded; the host keeps running and only stages that use channels fail. |
+| `GET /api/connections/meta` | What the console shows: each provider's label, form fields, recipient shape and examples, and one explanation (and fix hint) per error code. Static; no secrets. The console holds no provider or error tables of its own. |
 | `POST /api/connections/{id}/check` | Runs one live check and returns `{ state, checkedAt, error? }`. `404` with `CHANNEL_NOT_FOUND` for an unknown or disabled connection. |
 | `POST /api/connections/{id}/validate-target` | Checks a pinned recipient (`{ to, cc?, template? }`) against the provider's rules. No network call and no secret read. Returns `{ ok: true }` or `{ ok: false, issues }`. |
 

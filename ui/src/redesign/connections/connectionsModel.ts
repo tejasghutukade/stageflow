@@ -1,82 +1,8 @@
-import type { ChannelConnectionListing, ConnectionListing, ProjectMcpCatalogEntry } from "../../api";
+import type {
+  ChannelConnectionListing, ChannelMeta, ChannelProviderMeta, ConnectionListing, NewChannelConnection, ProjectMcpCatalogEntry,
+} from "../../api";
 import { channelStatus, type ChannelStatus } from "../../pages/channelStatus";
-
-export type ProviderId = "agentmail" | "slack" | "imessage" | "whatsapp" | "telegram";
-
-export type ProviderInfo = {
-  id: ProviderId;
-  label: string;
-  /** Shown on the "not connected" tile. */
-  blurb: string;
-  viaPhoton: boolean;
-  yaml: string;
-  env: string[];
-};
-
-const PHOTON_CREDENTIAL = `credentials:
-  - id: photon-main
-    provider: photon
-    secrets:
-      projectId: env:PHOTON_PROJECT_ID
-      projectSecret: env:PHOTON_PROJECT_SECRET
-`;
-
-export const PROVIDERS: ProviderInfo[] = [
-  {
-    id: "agentmail", label: "AgentMail", blurb: "Not connected · send email from an inbox", viaPhoton: false,
-    env: ["AGENTMAIL_API_KEY"],
-    yaml: `connections:
-  - id: support-inbox
-    provider: agentmail
-    config:
-      inbox: support@agentmail.to
-    secrets:
-      apiKey: env:AGENTMAIL_API_KEY
-`,
-  },
-  {
-    id: "slack", label: "Slack", blurb: "Not connected · post as a bot", viaPhoton: false,
-    env: ["SLACK_BOT_TOKEN"],
-    yaml: `connections:
-  - id: ops-slack
-    provider: slack
-    secrets:
-      botToken: env:SLACK_BOT_TOKEN
-`,
-  },
-  {
-    id: "imessage", label: "iMessage", blurb: "Not connected · via Photon", viaPhoton: true,
-    env: ["PHOTON_PROJECT_ID", "PHOTON_PROJECT_SECRET"],
-    yaml: `${PHOTON_CREDENTIAL}connections:
-  - id: alerts-imessage
-    provider: imessage
-    credential: photon-main
-`,
-  },
-  {
-    id: "whatsapp", label: "WhatsApp Business", blurb: "Not connected · via Photon", viaPhoton: true,
-    env: ["PHOTON_PROJECT_ID", "PHOTON_PROJECT_SECRET"],
-    yaml: `${PHOTON_CREDENTIAL}connections:
-  - id: orders-whatsapp
-    provider: whatsapp
-    credential: photon-main
-`,
-  },
-  {
-    id: "telegram", label: "Telegram", blurb: "Not connected · bot token", viaPhoton: false,
-    env: ["TELEGRAM_BOT_TOKEN"],
-    yaml: `connections:
-  - id: alerts-telegram
-    provider: telegram
-    secrets:
-      botToken: env:TELEGRAM_BOT_TOKEN
-`,
-  },
-];
-
-export function providerInfo(id: string): ProviderInfo | undefined {
-  return PROVIDERS.find((provider) => provider.id === id);
-}
+import { errorHint, errorReason, providerLabel, providerOf } from "./channelMeta";
 
 export type ConnectionRow = {
   key: string;
@@ -86,7 +12,9 @@ export type ConnectionRow = {
   provider: string;
   name: string;
   secondary: string;
-  viaPhoton: boolean;
+  via?: string;
+  /** Icon key from the host description; the console maps it. */
+  icon: string;
   status: ChannelStatus;
   checkedAt?: string;
   checkable: boolean;
@@ -95,19 +23,25 @@ export type ConnectionRow = {
 export function channelRows(
   channels: readonly ChannelConnectionListing[],
   emailAccounts: readonly ConnectionListing[],
+  meta?: ChannelMeta | null,
 ): ConnectionRow[] {
-  const rows: ConnectionRow[] = channels.map((connection) => ({
-    key: `channel:${connection.id}`,
-    id: connection.id,
-    kind: "channel",
-    provider: connection.provider,
-    name: providerInfo(connection.provider)?.label ?? connection.provider,
-    secondary: connection.identity ? `${connection.identity} · ${connection.id}` : connection.id,
-    viaPhoton: providerInfo(connection.provider)?.viaPhoton ?? false,
-    status: channelStatus(connection),
-    ...(connection.health ? { checkedAt: connection.health.checkedAt } : {}),
-    checkable: connection.enabled,
-  }));
+  const rows: ConnectionRow[] = channels.map((connection) => {
+    const described = providerOf(meta, connection.provider);
+    const via = described?.via;
+    return {
+      key: `channel:${connection.id}`,
+      id: connection.id,
+      kind: "channel",
+      provider: connection.provider,
+      name: providerLabel(meta, connection.provider),
+      secondary: connection.identity ? `${connection.identity} · ${connection.id}` : connection.id,
+      ...(via ? { via } : {}),
+      icon: described?.icon ?? "plug",
+      status: channelStatus(connection, meta),
+      ...(connection.health ? { checkedAt: connection.health.checkedAt } : {}),
+      checkable: connection.enabled,
+    };
+  });
   for (const account of emailAccounts) {
     rows.push({
       key: `email:${account.id}`,
@@ -116,7 +50,7 @@ export function channelRows(
       provider: "email",
       name: account.displayName,
       secondary: `${account.address} · IMAP/SMTP`,
-      viaPhoton: false,
+      icon: "mail",
       status: account.enabled ? { label: "Enabled", tone: "muted" } : { label: "Disabled", tone: "muted" },
       checkable: false,
     });
@@ -125,9 +59,9 @@ export function channelRows(
 }
 
 /** Providers that have no connection yet, offered as dashed tiles. */
-export function availableProviders(rows: readonly ConnectionRow[]): ProviderInfo[] {
+export function availableProviders(rows: readonly ConnectionRow[], meta: ChannelMeta | null | undefined): ChannelProviderMeta[] {
   const used = new Set(rows.map((row) => row.provider));
-  return PROVIDERS.filter((provider) => !used.has(provider.id));
+  return (meta?.providers ?? []).filter((provider) => !used.has(provider.id));
 }
 
 export type ToolCard = { name: string; detail: string };
@@ -159,49 +93,29 @@ export function footerText(totals: ConnectionTotals): string {
   return parts.join(" · ");
 }
 
-const USAGE_TARGETS: Record<string, string> = {
-  agentmail: "    to: [oncall@acme.com]",
-  slack: "    to: C0123ABCD",
-  telegram: '    to: "123456789"',
-  imessage: '    to: "+14155550123"',
-  whatsapp: `    to: "+14155550123"
-    template:
-      name: order_update
-      languageCode: en_US
-      bodyParams: ["{{message}}"]`,
-};
-
 /** The stage `channels:` entry that sends through a connection. */
-export function usageSnippet(provider: string, connectionId: string): string {
+export function usageSnippet(provider: string, connectionId: string, meta: ChannelMeta | null | undefined): string {
+  const example = providerOf(meta, provider)?.stageExample ?? "    to: <target>";
   return `channels:
   - connection: ${connectionId}
-${USAGE_TARGETS[provider] ?? "    to: <target>"}
+${example}
     operations: [send]
 `;
 }
 
-const FIX_HINTS: Record<string, string> = {
-  CHANNEL_SECRET_UNAVAILABLE: "Set the environment variable each secret in connections.yaml names (or its _FILE form) on the host, then check again.",
-  CHANNEL_AUTH_FAILED: "The provider rejected the credential. Replace the secret on the host with a valid one, then check again.",
-  CHANNEL_UNAUTHORIZED: "The provider refused the credential: it is invalid, or it lacks a permission this provider needs (for AgentMail, reading the inbox and sending). Check the key and its permissions, then try again.",
-  CHANNEL_RECIPIENT_REJECTED: "The provider will not message this recipient. For iMessage on a Free or Pro Photon project, add them as a project user and have them text their assigned line (the \"Texts on\" number) once.",
-  CHANNEL_INVALID_INPUT: "The settings in connections.yaml do not match the provider account (for example an unknown inbox or a different workspace). Fix the entry and restart.",
-  CHANNEL_PROVIDER_UNSUPPORTED: "This Stageflow version cannot use this provider, or its SDK is not installed (iMessage and WhatsApp need the Spectrum SDK packages).",
-  CHANNEL_CONNECTION_FAILED: "Stageflow could not reach the provider. This is usually temporary; check the network and try again.",
-  CHANNEL_TIMEOUT: "The provider did not answer in time. Try again.",
-  CHANNEL_RATE_LIMIT: "The provider is rate limiting this account. Wait and try again.",
-};
-
-export function fixHint(code: string | undefined): string | undefined {
-  return code ? FIX_HINTS[code] : undefined;
+/** What to do about the last failure, from the host's catalogue. */
+export function fixHint(code: string | undefined, meta: ChannelMeta | null | undefined): string | undefined {
+  return errorHint(meta, code);
 }
 
 export type DetailFact = { label: string; value: string; mono?: boolean };
 
-export function detailFacts(connection: { id: string; provider: string; displayName: string; enabled: boolean; identity?: string; credential?: string }): DetailFact[] {
-  const info = providerInfo(connection.provider);
+export function detailFacts(
+  connection: { id: string; provider: string; displayName: string; enabled: boolean; identity?: string; credential?: string },
+  meta?: ChannelMeta | null,
+): DetailFact[] {
   return [
-    { label: "Provider", value: info?.label ?? connection.provider },
+    { label: "Provider", value: providerLabel(meta, connection.provider) },
     { label: "Connection id", value: connection.id, mono: true },
     ...(connection.identity ? [{ label: "Identity", value: connection.identity, mono: true }] : []),
     ...(connection.credential ? [{ label: "Shared credential", value: connection.credential, mono: true }] : []),
@@ -209,71 +123,23 @@ export function detailFacts(connection: { id: string; provider: string; displayN
   ];
 }
 
-export type FormField = {
-  key: string;
-  label: string;
-  hint?: string;
-  placeholder?: string;
-  /** config goes to connections.yaml, secret to the secret store, credential to the shared Photon credential. */
-  target: "config" | "secret" | "credential";
-  input: "text" | "password" | "select";
-  required: boolean;
-  options?: Array<{ value: string; label: string }>;
-  defaultValue?: string;
-};
-
-const PHOTON_FIELDS: FormField[] = [
-  { key: "projectId", label: "Photon project ID", hint: "Project settings in app.photon.codes", target: "credential", input: "password", required: true, placeholder: "3f9c21aa-..." },
-  { key: "projectSecret", label: "Photon project secret", hint: "Stored on this host. Never written to connections.yaml.", target: "credential", input: "password", required: true },
-];
-
-export const PROVIDER_FORMS: Record<ProviderId, { fields: FormField[]; note?: string }> = {
-  agentmail: {
-    fields: [
-      { key: "inbox", label: "Inbox address", hint: "An existing AgentMail inbox. Stageflow does not create one.", target: "config", input: "text", required: true, placeholder: "research@agentmail.to" },
-      { key: "region", label: "Region", target: "config", input: "select", required: false, defaultValue: "us", options: [{ value: "us", label: "United States" }, { value: "eu", label: "Europe" }] },
-      { key: "apiKey", label: "API key", hint: "Needs to read the inbox and send messages.", target: "secret", input: "password", required: true, placeholder: "am_..." },
-    ],
-  },
-  slack: {
-    fields: [
-      { key: "botToken", label: "Bot token", hint: "xoxb-… from your Slack app (OAuth & Permissions). Needs chat:write.", target: "secret", input: "password", required: true, placeholder: "xoxb-..." },
-      { key: "teamId", label: "Workspace ID (optional)", hint: "Pins the connection to one workspace, such as T0123ABCD.", target: "config", input: "text", required: false, placeholder: "T0123ABCD" },
-    ],
-  },
-  telegram: {
-    fields: [
-      { key: "botToken", label: "Bot token", hint: "From @BotFather. People must start the bot before it can message them.", target: "secret", input: "password", required: true, placeholder: "123456:ABC..." },
-      { key: "botUsername", label: "Bot username (optional)", hint: "Fails the check if the token belongs to another bot.", target: "config", input: "text", required: false, placeholder: "acme_alerts_bot" },
-    ],
-  },
-  imessage: {
-    fields: PHOTON_FIELDS,
-    note: "Sending iMessage uses the Spectrum SDK packages (optional dependencies). On a Free or Pro Photon project, each recipient must be a project user and must text their assigned line once before Stageflow can message them.",
-  },
-  whatsapp: {
-    fields: PHOTON_FIELDS,
-    note: "Enable WhatsApp for the project in the Photon dashboard first. Uses the Spectrum SDK packages (optional dependencies). Stages pin an approved template per recipient.",
-  },
-};
-
 export type FormValues = Record<string, string>;
 
-export function missingFields(provider: ProviderId, values: FormValues, savedCredential: boolean): string[] {
-  return PROVIDER_FORMS[provider].fields
+export function missingFields(provider: ChannelProviderMeta, values: FormValues, savedCredential: boolean): string[] {
+  return provider.fields
     .filter((field) => field.required && !(savedCredential && field.target === "credential") && !(values[field.key] ?? "").trim())
     .map((field) => field.key);
 }
 
 export function buildNewConnection(
-  provider: ProviderId,
+  provider: ChannelProviderMeta,
   values: FormValues,
   options: { savedCredential?: string; id?: string; displayName?: string } = {},
-): import("../../api").NewChannelConnection {
+): NewChannelConnection {
   const config: Record<string, unknown> = {};
   const secrets: Record<string, string> = {};
   const credentialSecrets: Record<string, string> = {};
-  for (const field of PROVIDER_FORMS[provider].fields) {
+  for (const field of provider.fields) {
     const value = (values[field.key] ?? field.defaultValue ?? "").trim();
     if (!value) continue;
     if (field.target === "config") config[field.key] = value;
@@ -281,7 +147,7 @@ export function buildNewConnection(
     else if (!options.savedCredential) credentialSecrets[field.key] = value;
   }
   return {
-    provider,
+    provider: provider.id,
     ...(options.id ? { id: options.id } : {}),
     ...(options.displayName ? { displayName: options.displayName } : {}),
     config,
@@ -290,15 +156,12 @@ export function buildNewConnection(
   };
 }
 
-const API_ERRORS: Record<string, string> = {
-  CHANNEL_INVALID_INPUT: "Some of the values are not valid for this provider. Check the fields and try again.",
-  CHANNEL_PROVIDER_UNSUPPORTED: "This provider is not supported by this Stageflow version.",
-  CHANNEL_OPERATION_CONFLICT: "A connection with this id already exists.",
-  CHANNEL_STORAGE_FAILED: "Stageflow could not write connections.yaml or the secret store on this host.",
-  CHANNEL_RESOURCE_LIMIT: "The request or connections.yaml is too large.",
-  CHANNEL_NOT_FOUND: "That connection no longer exists.",
-};
-
-export function apiErrorMessage(code: string): string {
-  return API_ERRORS[code] ?? `Request failed (${code})`;
+/** A request failure in the host's words, with its hint when it has one. */
+export function apiErrorMessage(code: string, meta: ChannelMeta | null | undefined): string {
+  const reason = meta?.errors[code]?.reason;
+  if (!reason) return `Request failed (${code})`;
+  const hint = errorHint(meta, code);
+  return hint ? `${reason}. ${hint}` : reason;
 }
+
+export { errorReason };

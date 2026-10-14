@@ -1,43 +1,21 @@
-import type { ChannelConnectionListing } from "../api";
-
-export const PROVIDER_LABELS: Record<string, string> = {
-  agentmail: "AgentMail",
-  slack: "Slack",
-  telegram: "Telegram",
-  imessage: "iMessage",
-  whatsapp: "WhatsApp",
-};
-
-const CODE_MESSAGES: Record<string, string> = {
-  CHANNEL_AUTH_FAILED: "Credentials were rejected",
-  CHANNEL_UNAUTHORIZED: "Credentials were rejected or lack a required permission",
-  CHANNEL_SECRET_UNAVAILABLE: "A secret named in connections.yaml is not set on the host",
-  CHANNEL_CONNECTION_FAILED: "Could not reach the provider",
-  CHANNEL_TIMEOUT: "The provider did not answer in time",
-  CHANNEL_RATE_LIMIT: "The provider is rate limiting",
-  CHANNEL_INVALID_INPUT: "The connection settings do not match the provider account",
-  CHANNEL_PROVIDER_UNSUPPORTED: "This provider is not supported by this Stageflow version",
-  CHANNEL_INVALID_CONFIG: "connections.yaml could not be loaded",
-  CHANNEL_STORAGE_FAILED: "connections.yaml could not be read",
-  CHANNEL_RESOURCE_LIMIT: "connections.yaml is too large",
-};
-
-export function codeMessage(code: string): string {
-  return CODE_MESSAGES[code] ?? code;
-}
+import type { ChannelConnectionListing, ChannelMeta } from "../api";
+import { errorReason } from "../redesign/connections/channelMeta";
 
 export type ChannelStatus = { label: string; tone: "ok" | "needs" | "muted"; detail?: string };
 
-/** What the host last observed. "Not checked yet" never claims the connection works. */
-export function channelStatus(connection: ChannelConnectionListing): ChannelStatus {
+/**
+ * What the host last observed. "Not checked yet" never claims the connection works. The reason
+ * text comes from the host's error catalogue, so it can never disagree with the server.
+ */
+export function channelStatus(connection: ChannelConnectionListing, meta?: ChannelMeta | null): ChannelStatus {
   if (!connection.enabled) return { label: "Disabled", tone: "muted" };
   const health = connection.health;
   if (!health) return { label: "Not checked yet", tone: "muted" };
   if (health.state === "ok") return { label: "Connected", tone: "ok" };
   if (health.error?.code === "CHANNEL_SECRET_UNAVAILABLE") {
-    return { label: "Not connected", tone: "muted", detail: "Finish setup: a secret named in connections.yaml is not set on the host" };
+    return { label: "Not connected", tone: "muted", detail: `Finish setup: ${errorReason(meta, health.error.code)}` };
   }
-  return { label: "Connection broken", tone: "needs", ...(health.error ? { detail: codeMessage(health.error.code) } : {}) };
+  return { label: "Connection broken", tone: "needs", ...(health.error ? { detail: errorReason(meta, health.error.code) } : {}) };
 }
 
 export function ageLabel(checkedAt: string, now: number = Date.now()): string {

@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { IconType } from "react-icons";
-import {
-  LuCheck, LuHash, LuMail, LuMessageCircle, LuMinus, LuPhone, LuPlug, LuPlus, LuRefreshCw, LuSend, LuTriangleAlert, LuWrench,
-} from "react-icons/lu";
+import { LuCheck, LuMinus, LuPlug, LuPlus, LuRefreshCw, LuTriangleAlert, LuWrench } from "react-icons/lu";
 import {
   checkChannelConnection, fetchChannelConnections, fetchConnections, fetchProjectMcp,
-  type ChannelConnectionListing, type ConnectionListing, type ProjectMcpCatalogList,
+  type ChannelConnectionListing, type ChannelProviderMeta, type ConnectionListing, type ProjectMcpCatalogList,
 } from "../../api";
-import { ageLabel, codeMessage } from "../../pages/channelStatus";
+import { ageLabel } from "../../pages/channelStatus";
 import { connectionPath, navigate } from "../../routes";
 import { AddConnectionDialog } from "./AddConnectionDialog";
+import { errorReason, useChannelMeta } from "./channelMeta";
+import { providerIcon } from "./providerIcons";
 import {
   availableProviders, channelRows, connectionTotals, footerText, toolCards,
-  type ConnectionRow, type ProviderId, type ProviderInfo,
+  type ConnectionRow,
 } from "./connectionsModel";
 
 const MONO = "[font-family:'Geist_Mono',_monospace]";
@@ -21,19 +20,15 @@ const EYEBROW = `text-[#8b8f98] font-sans text-[11px] font-medium leading-normal
 const TILE = "flex size-9 shrink-0 items-center justify-center rounded-lg border border-[#ffffff1a] bg-[#1a1c21]";
 const GRID = "grid grid-cols-[minmax(0,1fr)_240px_132px_112px] items-center gap-4";
 
-const PROVIDER_ICONS: Record<string, IconType> = {
-  agentmail: LuMail, slack: LuHash, imessage: LuMessageCircle, whatsapp: LuPhone, telegram: LuSend, email: LuMail,
-};
-
-function ProviderIcon({ provider, size = "size-4" }: { provider: string; size?: string }) {
-  const Icon = PROVIDER_ICONS[provider] ?? LuPlug;
+function ProviderIcon({ icon, size = "size-4" }: { icon: string; size?: string }) {
+  const Icon = providerIcon(icon);
   return <Icon className={`${size} block text-[#a7aab2]`} aria-hidden />;
 }
 
-function PhotonTag() {
+function ViaTag({ via }: { via: string }) {
   return (
     <span className={`rounded-[4px] border border-[#ffffff1a] bg-[#1a1c21] px-1.5 text-[11px] leading-[18px] text-[#a7aab2] ${NOWRAP}`}>
-      via Photon
+      via {via}
     </span>
   );
 }
@@ -73,11 +68,11 @@ function ChannelRow({ row, checking, onCheck, now }: { row: ConnectionRow; check
       {...(row.kind === "channel" ? { role: "link", tabIndex: 0, "aria-label": `Open ${row.name} ${row.id}`, onClick: () => navigate(connectionPath(row.id)), onKeyDown: (event: { key: string }) => { if (event.key === "Enter") navigate(connectionPath(row.id)); } } : {})}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <div className={TILE}><ProviderIcon provider={row.provider} /></div>
+        <div className={TILE}><ProviderIcon icon={row.icon} /></div>
         <div className="flex min-w-0 flex-col gap-0.5">
           <div className="flex items-center gap-2">
             <span className="truncate text-[13px] font-medium leading-normal text-[#ecedee]">{row.name}</span>
-            {row.viaPhoton ? <PhotonTag /> : null}
+            {row.via ? <ViaTag via={row.via} /> : null}
           </div>
           <span className={`truncate text-xs leading-normal text-[#8b8f98] ${MONO}`} title={row.secondary}>{row.secondary}</span>
         </div>
@@ -119,10 +114,10 @@ function ChannelTableBlock({ rows, checking, onCheck, now }: { rows: ConnectionR
   );
 }
 
-function AvailableTile({ provider, onConnect }: { provider: ProviderInfo; onConnect: () => void }) {
+function AvailableTile({ provider, onConnect }: { provider: ChannelProviderMeta; onConnect: () => void }) {
   return (
     <div className="flex min-w-0 items-center gap-3 rounded-lg border border-dashed border-[#ffffff1a] px-4 py-3">
-      <div className={TILE}><ProviderIcon provider={provider.id} /></div>
+      <div className={TILE}><ProviderIcon icon={provider.icon} /></div>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-[13px] font-medium leading-normal text-[#ecedee]">{provider.label}</span>
         <span className="truncate text-xs leading-normal text-[#8b8f98]">{provider.blurb}</span>
@@ -159,7 +154,7 @@ export function ConnectionsRedesign() {
   const [tools, setTools] = useState<ProjectMcpCatalogList | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [checking, setChecking] = useState<ReadonlySet<string>>(new Set());
-  const [dialog, setDialog] = useState<ProviderId | null>(null);
+  const [dialog, setDialog] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -188,8 +183,9 @@ export function ConnectionsRedesign() {
       .finally(() => setChecking((current) => { const next = new Set(current); next.delete(id); return next; }));
   }, []);
 
-  const rows = channelRows(channels, email);
-  const available = availableProviders(rows);
+  const { meta } = useChannelMeta();
+  const rows = channelRows(channels, email, meta);
+  const available = availableProviders(rows, meta);
   const cards = toolCards(tools?.status === "ok" ? tools.servers : []);
   const totals = connectionTotals(rows, cards);
 
@@ -204,7 +200,7 @@ export function ConnectionsRedesign() {
               Connect an account once, then let stages send through it. Channels carry messages from a stage; tools let an agent reach other services.
             </p>
           </div>
-          <button type="button" onClick={() => setDialog("agentmail")} className="flex h-8 shrink-0 items-center rounded-lg bg-[#ecedee] px-3 py-0 gap-2">
+          <button type="button" onClick={() => setDialog(meta?.providers[0]?.id ?? "")} className="flex h-8 shrink-0 items-center rounded-lg bg-[#ecedee] px-3 py-0 gap-2">
             <LuPlus className="size-3.5 block text-[#0c0d0f]" aria-hidden />
             <span className={`font-sans text-[13px] font-medium leading-normal text-[#0c0d0f] ${NOWRAP}`}>Add connection</span>
           </button>
@@ -220,7 +216,7 @@ export function ConnectionsRedesign() {
             {channelError ? (
               <div className="flex items-start gap-2 rounded-lg border border-[#f5b54447] bg-[#16140f] px-3 py-2.5 text-[13px] text-[#f5b544]" role="alert">
                 <LuTriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-                Could not load channels: {codeMessage(channelError)}
+                Could not load channels: {errorReason(meta, channelError)}
               </div>
             ) : null}
             {!loaded ? <div className="text-[13px] text-[#8b8f98]">Loading connections…</div> : null}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { LuChevronDown, LuPlus, LuTriangleAlert, LuX } from "react-icons/lu";
-import { validateChannelTarget, type ChannelConnectionListing } from "../../api";
-import { PROVIDERS } from "../connections/connectionsModel";
+import { validateChannelTarget, type ChannelConnectionListing, type ChannelMeta } from "../../api";
+import { providerLabel } from "../connections/channelMeta";
 import type { StageChannelEntry } from "../workshop/inspector/stageFields";
 import {
   channelKey, connectionNote, draftToTemplate, duplicateKeys, emptyChannelEntry, isFilled, parseTo, recipientsText,
@@ -12,8 +12,6 @@ const LABEL = "w-fit text-[11px] font-medium uppercase leading-normal tracking-[
 const MONO = "font-['Geist_Mono',monospace]";
 const INPUT = `h-[30px] w-full min-w-0 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-2.5 text-xs text-[#ecedee] outline-none placeholder:text-[#8b8f98] hover:bg-[#ffffff08] focus:border-[#ecedee73] ${MONO}`;
 const SELECT = `h-[30px] w-full min-w-0 appearance-none rounded-lg border border-[#ffffff1a] bg-[#1a1c21] pl-2.5 pr-7 text-xs text-[#ecedee] outline-none hover:bg-[#ffffff08] ${MONO}`;
-
-const providerLabel = (id: string): string => PROVIDERS.find((provider) => provider.id === id)?.label ?? id;
 
 type Validity = { state: "idle" | "checking" | "ok" | "bad" | "unknown" };
 
@@ -37,9 +35,10 @@ function useTargetValidity(entry: StageChannelEntry, known: boolean): Validity {
 }
 
 function ChannelCard({
-  entry, connections, duplicate, showName, onChange, onRemove,
+  entry, connections, meta, duplicate, showName, onChange, onRemove,
 }: {
   entry: StageChannelEntry;
+  meta: ChannelMeta | null;
   connections: readonly ChannelConnectionListing[];
   duplicate: boolean;
   showName: boolean;
@@ -47,7 +46,7 @@ function ChannelCard({
   onRemove: () => void;
 }) {
   const connection = connections.find((candidate) => candidate.id === entry.connection);
-  const spec = targetSpec(connection?.provider);
+  const spec = targetSpec(connection?.provider, meta);
   const note = connectionNote(connection, entry.connection);
   const validity = useTargetValidity(entry, Boolean(connection));
   const template = templateToDraft(entry.template);
@@ -74,7 +73,7 @@ function ChannelCard({
             {!entry.connection ? <option value="">Choose a connection…</option> : null}
             {options.map((candidate) => (
               <option key={candidate.id} value={candidate.id}>
-                {candidate.displayName ? `${providerLabel(candidate.provider)} · ${candidate.id}` : `${entry.connection} (missing)`}
+                {candidate.displayName ? `${providerLabel(meta, candidate.provider)} · ${candidate.id}` : `${entry.connection} (missing)`}
                 {candidate.enabled === false ? " (disabled)" : ""}
               </option>
             ))}
@@ -100,7 +99,7 @@ function ChannelCard({
         {validity.state === "bad" ? (
           <div className="flex items-center gap-1 text-[11px] text-[#f5b544]" role="alert">
             <LuTriangleAlert className="size-3 shrink-0" aria-hidden />
-            Not a valid {connection ? providerLabel(connection.provider) : ""} recipient
+            Not a valid {connection ? providerLabel(meta, connection.provider) : ""} recipient
           </div>
         ) : null}
         {validity.state === "unknown" ? <div className="text-[11px] text-[#8b8f98]">Could not check this recipient</div> : null}
@@ -157,8 +156,9 @@ function ChannelCard({
 }
 
 export function StageChannelsSection({
-  entries, connections, loadFailed, limit = 1, onChange,
+  entries, connections, meta = null, loadFailed, limit = 1, onChange,
 }: {
+  meta?: ChannelMeta | null;
   entries: readonly StageChannelEntry[];
   connections: readonly ChannelConnectionListing[];
   loadFailed: boolean;
@@ -187,6 +187,7 @@ export function StageChannelsSection({
           key={index}
           entry={entry}
           connections={connections}
+          meta={meta}
           duplicate={duplicates.has(channelKey(entry))}
           showName={limit > 1}
           onChange={(next) => onChange(entries.map((current, at) => (at === index ? next : current)))}

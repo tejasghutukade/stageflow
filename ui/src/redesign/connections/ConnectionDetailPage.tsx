@@ -2,19 +2,20 @@ import { useCallback, useEffect, useState } from "react";
 import { LuArrowLeft, LuCheck, LuCopy, LuMinus, LuPlug, LuRefreshCw, LuTriangleAlert } from "react-icons/lu";
 import {
   ChannelApiError, checkChannelConnection, deleteChannelConnection, fetchChannelConnections, updateChannelConnection,
-  type ChannelConnectionListing,
+  type ChannelConnectionListing, type ChannelMeta,
 } from "../../api";
-import { ageLabel, channelStatus, codeMessage } from "../../pages/channelStatus";
+import { ageLabel, channelStatus } from "../../pages/channelStatus";
 import { navigate } from "../../routes";
-import { PROVIDER_FORMS, apiErrorMessage, detailFacts, fixHint, providerInfo, usageSnippet, type ProviderId } from "./connectionsModel";
+import { errorReason, providerLabel, providerOf, useChannelMeta } from "./channelMeta";
+import { apiErrorMessage, detailFacts, fixHint, usageSnippet } from "./connectionsModel";
 
 const MONO = "[font-family:'Geist_Mono',_monospace]";
 const NOWRAP = "[white-space-collapse:collapse] [text-wrap-mode:nowrap]";
 const EYEBROW = `text-[#8b8f98] font-sans text-[11px] font-medium leading-normal tracking-[0.88px] uppercase ${NOWRAP}`;
 const CARD = "rounded-lg border border-[#ffffff12] bg-[#131418]";
 
-function StatusPill({ connection }: { connection: ChannelConnectionListing }) {
-  const status = channelStatus(connection);
+function StatusPill({ connection, meta }: { connection: ChannelConnectionListing; meta: ChannelMeta | null }) {
+  const status = channelStatus(connection, meta);
   const tone = status.tone === "ok"
     ? "border-[#4cc38a40] bg-[#4cc38a14] text-[#4cc38a]"
     : status.tone === "needs"
@@ -30,6 +31,7 @@ function StatusPill({ connection }: { connection: ChannelConnectionListing }) {
 }
 
 export function ConnectionDetailPage({ connectionId }: { connectionId: string }) {
+  const { meta } = useChannelMeta();
   const [connection, setConnection] = useState<ChannelConnectionListing | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "missing" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +79,7 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
     try {
       await work();
     } catch (caught) {
-      setActionError(apiErrorMessage(caught instanceof ChannelApiError ? caught.code : "unknown"));
+      setActionError(apiErrorMessage(caught instanceof ChannelApiError ? caught.code : "unknown", meta));
     } finally {
       setBusy(false);
     }
@@ -103,12 +105,12 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
   });
 
   const secretFields = connection
-    ? PROVIDER_FORMS[connection.provider as ProviderId]?.fields.filter((field) => field.target === "secret") ?? []
+    ? providerOf(meta, connection.provider)?.fields.filter((field) => field.target === "secret") ?? []
     : [];
-  const info = connection ? providerInfo(connection.provider) : undefined;
-  const status = connection ? channelStatus(connection) : null;
-  const hint = connection?.health?.state === "failed" ? fixHint(connection.health.error?.code) : undefined;
-  const snippet = connection ? usageSnippet(connection.provider, connection.id) : "";
+  const label = connection ? providerLabel(meta, connection.provider) : undefined;
+  const status = connection ? channelStatus(connection, meta) : null;
+  const hint = connection?.health?.state === "failed" ? fixHint(connection.health.error?.code, meta) : undefined;
+  const snippet = connection ? usageSnippet(connection.provider, connection.id, meta) : "";
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[#0c0d0f]">
@@ -119,17 +121,17 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
               <LuArrowLeft className="size-3 block" aria-hidden />
               Connections
               <span aria-hidden>/</span>
-              <span className="text-[#a7aab2]">{info?.label ?? connectionId}</span>
+              <span className="text-[#a7aab2]">{label ?? connectionId}</span>
             </button>
             <div className="flex flex-wrap items-center gap-3">
               <h1 className={`truncate text-2xl font-semibold leading-normal tracking-[-0.48px] text-[#ecedee] ${MONO}`}>
                 {connection?.identity ?? connectionId}
               </h1>
-              {connection ? <StatusPill connection={connection} /> : null}
+              {connection ? <StatusPill connection={connection} meta={meta} /> : null}
             </div>
             {connection ? (
               <p className="text-[13px] leading-normal text-[#a7aab2]">
-                {info?.label ?? connection.provider} · Communication channel ·{" "}
+                {label ?? connection.provider} · Communication channel ·{" "}
                 {connection.health ? `Last checked ${ageLabel(connection.health.checkedAt, now)}` : "Not checked yet"}
               </p>
             ) : null}
@@ -165,7 +167,7 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
         {state === "error" ? (
           <div className="mx-7 mt-7 flex items-start gap-2 rounded-lg border border-[#f5b54447] bg-[#16140f] px-3 py-2.5 text-[13px] text-[#f5b544]" role="alert">
             <LuTriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            Could not load this connection: {error ? codeMessage(error) : "unknown error"}
+            Could not load this connection: {error ? errorReason(meta, error) : "unknown error"}
           </div>
         ) : null}
 
@@ -217,7 +219,7 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
               <section className={`${CARD} flex flex-col gap-3 p-4`}>
                 <span className={EYEBROW}>Connection</span>
                 <dl className="flex flex-col gap-2.5">
-                  {detailFacts(connection).map((fact) => (
+                  {detailFacts(connection, meta).map((fact) => (
                     <div key={fact.label} className="flex items-baseline justify-between gap-3">
                       <dt className="text-xs text-[#8b8f98]">{fact.label}</dt>
                       <dd className={`min-w-0 truncate text-[13px] text-[#ecedee] ${fact.mono ? MONO : ""}`} title={fact.value}>{fact.value}</dd>
@@ -279,7 +281,7 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
               <section className="flex flex-col gap-2 rounded-lg border border-[#f2645a40] p-4" aria-label="Disconnect">
                 <span className={EYEBROW}>Disconnect</span>
                 <p className="text-xs leading-[1.5] text-[#a7aab2]">
-                  Removes this entry from connections.yaml and deletes its stored secret. Stages that still list it will fail validation. Nothing is deleted at {info?.label ?? "the provider"}.
+                  Removes this entry from connections.yaml and deletes its stored secret. Stages that still list it will fail validation. Nothing is deleted at {label ?? "the provider"}.
                 </p>
                 {confirmRemove ? (
                   <div className="flex gap-2">
@@ -287,7 +289,7 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
                     <button type="button" onClick={() => setConfirmRemove(false)} className="h-8 rounded-lg px-3 text-[13px] text-[#a7aab2] hover:bg-[#1a1c21]">Cancel</button>
                   </div>
                 ) : (
-                  <button type="button" onClick={() => setConfirmRemove(true)} className="h-8 w-fit rounded-lg border border-[#f2645a66] px-3 text-[13px] text-[#f2645a] hover:bg-[#f2645a14]">Disconnect {info?.label ?? "connection"}</button>
+                  <button type="button" onClick={() => setConfirmRemove(true)} className="h-8 w-fit rounded-lg border border-[#f2645a66] px-3 text-[13px] text-[#f2645a] hover:bg-[#f2645a14]">Disconnect {label ?? "connection"}</button>
                 )}
               </section>
             </aside>

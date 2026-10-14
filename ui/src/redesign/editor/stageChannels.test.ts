@@ -2,6 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ChannelConnectionListing, DraftPackagePayload } from "../../api";
+import type { ChannelMeta } from "../../api";
+import metaFixture from "../connections/metaFixture.json";
 import { readStageChannels, writeStageChannels, type StageChannelEntry } from "../workshop/inspector/stageFields";
 import { StageChannelsSection } from "./StageChannelsSection";
 import {
@@ -9,6 +11,7 @@ import {
   targetBody, targetSpec, templateToDraft,
 } from "./stageChannelsModel";
 
+const meta = metaFixture as ChannelMeta;
 const conn = (extra: Partial<ChannelConnectionListing> = {}): ChannelConnectionListing =>
   ({ id: "ops", provider: "slack", displayName: "Ops", enabled: true, ...extra });
 
@@ -64,11 +67,12 @@ describe("stage channel drafts", () => {
 
 describe("stage channel form model", () => {
   it("describes the recipient field per provider", () => {
-    expect(targetSpec("agentmail")).toMatchObject({ multiple: true, cc: true, template: false });
-    expect(targetSpec("whatsapp")).toMatchObject({ template: true, multiple: false });
-    expect(targetSpec("slack").toLabel).toBe("Channel id");
-    expect(targetSpec("nope")).toMatchObject({ toLabel: "To", multiple: false });
-    expect(targetSpec(undefined).cc).toBe(false);
+    expect(targetSpec("agentmail", meta)).toMatchObject({ multiple: true, cc: true, template: false });
+    expect(targetSpec("whatsapp", meta)).toMatchObject({ template: true, multiple: false });
+    expect(targetSpec("slack", meta).toLabel).toBe("Channel id");
+    expect(targetSpec("nope", meta)).toMatchObject({ toLabel: "To", multiple: false });
+    expect(targetSpec(undefined, meta).cc).toBe(false);
+    expect(targetSpec("slack")).toMatchObject({ toLabel: "To" });
   });
 
   it("parses recipient text", () => {
@@ -111,7 +115,7 @@ describe("stage channel form model", () => {
 
 describe("StageChannelsSection with the one-channel policy", () => {
   const render = (entries: StageChannelEntry[], limit?: number, connections = [conn()]) =>
-    renderToStaticMarkup(createElement(StageChannelsSection, { entries, connections, loadFailed: false, ...(limit !== undefined ? { limit } : {}), onChange: () => {} }));
+    renderToStaticMarkup(createElement(StageChannelsSection, { entries, connections, meta, loadFailed: false, ...(limit !== undefined ? { limit } : {}), onChange: () => {} }));
   const one: StageChannelEntry = { connection: "ops", to: "C0123ABCD", operations: ["send"] };
 
   it("defaults to one: an empty stage can add, a stage with one cannot", () => {
@@ -145,7 +149,7 @@ describe("StageChannelsSection with the one-channel policy", () => {
 
 describe("StageChannelsSection", () => {
   const render = (entries: StageChannelEntry[], connections: ChannelConnectionListing[] = [conn()], loadFailed = false, limit = 5) =>
-    renderToStaticMarkup(createElement(StageChannelsSection, { entries, connections, loadFailed, limit, onChange: () => {} }));
+    renderToStaticMarkup(createElement(StageChannelsSection, { entries, connections, meta, loadFailed, limit, onChange: () => {} }));
 
   it("explains the empty state and disables Add when there are no connections", () => {
     const empty = render([], []);

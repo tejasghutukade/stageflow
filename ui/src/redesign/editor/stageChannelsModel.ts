@@ -1,4 +1,5 @@
-import type { ChannelConnectionListing } from "../../api";
+import type { ChannelConnectionListing, ChannelMeta } from "../../api";
+import { providerOf } from "../connections/channelMeta";
 import type { StageChannelEntry } from "../workshop/inspector/stageFields";
 
 export type TargetSpec = {
@@ -9,18 +10,14 @@ export type TargetSpec = {
   template: boolean;
 };
 
-const SPECS: Record<string, TargetSpec> = {
-  agentmail: { toLabel: "To", toPlaceholder: "oncall@acme.com, lead@acme.com", multiple: true, cc: true, template: false },
-  slack: { toLabel: "Channel id", toPlaceholder: "C0123ABCD (channel, group, DM or user id)", multiple: false, cc: false, template: false },
-  telegram: { toLabel: "Chat id", toPlaceholder: "123456789 or @channelname", multiple: false, cc: false, template: false },
-  imessage: { toLabel: "Recipient", toPlaceholder: "+14155550123 or an Apple ID email", multiple: false, cc: false, template: false },
-  whatsapp: { toLabel: "Recipient", toPlaceholder: "+14155550123", multiple: false, cc: false, template: true },
-};
-
 const FALLBACK: TargetSpec = { toLabel: "To", toPlaceholder: "", multiple: false, cc: false, template: false };
 
-export function targetSpec(provider: string | undefined): TargetSpec {
-  return (provider && SPECS[provider]) || FALLBACK;
+/** The recipient field for a provider, from the host's description of it. */
+export function targetSpec(provider: string | undefined, meta?: ChannelMeta | null): TargetSpec {
+  const recipient = providerOf(meta, provider ?? "")?.recipient;
+  return recipient
+    ? { toLabel: recipient.label, toPlaceholder: recipient.placeholder, multiple: recipient.multiple, cc: recipient.cc, template: recipient.template }
+    : FALLBACK;
 }
 
 export function splitList(text: string): string[] {

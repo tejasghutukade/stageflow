@@ -42,6 +42,7 @@ import type {
   PackageListing,
   ExtensionFileListing,
   ChannelConnectionsResult,
+  ChannelMeta,
   ChannelHealth,
   ProjectMcpCatalogList,
   ProjectMcpProbeResult,
@@ -267,6 +268,10 @@ export function updateChannelConnection(
 
 export async function deleteChannelConnection(id: string): Promise<void> {
   await channelRequest(`/api/connections/${encodeURIComponent(id)}`, "DELETE");
+}
+
+export function fetchChannelMeta(): Promise<ChannelMeta> {
+  return api("/api/connections/meta");
 }
 
 export function validateChannelTarget(

@@ -126,6 +126,8 @@ Rules every change must keep:
 - A send that may have reached the provider is `CHANNEL_SEND_OUTCOME_UNKNOWN` and is never resent. Only definite failures (refused connection, DNS/TLS, 4xx) are retryable or resendable under a new key.
 - A stage uses one channel (`MAX_CHANNELS_PER_STAGE`). Keep it enforced at parse, merge, validation and send; tests that need several raise it with `setStageChannelLimitForTests`.
 - Connections are host-level (`$STAGEFLOW_HOME/connections.yaml`, project file wins, `STAGEFLOW_CONNECTIONS_FILE` overrides). The test setup pins an empty `STAGEFLOW_HOME` so host files never leak in.
+- A provider is one file: its adapter, its `meta` (form fields, recipient shape, examples; the console renders from `GET /api/connections/meta`) and its tests. Every `ChannelErrorCode` is explained once in `src/channels/errorInfo.ts` (a `Record`, so a missing entry is a compile error). After changing either, run `npx tsx scripts/generate-channel-meta-fixture.ts` so the console fixture matches; `tests/channels.metaFixture.test.ts` fails if it does not.
+- Connection edits (create, replace key, enable, remove) go through `ConnectionEdits.apply`, which changes secrets and file together and undoes both on failure. Do not write the secret store or `connections.yaml` anywhere else.
 - Provider tests use the local HTTP fixture or a fake SDK importer, never the network. Real-account smoke tests are opt-in env-gated files.
 
 ## Documentation

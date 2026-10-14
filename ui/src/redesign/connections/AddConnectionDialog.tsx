@@ -1,29 +1,24 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import type { IconType } from "react-icons";
-import { LuCheck, LuCopy, LuHash, LuKeyRound, LuMail, LuMessageCircle, LuPhone, LuPlug, LuSend, LuTriangleAlert, LuX } from "react-icons/lu";
+import { LuCheck, LuCopy, LuKeyRound, LuTriangleAlert, LuX } from "react-icons/lu";
 import {
   ChannelApiError, createChannelConnection, testChannelConnection,
-  type ChannelConnectionListing, type ChannelHealth,
+  type ChannelConnectionListing, type ChannelHealth, type ChannelMeta, type ChannelProviderField,
 } from "../../api";
-import { codeMessage } from "../../pages/channelStatus";
-import {
-  PROVIDERS, PROVIDER_FORMS, apiErrorMessage, buildNewConnection, fixHint, missingFields,
-  type FormField, type FormValues, type ProviderId,
-} from "./connectionsModel";
+import { errorReason, useChannelMeta } from "./channelMeta";
+import { apiErrorMessage, buildNewConnection, fixHint, missingFields, type FormValues } from "./connectionsModel";
+import { providerIcon } from "./providerIcons";
 
 const MONO = "[font-family:'Geist_Mono',_monospace]";
 const NOWRAP = "[white-space-collapse:collapse] [text-wrap-mode:nowrap]";
 const EYEBROW = `text-[#8b8f98] font-sans text-[11px] font-medium leading-normal tracking-[0.88px] uppercase ${NOWRAP}`;
 const INPUT = "h-9 w-full rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] text-[#ecedee] outline-none placeholder:text-[#8b8f98] focus:border-[#ecedee73]";
 
-const ICONS: Record<string, IconType> = { agentmail: LuMail, slack: LuHash, imessage: LuMessageCircle, whatsapp: LuPhone, telegram: LuSend };
-
-function PhotonTag() {
-  return <span className={`rounded-[4px] border border-[#ffffff1a] bg-[#1a1c21] px-1.5 text-[11px] leading-[18px] text-[#a7aab2] ${NOWRAP}`}>via Photon</span>;
+function ViaTag({ via }: { via: string }) {
+  return <span className={`rounded-[4px] border border-[#ffffff1a] bg-[#1a1c21] px-1.5 text-[11px] leading-[18px] text-[#a7aab2] ${NOWRAP}`}>via {via}</span>;
 }
 
-function FieldInput({ field, value, onChange }: { field: FormField; value: string; onChange: (value: string) => void }) {
+function FieldInput({ field, value, onChange }: { field: ChannelProviderField; value: string; onChange: (value: string) => void }) {
   const id = `connection-field-${field.key}`;
   return (
     <div className="flex flex-col gap-1.5">
@@ -52,7 +47,7 @@ function FieldInput({ field, value, onChange }: { field: FormField; value: strin
   );
 }
 
-export function ResultLine({ health }: { health: ChannelHealth }) {
+export function ResultLine({ health, meta }: { health: ChannelHealth; meta: ChannelMeta | null }) {
   if (health.state === "ok") {
     return (
       <div className="flex items-center gap-2 text-[13px] text-[#4cc38a]" role="status">
@@ -62,12 +57,12 @@ export function ResultLine({ health }: { health: ChannelHealth }) {
     );
   }
   const code = health.error?.code;
-  const hint = fixHint(code);
+  const hint = fixHint(code, meta);
   return (
     <div className="flex items-start gap-2 text-[13px] text-[#f5b544]" role="alert">
       <LuTriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
       <div className="flex flex-col gap-0.5">
-        <span>{code ? codeMessage(code) : "The check failed."}</span>
+        <span>{code ? errorReason(meta, code) : "The check failed."}</span>
         {hint ? <span className="text-xs text-[#a7aab2]">{hint}</span> : null}
       </div>
     </div>
@@ -77,12 +72,13 @@ export function ResultLine({ health }: { health: ChannelHealth }) {
 export function AddConnectionDialog({
   initial, existing, onClose, onSaved,
 }: {
-  initial: ProviderId;
+  initial: string;
   existing: readonly ChannelConnectionListing[];
   onClose: () => void;
   onSaved: (id: string) => void;
 }) {
-  const [selected, setSelected] = useState<ProviderId>(initial);
+  const { meta, failed: metaFailed } = useChannelMeta();
+  const [selected, setSelected] = useState<string>(initial);
   const [values, setValues] = useState<FormValues>({});
   const [useSaved, setUseSaved] = useState(true);
   const [result, setResult] = useState<ChannelHealth | null>(null);
@@ -91,13 +87,13 @@ export function AddConnectionDialog({
   const [showYaml, setShowYaml] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const provider = PROVIDERS.find((entry) => entry.id === selected) ?? PROVIDERS[0]!;
-  const form = PROVIDER_FORMS[selected];
-  const savedCredential = form.fields.some((field) => field.target === "credential")
+  const providers = meta?.providers ?? [];
+  const provider = providers.find((entry) => entry.id === selected) ?? providers[0];
+  const savedCredential = provider?.fields.some((field) => field.target === "credential")
     ? existing.find((entry) => entry.credential)?.credential
     : undefined;
   const reuse = Boolean(savedCredential) && useSaved;
-  const missing = missingFields(selected, values, reuse);
+  const missing = provider ? missingFields(provider, values, reuse) : [];
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
@@ -105,10 +101,11 @@ export function AddConnectionDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, busy]);
 
-  const select = (id: ProviderId) => { setSelected(id); setValues({}); setResult(null); setError(null); };
-  const payload = () => buildNewConnection(selected, values, reuse && savedCredential ? { savedCredential } : {});
+  const select = (id: string) => { setSelected(id); setValues({}); setResult(null); setError(null); };
+  const payload = () => buildNewConnection(provider!, values, reuse && savedCredential ? { savedCredential } : {});
 
   const run = async (kind: "test" | "save") => {
+    if (!provider) return;
     if (missing.length > 0) { setError("Fill in the required fields first."); return; }
     setBusy(kind);
     setError(null);
@@ -120,7 +117,7 @@ export function AddConnectionDialog({
         onSaved(saved.id);
       }
     } catch (caught) {
-      setError(apiErrorMessage(caught instanceof ChannelApiError ? caught.code : "unknown"));
+      setError(apiErrorMessage(caught instanceof ChannelApiError ? caught.code : "unknown", meta));
     } finally {
       setBusy(null);
     }
@@ -136,7 +133,7 @@ export function AddConnectionDialog({
       >
         <div className="flex items-start gap-3 border-b border-b-[#ffffff12] px-5 py-4">
           <div className="flex flex-1 flex-col gap-1">
-            <h2 id="add-connection-title" className="text-lg font-semibold tracking-[-0.36px] text-[#ecedee]">Connect {provider.label}</h2>
+            <h2 id="add-connection-title" className="text-lg font-semibold tracking-[-0.36px] text-[#ecedee]">Connect {provider?.label ?? "a provider"}</h2>
             <p className="text-[13px] leading-normal text-[#a7aab2]">Secrets are stored on this host and never written to connections.yaml.</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="flex size-7 items-center justify-center rounded-md text-[#8b8f98] hover:bg-[#1a1c21]">
@@ -146,8 +143,8 @@ export function AddConnectionDialog({
 
         <div className="flex flex-col gap-4 px-5 py-4">
           <div className="flex flex-wrap gap-2" role="tablist" aria-label="Provider">
-            {PROVIDERS.map((entry) => {
-              const Icon = ICONS[entry.id] ?? LuPlug;
+            {providers.map((entry) => {
+              const Icon = providerIcon(entry.icon);
               return (
                 <button
                   key={entry.id} type="button" role="tab" aria-selected={entry.id === selected} onClick={() => select(entry.id)}
@@ -155,7 +152,7 @@ export function AddConnectionDialog({
                 >
                   <Icon className="size-3.5 block text-[#a7aab2]" aria-hidden />
                   {entry.label}
-                  {entry.viaPhoton ? <PhotonTag /> : null}
+                  {entry.via ? <ViaTag via={entry.via} /> : null}
                 </button>
               );
             })}
@@ -168,12 +165,17 @@ export function AddConnectionDialog({
             </label>
           ) : null}
 
-          {form.fields.filter((field) => !(reuse && field.target === "credential")).map((field) => (
+          {!provider ? (
+            <p className="text-[13px] text-[#8b8f98]" role={metaFailed ? "alert" : undefined}>
+              {metaFailed ? "Could not load provider details from the host." : "Loading providers…"}
+            </p>
+          ) : null}
+          {provider?.fields.filter((field) => !(reuse && field.target === "credential")).map((field) => (
             <FieldInput key={field.key} field={field} value={values[field.key] ?? ""} onChange={(value) => setValues((current) => ({ ...current, [field.key]: value }))} />
           ))}
-          {form.note ? <p className="text-xs leading-[1.5] text-[#8b8f98]">{form.note}</p> : null}
+          {provider?.note ? <p className="text-xs leading-[1.5] text-[#8b8f98]">{provider.note}</p> : null}
 
-          {result ? <ResultLine health={result} /> : null}
+          {result ? <ResultLine health={result} meta={meta} /> : null}
           {error ? (
             <div className="flex items-start gap-2 text-[13px] text-[#f2645a]" role="alert">
               <LuTriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -185,21 +187,21 @@ export function AddConnectionDialog({
             <button type="button" onClick={() => setShowYaml((open) => !open)} className="w-fit text-xs text-[#8b8f98] underline hover:text-[#ecedee]" aria-expanded={showYaml}>
               {showYaml ? "Hide" : "Prefer to edit connections.yaml yourself?"}
             </button>
-            {showYaml ? (
+            {showYaml && provider ? (
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <span className={EYEBROW}>connections.yaml</span>
                   <button
                     type="button"
-                    onClick={() => { void navigator.clipboard?.writeText(provider.yaml).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); }, () => undefined); }}
+                    onClick={() => { void navigator.clipboard?.writeText(provider?.yamlExample ?? "").then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); }, () => undefined); }}
                     className="flex h-7 items-center gap-1.5 rounded-md border border-[#ffffff1a] px-2 text-xs text-[#a7aab2] hover:bg-[#1a1c21]"
                   >
                     {copied ? <LuCheck className="size-3 block text-[#4cc38a]" aria-hidden /> : <LuCopy className="size-3 block" aria-hidden />}
                     {copied ? "Copied" : "Copy"}
                   </button>
                 </div>
-                <pre className={`overflow-x-auto rounded-lg border border-[#ffffff12] bg-[#0c0d0f] p-3 text-xs leading-[1.6] text-[#ecedee] ${MONO}`}>{provider.yaml}</pre>
-                <p className="text-xs leading-[1.5] text-[#8b8f98]">Set {provider.env.join(", ")} on the host, then restart. Values written as <span className={MONO}>env:NAME</span> are read from the host environment.</p>
+                <pre className={`overflow-x-auto rounded-lg border border-[#ffffff12] bg-[#0c0d0f] p-3 text-xs leading-[1.6] text-[#ecedee] ${MONO}`}>{provider?.yamlExample}</pre>
+                <p className="text-xs leading-[1.5] text-[#8b8f98]">Set {provider?.envNames.join(", ")} on the host, then restart. Values written as <span className={MONO}>env:NAME</span> are read from the host environment.</p>
               </div>
             ) : null}
           </div>
@@ -207,7 +209,7 @@ export function AddConnectionDialog({
 
         <div className="flex items-center justify-between border-t border-t-[#ffffff12] px-5 py-3">
           <button
-            type="button" onClick={() => void run("test")} disabled={busy !== null}
+            type="button" onClick={() => void run("test")} disabled={busy !== null || !provider}
             className="flex h-8 items-center rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] font-medium text-[#ecedee] disabled:opacity-60"
           >
             {busy === "test" ? "Testing…" : "Test connection"}
@@ -215,10 +217,10 @@ export function AddConnectionDialog({
           <div className="flex items-center gap-2">
             <button type="button" onClick={onClose} disabled={busy === "save"} className="flex h-8 items-center rounded-lg px-3 text-[13px] text-[#a7aab2] hover:bg-[#1a1c21]">Cancel</button>
             <button
-              type="submit" disabled={busy !== null}
+              type="submit" disabled={busy !== null || !provider}
               className="flex h-8 items-center rounded-lg bg-[#ecedee] px-3 text-[13px] font-medium text-[#0c0d0f] disabled:opacity-60"
             >
-              {busy === "save" ? "Connecting…" : `Connect ${provider.label}`}
+              {busy === "save" ? "Connecting…" : `Connect ${provider?.label ?? ""}`}
             </button>
           </div>
         </div>

@@ -24,6 +24,7 @@ import {
   readStageChannels,
   writeStageChannels,
 } from "../workshop/inspector/stageFields";
+import { useChannelMeta } from "../connections/channelMeta";
 import { StageChannelsSection } from "./StageChannelsSection";
 import {
   INSPECTOR_GATE_ORDER,
@@ -99,6 +100,7 @@ export function PipelineEditorInspector({
   const [connections, setConnections] = useState<ChannelConnectionListing[]>([]);
   const [connectionsFailed, setConnectionsFailed] = useState(false);
   const [channelLimit, setChannelLimit] = useState(1);
+  const { meta: channelMeta } = useChannelMeta();
 
   useEffect(() => {
     let cancelled = false;
@@ -297,6 +299,7 @@ export function PipelineEditorInspector({
         <StageChannelsSection
           entries={readStageChannels(draft, form.id)}
           connections={connections}
+          meta={channelMeta}
           loadFailed={connectionsFailed}
           limit={channelLimit}
           onChange={(next) => onDraftChange(writeStageChannels(draft, form.id, next))}

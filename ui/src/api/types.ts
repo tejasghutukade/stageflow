@@ -1189,6 +1189,37 @@ export type ChannelConnectionListing = {
   health?: ChannelHealth;
 };
 
+export type ChannelProviderField = {
+  key: string;
+  label: string;
+  hint?: string;
+  placeholder?: string;
+  target: "config" | "secret" | "credential";
+  input: "text" | "password" | "select";
+  required: boolean;
+  options?: Array<{ value: string; label: string }>;
+  defaultValue?: string;
+};
+
+export type ChannelProviderMeta = {
+  id: string;
+  label: string;
+  blurb: string;
+  icon: string;
+  via?: string;
+  note?: string;
+  fields: ChannelProviderField[];
+  recipient: { label: string; placeholder: string; multiple: boolean; cc: boolean; template: boolean };
+  envNames: string[];
+  yamlExample: string;
+  stageExample: string;
+};
+
+export type ChannelMeta = {
+  providers: ChannelProviderMeta[];
+  errors: Record<string, { reason: string; hint?: string }>;
+};
+
 export type ChannelConnectionsResult = {
   connections: ChannelConnectionListing[];
   error?: string;
