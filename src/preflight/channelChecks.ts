@@ -107,7 +107,7 @@ export async function checkStageChannels(loaded: LoadedPipeline, options: Channe
 }
 
 const FAILURE_REASONS: Record<string, string> = {
-  CHANNEL_RECIPIENT_REJECTED: "the provider will not message the pinned recipient (for iMessage on a Free or Pro Photon project, register that person in the project)",
+  CHANNEL_RECIPIENT_REJECTED: "the provider will not message the pinned recipient (for iMessage on a Free or Pro Photon project, register that person as a project user using the handle Apple sends from; debug.photon.codes shows it)",
   CHANNEL_TARGET_INVALID: "the pinned recipient is not valid for this provider",
   CHANNEL_SECRET_UNAVAILABLE: "a secret for this connection is not set on the host",
   CHANNEL_AUTH_FAILED: "the provider rejected the credentials",
