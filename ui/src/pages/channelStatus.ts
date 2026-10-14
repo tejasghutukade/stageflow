@@ -28,19 +28,16 @@ export function codeMessage(code: string): string {
 
 export type ChannelStatus = { label: string; tone: "ok" | "needs" | "muted"; detail?: string };
 
-const SETUP_CODES = new Set([
-  "CHANNEL_AUTH_FAILED", "CHANNEL_UNAUTHORIZED", "CHANNEL_SECRET_UNAVAILABLE", "CHANNEL_INVALID_INPUT", "CHANNEL_PROVIDER_UNSUPPORTED",
-]);
-
 /** What the host last observed. "Not checked yet" never claims the connection works. */
 export function channelStatus(connection: ChannelConnectionListing): ChannelStatus {
   if (!connection.enabled) return { label: "Disabled", tone: "muted" };
   const health = connection.health;
   if (!health) return { label: "Not checked yet", tone: "muted" };
   if (health.state === "ok") return { label: "Connected", tone: "ok" };
-  const detail = health.error ? codeMessage(health.error.code) : undefined;
-  const label = health.error && SETUP_CODES.has(health.error.code) ? "Needs setup" : "Check failed";
-  return { label, tone: "needs", ...(detail ? { detail } : {}) };
+  if (health.error?.code === "CHANNEL_SECRET_UNAVAILABLE") {
+    return { label: "Not connected", tone: "muted", detail: "Finish setup: a secret named in connections.yaml is not set on the host" };
+  }
+  return { label: "Connection broken", tone: "needs", ...(health.error ? { detail: codeMessage(health.error.code) } : {}) };
 }
 
 export function ageLabel(checkedAt: string, now: number = Date.now()): string {

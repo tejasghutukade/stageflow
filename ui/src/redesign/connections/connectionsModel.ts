@@ -149,6 +149,7 @@ export function connectionTotals(rows: readonly ConnectionRow[], tools: readonly
 }
 
 export function footerText(totals: ConnectionTotals): string {
+  if (totals.connections === 0) return "No connections yet";
   const parts = [
     `${totals.connections} connection${totals.connections === 1 ? "" : "s"}`,
     `${totals.channels} channel${totals.channels === 1 ? "" : "s"}`,

@@ -42,10 +42,10 @@ describe("status vocabulary", () => {
     expect(channelStatus({ ...base, health: { state: "ok", checkedAt: "x" } })).toEqual({ label: "Connected", tone: "ok" });
   });
 
-  it("separates setup problems from transient failures", () => {
-    expect(channelStatus(failed("CHANNEL_AUTH_FAILED"))).toEqual({ label: "Needs setup", tone: "needs", detail: "Credentials were rejected" });
-    expect(channelStatus(failed("CHANNEL_SECRET_UNAVAILABLE")).label).toBe("Needs setup");
-    expect(channelStatus(failed("CHANNEL_CONNECTION_FAILED"))).toMatchObject({ label: "Check failed", tone: "needs" });
+  it("tells a missing secret (not connected yet) apart from a broken connection", () => {
+    expect(channelStatus(failed("CHANNEL_SECRET_UNAVAILABLE"))).toMatchObject({ label: "Not connected", tone: "muted" });
+    expect(channelStatus(failed("CHANNEL_AUTH_FAILED"))).toEqual({ label: "Connection broken", tone: "needs", detail: "Credentials were rejected" });
+    expect(channelStatus(failed("CHANNEL_CONNECTION_FAILED"))).toMatchObject({ label: "Connection broken", tone: "needs" });
   });
 
   it("formats check age", () => {
@@ -89,12 +89,13 @@ describe("connections view model", () => {
   });
 
   it("counts totals for the footer", () => {
-    const rows = channelRows([{ ...base, health: { state: "ok", checkedAt: "x" } }, failed("CHANNEL_AUTH_FAILED"), { ...base, id: "n" }], []);
+    const rows = channelRows([{ ...base, health: { state: "ok", checkedAt: "x" } }, failed("CHANNEL_AUTH_FAILED"), failed("CHANNEL_SECRET_UNAVAILABLE")], []);
     const tools = toolCards([{ name: "github", transport: "http" }]);
     expect(tools).toEqual([{ name: "github", detail: "http server · .mcp.json" }]);
     const totals = connectionTotals(rows, tools);
     expect(totals).toEqual({ connections: 4, channels: 3, tools: 1, needsAttention: 1, connectedChannels: 1 });
     expect(footerText(totals)).toBe("4 connections · 3 channels · 1 tool · 1 needs attention");
+    expect(footerText({ connections: 0, channels: 0, tools: 0, needsAttention: 0, connectedChannels: 0 })).toBe("No connections yet");
     expect(footerText({ connections: 1, channels: 1, tools: 0, needsAttention: 0, connectedChannels: 0 })).toBe("1 connection · 1 channel · 0 tools");
   });
 });

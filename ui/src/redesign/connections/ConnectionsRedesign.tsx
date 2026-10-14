@@ -290,7 +290,7 @@ export function ConnectionsRedesign() {
             <SectionHead
               title="Communication channels"
               subtitle="Where a stage can send messages. Send-only: nothing is received yet."
-              aside={loaded ? `${totals.connectedChannels} connected` : undefined}
+              aside={loaded && rows.length > 0 ? `${totals.connectedChannels} of ${rows.length} connected` : undefined}
             />
             {channelError ? (
               <div className="flex items-start gap-2 rounded-lg border border-[#f5b54447] bg-[#16140f] px-3 py-2.5 text-[13px] text-[#f5b544]" role="alert">
@@ -299,12 +299,24 @@ export function ConnectionsRedesign() {
               </div>
             ) : null}
             {!loaded ? <div className="text-[13px] text-[#8b8f98]">Loading connections…</div> : null}
+            {loaded && rows.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 rounded-lg border border-[#ffffff12] bg-[#131418] px-6 py-8 text-center" data-testid="connections-empty">
+                <div className={TILE}><LuPlug className="size-4 block text-[#a7aab2]" aria-hidden /></div>
+                <h3 className="text-[15px] font-semibold leading-normal text-[#ecedee]">You haven&apos;t connected anything yet</h3>
+                <p className="max-w-[520px] text-[13px] leading-[1.5] text-[#a7aab2]">
+                  Connect a channel and your stages can send messages through it, for example a Slack post when a run finishes. Pick a provider below to see how to set it up.
+                </p>
+              </div>
+            ) : null}
             {loaded && rows.length > 0 ? <ChannelTableBlock rows={rows} checking={checking} onCheck={onCheck} now={now} /> : null}
             {loaded && available.length > 0 ? (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                {available.map((provider) => (
-                  <AvailableTile key={provider.id} provider={provider} onConnect={() => setDialog(provider.id)} />
-                ))}
+              <div className="flex flex-col gap-3">
+                {rows.length > 0 ? <span className={EYEBROW}>Available to connect</span> : null}
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {available.map((provider) => (
+                    <AvailableTile key={provider.id} provider={provider} onConnect={() => setDialog(provider.id)} />
+                  ))}
+                </div>
               </div>
             ) : null}
           </section>
