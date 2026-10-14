@@ -1,0 +1,106 @@
+import { z } from "zod";
+import { ChannelError } from "../errors.js";
+import { httpCall, parseJson, statusFailure } from "../http.js";
+import type { HttpMode } from "../http.js";
+import type { ChannelProvider, ConnectionHealth, OutboundMessage, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
+
+export type SlackConfig = { teamId?: string };
+export type SlackTarget = { channel: string };
+
+export const SLACK_BASE_URL = "https://slack.com/api";
+
+const configSchema = z.object({ teamId: z.string().regex(/^T[A-Z0-9]{2,31}$/).optional() }).strict();
+const targetSchema = z.object({ to: z.string().regex(/^[CGDU][A-Z0-9]{2,31}$/) }).strict();
+
+export type SlackOptions = {
+  fetch?: typeof fetch;
+  baseUrl?: string;
+  sendTimeoutMs?: number;
+  checkTimeoutMs?: number;
+};
+
+const AUTH_ERRORS = new Set(["invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired"]);
+const SCOPE_ERRORS = new Set(["missing_scope", "not_allowed_token_type", "no_permission", "restricted_action", "access_denied"]);
+const RECIPIENT_ERRORS = new Set([
+  "channel_not_found", "user_not_found", "is_archived", "not_in_channel", "cannot_dm_bot", "user_disabled",
+  "restricted_action_read_only_channel", "restricted_action_thread_only_channel", "channel_is_archived",
+]);
+const TRANSIENT_ERRORS = new Set(["internal_error", "fatal_error", "service_unavailable", "request_timeout"]);
+
+/** Maps a Slack `ok: false` error name. Names are mapped, never echoed. */
+export function slackFailure(name: unknown, mode: HttpMode, connectionId: string): ChannelError {
+  const detail = { connectionId };
+  if (typeof name !== "string") return new ChannelError(mode === "send" ? "CHANNEL_SEND_OUTCOME_UNKNOWN" : "CHANNEL_CONNECTION_FAILED", mode !== "send", detail);
+  if (AUTH_ERRORS.has(name)) return new ChannelError("CHANNEL_AUTH_FAILED", false, detail);
+  if (SCOPE_ERRORS.has(name)) return new ChannelError("CHANNEL_UNAUTHORIZED", false, detail);
+  if (RECIPIENT_ERRORS.has(name)) return new ChannelError("CHANNEL_RECIPIENT_REJECTED", false, detail);
+  if (name === "ratelimited" || name === "rate_limited") return new ChannelError("CHANNEL_RATE_LIMIT", true, detail);
+  if (TRANSIENT_ERRORS.has(name)) {
+    return mode === "send" ? new ChannelError("CHANNEL_SEND_OUTCOME_UNKNOWN", false, detail) : new ChannelError("CHANNEL_CONNECTION_FAILED", true, detail);
+  }
+  return new ChannelError("CHANNEL_INVALID_INPUT", false, detail);
+}
+
+/**
+ * Posts as a Slack bot through `chat.postMessage`. The bot needs `chat:write`; posting to a
+ * public channel it has not joined also needs `chat:write.public`, and a direct message to a
+ * user id needs `im:write`. Receiving is not part of this phase.
+ */
+export function createSlackProvider(options: SlackOptions = {}): ChannelProvider<SlackConfig, SlackTarget> {
+  const doFetch = options.fetch ?? fetch;
+  const base = options.baseUrl ?? SLACK_BASE_URL;
+  const headers = (connection: ResolvedConnection<SlackConfig>): Record<string, string> =>
+    ({ authorization: `Bearer ${connection.secrets.botToken}`, accept: "application/json" });
+
+  return {
+    id: "slack",
+    operations: ["send"],
+    secrets: { required: ["botToken"] },
+    validateConfig(config) {
+      const parsed = configSchema.safeParse(config);
+      return parsed.success ? { ok: true, value: parsed.data } : { ok: false, issues: parsed.error.issues.map(issue => issue.path.join(".") || "config") };
+    },
+    validateTarget(target) {
+      const parsed = targetSchema.safeParse(target);
+      return parsed.success ? { ok: true, value: { channel: parsed.data.to } } : { ok: false, issues: parsed.error.issues.map(issue => issue.path.join(".") || "target") };
+    },
+    describe: config => (config.teamId ? { identity: config.teamId } : {}),
+    async check(connection, signal): Promise<ConnectionHealth> {
+      const checkedAt = new Date().toISOString();
+      const fail = (failure: ChannelError): ConnectionHealth => ({ state: "failed", checkedAt, error: { code: failure.code, retryable: failure.retryable } });
+      try {
+        const result = await httpCall({
+          fetch: doFetch, url: `${base}/auth.test`, method: "POST", headers: headers(connection),
+          timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
+        });
+        if (result.status < 200 || result.status >= 300) return fail(statusFailure(result.status, "check", connection.id));
+        const body = parseJson(result.text) as { ok?: unknown; error?: unknown; team_id?: unknown } | undefined;
+        if (body?.ok !== true) return fail(slackFailure(body?.error, "check", connection.id));
+        if (connection.config.teamId !== undefined && body.team_id !== connection.config.teamId) {
+          return fail(new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id, field: "teamId" }));
+        }
+        return { state: "ok", checkedAt };
+      } catch (error) {
+        return fail(error instanceof ChannelError ? error : new ChannelError("CHANNEL_CONNECTION_FAILED", true));
+      }
+    },
+    async send(connection, target, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
+      const text = message.subject ? `*${message.subject}*\n${message.text}` : message.text;
+      const result = await httpCall({
+        fetch: doFetch, url: `${base}/chat.postMessage`, method: "POST", headers: headers(connection),
+        body: { channel: target.channel, text, link_names: false, unfurl_links: false, unfurl_media: false },
+        timeoutMs: options.sendTimeoutMs ?? 30000, mode: "send", connectionId: connection.id,
+      });
+      if (result.status < 200 || result.status >= 300) throw statusFailure(result.status, "send", connection.id);
+      const body = parseJson(result.text) as { ok?: unknown; error?: unknown; ts?: unknown } | undefined;
+      if (body === undefined) throw new ChannelError("CHANNEL_SEND_OUTCOME_UNKNOWN", false, { connectionId: connection.id });
+      if (body.ok !== true) throw slackFailure(body.error, "send", connection.id);
+      const providerMessageId = typeof body.ts === "string" ? body.ts : undefined;
+      return {
+        ...(providerMessageId !== undefined ? { providerMessageId } : {}),
+        submittedAt: new Date().toISOString(),
+        ...(providerMessageId === undefined ? { warnings: ["CHANNEL_RESPONSE_UNPARSEABLE"] } : {}),
+      };
+    },
+  };
+}

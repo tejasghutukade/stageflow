@@ -1,8 +1,10 @@
 import type { AnyChannelProvider } from "./types.js";
 import { createAgentMailProvider } from "./providers/agentmail.js";
+import { createSlackProvider } from "./providers/slack.js";
 
 const providers = new Map<string, AnyChannelProvider>([
   ["agentmail", createAgentMailProvider() as AnyChannelProvider],
+  ["slack", createSlackProvider() as AnyChannelProvider],
 ]);
 
 /** Built-in providers are listed in the initial map as they are implemented. */
