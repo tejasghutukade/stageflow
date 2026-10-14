@@ -18,6 +18,7 @@ import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TriggersPage } from "./pages/TriggersPage";
 import { ConnectionsPage } from "./pages/ConnectionsPage";
+import { ConnectionDetailPage } from "./redesign/connections/ConnectionDetailPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { CatalogPage } from "./pages/CatalogPage";
@@ -55,6 +56,7 @@ function railActiveId(route: Route, redesignOn: boolean): string {
   if (route.name === "pipeline") return "pipelines";
   if (route.name === "task") return "tasks";
   if (route.name === "trigger") return "triggers";
+  if (route.name === "connection") return "connections";
   if (redesignOn) {
     if (route.name === "catalog" || route.name === "stage") return "catalog";
     if (route.name === "skill" || route.name === "skills") return "catalog";
@@ -215,6 +217,8 @@ function ConsoleRoot() {
     content = <TriggersPage />;
   } else if (route.name === "connections") {
     content = <ConnectionsPage />;
+  } else if (route.name === "connection") {
+    content = <ConnectionDetailPage connectionId={route.connectionId} />;
   } else if (route.name === "trigger") {
     content = (
       <TriggersPage

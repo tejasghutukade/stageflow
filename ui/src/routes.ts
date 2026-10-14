@@ -18,6 +18,7 @@ export type Route =
   | { name: "task"; taskId: string }
   | { name: "triggers" }
   | { name: "connections" }
+  | { name: "connection"; connectionId: string }
   | { name: "trigger"; triggerId: string; projectRoot?: string }
   | { name: "skills" }
   | { name: "skill"; skillName: string }
@@ -149,6 +150,10 @@ export function workshopPath(opts?: {
   return query ? `/workshop?${query}` : "/workshop";
 }
 
+export function connectionPath(connectionId: string): string {
+  return `/connections/${encodeURIComponent(connectionId)}`;
+}
+
 export function connectPath(): string {
   return "/connect";
 }
@@ -226,6 +231,10 @@ export function parseHash(hash = window.location.hash): Route {
   }
   if (path === "triggers") return { name: "triggers" };
   if (path === "connections") return { name: "connections" };
+  if (path.startsWith("connections/")) {
+    const connectionId = firstSegment(path.slice("connections/".length));
+    if (connectionId) return { name: "connection", connectionId };
+  }
   if (path.startsWith("triggers/")) {
     const triggerId = firstSegment(path.slice("triggers/".length));
     if (triggerId) {

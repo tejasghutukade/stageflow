@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkChannelConnection, fetchChannelConnections } from "../api";
+import { parseHash, connectionPath } from "../routes";
+import { parse as parseYaml } from "yaml";
 import { ageLabel, channelStatus } from "./channelStatus";
 import {
-  PROVIDERS, availableProviders, channelRows, connectionTotals, footerText, toolCards,
+  PROVIDERS, availableProviders, channelRows, connectionTotals, detailFacts, fixHint, footerText, toolCards, usageSnippet,
 } from "../redesign/connections/connectionsModel";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -97,5 +99,40 @@ describe("connections view model", () => {
     expect(footerText(totals)).toBe("4 connections · 3 channels · 1 tool · 1 needs attention");
     expect(footerText({ connections: 0, channels: 0, tools: 0, needsAttention: 0, connectedChannels: 0 })).toBe("No connections yet");
     expect(footerText({ connections: 1, channels: 1, tools: 0, needsAttention: 0, connectedChannels: 0 })).toBe("1 connection · 1 channel · 0 tools");
+  });
+});
+
+describe("connection detail", () => {
+  it("routes /connections/<id> and round-trips odd ids", () => {
+    expect(parseHash("#/connections/ops-slack")).toEqual({ name: "connection", connectionId: "ops-slack" });
+    expect(parseHash(`#${connectionPath("a b/c")}`)).toEqual({ name: "connection", connectionId: "a b/c" });
+    expect(parseHash("#/connections")).toEqual({ name: "connections" });
+  });
+
+  it("generates a valid stage channels snippet for every provider", () => {
+    for (const provider of PROVIDERS) {
+      const parsed = parseYaml(usageSnippet(provider.id, "my-conn")) as { channels: Array<{ connection: string; to: unknown; operations: string[] }> };
+      expect(parsed.channels[0]).toMatchObject({ connection: "my-conn", operations: ["send"] });
+      expect(parsed.channels[0]!.to).toBeTruthy();
+    }
+    expect(usageSnippet("whatsapp", "w")).toContain("template:");
+    expect(usageSnippet("nope", "x")).toContain("<target>");
+  });
+
+  it("explains failures and lists connection facts without secrets", () => {
+    expect(fixHint("CHANNEL_AUTH_FAILED")).toMatch(/rejected/);
+    expect(fixHint("CHANNEL_SECRET_UNAVAILABLE")).toMatch(/environment variable/);
+    expect(fixHint("CHANNEL_SEND_OUTCOME_UNKNOWN")).toBeUndefined();
+    expect(fixHint(undefined)).toBeUndefined();
+    const facts = detailFacts({ ...base, credential: "photon-main" });
+    expect(facts.map((fact) => fact.label)).toEqual(["Provider", "Connection id", "Identity", "Shared credential", "Enabled"]);
+    expect(detailFacts({ ...base, identity: undefined }).map((fact) => fact.label)).not.toContain("Identity");
+  });
+
+  it("keeps the shared credential id in the projection", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ connections: [{ ...base, credential: "photon-main", secrets: { x: "y" } }] }) }));
+    const result = await fetchChannelConnections();
+    expect(result.connections[0]).toMatchObject({ credential: "photon-main" });
+    expect(JSON.stringify(result)).not.toContain('"secrets"');
   });
 });

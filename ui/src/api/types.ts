@@ -1183,6 +1183,7 @@ export type ChannelConnectionListing = {
   displayName: string;
   enabled: boolean;
   identity?: string;
+  credential?: string;
   health?: ChannelHealth;
 };
 

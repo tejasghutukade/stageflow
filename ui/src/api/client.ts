@@ -210,9 +210,10 @@ export async function fetchConnections(): Promise<ConnectionListing[]> {
 export async function fetchChannelConnections(): Promise<ChannelConnectionsResult> {
   const result = await api<ChannelConnectionsResult>("/api/connections");
   return {
-    connections: result.connections.map(({ id, provider, displayName, enabled, identity, health }) => ({
+    connections: result.connections.map(({ id, provider, displayName, enabled, identity, credential, health }) => ({
       id, provider, displayName, enabled,
       ...(identity !== undefined ? { identity } : {}),
+      ...(credential !== undefined ? { credential } : {}),
       ...(health ? { health: { state: health.state, checkedAt: health.checkedAt, ...(health.error ? { error: { code: health.error.code, retryable: health.error.retryable } } : {}) } } : {}),
     })),
     ...(result.error ? { error: result.error } : {}),

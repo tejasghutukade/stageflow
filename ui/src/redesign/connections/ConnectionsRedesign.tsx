@@ -9,6 +9,7 @@ import {
   type ChannelConnectionListing, type ConnectionListing, type ProjectMcpCatalogList,
 } from "../../api";
 import { ageLabel, codeMessage } from "../../pages/channelStatus";
+import { connectionPath, navigate } from "../../routes";
 import {
   PROVIDERS, availableProviders, channelRows, connectionTotals, footerText, toolCards,
   type ConnectionRow, type ProviderId, type ProviderInfo,
@@ -68,7 +69,10 @@ function StatusCell({ row }: { row: ConnectionRow }) {
 
 function ChannelRow({ row, checking, onCheck, now }: { row: ConnectionRow; checking: boolean; onCheck: (id: string) => void; now: number }) {
   return (
-    <div className={`${GRID} border-t border-t-[#ffffff12] px-4 py-3`}>
+    <div
+      className={`${GRID} border-t border-t-[#ffffff12] px-4 py-3 ${row.kind === "channel" ? "cursor-pointer hover:bg-[#16171b]" : ""}`}
+      {...(row.kind === "channel" ? { role: "link", tabIndex: 0, "aria-label": `Open ${row.name} ${row.id}`, onClick: () => navigate(connectionPath(row.id)), onKeyDown: (event: { key: string }) => { if (event.key === "Enter") navigate(connectionPath(row.id)); } } : {})}
+    >
       <div className="flex min-w-0 items-center gap-3">
         <div className={TILE}><ProviderIcon provider={row.provider} /></div>
         <div className="flex min-w-0 flex-col gap-0.5">
@@ -88,7 +92,7 @@ function ChannelRow({ row, checking, onCheck, now }: { row: ConnectionRow; check
           <button
             type="button"
             disabled={checking}
-            onClick={() => onCheck(row.id)}
+            onClick={(event) => { event.stopPropagation(); onCheck(row.id); }}
             className="flex h-7 items-center gap-1.5 rounded-md border border-[#ffffff1a] bg-transparent px-2 text-xs text-[#a7aab2] hover:bg-[#1a1c21] disabled:opacity-60"
           >
             <LuRefreshCw className={`size-3 block ${checking ? "animate-spin" : ""}`} aria-hidden />

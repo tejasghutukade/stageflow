@@ -158,3 +158,52 @@ export function footerText(totals: ConnectionTotals): string {
   if (totals.needsAttention > 0) parts.push(`${totals.needsAttention} needs attention`);
   return parts.join(" · ");
 }
+
+const USAGE_TARGETS: Record<string, string> = {
+  agentmail: "    to: [oncall@acme.com]",
+  slack: "    to: C0123ABCD",
+  telegram: '    to: "123456789"',
+  imessage: '    to: "+14155550123"',
+  whatsapp: `    to: "+14155550123"
+    template:
+      name: order_update
+      languageCode: en_US
+      bodyParams: ["{{message}}"]`,
+};
+
+/** The stage `channels:` entry that sends through a connection. */
+export function usageSnippet(provider: string, connectionId: string): string {
+  return `channels:
+  - connection: ${connectionId}
+${USAGE_TARGETS[provider] ?? "    to: <target>"}
+    operations: [send]
+`;
+}
+
+const FIX_HINTS: Record<string, string> = {
+  CHANNEL_SECRET_UNAVAILABLE: "Set the environment variable each secret in connections.yaml names (or its _FILE form) on the host, then check again.",
+  CHANNEL_AUTH_FAILED: "The provider rejected the credential. Replace the secret on the host with a valid one, then check again.",
+  CHANNEL_UNAUTHORIZED: "The credential works but lacks a permission this provider needs. Grant it in the provider, then check again.",
+  CHANNEL_INVALID_INPUT: "The settings in connections.yaml do not match the provider account (for example an unknown inbox or a different workspace). Fix the entry and restart.",
+  CHANNEL_PROVIDER_UNSUPPORTED: "This Stageflow version cannot use this provider, or its SDK is not installed (iMessage and WhatsApp need spectrum-ts).",
+  CHANNEL_CONNECTION_FAILED: "Stageflow could not reach the provider. This is usually temporary; check the network and try again.",
+  CHANNEL_TIMEOUT: "The provider did not answer in time. Try again.",
+  CHANNEL_RATE_LIMIT: "The provider is rate limiting this account. Wait and try again.",
+};
+
+export function fixHint(code: string | undefined): string | undefined {
+  return code ? FIX_HINTS[code] : undefined;
+}
+
+export type DetailFact = { label: string; value: string; mono?: boolean };
+
+export function detailFacts(connection: { id: string; provider: string; displayName: string; enabled: boolean; identity?: string; credential?: string }): DetailFact[] {
+  const info = providerInfo(connection.provider);
+  return [
+    { label: "Provider", value: info?.label ?? connection.provider },
+    { label: "Connection id", value: connection.id, mono: true },
+    ...(connection.identity ? [{ label: "Identity", value: connection.identity, mono: true }] : []),
+    ...(connection.credential ? [{ label: "Shared credential", value: connection.credential, mono: true }] : []),
+    { label: "Enabled", value: connection.enabled ? "Yes" : "No" },
+  ];
+}
