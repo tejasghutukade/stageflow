@@ -1,6 +1,6 @@
 id: send-test-messages
-# Change the model to one you have a provider for.
-model: anthropic/claude-sonnet-4-5
+# cursor/auto needs CURSOR_API_KEY on the host. Use another model if you prefer.
+model: cursor/auto
 # Pin the recipients here. The agent can only send to these and cannot change them.
 # `connection` is the id shown on the Connections page; `alias` is the name the agent uses.
 channels:
