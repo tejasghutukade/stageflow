@@ -425,6 +425,43 @@ export function writeStageSkill(
   });
 }
 
+export type StageChannelEntry = {
+  alias?: string;
+  connection: string;
+  to: string | string[];
+  cc?: string[];
+  template?: Record<string, unknown>;
+  operations: string[];
+};
+
+export function readStageChannels(draft: DraftPackagePayload, stageId: string): StageChannelEntry[] {
+  const loc = locateStage(draft, stageId);
+  if (!loc) return [];
+  const raw = bodyAt(draft, loc).channels;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(isObj).map((entry) => ({
+    ...(typeof entry.alias === "string" ? { alias: entry.alias } : {}),
+    connection: typeof entry.connection === "string" ? entry.connection : "",
+    to: Array.isArray(entry.to) ? entry.to.map(String) : entry.to === undefined ? "" : String(entry.to),
+    ...(Array.isArray(entry.cc) ? { cc: entry.cc.map(String) } : {}),
+    ...(isObj(entry.template) ? { template: entry.template } : {}),
+    operations: Array.isArray(entry.operations) ? entry.operations.map(String) : ["send"],
+  }));
+}
+
+/** An empty list removes the key, so the stage inherits the pipeline's default channels. */
+export function writeStageChannels(
+  draft: DraftPackagePayload,
+  stageId: string,
+  channels: readonly StageChannelEntry[],
+): DraftPackagePayload {
+  return editBody(draft, stageId, (body, ref) => {
+    delete ref.channels;
+    if (channels.length === 0) delete body.channels;
+    else body.channels = channels.map((entry) => ({ ...entry }));
+  });
+}
+
 function ensureIoSchema(body: Obj, side: "input" | "output"): Obj {
   const existing = getIn(body, ["io", side, "schema"]);
   if (isObj(existing)) return existing;

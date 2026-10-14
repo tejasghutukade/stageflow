@@ -268,6 +268,13 @@ export async function deleteChannelConnection(id: string): Promise<void> {
   await channelRequest(`/api/connections/${encodeURIComponent(id)}`, "DELETE");
 }
 
+export function validateChannelTarget(
+  connectionId: string,
+  target: { to: string | string[]; cc?: string[]; template?: Record<string, unknown> },
+): Promise<{ ok: true } | { ok: false; issues: string[] }> {
+  return channelRequest(`/api/connections/${encodeURIComponent(connectionId)}/validate-target`, "POST", target);
+}
+
 export function checkChannelConnection(id: string): Promise<ChannelHealth> {
   return api(`/api/connections/${encodeURIComponent(id)}/check`, { method: "POST" });
 }
