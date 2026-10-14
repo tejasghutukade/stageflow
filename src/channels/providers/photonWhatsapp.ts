@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
-import type { ChannelProvider, ConnectionHealth, OutboundMessage, ProviderMeta, SendContext, SendReceipt } from "../types.js";
+import { healthOf, importModule, receiptFor, withSendTimeout, withSpectrumApp, zodValidator, type SpectrumImporter } from "./kit.js";
+import type { ChannelProvider, OutboundMessage, ProviderMeta, SendContext, SendReceipt } from "../types.js";
 import { PHOTON_BASE_URL, PHOTON_CREDENTIAL_YAML, PHOTON_FIELDS, credentialsOf, photonData, photonHeaders, type PhotonCredentials } from "./photonImessage.js";
 
 export type WhatsappTemplate = { name: string; languageCode: string; bodyParams?: string[] };
@@ -48,6 +49,12 @@ const targetSchema = z.object({
   to: z.string().regex(/^\+[1-9]\d{6,14}$/),
   template: templateSchema.optional(),
 }).strict();
+
+const validateConfig = zodValidator(z.object({}).strict(), "config", (): WhatsappConfig => ({}));
+const validateTarget = zodValidator(targetSchema, "target", (data): WhatsappTarget => ({
+  recipient: data.to,
+  ...(data.template ? { template: data.template } : {}),
+}));
 
 export type PhotonWhatsappOptions = {
   fetch?: typeof fetch;
@@ -100,31 +107,15 @@ export function classifyWhatsappError(error: unknown, connectionId: string): Cha
   return new ChannelError("CHANNEL_SEND_OUTCOME_UNKNOWN", false, detail);
 }
 
-/** Same lifecycle as the iMessage transport: lazy import, one app per send, stopped in `finally`. */
-export function spectrumWhatsappTransport(importer: (specifier: string) => Promise<any> = specifier => import(specifier)): PhotonWhatsappTransport {
+/** The Spectrum SDK send for WhatsApp, on the same shared lifecycle as iMessage. */
+export function spectrumWhatsappTransport(importer: SpectrumImporter = importModule): PhotonWhatsappTransport {
   return {
-    async send({ projectId, projectSecret }, recipient, outbound) {
-      let core: any;
-      let provider: any;
-      try {
-        core = await importer("@spectrum-ts/core");
-        provider = await importer("@spectrum-ts/whatsapp-business");
-      } catch {
-        throw new ChannelError("CHANNEL_PROVIDER_UNSUPPORTED");
-      }
-      const app = await core.Spectrum({ projectId, projectSecret, providers: [provider.whatsappBusiness.config()] });
-      try {
-        const wa = provider.whatsappBusiness(app);
-        const user = await wa.user(recipient);
-        const space = await wa.space.create(user);
-        const content = "template" in outbound ? provider.whatsappTemplate(outbound.template) : outbound.text;
-        const sent = await space.send(content);
-        const id = sent?.id;
-        return typeof id === "string" ? { messageId: id } : {};
-      } finally {
-        await app.stop().catch(() => undefined);
-      }
-    },
+    send: (credentials, recipient, outbound) => withSpectrumApp(importer, credentials, { pkg: "@spectrum-ts/whatsapp-business", exportName: "whatsappBusiness" }, async ({ platform, module }) => {
+      const user = await platform.user(recipient);
+      const space = await platform.space.create(user);
+      const sent = await space.send("template" in outbound ? module.whatsappTemplate(outbound.template) : outbound.text);
+      return typeof sent?.id === "string" ? { messageId: sent.id } : {};
+    }),
   };
 }
 
@@ -137,58 +128,36 @@ export function createPhotonWhatsappProvider(options: PhotonWhatsappOptions = {}
   const doFetch = options.fetch ?? fetch;
   const base = options.baseUrl ?? PHOTON_BASE_URL;
   const transport = options.transport ?? spectrumWhatsappTransport();
-  const failed = (failure: ChannelError, checkedAt: string): ConnectionHealth =>
-    ({ state: "failed", checkedAt, error: { code: failure.code, retryable: failure.retryable } });
-
   return {
     id: "whatsapp",
     meta: WHATSAPP_META,
     operations: ["send"],
     secrets: { required: [] },
     credentialProvider: "photon",
-    validateConfig(config) {
-      return z.object({}).strict().safeParse(config).success ? { ok: true, value: {} } : { ok: false, issues: ["config"] };
-    },
-    validateTarget(target) {
-      const parsed = targetSchema.safeParse(target);
-      return parsed.success ? { ok: true, value: { recipient: parsed.data.to, ...(parsed.data.template ? { template: parsed.data.template } : {}) } } : { ok: false, issues: parsed.error.issues.map(issue => issue.path.join(".") || "target") };
-    },
-    async check(connection, signal): Promise<ConnectionHealth> {
-      const checkedAt = new Date().toISOString();
-      try {
-        const credentials = credentialsOf(connection);
-        const result = await httpCall({
-          fetch: doFetch, url: `${base}/projects/${encodeURIComponent(credentials.projectId)}/whatsapp-business/tokens`, method: "POST",
-          headers: photonHeaders(credentials), body: {}, timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
-        });
-        if (result.status < 200 || result.status >= 300) return failed(statusFailure(result.status, "check", connection.id), checkedAt);
-        const auth = photonData(parseJson(result.text))?.auth;
-        const lines = auth && typeof auth === "object" ? Object.keys(auth).length : 0;
-        return lines > 0 ? { state: "ok", checkedAt } : failed(new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id, field: "whatsapp" }), checkedAt);
-      } catch (error) {
-        return failed(error instanceof ChannelError ? error : new ChannelError("CHANNEL_CONNECTION_FAILED", true), checkedAt);
+    validateConfig,
+    validateTarget,
+    check: (connection, signal) => healthOf(async () => {
+      const credentials = credentialsOf(connection);
+      const result = await httpCall({
+        fetch: doFetch, url: `${base}/projects/${encodeURIComponent(credentials.projectId)}/whatsapp-business/tokens`, method: "POST",
+        headers: photonHeaders(credentials), body: {}, timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
+      });
+      if (result.status < 200 || result.status >= 300) throw statusFailure(result.status, "check", connection.id);
+      const auth = photonData(parseJson(result.text))?.auth;
+      if (!(auth && typeof auth === "object" && Object.keys(auth).length > 0)) {
+        throw new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id, field: "whatsapp" });
       }
-    },
+    }),
     async send(connection, target, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
       const credentials = credentialsOf(connection);
       const outbound: WhatsappOutbound = target.template
         ? { template: fillTemplate(target.template, message, connection.id) }
         : { text: message.subject ? `${message.subject}\n\n${message.text}` : message.text };
-      let timer: NodeJS.Timeout | undefined;
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new ChannelError("CHANNEL_SEND_OUTCOME_UNKNOWN", false, { connectionId: connection.id })), options.sendTimeoutMs ?? 45000);
-      });
       try {
-        const sent = await Promise.race([transport.send(credentials, target.recipient, outbound), timeout]);
-        return {
-          ...(sent.messageId !== undefined ? { providerMessageId: sent.messageId } : {}),
-          submittedAt: new Date().toISOString(),
-          ...(sent.messageId === undefined ? { warnings: ["CHANNEL_RESPONSE_UNPARSEABLE"] } : {}),
-        };
+        const sent = await withSendTimeout(options.sendTimeoutMs ?? 45000, connection.id, transport.send(credentials, target.recipient, outbound));
+        return receiptFor(sent.messageId);
       } catch (error) {
         throw classifyWhatsappError(error, connection.id);
-      } finally {
-        clearTimeout(timer);
       }
     },
   };

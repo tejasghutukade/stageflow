@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
-import type { ChannelProvider, ConnectionHealth, OutboundMessage, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
+import { healthOf, receiptFor, zodValidator } from "./kit.js";
+import type { ChannelProvider, OutboundMessage, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
 
 export type AgentMailConfig = { inbox: string; region: "us" | "eu" };
 export type AgentMailTarget = { to: string[]; cc?: string[] };
@@ -38,6 +39,12 @@ const targetSchema = z.object({
   cc: z.array(address).min(1).max(20).optional(),
 }).strict();
 
+const validateConfig = zodValidator(configSchema, "config");
+const validateTarget = zodValidator(targetSchema, "target", (data): AgentMailTarget => ({
+  to: Array.isArray(data.to) ? data.to : [data.to],
+  ...(data.cc !== undefined ? { cc: data.cc } : {}),
+}));
+
 export type AgentMailOptions = {
   fetch?: typeof fetch;
   baseUrls?: Partial<Record<"us" | "eu", string>>;
@@ -62,32 +69,17 @@ export function createAgentMailProvider(options: AgentMailOptions = {}): Channel
     meta: AGENTMAIL_META,
     operations: ["send"],
     secrets: { required: ["apiKey"] },
-    validateConfig(config) {
-      const parsed = configSchema.safeParse(config);
-      return parsed.success ? { ok: true, value: parsed.data } : { ok: false, issues: parsed.error.issues.map(issue => issue.path.join(".") || "config") };
-    },
-    validateTarget(target) {
-      const parsed = targetSchema.safeParse(target);
-      if (!parsed.success) return { ok: false, issues: parsed.error.issues.map(issue => issue.path.join(".") || "target") };
-      const to = Array.isArray(parsed.data.to) ? parsed.data.to : [parsed.data.to];
-      return { ok: true, value: { to, ...(parsed.data.cc !== undefined ? { cc: parsed.data.cc } : {}) } };
-    },
+    validateConfig,
+    validateTarget,
     describe: config => ({ identity: config.inbox }),
-    async check(connection, signal): Promise<ConnectionHealth> {
-      const checkedAt = new Date().toISOString();
-      try {
-        const result = await httpCall({
-          fetch: doFetch, url: inboxUrl(connection), method: "GET", headers: auth(connection),
-          timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
-        });
-        if (result.status >= 200 && result.status < 300) return { state: "ok", checkedAt };
-        const failure = result.status === 404 ? new ChannelError("CHANNEL_INVALID_INPUT") : statusFailure(result.status, "check", connection.id);
-        return { state: "failed", checkedAt, error: { code: failure.code, retryable: failure.retryable } };
-      } catch (error) {
-        const failure = error instanceof ChannelError ? error : new ChannelError("CHANNEL_CONNECTION_FAILED", true);
-        return { state: "failed", checkedAt, error: { code: failure.code, retryable: failure.retryable } };
-      }
-    },
+    check: (connection, signal) => healthOf(async () => {
+      const result = await httpCall({
+        fetch: doFetch, url: inboxUrl(connection), method: "GET", headers: auth(connection),
+        timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
+      });
+      if (result.status >= 200 && result.status < 300) return;
+      throw result.status === 404 ? new ChannelError("CHANNEL_INVALID_INPUT") : statusFailure(result.status, "check", connection.id);
+    }),
     async send(connection, target, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
       const result = await httpCall({
         fetch: doFetch, url: `${inboxUrl(connection)}/messages/send`, method: "POST", headers: auth(connection),
@@ -101,12 +93,7 @@ export function createAgentMailProvider(options: AgentMailOptions = {}): Channel
         throw result.status === 404 ? new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id }) : statusFailure(result.status, "send", connection.id);
       }
       const body = parseJson(result.text) as { message_id?: unknown } | undefined;
-      const providerMessageId = typeof body?.message_id === "string" ? body.message_id : undefined;
-      return {
-        ...(providerMessageId !== undefined ? { providerMessageId } : {}),
-        submittedAt: new Date().toISOString(),
-        ...(providerMessageId === undefined ? { warnings: ["CHANNEL_RESPONSE_UNPARSEABLE"] } : {}),
-      };
+      return receiptFor(typeof body?.message_id === "string" ? body.message_id : undefined);
     },
   };
 }

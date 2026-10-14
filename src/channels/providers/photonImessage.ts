@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
-import type { ChannelProvider, ConnectionHealth, OutboundMessage, ProviderField, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
+import { healthOf, importModule, receiptFor, withSendTimeout, withSpectrumApp, zodValidator, type SpectrumImporter } from "./kit.js";
+import type { ChannelProvider, OutboundMessage, ProviderField, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
 
 export type PhotonImessageConfig = Record<string, never>;
 export type PhotonImessageTarget = { recipient: string };
@@ -47,6 +48,9 @@ export const IMESSAGE_META: ProviderMeta = {
 const e164 = /^\+[1-9]\d{6,14}$/;
 const email = /^[^\s@<>,;]+@[^\s@<>,;]+$/;
 const targetSchema = z.object({ to: z.string().max(320).refine(value => e164.test(value) || email.test(value)) }).strict();
+
+const validateConfig = zodValidator(z.object({}).strict(), "config", (): PhotonImessageConfig => ({}));
+const validateTarget = zodValidator(targetSchema, "target", (data): PhotonImessageTarget => ({ recipient: data.to }));
 
 export type PhotonImessageOptions = {
   fetch?: typeof fetch;
@@ -94,33 +98,17 @@ export function classifySdkError(error: unknown, connectionId: string): ChannelE
 }
 
 /**
- * Loads the Spectrum SDK (`@spectrum-ts/core`) on first use, so a host that never sends iMessage does not need it. The
- * app is created for one send and stopped in `finally`: nothing keeps a connection open, whether
- * or not the SDK opens inbound streams while it is alive.
+ * The Spectrum SDK send for iMessage. The lifecycle (lazy import, create, stop) is shared with
+ * WhatsApp in `withSpectrumApp`.
  */
-export function spectrumTransport(importer: (specifier: string) => Promise<any> = specifier => import(specifier)): PhotonImessageTransport {
+export function spectrumTransport(importer: SpectrumImporter = importModule): PhotonImessageTransport {
   return {
-    async sendText({ projectId, projectSecret }, recipient, text) {
-      let core: any;
-      let provider: any;
-      try {
-        core = await importer("@spectrum-ts/core");
-        provider = await importer("@spectrum-ts/imessage");
-      } catch {
-        throw new ChannelError("CHANNEL_PROVIDER_UNSUPPORTED");
-      }
-      const app = await core.Spectrum({ projectId, projectSecret, providers: [provider.imessage.config()] });
-      try {
-        const im = provider.imessage(app);
-        const user = await im.user(recipient);
-        const space = await im.space.create(user);
-        const sent = await space.send(text);
-        const id = sent?.id;
-        return typeof id === "string" ? { messageId: id } : {};
-      } finally {
-        await app.stop().catch(() => undefined);
-      }
-    },
+    sendText: (credentials, recipient, text) => withSpectrumApp(importer, credentials, { pkg: "@spectrum-ts/imessage", exportName: "imessage" }, async ({ platform }) => {
+      const user = await platform.user(recipient);
+      const space = await platform.space.create(user);
+      const sent = await space.send(text);
+      return typeof sent?.id === "string" ? { messageId: sent.id } : {};
+    }),
   };
 }
 
@@ -133,81 +121,46 @@ export function createPhotonImessageProvider(options: PhotonImessageOptions = {}
   const doFetch = options.fetch ?? fetch;
   const base = options.baseUrl ?? PHOTON_BASE_URL;
   const transport = options.transport ?? spectrumTransport();
-  const failed = (failure: ChannelError, checkedAt: string): ConnectionHealth =>
-    ({ state: "failed", checkedAt, error: { code: failure.code, retryable: failure.retryable } });
-
   return {
     id: "imessage",
     meta: IMESSAGE_META,
     operations: ["send"],
     secrets: { required: [] },
     credentialProvider: "photon",
-    validateConfig(config) {
-      const parsed = z.object({}).strict().safeParse(config);
-      return parsed.success ? { ok: true, value: {} } : { ok: false, issues: ["config"] };
-    },
-    validateTarget(target) {
-      const parsed = targetSchema.safeParse(target);
-      return parsed.success ? { ok: true, value: { recipient: parsed.data.to } } : { ok: false, issues: parsed.error.issues.map(issue => issue.path.join(".") || "target") };
-    },
-    async check(connection, signal): Promise<ConnectionHealth> {
-      const checkedAt = new Date().toISOString();
-      try {
-        const credentials = credentialsOf(connection);
-        const result = await httpCall({
-          fetch: doFetch, url: `${base}/projects/${encodeURIComponent(credentials.projectId)}/imessage/tokens`, method: "POST",
-          headers: photonHeaders(credentials), body: {}, timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
-        });
-        return result.status >= 200 && result.status < 300 ? { state: "ok", checkedAt } : failed(statusFailure(result.status, "check", connection.id), checkedAt);
-      } catch (error) {
-        return failed(error instanceof ChannelError ? error : new ChannelError("CHANNEL_CONNECTION_FAILED", true), checkedAt);
+    validateConfig,
+    validateTarget,
+    check: (connection, signal) => healthOf(async () => {
+      const credentials = credentialsOf(connection);
+      const result = await httpCall({
+        fetch: doFetch, url: `${base}/projects/${encodeURIComponent(credentials.projectId)}/imessage/tokens`, method: "POST",
+        headers: photonHeaders(credentials), body: {}, timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
+      });
+      if (result.status < 200 || result.status >= 300) throw statusFailure(result.status, "check", connection.id);
+    }),
+    checkTargets: (connection, targets, signal) => healthOf(async () => {
+      const credentials = credentialsOf(connection);
+      const project = encodeURIComponent(credentials.projectId);
+      const call = (url: string, init: { method: "GET" | "POST"; body?: unknown }) => httpCall({
+        fetch: doFetch, url, method: init.method, headers: photonHeaders(credentials), ...(init.body !== undefined ? { body: init.body } : {}),
+        timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
+      });
+      const tokens = await call(`${base}/projects/${project}/imessage/tokens`, { method: "POST", body: {} });
+      if (tokens.status < 200 || tokens.status >= 300) throw statusFailure(tokens.status, "check", connection.id);
+      if (photonData(parseJson(tokens.text))?.type === "dedicated") return;
+      for (const target of targets) {
+        const found = await call(`${base}/projects/${project}/users/?search=${encodeURIComponent(target.recipient)}`, { method: "GET" });
+        if (found.status < 200 || found.status >= 300) throw statusFailure(found.status, "check", connection.id);
+        if (!containsString(parseJson(found.text), target.recipient)) throw new ChannelError("CHANNEL_RECIPIENT_REJECTED", false, { connectionId: connection.id });
       }
-    },
-    async checkTargets(connection, targets, signal): Promise<ConnectionHealth> {
-      const checkedAt = new Date().toISOString();
-      try {
-        const credentials = credentialsOf(connection);
-        const project = encodeURIComponent(credentials.projectId);
-        const tokens = await httpCall({
-          fetch: doFetch, url: `${base}/projects/${project}/imessage/tokens`, method: "POST", headers: photonHeaders(credentials), body: {},
-          timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
-        });
-        if (tokens.status < 200 || tokens.status >= 300) return failed(statusFailure(tokens.status, "check", connection.id), checkedAt);
-        const type = photonData(parseJson(tokens.text))?.type;
-        if (type === "dedicated") return { state: "ok", checkedAt };
-        for (const target of targets) {
-          const found = await httpCall({
-            fetch: doFetch, url: `${base}/projects/${project}/users/?search=${encodeURIComponent(target.recipient)}`, method: "GET",
-            headers: photonHeaders(credentials), timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
-          });
-          if (found.status < 200 || found.status >= 300) return failed(statusFailure(found.status, "check", connection.id), checkedAt);
-          if (!containsString(parseJson(found.text), target.recipient)) {
-            return failed(new ChannelError("CHANNEL_RECIPIENT_REJECTED", false, { connectionId: connection.id }), checkedAt);
-          }
-        }
-        return { state: "ok", checkedAt };
-      } catch (error) {
-        return failed(error instanceof ChannelError ? error : new ChannelError("CHANNEL_CONNECTION_FAILED", true), checkedAt);
-      }
-    },
+    }),
     async send(connection, target, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
       const credentials = credentialsOf(connection);
       const text = message.subject ? `${message.subject}\n\n${message.text}` : message.text;
-      let timer: NodeJS.Timeout | undefined;
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new ChannelError("CHANNEL_SEND_OUTCOME_UNKNOWN", false, { connectionId: connection.id })), options.sendTimeoutMs ?? 45000);
-      });
       try {
-        const sent = await Promise.race([transport.sendText(credentials, target.recipient, text), timeout]);
-        return {
-          ...(sent.messageId !== undefined ? { providerMessageId: sent.messageId } : {}),
-          submittedAt: new Date().toISOString(),
-          ...(sent.messageId === undefined ? { warnings: ["CHANNEL_RESPONSE_UNPARSEABLE"] } : {}),
-        };
+        const sent = await withSendTimeout(options.sendTimeoutMs ?? 45000, connection.id, transport.sendText(credentials, target.recipient, text));
+        return receiptFor(sent.messageId);
       } catch (error) {
         throw classifySdkError(error, connection.id);
-      } finally {
-        clearTimeout(timer);
       }
     },
   };

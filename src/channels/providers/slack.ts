@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
+import { healthOf, receiptFor, zodValidator } from "./kit.js";
 import type { HttpMode } from "../http.js";
-import type { ChannelProvider, ConnectionHealth, OutboundMessage, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
+import type { ChannelProvider, OutboundMessage, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
 
 export type SlackConfig = { teamId?: string };
 export type SlackTarget = { channel: string };
@@ -30,6 +31,9 @@ export const SLACK_META: ProviderMeta = {
 
 const configSchema = z.object({ teamId: z.string().regex(/^T[A-Z0-9]{2,31}$/).optional() }).strict();
 const targetSchema = z.object({ to: z.string().regex(/^[CGDU][A-Z0-9]{2,31}$/) }).strict();
+
+const validateConfig = zodValidator(configSchema, "config");
+const validateTarget = zodValidator(targetSchema, "target", (data): SlackTarget => ({ channel: data.to }));
 
 export type SlackOptions = {
   fetch?: typeof fetch;
@@ -76,34 +80,21 @@ export function createSlackProvider(options: SlackOptions = {}): ChannelProvider
     meta: SLACK_META,
     operations: ["send"],
     secrets: { required: ["botToken"] },
-    validateConfig(config) {
-      const parsed = configSchema.safeParse(config);
-      return parsed.success ? { ok: true, value: parsed.data } : { ok: false, issues: parsed.error.issues.map(issue => issue.path.join(".") || "config") };
-    },
-    validateTarget(target) {
-      const parsed = targetSchema.safeParse(target);
-      return parsed.success ? { ok: true, value: { channel: parsed.data.to } } : { ok: false, issues: parsed.error.issues.map(issue => issue.path.join(".") || "target") };
-    },
+    validateConfig,
+    validateTarget,
     describe: config => (config.teamId ? { identity: config.teamId } : {}),
-    async check(connection, signal): Promise<ConnectionHealth> {
-      const checkedAt = new Date().toISOString();
-      const fail = (failure: ChannelError): ConnectionHealth => ({ state: "failed", checkedAt, error: { code: failure.code, retryable: failure.retryable } });
-      try {
-        const result = await httpCall({
-          fetch: doFetch, url: `${base}/auth.test`, method: "POST", headers: headers(connection),
-          timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
-        });
-        if (result.status < 200 || result.status >= 300) return fail(statusFailure(result.status, "check", connection.id));
-        const body = parseJson(result.text) as { ok?: unknown; error?: unknown; team_id?: unknown } | undefined;
-        if (body?.ok !== true) return fail(slackFailure(body?.error, "check", connection.id));
-        if (connection.config.teamId !== undefined && body.team_id !== connection.config.teamId) {
-          return fail(new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id, field: "teamId" }));
-        }
-        return { state: "ok", checkedAt };
-      } catch (error) {
-        return fail(error instanceof ChannelError ? error : new ChannelError("CHANNEL_CONNECTION_FAILED", true));
+    check: (connection, signal) => healthOf(async () => {
+      const result = await httpCall({
+        fetch: doFetch, url: `${base}/auth.test`, method: "POST", headers: headers(connection),
+        timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
+      });
+      if (result.status < 200 || result.status >= 300) throw statusFailure(result.status, "check", connection.id);
+      const body = parseJson(result.text) as { ok?: unknown; error?: unknown; team_id?: unknown } | undefined;
+      if (body?.ok !== true) throw slackFailure(body?.error, "check", connection.id);
+      if (connection.config.teamId !== undefined && body.team_id !== connection.config.teamId) {
+        throw new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id, field: "teamId" });
       }
-    },
+    }),
     async send(connection, target, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
       const text = message.subject ? `*${message.subject}*\n${message.text}` : message.text;
       const result = await httpCall({
@@ -115,12 +106,7 @@ export function createSlackProvider(options: SlackOptions = {}): ChannelProvider
       const body = parseJson(result.text) as { ok?: unknown; error?: unknown; ts?: unknown } | undefined;
       if (body === undefined) throw new ChannelError("CHANNEL_SEND_OUTCOME_UNKNOWN", false, { connectionId: connection.id });
       if (body.ok !== true) throw slackFailure(body.error, "send", connection.id);
-      const providerMessageId = typeof body.ts === "string" ? body.ts : undefined;
-      return {
-        ...(providerMessageId !== undefined ? { providerMessageId } : {}),
-        submittedAt: new Date().toISOString(),
-        ...(providerMessageId === undefined ? { warnings: ["CHANNEL_RESPONSE_UNPARSEABLE"] } : {}),
-      };
+      return receiptFor(typeof body.ts === "string" ? body.ts : undefined);
     },
   };
 }

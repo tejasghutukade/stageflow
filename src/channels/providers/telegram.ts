@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
+import { healthOf, receiptFor, zodValidator } from "./kit.js";
 import type { HttpMode } from "../http.js";
-import type { ChannelProvider, ConnectionHealth, OutboundMessage, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
+import type { ChannelProvider, OutboundMessage, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
 
 export type TelegramConfig = { botUsername?: string };
 export type TelegramTarget = { chatId: string | number };
@@ -36,6 +37,9 @@ const chatId = z.union([
   z.string().regex(/^@[A-Za-z][A-Za-z0-9_]{4,31}$/),
 ]);
 const targetSchema = z.object({ to: chatId }).strict();
+
+const validateConfig = zodValidator(configSchema, "config");
+const validateTarget = zodValidator(targetSchema, "target", (data): TelegramTarget => ({ chatId: data.to }));
 
 export type TelegramOptions = {
   fetch?: typeof fetch;
@@ -77,35 +81,22 @@ export function createTelegramProvider(options: TelegramOptions = {}): ChannelPr
     meta: TELEGRAM_META,
     operations: ["send"],
     secrets: { required: ["botToken"] },
-    validateConfig(config) {
-      const parsed = configSchema.safeParse(config);
-      return parsed.success ? { ok: true, value: parsed.data } : { ok: false, issues: parsed.error.issues.map(issue => issue.path.join(".") || "config") };
-    },
-    validateTarget(target) {
-      const parsed = targetSchema.safeParse(target);
-      return parsed.success ? { ok: true, value: { chatId: parsed.data.to } } : { ok: false, issues: parsed.error.issues.map(issue => issue.path.join(".") || "target") };
-    },
+    validateConfig,
+    validateTarget,
     describe: config => (config.botUsername ? { identity: `@${config.botUsername}` } : {}),
-    async check(connection, signal): Promise<ConnectionHealth> {
-      const checkedAt = new Date().toISOString();
-      const fail = (failure: ChannelError): ConnectionHealth => ({ state: "failed", checkedAt, error: { code: failure.code, retryable: failure.retryable } });
-      try {
-        const result = await httpCall({
-          fetch: doFetch, url: url(connection, "getMe"), method: "GET", headers: { accept: "application/json" },
-          timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
-        });
-        const body = parseJson(result.text) as TelegramBody | undefined;
-        if (result.status < 200 || result.status >= 300) return fail(telegramFailure(result.status, body, "check", connection.id));
-        if (body?.ok !== true) return fail(new ChannelError("CHANNEL_CONNECTION_FAILED", true, { connectionId: connection.id }));
-        const pinned = connection.config.botUsername;
-        if (pinned !== undefined && String(body.result?.username).toLowerCase() !== pinned.toLowerCase()) {
-          return fail(new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id, field: "botUsername" }));
-        }
-        return { state: "ok", checkedAt };
-      } catch (error) {
-        return fail(error instanceof ChannelError ? error : new ChannelError("CHANNEL_CONNECTION_FAILED", true));
+    check: (connection, signal) => healthOf(async () => {
+      const result = await httpCall({
+        fetch: doFetch, url: url(connection, "getMe"), method: "GET", headers: { accept: "application/json" },
+        timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
+      });
+      const body = parseJson(result.text) as TelegramBody | undefined;
+      if (result.status < 200 || result.status >= 300) throw telegramFailure(result.status, body, "check", connection.id);
+      if (body?.ok !== true) throw new ChannelError("CHANNEL_CONNECTION_FAILED", true, { connectionId: connection.id });
+      const pinned = connection.config.botUsername;
+      if (pinned !== undefined && String(body.result?.username).toLowerCase() !== pinned.toLowerCase()) {
+        throw new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id, field: "botUsername" });
       }
-    },
+    }),
     async send(connection, target, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
       const text = message.subject ? `${message.subject}\n\n${message.text}` : message.text;
       if (text.length > TELEGRAM_MAX_TEXT) throw new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id, field: "text" });
@@ -118,12 +109,7 @@ export function createTelegramProvider(options: TelegramOptions = {}): ChannelPr
       if (result.status < 200 || result.status >= 300) throw telegramFailure(result.status, body, "send", connection.id);
       if (body?.ok !== true) throw new ChannelError("CHANNEL_SEND_OUTCOME_UNKNOWN", false, { connectionId: connection.id });
       const id = body.result?.message_id;
-      const providerMessageId = typeof id === "number" ? String(id) : undefined;
-      return {
-        ...(providerMessageId !== undefined ? { providerMessageId } : {}),
-        submittedAt: new Date().toISOString(),
-        ...(providerMessageId === undefined ? { warnings: ["CHANNEL_RESPONSE_UNPARSEABLE"] } : {}),
-      };
+      return receiptFor(typeof id === "number" ? String(id) : undefined);
     },
   };
 }
