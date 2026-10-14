@@ -98,11 +98,12 @@ export function PipelineEditorInspector({
   const lastNonce = useRef<number | null>(null);
   const [connections, setConnections] = useState<ChannelConnectionListing[]>([]);
   const [connectionsFailed, setConnectionsFailed] = useState(false);
+  const [channelLimit, setChannelLimit] = useState(1);
 
   useEffect(() => {
     let cancelled = false;
     void fetchChannelConnections().then(
-      (result) => { if (!cancelled) { setConnections(result.connections); setConnectionsFailed(Boolean(result.error)); } },
+      (result) => { if (!cancelled) { setConnections(result.connections); setConnectionsFailed(Boolean(result.error)); setChannelLimit(result.limits.channelsPerStage); } },
       () => { if (!cancelled) setConnectionsFailed(true); },
     );
     return () => { cancelled = true; };
@@ -297,6 +298,7 @@ export function PipelineEditorInspector({
           entries={readStageChannels(draft, form.id)}
           connections={connections}
           loadFailed={connectionsFailed}
+          limit={channelLimit}
           onChange={(next) => onDraftChange(writeStageChannels(draft, form.id, next))}
         />
         <div className="flex flex-col gap-1.5">

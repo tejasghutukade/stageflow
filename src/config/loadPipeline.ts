@@ -1,4 +1,4 @@
-import { MAX_STAGE_CHANNELS, mergeChannelDefaults } from "../channels/stageChannels.js";
+import { MAX_STAGE_CHANNELS, channelLimitMessage, mergeChannelDefaults, stageChannelLimit } from "../channels/stageChannels.js";
 import type { StageChannel } from "../types/stage.js";
 import { access } from "node:fs/promises";
 import path from "node:path";
@@ -206,11 +206,11 @@ function applyPipelineChannels(
 ): LoadOutcome<StageConfig> {
   const channels = mergeChannelDefaults(defaults, stage.channels);
   if (channels === undefined) return loadSuccess(stage);
-  if (channels.length > MAX_STAGE_CHANNELS) {
+  if (channels.length > Math.min(MAX_STAGE_CHANNELS, stageChannelLimit())) {
     return loadFailure([
       {
         code: "stage.invalid_channels",
-        message: `Pipeline ${pipelineId}: stage "${stage.id}" has more than ${MAX_STAGE_CHANNELS} channels after merging pipeline defaults`,
+        message: `Pipeline ${pipelineId}: stage "${stage.id}" ends up with ${channels.length} channels after merging pipeline defaults, but ${channelLimitMessage()}. Use \`channels: []\` on the stage to drop the pipeline default.`,
         category: "stage",
         stageId: stage.id,
       },

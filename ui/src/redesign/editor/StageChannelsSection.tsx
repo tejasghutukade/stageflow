@@ -37,11 +37,12 @@ function useTargetValidity(entry: StageChannelEntry, known: boolean): Validity {
 }
 
 function ChannelCard({
-  entry, connections, duplicate, onChange, onRemove,
+  entry, connections, duplicate, showName, onChange, onRemove,
 }: {
   entry: StageChannelEntry;
   connections: readonly ChannelConnectionListing[];
   duplicate: boolean;
+  showName: boolean;
   onChange: (next: StageChannelEntry) => void;
   onRemove: () => void;
 }) {
@@ -133,6 +134,7 @@ function ChannelCard({
         </div>
       ) : null}
 
+      {showName ? (
       <div className="flex flex-col gap-1">
         <div className={LABEL}>Name {duplicate ? "(must be unique)" : "(optional)"}</div>
         <input
@@ -149,19 +151,24 @@ function ChannelCard({
         />
         <div className="text-[11px] leading-[1.4] text-[#8b8f98]">The agent calls send_message with this name: {channelKey(entry) || "…"}</div>
       </div>
+      ) : null}
     </div>
   );
 }
 
 export function StageChannelsSection({
-  entries, connections, loadFailed, onChange,
+  entries, connections, loadFailed, limit = 1, onChange,
 }: {
   entries: readonly StageChannelEntry[];
   connections: readonly ChannelConnectionListing[];
   loadFailed: boolean;
+  /** How many channels one stage may use. The host decides and enforces it; the form only follows. */
+  limit?: number;
   onChange: (next: StageChannelEntry[]) => void;
 }) {
   const duplicates = new Set(duplicateKeys(entries));
+  const atLimit = entries.length >= limit;
+  const overLimit = entries.length > limit;
   return (
     <div className="flex flex-col gap-1.5" data-testid="stage-channels">
       <div className="flex items-center">
@@ -181,20 +188,33 @@ export function StageChannelsSection({
           entry={entry}
           connections={connections}
           duplicate={duplicates.has(channelKey(entry))}
+          showName={limit > 1}
           onChange={(next) => onChange(entries.map((current, at) => (at === index ? next : current)))}
           onRemove={() => onChange(entries.filter((_, at) => at !== index))}
         />
       ))}
-      <button
-        type="button"
-        onClick={() => onChange([...entries, emptyChannelEntry(connections)])}
-        disabled={connections.length === 0}
-        className="flex h-7 w-fit items-center gap-1.5 rounded-md border border-[#ffffff1a] px-2 text-xs text-[#a7aab2] hover:bg-[#1a1c21] disabled:opacity-50"
-        title={connections.length === 0 ? "Connect a provider on the Connections page first" : undefined}
-      >
-        <LuPlus className="size-3" aria-hidden />
-        Add channel
-      </button>
+      {overLimit ? (
+        <div className="flex items-start gap-1 text-[11px] leading-[1.4] text-[#f5b544]" role="alert">
+          <LuTriangleAlert className="mt-0.5 size-3 shrink-0" aria-hidden />
+          This stage lists {entries.length} channels but can use {limit}. Remove the extra ones or the run will not start.
+        </div>
+      ) : null}
+      {atLimit ? (
+        <div className="text-[11px] leading-[1.45] text-[#8b8f98]" data-testid="channel-limit-note">
+          {limit === 1 ? "A stage can use one channel for now." : `A stage can use up to ${limit} channels.`} To use another, split the work into a separate stage.
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onChange([...entries, emptyChannelEntry(connections)])}
+          disabled={connections.length === 0}
+          className="flex h-7 w-fit items-center gap-1.5 rounded-md border border-[#ffffff1a] px-2 text-xs text-[#a7aab2] hover:bg-[#1a1c21] disabled:opacity-50"
+          title={connections.length === 0 ? "Connect a provider on the Connections page first" : undefined}
+        >
+          <LuPlus className="size-3" aria-hidden />
+          Add channel
+        </button>
+      )}
     </div>
   );
 }

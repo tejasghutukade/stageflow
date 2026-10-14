@@ -218,6 +218,7 @@ export async function fetchChannelConnections(): Promise<ChannelConnectionsResul
       ...(health ? { health: { state: health.state, checkedAt: health.checkedAt, ...(health.error ? { error: { code: health.error.code, retryable: health.error.retryable } } : {}) } } : {}),
     })),
     ...(result.error ? { error: result.error } : {}),
+    limits: { channelsPerStage: Number.isInteger(result.limits?.channelsPerStage) && result.limits.channelsPerStage > 0 ? result.limits.channelsPerStage : 1 },
   };
 }
 

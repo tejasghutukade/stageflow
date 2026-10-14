@@ -1192,6 +1192,7 @@ export type ChannelConnectionListing = {
 export type ChannelConnectionsResult = {
   connections: ChannelConnectionListing[];
   error?: string;
+  limits: { channelsPerStage: number };
 };
 
 export type TriggerEvent = {

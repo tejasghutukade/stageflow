@@ -4,7 +4,7 @@ export { loadConnectionsFile, parseConnectionsYaml, type ConnectionsFile } from 
 export { isSecretRef, redactSecrets, resolveSecretRef, resolveSecrets } from "./secrets.js";
 export type * from "./types.js";
 export {
-  MAX_CHANNEL_TARGETS, MAX_STAGE_CHANNELS, channelKey, channelTarget, mergeChannelDefaults, parseChannels,
+  MAX_CHANNEL_TARGETS, MAX_CHANNELS_PER_STAGE, MAX_STAGE_CHANNELS, channelLimitMessage, setStageChannelLimitForTests, stageChannelLimit, channelKey, channelTarget, mergeChannelDefaults, parseChannels,
   validateStageChannels, type ParsedChannels, type StageChannelIssue,
 } from "./stageChannels.js";
 export {

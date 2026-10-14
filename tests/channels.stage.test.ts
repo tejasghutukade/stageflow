@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +8,11 @@ import { validatePipeline } from "../src/config/validateCatalog.js";
 import { channelKey, mergeChannelDefaults, parseChannels } from "../src/channels/stageChannels.js";
 import type { StageChannel } from "../src/types/stage.js";
 import { fakeChannelProvider } from "./fixtures/fakeChannelProvider.js";
+import { setStageChannelLimitForTests } from "../src/channels/stageChannels.js";
+
+let restoreChannelLimit: () => void;
+beforeEach(() => { restoreChannelLimit = setStageChannelLimitForTests(20); });
+afterEach(() => restoreChannelLimit());
 
 const roots: string[] = [];
 afterEach(async () => {

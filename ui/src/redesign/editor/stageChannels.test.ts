@@ -109,9 +109,43 @@ describe("stage channel form model", () => {
   });
 });
 
+describe("StageChannelsSection with the one-channel policy", () => {
+  const render = (entries: StageChannelEntry[], limit?: number, connections = [conn()]) =>
+    renderToStaticMarkup(createElement(StageChannelsSection, { entries, connections, loadFailed: false, ...(limit !== undefined ? { limit } : {}), onChange: () => {} }));
+  const one: StageChannelEntry = { connection: "ops", to: "C0123ABCD", operations: ["send"] };
+
+  it("defaults to one: an empty stage can add, a stage with one cannot", () => {
+    expect(render([])).toContain("Add channel");
+    const full = render([one]);
+    expect(full).not.toContain("Add channel");
+    expect(full).toContain("A stage can use one channel for now.");
+    expect(full).toContain("split the work into a separate stage");
+  });
+
+  it("hides the channel name field while only one is allowed", () => {
+    const html = render([one]);
+    expect(html).not.toContain("Channel name");
+    expect(html).not.toContain("send_message with this name");
+    expect(render([one], 3)).toContain("Channel name");
+  });
+
+  it("warns, and offers removal, when a file already lists more than the limit", () => {
+    const html = render([one, { ...one, connection: "ops", alias: "b" }]);
+    expect(html).toContain("lists 2 channels but can use 1");
+    expect(html).toContain("Remove channel");
+    expect(html).not.toContain("Add channel");
+  });
+
+  it("offers Add again when the host raises the limit", () => {
+    expect(render([one], 2)).toContain("Add channel");
+    expect(render([one, one], 2)).not.toContain("Add channel");
+    expect(render([one, one], 2)).toContain("A stage can use up to 2 channels.");
+  });
+});
+
 describe("StageChannelsSection", () => {
-  const render = (entries: StageChannelEntry[], connections: ChannelConnectionListing[] = [conn()], loadFailed = false) =>
-    renderToStaticMarkup(createElement(StageChannelsSection, { entries, connections, loadFailed, onChange: () => {} }));
+  const render = (entries: StageChannelEntry[], connections: ChannelConnectionListing[] = [conn()], loadFailed = false, limit = 5) =>
+    renderToStaticMarkup(createElement(StageChannelsSection, { entries, connections, loadFailed, limit, onChange: () => {} }));
 
   it("explains the empty state and disables Add when there are no connections", () => {
     const empty = render([], []);

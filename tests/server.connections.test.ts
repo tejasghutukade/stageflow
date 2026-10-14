@@ -108,7 +108,7 @@ describe("/api/connections", () => {
     await boot("version: 1\nconnections:\n  - id: ops\n    provider: nope\n");
     const response = await fetch(`${base}/api/connections`);
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ connections: [], error: "CHANNEL_PROVIDER_UNSUPPORTED" });
+    expect(await response.json()).toEqual({ connections: [], error: "CHANNEL_PROVIDER_UNSUPPORTED", limits: { channelsPerStage: 1 } });
   });
 
   it("lists nothing, without an error, when there is no connections.yaml", async () => {
@@ -121,7 +121,7 @@ describe("/api/connections", () => {
     if (!address || typeof address === "string") throw new Error("expected TCP");
     base = `http://127.0.0.1:${address.port}`;
     close = async () => { await new Promise<void>((resolve, reject) => server.close(err => (err ? reject(err) : resolve()))); };
-    expect(await (await fetch(`${base}/api/connections`)).json()).toEqual({ connections: [] });
+    expect(await (await fetch(`${base}/api/connections`)).json()).toEqual({ connections: [], limits: { channelsPerStage: 1 } });
   });
 
   describe("editing", () => {

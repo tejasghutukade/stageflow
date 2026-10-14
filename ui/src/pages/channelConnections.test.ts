@@ -21,14 +21,21 @@ describe("channel connections api", () => {
       connections: [{ ...base, scope: "/private/path", secrets: { botToken: "env:SECRET_NAME" }, health: { state: "failed", checkedAt: "2026-10-14T10:00:00Z", error: { code: "CHANNEL_AUTH_FAILED", retryable: false }, extra: 1 } }],
     }) }));
     const result = await fetchChannelConnections();
-    expect(result).toEqual({ connections: [{ ...base, secrets: { botToken: "env" }, health: { state: "failed", checkedAt: "2026-10-14T10:00:00Z", error: { code: "CHANNEL_AUTH_FAILED", retryable: false } } }] });
+    expect(result).toEqual({ connections: [{ ...base, secrets: { botToken: "env" }, health: { state: "failed", checkedAt: "2026-10-14T10:00:00Z", error: { code: "CHANNEL_AUTH_FAILED", retryable: false } } }], limits: { channelsPerStage: 1 } });
     expect(JSON.stringify(result)).not.toContain("SECRET_NAME");
     expect(JSON.stringify(result)).not.toContain("/private");
   });
 
   it("passes a load error code through", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ connections: [], error: "CHANNEL_PROVIDER_UNSUPPORTED" }) }));
-    expect(await fetchChannelConnections()).toEqual({ connections: [], error: "CHANNEL_PROVIDER_UNSUPPORTED" });
+    expect(await fetchChannelConnections()).toEqual({ connections: [], error: "CHANNEL_PROVIDER_UNSUPPORTED", limits: { channelsPerStage: 1 } });
+  });
+
+  it("follows the host's per-stage channel limit and falls back to one for anything odd", async () => {
+    for (const [limits, expected] of [[{ channelsPerStage: 3 }, 3], [undefined, 1], [{ channelsPerStage: 0 }, 1], [{ channelsPerStage: "many" }, 1], [{ channelsPerStage: 1.5 }, 1]] as const) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ connections: [], ...(limits ? { limits } : {}) }) }));
+      expect((await fetchChannelConnections()).limits.channelsPerStage).toBe(expected);
+    }
   });
 
   it("posts a check to the connection's own path", async () => {

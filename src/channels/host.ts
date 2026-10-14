@@ -6,7 +6,7 @@ import { ChannelRegistry, connectionsFilePath, type ChannelRegistryOptions } fro
 import { loadConnectionsFile } from "./config.js";
 import { ChannelError, type ChannelErrorCode } from "./errors.js";
 import { ChannelSends } from "./ledger.js";
-import { channelKey, channelTarget, validateStageChannels } from "./stageChannels.js";
+import { channelKey, channelTarget, stageChannelLimit, validateStageChannels } from "./stageChannels.js";
 import type { OutboundMessage, SendReceipt } from "./types.js";
 
 export type ChannelSendInput = { channel?: string; text: string; subject?: string; operationKey: string };
@@ -130,8 +130,10 @@ function hashOf(parts: unknown): string {
 export function stageChannels(host: ChannelHost, stage: StageConfig, runId: string): StageChannels {
   const declared = structuredClone(stage.channels ?? []);
   const stageId = stage.id;
+  const tooMany = declared.length > stageChannelLimit();
   return {
     async send(raw) {
+      if (tooMany) throw new ChannelError("CHANNEL_INVALID_INPUT");
       const parsed = sendSchema.safeParse(raw);
       if (!parsed.success) throw new ChannelError("CHANNEL_INVALID_INPUT");
       const input = parsed.data;

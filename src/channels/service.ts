@@ -6,12 +6,14 @@ import { ChannelHealthMonitor, type ChannelHealthOptions } from "./health.js";
 import { channelHostFor, releaseChannelHost, reloadChannelHosts, type ChannelHost } from "./host.js";
 import { ChannelRegistry, connectionsFilePath, defaultSecretStore, sealed } from "./registry.js";
 import { STORE_NAME_PATTERN } from "./secretStore.js";
+import { stageChannelLimit } from "./stageChannels.js";
 import type { ConnectionHealth, ConnectionSummary, ResolvedConnection, SecretRef } from "./types.js";
 
 export type ChannelListing = {
   connections: Array<ConnectionSummary & { health?: ConnectionHealth }>;
   /** Set when `connections.yaml` could not be loaded. The file's content is never included. */
   error?: ChannelErrorCode;
+  limits: { channelsPerStage: number };
 };
 
 export type ChannelService = {
@@ -57,6 +59,7 @@ const updateSchema = z.object({
   secrets: secretsInput.optional(),
 }).strict();
 
+const limits = (): ChannelListing["limits"] => ({ channelsPerStage: stageChannelLimit() });
 const invalid = (field?: string): ChannelError => new ChannelError("CHANNEL_INVALID_INPUT", false, field ? { field } : undefined);
 
 /**
@@ -175,11 +178,12 @@ export function startChannelService(
 
   return {
     list() {
-      if (!host) return { connections: [], ...(error ? { error } : {}) };
+      if (!host) return { connections: [], ...(error ? { error } : {}), limits: limits() };
       const health = monitor?.snapshot() ?? {};
       return {
         connections: host.registry.list().map(summary => ({ ...summary, ...(health[summary.id] ? { health: health[summary.id] } : {}) })),
         ...(error ? { error } : {}),
+        limits: limits(),
       };
     },
 

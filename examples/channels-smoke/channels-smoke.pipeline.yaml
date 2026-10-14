@@ -1,6 +1,11 @@
 id: channels-smoke
 stages:
-  - id: send-test-messages
+  - id: send-email
     entry: true
-    uses: ./send-test-messages.yaml
+    uses: ./send-email.yaml
+    replay_safe: false
+    route:
+      - to: send-text
+  - id: send-text
+    uses: ./send-text.yaml
     replay_safe: false

@@ -7,6 +7,11 @@ import { preflightFailureCode, runPipelinePreflight } from "../src/preflight/pip
 import { checkStageChannels } from "../src/preflight/channelChecks.js";
 import type { ConnectionHealth } from "../src/channels/types.js";
 import { fakeChannelProvider } from "./fixtures/fakeChannelProvider.js";
+import { setStageChannelLimitForTests } from "../src/channels/stageChannels.js";
+
+let restoreChannelLimit: () => void;
+beforeEach(() => { restoreChannelLimit = setStageChannelLimitForTests(20); });
+afterEach(() => restoreChannelLimit());
 
 const roots: string[] = [];
 beforeEach(() => { process.env.CH_TEST_TOKEN = "super-secret-token-value"; });

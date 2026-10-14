@@ -4,6 +4,31 @@ import { ChannelError, type ChannelErrorCode } from "./errors.js";
 import type { ChannelRegistry } from "./registry.js";
 
 export const MAX_STAGE_CHANNELS = 20;
+
+/**
+ * Policy, not capability: how many channels one stage may use. Everything below (merge by alias,
+ * picking by name, the per-channel ledger key) still handles several, so raising this one number
+ * is all it takes to enable them. It is enforced where a stage is parsed, merged, validated and
+ * at the moment of sending, so no single entry point can bypass it.
+ */
+export const MAX_CHANNELS_PER_STAGE = 1;
+let channelLimit = MAX_CHANNELS_PER_STAGE;
+
+export function stageChannelLimit(): number {
+  return channelLimit;
+}
+
+/** Tests that exercise multi-channel behavior raise the policy for their own duration. */
+export function setStageChannelLimitForTests(limit: number): () => void {
+  const previous = channelLimit;
+  channelLimit = limit;
+  return () => { channelLimit = previous; };
+}
+
+export function channelLimitMessage(count?: number): string {
+  const limit = channelLimit;
+  return `a stage can use ${limit === 1 ? "one channel" : `at most ${limit} channels`} for now${count === undefined ? "" : ` (this one has ${count})`}; split the work into separate stages`;
+}
 export const MAX_CHANNEL_TARGETS = 20;
 
 const targetSchema = z.union([z.string().min(1).max(500), z.number().int().refine(Number.isSafeInteger).transform(String)]);
@@ -24,6 +49,7 @@ export function channelKey(channel: Pick<StageChannel, "alias" | "connection">):
 
 /** Shape check only. Whether the connection exists is checked against `connections.yaml` later. */
 export function parseChannels(raw: unknown): ParsedChannels {
+  if (Array.isArray(raw) && raw.length > channelLimit) return { ok: false, message: `channels: ${channelLimitMessage(raw.length)}` };
   const parsed = z.array(channelSchema).max(MAX_STAGE_CHANNELS).safeParse(raw);
   if (!parsed.success) return { ok: false, message: "channels must be a list of { connection, to, operations: [send] } entries (optional alias, cc, template)" };
   const keys = parsed.data.map(channelKey);
@@ -68,6 +94,10 @@ export function channelTarget(channel: StageChannel): { to: string | string[]; c
 /** Static checks against `connections.yaml`. No network and no secret reads. */
 export function validateStageChannels(registry: ChannelRegistry, stage: Pick<StageConfig, "id" | "channels">): StageChannelIssue[] {
   const issues: StageChannelIssue[] = [];
+  const count = stage.channels?.length ?? 0;
+  if (count > channelLimit) {
+    issues.push({ stageId: stage.id, key: stage.channels![0] ? channelKey(stage.channels![0]) : "", code: "CHANNEL_INVALID_INPUT", message: `stage "${stage.id}": ${channelLimitMessage(count)}` });
+  }
   for (const channel of stage.channels ?? []) {
     const key = channelKey(channel);
     const fail = (code: ChannelErrorCode, message: string): void => {
