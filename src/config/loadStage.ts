@@ -1,3 +1,4 @@
+import { parseChannels } from "../channels/stageChannels.js";
 import { parseAgentField } from "../agent/agentBackend.js";
 import { STAGEFLOW_MCP_SERVER_NAME } from "../agent/claudeTools.js";
 import type { CompletionContract } from "../types/completion.js";
@@ -409,6 +410,21 @@ function parseStageFields(
   if (!mcpOutcome.ok) return mcpOutcome;
   if (mcpOutcome.value !== undefined) {
     stage.mcp = mcpOutcome.value;
+  }
+
+  if (raw.channels !== undefined) {
+    const channels = parseChannels(raw.channels);
+    if (!channels.ok) {
+      return loadFailure([
+        {
+          code: "stage.invalid_channels",
+          message: `Invalid stage ${label}: ${channels.message}`,
+          category: "stage",
+          stageId: entryId,
+        },
+      ]);
+    }
+    stage.channels = channels.value;
   }
 
   const secretsOutcome = parseStageSecrets(raw.secrets, label, entryId);

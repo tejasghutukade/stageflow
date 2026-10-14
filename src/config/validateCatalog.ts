@@ -28,6 +28,10 @@ import {
 import { loadSecretRegistry } from "../runtime/stageSecrets.js";
 import { isForeverDeniedSecret } from "../runtime/stageEnvironment.js";
 import { findMissingMcpCommands } from "../preflight/mcpCommands.js";
+import { ChannelError } from "../channels/errors.js";
+import { ChannelRegistry } from "../channels/registry.js";
+import { validateStageChannels } from "../channels/stageChannels.js";
+import type { AnyChannelProvider } from "../channels/types.js";
 
 export type ValidationSeverity = "error" | "warning";
 
@@ -58,6 +62,7 @@ export type ValidationFindingCode =
   | "pipeline.route_all_gated"
   | "pipeline.invalid_requires"
   | "pipeline.requires_conflict"
+  | "pipeline.invalid_channels"
   | "stage.invalid_shape"
   | "stage.invalid_model"
   | "stage.missing_model"
@@ -70,6 +75,8 @@ export type ValidationFindingCode =
   | "stage.invalid_timeout_ms"
   | "stage.invalid_skill"
   | "stage.invalid_mcp"
+  | "stage.invalid_channels"
+  | "stage.channel_unavailable"
   | "stage.invalid_browser"
   | "stage.invalid_secrets"
   | "stage.unknown_secret"
@@ -528,6 +535,40 @@ function collectMcpAllowlistNames(loaded: LoadedPipeline): string[] {
   return [...names];
 }
 
+function findingsForStageChannels(
+  cwd: string,
+  pipelinePath: string,
+  loaded: LoadedPipeline,
+  projectRoot: string,
+  providers: readonly AnyChannelProvider[] | undefined,
+): ValidationFinding[] {
+  const users = loaded.stages.filter((stage) => (stage.channels?.length ?? 0) > 0);
+  if (users.length === 0) return [];
+  let registry: ChannelRegistry;
+  try {
+    registry = new ChannelRegistry({ cwd: projectRoot, providers });
+  } catch (error) {
+    const code = error instanceof ChannelError ? error.code : "CHANNEL_INVALID_INPUT";
+    const field = error instanceof ChannelError && error.detail?.connectionId
+      ? ` (connection "${error.detail.connectionId}"${error.detail.field ? `, field "${error.detail.field}"` : ""})`
+      : "";
+    return users.map((stage) =>
+      findingStageError(
+        cwd,
+        pipelinePath,
+        `connections.yaml could not be loaded: ${code}${field}`,
+        "stage.channel_unavailable",
+        stage.id,
+      ),
+    );
+  }
+  return users.flatMap((stage) =>
+    validateStageChannels(registry, stage).map((issue) =>
+      findingStageError(cwd, pipelinePath, issue.message, "stage.channel_unavailable", issue.stageId),
+    ),
+  );
+}
+
 function findingsForStageSecrets(
   cwd: string,
   pipelinePath: string,
@@ -749,7 +790,12 @@ type PipelineValidationCoreResult =
 
 async function runPipelineValidation(
   nameOrPath: string | InlinePipelineDefinition,
-  options: { cwd: string; projectRoot?: string; validateStages: boolean },
+  options: {
+    cwd: string;
+    projectRoot?: string;
+    validateStages: boolean;
+    channelProviders?: readonly AnyChannelProvider[];
+  },
 ): Promise<PipelineValidationCoreResult> {
   const { cwd, validateStages } = options;
   const projectRoot = options.projectRoot ?? cwd;
@@ -790,6 +836,9 @@ async function runPipelineValidation(
 
   findings.push(...(await findingsForStageMcpCatalog(cwd, outcome.value)));
   findings.push(...findingsForStageSecrets(cwd, pipelinePath, outcome.value));
+  findings.push(
+    ...findingsForStageChannels(cwd, pipelinePath, outcome.value, projectRoot, options.channelProviders),
+  );
   findings.push(...findingsForStageflowHomeAbsolutePaths(cwd, outcome.value));
 
   if (validateStages && outcome.value.stageSources) {
@@ -815,6 +864,7 @@ export type ValidatePipelineOptions = {
   projectRoot?: string;
   validateStages?: boolean;
   strict?: boolean;
+  channelProviders?: readonly AnyChannelProvider[];
 };
 
 export async function validatePipeline(
@@ -829,6 +879,7 @@ export async function validatePipeline(
     cwd,
     projectRoot,
     validateStages,
+    channelProviders: options.channelProviders,
   });
   return buildValidationResult("pipeline", core.findings, strict);
 }
@@ -839,7 +890,12 @@ export type LoadPipelineValidatedResult =
 
 export async function loadPipelineValidated(
   nameOrPath: string | InlinePipelineDefinition,
-  options: { cwd?: string; projectRoot?: string; validateStages?: boolean } = {},
+  options: {
+    cwd?: string;
+    projectRoot?: string;
+    validateStages?: boolean;
+    channelProviders?: readonly AnyChannelProvider[];
+  } = {},
 ): Promise<LoadPipelineValidatedResult> {
   const cwd = options.cwd ?? process.cwd();
   const projectRoot = options.projectRoot ?? cwd;
@@ -848,6 +904,7 @@ export async function loadPipelineValidated(
     cwd,
     projectRoot,
     validateStages,
+    channelProviders: options.channelProviders,
   });
   if (core.ok) {
     return { ok: true, loaded: core.loaded, findings: core.findings };

@@ -100,6 +100,7 @@ const inlinePipelineSchema = z
     model: z.unknown().optional(),
     schemas: z.unknown().optional(),
     requires: z.unknown().optional(),
+    channels: z.unknown().optional(),
   })
   .strict();
 

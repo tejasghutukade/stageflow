@@ -351,7 +351,9 @@ function preflightToDoctorChecks(
         ? `toolchain:${c.tool ?? i}`
         : c.kind === "secret"
           ? `secret:${c.secret ?? i}`
-          : `mcp:${c.server ?? c.stageId ?? i}`;
+          : c.kind === "channel"
+            ? `channel:${c.connection ?? i}`
+            : `mcp:${c.server ?? c.stageId ?? i}`;
     let status: DoctorCheckStatus = "pass";
     if (c.status === "ok") {
       status = "pass";

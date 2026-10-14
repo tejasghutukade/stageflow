@@ -1,4 +1,6 @@
 import { emailHostFor, stageEmail, workerStageEmail, validateStageEmailAccounts } from "../email/host.js";
+import { ChannelError } from "../channels/errors.js";
+import { channelHostFor, stageChannels, validateStageChannelConnections, workerStageChannels } from "../channels/host.js";
 import { EmailError } from "../email/port.js";
 import type {
   StagePort,
@@ -734,6 +736,13 @@ export async function openStageAttempt(
       throw error;
     }
   }
+  if (process.env.SF_STAGE_WORKER !== "1" && input.stage.channels?.length) {
+    try { validateStageChannelConnections(channelHostFor(input.factoryCwd ?? process.cwd()), input.stage); }
+    catch (error) {
+      if (error instanceof ChannelError) return { ok: false, reason: error.code };
+      throw error;
+    }
+  }
   const opened = await openStageWithOperatorCatalog(
     input.agent,
     {
@@ -751,6 +760,10 @@ export async function openStageAttempt(
       resumeToken,
       email: input.stage.email?.length ? (process.env.SF_STAGE_WORKER === "1" ? workerStageEmail()
         : stageEmail(emailHostFor(input.factoryCwd ?? process.cwd()).mailbox, input.stage, input.runId, { workspaceDir: input.workspaceDir, attempt })) : undefined,
+      ...(input.stage.channels?.length ? {
+        channels: process.env.SF_STAGE_WORKER === "1" ? workerStageChannels()
+          : stageChannels(channelHostFor(input.factoryCwd ?? process.cwd()), input.stage, input.runId),
+      } : {}),
       ...(input.sessionMode !== undefined ? { sessionMode: input.sessionMode } : {}),
       onActivity: (event) => {
         input.onActivity?.(

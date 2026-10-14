@@ -8,6 +8,7 @@ import type { StageActivityEvent } from "./activity.js";
 import type { ResolvedMcpServers } from "../config/resolveStageMcpServers.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import type { StageEmail } from "../email/host.js";
+import type { StageChannels } from "../channels/host.js";
 import type { QaExchange } from "../hitl/qaTrail.js";
 import type { StageUsage } from "../types/usage.js";
 
@@ -75,6 +76,7 @@ export type StageRunInput = {
   onAssistantTextDelta?: (delta: string) => void;
   skillFilePath?: string;
   email?: StageEmail;
+  channels?: StageChannels;
   /** Bundled browser skill; set by the runtime when the stage has `browser`. */
   browserSkillFilePath?: string;
   forkEmitContext?: ForkEmitContext;

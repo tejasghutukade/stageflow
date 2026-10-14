@@ -116,6 +116,12 @@ function preflight(input: StageRunInput): Preflight {
       reason: `stage declares skill "${input.stage.skill}"; the claude agent backend does not support skills yet`,
     };
   }
+  if (input.stage.channels?.length) {
+    return {
+      ok: false,
+      reason: "stage declares channels; the claude agent backend does not provide send_message yet, so the stage would run without it",
+    };
+  }
   return resolveClaudeModel(input.stage.model);
 }
 

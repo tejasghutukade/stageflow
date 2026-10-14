@@ -52,6 +52,7 @@ export type StartFailureCode =
   | "tool_version_mismatch"
   | "unknown_version"
   | "secret_unavailable"
+  | "channel_check_failed"
   | "unresolved_var"
   | "shutting_down"
   | "autostart_disabled"
