@@ -825,16 +825,19 @@ Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.
 
 ### Stage channels {#stage-channels}
 
-> **Status: built for AgentMail, Slack, Telegram, iMessage and WhatsApp (all via `connections.yaml`).** `channels:` loads, merges and validates. A stage that declares a `send` channel gets a `send_message` tool on the Pi backend, delivered by the Host with the target pinned here, and the Host refuses to start the stage if `connections.yaml` no longer matches. See [Communication channels](channels.md). The Claude backend does not expose `send_message` (the same gap exists for `email:` today). Run start (and the MCP `preflight` tool and `sf doctor`) runs a live check of each declared connection and blocks the run with `channel_check_failed` if one fails; see [MCP `preflight`](mcp.md#preflight). The feature plan is in the repo's local planning notes (`docs/plans/`, gitignored).
+> **Status: built for AgentMail, Slack, Telegram, iMessage and WhatsApp.** Connections are defined in the console or in `connections.yaml`; see [Communication channels](channels.md). `channels:` loads, merges and validates. A stage that declares a `send` channel gets a `send_message` tool on the Pi backend, delivered by the Host with the target pinned here, and the Host refuses to start the stage if the connection no longer matches. The Claude backend does not provide `send_message`, so a stage with `channels:` fails at start there (`email:` still has the older gap). Run start (and the MCP `preflight` tool and `sf doctor`) runs a live check of each declared connection and blocks the run with `channel_check_failed` if one fails, naming the connection and the reason; see [MCP `preflight`](mcp.md#preflight). The pipeline editor edits stage channels in its inspector.
 
 A stage declares which communication connections it may send on. Each entry points at a connection defined in [`connections.yaml`](../connections.example.yaml) and **pins the target**, so the agent can never choose a different recipient. This is separate from `email:`, which keeps working unchanged for IMAP/SMTP accounts.
 
 ```yaml
 channels:
-  - alias: releases            # optional, defaults to the connection id
-    connection: ops-slack
+  - connection: ops-slack
     to: C0123ABCD              # one target: a Slack channel id; phone, chat id, etc. for the others
     operations: [send]
+```
+
+```yaml
+channels:
   - connection: support-inbox
     to: [oncall@acme.com, lead@acme.com]   # AgentMail only: several recipients, one message
     cc: [manager@acme.com]
@@ -846,7 +849,7 @@ channels:
 | `connection` | yes | Id of a connection in `connections.yaml` (letters, digits, `.`, `_`, `-`) |
 | `to` | yes | Target. A string, or a list of strings (1 to 20). What is valid depends on the provider and is checked at validate time |
 | `operations` | yes | Closed list, `[send]` today. It is a list so `reply`/`receive` can be added later without changing the shape |
-| `alias` | no | Name for this entry. Needed when two entries use the same connection |
+| `alias` | no | Name for this entry; the agent passes it as `send_message`'s `channel`. Only matters when several channels are enabled, because with one the agent can omit `channel` |
 | `cc` | no | List of strings. Accepted by providers that support it, rejected by the rest |
 | `template` | no | Provider-specific message template. Only WhatsApp uses it (`name`, `languageCode`, `bodyParams`; the text `{{message}}` in a parameter is replaced with the agent's message) |
 

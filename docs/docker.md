@@ -74,6 +74,10 @@ Slot 6 stages get a **curated** environment — not a copy of Host `process.env`
 
 The published image does **not** install the GitHub CLI. Catalogs that `requires:` `gh` need a [derived image](#derived-images) (or an install step in your Dockerfile). Stageflow never installs tools from `requires:` automatically.
 
+### Channels in the container
+
+[Communication channels](channels.md) need no extra setup in the image. Connections made in the console are written to `/data/connections.yaml` and the secrets to `/data/channel-secrets.json`, both on the data volume, so they survive restarts and rebuilds (they are lost only if you delete the volume). The image includes the optional Spectrum packages that iMessage and WhatsApp use. For a connection that should come from the environment instead (CI or a secrets manager), use `env:NAME` references in `connections.yaml` and pass the variables to the container. `STAGEFLOW_CONNECTIONS_FILE` can point the file elsewhere.
+
 ### Catalog in the container
 
 The image does **not** ship the repo `examples/` tree. Workshop saves and the default writable **workspace** catalog live under `/data` (`$STAGEFLOW_HOME/workspace`). For an external catalog, bind-mount it into the container and **register / ensure** that absolute path with the Host (`STAGEFLOW_ENSURE_PROJECT_ROOTS`, `POST /api/projects`, or local `sf run` ensure-then-start). Remotes cannot invent unknown absolute `project_root` values. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root). Compose has a commented volume-mount pattern in [`docker-compose.yml`](../docker-compose.yml).
@@ -248,6 +252,7 @@ STAGEFLOW_DOCKER_SMOKE=1 npx vitest run tests/docker.containerBrowserHost.smoke.
 | `state.db` (+ `-wal`, `-shm`) | **Irreplaceable** | Every run, stage, envelope, event, verification record, and A2A rows. Only ever copy via `sf backup`. |
 | `agent/auth.json` | **Irreplaceable** | Operator auth file. The image sets `STAGEFLOW_CREDENTIAL_HOME` to this data directory. |
 | `settings.json` | **Irreplaceable** | Concurrency and credential-source choice. |
+| `connections.yaml`, `channel-secrets.json` | **Irreplaceable** | [Channel](channels.md) connections and the secrets typed into the console. Not covered by `sf backup`; copy them yourself and keep the secrets file private (`0600`). |
 | `runs/<runId>/` | Situational | Artifact bytes; records live in `state.db`. |
 | `a2a-artifacts/` | Situational | Opt in with `sf backup --include-a2a-artifacts`. |
 | `repos/`, `worktrees/`, `cache/` | Disposable | Re-clonable / rebuildable. |

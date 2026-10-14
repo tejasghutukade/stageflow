@@ -117,7 +117,16 @@ Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** 
 
 ### Connections (communication channels and tools)
 
-Before touching the Connections page, `src/email/`, or adding a channel provider (AgentMail, Slack, Photon iMessage/WhatsApp/Telegram), read **[docs/specs/connections-spec.md](docs/specs/connections-spec.md)**. Verified provider facts are in [connections-provider-reference.md](docs/specs/connections-provider-reference.md); Wonder artboard map and styling are in [connections-design-handoff.md](docs/specs/connections-design-handoff.md). Resolve the spec's "Decision needed" items with the owner before building.
+Send-only stage channels are built (`src/channels/`, `src/tools/sendMessage.ts`, `src/server/channelRoutes.ts`, `ui/src/redesign/connections/`, the editor's `StageChannelsSection`). User docs: **[docs/channels.md](docs/channels.md)**. Before changing them or adding a provider, read that page, then [docs/specs/connections-spec.md](docs/specs/connections-spec.md) (original proposal, partly superseded), the verified provider facts in [connections-provider-reference.md](docs/specs/connections-provider-reference.md), and the Wonder artboard map in [connections-design-handoff.md](docs/specs/connections-design-handoff.md).
+
+Rules every change must keep:
+
+- A secret is never a YAML value, never in a response, log, error, run state or the stage worker. Providers get secrets only through `ResolvedConnection` (non-enumerable). Errors carry codes, never response bodies or request URLs.
+- Recipients are pinned in YAML. The agent never chooses one.
+- A send that may have reached the provider is `CHANNEL_SEND_OUTCOME_UNKNOWN` and is never resent. Only definite failures (refused connection, DNS/TLS, 4xx) are retryable or resendable under a new key.
+- A stage uses one channel (`MAX_CHANNELS_PER_STAGE`). Keep it enforced at parse, merge, validation and send; tests that need several raise it with `setStageChannelLimitForTests`.
+- Connections are host-level (`$STAGEFLOW_HOME/connections.yaml`, project file wins, `STAGEFLOW_CONNECTIONS_FILE` overrides). The test setup pins an empty `STAGEFLOW_HOME` so host files never leak in.
+- Provider tests use the local HTTP fixture or a fake SDK importer, never the network. Real-account smoke tests are opt-in env-gated files.
 
 ## Documentation
 

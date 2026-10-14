@@ -1,10 +1,27 @@
 # Communication channels
 
-Channels let a stage send a message over an external service. A stage uses **one** channel for now; use separate stages for separate channels. You define a **connection** once in `connections.yaml`, then a stage lists it under [`channels:`](yaml-catalog.md#stage-channels) with the recipient pinned. The agent gets one tool, `send_message`, and cannot pick a different recipient.
+Channels let a stage send a message over an external service. You define a **connection** once (in the console or in `connections.yaml`), then a stage lists it under [`channels:`](yaml-catalog.md#stage-channels) with the recipient pinned. The agent gets one tool, `send_message`, and cannot pick a different recipient.
 
-> **Status: send path built.** Sending works for AgentMail, Slack, Telegram, iMessage and WhatsApp. Channels are send-only; stages never receive messages. The `send_message` tool is available on the Pi backend only; a stage with `channels:` on the Claude backend fails at start instead of running without it.
+> **Status: send path built.** Sending works for AgentMail, Slack, Telegram, iMessage and WhatsApp. Channels are send-only; stages never receive messages, and agents do not have channels yet. The `send_message` tool is available on the Pi backend only; a stage with `channels:` on the Claude backend fails at start instead of running without it.
 
 Channels are separate from [email accounts](email-accounts.md) (`email.yaml`, IMAP/SMTP), which keep working unchanged.
+
+## Quick start
+
+1. **Connect a provider.** Open **Connections** in the console and choose **Add connection** (or add an entry to `connections.yaml`, below). The console tests the values, stores the secret on the host and shows Connected or the reason it is not.
+2. **Link it to a stage.** In the pipeline editor, select a stage and use **Channels** in the inspector: pick the connection and enter the recipient. Or write it in the stage's YAML:
+   ```yaml
+   channels:
+     - connection: support-inbox
+       to: [oncall@acme.com]
+       operations: [send]
+   ```
+3. **Tell the agent what to send** in the stage's `system_prompt`, and have it call `send_message` with an `operationKey`. The runnable example is [`examples/channels-smoke/`](../examples/channels-smoke/README.md): two stages that send one email and one text.
+4. **Run.** Run start checks the connection live and blocks the run with a reason if it is not usable.
+
+### One channel per stage
+
+For now a stage can use **one** channel. A second entry is rejected in the console, by `sf validate`, by `start_run` and at run start, and again when a message is sent, including a second channel that only appears after merging a pipeline-level default (use `channels: []` on the stage to drop the default). To send on two channels, use two stages, as the smoke example does. One connection can still reach several recipients through its own target list (AgentMail `to` and `cc`). The limit is a single policy constant; the rest of the code still supports several, so it can be raised later.
 
 ## connections.yaml
 
@@ -58,7 +75,7 @@ Tool errors carry only `{ code, retryable }`.
 
 | Code | Meaning |
 |------|---------|
-| `CHANNEL_INVALID_INPUT` | The request or configuration is not valid |
+| `CHANNEL_INVALID_INPUT` | The request or configuration is not valid, for example a stage that lists more channels than the one-channel limit |
 | `CHANNEL_NOT_FOUND`, `CHANNEL_DISABLED` | The connection is not defined or is disabled |
 | `CHANNEL_UNAUTHORIZED` | The stage did not declare this channel or operation, or the provider refused the credential's permission |
 | `CHANNEL_AUTH_FAILED` | The provider rejected the credential |
@@ -66,7 +83,7 @@ Tool errors carry only `{ code, retryable }`.
 | `CHANNEL_TARGET_INVALID` | The pinned target is not valid for the provider |
 | `CHANNEL_RATE_LIMIT` | The provider is throttling (retryable) |
 | `CHANNEL_CONNECTION_FAILED`, `CHANNEL_TIMEOUT` | The provider could not be reached (retryable) |
-| `CHANNEL_RECIPIENT_REJECTED` | The provider refused this recipient: unknown channel or chat, a bot that was not added or was blocked, or an iMessage user not registered in the Photon project |
+| `CHANNEL_RECIPIENT_REJECTED` | The provider refused this recipient: unknown channel or chat, a bot that was not added or was blocked, or an iMessage user who is not registered in the Photon project or has not yet texted their assigned line |
 | `CHANNEL_WINDOW_CLOSED` | WhatsApp only: the 24-hour window is closed, so the stage must pin an approved `template` |
 | `CHANNEL_PROVIDER_UNSUPPORTED` | The provider is unknown to this Stageflow version, or its SDK (`@spectrum-ts/*` for iMessage and WhatsApp) is not installed |
 | `CHANNEL_SEND_OUTCOME_UNKNOWN` | The message may or may not have been sent. Do not retry with a new key |
@@ -82,10 +99,23 @@ The operator console's **Connections** page lists the channels from `connections
 | `POST /api/connections/test` | Same body, checks the values without saving anything. |
 | `PATCH /api/connections/{id}` | Replace secrets, enable or disable, rename, change config. |
 | `DELETE /api/connections/{id}` | Disconnect: removes the entry, its stored secrets and a shared credential nothing else uses. |
-| `GET /api/connections` | `{ connections: [{ id, provider, displayName, enabled, identity?, health? }], error? }`. `error` is a code when `connections.yaml` could not be loaded; the host keeps running and only stages that use channels fail. |
-| `POST /api/connections/{id}/check` | Runs one live check and returns `{ state, checkedAt, error? }`. `404` with `CHANNEL_NOT_FOUND` for an unknown or disabled connection. Needs a same-origin `Origin` header and the `drive` scope. |
+| `GET /api/connections` | `{ connections: [{ id, provider, displayName, enabled, identity?, credential?, secrets, health? }], limits: { channelsPerStage }, error? }`. `secrets` says only whether each field comes from the environment or the console store. `error` is a code when `connections.yaml` could not be loaded; the host keeps running and only stages that use channels fail. |
+| `POST /api/connections/{id}/check` | Runs one live check and returns `{ state, checkedAt, error? }`. `404` with `CHANNEL_NOT_FOUND` for an unknown or disabled connection. |
+| `POST /api/connections/{id}/validate-target` | Checks a pinned recipient (`{ to, cc?, template? }`) against the provider's rules. No network call and no secret read. Returns `{ ok: true }` or `{ ok: false, issues }`. |
 
-The listing is for the workspace the host was started in.
+Every request other than `GET` needs a same-origin `Origin` header and the `drive` scope. Request bodies carry secret values on the way in only. Responses and errors carry codes, never a secret or the request body, and bodies over 64 KiB are refused. The listing shows the connections visible from the directory the host was started in: the host-level file, unless that directory has its own `connections.yaml`. Edits reload every cached project, so a connection made once is visible to stages in any project on the host.
+
+## Troubleshooting
+
+| You see | Cause and fix |
+|---------|---------------|
+| Connections page: **Not connected**, "a secret named in connections.yaml is not set" | An `env:NAME` secret is not set on the host, or a `store:` secret is missing on this host (the YAML was copied from another machine). Set the variable, or use **Replace** on the connection page. |
+| Connections page: **Connection broken** | The provider rejected the credential or could not be reached. The page shows the reason and **Check now** retries. |
+| Run blocked: `Pipeline preflight failed: channel_check_failed: <connection>: <reason> (<code>)` | The named connection failed its live check. Fix what the reason says and start again. |
+| Text never arrives and the send says `CHANNEL_RECIPIENT_REJECTED` (iMessage) | See [iMessage](#imessage-photon): the user must be a project user and have texted their assigned line once. |
+| `CHANNEL_PROVIDER_UNSUPPORTED` on iMessage or WhatsApp | The optional `@spectrum-ts/*` packages are not installed (for example `npm install --omit=optional`). |
+| `a stage can use one channel for now` | A stage lists two channels, or one plus a pipeline default. Use two stages, or `channels: []` to drop the default. |
+| Stage fails right after start on the Claude backend | `send_message` is only available on the Pi backend. Use a Pi model. |
 
 ## Providers
 
@@ -103,7 +133,7 @@ Sends plain-text mail from one **existing** AgentMail inbox through the REST API
     apiKey: env:AGENTMAIL_API_KEY
 ```
 
-- **Key permissions.** The key must be able to read the inbox (used by the live check) and send messages. If you restrict permissions on the key, grant `inbox_read` and `message_send`. Whether an inbox-scoped key may read its own inbox was not verified, so test a scoped key with `sf doctor` first.
+- **Key permissions.** The key must be able to read the inbox (used by the live check) and send messages. If you restrict permissions on the key, grant `inbox_read` and `message_send`. A key that passes the console's **Test connection** (verified with a real account) can do both. Test a restricted key before relying on it: the check reads the inbox, so a send-only key fails it.
 - **Targets.** `to` is one address or a list of up to 20, optionally with `cc` (up to 20). All recipients get one message. `bcc` is not supported.
 - **Subject.** The agent may pass `subject` to `send_message`. Without one, the subject is `Message from Stageflow`.
 - **Body.** `text` is sent as plain text, up to 64 KiB. There are no attachments or HTML.
@@ -178,7 +208,7 @@ connections:
 - **Limits.** Photon documents 5,000 messages per server per day and 50 new conversations per line per day, and warns that unsolicited messages can get a line flagged. Message only people who opted in.
 - **Live check.** Issuing an iMessage token proves the project id and secret work.
 - Each send starts the SDK, sends, and stops it, so nothing stays connected between sends. Telemetry is not enabled.
-- **Not verified against a real project:** the exact shape of Photon's users lookup (Stageflow matches the recipient anywhere in the response) and whether the SDK opens inbound streams while it is alive. An opt-in smoke test, `tests/channels.imessage.smoke.test.ts`, checks both.
+- **Verified against a real Free project:** the token and users endpoints answer as `{ succeed, data }`, the SDK starts in about half a second and stops cleanly with nothing left open, and a send succeeds once the user has texted their assigned line. An opt-in smoke test, `tests/channels.imessage.smoke.test.ts`, repeats the checks.
 
 Provider reference: <https://photon.codes/docs/spectrum-ts/providers/imessage>.
 

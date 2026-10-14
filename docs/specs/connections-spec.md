@@ -4,9 +4,9 @@ status: proposed
 
 # Spec: Connections (communication channels and tools)
 
-> **Scope update 2026-10-13:** phase 1 is send-only for stages and pipelines, configured by `connections.yaml` plus env secrets. See the agreed plan at `docs/plans/2026-10-13-001-feat-stage-channels-send-plan.md` (local-only, gitignored). Where this spec's phasing, secrets approach, or dialogs differ from that plan, the plan wins. Receiving, agent binding, UI dialogs and a host secret store are later phases.
+> **Scope update 2026-10-14:** phase 1 shipped as **send-only** stage channels. Built: the five providers (AgentMail, Slack, Telegram, iMessage and WhatsApp via Photon), `connections.yaml` with `env:` and console-written `store:` secret references, a host-level file, run-start live checks, the Connections page with connect/test/replace/disconnect, and a stage-inspector picker. A stage uses one channel. Not built: receiving, agent binding and conversations, the Slack app-manifest flow, AgentMail inbox creation, WhatsApp own-Meta-app mode, local iMessage, tool connectors beyond a read-only `.mcp.json` list, and the per-provider detail layouts beyond a common one. The shipped behavior is documented in [docs/channels.md](../channels.md); where this spec differs, that page wins.
 
-**Status: proposed. Nothing in this spec is implemented yet.** Designs exist in Wonder (see [connections-design-handoff.md](connections-design-handoff.md)). Verified third-party facts live in [connections-provider-reference.md](connections-provider-reference.md). Read both before implementing.
+**Status: partly implemented (see the scope update above). The rest of this spec is still a proposal.** Designs exist in Wonder (see [connections-design-handoff.md](connections-design-handoff.md)). Verified third-party facts live in [connections-provider-reference.md](connections-provider-reference.md). Read both before implementing.
 
 Anything marked **Decision needed** is an open product or architecture question. Do not silently pick an answer. Ask the owner or record the choice in this file.
 

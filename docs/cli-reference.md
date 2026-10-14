@@ -756,7 +756,7 @@ sf validate --strict --json
 sf doctor [--json] [--pipeline <path>] [--strict]
 ```
 
-Operator preflight: shared `/readyz` checks (store, home, migrations, git), plus bash, Node, credentials presence/source, TLS CA path existence, free disk, and `.mcp.json` commands on PATH. With `--pipeline`, also diffs that pipeline's `requires:` / `secrets:` / stage MCP against the toolchain manifest and curated stage env (same check as MCP `preflight` / `start_run`). `--strict` treats `unknown_version` as failure. Exits non-zero when any check is `fail`.
+Operator preflight: shared `/readyz` checks (store, home, migrations, git), plus bash, Node, credentials presence/source, TLS CA path existence, free disk, and `.mcp.json` commands on PATH. With `--pipeline`, also diffs that pipeline's `requires:` / `secrets:` / stage MCP against the toolchain manifest and curated stage env (same check as MCP `preflight` / `start_run`). With `--pipeline`, stages that declare [`channels:`](channels.md) also get a live check of each connection (it never sends a message); a failure is `channel_check_failed` with the connection and reason. `--strict` treats `unknown_version` as failure. Exits non-zero when any check is `fail`.
 
 **Never use `sf doctor` as a container `HEALTHCHECK`.** Use `GET /livez` for liveness; doctor is a human/CI preflight tool.
 
