@@ -8,7 +8,7 @@ Channels are separate from [email accounts](email-accounts.md) (`email.yaml`, IM
 
 ## connections.yaml
 
-Put `connections.yaml` in the Stageflow workspace root, next to `stageflow.yaml`. The host reads it at start; restart the host after a change. Copy [`connections.example.yaml`](../connections.example.yaml) to begin. A missing file means no connections. A file that does not validate stops the stages that use channels, with a safe error code and no file content in the message.
+You can connect providers from the console (Connections, **Add connection**) or edit `connections.yaml` yourself. The file lives in the Stageflow workspace root, next to `stageflow.yaml`, unless `STAGEFLOW_CONNECTIONS_FILE` points elsewhere (for a container, put it on the data volume, for example `/data/connections.yaml`). The console edits the file in place, keeps your comments, and applies the change without a restart. A file you edit by hand is read at start, so restart the host after a manual change. Copy [`connections.example.yaml`](../connections.example.yaml) to begin. A missing file means no connections. A file that does not validate stops the stages that use channels, with a safe error code and no file content in the message.
 
 ```yaml
 version: 1
@@ -36,7 +36,11 @@ The file is limited to 256 KiB, 100 connections and 20 credentials. Duplicate id
 
 ### Secrets
 
-A secret is always a reference, written `env:NAME`. Stageflow reads `NAME` from the host environment, or from the file named by `NAME_FILE` (one trailing newline is trimmed). Setting both is an error. **Inline secret values are rejected**, unlike `email.yaml`.
+A secret is always a reference, never a value in the file. There are two kinds: `env:NAME` (you set the variable on the host) and `store:NAME` (written by the console).
+
+**`env:NAME`.** Stageflow reads `NAME` from the host environment, or from the file named by `NAME_FILE` (one trailing newline is trimmed). Setting both is an error. **Inline secret values are rejected**, unlike `email.yaml`. Use this for CI.
+
+**`store:NAME`.** When you connect a provider in the console, the key you type is saved in `channel-secrets.json` in the credential root (`STAGEFLOW_CREDENTIAL_HOME`, default `~/.stageflow`), mode `0600`, and `connections.yaml` gets only `store:connection.<id>.<field>`. The API never returns a value and a failed save removes what it wrote. This file has the same trust level as provider auth in the same directory: a process running as the same user can read it, so on a shared machine keep using `env:`. Replacing a key in the console stores the new value and switches that field to `store:`. Disconnecting deletes the entry and its stored values.
 
 Secrets are read on the host when a message is sent or a check runs. They are never written to run state, logs, envelopes or artifacts, never returned by the API, and never passed to the stage worker: the host removes every variable referenced in `connections.yaml` (and its `_FILE` form) from the worker environment, and the worker asks the host to send over a private channel.
 
@@ -70,10 +74,14 @@ Tool errors carry only `{ code, retryable }`.
 
 ## Connections page and API
 
-The operator console's **Connections** page lists the channels from `connections.yaml` next to the email accounts and the `.mcp.json` tool servers. It is read-only: there is no add or edit, and secrets are never shown. The host re-checks each enabled connection every 5 minutes (with jitter, backing off after failures) and the page shows the last result, or "Not checked yet". **Check now** runs one live check; it never sends a message.
+The operator console's **Connections** page lists the channels from `connections.yaml` next to the email accounts and the `.mcp.json` tool servers. Secrets are never shown. You can connect, replace a key, disable and disconnect from it. The host re-checks each enabled connection every 5 minutes (with jitter, backing off after failures) and the page shows the last result, or "Not checked yet". **Check now** runs one live check; it never sends a message.
 
 | Endpoint | Purpose |
 |----------|---------|
+| `POST /api/connections` | Connects a provider: validates, stores secrets, edits `connections.yaml`, reloads, runs a check and returns `{ id, health }`. Body: `{ provider, id?, displayName?, config, secrets, credential? }`. |
+| `POST /api/connections/test` | Same body, checks the values without saving anything. |
+| `PATCH /api/connections/{id}` | Replace secrets, enable or disable, rename, change config. |
+| `DELETE /api/connections/{id}` | Disconnect: removes the entry, its stored secrets and a shared credential nothing else uses. |
 | `GET /api/connections` | `{ connections: [{ id, provider, displayName, enabled, identity?, health? }], error? }`. `error` is a code when `connections.yaml` could not be loaded; the host keeps running and only stages that use channels fail. |
 | `POST /api/connections/{id}/check` | Runs one live check and returns `{ state, checkedAt, error? }`. `404` with `CHANNEL_NOT_FOUND` for an unknown or disabled connection. Needs a same-origin `Origin` header and the `drive` scope. |
 

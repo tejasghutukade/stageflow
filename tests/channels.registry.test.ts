@@ -35,7 +35,7 @@ describe("ChannelRegistry loading", () => {
 
   it("lists masked summaries with provider identity", async () => {
     const { registry: r, root } = await registry(base("    displayName: Box\n"));
-    expect(r.list()).toEqual([{ id: "box", scope: path.resolve(root), provider: "fake", displayName: "Box", enabled: true, identity: "a@b.test" }]);
+    expect(r.list()).toEqual([{ id: "box", scope: path.resolve(root), provider: "fake", displayName: "Box", enabled: true, identity: "a@b.test", secrets: { token: "env" } }]);
     expect(JSON.stringify(r.list())).not.toContain("BOX_TOKEN");
   });
 

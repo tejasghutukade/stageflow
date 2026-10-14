@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 import type { StageChannel, StageConfig } from "../types/stage.js";
-import { CONNECTIONS_FILE_NAME, ChannelRegistry, type ChannelRegistryOptions } from "./registry.js";
+import { ChannelRegistry, connectionsFilePath, type ChannelRegistryOptions } from "./registry.js";
 import { loadConnectionsFile } from "./config.js";
 import { ChannelError, type ChannelErrorCode } from "./errors.js";
 import { ChannelSends } from "./ledger.js";
@@ -30,11 +30,16 @@ const sendSchema = z.object({
 }).strict();
 
 export class ChannelHost {
-  readonly registry: ChannelRegistry;
+  registry: ChannelRegistry;
   readonly sends: ChannelSends;
-  constructor(cwd: string, options: Omit<ChannelRegistryOptions, "cwd"> = {}) {
+  constructor(private readonly cwd: string, private readonly options: Omit<ChannelRegistryOptions, "cwd"> = {}) {
     this.registry = new ChannelRegistry({ cwd, ...options });
     this.sends = new ChannelSends(this.registry.scope);
+  }
+
+  /** Re-reads connections.yaml after an edit. A file that no longer loads keeps the old registry. */
+  reload(): void {
+    this.registry = new ChannelRegistry({ cwd: this.cwd, ...this.options });
   }
 }
 
@@ -77,12 +82,13 @@ export function channelsWorkerEnvironment(env: NodeJS.ProcessEnv, cwd: string): 
   const result = { ...env };
   let file;
   try {
-    file = loadConnectionsFile(path.join(path.resolve(cwd), CONNECTIONS_FILE_NAME));
+    file = loadConnectionsFile(connectionsFilePath(cwd));
   } catch {
     return result;
   }
   for (const entry of [...file.credentials, ...file.connections]) {
     for (const ref of Object.values(entry.secrets)) {
+      if (!ref.startsWith("env:")) continue;
       const name = ref.slice("env:".length);
       delete result[name];
       delete result[`${name}_FILE`];

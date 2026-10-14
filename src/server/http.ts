@@ -487,9 +487,9 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         if (await liveView.handle(req, res)) return true;
 
         if (pathname === "/api/connections" || pathname.startsWith("/api/connections/")) {
-          if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method === "POST" })) return true;
+          if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
           if (!boot.channels) { json(res, 503, { code: "CHANNEL_CONNECTION_FAILED" }); return true; }
-          if (await handleChannelRoutes(method, pathname, boot.channels, res, json)) return true;
+          if (await handleChannelRoutes(req, method, pathname, boot.channels, res, json)) return true;
         }
         if (pathname.startsWith("/api/email/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: ["POST", "PATCH", "DELETE"].includes(method) })) return true;

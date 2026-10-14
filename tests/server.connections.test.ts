@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createCompletedOnlyStageHandle } from "../src/agent/port.js";
@@ -13,6 +14,8 @@ import { fakeChannelProvider } from "./fixtures/fakeChannelProvider.js";
 import type { RunStore } from "../src/runstore/port.js";
 
 const SECRET = "super-secret-token-value";
+const credentialRoot = mkdtempSync(path.join(tmpdir(), "sf-conn-cred-"));
+process.env.STAGEFLOW_CREDENTIAL_HOME = credentialRoot;
 const YAML = "version: 1\nconnections:\n  - id: ops\n    provider: fake\n    displayName: Ops\n    config: { inbox: ops@b.test }\n    secrets: { token: env:CH_TEST_TOKEN }\n  - id: off\n    provider: fake\n    enabled: false\n    config: { inbox: off@b.test }\n    secrets: { token: env:CH_TEST_TOKEN }\n";
 
 describe("/api/connections", () => {
@@ -119,5 +122,76 @@ describe("/api/connections", () => {
     base = `http://127.0.0.1:${address.port}`;
     close = async () => { await new Promise<void>((resolve, reject) => server.close(err => (err ? reject(err) : resolve()))); };
     expect(await (await fetch(`${base}/api/connections`)).json()).toEqual({ connections: [] });
+  });
+
+  describe("editing", () => {
+    const post = (url: string, body: unknown, method = "POST", origin: string | null = base) =>
+      fetch(`${base}${url}`, { method, headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const draft = (extra: object = {}) => ({ provider: "fake", id: "new-box", config: { inbox: "n@b.test" }, secrets: { token: SECRET }, ...extra });
+
+    it("creates, replaces, disables and removes a connection over HTTP without echoing the secret", async () => {
+      await boot("version: 1\nconnections: []\n");
+      const created = await post("/api/connections", draft());
+      expect(created.status).toBe(201);
+      const createdBody = await created.json();
+      expect(createdBody).toMatchObject({ id: "new-box", health: { state: "ok" } });
+      expect(JSON.stringify(createdBody)).not.toContain(SECRET);
+      const yaml = await readFile(path.join(root, "connections.yaml"), "utf8");
+      expect(yaml).toContain("store:connection.new-box.token");
+      expect(yaml).not.toContain(SECRET);
+
+      const listing = await (await fetch(`${base}/api/connections`)).json();
+      expect(listing.connections[0]).toMatchObject({ id: "new-box", secrets: { token: "store" }, health: { state: "ok" } });
+      expect(JSON.stringify(listing)).not.toContain(SECRET);
+
+      const replaced = await post("/api/connections/new-box", { secrets: { token: "another-secret-value" } }, "PATCH");
+      expect(replaced.status).toBe(200);
+      expect(JSON.stringify(await replaced.json())).not.toContain("another-secret");
+      expect((await post("/api/connections/new-box", { enabled: false }, "PATCH")).status).toBe(200);
+      expect((await (await fetch(`${base}/api/connections`)).json()).connections[0].enabled).toBe(false);
+
+      expect((await post("/api/connections/new-box", undefined, "DELETE")).status).toBe(200);
+      expect((await (await fetch(`${base}/api/connections`)).json()).connections).toEqual([]);
+      expect((await post("/api/connections/new-box", undefined, "DELETE")).status).toBe(404);
+    });
+
+    it("tests entered values without saving", async () => {
+      await boot("version: 1\nconnections: []\n");
+      provider.health = "failed";
+      const response = await post("/api/connections/test", draft());
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ state: "failed", error: { code: "CHANNEL_AUTH_FAILED" } });
+      expect((await (await fetch(`${base}/api/connections`)).json()).connections).toEqual([]);
+    });
+
+    it.each([
+      [draft({ provider: "nope" }), 400, "CHANNEL_PROVIDER_UNSUPPORTED"],
+      [draft({ config: { inbox: 3 } }), 400, "CHANNEL_INVALID_INPUT"],
+      [draft({ secrets: {} }), 400, "CHANNEL_INVALID_INPUT"],
+    ])("answers invalid input with only a code", async (body, status, code) => {
+      await boot("version: 1\nconnections: []\n");
+      const response = await post("/api/connections", body);
+      expect(response.status).toBe(status);
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual({ code });
+      expect(text).not.toContain(SECRET);
+    });
+
+    it("answers a duplicate id with 409 and bad JSON with 400", async () => {
+      await boot("version: 1\nconnections: []\n");
+      expect((await post("/api/connections", draft())).status).toBe(201);
+      expect((await post("/api/connections", draft())).status).toBe(409);
+      const bad = await fetch(`${base}/api/connections`, { method: "POST", headers: { "content-type": "application/json", origin: base }, body: "{nope" });
+      expect(bad.status).toBe(400);
+    });
+
+    it("refuses edits without a same-origin header and oversized bodies", async () => {
+      await boot("version: 1\nconnections: []\n");
+      expect((await post("/api/connections", draft(), "POST", null)).status).toBeGreaterThanOrEqual(400);
+      expect((await post("/api/connections/x", undefined, "DELETE", null)).status).toBeGreaterThanOrEqual(400);
+      const big = await post("/api/connections", draft({ displayName: "x".repeat(70000) }));
+      expect(big.status).toBe(413);
+      expect((await (await fetch(`${base}/api/connections`)).json()).connections).toEqual([]);
+    });
   });
 });

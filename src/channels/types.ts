@@ -2,7 +2,7 @@ import type { ChannelErrorCode } from "./errors.js";
 
 export type ChannelOperation = "send";
 
-export type SecretRef = `env:${string}`;
+export type SecretRef = `env:${string}` | `store:${string}`;
 
 export type ConnectionEntry = {
   id: string;
@@ -83,4 +83,6 @@ export type ConnectionSummary = {
   enabled: boolean;
   identity?: string;
   credential?: string;
+  /** Where each secret field is read from: the host environment or the console secret store. */
+  secrets: Record<string, "env" | "store">;
 };

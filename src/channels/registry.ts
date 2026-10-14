@@ -1,15 +1,28 @@
 import path from "node:path";
 import { inspect } from "node:util";
-import { loadConnectionsFile } from "./config.js";
+import { loadConnectionsFile, type ConnectionsFile } from "./config.js";
 import { ChannelError } from "./errors.js";
 import { channelProviders } from "./providers.js";
 import { resolveSecrets } from "./secrets.js";
+import { ChannelSecretStore, type SecretReader } from "./secretStore.js";
+import { globalCredentialRoot } from "../project/globalHome.js";
 import type {
   AnyChannelProvider, ConnectionEntry, ConnectionSummary, CredentialEntry,
   ResolvedConnection, ResolvedCredential,
 } from "./types.js";
 
 export const CONNECTIONS_FILE_NAME = "connections.yaml";
+
+/** `STAGEFLOW_CONNECTIONS_FILE` wins, so a container can keep the file on its data volume. */
+export function connectionsFilePath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.STAGEFLOW_CONNECTIONS_FILE?.trim();
+  if (override) return path.isAbsolute(override) ? path.resolve(override) : path.resolve(cwd, override);
+  return path.join(path.resolve(cwd), CONNECTIONS_FILE_NAME);
+}
+
+export function defaultSecretStore(): ChannelSecretStore {
+  return new ChannelSecretStore(path.join(globalCredentialRoot(), "channel-secrets.json"));
+}
 
 export type ChannelRegistryOptions = {
   cwd: string;
@@ -18,6 +31,9 @@ export type ChannelRegistryOptions = {
   /** Owner scope. TODO(multi-tenant): the local default is the workspace path, like email accounts. */
   scope?: string;
   file?: string;
+  /** Already parsed content, used to validate an edit before it is written. */
+  parsed?: ConnectionsFile;
+  secretStore?: SecretReader;
 };
 
 type LoadedConnection = ConnectionEntry & { config: unknown; displayName: string };
@@ -26,6 +42,7 @@ type LoadedConnection = ConnectionEntry & { config: unknown; displayName: string
 export class ChannelRegistry {
   readonly scope: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly secretStore: SecretReader;
   private readonly providers = new Map<string, AnyChannelProvider>();
   private readonly credentials = new Map<string, CredentialEntry>();
   private readonly connections = new Map<string, LoadedConnection>();
@@ -34,7 +51,8 @@ export class ChannelRegistry {
     this.scope = options.scope ?? path.resolve(options.cwd);
     this.env = options.env ?? process.env;
     for (const provider of options.providers ?? channelProviders()) this.providers.set(provider.id, provider);
-    const file = loadConnectionsFile(options.file ?? path.join(path.resolve(options.cwd), CONNECTIONS_FILE_NAME));
+    this.secretStore = options.secretStore ?? { get: name => defaultSecretStore().get(name) };
+    const file = options.parsed ?? loadConnectionsFile(options.file ?? connectionsFilePath(options.cwd, this.env));
     for (const credential of file.credentials) this.addCredential(credential);
     for (const entry of file.connections) this.addConnection(entry);
   }
@@ -49,11 +67,35 @@ export class ChannelRegistry {
       id: loaded.id, scope: this.scope, provider: loaded.provider, displayName: loaded.displayName,
       enabled: loaded.enabled, ...(identity ? { identity } : {}),
       ...(loaded.credential ? { credential: loaded.credential } : {}),
+      secrets: Object.fromEntries(Object.entries(loaded.secrets).map(([field, ref]) => [field, ref.startsWith("store:") ? "store" : "env"])) as Record<string, "env" | "store">,
     };
   }
 
   get(id: string, requireEnabled = true): ConnectionSummary {
     return this.summarize(this.entry(id, requireEnabled));
+  }
+
+  providerById(providerId: string): AnyChannelProvider {
+    return this.requireProvider(providerId);
+  }
+
+  providerList(): AnyChannelProvider[] {
+    return [...this.providers.values()];
+  }
+
+  hasCredential(id: string): boolean {
+    return this.credentials.has(id);
+  }
+
+  /** Resolves a shared credential by id, for providers that reference one. */
+  resolveCredential(id: string): ResolvedCredential {
+    const entry = this.credentials.get(id);
+    if (!entry) throw new ChannelError("CHANNEL_INVALID_INPUT", false, { field: "credential" });
+    return { id: entry.id, provider: entry.provider, secrets: resolveSecrets(entry.secrets, this.env, `credential:${entry.id}`, this.secretStore) };
+  }
+
+  hasConnection(id: string): boolean {
+    return this.connections.has(id);
   }
 
   providerFor(id: string): AnyChannelProvider {
@@ -69,12 +111,12 @@ export class ChannelRegistry {
   /** Reads secrets from the environment at call time. Values are never cached on the registry. */
   resolve(id: string, requireEnabled = true): ResolvedConnection {
     const entry = this.entry(id, requireEnabled);
-    const secrets = resolveSecrets(entry.secrets, this.env, entry.id);
+    const secrets = resolveSecrets(entry.secrets, this.env, entry.id, this.secretStore);
     const credentialEntry = entry.credential ? this.credentials.get(entry.credential) : undefined;
     const credential: ResolvedCredential | undefined = credentialEntry && {
       id: credentialEntry.id,
       provider: credentialEntry.provider,
-      secrets: resolveSecrets(credentialEntry.secrets, this.env, `credential:${credentialEntry.id}`),
+      secrets: resolveSecrets(credentialEntry.secrets, this.env, `credential:${credentialEntry.id}`, this.secretStore),
     };
     return sealed({
       id: entry.id, scope: this.scope, provider: entry.provider, displayName: entry.displayName,
@@ -133,7 +175,7 @@ export class ChannelRegistry {
   }
 }
 
-function sealed<T extends ResolvedConnection>(value: T): T {
+export function sealed<T extends ResolvedConnection>(value: T): T {
   const { secrets, credential, ...visible } = value;
   const out = { ...visible } as Record<string, unknown>;
   Object.defineProperty(out, "secrets", { value: secrets, enumerable: false });
