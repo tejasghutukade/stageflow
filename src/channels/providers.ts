@@ -3,12 +3,14 @@ import { createAgentMailProvider } from "./providers/agentmail.js";
 import { createSlackProvider } from "./providers/slack.js";
 import { createTelegramProvider } from "./providers/telegram.js";
 import { createPhotonImessageProvider } from "./providers/photonImessage.js";
+import { createPhotonWhatsappProvider } from "./providers/photonWhatsapp.js";
 
 const providers = new Map<string, AnyChannelProvider>([
   ["agentmail", createAgentMailProvider() as AnyChannelProvider],
   ["slack", createSlackProvider() as AnyChannelProvider],
   ["telegram", createTelegramProvider() as AnyChannelProvider],
   ["imessage", createPhotonImessageProvider() as AnyChannelProvider],
+  ["whatsapp", createPhotonWhatsappProvider() as AnyChannelProvider],
 ]);
 
 /** Built-in providers are listed in the initial map as they are implemented. */
