@@ -88,7 +88,7 @@ describe("imessage send", () => {
 
 describe("imessage spectrum transport", () => {
   const fakeSdk = (log: string[], sendError?: Error) => async (specifier: string) => {
-    if (specifier === "spectrum-ts") {
+    if (specifier === "@spectrum-ts/core") {
       return { Spectrum: async (options: { projectId: string }) => { log.push(`app:${options.projectId}`); return { stop: async () => { log.push("stop"); } }; } };
     }
     return {

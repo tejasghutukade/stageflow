@@ -5,7 +5,7 @@ const enabled = process.env.STAGEFLOW_CHANNELS_SMOKE_PHOTON === "1"
   && Boolean(process.env.PHOTON_PROJECT_ID) && Boolean(process.env.PHOTON_PROJECT_SECRET);
 
 /**
- * Opt-in, real Photon project (use a dedicated test project) and `npm i spectrum-ts`. Run with:
+ * Opt-in, real Photon project (use a dedicated test project) and the Spectrum packages installed (they are optional dependencies). Run with:
  *   STAGEFLOW_CHANNELS_SMOKE_PHOTON=1 PHOTON_PROJECT_ID=... PHOTON_PROJECT_SECRET=... \
  *   PHOTON_SMOKE_TO=+1... npx vitest run tests/channels.imessage.smoke.test.ts
  * The live check always runs. A message is sent only when PHOTON_SMOKE_TO is set. After the send

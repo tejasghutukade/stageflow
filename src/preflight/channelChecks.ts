@@ -116,7 +116,7 @@ const FAILURE_REASONS: Record<string, string> = {
   CHANNEL_CONNECTION_FAILED: "the provider could not be reached",
   CHANNEL_TIMEOUT: "the provider did not answer in time",
   CHANNEL_RATE_LIMIT: "the provider is rate limiting this account",
-  CHANNEL_PROVIDER_UNSUPPORTED: "the provider is not supported here, or its SDK (spectrum-ts) is not installed",
+  CHANNEL_PROVIDER_UNSUPPORTED: "the provider is not supported here, or its Spectrum SDK packages are not installed",
   CHANNEL_NOT_FOUND: "the connection is not defined",
   CHANNEL_DISABLED: "the connection is disabled",
 };

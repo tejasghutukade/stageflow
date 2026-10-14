@@ -68,7 +68,7 @@ Tool errors carry only `{ code, retryable }`.
 | `CHANNEL_CONNECTION_FAILED`, `CHANNEL_TIMEOUT` | The provider could not be reached (retryable) |
 | `CHANNEL_RECIPIENT_REJECTED` | The provider refused this recipient: unknown channel or chat, a bot that was not added or was blocked, or an iMessage user not registered in the Photon project |
 | `CHANNEL_WINDOW_CLOSED` | WhatsApp only: the 24-hour window is closed, so the stage must pin an approved `template` |
-| `CHANNEL_PROVIDER_UNSUPPORTED` | The provider is unknown to this Stageflow version, or its SDK (`spectrum-ts` for iMessage and WhatsApp) is not installed |
+| `CHANNEL_PROVIDER_UNSUPPORTED` | The provider is unknown to this Stageflow version, or its SDK (`@spectrum-ts/*` for iMessage and WhatsApp) is not installed |
 | `CHANNEL_SEND_OUTCOME_UNKNOWN` | The message may or may not have been sent. Do not retry with a new key |
 | `CHANNEL_OPERATION_CONFLICT` | The same operation key was reused with different content |
 
@@ -172,7 +172,7 @@ connections:
     credential: photon-main
 ```
 
-- **Install the SDK.** The send uses `spectrum-ts`, which is not bundled. Run `npm i spectrum-ts` next to Stageflow. Without it, a send fails with `CHANNEL_PROVIDER_UNSUPPORTED`.
+- **SDK.** The send uses the Spectrum packages `@spectrum-ts/core`, `@spectrum-ts/imessage` and `@spectrum-ts/whatsapp-business`, declared as optional dependencies (about 100 MB with their gRPC dependencies). If you install with `--omit=optional`, add them yourself. Without them, a send fails with `CHANNEL_PROVIDER_UNSUPPORTED`.
 - **Targets.** `to` is an E.164 phone number (`+14155550123`) or an Apple ID email. One recipient per entry.
 - **Free and Pro projects** use a shared line and can only message users registered in the project. The run-start check looks the recipient up and blocks the run with `CHANNEL_RECIPIENT_REJECTED` if they are missing. Stageflow never registers users; add them in the Photon dashboard. Business projects have dedicated lines and skip this lookup.
 - **Limits.** Photon documents 5,000 messages per server per day and 50 new conversations per line per day, and warns that unsolicited messages can get a line flagged. Message only people who opted in.
@@ -209,7 +209,7 @@ channels:
 - **Templates.** `name` is the approved template name, `languageCode` its language (`en`, `en_US`), `bodyParams` the positional body parameters (`{{1}}`, `{{2}}`, up to 10, 1024 characters each). Only body text parameters are supported; header and button components are not. Put `{{message}}` in a parameter and Stageflow fills it with the agent's message (a subject becomes a prefix `Subject: ...`). Newlines and tabs are replaced with spaces because template parameters cannot hold them. A message that makes a parameter empty or too long is refused before sending.
 - **Targets.** `to` is an E.164 number. Lists and `cc` are rejected.
 - **Live check.** Issuing a WhatsApp token proves the credentials work and that the project has at least one WhatsApp line. It cannot know whether a recipient's window is open.
-- **Install the SDK.** Needs `npm i spectrum-ts`, like iMessage. Each send starts and stops it.
+- **SDK.** Same optional Spectrum packages as iMessage. Each send starts and stops it.
 - Not supported yet: connecting your own Meta app directly (without Photon), template header and button components, and media.
 - **Not verified against a real project:** how the SDK surfaces Meta error codes. Stageflow reads the code from the error's `code`, a nested `error.code`, or the message text; anything else is an unknown outcome and is never resent.
 

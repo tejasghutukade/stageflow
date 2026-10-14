@@ -86,7 +86,7 @@ export function spectrumWhatsappTransport(importer: (specifier: string) => Promi
       let core: any;
       let provider: any;
       try {
-        core = await importer("spectrum-ts");
+        core = await importer("@spectrum-ts/core");
         provider = await importer("@spectrum-ts/whatsapp-business");
       } catch {
         throw new ChannelError("CHANNEL_PROVIDER_UNSUPPORTED");

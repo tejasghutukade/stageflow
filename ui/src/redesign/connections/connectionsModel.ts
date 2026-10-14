@@ -185,7 +185,7 @@ const FIX_HINTS: Record<string, string> = {
   CHANNEL_AUTH_FAILED: "The provider rejected the credential. Replace the secret on the host with a valid one, then check again.",
   CHANNEL_UNAUTHORIZED: "The provider refused the credential: it is invalid, or it lacks a permission this provider needs (for AgentMail, reading the inbox and sending). Check the key and its permissions, then try again.",
   CHANNEL_INVALID_INPUT: "The settings in connections.yaml do not match the provider account (for example an unknown inbox or a different workspace). Fix the entry and restart.",
-  CHANNEL_PROVIDER_UNSUPPORTED: "This Stageflow version cannot use this provider, or its SDK is not installed (iMessage and WhatsApp need spectrum-ts).",
+  CHANNEL_PROVIDER_UNSUPPORTED: "This Stageflow version cannot use this provider, or its SDK is not installed (iMessage and WhatsApp need the Spectrum SDK packages).",
   CHANNEL_CONNECTION_FAILED: "Stageflow could not reach the provider. This is usually temporary; check the network and try again.",
   CHANNEL_TIMEOUT: "The provider did not answer in time. Try again.",
   CHANNEL_RATE_LIMIT: "The provider is rate limiting this account. Wait and try again.",
@@ -248,11 +248,11 @@ export const PROVIDER_FORMS: Record<ProviderId, { fields: FormField[]; note?: st
   },
   imessage: {
     fields: PHOTON_FIELDS,
-    note: "Sending iMessage needs the spectrum-ts package installed next to Stageflow (npm i spectrum-ts).",
+    note: "Sending iMessage uses the Spectrum SDK packages, which Stageflow installs as optional dependencies.",
   },
   whatsapp: {
     fields: PHOTON_FIELDS,
-    note: "Enable WhatsApp for the project in the Photon dashboard first. Needs spectrum-ts installed. Stages pin an approved template per recipient.",
+    note: "Enable WhatsApp for the project in the Photon dashboard first. Uses the Spectrum SDK packages (optional dependencies). Stages pin an approved template per recipient.",
   },
 };
 

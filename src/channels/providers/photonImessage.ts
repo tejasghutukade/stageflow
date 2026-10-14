@@ -57,7 +57,7 @@ export function classifySdkError(error: unknown, connectionId: string): ChannelE
 }
 
 /**
- * Loads `spectrum-ts` on first use, so a host that never sends iMessage does not need it. The
+ * Loads the Spectrum SDK (`@spectrum-ts/core`) on first use, so a host that never sends iMessage does not need it. The
  * app is created for one send and stopped in `finally`: nothing keeps a connection open, whether
  * or not the SDK opens inbound streams while it is alive.
  */
@@ -67,7 +67,7 @@ export function spectrumTransport(importer: (specifier: string) => Promise<any> 
       let core: any;
       let provider: any;
       try {
-        core = await importer("spectrum-ts");
+        core = await importer("@spectrum-ts/core");
         provider = await importer("@spectrum-ts/imessage");
       } catch {
         throw new ChannelError("CHANNEL_PROVIDER_UNSUPPORTED");
