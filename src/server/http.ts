@@ -179,6 +179,7 @@ import type { TaskFile } from "../types/task.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { emailHostFor, releaseEmailHost } from "../email/host.js";
 import { handleEmailRoutes } from "./emailRoutes.js";
+import { handleChannelRoutes } from "./channelRoutes.js";
 import { EmailTriggers } from "../email/triggers.js";
 import {
   bootstrapStageflowHost,
@@ -485,6 +486,11 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
       try {
         if (await liveView.handle(req, res)) return true;
 
+        if (pathname === "/api/connections" || pathname.startsWith("/api/connections/")) {
+          if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method === "POST" })) return true;
+          if (!boot.channels) { json(res, 503, { code: "CHANNEL_CONNECTION_FAILED" }); return true; }
+          if (await handleChannelRoutes(method, pathname, boot.channels, res, json)) return true;
+        }
         if (pathname.startsWith("/api/email/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: ["POST", "PATCH", "DELETE"].includes(method) })) return true;
           const email = boot.email;

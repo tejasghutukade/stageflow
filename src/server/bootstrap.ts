@@ -40,6 +40,7 @@ import {
 import { EmailSource } from "../runtime/emailSource.js";
 import { emailHostFor, releaseEmailHost } from "../email/host.js";
 import { EmailTriggers } from "../email/triggers.js";
+import { startChannelService, type ChannelService } from "../channels/service.js";
 import { fireTrigger } from "../runtime/triggerRunner.js";
 import type { TriggerFireEvent } from "../runtime/triggerPort.js";
 import {
@@ -115,6 +116,8 @@ export type StageflowHostBootstrap = {
   stopGithubPollSource: () => void;
   /** Stops the email-trigger IMAP/IDLE listeners started at boot. */
   stopEmailSource: () => void;
+  /** Connections page read model and background health checks. */
+  channels?: ChannelService;
   email?: ReturnType<typeof emailHostFor> & { triggers: EmailTriggers; stop: () => Promise<void> };
   /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
   storeFilesystem?: StoreFilesystemClassification;
@@ -480,9 +483,11 @@ export async function bootstrapStageflowHost(
     await Promise.all([stopAccountEmail(), emailSource.stop(), scheduleSource.stop(), githubPollSource.stop()]);
     throw error;
   }
+  const channels = startChannelService(cwd);
   const stopEmailSource = () => {
     void emailSource.stop();
     void stopAccountEmail();
+    void channels.stop();
   };
 
   const mcpStateless = resolveMcpStateless({
@@ -530,6 +535,7 @@ export async function bootstrapStageflowHost(
     stopGithubPollSource,
     stopEmailSource,
     email: { ...emailHost, triggers: emailTriggers, stop: stopAccountEmail },
+    channels,
     storeFilesystem,
     workspaceCatalog,
   };

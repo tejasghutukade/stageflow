@@ -41,6 +41,8 @@ import type {
   CreatedStageListing,
   PackageListing,
   ExtensionFileListing,
+  ChannelConnectionsResult,
+  ChannelHealth,
   ProjectMcpCatalogList,
   ProjectMcpProbeResult,
   AttachTaskInput,
@@ -203,6 +205,22 @@ export async function fetchConnections(): Promise<ConnectionListing[]> {
     enabled: account.enabled,
     folders: account.folders,
   }));
+}
+
+export async function fetchChannelConnections(): Promise<ChannelConnectionsResult> {
+  const result = await api<ChannelConnectionsResult>("/api/connections");
+  return {
+    connections: result.connections.map(({ id, provider, displayName, enabled, identity, health }) => ({
+      id, provider, displayName, enabled,
+      ...(identity !== undefined ? { identity } : {}),
+      ...(health ? { health: { state: health.state, checkedAt: health.checkedAt, ...(health.error ? { error: { code: health.error.code, retryable: health.error.retryable } } : {}) } } : {}),
+    })),
+    ...(result.error ? { error: result.error } : {}),
+  };
+}
+
+export function checkChannelConnection(id: string): Promise<ChannelHealth> {
+  return api(`/api/connections/${encodeURIComponent(id)}/check`, { method: "POST" });
 }
 
 export function fetchEmailTrigger(id: string): Promise<EmailTriggerRule> {

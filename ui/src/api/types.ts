@@ -1171,6 +1171,26 @@ export type ConnectionListing = {
   folders: string[];
 };
 
+export type ChannelHealth = {
+  state: "ok" | "failed";
+  checkedAt: string;
+  error?: { code: string; retryable: boolean };
+};
+
+export type ChannelConnectionListing = {
+  id: string;
+  provider: string;
+  displayName: string;
+  enabled: boolean;
+  identity?: string;
+  health?: ChannelHealth;
+};
+
+export type ChannelConnectionsResult = {
+  connections: ChannelConnectionListing[];
+  error?: string;
+};
+
 export type TriggerEvent = {
   source: string;
   match?: Record<string, unknown>;
