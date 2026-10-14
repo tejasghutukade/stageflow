@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { inspect } from "node:util";
 import { loadConnectionsFile, type ConnectionsFile } from "./config.js";
@@ -5,7 +6,7 @@ import { ChannelError } from "./errors.js";
 import { channelProviders } from "./providers.js";
 import { resolveSecrets } from "./secrets.js";
 import { ChannelSecretStore, type SecretReader } from "./secretStore.js";
-import { globalCredentialRoot } from "../project/globalHome.js";
+import { globalCredentialRoot, globalStageflowHome } from "../project/globalHome.js";
 import type {
   AnyChannelProvider, ConnectionEntry, ConnectionSummary, CredentialEntry,
   ResolvedConnection, ResolvedCredential,
@@ -13,11 +14,22 @@ import type {
 
 export const CONNECTIONS_FILE_NAME = "connections.yaml";
 
-/** `STAGEFLOW_CONNECTIONS_FILE` wins, so a container can keep the file on its data volume. */
+function hostConnectionsFile(env: NodeJS.ProcessEnv): string | undefined {
+  const home = env.STAGEFLOW_HOME?.trim() || (env === process.env ? globalStageflowHome() : undefined);
+  return home ? path.join(path.resolve(home), CONNECTIONS_FILE_NAME) : undefined;
+}
+
+/**
+ * Where connections live. Connections are host-level, like provider credentials, so the default is
+ * `$STAGEFLOW_HOME/connections.yaml`. A `connections.yaml` in the project root takes precedence when
+ * it exists (CI and checked-in setups), and `STAGEFLOW_CONNECTIONS_FILE` overrides both.
+ */
 export function connectionsFilePath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
   const override = env.STAGEFLOW_CONNECTIONS_FILE?.trim();
   if (override) return path.isAbsolute(override) ? path.resolve(override) : path.resolve(cwd, override);
-  return path.join(path.resolve(cwd), CONNECTIONS_FILE_NAME);
+  const project = path.join(path.resolve(cwd), CONNECTIONS_FILE_NAME);
+  if (existsSync(project)) return project;
+  return hostConnectionsFile(env) ?? project;
 }
 
 export function defaultSecretStore(): ChannelSecretStore {

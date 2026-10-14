@@ -7,7 +7,7 @@ import { addConnectionYaml, removeConnectionYaml, updateConnectionYaml } from ".
 import { resolveSecretRef } from "../src/channels/secrets.js";
 import { connectionsFilePath } from "../src/channels/registry.js";
 import { startChannelService, type ChannelService } from "../src/channels/service.js";
-import { releaseChannelHost } from "../src/channels/host.js";
+import { channelHostFor, releaseChannelHost } from "../src/channels/host.js";
 import { registerChannelProvider, unregisterChannelProvider } from "../src/channels/providers.js";
 import { ChannelError } from "../src/channels/errors.js";
 import { fakeChannelProvider } from "./fixtures/fakeChannelProvider.js";
@@ -138,6 +138,7 @@ describe("channel service edits", () => {
     await service.stop();
     await releaseChannelHost(cwd);
     unregisterChannelProvider("fake");
+    await rm(file, { force: true });
     await rm(cwd, { recursive: true, force: true });
     new ChannelSecretStore(path.join(credentialRoot, "channel-secrets.json")).deleteWithPrefix("");
   });
@@ -239,5 +240,34 @@ describe("channel service edits", () => {
     expect(connectionsFilePath("/work", { STAGEFLOW_CONNECTIONS_FILE: "/data/connections.yaml" })).toBe("/data/connections.yaml");
     expect(connectionsFilePath("/work", { STAGEFLOW_CONNECTIONS_FILE: "rel.yaml" })).toBe(path.resolve("/work", "rel.yaml"));
     expect(connectionsFilePath("/work", {})).toBe(path.join("/work", "connections.yaml"));
+  });
+
+  it("defaults to the host-level file and lets a project file take precedence", async () => {
+    const project = await mkdtemp(path.join(tmpdir(), "sf-proj-"));
+    try {
+      const env = { STAGEFLOW_HOME: "/var/sf-home" };
+      expect(connectionsFilePath(project, env)).toBe(path.join("/var/sf-home", "connections.yaml"));
+      await writeFile(path.join(project, "connections.yaml"), "version: 1\n");
+      expect(connectionsFilePath(project, env)).toBe(path.join(project, "connections.yaml"));
+      expect(connectionsFilePath(project, { ...env, STAGEFLOW_CONNECTIONS_FILE: "/x/c.yaml" })).toBe("/x/c.yaml");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a first connection to the host-level file and every cached project host sees it", async () => {
+    const other = await mkdtemp(path.join(tmpdir(), "sf-other-"));
+    try {
+      const otherHost = channelHostFor(other);
+      expect(otherHost.registry.list()).toEqual([]);
+      await service.create(input({ id: "shared" }));
+      expect(file).toBe(path.join(process.env.STAGEFLOW_HOME!, "connections.yaml"));
+      expect(otherHost.registry.list().map(entry => entry.id)).toEqual(["shared"]);
+      await service.remove("shared");
+      expect(otherHost.registry.list()).toEqual([]);
+    } finally {
+      await releaseChannelHost(other);
+      await rm(other, { recursive: true, force: true });
+    }
   });
 });

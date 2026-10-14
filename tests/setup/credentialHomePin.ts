@@ -1,4 +1,14 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 const realEnv = process.env;
+
+// Without a pinned home, host-level files such as connections.yaml would be read from the
+// developer's real ~/.stageflow. Each test file gets its own empty one.
+if (!realEnv.STAGEFLOW_HOME?.trim()) {
+  realEnv.STAGEFLOW_HOME = mkdtempSync(path.join(tmpdir(), "sf-test-home-"));
+}
 
 if (realEnv.STAGEFLOW_HOME?.trim() && !realEnv.STAGEFLOW_CREDENTIAL_HOME?.trim()) {
   realEnv.STAGEFLOW_CREDENTIAL_HOME = realEnv.STAGEFLOW_HOME;

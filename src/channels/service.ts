@@ -3,7 +3,7 @@ import { parseConnectionsYaml } from "./config.js";
 import { addConnectionYaml, readConnectionsText, removeConnectionYaml, toYamlEntry, updateConnectionYaml, writeConnectionsText, type ConnectionPatch } from "./configWriter.js";
 import { ChannelError, type ChannelErrorCode } from "./errors.js";
 import { ChannelHealthMonitor, type ChannelHealthOptions } from "./health.js";
-import { channelHostFor, releaseChannelHost, type ChannelHost } from "./host.js";
+import { channelHostFor, releaseChannelHost, reloadChannelHosts, type ChannelHost } from "./host.js";
 import { ChannelRegistry, connectionsFilePath, defaultSecretStore, sealed } from "./registry.js";
 import { STORE_NAME_PATTERN } from "./secretStore.js";
 import type { ConnectionHealth, ConnectionSummary, ResolvedConnection, SecretRef } from "./types.js";
@@ -57,7 +57,7 @@ export function startChannelService(
   cwd: string,
   options: Pick<ChannelHealthOptions, "intervalMs" | "timeoutMs"> = {},
 ): ChannelService {
-  const file = connectionsFilePath(cwd);
+  const file = (): string => connectionsFilePath(cwd);
   const store = defaultSecretStore();
   let host: ChannelHost | undefined;
   let monitor: ChannelHealthMonitor | undefined;
@@ -88,6 +88,7 @@ export function startChannelService(
 
   const reload = async (): Promise<void> => {
     await monitor?.stop();
+    reloadChannelHosts();
     if (host) {
       try {
         host.reload();
@@ -206,7 +207,7 @@ export function startChannelService(
         let credentialYaml: { id: string; provider: string; secrets: Record<string, string> } | undefined;
         let credentialId: string | undefined;
         const refs = secretRefs(`connection.${id}`, parsed.secrets);
-        const text = readConnectionsText(file);
+        const text = readConnectionsText(file());
         try {
           if (provider.credentialProvider) {
             if (typeof parsed.credential === "string") {
@@ -233,7 +234,7 @@ export function startChannelService(
           });
           const next = addConnectionYaml(text, entry, credentialYaml);
           validate(next);
-          writeConnectionsText(file, next);
+          writeConnectionsText(file(), next);
         } catch (caught) {
           for (const name of written) store.delete(name);
           throw caught;
@@ -265,7 +266,7 @@ export function startChannelService(
         const secrets = parsed.data.secrets ?? {};
         for (const field of Object.keys(secrets)) if (!allowed.has(field)) throw invalid(field);
         const refs = secretRefs(`connection.${id}`, secrets);
-        const text = readConnectionsText(file);
+        const text = readConnectionsText(file());
         try {
           for (const field of Object.keys(secrets)) {
             const name = `connection.${id}.${field}`;
@@ -276,7 +277,7 @@ export function startChannelService(
           if (Object.keys(refs).length) patch.secrets = refs;
           const next = updateConnectionYaml(text, id, patch);
           validate(next);
-          writeConnectionsText(file, next);
+          writeConnectionsText(file(), next);
         } catch (caught) {
           for (const name of written) {
             if (previous[name] === undefined) store.delete(name); else store.set(name, previous[name]!);
@@ -292,9 +293,9 @@ export function startChannelService(
     remove(id) {
       return serialized(async () => {
         requireHost().registry.get(id, false);
-        const { text, removedCredential } = removeConnectionYaml(readConnectionsText(file), id);
+        const { text, removedCredential } = removeConnectionYaml(readConnectionsText(file()), id);
         validate(text);
-        writeConnectionsText(file, text);
+        writeConnectionsText(file(), text);
         store.deleteWithPrefix(`connection.${id}.`);
         if (removedCredential) store.deleteWithPrefix(`credential.${removedCredential}.`);
         await reload();

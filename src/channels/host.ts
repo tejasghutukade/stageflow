@@ -56,6 +56,17 @@ export function channelHostFor(cwd: string): ChannelHost {
   return entry.host;
 }
 
+/** Re-reads connections.yaml in every cached host, so an edit made once reaches every project. */
+export function reloadChannelHosts(): void {
+  for (const entry of hosts.values()) {
+    try {
+      entry.host.reload();
+    } catch {
+      /* a host whose file no longer loads keeps its previous registry until the file is fixed */
+    }
+  }
+}
+
 export async function releaseChannelHost(cwd: string): Promise<void> {
   const key = path.resolve(cwd);
   const entry = hosts.get(key);
