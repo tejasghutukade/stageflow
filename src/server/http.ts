@@ -179,6 +179,8 @@ import type { TaskFile } from "../types/task.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { emailHostFor, releaseEmailHost } from "../email/host.js";
 import { handleEmailRoutes } from "./emailRoutes.js";
+import { AgentService } from "../agents/service.js";
+import { handleAgentRoutes } from "./agentRoutes.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { EmailTriggers } from "../email/triggers.js";
 import {
@@ -421,6 +423,7 @@ export type OperatorRoutes = ((ctx: HttpHostRouteContext) => Promise<boolean | v
 };
 
 export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
+  const agents = new AgentService({ homeDir: globalStageflowHome() });
   const {
     manager,
     store,
@@ -486,6 +489,9 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
       try {
         if (await liveView.handle(req, res)) return true;
 
+        if (pathname === "/api/agents" || pathname.startsWith("/api/agents/")) {
+          if (await handleAgentRoutes(req, method, pathname, agents, cwd, res, json)) return true;
+        }
         if (pathname === "/api/connections" || pathname.startsWith("/api/connections/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
           if (!boot.channels) { json(res, 503, { code: "CHANNEL_CONNECTION_FAILED" }); return true; }

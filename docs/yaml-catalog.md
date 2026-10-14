@@ -1027,6 +1027,20 @@ Prose-only tasks (no `input`) stay valid as files. If an entry stage declares `i
 
 Runnable demo: [`examples/hello-world/`](../examples/hello-world/) — task `input` paired with entry `io.input.schema` (see that README’s “What this demonstrates”). See also [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
 
+## Agents (`agents/*.agent.yaml`) {#agents-agent-yaml}
+
+An agent is a project-owned definition. The file name is the agent id: `agents/<id>.agent.yaml`. This is not the stage `agent:` field, which still selects the Pi or Claude backend.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | yes | Lowercase identifier. Fixed after create. Must match the file name |
+| `name` | yes | Operator-facing name |
+| `instructions` | yes | Instructions applied to sessions started on this revision |
+| `enabled` | no | Defaults to `false`. A disabled agent accepts no new sessions or turns |
+| `description` | no | Short summary shown in the directory |
+
+A valid save or a valid edit of the file creates a new revision for future sessions. An invalid edit leaves the last valid revision in place and reports `agent.invalid` without echoing the file. A console save whose `baseRevision` is not the current revision returns `agent.conflict` and does not write the file. Removing the file archives the agent and keeps its sessions readable.
+
 ## Triggers (`*.trigger.yaml`) {#triggers-trigger-yaml}
 
 A trigger is a small catalog file that binds one addressable `id` to an existing `pipeline` + `task`, so something outside the pipeline DAG can start a run without knowing the underlying catalog paths — an operator running `sf trigger fire`, an external system calling the REST route, a `schedule`-kind trigger firing on its own, or an `event`-kind trigger watching GitHub via the poll adapter or a mailbox via the email adapter. See [Architecture](architecture.md) for what backs a trigger today versus what is deferred.
