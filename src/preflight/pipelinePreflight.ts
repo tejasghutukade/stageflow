@@ -13,6 +13,7 @@ import {
   SecretUnavailableError,
 } from "../runtime/stageSecrets.js";
 import { isForeverDeniedSecret } from "../runtime/stageEnvironment.js";
+import { checkStageChannels, type ChannelCheckOptions } from "./channelChecks.js";
 import {
   checkToolchainRequirements,
   curatedStageEnv,
@@ -24,7 +25,8 @@ import {
 export type PreflightCheckKind =
   | "toolchain"
   | "secret"
-  | "mcp";
+  | "mcp"
+  | "channel";
 
 export type PreflightItem = {
   kind: PreflightCheckKind;
@@ -40,7 +42,8 @@ export type PreflightItem = {
     | "missing_catalog"
     | "unknown_server"
     | "invalid_config"
-    | "untrusted_config_origin";
+    | "untrusted_config_origin"
+    | "channel_check_failed";
   tool?: string;
   required?: string;
   found?: string;
@@ -48,6 +51,11 @@ export type PreflightItem = {
   secret?: string;
   stageId?: string;
   server?: string;
+  /** Connection id for `kind: "channel"`. */
+  connection?: string;
+  /** Provider-neutral channel error code, such as CHANNEL_AUTH_FAILED. */
+  channelCode?: string;
+  retryable?: boolean;
   message?: string;
 };
 
@@ -222,6 +230,7 @@ export async function runPipelinePreflight(
     strict?: boolean;
     /** start_run: unknown_version passes; missing/mismatch fail. */
     forStart?: boolean;
+    channels?: Pick<ChannelCheckOptions, "providers" | "retryDelaysMs" | "attemptTimeoutMs">;
   },
 ): Promise<PipelinePreflightResult> {
   const hostEnv = options.hostEnv ?? process.env;
@@ -248,16 +257,24 @@ export async function runPipelinePreflight(
     hostEnv,
   });
 
+  const channelChecks = await checkStageChannels(loaded, {
+    projectRoot: options.projectRoot,
+    hostEnv,
+    ...options.channels,
+  });
+
   const checks: PreflightItem[] = [
     ...toolchainItems(toolchain.checks),
     ...secretChecks,
     ...mcpChecks,
+    ...channelChecks,
   ];
 
   const ok =
     toolchain.ok &&
     !secretChecks.some((c) => c.status !== "ok") &&
-    !mcpChecks.some((c) => c.status !== "ok");
+    !mcpChecks.some((c) => c.status !== "ok") &&
+    !channelChecks.some((c) => c.status !== "ok");
 
   return { ok, checks, requirements, toolchain };
 }

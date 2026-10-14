@@ -33,6 +33,7 @@ Left rail items (`ui/src/redesign/shell/navConfig.ts`):
 | **Tasks** | `#/tasks` | Browse task files |
 | **Catalog** | `#/catalog` | Stages and skills. `#/skills` redirects here |
 | **Triggers** | `#/triggers` | Catalog triggers |
+| **Connections** | `#/connections` | Communication channels (connect, test, replace a key, disconnect), email accounts and `.mcp.json` tool servers. See [Communication channels](channels.md#connections-page-and-api) |
 | **Settings** | `#/settings` | General, Providers, MCP, Concurrency, Project MCP, Notifications |
 
 **Start a run** — `#/new` opens the Start Run dialog (optional `?pipeline=` and `?task=` query params).
@@ -40,6 +41,10 @@ Left rail items (`ui/src/redesign/shell/navConfig.ts`):
 Waiting runs show a count badge on Inbox.
 
 Runs and Pipelines list rows stack identity above a full-width mini track so catalog paths stay readable.
+
+## Stage channels in the pipeline editor
+
+Selecting a stage in the pipeline editor shows a **Channels** section in the inspector. Pick a connection from the Connections list, enter the recipient (fields match the provider: several addresses and Cc for AgentMail, a channel id for Slack, a chat id for Telegram, a phone or email for iMessage, a phone plus an optional template for WhatsApp), and the editor writes `channels:` onto the stage. It shows the connection's status, flags a recipient the provider would reject as you type, and hides **Add channel** once the stage has its one allowed channel. A pipeline-level default `channels:` is edited in the YAML panel and survives saves. See [Communication channels](channels.md#quick-start).
 
 ## Workshop
 
@@ -84,6 +89,8 @@ Hash-based routing (`ui/src/routes.ts`):
 | `#/pipelines/<id>` | Single pipeline detail |
 | `#/tasks` | Task catalog |
 | `#/tasks/<id>` | Single task detail |
+| `#/connections` | Connections: channels, email accounts, tool servers. First run shows the providers you can connect |
+| `#/connections/<id>` | One channel connection: status and fix hint, Test connection, replace key, enable or disable, disconnect, and the `channels:` snippet for a stage |
 | `#/skills`, `#/skills/<name>` | Skills browser |
 | `#/extensions` | Extensions index |
 | `#/extensions/packages/<scope>/<source>` | Extension package detail |

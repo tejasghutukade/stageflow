@@ -43,6 +43,19 @@ export type StageBrowserConfig = {
   };
 };
 
+export type StageChannelOperation = "send";
+
+/** A pinned communication target for a stage. Targets are validated per provider. */
+export type StageChannel = {
+  alias?: string;
+  connection: string;
+  operations: StageChannelOperation[];
+  to: string | string[];
+  cc?: string[];
+  /** Provider-specific message template, such as a pinned WhatsApp template. Validated by the provider. */
+  template?: Record<string, unknown>;
+};
+
 export type StageConfig = {
   id: string;
   system_prompt: string;
@@ -60,6 +73,8 @@ export type StageConfig = {
   skill?: string;
   email?: { accountId: string; operations: ("send" | "reply" | "getMessage" | "search" | "downloadAttachment")[] }[];
   mcp?: string[];
+  /** Communication channels this stage may send on. Inherits pipeline `channels` defaults. */
+  channels?: StageChannel[];
   /** Declared Host secret names this stage may receive (Slot 6). */
   secrets?: StageSecretDecl[];
   /** Declared toolchain binaries this stage needs (Slot 9). */

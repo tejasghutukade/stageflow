@@ -856,3 +856,28 @@ describe("Workshop Author save tool facade", () => {
       await access(path.join(ws, "ws-save", "ws-save.pipeline.yaml"));
     }));
 });
+
+describe("pipeline-level channels survive the draft round trip", () => {
+  it("loads root channels and writes them back on overwrite", () =>
+    withRepo(async (root) => {
+      const dir = await seedPackage(root, { prompts: { clarify: "Clarify", decide: "Decide" } });
+      const file = path.join(dir, "demo.pipeline.yaml");
+      const original = await readFile(file, "utf8");
+      await writeFile(
+        file,
+        `${original.trimEnd()}\nchannels:\n  - connection: ops\n    to: C0123ABCD\n    operations: [send]\n`,
+        "utf8",
+      );
+
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+      expect(loaded.draft.pipeline.channels).toEqual([{ connection: "ops", to: "C0123ABCD", operations: ["send"] }]);
+
+      const result = await overwriteDraftPackage(root, { directory: "pipelines", draft: loaded.draft, allowInvalid: true });
+      expect(result.ok).toBe(true);
+      const written = await readFile(file, "utf8");
+      expect(written).toContain("channels:");
+      expect(written).toContain("connection: ops");
+    }));
+});

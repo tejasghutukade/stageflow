@@ -26,6 +26,7 @@ export const NETWORK_ERROR_CODES = [
   "tool_version_mismatch",
   "unknown_version",
   "secret_unavailable",
+  "channel_check_failed",
   "not_ready",
   "internal_error",
   "retry_in_progress",

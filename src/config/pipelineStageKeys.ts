@@ -30,6 +30,7 @@ export const WIRING_KEYS = new Set([
 /** Stage body keys. Target: `io` / `verify`. IR/legacy: `payload_schema`, `pre_emit_checks`, `clone_input_schema`. */
 export const BODY_KEYS = new Set([
   "email",
+  "channels",
   "system_prompt",
   "model",
   "payload_schema",

@@ -35,6 +35,7 @@ export type DraftPackage = {
     model?: unknown;
     schemas?: unknown;
     requires?: unknown;
+    channels?: unknown;
   };
   stages?: DraftStageArtifact[];
   task?: {
@@ -199,6 +200,7 @@ function pipelineDocument(pipeline: DraftPackage["pipeline"]): Record<string, un
   if (pipeline.model !== undefined) doc.model = pipeline.model;
   if (pipeline.schemas !== undefined) doc.schemas = pipeline.schemas;
   if (pipeline.requires !== undefined) doc.requires = pipeline.requires;
+  if (pipeline.channels !== undefined) doc.channels = pipeline.channels;
   return doc;
 }
 
@@ -314,6 +316,7 @@ export async function validateDraftPackage(
       ...(draft.pipeline.requires !== undefined
         ? { requires: draft.pipeline.requires }
         : {}),
+      ...(draft.pipeline.channels !== undefined ? { channels: draft.pipeline.channels } : {}),
     };
     const result = await loadPipelineValidated(inline, {
       cwd,
@@ -1046,6 +1049,7 @@ export async function loadDraftPackage(
       ...(raw.model !== undefined ? { model: raw.model } : {}),
       ...(raw.schemas !== undefined ? { schemas: raw.schemas } : {}),
       ...(raw.requires !== undefined ? { requires: raw.requires } : {}),
+      ...(raw.channels !== undefined ? { channels: raw.channels } : {}),
     },
     ...(stageArtifacts.length > 0 ? { stages: stageArtifacts } : {}),
   };

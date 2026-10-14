@@ -1,5 +1,6 @@
 import type {
   LoadedStageConfig,
+  StageChannel,
   StageBrowserConfig,
   StageGateKind,
   StageIoYaml,
@@ -19,6 +20,8 @@ export type PipelineConfig = {
   schemas?: Record<string, unknown>;
   /** Declared toolchain binaries this pipeline needs (Slot 9). */
   requires?: ToolRequirement[];
+  /** Default channels inherited by every stage that does not override them. */
+  channels?: StageChannel[];
 };
 
 /** An inline pipeline definition authored directly in a `start_run` call, with no backing file. */
@@ -29,6 +32,7 @@ export type InlinePipelineDefinition = {
   model?: unknown;
   schemas?: unknown;
   requires?: unknown;
+  channels?: unknown;
 };
 
 export type PipelineForkConfig = {

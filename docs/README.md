@@ -32,6 +32,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Browser sessions](browser.md) | Stage `browser` field, saved logins (profiles), login check and human login pattern, queueing, teardown, headed vs headless, live view and watch-the-agent for Hosts with no screen, container browser host (development), Host config keys, what is not built |
 | [Browser sessions internals](browser-internals.md) | For contributors: module map, lifecycle, file layout, env contract, invariants, seams, extension recipes, test and debug guide for browser sessions |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
+| [Communication channels](channels.md) | connecting AgentMail, Slack, Telegram, iMessage and WhatsApp, linking a connection to a stage, `connections.yaml` and secret handling, run-start checks, the Connections page API, and troubleshooting |
 
 ## Operating Stageflow
 

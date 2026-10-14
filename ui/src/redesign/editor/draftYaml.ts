@@ -25,6 +25,7 @@ export function pipelineYamlDocument(
   if (pipeline.model !== undefined) doc.model = pipeline.model;
   if (pipeline.schemas !== undefined) doc.schemas = pipeline.schemas;
   if (pipeline.requires !== undefined) doc.requires = pipeline.requires;
+  if (pipeline.channels !== undefined) doc.channels = pipeline.channels;
   return doc;
 }
 

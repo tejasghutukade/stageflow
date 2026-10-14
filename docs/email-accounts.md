@@ -4,6 +4,8 @@ Stageflow connects existing mailboxes. It does not create addresses or host emai
 
 Account management, connection tests, send, reply, retrieval, bounded search, incoming detection, and pipeline triggers are available. Account capabilities report only implemented mailbox operations.
 
+To send messages from a stage over AgentMail, Slack, Telegram, iMessage or WhatsApp instead of an IMAP/SMTP mailbox, see [Communication channels](channels.md). Email accounts and channels are separate and both keep working.
+
 Mailbox passwords can come from the host environment or the local `email.yaml` file. Use an app password when your provider requires one. OAuth tokens must come from the environment. Do not put credentials in stage YAML, tasks, prompts, or model provider settings.
 
 ## Configure accounts in email.yaml

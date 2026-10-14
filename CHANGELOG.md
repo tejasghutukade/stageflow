@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-10-14
+
+### Added
+
+- **Communication channels (send-only).** Connect AgentMail, Slack, Telegram, iMessage or WhatsApp once, then let a stage send through it. A stage (or a pipeline default) declares `channels:` with the recipient pinned in YAML, and the agent gets one neutral `send_message` tool on the Pi backend. It cannot choose a recipient. iMessage and WhatsApp go through Photon and use optional `@spectrum-ts/*` packages. A stage uses one channel for now (enforced when a stage is parsed, merged, validated and sent; the code that supports several stays behind one limit). Receiving messages and agent channels are not part of this release. See [Communication channels](docs/channels.md).
+- **Connections page.** Connect a provider from the console: Test connection before saving, Replace key, disable, disconnect, and a per-connection page with a status fix hint and a `channels:` snippet. First run explains that nothing is connected and offers every provider. Email accounts and `.mcp.json` tool servers are listed alongside. New `GET`/`POST /api/connections`, `POST /api/connections/test`, `PATCH`/`DELETE /api/connections/{id}`, `POST /api/connections/{id}/check` and `POST /api/connections/{id}/validate-target`.
+- **Stage channels in the pipeline editor.** The stage inspector has a Channels section: pick a connection, enter a provider-shaped recipient with live validation, see the connection's status. Pipeline-level `channels:` now survives a draft save.
+- **Host-level connections and a secret store.** Connections live in `$STAGEFLOW_HOME/connections.yaml` and are shared by every project (a project-root file wins; `STAGEFLOW_CONNECTIONS_FILE` overrides). Secrets are `env:NAME` references or `store:NAME` references to `channel-secrets.json` (mode `0600`) written by the console. A YAML value is never a secret.
+- **Run-start channel check.** Preflight, `start_run` and `sf doctor` check each connection live and block the run with `channel_check_failed`, naming the connection and the reason. Only transient failures are retried, at most twice.
+- **Safe sending.** Sends are idempotent per operation key through a durable ledger; a send that may have reached the provider is never resent, even after a restart. Secrets stay out of the stage worker, logs, errors and API responses.
+- `examples/channels-smoke/`: a two-stage pipeline that sends one email and one text.
+
+### Changed
+
+- The Claude agent backend rejects a stage that declares `channels:` instead of running without `send_message`.
+- The Docker image includes the optional Spectrum packages (about 100 MB); `npm install --omit=optional` skips them and iMessage/WhatsApp then report `CHANNEL_PROVIDER_UNSUPPORTED`.
+
+### Known limits
+
+- A Free or Pro Photon user must be a project user and must text their assigned Photon line once before iMessage sends are accepted. The run-start check cannot detect this.
+- `sf backup` does not include `connections.yaml` or `channel-secrets.json`.
+- Not verified against a real account: Slack, Telegram and WhatsApp sends.
+
 ## [0.35.0] - 2026-10-13
 
 ### Added

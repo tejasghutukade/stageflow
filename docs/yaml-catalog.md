@@ -58,6 +58,7 @@ Optional top-level fields:
 | `schemas` | object | Named JSON Schema map for `$ref: "#/schemas/NAME"` on stage `io` (see [Pipeline schemas](#pipeline-schemas)) |
 | `browser` | object | Browser session settings (see [Stage browser](#stage-browser)); adds the `agent-browser` requirement |
 | `requires` | array | Toolchain declarations `{ tool, version? }` checked before start (see [Toolchain requires](#toolchain-requires)) |
+| `channels` | array | Default communication channels every stage inherits unless it overrides them (see [Stage channels](#stage-channels)) |
 
 Bare string stage refs are rejected.
 
@@ -821,6 +822,43 @@ MCP elicitation is unsupported — a passed server cannot ask the operator a que
 Settings can list git-root `.mcp.json` names and Check whether a server can connect without starting a run. That inspect is not attach: YAML `mcp:` still allowlists what a stage receives.
 
 Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md).
+
+### Stage channels {#stage-channels}
+
+> **Status: built for AgentMail, Slack, Telegram, iMessage and WhatsApp.** Connections are defined in the console or in `connections.yaml`; see [Communication channels](channels.md). `channels:` loads, merges and validates. A stage that declares a `send` channel gets a `send_message` tool on the Pi backend, delivered by the Host with the target pinned here, and the Host refuses to start the stage if the connection no longer matches. The Claude backend does not provide `send_message`, so a stage with `channels:` fails at start there (`email:` still has the older gap). Run start (and the MCP `preflight` tool and `sf doctor`) runs a live check of each declared connection and blocks the run with `channel_check_failed` if one fails, naming the connection and the reason; see [MCP `preflight`](mcp.md#preflight). The pipeline editor edits stage channels in its inspector.
+
+A stage declares which communication connections it may send on. Each entry points at a connection defined in [`connections.yaml`](../connections.example.yaml) and **pins the target**, so the agent can never choose a different recipient. This is separate from `email:`, which keeps working unchanged for IMAP/SMTP accounts.
+
+```yaml
+channels:
+  - connection: ops-slack
+    to: C0123ABCD              # one target: a Slack channel id; phone, chat id, etc. for the others
+    operations: [send]
+```
+
+```yaml
+channels:
+  - connection: support-inbox
+    to: [oncall@acme.com, lead@acme.com]   # AgentMail only: several recipients, one message
+    cc: [manager@acme.com]
+    operations: [send]
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `connection` | yes | Id of a connection in `connections.yaml` (letters, digits, `.`, `_`, `-`) |
+| `to` | yes | Target. A string, or a list of strings (1 to 20). What is valid depends on the provider and is checked at validate time |
+| `operations` | yes | Closed list, `[send]` today. It is a list so `reply`/`receive` can be added later without changing the shape |
+| `alias` | no | Name for this entry; the agent passes it as `send_message`'s `channel`. Only matters when several channels are enabled, because with one the agent can omit `channel` |
+| `cc` | no | List of strings. Accepted by providers that support it, rejected by the rest |
+| `template` | no | Provider-specific message template. Only WhatsApp uses it (`name`, `languageCode`, `bodyParams`; the text `{{message}}` in a parameter is replaced with the agent's message) |
+
+- **One channel per stage (for now).** A stage may use exactly one channel. A second entry is rejected wherever a stage is loaded (`sf validate`, the console, `start_run`, run start) and again when a message is sent, including a second channel that only appears after merging a pipeline default (use `channels: []` on the stage to drop the default). To use two channels, use two stages. One connection can still reach several recipients through its own target list (AgentMail `to` and `cc`). The limit is one policy constant, `MAX_CHANNELS_PER_STAGE`, and the alias, merge and per-channel idempotency logic still support several, so it can be raised later. Entry names (alias, or connection id when there is no alias) must be unique within a stage.
+- `channels` is a stage **body** key: it goes in a stage file or an inline entry. Like `email`, it is rejected on a `uses:` wrapper.
+- **Pipeline defaults.** A top-level `channels:` on the pipeline is inherited by every stage. A stage that declares its own `channels:` merges by entry name with the stage entry winning, and keeps the other defaults. `channels: []` on a stage clears every inherited entry. The merged result must still fit the one-channel limit.
+- **Live check** (run start, `preflight`, `sf doctor`): every distinct connection a pipeline's stages use is checked once, in parallel, and some providers also check the pinned targets. Only transient failures are retried (up to two retries). A failure blocks the run with `channel_check_failed`. It never sends a message.
+- **Static validation** (`sf validate`, and again at run start) fails a stage when `connections.yaml` cannot be loaded, the connection is not defined or is disabled, the provider does not support the operation, or the target is not valid for the provider. It never calls a provider and never reads a secret. A stage that declares no channels never reads `connections.yaml`.
+- Invalid shapes are reported as `stage.invalid_channels` (stage) or `pipeline.invalid_channels` (pipeline root). Connection and target problems are `stage.channel_unavailable`.
 
 ### Stage browser {#stage-browser}
 

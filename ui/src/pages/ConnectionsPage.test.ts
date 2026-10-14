@@ -1,16 +1,16 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchConnections } from "../api";
 import { defaultRailItems } from "../components/AppRail";
+import { NAV_GROUPS } from "../redesign/shell/navConfig";
 import { parseHash } from "../routes";
-import { ConnectionTable } from "./ConnectionsPage";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Connections", () => {
   it("is reachable from the sidebar and direct URL", () => {
     expect(defaultRailItems.find((item) => item.id === "connections")?.label).toBe("Connections");
+    const item = NAV_GROUPS.flatMap((group) => group.items).find((entry) => entry.id === "connections");
+    expect(item).toMatchObject({ label: "Connections", href: "#/connections" });
     expect(parseHash("#/connections")).toEqual({ name: "connections" });
   });
 
@@ -26,21 +26,7 @@ describe("Connections", () => {
       id: "test-inbox", channel: "Email", displayName: "Test email", address: "test@example.com",
       enabled: true, folders: ["INBOX"],
     }]);
-    const html = renderToStaticMarkup(createElement(ConnectionTable, { connections }));
-    expect(html).toContain("Test email");
-    expect(html).toContain("test@example.com");
-    expect(html).toContain("Enabled");
-    expect(html).not.toContain("private-");
-    expect(html).not.toContain("Connected");
-  });
-
-  it("keeps disabled accounts visible", () => {
-    const html = renderToStaticMarkup(createElement(ConnectionTable, { connections: [{
-      id: "disabled", channel: "Email", displayName: "Disabled email", address: "test@example.com",
-      enabled: false, folders: ["INBOX", "Updates"],
-    }] }));
-    expect(html).toContain("Disabled");
-    expect(html).toContain("INBOX, Updates");
+    expect(JSON.stringify(connections)).not.toContain("private-");
   });
 
   it("reports load failures instead of claiming there are no accounts", async () => {

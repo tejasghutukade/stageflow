@@ -115,6 +115,21 @@ Real Chrome smoke test (opt-in, needs `agent-browser` on `PATH`): `STAGEFLOW_BRO
 
 Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** for UI-specific rules (Astryx workflow, chrome exception, UX docs, component map). Do not duplicate that file here.
 
+### Connections (communication channels and tools)
+
+Send-only stage channels are built (`src/channels/`, `src/tools/sendMessage.ts`, `src/server/channelRoutes.ts`, `ui/src/redesign/connections/`, the editor's `StageChannelsSection`). User docs: **[docs/channels.md](docs/channels.md)**. Before changing them or adding a provider, read that page. Local-only working notes (gitignored, not in the repo) may exist at `docs/specs/connections-spec.md`, `connections-provider-reference.md` and `connections-design-handoff.md`; if you have them, the provider reference holds verified third-party facts.
+
+Rules every change must keep:
+
+- A secret is never a YAML value, never in a response, log, error, run state or the stage worker. Providers get secrets only through `ResolvedConnection` (non-enumerable). Errors carry codes, never response bodies or request URLs.
+- Recipients are pinned in YAML. The agent never chooses one.
+- A send that may have reached the provider is `CHANNEL_SEND_OUTCOME_UNKNOWN` and is never resent. Only definite failures (refused connection, DNS/TLS, 4xx) are retryable or resendable under a new key.
+- A stage uses one channel (`MAX_CHANNELS_PER_STAGE`). Keep it enforced at parse, merge, validation and send; tests that need several raise it with `setStageChannelLimitForTests`.
+- Connections are host-level (`$STAGEFLOW_HOME/connections.yaml`, project file wins, `STAGEFLOW_CONNECTIONS_FILE` overrides). The test setup pins an empty `STAGEFLOW_HOME` so host files never leak in.
+- A provider is one file: its adapter, its `meta` (form fields, recipient shape, examples; the console renders from `GET /api/connections/meta`) and its tests. Every `ChannelErrorCode` is explained once in `src/channels/errorInfo.ts` (a `Record`, so a missing entry is a compile error). After changing either, run `npx tsx scripts/generate-channel-meta-fixture.ts` so the console fixture matches; `tests/channels.metaFixture.test.ts` fails if it does not.
+- Connection edits (create, replace key, enable, remove) go through `ConnectionEdits.apply`, which changes secrets and file together and undoes both on failure. Do not write the secret store or `connections.yaml` anywhere else.
+- Provider tests use the local HTTP fixture or a fake SDK importer, never the network. Real-account smoke tests are opt-in env-gated files.
+
 ## Documentation
 
 - Public docs index: [docs/README.md](docs/README.md)

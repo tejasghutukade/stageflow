@@ -1,3 +1,5 @@
+import { MAX_STAGE_CHANNELS, channelLimitMessage, mergeChannelDefaults, stageChannelLimit } from "../channels/stageChannels.js";
+import type { StageChannel } from "../types/stage.js";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -197,6 +199,26 @@ export async function loadPipelineFromObject(
   return outcome.value;
 }
 
+function applyPipelineChannels(
+  stage: StageConfig,
+  defaults: StageChannel[] | undefined,
+  pipelineId: string,
+): LoadOutcome<StageConfig> {
+  const channels = mergeChannelDefaults(defaults, stage.channels);
+  if (channels === undefined) return loadSuccess(stage);
+  if (channels.length > Math.min(MAX_STAGE_CHANNELS, stageChannelLimit())) {
+    return loadFailure([
+      {
+        code: "stage.invalid_channels",
+        message: `Pipeline ${pipelineId}: stage "${stage.id}" ends up with ${channels.length} channels after merging pipeline defaults, but ${channelLimitMessage()}. Use \`channels: []\` on the stage to drop the pipeline default.`,
+        category: "stage",
+        stageId: stage.id,
+      },
+    ]);
+  }
+  return loadSuccess({ ...stage, channels });
+}
+
 async function buildLoadedPipelineFromMerge(
   merge: {
     entries: RawMergedEntry[];
@@ -205,6 +227,7 @@ async function buildLoadedPipelineFromMerge(
     model?: string;
     schemas?: PayloadSchemaMap;
     requires?: ToolRequirement[];
+    channels?: StageChannel[];
     warnings: LoadIssue[];
   },
   options: { projectRoot: string; requireIo: boolean; pipelinePath: string },
@@ -217,6 +240,7 @@ async function buildLoadedPipelineFromMerge(
     model: pipelineModel,
     schemas: pipelineSchemas,
     requires: pipelineRequires,
+    channels: pipelineChannels,
     warnings: mergeWarnings,
   } = merge;
   const ctx = { pipelineId, path: pipelinePath };
@@ -293,7 +317,9 @@ async function buildLoadedPipelineFromMerge(
       if (inlineRequires.value !== undefined) {
         stage = { ...stage, requires: inlineRequires.value };
       }
-      stages.push(stage);
+      const inlineChannels = applyPipelineChannels(stage, pipelineChannels, pipelineId);
+      if (!inlineChannels.ok) return loadFailure(inlineChannels.issues);
+      stages.push(inlineChannels.value);
       stageSources[stageId] = { kind: "inline" };
       continue;
     }
@@ -362,8 +388,11 @@ async function buildLoadedPipelineFromMerge(
     if (!fileRequires.ok) return loadFailure(fileRequires.issues);
     stageRequires = fileRequires.value;
 
+    const withChannels = applyPipelineChannels(stageOutcome.value, pipelineChannels, pipelineId);
+    if (!withChannels.ok) return loadFailure(withChannels.issues);
+
     const stage: StageConfig = {
-      ...stageOutcome.value,
+      ...withChannels.value,
       ...(browser !== undefined ? { browser } : {}),
       ...(entry.mcp !== undefined ? { mcp: entry.mcp } : {}),
       ...(entry.secrets !== undefined ? { secrets: entry.secrets } : {}),
@@ -427,6 +456,7 @@ async function buildLoadedPipelineFromMerge(
     ...(pipelineModel !== undefined ? { model: pipelineModel } : {}),
     ...(pipelineSchemas !== undefined ? { schemas: pipelineSchemas } : {}),
     ...(pipelineRequires !== undefined ? { requires: pipelineRequires } : {}),
+    ...(pipelineChannels !== undefined ? { channels: pipelineChannels } : {}),
   };
 
   const effectiveRequires = mergeToolRequires(

@@ -22,6 +22,9 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode), including the durable **projects registry** |
 | `settings.json` | **keep** | Global settings (credential source, concurrency, …) |
 | `agent/auth.json` | **keep** | Operator auth file when this directory is the credential root |
+| `connections.yaml` | **keep** | Host-level [communication channel](channels.md) connections (provider settings, `env:`/`store:` secret references; never a secret value). A project-root `connections.yaml` or `STAGEFLOW_CONNECTIONS_FILE` can replace it. **Not included in `sf backup`.** |
+| `channel-secrets.json` | **keep** | Secrets typed into the console Connections page, mode `0600`. Lives in the credential root (this directory when it is the credential root). Plaintext, same trust level as `agent/auth.json`. **Not included in `sf backup`.** |
+| `.stageflow/channel-sends.json` | **keep** | Per-workspace send ledger for channel messages (hashes and outcomes, never message text). Keeps an uncertain send from being repeated after a restart. Records older than 30 days are pruned. |
 | `agent/` | **keep** | Host Pi agent directory (`PI_CODING_AGENT_DIR` for the Host process) |
 | `runs/` | disposable | Per-run workspaces, stage attempts, artifacts |
 | `a2a-artifacts/` | disposable | A2A artifact bytes |

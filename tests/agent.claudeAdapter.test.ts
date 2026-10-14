@@ -134,6 +134,7 @@ function modelUsageResult(cost: number, inputTokens: number, outputTokens: numbe
 describe("ClaudeAgentAdapter — preflight", () => {
   it.each([
     { name: "a stage that declares a skill", stage: { skill: "reviewer" }, reason: /skill/ },
+    { name: "a stage that declares channels", stage: { channels: [{ connection: "ops", to: "C0123ABCD", operations: ["send"] }] }, reason: /channels/ },
     { name: "a non-anthropic model", stage: { model: "openai/gpt-5" }, reason: /anthropic/ },
     {
       name: "a malformed model string with no provider prefix",

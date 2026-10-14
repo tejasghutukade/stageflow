@@ -31,6 +31,8 @@ import {
 } from "./stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import { emailHostFor, emailWorkerEnvironment, stageEmail, validateStageEmailAccounts } from "../email/host.js";
+import { ChannelError } from "../channels/errors.js";
+import { channelFault, channelHostFor, channelsWorkerEnvironment, stageChannels, validateStageChannelConnections, type ChannelSendInput } from "../channels/host.js";
 import { EmailError, type SendEmailInput, type ReplyToEmailInput, type SearchEmailsInput, type EmailMessageRef, type DownloadEmailAttachmentInput } from "../email/port.js";
 import type { StageConfig } from "../types/stage.js";
 import {
@@ -298,6 +300,12 @@ export class StageProcessLauncher {
       if (error instanceof EmailError) return { type: "failed", reason: error.code };
       throw error;
     }
+    try {
+      if (input.stage?.channels?.length) validateStageChannelConnections(channelHostFor(input.factoryCwd ?? input.operatorCatalog?.cwd ?? input.rootDir), input.stage);
+    } catch (error) {
+      if (error instanceof ChannelError) return { type: "failed", reason: error.code };
+      throw error;
+    }
     input = { ...input, stage: input.stage ? structuredClone(input.stage) : undefined };
     const acquired = await this.waitForCapacity(input.runId);
     if (!acquired) {
@@ -498,7 +506,7 @@ export class StageProcessLauncher {
 
     const child = this.forkFn(this.cliEntry, args, {
       cwd: input.rootDir,
-      env: emailWorkerEnvironment({ ...childEnv, [SF_STAGE_WORKER]: "1" }, emailHostFor(factoryCwd).accounts),
+      env: channelsWorkerEnvironment(emailWorkerEnvironment({ ...childEnv, [SF_STAGE_WORKER]: "1" }, emailHostFor(factoryCwd).accounts), factoryCwd),
       stdio: ["pipe", "pipe", "pipe", "ipc"],
       detached: true,
       // Explicit: do not inherit Host execArgv; set heap from cgroup budget.
@@ -560,6 +568,21 @@ export class StageProcessLauncher {
               response = { error: { code: fault.code, retryable: fault.retryable, ...(fault.unsupportedFields ? { unsupportedFields: fault.unsupportedFields } : {}) } };
             }
             if (child.connected && !settled) child.send({ type: "email.response", requestId: request.requestId, ...response });
+          })();
+          return;
+        }
+        if (!settled && request?.type === "channel.send") {
+          void (async () => {
+            if (typeof request.requestId !== "string" || request.requestId.length > 100) return;
+            let response: object;
+            try {
+              const stage = input.stage;
+              if (!stage || settled) throw new ChannelError("CHANNEL_UNAUTHORIZED");
+              response = { receipt: await stageChannels(channelHostFor(factoryCwd), stage, input.runId).send(request.input as ChannelSendInput) };
+            } catch (error) {
+              response = { error: channelFault(error) };
+            }
+            if (child.connected && !settled) child.send({ type: "channel.response", requestId: request.requestId, ...response });
           })();
           return;
         }

@@ -547,7 +547,7 @@ Check a pipeline's `requires:`, declared `secrets:`, and stage MCP `${VAR}` reso
 | `project_root` | string | Optional catalog root |
 | `strict` | boolean | When true, `unknown_version` fails (default: pass) |
 
-**Output:** `{ ok, checks: [{ kind, status, tool?, required?, found?, … }], code? }` where toolchain `status` is `ok` \| `missing_tool` \| `tool_version_mismatch` \| `unknown_version`. `start_run` runs the same gate and fails with those codes before `createRun`.
+**Output:** `{ ok, checks: [{ kind, status, tool?, required?, found?, … }], code? }` where toolchain `status` is `ok` \| `missing_tool` \| `tool_version_mismatch` \| `unknown_version`. `start_run` runs the same gate and fails with those codes before `createRun`. Stages that declare [`channels:`](yaml-catalog.md#stage-channels) add one `kind: "channel"` check per connection: `{ kind, status, connection, channelCode?, retryable? }` with `status` `ok` \| `channel_check_failed`, where `channelCode` is the provider-neutral reason (for example `CHANNEL_AUTH_FAILED`). A failed channel check yields `code: "channel_check_failed"`. The check is live but never sends a message, retries only transient failures (at most twice, a few seconds in total) and fails immediately on authentication, configuration, permission or target problems.
 
 `version` on `get_health` is the running server's npm package version — compare it against the version you built your integration against to detect a behavior change that isn't visible as a tool being added or removed.
 

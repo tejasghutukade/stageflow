@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   LuArrowUpRight,
   LuBraces,
@@ -9,6 +9,7 @@ import {
   LuLayers,
   LuTriangleAlert,
 } from "react-icons/lu";
+import { fetchChannelConnections, type ChannelConnectionListing } from "../../api";
 import type {
   DraftPackagePayload,
   PipelineListing,
@@ -20,7 +21,11 @@ import {
   setStageModel,
   setStageSystemPrompt,
   getStageForm,
+  readStageChannels,
+  writeStageChannels,
 } from "../workshop/inspector/stageFields";
+import { useChannelMeta } from "../connections/channelMeta";
+import { StageChannelsSection } from "./StageChannelsSection";
 import {
   INSPECTOR_GATE_ORDER,
   applyGateKindToggle,
@@ -92,6 +97,19 @@ export function PipelineEditorInspector({
   const promptOpen = promptState?.stageId === selectedStageId && promptState.open;
   const focusRefs = useRef<Partial<Record<InspectorFocusTarget, HTMLElement>>>({});
   const lastNonce = useRef<number | null>(null);
+  const [connections, setConnections] = useState<ChannelConnectionListing[]>([]);
+  const [connectionsFailed, setConnectionsFailed] = useState(false);
+  const [channelLimit, setChannelLimit] = useState(1);
+  const { meta: channelMeta } = useChannelMeta();
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchChannelConnections().then(
+      (result) => { if (!cancelled) { setConnections(result.connections); setConnectionsFailed(Boolean(result.error)); setChannelLimit(result.limits.channelsPerStage); } },
+      () => { if (!cancelled) setConnectionsFailed(true); },
+    );
+    return () => { cancelled = true; };
+  }, []);
 
   function bindFocus(target: InspectorFocusTarget) {
     return (el: HTMLElement | null) => {
@@ -278,6 +296,14 @@ export function PipelineEditorInspector({
             />
           </div>
         </div>
+        <StageChannelsSection
+          entries={readStageChannels(draft, form.id)}
+          connections={connections}
+          meta={channelMeta}
+          loadFailed={connectionsFailed}
+          limit={channelLimit}
+          onChange={(next) => onDraftChange(writeStageChannels(draft, form.id, next))}
+        />
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center">
             <div className={`${LABEL} flex-1`}>system_prompt</div>

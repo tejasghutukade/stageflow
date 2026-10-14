@@ -39,6 +39,7 @@ import {
   preflightFailureCode,
   runPipelinePreflight,
 } from "../preflight/pipelinePreflight.js";
+import { channelFailureSummary } from "../preflight/channelChecks.js";
 import { networkError } from "../errors/codes.js";
 import { newRunId } from "../runstore/paths.js";
 import {
@@ -63,7 +64,8 @@ export class PipelinePreflightError extends Error {
     code: string,
     preflight: Awaited<ReturnType<typeof runPipelinePreflight>>,
   ) {
-    super(`Pipeline preflight failed: ${code}`);
+    const detail = code === "channel_check_failed" ? channelFailureSummary(preflight.checks) : undefined;
+    super(`Pipeline preflight failed: ${code}${detail ? `: ${detail}` : ""}`);
     this.name = "PipelinePreflightError";
     this.code = code;
     this.preflight = preflight;
