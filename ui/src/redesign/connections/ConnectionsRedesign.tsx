@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import type { IconType } from "react-icons";
 import {
-  LuCheck, LuCopy, LuHash, LuMail, LuMessageCircle, LuMinus, LuPhone, LuPlug, LuPlus, LuRefreshCw, LuSend, LuTriangleAlert, LuWrench, LuX,
+  LuCheck, LuHash, LuMail, LuMessageCircle, LuMinus, LuPhone, LuPlug, LuPlus, LuRefreshCw, LuSend, LuTriangleAlert, LuWrench,
 } from "react-icons/lu";
 import {
   checkChannelConnection, fetchChannelConnections, fetchConnections, fetchProjectMcp,
@@ -10,8 +9,9 @@ import {
 } from "../../api";
 import { ageLabel, codeMessage } from "../../pages/channelStatus";
 import { connectionPath, navigate } from "../../routes";
+import { AddConnectionDialog } from "./AddConnectionDialog";
 import {
-  PROVIDERS, availableProviders, channelRows, connectionTotals, footerText, toolCards,
+  availableProviders, channelRows, connectionTotals, footerText, toolCards,
   type ConnectionRow, type ProviderId, type ProviderInfo,
 } from "./connectionsModel";
 
@@ -19,7 +19,6 @@ const MONO = "[font-family:'Geist_Mono',_monospace]";
 const NOWRAP = "[white-space-collapse:collapse] [text-wrap-mode:nowrap]";
 const EYEBROW = `text-[#8b8f98] font-sans text-[11px] font-medium leading-normal tracking-[0.88px] uppercase ${NOWRAP}`;
 const TILE = "flex size-9 shrink-0 items-center justify-center rounded-lg border border-[#ffffff1a] bg-[#1a1c21]";
-const SECONDARY_BTN = "flex h-8 shrink-0 items-center rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 py-0 gap-2";
 const GRID = "grid grid-cols-[minmax(0,1fr)_240px_132px_112px] items-center gap-4";
 
 const PROVIDER_ICONS: Record<string, IconType> = {
@@ -153,84 +152,6 @@ function ToolCardView({ name, detail }: { name: string; detail: string }) {
   );
 }
 
-function AddConnectionDialog({ initial, onClose }: { initial: ProviderId; onClose: () => void }) {
-  const [selected, setSelected] = useState<ProviderId>(initial);
-  const [copied, setCopied] = useState(false);
-  const provider = PROVIDERS.find((entry) => entry.id === selected) ?? PROVIDERS[0]!;
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const copy = () => {
-    void navigator.clipboard?.writeText(provider.yaml).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    }, () => undefined);
-  };
-  return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-[#040506a8] p-4" role="presentation" onClick={onClose}>
-      <div
-        className="flex max-h-[90vh] w-full max-w-[600px] flex-col overflow-y-auto rounded-xl border border-[#ffffff1a] bg-[#131418] shadow-[0px_32px_96px_rgba(0,0,0,0.65),0px_8px_24px_rgba(0,0,0,0.45)]"
-        role="dialog" aria-modal="true" aria-labelledby="add-connection-title" onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-start gap-3 border-b border-b-[#ffffff12] px-5 py-4">
-          <div className="flex flex-1 flex-col gap-1">
-            <h2 id="add-connection-title" className="text-lg font-semibold tracking-[-0.36px] text-[#ecedee]">Add a connection</h2>
-            <p className="text-[13px] leading-normal text-[#a7aab2]">
-              Connections live in <span className={MONO}>connections.yaml</span> beside <span className={MONO}>stageflow.yaml</span>. Add an entry, set the secrets on the host, then restart Stageflow.
-            </p>
-          </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="flex size-7 items-center justify-center rounded-md text-[#8b8f98] hover:bg-[#1a1c21]">
-            <LuX className="size-4 block" aria-hidden />
-          </button>
-        </div>
-        <div className="flex flex-col gap-4 px-5 py-4">
-          <div className="flex flex-wrap gap-2" role="tablist" aria-label="Provider">
-            {PROVIDERS.map((entry) => (
-              <button
-                key={entry.id} type="button" role="tab" aria-selected={entry.id === selected} onClick={() => setSelected(entry.id)}
-                className={`flex h-8 items-center gap-2 rounded-lg border px-2.5 text-[13px] ${entry.id === selected ? "border-[#6ca6ff] bg-[#1a1c21] text-[#ecedee]" : "border-[#ffffff1a] text-[#a7aab2] hover:bg-[#1a1c21]"}`}
-              >
-                <ProviderIcon provider={entry.id} size="size-3.5" />
-                {entry.label}
-                {entry.viaPhoton ? <PhotonTag /> : null}
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className={EYEBROW}>connections.yaml</span>
-              <button type="button" onClick={copy} className="flex h-7 items-center gap-1.5 rounded-md border border-[#ffffff1a] px-2 text-xs text-[#a7aab2] hover:bg-[#1a1c21]">
-                {copied ? <LuCheck className="size-3 block text-[#4cc38a]" aria-hidden /> : <LuCopy className="size-3 block" aria-hidden />}
-                {copied ? "Copied" : "Copy"}
-              </button>
-            </div>
-            <pre className={`overflow-x-auto rounded-lg border border-[#ffffff12] bg-[#0c0d0f] p-3 text-xs leading-[1.6] text-[#ecedee] ${MONO}`}>{provider.yaml}</pre>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <span className={EYEBROW}>Set on the host</span>
-            <div className="flex flex-wrap gap-2">
-              {provider.env.map((name) => (
-                <span key={name} className={`rounded-md border border-[#ffffff1a] bg-[#1a1c21] px-2 py-0.5 text-xs text-[#ecedee] ${MONO}`}>{name}</span>
-              ))}
-            </div>
-            <p className="text-xs leading-[1.5] text-[#8b8f98]">
-              Secrets are never written to the file. Each value is an <span className={MONO}>env:NAME</span> reference, read from the host environment when a message is sent or a check runs.
-            </p>
-          </div>
-        </div>
-        <div className="flex justify-end border-t border-t-[#ffffff12] px-5 py-3">
-          <button type="button" onClick={onClose} className={SECONDARY_BTN}>
-            <span className="text-[13px] font-medium text-[#ecedee]">Done</span>
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
 export function ConnectionsRedesign() {
   const [channels, setChannels] = useState<ChannelConnectionListing[]>([]);
   const [channelError, setChannelError] = useState<string | null>(null);
@@ -351,10 +272,17 @@ export function ConnectionsRedesign() {
 
       <footer className="flex h-10 shrink-0 items-center justify-between border-t border-t-[#ffffff12] px-7">
         <span className={`text-xs leading-normal text-[#8b8f98] ${MONO}`}>{loaded ? footerText(totals) : ""}</span>
-        <span className="text-xs leading-normal text-[#8b8f98]">Read-only. Edit connections.yaml and restart to change.</span>
+        <span className="text-xs leading-normal text-[#8b8f98]">Changes apply immediately. connections.yaml never holds a secret.</span>
       </footer>
 
-      {dialog ? <AddConnectionDialog initial={dialog} onClose={() => setDialog(null)} /> : null}
+      {dialog ? (
+        <AddConnectionDialog
+          initial={dialog}
+          existing={channels}
+          onClose={() => setDialog(null)}
+          onSaved={(id) => { setDialog(null); navigate(connectionPath(id)); }}
+        />
+      ) : null}
     </div>
   );
 }

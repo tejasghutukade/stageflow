@@ -10,7 +10,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
 
 const CODE_MESSAGES: Record<string, string> = {
   CHANNEL_AUTH_FAILED: "Credentials were rejected",
-  CHANNEL_UNAUTHORIZED: "Credentials lack a required permission",
+  CHANNEL_UNAUTHORIZED: "Credentials were rejected or lack a required permission",
   CHANNEL_SECRET_UNAVAILABLE: "A secret named in connections.yaml is not set on the host",
   CHANNEL_CONNECTION_FAILED: "Could not reach the provider",
   CHANNEL_TIMEOUT: "The provider did not answer in time",

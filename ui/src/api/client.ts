@@ -210,14 +210,62 @@ export async function fetchConnections(): Promise<ConnectionListing[]> {
 export async function fetchChannelConnections(): Promise<ChannelConnectionsResult> {
   const result = await api<ChannelConnectionsResult>("/api/connections");
   return {
-    connections: result.connections.map(({ id, provider, displayName, enabled, identity, credential, health }) => ({
+    connections: result.connections.map(({ id, provider, displayName, enabled, identity, credential, secrets, health }) => ({
       id, provider, displayName, enabled,
+      ...(secrets ? { secrets: Object.fromEntries(Object.entries(secrets).map(([field, source]) => [field, source === "store" ? "store" : "env"])) as Record<string, "env" | "store"> } : {}),
       ...(identity !== undefined ? { identity } : {}),
       ...(credential !== undefined ? { credential } : {}),
       ...(health ? { health: { state: health.state, checkedAt: health.checkedAt, ...(health.error ? { error: { code: health.error.code, retryable: health.error.retryable } } : {}) } } : {}),
     })),
     ...(result.error ? { error: result.error } : {}),
   };
+}
+
+export class ChannelApiError extends Error {
+  constructor(public readonly code: string) {
+    super(code);
+    this.name = "ChannelApiError";
+  }
+}
+
+async function channelRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  const parsed = (await res.json().catch(() => ({}))) as T & { code?: string };
+  if (res.status === 401) notifyControlTokenRequired();
+  if (!res.ok) throw new ChannelApiError(typeof parsed.code === "string" ? parsed.code : `HTTP_${res.status}`);
+  return parsed;
+}
+
+export type NewChannelConnection = {
+  provider: string;
+  id?: string;
+  displayName?: string;
+  config: Record<string, unknown>;
+  secrets: Record<string, string>;
+  credential?: string | { id?: string; secrets: Record<string, string> };
+};
+
+export function testChannelConnection(input: NewChannelConnection): Promise<ChannelHealth> {
+  return channelRequest("/api/connections/test", "POST", input);
+}
+
+export function createChannelConnection(input: NewChannelConnection): Promise<{ id: string; health: ChannelHealth }> {
+  return channelRequest("/api/connections", "POST", input);
+}
+
+export function updateChannelConnection(
+  id: string,
+  patch: { displayName?: string | null; enabled?: boolean; config?: Record<string, unknown>; secrets?: Record<string, string> },
+): Promise<{ health?: ChannelHealth }> {
+  return channelRequest(`/api/connections/${encodeURIComponent(id)}`, "PATCH", patch);
+}
+
+export async function deleteChannelConnection(id: string): Promise<void> {
+  await channelRequest(`/api/connections/${encodeURIComponent(id)}`, "DELETE");
 }
 
 export function checkChannelConnection(id: string): Promise<ChannelHealth> {

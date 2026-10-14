@@ -1184,6 +1184,7 @@ export type ChannelConnectionListing = {
   enabled: boolean;
   identity?: string;
   credential?: string;
+  secrets?: Record<string, "env" | "store">;
   health?: ChannelHealth;
 };
 

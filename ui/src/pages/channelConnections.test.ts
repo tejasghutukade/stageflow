@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkChannelConnection, fetchChannelConnections } from "../api";
+import {
+  ChannelApiError, checkChannelConnection, createChannelConnection, deleteChannelConnection, fetchChannelConnections,
+  testChannelConnection, updateChannelConnection,
+} from "../api";
 import { parseHash, connectionPath } from "../routes";
 import { parse as parseYaml } from "yaml";
 import { ageLabel, channelStatus } from "./channelStatus";
 import {
-  PROVIDERS, availableProviders, channelRows, connectionTotals, detailFacts, fixHint, footerText, toolCards, usageSnippet,
+  PROVIDERS, PROVIDER_FORMS, apiErrorMessage, availableProviders, buildNewConnection, missingFields, channelRows, connectionTotals, detailFacts, fixHint, footerText, toolCards, usageSnippet,
 } from "../redesign/connections/connectionsModel";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -18,7 +21,7 @@ describe("channel connections api", () => {
       connections: [{ ...base, scope: "/private/path", secrets: { botToken: "env:SECRET_NAME" }, health: { state: "failed", checkedAt: "2026-10-14T10:00:00Z", error: { code: "CHANNEL_AUTH_FAILED", retryable: false }, extra: 1 } }],
     }) }));
     const result = await fetchChannelConnections();
-    expect(result).toEqual({ connections: [{ ...base, health: { state: "failed", checkedAt: "2026-10-14T10:00:00Z", error: { code: "CHANNEL_AUTH_FAILED", retryable: false } } }] });
+    expect(result).toEqual({ connections: [{ ...base, secrets: { botToken: "env" }, health: { state: "failed", checkedAt: "2026-10-14T10:00:00Z", error: { code: "CHANNEL_AUTH_FAILED", retryable: false } } }] });
     expect(JSON.stringify(result)).not.toContain("SECRET_NAME");
     expect(JSON.stringify(result)).not.toContain("/private");
   });
@@ -133,6 +136,75 @@ describe("connection detail", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ connections: [{ ...base, credential: "photon-main", secrets: { x: "y" } }] }) }));
     const result = await fetchChannelConnections();
     expect(result.connections[0]).toMatchObject({ credential: "photon-main" });
-    expect(JSON.stringify(result)).not.toContain('"secrets"');
+    expect(JSON.stringify(result)).not.toContain('"y"');
+    expect(result.connections[0]!.secrets).toEqual({ x: "env" });
+  });
+});
+
+describe("connect forms", () => {
+  it("builds an AgentMail payload with config and secret separated and the default region", () => {
+    const body = buildNewConnection("agentmail", { inbox: " a@agentmail.to ", apiKey: "am_key" });
+    expect(body).toEqual({ provider: "agentmail", config: { inbox: "a@agentmail.to", region: "us" }, secrets: { apiKey: "am_key" } });
+  });
+
+  it("omits blank optional fields", () => {
+    expect(buildNewConnection("slack", { botToken: "xoxb-1", teamId: "  " })).toEqual({ provider: "slack", config: {}, secrets: { botToken: "xoxb-1" } });
+    expect(buildNewConnection("telegram", { botToken: "1:a", botUsername: "acme_bot" }).config).toEqual({ botUsername: "acme_bot" });
+  });
+
+  it("sends Photon values as a new credential, or references the saved one", () => {
+    const fresh = buildNewConnection("imessage", { projectId: "p", projectSecret: "s" });
+    expect(fresh).toEqual({ provider: "imessage", config: {}, secrets: {}, credential: { secrets: { projectId: "p", projectSecret: "s" } } });
+    const saved = buildNewConnection("whatsapp", { projectId: "ignored", projectSecret: "ignored" }, { savedCredential: "photon-main" });
+    expect(saved).toEqual({ provider: "whatsapp", config: {}, secrets: {}, credential: "photon-main" });
+    expect(JSON.stringify(saved)).not.toContain("ignored");
+  });
+
+  it("reports missing required fields and lets a saved credential satisfy Photon ones", () => {
+    expect(missingFields("agentmail", { inbox: "x" }, false)).toEqual(["apiKey"]);
+    expect(missingFields("agentmail", { inbox: "x", apiKey: "k" }, false)).toEqual([]);
+    expect(missingFields("imessage", {}, false)).toEqual(["projectId", "projectSecret"]);
+    expect(missingFields("imessage", {}, true)).toEqual([]);
+  });
+
+  it("every provider form marks secrets as password inputs", () => {
+    for (const form of Object.values(PROVIDER_FORMS)) {
+      for (const field of form.fields.filter((entry) => entry.target !== "config")) expect(field.input).toBe("password");
+    }
+    expect(apiErrorMessage("CHANNEL_OPERATION_CONFLICT")).toMatch(/already exists/);
+    expect(apiErrorMessage("HTTP_500")).toBe("Request failed (HTTP_500)");
+  });
+});
+
+describe("connection mutations", () => {
+  const ok = (body: unknown, status = 200) => vi.fn().mockResolvedValue({ ok: status < 400, status, json: async () => body });
+
+  it("posts create and test bodies as given and returns the health", async () => {
+    const fetchMock = ok({ id: "inbox", health: { state: "ok", checkedAt: "x" } }, 201);
+    vi.stubGlobal("fetch", fetchMock);
+    const input = { provider: "agentmail", config: { inbox: "a@b.test" }, secrets: { apiKey: "k" } };
+    expect(await createChannelConnection(input)).toMatchObject({ id: "inbox" });
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/connections");
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual(input);
+    vi.stubGlobal("fetch", ok({ state: "ok", checkedAt: "x" }));
+    await testChannelConnection(input);
+  });
+
+  it("patches and deletes on the connection's own path", async () => {
+    const fetchMock = ok({});
+    vi.stubGlobal("fetch", fetchMock);
+    await updateChannelConnection("a/b", { enabled: false });
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/connections/a%2Fb");
+    expect(fetchMock.mock.calls[0]![1]).toMatchObject({ method: "PATCH" });
+    await deleteChannelConnection("a/b");
+    expect(fetchMock.mock.calls[1]![1]).toMatchObject({ method: "DELETE" });
+  });
+
+  it("surfaces the error code and never the request body", async () => {
+    vi.stubGlobal("fetch", ok({ code: "CHANNEL_INVALID_INPUT" }, 400));
+    const error = await createChannelConnection({ provider: "slack", config: {}, secrets: { botToken: "super-secret" } }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ChannelApiError);
+    expect((error as ChannelApiError).code).toBe("CHANNEL_INVALID_INPUT");
+    expect(String(error) + JSON.stringify(error)).not.toContain("super-secret");
   });
 });

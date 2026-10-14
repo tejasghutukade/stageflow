@@ -183,7 +183,7 @@ ${USAGE_TARGETS[provider] ?? "    to: <target>"}
 const FIX_HINTS: Record<string, string> = {
   CHANNEL_SECRET_UNAVAILABLE: "Set the environment variable each secret in connections.yaml names (or its _FILE form) on the host, then check again.",
   CHANNEL_AUTH_FAILED: "The provider rejected the credential. Replace the secret on the host with a valid one, then check again.",
-  CHANNEL_UNAUTHORIZED: "The credential works but lacks a permission this provider needs. Grant it in the provider, then check again.",
+  CHANNEL_UNAUTHORIZED: "The provider refused the credential: it is invalid, or it lacks a permission this provider needs (for AgentMail, reading the inbox and sending). Check the key and its permissions, then try again.",
   CHANNEL_INVALID_INPUT: "The settings in connections.yaml do not match the provider account (for example an unknown inbox or a different workspace). Fix the entry and restart.",
   CHANNEL_PROVIDER_UNSUPPORTED: "This Stageflow version cannot use this provider, or its SDK is not installed (iMessage and WhatsApp need spectrum-ts).",
   CHANNEL_CONNECTION_FAILED: "Stageflow could not reach the provider. This is usually temporary; check the network and try again.",
@@ -206,4 +206,98 @@ export function detailFacts(connection: { id: string; provider: string; displayN
     ...(connection.credential ? [{ label: "Shared credential", value: connection.credential, mono: true }] : []),
     { label: "Enabled", value: connection.enabled ? "Yes" : "No" },
   ];
+}
+
+export type FormField = {
+  key: string;
+  label: string;
+  hint?: string;
+  placeholder?: string;
+  /** config goes to connections.yaml, secret to the secret store, credential to the shared Photon credential. */
+  target: "config" | "secret" | "credential";
+  input: "text" | "password" | "select";
+  required: boolean;
+  options?: Array<{ value: string; label: string }>;
+  defaultValue?: string;
+};
+
+const PHOTON_FIELDS: FormField[] = [
+  { key: "projectId", label: "Photon project ID", hint: "Project settings in app.photon.codes", target: "credential", input: "password", required: true, placeholder: "3f9c21aa-..." },
+  { key: "projectSecret", label: "Photon project secret", hint: "Stored on this host. Never written to connections.yaml.", target: "credential", input: "password", required: true },
+];
+
+export const PROVIDER_FORMS: Record<ProviderId, { fields: FormField[]; note?: string }> = {
+  agentmail: {
+    fields: [
+      { key: "inbox", label: "Inbox address", hint: "An existing AgentMail inbox. Stageflow does not create one.", target: "config", input: "text", required: true, placeholder: "research@agentmail.to" },
+      { key: "region", label: "Region", target: "config", input: "select", required: false, defaultValue: "us", options: [{ value: "us", label: "United States" }, { value: "eu", label: "Europe" }] },
+      { key: "apiKey", label: "API key", hint: "Needs to read the inbox and send messages.", target: "secret", input: "password", required: true, placeholder: "am_..." },
+    ],
+  },
+  slack: {
+    fields: [
+      { key: "botToken", label: "Bot token", hint: "xoxb-… from your Slack app (OAuth & Permissions). Needs chat:write.", target: "secret", input: "password", required: true, placeholder: "xoxb-..." },
+      { key: "teamId", label: "Workspace ID (optional)", hint: "Pins the connection to one workspace, such as T0123ABCD.", target: "config", input: "text", required: false, placeholder: "T0123ABCD" },
+    ],
+  },
+  telegram: {
+    fields: [
+      { key: "botToken", label: "Bot token", hint: "From @BotFather. People must start the bot before it can message them.", target: "secret", input: "password", required: true, placeholder: "123456:ABC..." },
+      { key: "botUsername", label: "Bot username (optional)", hint: "Fails the check if the token belongs to another bot.", target: "config", input: "text", required: false, placeholder: "acme_alerts_bot" },
+    ],
+  },
+  imessage: {
+    fields: PHOTON_FIELDS,
+    note: "Sending iMessage needs the spectrum-ts package installed next to Stageflow (npm i spectrum-ts).",
+  },
+  whatsapp: {
+    fields: PHOTON_FIELDS,
+    note: "Enable WhatsApp for the project in the Photon dashboard first. Needs spectrum-ts installed. Stages pin an approved template per recipient.",
+  },
+};
+
+export type FormValues = Record<string, string>;
+
+export function missingFields(provider: ProviderId, values: FormValues, savedCredential: boolean): string[] {
+  return PROVIDER_FORMS[provider].fields
+    .filter((field) => field.required && !(savedCredential && field.target === "credential") && !(values[field.key] ?? "").trim())
+    .map((field) => field.key);
+}
+
+export function buildNewConnection(
+  provider: ProviderId,
+  values: FormValues,
+  options: { savedCredential?: string; id?: string; displayName?: string } = {},
+): import("../../api").NewChannelConnection {
+  const config: Record<string, unknown> = {};
+  const secrets: Record<string, string> = {};
+  const credentialSecrets: Record<string, string> = {};
+  for (const field of PROVIDER_FORMS[provider].fields) {
+    const value = (values[field.key] ?? field.defaultValue ?? "").trim();
+    if (!value) continue;
+    if (field.target === "config") config[field.key] = value;
+    else if (field.target === "secret") secrets[field.key] = value;
+    else if (!options.savedCredential) credentialSecrets[field.key] = value;
+  }
+  return {
+    provider,
+    ...(options.id ? { id: options.id } : {}),
+    ...(options.displayName ? { displayName: options.displayName } : {}),
+    config,
+    secrets,
+    ...(options.savedCredential ? { credential: options.savedCredential } : Object.keys(credentialSecrets).length ? { credential: { secrets: credentialSecrets } } : {}),
+  };
+}
+
+const API_ERRORS: Record<string, string> = {
+  CHANNEL_INVALID_INPUT: "Some of the values are not valid for this provider. Check the fields and try again.",
+  CHANNEL_PROVIDER_UNSUPPORTED: "This provider is not supported by this Stageflow version.",
+  CHANNEL_OPERATION_CONFLICT: "A connection with this id already exists.",
+  CHANNEL_STORAGE_FAILED: "Stageflow could not write connections.yaml or the secret store on this host.",
+  CHANNEL_RESOURCE_LIMIT: "The request or connections.yaml is too large.",
+  CHANNEL_NOT_FOUND: "That connection no longer exists.",
+};
+
+export function apiErrorMessage(code: string): string {
+  return API_ERRORS[code] ?? `Request failed (${code})`;
 }

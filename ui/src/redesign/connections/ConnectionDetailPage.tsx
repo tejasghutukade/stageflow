@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { LuArrowLeft, LuCheck, LuCopy, LuMinus, LuPlug, LuRefreshCw, LuTriangleAlert } from "react-icons/lu";
-import { checkChannelConnection, fetchChannelConnections, type ChannelConnectionListing } from "../../api";
+import {
+  ChannelApiError, checkChannelConnection, deleteChannelConnection, fetchChannelConnections, updateChannelConnection,
+  type ChannelConnectionListing,
+} from "../../api";
 import { ageLabel, channelStatus, codeMessage } from "../../pages/channelStatus";
 import { navigate } from "../../routes";
-import { detailFacts, fixHint, providerInfo, usageSnippet } from "./connectionsModel";
+import { PROVIDER_FORMS, apiErrorMessage, detailFacts, fixHint, providerInfo, usageSnippet, type ProviderId } from "./connectionsModel";
 
 const MONO = "[font-family:'Geist_Mono',_monospace]";
 const NOWRAP = "[white-space-collapse:collapse] [text-wrap-mode:nowrap]";
@@ -33,6 +36,11 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
   const [checking, setChecking] = useState(false);
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [replacing, setReplacing] = useState<string | null>(null);
+  const [replacement, setReplacement] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +70,41 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
   }, [connectionId]);
 
   const back = () => navigate("/connections");
+
+  const act = async (work: () => Promise<void>) => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await work();
+    } catch (caught) {
+      setActionError(apiErrorMessage(caught instanceof ChannelApiError ? caught.code : "unknown"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const replaceSecret = (field: string) => act(async () => {
+    const result = await updateChannelConnection(connectionId, { secrets: { [field]: replacement.trim() } });
+    setConnection((current) => (current ? { ...current, secrets: { ...(current.secrets ?? {}), [field]: "store" }, ...(result.health ? { health: result.health } : {}) } : current));
+    setReplacing(null);
+    setReplacement("");
+    setNow(Date.now());
+  });
+
+  const setEnabled = (enabled: boolean) => act(async () => {
+    const result = await updateChannelConnection(connectionId, { enabled });
+    setConnection((current) => (current ? { ...current, enabled, ...(result.health ? { health: result.health } : {}) } : current));
+    setNow(Date.now());
+  });
+
+  const remove = () => act(async () => {
+    await deleteChannelConnection(connectionId);
+    navigate("/connections");
+  });
+
+  const secretFields = connection
+    ? PROVIDER_FORMS[connection.provider as ProviderId]?.fields.filter((field) => field.target === "secret") ?? []
+    : [];
   const info = connection ? providerInfo(connection.provider) : undefined;
   const status = connection ? channelStatus(connection) : null;
   const hint = connection?.health?.state === "failed" ? fixHint(connection.health.error?.code) : undefined;
@@ -91,14 +134,24 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
               </p>
             ) : null}
           </div>
-          {connection?.enabled ? (
-            <button
-              type="button" onClick={check} disabled={checking}
-              className="flex h-8 shrink-0 items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] font-medium text-[#ecedee] disabled:opacity-60"
-            >
-              <LuRefreshCw className={`size-3.5 block ${checking ? "animate-spin" : ""}`} aria-hidden />
-              {checking ? "Checking" : "Test connection"}
-            </button>
+          {connection ? (
+            <div className="flex shrink-0 items-center gap-2">
+              {connection.enabled ? (
+                <button
+                  type="button" onClick={check} disabled={checking || busy}
+                  className="flex h-8 items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] font-medium text-[#ecedee] disabled:opacity-60"
+                >
+                  <LuRefreshCw className={`size-3.5 block ${checking ? "animate-spin" : ""}`} aria-hidden />
+                  {checking ? "Checking" : "Test connection"}
+                </button>
+              ) : null}
+              <button
+                type="button" onClick={() => void setEnabled(!connection.enabled)} disabled={busy}
+                className="flex h-8 items-center rounded-lg border border-[#ffffff1a] px-3 text-[13px] text-[#a7aab2] hover:bg-[#1a1c21] disabled:opacity-60"
+              >
+                {connection.enabled ? "Disable" : "Enable"}
+              </button>
+            </div>
           ) : null}
         </header>
 
@@ -172,21 +225,70 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
                   ))}
                 </dl>
               </section>
-              <section className={`${CARD} flex flex-col gap-2 p-4`}>
+              <section className={`${CARD} flex flex-col gap-3 p-4`} aria-label="Credential">
                 <span className={EYEBROW}>Credential</span>
-                <div className="flex items-center gap-2 text-[13px] text-[#ecedee]">
-                  <LuPlug className="size-3.5 block text-[#8b8f98]" aria-hidden />
-                  Read from the host environment
-                </div>
-                <p className="text-xs leading-[1.5] text-[#8b8f98]">
-                  connections.yaml holds only <span className={MONO}>env:NAME</span> references. Secret values are never written to the file, shown here, or passed to a stage.
-                </p>
+                {connection.credential ? (
+                  <p className="text-xs leading-[1.5] text-[#8b8f98]">
+                    Uses the shared credential <span className={MONO}>{connection.credential}</span>. Its values are never shown or written to connections.yaml.
+                  </p>
+                ) : null}
+                {secretFields.map((field) => {
+                  const source = connection.secrets?.[field.key];
+                  return (
+                    <div key={field.key} className="flex flex-col gap-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-2 text-[13px] text-[#ecedee]">
+                          <LuPlug className="size-3.5 block shrink-0 text-[#8b8f98]" aria-hidden />
+                          <span className="truncate">{field.label}</span>
+                        </div>
+                        {replacing !== field.key ? (
+                          <button type="button" onClick={() => { setReplacing(field.key); setReplacement(""); setActionError(null); }} className="shrink-0 rounded-md border border-[#ffffff1a] px-2 py-1 text-xs text-[#a7aab2] hover:bg-[#1a1c21]">
+                            Replace
+                          </button>
+                        ) : null}
+                      </div>
+                      <span className="text-xs leading-[1.4] text-[#8b8f98]">
+                        {source === "store" ? "Stored on this host. Never written to connections.yaml." : "Read from the host environment (an env: reference in connections.yaml). Replacing it stores the new value on this host instead."}
+                      </span>
+                      {replacing === field.key ? (
+                        <form className="flex flex-col gap-2" onSubmit={(event) => { event.preventDefault(); if (replacement.trim()) void replaceSecret(field.key); }}>
+                          <input
+                            type="password" value={replacement} onChange={(event) => setReplacement(event.target.value)} autoComplete="off" autoFocus
+                            aria-label={`New ${field.label}`} placeholder={field.placeholder}
+                            className={`h-9 w-full rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] text-[#ecedee] outline-none placeholder:text-[#8b8f98] focus:border-[#ecedee73] ${MONO}`}
+                          />
+                          <div className="flex gap-2">
+                            <button type="submit" disabled={busy || !replacement.trim()} className="h-8 rounded-lg bg-[#ecedee] px-3 text-[13px] font-medium text-[#0c0d0f] disabled:opacity-60">{busy ? "Saving…" : "Save and check"}</button>
+                            <button type="button" onClick={() => { setReplacing(null); setReplacement(""); }} className="h-8 rounded-lg px-3 text-[13px] text-[#a7aab2] hover:bg-[#1a1c21]">Cancel</button>
+                          </div>
+                        </form>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                {secretFields.length === 0 && !connection.credential ? (
+                  <p className="text-xs leading-[1.5] text-[#8b8f98]">This provider needs no secret of its own.</p>
+                ) : null}
               </section>
-              <section className="flex flex-col gap-2 rounded-lg border border-[#f2645a40] p-4">
+              {actionError ? (
+                <div className="flex items-start gap-2 text-[13px] text-[#f2645a]" role="alert">
+                  <LuTriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                  {actionError}
+                </div>
+              ) : null}
+              <section className="flex flex-col gap-2 rounded-lg border border-[#f2645a40] p-4" aria-label="Disconnect">
                 <span className={EYEBROW}>Disconnect</span>
                 <p className="text-xs leading-[1.5] text-[#a7aab2]">
-                  Remove this entry from connections.yaml and restart Stageflow. Stages that still list it will fail validation. Nothing is deleted at {info?.label ?? "the provider"}.
+                  Removes this entry from connections.yaml and deletes its stored secret. Stages that still list it will fail validation. Nothing is deleted at {info?.label ?? "the provider"}.
                 </p>
+                {confirmRemove ? (
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => void remove()} disabled={busy} className="h-8 rounded-lg border border-[#f2645a] bg-[#f2645a1f] px-3 text-[13px] font-medium text-[#f2645a] disabled:opacity-60">{busy ? "Removing…" : "Yes, disconnect"}</button>
+                    <button type="button" onClick={() => setConfirmRemove(false)} className="h-8 rounded-lg px-3 text-[13px] text-[#a7aab2] hover:bg-[#1a1c21]">Cancel</button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setConfirmRemove(true)} className="h-8 w-fit rounded-lg border border-[#f2645a66] px-3 text-[13px] text-[#f2645a] hover:bg-[#f2645a14]">Disconnect {info?.label ?? "connection"}</button>
+                )}
               </section>
             </aside>
           </div>
