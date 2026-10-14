@@ -5,6 +5,7 @@ import {
   LuLayers,
   LuList,
   LuPenLine,
+  LuPlug,
   LuSparkles,
   LuZap,
 } from "react-icons/lu";
@@ -44,6 +45,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Automate",
     items: [
       { id: "triggers", label: "Triggers", href: "#/triggers", icon: LuZap },
+      { id: "connections", label: "Connections", href: "#/connections", icon: LuPlug },
       { id: "agents", label: "Agents", href: "#", icon: LuBot, soon: true },
     ],
   },

@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkChannelConnection, fetchChannelConnections } from "../api";
+import { NAV_GROUPS } from "../redesign/shell/navConfig";
 import { ChannelTable, ToolTable } from "./ConnectionsPage";
 import { ageLabel, channelStatus } from "./channelStatus";
 
@@ -10,6 +11,11 @@ afterEach(() => vi.unstubAllGlobals());
 const base = { id: "ops", provider: "slack", displayName: "Ops Slack", enabled: true, identity: "T0123ABCD" };
 
 describe("channel connections", () => {
+  it("is reachable from the console rail", () => {
+    const item = NAV_GROUPS.flatMap((group) => group.items).find((entry) => entry.id === "connections");
+    expect(item).toMatchObject({ label: "Connections", href: "#/connections" });
+  });
+
   it("projects the listing without carrying unknown fields", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({
       connections: [{ ...base, scope: "/private/path", secrets: { botToken: "env:SECRET_NAME" }, health: { state: "failed", checkedAt: "2026-10-14T10:00:00Z", error: { code: "CHANNEL_AUTH_FAILED", retryable: false }, extra: 1 } }],
