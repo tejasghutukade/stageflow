@@ -184,6 +184,7 @@ const FIX_HINTS: Record<string, string> = {
   CHANNEL_SECRET_UNAVAILABLE: "Set the environment variable each secret in connections.yaml names (or its _FILE form) on the host, then check again.",
   CHANNEL_AUTH_FAILED: "The provider rejected the credential. Replace the secret on the host with a valid one, then check again.",
   CHANNEL_UNAUTHORIZED: "The provider refused the credential: it is invalid, or it lacks a permission this provider needs (for AgentMail, reading the inbox and sending). Check the key and its permissions, then try again.",
+  CHANNEL_RECIPIENT_REJECTED: "The provider will not message this recipient. For iMessage on a Free or Pro Photon project, add them as a project user and have them text their assigned line (the \"Texts on\" number) once.",
   CHANNEL_INVALID_INPUT: "The settings in connections.yaml do not match the provider account (for example an unknown inbox or a different workspace). Fix the entry and restart.",
   CHANNEL_PROVIDER_UNSUPPORTED: "This Stageflow version cannot use this provider, or its SDK is not installed (iMessage and WhatsApp need the Spectrum SDK packages).",
   CHANNEL_CONNECTION_FAILED: "Stageflow could not reach the provider. This is usually temporary; check the network and try again.",
@@ -248,7 +249,7 @@ export const PROVIDER_FORMS: Record<ProviderId, { fields: FormField[]; note?: st
   },
   imessage: {
     fields: PHOTON_FIELDS,
-    note: "Sending iMessage uses the Spectrum SDK packages, which Stageflow installs as optional dependencies.",
+    note: "Sending iMessage uses the Spectrum SDK packages (optional dependencies). On a Free or Pro Photon project, each recipient must be a project user and must text their assigned line once before Stageflow can message them.",
   },
   whatsapp: {
     fields: PHOTON_FIELDS,
