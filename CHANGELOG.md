@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Communication channels (send-only).** Stages and pipelines can declare `channels:` that point at a connection in `connections.yaml` with the recipient pinned in YAML. The agent gets one neutral `send_message` tool on the Pi backend. Providers: AgentMail, Slack, Telegram, iMessage and WhatsApp (the last two through Photon; install `spectrum-ts`). Secrets are `env:NAME` references only and are kept out of the stage worker. Sends are idempotent per operation key and a send that may have reached the provider is never resent.
+- **Run-start channel check.** Preflight, `start_run` and `sf doctor` check each connection live and block the run with `channel_check_failed`, retrying only transient failures.
+- **Connections page.** The console lists channels with their last health result and a Check now action, next to email accounts and `.mcp.json` tool servers (read-only). New `GET /api/connections` and `POST /api/connections/{id}/check`.
+- See [Communication channels](docs/channels.md). Receiving messages and agent channels are not part of this release.
+
 ## [0.35.0] - 2026-10-13
 
 ### Added

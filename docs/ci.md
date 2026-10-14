@@ -246,6 +246,10 @@ Stages can reference installed skills via the `skill:` field in stage YAML. Skil
 
 The service defaults to `{ cwd: process.cwd(), agentDir: getAgentDir() }` captured at the moment it auto-starts. Export the env vars in the job **before** the first command that could start the global service, when the job checkout is not the skill tree root or when skills live in a shared agent dir on the runner.
 
+## Channels in CI
+
+Stages that declare [`channels:`](yaml-catalog.md#stage-channels) work in CI. Put a `connections.yaml` in the workspace and supply every `env:NAME` secret it references as an environment variable (or `NAME_FILE`) on the Host; secrets are never written to run state or logs. Run start checks each connection live and fails with `channel_check_failed` when one does not work (bad token, missing secret, unreachable provider), with the provider-neutral `channelCode` in the preflight output. Run `sf doctor --pipeline <file>` as an earlier CI step to see the same result without starting a run. See [Communication channels](channels.md).
+
 ## Extensions in CI
 
 Only provider-level hooks are supported today — for example `STAGEFLOW_CURSOR_EXTENSION` for Cursor-backed models. Per-stage extension YAML in the catalog is not supported in headless CI yet.
