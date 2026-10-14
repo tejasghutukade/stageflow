@@ -1,0 +1,40 @@
+id: send-test-messages
+# Change the model to one you have a provider for.
+model: anthropic/claude-sonnet-4-5
+# Pin the recipients here. The agent can only send to these and cannot change them.
+# `connection` is the id shown on the Connections page; `alias` is the name the agent uses.
+channels:
+  - alias: email
+    connection: agentmail
+    to: [change-me@example.invalid]
+    operations: [send]
+  - alias: text
+    connection: imessage
+    to: "+10000000000"
+    operations: [send]
+io:
+  input:
+    schema:
+      type: object
+      additionalProperties: true
+  output:
+    schema:
+      type: object
+      required: [email, text]
+      properties:
+        email: { type: string, enum: [sent, failed] }
+        text: { type: string, enum: [sent, failed] }
+      additionalProperties: false
+system_prompt: |
+  Send two test messages, one on each channel, then report the result.
+  1. send_message on channel "email" with operationKey "smoke-email",
+     subject "Stageflow channels test" and text "Hello! This email was sent by a Stageflow test pipeline."
+  2. send_message on channel "text" with operationKey "smoke-text"
+     and text "Hello! This text was sent by a Stageflow test pipeline."
+  Recipients are fixed by configuration; never try to choose or change one.
+  If a call is repeated, use the same operationKey and the same content.
+  Never resend an uncertain submission (code CHANNEL_SEND_OUTCOME_UNKNOWN) with a different key.
+  Do not send messages through shell commands or any other tool.
+  Write a short receipt via write_stage_artifact. Do not include secrets.
+  When finished, call emit_stage_envelope exactly once. Set payload.email and payload.text
+  to "sent" or "failed" for each channel. If either failed, use status failure.
