@@ -1,6 +1,9 @@
 import type { AnyChannelProvider } from "./types.js";
+import { createAgentMailProvider } from "./providers/agentmail.js";
 
-const providers = new Map<string, AnyChannelProvider>();
+const providers = new Map<string, AnyChannelProvider>([
+  ["agentmail", createAgentMailProvider() as AnyChannelProvider],
+]);
 
 /** Built-in providers are listed in the initial map as they are implemented. */
 export function channelProviders(): AnyChannelProvider[] {
