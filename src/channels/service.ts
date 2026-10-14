@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseConnectionsYaml } from "./config.js";
-import { addConnectionYaml, readConnectionsText, removeConnectionYaml, toYamlEntry, updateConnectionYaml, writeConnectionsText, type ConnectionPatch } from "./configWriter.js";
+import { addConnectionYaml, removeConnectionYaml, toYamlEntry, updateConnectionYaml, type ConnectionPatch } from "./configWriter.js";
+import { ConnectionEdits } from "./connectionEdits.js";
 import { ChannelError, type ChannelErrorCode } from "./errors.js";
 import { ChannelHealthMonitor, type ChannelHealthOptions } from "./health.js";
 import { channelHostFor, releaseChannelHost, reloadChannelHosts, type ChannelHost } from "./host.js";
@@ -132,6 +133,8 @@ export function startChannelService(
     new ChannelRegistry({ cwd, parsed, secretStore: store, providers: requireHost().registry.providerList() });
   };
 
+  const edits = new ConnectionEdits({ file, store, validate });
+
   const uniqueId = (base: string, taken: (id: string) => boolean): string => {
     if (!taken(base)) return base;
     for (let n = 2; n < 1000; n++) if (!taken(`${base}-${n}`)) return `${base}-${n}`;
@@ -227,42 +230,26 @@ export function startChannelService(
         if (registry.hasConnection(id)) throw new ChannelError("CHANNEL_OPERATION_CONFLICT", false, { connectionId: id });
         draft(parsed, id);
 
-        const written: string[] = [];
+        const secrets: Record<string, string> = {};
         let credentialYaml: { id: string; provider: string; secrets: Record<string, string> } | undefined;
         let credentialId: string | undefined;
-        const refs = secretRefs(`connection.${id}`, parsed.secrets);
-        const text = readConnectionsText(file());
-        try {
-          if (provider.credentialProvider) {
-            if (typeof parsed.credential === "string") {
-              credentialId = parsed.credential;
-            } else if (parsed.credential) {
-              credentialId = parsed.credential.id ?? uniqueId(`${provider.credentialProvider}-main`, candidate => registry.hasCredential(candidate));
-              credentialYaml = { id: credentialId, provider: provider.credentialProvider, secrets: secretRefs(`credential.${credentialId}`, parsed.credential.secrets) };
-              for (const [field, value] of Object.entries(parsed.credential.secrets)) {
-                const name = `credential.${credentialId}.${field}`;
-                store.set(name, value);
-                written.push(name);
-              }
-            }
+        if (provider.credentialProvider) {
+          if (typeof parsed.credential === "string") {
+            credentialId = parsed.credential;
+          } else if (parsed.credential) {
+            credentialId = parsed.credential.id ?? uniqueId(`${provider.credentialProvider}-main`, candidate => registry.hasCredential(candidate));
+            credentialYaml = { id: credentialId, provider: provider.credentialProvider, secrets: secretRefs(`credential.${credentialId}`, parsed.credential.secrets) };
+            for (const [field, value] of Object.entries(parsed.credential.secrets)) secrets[`credential.${credentialId}.${field}`] = value;
           }
-          for (const [field, value] of Object.entries(parsed.secrets)) {
-            const name = `connection.${id}.${field}`;
-            store.set(name, value);
-            written.push(name);
-          }
-          const entry = toYamlEntry({
-            id, provider: parsed.provider, enabled: true, config: parsed.config, secrets: refs,
-            ...(parsed.displayName ? { displayName: parsed.displayName } : {}),
-            ...(credentialId ? { credential: credentialId } : {}),
-          });
-          const next = addConnectionYaml(text, entry, credentialYaml);
-          validate(next);
-          writeConnectionsText(file(), next);
-        } catch (caught) {
-          for (const name of written) store.delete(name);
-          throw caught;
         }
+        const refs = secretRefs(`connection.${id}`, parsed.secrets);
+        for (const [field, value] of Object.entries(parsed.secrets)) secrets[`connection.${id}.${field}`] = value;
+        const entry = toYamlEntry({
+          id, provider: parsed.provider, enabled: true, config: parsed.config, secrets: refs,
+          ...(parsed.displayName ? { displayName: parsed.displayName } : {}),
+          ...(credentialId ? { credential: credentialId } : {}),
+        });
+        edits.apply({ secrets, rewrite: text => ({ text: addConnectionYaml(text, entry, credentialYaml) }) });
         await reload();
         const health = (await this.checkNow(id)) ?? { state: "failed" as const, checkedAt: new Date().toISOString(), error: { code: "CHANNEL_CONNECTION_FAILED" as const, retryable: true } };
         return { id, health };
@@ -285,29 +272,14 @@ export function startChannelService(
           patch.config = parsed.data.config;
         }
         const allowed = new Set([...provider.secrets.required, ...(provider.secrets.optional ?? [])]);
-        const written: string[] = [];
-        const previous: Record<string, string | undefined> = {};
         const secrets = parsed.data.secrets ?? {};
         for (const field of Object.keys(secrets)) if (!allowed.has(field)) throw invalid(field);
         const refs = secretRefs(`connection.${id}`, secrets);
-        const text = readConnectionsText(file());
-        try {
-          for (const field of Object.keys(secrets)) {
-            const name = `connection.${id}.${field}`;
-            previous[name] = store.get(name);
-            store.set(name, secrets[field]!);
-            written.push(name);
-          }
-          if (Object.keys(refs).length) patch.secrets = refs;
-          const next = updateConnectionYaml(text, id, patch);
-          validate(next);
-          writeConnectionsText(file(), next);
-        } catch (caught) {
-          for (const name of written) {
-            if (previous[name] === undefined) store.delete(name); else store.set(name, previous[name]!);
-          }
-          throw caught;
-        }
+        if (Object.keys(refs).length) patch.secrets = refs;
+        edits.apply({
+          secrets: Object.fromEntries(Object.entries(secrets).map(([field, value]) => [`connection.${id}.${field}`, value])),
+          rewrite: text => ({ text: updateConnectionYaml(text, id, patch) }),
+        });
         await reload();
         const enabled = parsed.data.enabled ?? current.enabled;
         return enabled ? { health: await this.checkNow(id) } : {};
@@ -317,11 +289,15 @@ export function startChannelService(
     remove(id) {
       return serialized(async () => {
         requireHost().registry.get(id, false);
-        const { text, removedCredential } = removeConnectionYaml(readConnectionsText(file()), id);
-        validate(text);
-        writeConnectionsText(file(), text);
-        store.deleteWithPrefix(`connection.${id}.`);
-        if (removedCredential) store.deleteWithPrefix(`credential.${removedCredential}.`);
+        edits.apply({
+          rewrite: text => {
+            const removed = removeConnectionYaml(text, id);
+            return {
+              text: removed.text,
+              dropSecretPrefixes: [`connection.${id}.`, ...(removed.removedCredential ? [`credential.${removed.removedCredential}.`] : [])],
+            };
+          },
+        });
         await reload();
       });
     },
