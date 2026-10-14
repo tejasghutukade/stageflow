@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { ChannelError } from "../channels/errors.js";
+import { channelErrorStatus } from "../channels/errorInfo.js";
 import type { ChannelService } from "../channels/service.js";
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
@@ -23,14 +24,6 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-function statusFor(code: string): number {
-  if (code === "CHANNEL_INVALID_INPUT" || code === "CHANNEL_TARGET_INVALID" || code === "CHANNEL_PROVIDER_UNSUPPORTED") return 400;
-  if (code === "CHANNEL_NOT_FOUND") return 404;
-  if (code === "CHANNEL_OPERATION_CONFLICT") return 409;
-  if (code === "CHANNEL_RESOURCE_LIMIT") return 413;
-  return 500;
-}
-
 /**
  * Listing, live checks and edits. Request bodies carry secret values on the way in only; nothing
  * the API returns contains one, and failures answer with a code, never the request or its values.
@@ -41,9 +34,11 @@ export async function handleChannelRoutes(
   const idMatch = pathname.match(/^\/api\/connections\/([^/]+)(?:\/(check|validate-target))?$/);
   const isCollection = pathname === "/api/connections";
   const isTest = pathname === "/api/connections/test";
-  if (!isCollection && !isTest && !idMatch) return false;
+  const isMeta = pathname === "/api/connections/meta";
+  if (!isCollection && !isTest && !isMeta && !idMatch) return false;
 
   try {
+    if (isMeta && method === "GET") { json(res, 200, service.meta()); return true; }
     if (isCollection && method === "GET") { json(res, 200, service.list()); return true; }
     if (isCollection && method === "POST") { json(res, 201, await service.create(await readBody(req))); return true; }
     if (isTest && method === "POST") { json(res, 200, await service.test(await readBody(req))); return true; }
@@ -68,7 +63,7 @@ export async function handleChannelRoutes(
     }
   } catch (error) {
     const code = error instanceof ChannelError ? error.code : "CHANNEL_STORAGE_FAILED";
-    json(res, statusFor(code), { code });
+    json(res, channelErrorStatus(code), { code });
     return true;
   }
   return false;

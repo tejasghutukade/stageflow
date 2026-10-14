@@ -1,13 +1,35 @@
 import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
-import type { ChannelProvider, ConnectionHealth, OutboundMessage, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
+import type { ChannelProvider, ConnectionHealth, OutboundMessage, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
 
 export type AgentMailConfig = { inbox: string; region: "us" | "eu" };
 export type AgentMailTarget = { to: string[]; cc?: string[] };
 
 export const AGENTMAIL_BASE_URLS = { us: "https://api.agentmail.to", eu: "https://api.agentmail.eu" } as const;
 export const AGENTMAIL_DEFAULT_SUBJECT = "Message from Stageflow";
+
+export const AGENTMAIL_META: ProviderMeta = {
+  label: "AgentMail",
+  blurb: "Not connected · send email from an inbox",
+  icon: "mail",
+  fields: [
+    { key: "inbox", label: "Inbox address", hint: "An existing AgentMail inbox. Stageflow does not create one.", target: "config", input: "text", required: true, placeholder: "research@agentmail.to" },
+    { key: "region", label: "Region", target: "config", input: "select", required: false, defaultValue: "us", options: [{ value: "us", label: "United States" }, { value: "eu", label: "Europe" }] },
+    { key: "apiKey", label: "API key", hint: "Needs to read the inbox and send messages.", target: "secret", input: "password", required: true, placeholder: "am_..." },
+  ],
+  recipient: { label: "To", placeholder: "oncall@acme.com, lead@acme.com", multiple: true, cc: true, template: false },
+  envNames: ["AGENTMAIL_API_KEY"],
+  yamlExample: `connections:
+  - id: support-inbox
+    provider: agentmail
+    config:
+      inbox: support@agentmail.to
+    secrets:
+      apiKey: env:AGENTMAIL_API_KEY
+`,
+  stageExample: "    to: [oncall@acme.com]",
+};
 
 const address = z.string().min(3).max(320).regex(/^[^\s@<>,;]+@[^\s@<>,;]+$/);
 const configSchema = z.object({ inbox: address, region: z.enum(["us", "eu"]).default("us") }).strict();
@@ -37,6 +59,7 @@ export function createAgentMailProvider(options: AgentMailOptions = {}): Channel
 
   return {
     id: "agentmail",
+    meta: AGENTMAIL_META,
     operations: ["send"],
     secrets: { required: ["apiKey"] },
     validateConfig(config) {

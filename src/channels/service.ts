@@ -2,13 +2,15 @@ import { z } from "zod";
 import { parseConnectionsYaml } from "./config.js";
 import { addConnectionYaml, removeConnectionYaml, toYamlEntry, updateConnectionYaml, type ConnectionPatch } from "./configWriter.js";
 import { ConnectionEdits } from "./connectionEdits.js";
+import { CHANNEL_ERROR_INFO } from "./errorInfo.js";
 import { ChannelError, type ChannelErrorCode } from "./errors.js";
+import { channelProviders } from "./providers.js";
 import { ChannelHealthMonitor, type ChannelHealthOptions } from "./health.js";
 import { channelHostFor, releaseChannelHost, reloadChannelHosts, type ChannelHost } from "./host.js";
 import { ChannelRegistry, connectionsFilePath, defaultSecretStore, sealed } from "./registry.js";
 import { STORE_NAME_PATTERN } from "./secretStore.js";
 import { stageChannelLimit } from "./stageChannels.js";
-import type { ConnectionHealth, ConnectionSummary, ResolvedConnection, SecretRef } from "./types.js";
+import type { ConnectionHealth, ConnectionSummary, ProviderMeta, ResolvedConnection, SecretRef } from "./types.js";
 
 export type ChannelListing = {
   connections: Array<ConnectionSummary & { health?: ConnectionHealth }>;
@@ -17,7 +19,14 @@ export type ChannelListing = {
   limits: { channelsPerStage: number };
 };
 
+export type ChannelMeta = {
+  providers: Array<ProviderMeta & { id: string }>;
+  errors: Record<string, { reason: string; hint?: string }>;
+};
+
 export type ChannelService = {
+  /** What the console shows about each provider and each error code. Static; needs no secrets. */
+  meta(): ChannelMeta;
   list(): ChannelListing;
   /** Runs one live check now. Returns undefined when the connection is unknown or disabled. */
   checkNow(id: string): Promise<ConnectionHealth | undefined>;
@@ -180,6 +189,14 @@ export function startChannelService(
   };
 
   return {
+    meta() {
+      const providers = host ? host.registry.providerList() : channelProviders();
+      return {
+        providers: providers.map(provider => ({ id: provider.id, ...provider.meta })),
+        errors: Object.fromEntries(Object.entries(CHANNEL_ERROR_INFO).map(([code, info]) => [code, { reason: info.reason, ...(info.hint ? { hint: info.hint } : {}) }])),
+      };
+    },
+
     list() {
       if (!host) return { connections: [], ...(error ? { error } : {}), limits: limits() };
       const health = monitor?.snapshot() ?? {};

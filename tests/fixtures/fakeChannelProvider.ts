@@ -15,6 +15,11 @@ export function fakeChannelProvider(options: { id?: string; credentialProvider?:
   const sent: FakeSend[] = [];
   const provider = {
     id: options.id ?? "fake",
+    meta: {
+      label: "Fake", blurb: "Not connected", icon: "plug",
+      fields: [], recipient: { label: "To", placeholder: "", multiple: false, cc: false, template: false },
+      envNames: [], yamlExample: "", stageExample: "    to: x",
+    },
     operations: ["send"] as const,
     secrets: { required: ["token"], optional: ["extra"] },
     credentialProvider: options.credentialProvider,

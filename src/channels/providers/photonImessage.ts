@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
-import type { ChannelProvider, ConnectionHealth, OutboundMessage, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
+import type { ChannelProvider, ConnectionHealth, OutboundMessage, ProviderField, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
 
 export type PhotonImessageConfig = Record<string, never>;
 export type PhotonImessageTarget = { recipient: string };
@@ -13,6 +13,36 @@ export interface PhotonImessageTransport {
 }
 
 export const PHOTON_BASE_URL = "https://spectrum.photon.codes";
+
+export const PHOTON_FIELDS: ProviderField[] = [
+  { key: "projectId", label: "Photon project ID", hint: "Project settings in app.photon.codes", target: "credential", input: "password", required: true, placeholder: "3f9c21aa-..." },
+  { key: "projectSecret", label: "Photon project secret", hint: "Stored on this host. Never written to connections.yaml.", target: "credential", input: "password", required: true },
+];
+
+export const PHOTON_CREDENTIAL_YAML = `credentials:
+  - id: photon-main
+    provider: photon
+    secrets:
+      projectId: env:PHOTON_PROJECT_ID
+      projectSecret: env:PHOTON_PROJECT_SECRET
+`;
+
+export const IMESSAGE_META: ProviderMeta = {
+  label: "iMessage",
+  blurb: "Not connected · via Photon",
+  icon: "message-circle",
+  via: "Photon",
+  note: "Sending iMessage uses the Spectrum SDK packages (optional dependencies). On a Free or Pro Photon project, each recipient must be a project user and must text their assigned line once before Stageflow can message them.",
+  fields: PHOTON_FIELDS,
+  recipient: { label: "Recipient", placeholder: "+14155550123 or an Apple ID email", multiple: false, cc: false, template: false },
+  envNames: ["PHOTON_PROJECT_ID", "PHOTON_PROJECT_SECRET"],
+  yamlExample: `${PHOTON_CREDENTIAL_YAML}connections:
+  - id: alerts-imessage
+    provider: imessage
+    credential: photon-main
+`,
+  stageExample: '    to: "+14155550123"',
+};
 
 const e164 = /^\+[1-9]\d{6,14}$/;
 const email = /^[^\s@<>,;]+@[^\s@<>,;]+$/;
@@ -108,6 +138,7 @@ export function createPhotonImessageProvider(options: PhotonImessageOptions = {}
 
   return {
     id: "imessage",
+    meta: IMESSAGE_META,
     operations: ["send"],
     secrets: { required: [] },
     credentialProvider: "photon",

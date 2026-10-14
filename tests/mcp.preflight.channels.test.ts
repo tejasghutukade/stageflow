@@ -91,7 +91,7 @@ describe("preflight and start_run with channels", () => {
     const result = await mcpCall(base, "start_run", { pipeline: inline(), task: { id: "t", goal: "g" } });
     expect(result.isError).toBe(true);
     expect(result.payload.code).toBe("channel_check_failed");
-    expect(JSON.stringify(result.payload)).toContain("ops: the provider rejected the credentials (CHANNEL_AUTH_FAILED)");
+    expect(JSON.stringify(result.payload)).toContain("ops: Credentials were rejected (CHANNEL_AUTH_FAILED)");
     expect(JSON.stringify(result.payload)).not.toContain("super-secret");
     expect(provider.sent).toHaveLength(0);
     expect((await store.listRuns()).length).toBe(before.length);

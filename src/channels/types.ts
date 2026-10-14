@@ -54,8 +54,43 @@ export type SendReceipt = {
 
 export type ProviderSecretSpec = { required: readonly string[]; optional?: readonly string[] };
 
+/** One input in the connect form. The provider says what it needs; the console renders it. */
+export type ProviderField = {
+  key: string;
+  label: string;
+  hint?: string;
+  placeholder?: string;
+  /** config goes to connections.yaml, secret to the secret store, credential to the shared credential. */
+  target: "config" | "secret" | "credential";
+  input: "text" | "password" | "select";
+  required: boolean;
+  options?: Array<{ value: string; label: string }>;
+  defaultValue?: string;
+};
+
+/** Everything the console shows about a provider, so the console holds no provider tables of its own. */
+export type ProviderMeta = {
+  label: string;
+  /** Shown on the "not connected" tile. */
+  blurb: string;
+  /** Presentation key for an icon. The console maps it. */
+  icon: string;
+  /** Set when the provider works through another service, such as "Photon". */
+  via?: string;
+  note?: string;
+  fields: ProviderField[];
+  recipient: { label: string; placeholder: string; multiple: boolean; cc: boolean; template: boolean };
+  /** Environment variable names for the `env:` form, in the order the YAML example uses them. */
+  envNames: string[];
+  /** A connections.yaml snippet that connects this provider. */
+  yamlExample: string;
+  /** The `to:` lines (and template, if any) of a stage `channels:` entry for this provider. */
+  stageExample: string;
+};
+
 export interface ChannelProvider<C = unknown, T = unknown> {
   readonly id: string;
+  readonly meta: ProviderMeta;
   readonly operations: readonly ChannelOperation[];
   readonly secrets: ProviderSecretSpec;
   /** When set, a connection must reference a credential of this provider kind. */

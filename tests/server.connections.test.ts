@@ -185,7 +185,21 @@ describe("/api/connections", () => {
       expect(bad.status).toBe(400);
     });
 
-    it("validates a pinned recipient with the provider's own rules, without network or secrets", async () => {
+    it("serves provider descriptions and the error catalogue without secrets", async () => {
+      await boot("version: 1\nconnections: []\n");
+      const response = await fetch(`${base}/api/connections/meta`);
+      expect(response.status).toBe(200);
+      const meta = await response.json();
+      const ids = meta.providers.map((provider: { id: string }) => provider.id);
+      expect(ids).toEqual(expect.arrayContaining(["agentmail", "slack", "telegram", "imessage", "whatsapp"]));
+      const agentmail = meta.providers.find((provider: { id: string }) => provider.id === "agentmail");
+      expect(agentmail.fields.map((field: { key: string }) => field.key)).toEqual(["inbox", "region", "apiKey"]);
+      expect(meta.errors.CHANNEL_RECIPIENT_REJECTED.reason).toMatch(/will not message/);
+      expect(meta.errors.CHANNEL_NOT_FOUND.status).toBeUndefined();
+      expect(JSON.stringify(meta)).not.toContain(SECRET);
+    });
+
+    it("validates a pinned recipient with the provider\'s own rules, without network or secrets", async () => {
       await boot(YAML);
       const call = (id: string, body: unknown) => post(`/api/connections/${id}/validate-target`, body);
       expect(await (await call("ops", { to: "C123" })).json()).toEqual({ ok: true });

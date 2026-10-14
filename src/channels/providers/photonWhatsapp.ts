@@ -1,12 +1,33 @@
 import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
-import type { ChannelProvider, ConnectionHealth, OutboundMessage, SendContext, SendReceipt } from "../types.js";
-import { PHOTON_BASE_URL, credentialsOf, photonData, photonHeaders, type PhotonCredentials } from "./photonImessage.js";
+import type { ChannelProvider, ConnectionHealth, OutboundMessage, ProviderMeta, SendContext, SendReceipt } from "../types.js";
+import { PHOTON_BASE_URL, PHOTON_CREDENTIAL_YAML, PHOTON_FIELDS, credentialsOf, photonData, photonHeaders, type PhotonCredentials } from "./photonImessage.js";
 
 export type WhatsappTemplate = { name: string; languageCode: string; bodyParams?: string[] };
 export type WhatsappTarget = { recipient: string; template?: WhatsappTemplate };
 export type WhatsappConfig = Record<string, never>;
+
+export const WHATSAPP_META: ProviderMeta = {
+  label: "WhatsApp Business",
+  blurb: "Not connected · via Photon",
+  icon: "phone",
+  via: "Photon",
+  note: "Enable WhatsApp for the project in the Photon dashboard first. Uses the Spectrum SDK packages (optional dependencies). Stages pin an approved template per recipient.",
+  fields: PHOTON_FIELDS,
+  recipient: { label: "Recipient", placeholder: "+14155550123", multiple: false, cc: false, template: true },
+  envNames: ["PHOTON_PROJECT_ID", "PHOTON_PROJECT_SECRET"],
+  yamlExample: `${PHOTON_CREDENTIAL_YAML}connections:
+  - id: orders-whatsapp
+    provider: whatsapp
+    credential: photon-main
+`,
+  stageExample: `    to: "+14155550123"
+    template:
+      name: order_update
+      languageCode: en_US
+      bodyParams: ["{{message}}"]`,
+};
 
 export const MESSAGE_PLACEHOLDER = "{{message}}";
 export const MAX_TEMPLATE_PARAM = 1024;
@@ -121,6 +142,7 @@ export function createPhotonWhatsappProvider(options: PhotonWhatsappOptions = {}
 
   return {
     id: "whatsapp",
+    meta: WHATSAPP_META,
     operations: ["send"],
     secrets: { required: [] },
     credentialProvider: "photon",

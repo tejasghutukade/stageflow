@@ -2,12 +2,31 @@ import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
 import type { HttpMode } from "../http.js";
-import type { ChannelProvider, ConnectionHealth, OutboundMessage, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
+import type { ChannelProvider, ConnectionHealth, OutboundMessage, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
 
 export type SlackConfig = { teamId?: string };
 export type SlackTarget = { channel: string };
 
 export const SLACK_BASE_URL = "https://slack.com/api";
+
+export const SLACK_META: ProviderMeta = {
+  label: "Slack",
+  blurb: "Not connected · post as a bot",
+  icon: "hash",
+  fields: [
+    { key: "botToken", label: "Bot token", hint: "xoxb-… from your Slack app (OAuth & Permissions). Needs chat:write.", target: "secret", input: "password", required: true, placeholder: "xoxb-..." },
+    { key: "teamId", label: "Workspace ID (optional)", hint: "Pins the connection to one workspace, such as T0123ABCD.", target: "config", input: "text", required: false, placeholder: "T0123ABCD" },
+  ],
+  recipient: { label: "Channel id", placeholder: "C0123ABCD (channel, group, DM or user id)", multiple: false, cc: false, template: false },
+  envNames: ["SLACK_BOT_TOKEN"],
+  yamlExample: `connections:
+  - id: ops-slack
+    provider: slack
+    secrets:
+      botToken: env:SLACK_BOT_TOKEN
+`,
+  stageExample: "    to: C0123ABCD",
+};
 
 const configSchema = z.object({ teamId: z.string().regex(/^T[A-Z0-9]{2,31}$/).optional() }).strict();
 const targetSchema = z.object({ to: z.string().regex(/^[CGDU][A-Z0-9]{2,31}$/) }).strict();
@@ -54,6 +73,7 @@ export function createSlackProvider(options: SlackOptions = {}): ChannelProvider
 
   return {
     id: "slack",
+    meta: SLACK_META,
     operations: ["send"],
     secrets: { required: ["botToken"] },
     validateConfig(config) {

@@ -177,7 +177,7 @@ describe("channelFailureSummary", () => {
       { kind: "toolchain", status: "missing_tool", tool: "git" },
     ] as never[];
     const text = channelFailureSummary(checks)!;
-    expect(text).toContain("phone: the provider will not message the pinned recipient");
+    expect(text).toContain("phone: The provider will not message this recipient");
     expect(text).toContain("(CHANNEL_RECIPIENT_REJECTED)");
     expect(text).toContain("odd: CHANNEL_SOMETHING_NEW (CHANNEL_SOMETHING_NEW)");
     expect(text).not.toContain("mail");

@@ -2,13 +2,32 @@ import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
 import type { HttpMode } from "../http.js";
-import type { ChannelProvider, ConnectionHealth, OutboundMessage, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
+import type { ChannelProvider, ConnectionHealth, OutboundMessage, ProviderMeta, ResolvedConnection, SendContext, SendReceipt } from "../types.js";
 
 export type TelegramConfig = { botUsername?: string };
 export type TelegramTarget = { chatId: string | number };
 
 export const TELEGRAM_BASE_URL = "https://api.telegram.org";
 export const TELEGRAM_MAX_TEXT = 4096;
+
+export const TELEGRAM_META: ProviderMeta = {
+  label: "Telegram",
+  blurb: "Not connected · bot token",
+  icon: "send",
+  fields: [
+    { key: "botToken", label: "Bot token", hint: "From @BotFather. People must start the bot before it can message them.", target: "secret", input: "password", required: true, placeholder: "123456:ABC..." },
+    { key: "botUsername", label: "Bot username (optional)", hint: "Fails the check if the token belongs to another bot.", target: "config", input: "text", required: false, placeholder: "acme_alerts_bot" },
+  ],
+  recipient: { label: "Chat id", placeholder: "123456789 or @channelname", multiple: false, cc: false, template: false },
+  envNames: ["TELEGRAM_BOT_TOKEN"],
+  yamlExample: `connections:
+  - id: alerts-telegram
+    provider: telegram
+    secrets:
+      botToken: env:TELEGRAM_BOT_TOKEN
+`,
+  stageExample: '    to: "123456789"',
+};
 
 const configSchema = z.object({ botUsername: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{4,31}$/).optional() }).strict();
 const chatId = z.union([
@@ -55,6 +74,7 @@ export function createTelegramProvider(options: TelegramOptions = {}): ChannelPr
 
   return {
     id: "telegram",
+    meta: TELEGRAM_META,
     operations: ["send"],
     secrets: { required: ["botToken"] },
     validateConfig(config) {
