@@ -26,7 +26,11 @@ export function codeMessage(code: string): string {
   return CODE_MESSAGES[code] ?? code;
 }
 
-export type ChannelStatus = { label: string; tone: "ok" | "fail" | "muted"; detail?: string };
+export type ChannelStatus = { label: string; tone: "ok" | "needs" | "muted"; detail?: string };
+
+const SETUP_CODES = new Set([
+  "CHANNEL_AUTH_FAILED", "CHANNEL_UNAUTHORIZED", "CHANNEL_SECRET_UNAVAILABLE", "CHANNEL_INVALID_INPUT", "CHANNEL_PROVIDER_UNSUPPORTED",
+]);
 
 /** What the host last observed. "Not checked yet" never claims the connection works. */
 export function channelStatus(connection: ChannelConnectionListing): ChannelStatus {
@@ -34,7 +38,9 @@ export function channelStatus(connection: ChannelConnectionListing): ChannelStat
   const health = connection.health;
   if (!health) return { label: "Not checked yet", tone: "muted" };
   if (health.state === "ok") return { label: "Connected", tone: "ok" };
-  return { label: "Check failed", tone: "fail", detail: health.error ? codeMessage(health.error.code) : undefined };
+  const detail = health.error ? codeMessage(health.error.code) : undefined;
+  const label = health.error && SETUP_CODES.has(health.error.code) ? "Needs setup" : "Check failed";
+  return { label, tone: "needs", ...(detail ? { detail } : {}) };
 }
 
 export function ageLabel(checkedAt: string, now: number = Date.now()): string {
