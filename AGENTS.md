@@ -117,7 +117,7 @@ Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** 
 
 ### Connections (communication channels and tools)
 
-Send-only stage channels are built (`src/channels/`, `src/tools/sendMessage.ts`, `src/server/channelRoutes.ts`, `ui/src/redesign/connections/`, the editor's `StageChannelsSection`). User docs: **[docs/channels.md](docs/channels.md)**. Before changing them or adding a provider, read that page, then [docs/specs/connections-spec.md](docs/specs/connections-spec.md) (original proposal, partly superseded), the verified provider facts in [connections-provider-reference.md](docs/specs/connections-provider-reference.md), and the Wonder artboard map in [connections-design-handoff.md](docs/specs/connections-design-handoff.md).
+Send-only stage channels are built (`src/channels/`, `src/tools/sendMessage.ts`, `src/server/channelRoutes.ts`, `ui/src/redesign/connections/`, the editor's `StageChannelsSection`). User docs: **[docs/channels.md](docs/channels.md)**. Before changing them or adding a provider, read that page. Local-only working notes (gitignored, not in the repo) may exist at `docs/specs/connections-spec.md`, `connections-provider-reference.md` and `connections-design-handoff.md`; if you have them, the provider reference holds verified third-party facts.
 
 Rules every change must keep:
 

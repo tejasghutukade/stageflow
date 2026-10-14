@@ -141,7 +141,7 @@ describe("imessage checks", () => {
   });
 
   it("targets: passes on a shared project when the user is registered", async () => {
-    server.queue.push(tokens("shared"), { status: 200, body: JSON.stringify({ succeed: true, data: { users: [{ phoneNumber: "+14155550123", assignedPhoneNumber: "+16283167665" }], total: 1 } }) });
+    server.queue.push(tokens("shared"), { status: 200, body: JSON.stringify({ succeed: true, data: { users: [{ phoneNumber: "+14155550123", assignedPhoneNumber: "+15555550100" }], total: 1 } }) });
     expect(await make().checkTargets!(conn(), [target])).toMatchObject({ state: "ok" });
     expect(server.requests[1]!.url).toBe(`/projects/${PROJECT}/users/?search=%2B14155550123`);
   });
