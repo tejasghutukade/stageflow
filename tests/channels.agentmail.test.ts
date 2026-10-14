@@ -70,6 +70,13 @@ describe("agentmail config and targets", () => {
   });
 });
 
+describe("agentmail check", () => {
+  it("treats an unexpected error as a retryable connection failure, like every other provider", async () => {
+    const broken = { ...conn(), config: null } as never;
+    expect(await make().check(broken)).toMatchObject({ state: "failed", error: { code: "CHANNEL_CONNECTION_FAILED", retryable: true } });
+  });
+});
+
 describe("agentmail send", () => {
   it("posts to the inbox with the key in the header only", async () => {
     server.queue.push({ status: 200, body: JSON.stringify({ message_id: "msg_1", thread_id: "thr_1" }) });

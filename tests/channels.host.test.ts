@@ -206,8 +206,15 @@ describe("channelsWorkerEnvironment", () => {
   it("covers credentials and leaves the environment unchanged when the file is unreadable", async () => {
     const { root } = await setup("version: 1\ncredentials:\n  - id: p\n    provider: photon\n    secrets: { projectSecret: env:PHOTON_SECRET }\n");
     expect(channelsWorkerEnvironment({ PHOTON_SECRET: "s", KEEP: "1" }, root)).toEqual({ KEEP: "1" });
+    await releaseChannelHost(root);
     await writeFile(path.join(root, "connections.yaml"), "version: [");
     expect(channelsWorkerEnvironment({ PHOTON_SECRET: "s" }, root)).toEqual({ PHOTON_SECRET: "s" });
+  });
+
+  it("strips the names of the file the host loaded, not of a file it re-reads", async () => {
+    const { root } = await setup();
+    await writeFile(path.join(root, "connections.yaml"), "version: 1\nconnections:\n  - id: other\n    provider: fake\n    config: { inbox: o@b.test }\n    secrets: { token: env:OTHER_TOKEN }\n");
+    expect(channelsWorkerEnvironment({ CH_TEST_TOKEN: "s", OTHER_TOKEN: "o" }, root)).toEqual({ OTHER_TOKEN: "o" });
   });
 
   it("is a no-op without a connections file", async () => {

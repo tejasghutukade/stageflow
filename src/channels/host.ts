@@ -2,8 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 import type { StageChannel, StageConfig } from "../types/stage.js";
-import { ChannelRegistry, connectionsFilePath, type ChannelRegistryOptions } from "./registry.js";
-import { loadConnectionsFile } from "./config.js";
+import { ChannelRegistry, type ChannelRegistryOptions } from "./registry.js";
 import { ChannelError, type ChannelErrorCode } from "./errors.js";
 import { ChannelSends } from "./ledger.js";
 import { channelKey, channelTarget, stageChannelLimit, validateStageChannels } from "./stageChannels.js";
@@ -86,24 +85,22 @@ export function validateStageChannelConnections(host: ChannelHost, stage: Pick<S
 }
 
 /**
- * Removes every variable that `connections.yaml` points at, and its `_FILE` form, from a
- * worker environment. A file that cannot be read leaves the environment unchanged.
+ * Removes every variable the loaded connections point at, and its `_FILE` form, from a worker
+ * environment. It reads the names from the same registry the host sends with, so the variables
+ * stripped always belong to the file the host actually loaded. A file that cannot be loaded
+ * leaves the environment unchanged.
  */
 export function channelsWorkerEnvironment(env: NodeJS.ProcessEnv, cwd: string): NodeJS.ProcessEnv {
   const result = { ...env };
-  let file;
+  let names: string[];
   try {
-    file = loadConnectionsFile(connectionsFilePath(cwd));
+    names = channelHostFor(cwd).registry.envSecretNames();
   } catch {
     return result;
   }
-  for (const entry of [...file.credentials, ...file.connections]) {
-    for (const ref of Object.values(entry.secrets)) {
-      if (!ref.startsWith("env:")) continue;
-      const name = ref.slice("env:".length);
-      delete result[name];
-      delete result[`${name}_FILE`];
-    }
+  for (const name of names) {
+    delete result[name];
+    delete result[`${name}_FILE`];
   }
   return result;
 }

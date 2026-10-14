@@ -61,7 +61,7 @@ export function createAgentMailProvider(options: AgentMailOptions = {}): Channel
         const failure = result.status === 404 ? new ChannelError("CHANNEL_INVALID_INPUT") : statusFailure(result.status, "check", connection.id);
         return { state: "failed", checkedAt, error: { code: failure.code, retryable: failure.retryable } };
       } catch (error) {
-        const failure = error instanceof ChannelError ? error : new ChannelError("CHANNEL_CONNECTION_FAILED");
+        const failure = error instanceof ChannelError ? error : new ChannelError("CHANNEL_CONNECTION_FAILED", true);
         return { state: "failed", checkedAt, error: { code: failure.code, retryable: failure.retryable } };
       }
     },

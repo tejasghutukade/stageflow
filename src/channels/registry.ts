@@ -91,6 +91,15 @@ export class ChannelRegistry {
     return this.requireProvider(providerId);
   }
 
+  /** Environment variable names that connections and credentials point at with `env:` references. */
+  envSecretNames(): string[] {
+    const names = new Set<string>();
+    for (const entry of [...this.credentials.values(), ...this.connections.values()]) {
+      for (const ref of Object.values(entry.secrets)) if (ref.startsWith("env:")) names.add(ref.slice("env:".length));
+    }
+    return [...names];
+  }
+
   providerList(): AnyChannelProvider[] {
     return [...this.providers.values()];
   }
