@@ -105,3 +105,30 @@ export async function checkStageChannels(loaded: LoadedPipeline, options: Channe
     return item(id, await withRetry(signal => provider.checkTargets!(resolved, values, signal), retry));
   }));
 }
+
+const FAILURE_REASONS: Record<string, string> = {
+  CHANNEL_RECIPIENT_REJECTED: "the provider will not message the pinned recipient (for iMessage on a Free or Pro Photon project, register that person in the project)",
+  CHANNEL_TARGET_INVALID: "the pinned recipient is not valid for this provider",
+  CHANNEL_SECRET_UNAVAILABLE: "a secret for this connection is not set on the host",
+  CHANNEL_AUTH_FAILED: "the provider rejected the credentials",
+  CHANNEL_UNAUTHORIZED: "the provider refused the credentials or they lack a permission",
+  CHANNEL_INVALID_INPUT: "the connection settings do not match the provider account",
+  CHANNEL_CONNECTION_FAILED: "the provider could not be reached",
+  CHANNEL_TIMEOUT: "the provider did not answer in time",
+  CHANNEL_RATE_LIMIT: "the provider is rate limiting this account",
+  CHANNEL_PROVIDER_UNSUPPORTED: "the provider is not supported here, or its SDK (spectrum-ts) is not installed",
+  CHANNEL_NOT_FOUND: "the connection is not defined",
+  CHANNEL_DISABLED: "the connection is disabled",
+};
+
+/** One line naming each failed connection and why. Codes and plain reasons only, never a secret. */
+export function channelFailureSummary(checks: readonly PreflightItem[]): string | undefined {
+  const failed = checks.filter(check => check.kind === "channel" && check.status === "channel_check_failed");
+  if (failed.length === 0) return undefined;
+  return failed
+    .map(check => {
+      const code = check.channelCode ?? "CHANNEL_CONNECTION_FAILED";
+      return `${check.connection}: ${FAILURE_REASONS[code] ?? code} (${code})`;
+    })
+    .join("; ");
+}

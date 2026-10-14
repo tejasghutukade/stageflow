@@ -161,3 +161,21 @@ describe("runPipelinePreflight with channels", () => {
     expect(result.checks.filter(c => c.kind === "channel")).toEqual([{ kind: "channel", status: "ok", connection: "ops" }]);
   });
 });
+
+describe("channelFailureSummary", () => {
+  it("names each failed connection with a plain reason and its code, and ignores the rest", async () => {
+    const { channelFailureSummary } = await import("../src/preflight/channelChecks.js");
+    const checks = [
+      { kind: "channel", status: "ok", connection: "mail" },
+      { kind: "channel", status: "channel_check_failed", connection: "phone", channelCode: "CHANNEL_RECIPIENT_REJECTED" },
+      { kind: "channel", status: "channel_check_failed", connection: "odd", channelCode: "CHANNEL_SOMETHING_NEW" },
+      { kind: "toolchain", status: "missing_tool", tool: "git" },
+    ] as never[];
+    const text = channelFailureSummary(checks)!;
+    expect(text).toContain("phone: the provider will not message the pinned recipient");
+    expect(text).toContain("(CHANNEL_RECIPIENT_REJECTED)");
+    expect(text).toContain("odd: CHANNEL_SOMETHING_NEW (CHANNEL_SOMETHING_NEW)");
+    expect(text).not.toContain("mail");
+    expect(channelFailureSummary([{ kind: "channel", status: "ok", connection: "mail" } as never])).toBeUndefined();
+  });
+});

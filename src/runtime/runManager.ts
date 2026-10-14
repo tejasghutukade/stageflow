@@ -116,6 +116,7 @@ import {
   preflightFailureCode,
   runPipelinePreflight,
 } from "../preflight/pipelinePreflight.js";
+import { channelFailureSummary } from "../preflight/channelChecks.js";
 import { asAgentBackendId } from "../agent/agentBackend.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
@@ -3115,7 +3116,11 @@ export class RunManager {
           "missing_tool";
         return {
           ok: false,
-          reason: `Pipeline preflight failed: ${code}`,
+          reason: `Pipeline preflight failed: ${code}${
+            code === "channel_check_failed" && channelFailureSummary(preflight.checks)
+              ? `: ${channelFailureSummary(preflight.checks)}`
+              : ""
+          }`,
           status: 400,
           code,
         };
