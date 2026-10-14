@@ -5,6 +5,7 @@ import { stringify } from "yaml";
 import { parseAgentYaml, type AgentDefinition } from "../config/loadAgent.js";
 import {
   AgentStore,
+  type AgentMessage,
   type AgentRecord,
   type AgentRevisionRecord,
   type AgentSessionRecord,
@@ -271,7 +272,9 @@ export class AgentService {
         id: `ses_${randomBytes(8).toString("hex")}`,
         agentId: id,
         revision: current.revision,
+        backend: "pi",
         status: "open",
+        messages: [],
       };
       record.sessions.push(session);
       fresh.agents[id] = record;
@@ -294,6 +297,26 @@ export class AgentService {
         return { ok: true, turnId: `turn_${randomBytes(6).toString("hex")}` };
       }
       return { ok: false, code: "agent.session_not_found" };
+    });
+  }
+
+  async appendTurn(
+    projectRoot: string,
+    sessionId: string,
+    input: { backend: AgentSessionRecord["backend"]; messages: AgentMessage[]; status: AgentSessionRecord["status"] },
+  ): Promise<AgentSessionRecord | undefined> {
+    return this.exclusive(projectRoot, async () => {
+      const fresh = await this.store.load(projectRoot);
+      for (const record of Object.values(fresh.agents)) {
+        const session = record.sessions.find((item) => item.id === sessionId);
+        if (!session) continue;
+        session.backend = input.backend;
+        session.messages.push(...input.messages);
+        session.status = input.status;
+        await this.store.save(projectRoot, fresh);
+        return session;
+      }
+      return undefined;
     });
   }
 

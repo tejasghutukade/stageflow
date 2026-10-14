@@ -12,11 +12,19 @@ export type AgentRevisionRecord = {
   createdAt: string;
 };
 
+export type AgentMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+};
+
 export type AgentSessionRecord = {
   id: string;
   agentId: string;
   revision: number;
+  backend: "pi" | "claude";
   status: "open" | "running" | "held";
+  messages: AgentMessage[];
 };
 
 export type AgentRecord = {
