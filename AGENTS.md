@@ -115,6 +115,10 @@ Real Chrome smoke test (opt-in, needs `agent-browser` on `PATH`): `STAGEFLOW_BRO
 
 Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** for UI-specific rules (Astryx workflow, chrome exception, UX docs, component map). Do not duplicate that file here.
 
+### Connections (communication channels and tools)
+
+Before touching the Connections page, `src/email/`, or adding a channel provider (AgentMail, Slack, Photon iMessage/WhatsApp/Telegram), read **[docs/specs/connections-spec.md](docs/specs/connections-spec.md)**. Verified provider facts are in [connections-provider-reference.md](docs/specs/connections-provider-reference.md); Wonder artboard map and styling are in [connections-design-handoff.md](docs/specs/connections-design-handoff.md). Resolve the spec's "Decision needed" items with the owner before building.
+
 ## Documentation
 
 - Public docs index: [docs/README.md](docs/README.md)
