@@ -20,6 +20,8 @@ export type ChannelService = {
   checkNow(id: string): Promise<ConnectionHealth | undefined>;
   /** Checks entered values without saving anything. */
   test(input: unknown): Promise<ConnectionHealth>;
+  /** Static check of a pinned recipient for a connection. No network, no secret read. */
+  validateTarget(id: string, input: unknown): { ok: true } | { ok: false; issues: string[] };
   create(input: unknown): Promise<{ id: string; health: ConnectionHealth }>;
   update(id: string, input: unknown): Promise<{ health?: ConnectionHealth }>;
   remove(id: string): Promise<void>;
@@ -38,6 +40,16 @@ const createSchema = z.object({
   secrets: secretsInput.default({}),
   credential: z.union([idSchema, z.object({ id: idSchema.optional(), secrets: secretsInput })]).optional(),
 }).strict();
+const targetText = z.union([z.string().min(1).max(500), z.number().int()]);
+const targetSchema = z.object({
+  to: z.union([targetText, z.array(targetText).min(1).max(20)]),
+  cc: z.array(targetText).min(1).max(20).optional(),
+  template: z.record(z.string(), z.unknown()).optional(),
+}).strict().transform(value => ({
+  ...value,
+  to: Array.isArray(value.to) ? value.to.map(String) : String(value.to),
+  ...(value.cc ? { cc: value.cc.map(String) } : {}),
+}));
 const updateSchema = z.object({
   displayName: z.string().max(200).nullable().optional(),
   enabled: z.boolean().optional(),
@@ -179,6 +191,14 @@ export function startChannelService(
         return undefined;
       }
       return monitor.checkNow(id);
+    },
+
+    validateTarget(id, input) {
+      const parsed = targetSchema.safeParse(input);
+      if (!parsed.success) return { ok: false, issues: ["target"] };
+      const provider = requireHost().registry.providerFor(id);
+      const result = provider.validateTarget(parsed.data);
+      return result.ok ? { ok: true } : { ok: false, issues: result.issues };
     },
 
     async test(input) {

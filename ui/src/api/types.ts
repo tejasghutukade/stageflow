@@ -620,6 +620,7 @@ export type DraftPackagePayload = {
     model?: unknown;
     schemas?: unknown;
     requires?: unknown;
+    channels?: unknown;
   };
   stages?: Array<{ path: string; body: Record<string, unknown> }>;
   task?: { filename: string; body: Record<string, unknown> };

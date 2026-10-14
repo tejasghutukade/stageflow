@@ -185,6 +185,17 @@ describe("/api/connections", () => {
       expect(bad.status).toBe(400);
     });
 
+    it("validates a pinned recipient with the provider's own rules, without network or secrets", async () => {
+      await boot(YAML);
+      const call = (id: string, body: unknown) => post(`/api/connections/${id}/validate-target`, body);
+      expect(await (await call("ops", { to: "C123" })).json()).toEqual({ ok: true });
+      expect(await (await call("ops", { to: "C123", cc: ["x"] })).json()).toEqual({ ok: false, issues: ["target"] });
+      expect(await (await call("ops", { to: 42 })).json()).toEqual({ ok: true });
+      expect(await (await call("ops", { nope: 1 })).json()).toEqual({ ok: false, issues: ["target"] });
+      expect((await call("missing", { to: "x" })).status).toBe(404);
+      expect(provider.checkCalls).toBe(0);
+    });
+
     it("refuses edits without a same-origin header and oversized bodies", async () => {
       await boot("version: 1\nconnections: []\n");
       expect((await post("/api/connections", draft(), "POST", null)).status).toBeGreaterThanOrEqual(400);

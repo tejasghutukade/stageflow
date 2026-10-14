@@ -38,7 +38,7 @@ function statusFor(code: string): number {
 export async function handleChannelRoutes(
   req: IncomingMessage, method: string, pathname: string, service: ChannelService, res: ServerResponse, json: Json,
 ): Promise<boolean> {
-  const idMatch = pathname.match(/^\/api\/connections\/([^/]+)(?:\/(check))?$/);
+  const idMatch = pathname.match(/^\/api\/connections\/([^/]+)(?:\/(check|validate-target))?$/);
   const isCollection = pathname === "/api/connections";
   const isTest = pathname === "/api/connections/test";
   if (!isCollection && !isTest && !idMatch) return false;
@@ -57,6 +57,10 @@ export async function handleChannelRoutes(
       if (idMatch[2] === "check" && method === "POST") {
         const health = await service.checkNow(id);
         if (health) json(res, 200, health); else json(res, 404, { code: "CHANNEL_NOT_FOUND" });
+        return true;
+      }
+      if (idMatch[2] === "validate-target" && method === "POST") {
+        json(res, 200, service.validateTarget(id, await readBody(req)));
         return true;
       }
       if (!idMatch[2] && method === "PATCH") { json(res, 200, await service.update(id, await readBody(req))); return true; }
