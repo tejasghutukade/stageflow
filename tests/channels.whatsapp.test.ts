@@ -142,11 +142,12 @@ describe("whatsapp spectrum transport", () => {
 
 describe("whatsapp check", () => {
   it("needs at least one line on the project", async () => {
-    server.queue.push({ status: 200, body: JSON.stringify({ auth: { "123": "tok" }, numbers: {} } ) }, { status: 200, body: JSON.stringify({ auth: {} }) });
+    server.queue.push({ status: 200, body: JSON.stringify({ succeed: true, data: { auth: { "123": "tok" }, numbers: {} } }) }, { status: 200, body: JSON.stringify({ succeed: true, data: { auth: {} } }) }, { status: 200, body: JSON.stringify({ auth: { "123": "tok" } }) });
     expect(await make().check(conn())).toMatchObject({ state: "ok" });
     expect(server.requests[0]!.url).toBe(`/projects/${PROJECT}/whatsapp-business/tokens`);
     expect(server.requests[0]!.headers.authorization).toBe(`Basic ${Buffer.from(`${PROJECT}:${SECRET}`).toString("base64")}`);
     expect(await make().check(conn())).toMatchObject({ state: "failed", error: { code: "CHANNEL_INVALID_INPUT", retryable: false } });
+    expect(await make().check(conn())).toMatchObject({ state: "ok" });
   });
   it.each([[401, "CHANNEL_AUTH_FAILED", false], [429, "CHANNEL_RATE_LIMIT", true], [503, "CHANNEL_CONNECTION_FAILED", true]] as const)("maps status %i", async (status, code, retryable) => {
     server.queue.push({ status, body: "{}" });

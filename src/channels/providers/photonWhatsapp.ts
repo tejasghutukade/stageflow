@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ChannelError } from "../errors.js";
 import { httpCall, parseJson, statusFailure } from "../http.js";
 import type { ChannelProvider, ConnectionHealth, OutboundMessage, SendContext, SendReceipt } from "../types.js";
-import { PHOTON_BASE_URL, credentialsOf, photonHeaders, type PhotonCredentials } from "./photonImessage.js";
+import { PHOTON_BASE_URL, credentialsOf, photonData, photonHeaders, type PhotonCredentials } from "./photonImessage.js";
 
 export type WhatsappTemplate = { name: string; languageCode: string; bodyParams?: string[] };
 export type WhatsappTarget = { recipient: string; template?: WhatsappTemplate };
@@ -140,7 +140,7 @@ export function createPhotonWhatsappProvider(options: PhotonWhatsappOptions = {}
           headers: photonHeaders(credentials), body: {}, timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
         });
         if (result.status < 200 || result.status >= 300) return failed(statusFailure(result.status, "check", connection.id), checkedAt);
-        const auth = (parseJson(result.text) as { auth?: unknown } | undefined)?.auth;
+        const auth = photonData(parseJson(result.text))?.auth;
         const lines = auth && typeof auth === "object" ? Object.keys(auth).length : 0;
         return lines > 0 ? { state: "ok", checkedAt } : failed(new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id, field: "whatsapp" }), checkedAt);
       } catch (error) {

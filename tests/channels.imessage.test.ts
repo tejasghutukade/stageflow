@@ -28,7 +28,7 @@ const conn = (withCredential = true): ResolvedConnection<Record<string, never>> 
 };
 const context = { operationKey: "k" };
 const target = { recipient: "+14155550123" };
-const tokens = (type: "shared" | "dedicated") => ({ status: 200, body: JSON.stringify({ type }) });
+const tokens = (type: "shared" | "dedicated") => ({ status: 200, body: JSON.stringify({ succeed: true, data: { type, token: "t", expiresIn: 3600 } }) });
 async function fail(promise: Promise<unknown>): Promise<ChannelError | undefined> {
   try { await promise; } catch (error) { return error as ChannelError; }
   return undefined;
@@ -134,8 +134,14 @@ describe("imessage checks", () => {
   it("check without a credential fails as secret unavailable", async () => {
     expect(await make().check(conn(false))).toMatchObject({ state: "failed", error: { code: "CHANNEL_SECRET_UNAVAILABLE" } });
   });
+  it("targets: still reads an unwrapped token response", async () => {
+    server.queue.push({ status: 200, body: JSON.stringify({ type: "dedicated" }) });
+    expect(await make().checkTargets!(conn(), [target])).toMatchObject({ state: "ok" });
+    expect(server.requests).toHaveLength(1);
+  });
+
   it("targets: passes on a shared project when the user is registered", async () => {
-    server.queue.push(tokens("shared"), { status: 200, body: JSON.stringify({ users: [{ phoneNumber: "+14155550123" }] }) });
+    server.queue.push(tokens("shared"), { status: 200, body: JSON.stringify({ succeed: true, data: { users: [{ phoneNumber: "+14155550123", assignedPhoneNumber: "+16283167665" }], total: 1 } }) });
     expect(await make().checkTargets!(conn(), [target])).toMatchObject({ state: "ok" });
     expect(server.requests[1]!.url).toBe(`/projects/${PROJECT}/users/?search=%2B14155550123`);
   });

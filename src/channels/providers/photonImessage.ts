@@ -36,6 +36,13 @@ export function photonHeaders({ projectId, projectSecret }: PhotonCredentials): 
   return { authorization: `Basic ${Buffer.from(`${projectId}:${projectSecret}`).toString("base64")}`, accept: "application/json" };
 }
 
+/** Photon wraps responses as `{ succeed, data }`. Older shapes without the wrapper are still read. */
+export function photonData(body: unknown): Record<string, unknown> | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const wrapped = (body as { data?: unknown }).data;
+  return wrapped && typeof wrapped === "object" ? (wrapped as Record<string, unknown>) : (body as Record<string, unknown>);
+}
+
 function containsString(value: unknown, wanted: string): boolean {
   if (typeof value === "string") return value.toLowerCase() === wanted.toLowerCase();
   if (Array.isArray(value)) return value.some(item => containsString(item, wanted));
@@ -135,7 +142,7 @@ export function createPhotonImessageProvider(options: PhotonImessageOptions = {}
           timeoutMs: options.checkTimeoutMs ?? 10000, signal, mode: "check", connectionId: connection.id,
         });
         if (tokens.status < 200 || tokens.status >= 300) return failed(statusFailure(tokens.status, "check", connection.id), checkedAt);
-        const type = (parseJson(tokens.text) as { type?: unknown } | undefined)?.type;
+        const type = photonData(parseJson(tokens.text))?.type;
         if (type === "dedicated") return { state: "ok", checkedAt };
         for (const target of targets) {
           const found = await httpCall({
