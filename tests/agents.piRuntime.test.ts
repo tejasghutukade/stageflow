@@ -52,6 +52,19 @@ function fakeOpen(script: (emit: (event: unknown) => void, input: OpenSessionInp
 const assistantEnd = { type: "message_end", message: { role: "assistant", model: "m", content: [{ type: "text", text: "hi" }], usage: { input: 7, output: 3, cost: { total: 0.002 } } } };
 
 describe("Pi agent runtime", () => {
+  it("opens a session with only the Stageflow tools the definition grants", async () => {
+    const run = vi.fn(async () => ({ ok: true, text: "ok" }));
+    const tool = (name: string) => ({ name, grantId: `stageflow.${name}`, group: "runs.read", risk: "read", description: name, parameters: { type: "object", properties: {} }, run }) as never;
+    const { open, opened } = fakeOpen(async (emit) => emit(assistantEnd));
+    const runtime = createPiAgentRuntime({ cwd: "/p", agentDir: "/a", openSession: open, toolkit: () => [tool("get_run"), tool("cancel_run"), tool("list_runs")] });
+    await runtime.complete({
+      sessionId: "s1", projectRoot: "/p", signal: new AbortController().signal, onDelta: () => undefined, hooks: hooks(),
+      definition: definition({ tools: { stageflow: { groups: [], tools: ["get_run"] } } }),
+      messages: [{ role: "user", text: "go" }],
+    });
+    expect(opened[0]!.stageflowTools?.map((t) => t.name)).toEqual(["get_run"]);
+  });
+
   it("fails a turn when the model goes quiet, but not while waiting on an approval", async () => {
     vi.stubEnv("STAGEFLOW_AGENT_STALL_SECONDS", "0.1");
     try {

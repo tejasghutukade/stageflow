@@ -1,3 +1,4 @@
+import { grantedStageflowTools, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
 import { Cron } from "croner";
 import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
 import { z } from "zod";
@@ -70,6 +71,12 @@ const toolsSchema = z
       .default({}),
     skills: z.array(nonEmpty).default([]),
     browser: z.boolean().default(false),
+    stageflow: z
+      .strictObject({
+        groups: z.array(nonEmpty).default([]),
+        tools: z.array(nonEmpty).default([]),
+      })
+      .prefault({}),
   })
   .prefault({});
 
@@ -214,6 +221,19 @@ function semanticIssues(definition: AgentDefinition): AgentIssue[] {
       });
     }
   });
+  definition.tools.stageflow.groups.forEach((group, index) => {
+    if (!isToolGroupId(group)) {
+      issues.push({ path: `tools.stageflow.groups.${index}`, code: "agent.stageflow_group_unknown", message: `${group} is not a Stageflow tool group` });
+    }
+  });
+  definition.tools.stageflow.tools.forEach((tool, index) => {
+    if (!(tool in TOOL_META)) {
+      issues.push({ path: `tools.stageflow.tools.${index}`, code: "agent.stageflow_tool_unknown", message: `${tool} is not a Stageflow tool` });
+    }
+  });
+  if ("stageflow" in definition.tools.mcp) {
+    issues.push({ path: "tools.mcp.stageflow", code: "agent.mcp_name_reserved", message: "stageflow is reserved for Stageflow's own tools; rename the MCP server" });
+  }
   if (definition.sub_agents.includes(definition.id)) {
     issues.push({
       path: "sub_agents",
@@ -326,6 +346,7 @@ export function grantedToolIds(definition: Pick<AgentDefinition, "tools" | "sub_
   for (const [server, tools] of Object.entries(definition.tools.mcp)) {
     for (const tool of tools) ids.add(`${server}.${tool}`);
   }
+  for (const tool of grantedStageflowTools(definition.tools.stageflow)) ids.add(stageflowGrantId(tool));
   for (const agentId of definition.sub_agents) ids.add(`agent:${agentId}`);
   return ids;
 }

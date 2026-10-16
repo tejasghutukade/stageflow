@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { AgentError, isAgentError } from "../agents/errors.js";
 import type { AgentHostContext } from "../agents/hostContext.js";
+import { describeToolkit } from "../toolkit/index.js";
 import type { SessionQuery, SessionStatus } from "../agents/store.js";
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
@@ -173,6 +174,11 @@ const routes: Route[] = [
       const body = await readBody(ctx.req);
       ctx.json(ctx.res, 200, await ctx.host.service.validate(ctx.projectRoot, body.definition));
     },
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/agents\/stageflow-tools$/,
+    handle: async ({ res, json }) => json(res, 200, describeToolkit()),
   },
   {
     method: "GET",

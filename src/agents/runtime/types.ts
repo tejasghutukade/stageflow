@@ -1,4 +1,5 @@
 import type { AgentDefinition } from "../../config/loadAgent.js";
+import { stageflowGrantId, TOOL_META } from "../../toolkit/meta.js";
 
 export type ConversationMessage = { role: "user" | "assistant"; text: string };
 
@@ -53,9 +54,13 @@ export const BUILTIN_TOOL_GROUP_OF: Record<string, "read" | "write" | "shell"> =
   bash: "shell",
 };
 
+/** Pi tool names for Stageflow's own tools are `stageflow_<tool>`. */
+export const STAGEFLOW_PI_PREFIX = "stageflow_";
+
 /** Map a Pi tool name to its grant id given the granted MCP servers and sub-agents. */
 export function grantIdForPiTool(piTool: string, mcpServers: readonly string[], subAgents: readonly string[]): string {
   if (piTool in BUILTIN_TOOL_GROUP_OF) return piTool;
+  if (piTool.startsWith(STAGEFLOW_PI_PREFIX) && piTool.slice(STAGEFLOW_PI_PREFIX.length) in TOOL_META) return stageflowGrantId(piTool.slice(STAGEFLOW_PI_PREFIX.length));
   const agentMatch = /^agent_(.+)$/.exec(piTool);
   if (agentMatch && subAgents.includes(agentMatch[1]!)) return `agent:${agentMatch[1]}`;
   const server = [...mcpServers].sort((a, b) => b.length - a.length).find((name) => piTool.startsWith(`${name}_`));

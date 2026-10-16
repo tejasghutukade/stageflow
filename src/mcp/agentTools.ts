@@ -153,6 +153,47 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
   );
 
   server.registerTool(
+    "list_agent_sessions",
+    {
+      description: "List an agent's sessions, newest first, with turn counts, tokens and cost.",
+      inputSchema: z.object({
+        id: agentId,
+        status: z.enum(["open", "running", "waiting", "held", "closed"]).optional(),
+        search: z.string().optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+        cursor: z.string().optional(),
+      }),
+    },
+    ({ id, status, search, limit, cursor }) =>
+      call(() =>
+        service().listSessions(root(), id, {
+          limit: limit ?? 25,
+          ...(status ? { status } : {}),
+          ...(search ? { search } : {}),
+          ...(cursor ? { cursor } : {}),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "stop_agent_session",
+    {
+      description: "Stop the turn currently running in a session. The session stays open.",
+      inputSchema: z.object({ sessionId: z.string() }),
+    },
+    ({ sessionId }) => call(async () => ({ stopped: chat().stop(sessionId) })),
+  );
+
+  server.registerTool(
+    "archive_agent",
+    {
+      description: "Archive an agent: its definition leaves the project and new sessions are refused. Past sessions are kept.",
+      inputSchema: z.object({ id: agentId }),
+    },
+    ({ id }) => call(async () => { await service().archive(root(), id); return { archived: true }; }),
+  );
+
+  server.registerTool(
     "approve_agent_action",
     {
       description: "Approve the pending ask-first action on a session, as an operator.",

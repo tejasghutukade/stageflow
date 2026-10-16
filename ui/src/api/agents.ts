@@ -24,7 +24,7 @@ export type AgentDefinition = {
   project_context: boolean;
   execution: "trusted-local" | "sandbox";
   model: { backend: "pi" | "claude"; id?: string; thinking: ThinkingLevel };
-  tools: { builtin: BuiltinToolGroup[]; mcp: Record<string, string[]>; skills: string[]; browser: boolean };
+  tools: { builtin: BuiltinToolGroup[]; mcp: Record<string, string[]>; skills: string[]; browser: boolean; stageflow: { groups: string[]; tools: string[] } };
   approvals: {
     ask_first: string[];
     approvers: { operators: boolean; channel_ids: string[] };
@@ -166,6 +166,17 @@ export type AgentApproval = {
   actor: { kind: "operator" } | { kind: "channel"; channelId: string } | null;
 };
 
+export type StageflowToolRisk = "read" | "write" | "destructive" | "external";
+
+export type StageflowToolCatalog = {
+  groups: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    tools: Array<{ name: string; grantId: string; risk: StageflowToolRisk; description: string }>;
+  }>;
+};
+
 export type AgentSpan = {
   id: string;
   turnId: string;
@@ -237,6 +248,7 @@ export const agentsApi = {
   list: () => request<{ agents: AgentSummary[] }>("/api/agents").then((body) => body.agents),
   get: (id: string) => request<AgentDetail>(agentUrl(id)),
   validate: (definition: unknown) => request<AgentValidation>("/api/agents/validate", "POST", { definition }),
+  stageflowTools: () => request<StageflowToolCatalog>("/api/agents/stageflow-tools"),
   create: (definition: unknown) => request<AgentDetail>("/api/agents", "POST", { definition }),
   save: (id: string, input: { baseRevision: number; definition: unknown; summary?: string }) =>
     request<AgentDetail>(agentUrl(id, "/save"), "POST", input),

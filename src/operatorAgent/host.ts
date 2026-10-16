@@ -1,3 +1,4 @@
+import { profileMayUse } from "../toolkit/profiles.js";
 import {
   enrichProposal,
   isMutationConflict,
@@ -247,6 +248,9 @@ export async function invokeProfileTool(
   const tool = profile.tools.find((t) => t.name === name);
   if (!tool) {
     return { ok: false, content: null, error: `Unknown tool: ${name}` };
+  }
+  if (!profileMayUse(profile.id, name)) {
+    return { ok: false, content: null, error: `${profile.id} is not granted ${name}` };
   }
   const blocked = rejectUnlinkedWorkshopDraftTool(ctx.getContext(), name);
   if (blocked) return blocked;

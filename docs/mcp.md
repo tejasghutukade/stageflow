@@ -195,8 +195,24 @@ Project agents (`agents/*.agent.yaml`) — same service contract as `/api/agents
 | `agent_chat` | One non-streaming turn (`id`, `message`, optional `sessionId`) |
 | `get_agent_session` | Session transcript and metadata |
 | `approve_agent_action` / `deny_agent_action` | Resolve pending ask-first approvals |
+| `list_agent_sessions` / `stop_agent_session` | Browse an agent's sessions; stop the running turn |
+| `archive_agent` | Archive an agent (keeps its sessions) |
 
 See [Agents](agents.md).
+
+### Pipeline authoring tools {#pipeline-authoring-tools}
+
+Edit pipelines and tasks straight on disk, with the Workshop's builders and validation (nothing is written when validation fails unless `allow_invalid` is set).
+
+| Tool | Role |
+|------|------|
+| `read_pipeline` | Pipeline package (stages, task) plus its validation result |
+| `create_pipeline` | New `<id>.pipeline.yaml` in `directory`; fails if it exists |
+| `edit_pipeline` | Patch pipeline fields |
+| `create_stage` / `edit_stage` | Add or edit a file-backed stage |
+| `create_task` / `edit_task` | Create or edit the task beside a pipeline |
+
+Triggers also gain `update_trigger` and `set_trigger_enabled`.
 
 ### `get_started`
 

@@ -495,6 +495,14 @@ export async function bootstrapStageflowHost(
           connection: sqliteConnection,
           channels,
           ...(options.agentConversationBackend ? { backend: options.agentConversationBackend } : {}),
+          toolkitDeps: {
+            manager,
+            store,
+            agentDir,
+            projectRoot: rootDir,
+            ...(options.providerAuthContext ? { providerAuthContext: options.providerAuthContext } : {}),
+            ...(providerBoot !== undefined ? { providerBoot } : {}),
+          },
         })
       : undefined;
   const mcpStateless = resolveMcpStateless({

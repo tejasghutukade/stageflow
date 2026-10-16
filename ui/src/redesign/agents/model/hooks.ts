@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchChannelConnections, fetchProjectMcp, fetchSkills } from "../../../api";
-import { agentsApi, AgentApiError, type AgentDefinition, type AgentDetail, type AgentIssue } from "../../../api/agents";
+import { setStageflowCatalog } from "./definition";
+import { agentsApi, AgentApiError, type AgentDefinition, type AgentDetail, type AgentIssue, type StageflowToolCatalog } from "../../../api/agents";
 
 /** Choices the editor offers. Each list is undefined while loading and [] when unavailable. */
 export type EditorOptions = {
   mcpServers?: Array<{ name: string; transport: string }>;
+  stageflow?: StageflowToolCatalog;
   mcpStatus?: "ok" | "missing_catalog" | "invalid_config" | "error";
   skills?: Array<{ name: string; description: string }>;
   connections?: Array<{ id: string; provider: string; displayName: string; enabled: boolean }>;
@@ -19,6 +21,13 @@ export function useEditorOptions(): EditorOptions {
     fetchProjectMcp().then(
       (result) => set({ mcpServers: result.servers, mcpStatus: result.status }),
       () => set({ mcpServers: [], mcpStatus: "error" }),
+    );
+    agentsApi.stageflowTools().then(
+      (catalog) => {
+        setStageflowCatalog(catalog);
+        set({ stageflow: catalog });
+      },
+      () => set({ stageflow: { groups: [] } }),
     );
     fetchSkills().then(
       (result) => set({ skills: result.skills.map((skill) => ({ name: skill.name, description: skill.description })) }),

@@ -1,4 +1,4 @@
-import type { AgentDefinition, AgentIssue, AgentSummary, BuiltinToolGroup, WebChatConfig } from "../../../api/agents";
+import type { AgentDefinition, AgentIssue, AgentSummary, BuiltinToolGroup, StageflowToolCatalog, WebChatConfig } from "../../../api/agents";
 
 /**
  * Client model of the v2 agent definition: defaults, edits, change
@@ -17,7 +17,7 @@ export function defaultDefinition(): AgentDefinition {
     project_context: false,
     execution: "trusted-local",
     model: { backend: "pi", thinking: "medium" },
-    tools: { builtin: [], mcp: {}, skills: [], browser: false },
+    tools: { builtin: [], mcp: {}, skills: [], browser: false, stageflow: { groups: [], tools: [] } },
     approvals: {
       ask_first: [],
       approvers: { operators: true, channel_ids: [] },
@@ -74,13 +74,37 @@ export const BUILTIN_GROUPS: Array<{ id: BuiltinToolGroup; title: string; tools:
   { id: "shell", title: "Run shell commands", tools: ["bash"], effect: "Runs commands on this machine" },
 ];
 
+let stageflowCatalog: StageflowToolCatalog | null = null;
+
+/** The server's Stageflow tool groups, set once by the editor options hook and read by the approvals table. */
+export function setStageflowCatalog(catalog: StageflowToolCatalog | null): void {
+  stageflowCatalog = catalog;
+}
+
+export function getStageflowCatalog(): StageflowToolCatalog | null {
+  return stageflowCatalog;
+}
+
+const RISK_EFFECT = {
+  read: "Reads Stageflow state",
+  write: "Changes Stageflow state",
+  destructive: "Deletes or cancels things",
+  external: "Reaches outside Stageflow",
+} as const;
+
+/** Grant ids a toggled group or tool adds that should ask first by default: everything that is not read-only. */
+export function riskyGrantIds(catalog: StageflowToolCatalog, groupId: string, only?: string): string[] {
+  const group = catalog.groups.find((g) => g.id === groupId);
+  return (group?.tools ?? []).filter((tool) => tool.risk !== "read" && (only === undefined || tool.name === only)).map((tool) => tool.grantId);
+}
+
 export type ApprovalRow = {
   /** The tool id stored in approvals.ask_first. */
   tool: string;
   /** Display label; builtin groups collapse to one row. */
   label: string;
   effect: string;
-  kind: "builtin" | "mcp" | "agent";
+  kind: "builtin" | "mcp" | "agent" | "stageflow";
   /** For builtin groups: every tool id the row toggles. */
   tools: string[];
 };
@@ -98,6 +122,22 @@ export function approvalRows(definition: AgentDefinition): ApprovalRow[] {
       : tools;
     for (const tool of listed) {
       rows.push({ tool: `${server}.${tool}`, label: `${server}.${tool}`, effect: `${server} MCP tool`, kind: "mcp", tools: [`${server}.${tool}`] });
+    }
+  }
+  const catalog = stageflowCatalog;
+  const grants = definition.tools.stageflow ?? { groups: [], tools: [] };
+  if (catalog) {
+    const covered = new Set<string>();
+    for (const group of catalog.groups) {
+      if (!grants.groups.includes(group.id)) continue;
+      group.tools.forEach((tool) => covered.add(tool.name));
+      rows.push({ tool: group.tools[0]!.grantId, label: `${group.title} · Stageflow`, effect: `${group.tools.length} tools: ${group.summary}`, kind: "stageflow", tools: group.tools.map((t) => t.grantId) });
+    }
+    for (const group of catalog.groups) {
+      for (const tool of group.tools) {
+        if (covered.has(tool.name) || !grants.tools.includes(tool.name)) continue;
+        rows.push({ tool: tool.grantId, label: tool.name, effect: RISK_EFFECT[tool.risk], kind: "stageflow", tools: [tool.grantId] });
+      }
     }
   }
   for (const agentId of definition.sub_agents) {
@@ -130,8 +170,13 @@ export function pruneAskFirst(definition: AgentDefinition): AgentDefinition {
   const wildcard = Object.entries(definition.tools.mcp)
     .filter(([, tools]) => tools.includes("*"))
     .map(([server]) => `${server}.`);
+  const catalogLoaded = stageflowCatalog !== null;
   const kept = definition.approvals.ask_first.filter(
-    (tool) => granted.has(tool) || wildcard.some((prefix) => tool.startsWith(prefix)),
+    (tool) =>
+      granted.has(tool) ||
+      wildcard.some((prefix) => tool.startsWith(prefix)) ||
+      // Until the catalog arrives we cannot tell which Stageflow grants are still held, so keep them.
+      (!catalogLoaded && tool.startsWith("stageflow.")),
   );
   return kept.length === definition.approvals.ask_first.length
     ? definition

@@ -81,3 +81,22 @@ Base `/api/public/chat/<slug>`. A visitor id (client-generated, kept in the brow
 Error codes (always friendly `message`, never internals): `web_chat.rate_limited` (429, `retryAfterSec`), `web_chat.message_too_long` (413), `web_chat.busy` (409, a turn is already running for this thread), `web_chat.limit_reached` (409, agent max_turns / session_minutes / cost cap), `web_chat.unavailable` (404), `web_chat.failed` (500). Before streaming starts these are plain JSON with the HTTP status; once streaming they arrive as an `error` frame.
 
 CORS: same-origin by default. `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma-separated) lets a page hosted elsewhere call the API, so the chat page can be deployed separately later; it only needs its API base URL. Exposing the Host to the internet (restricting the console) is a later follow-up.
+
+## Stageflow tools for agents
+
+An agent can be granted Stageflow's own tools (the MCP tools in [mcp.md](mcp.md)), as whole groups or one tool at a time:
+
+```yaml
+tools:
+  stageflow:
+    groups: [runs.read, gates]   # discover, runs.read, runs.control, gates, triggers, agents.read, agents.manage, agents.converse, pipelines.author
+    tools: [start_run]           # single tools on top of the groups
+approvals:
+  ask_first: [stageflow.start_run]
+```
+
+- One registry (`src/toolkit`) is derived from the MCP registrations plus a metadata table (group and risk: `read`, `write`, `destructive`, `external`); `GET /api/agents/stageflow-tools` serves it to the console, which turns on ask-first for every non-read tool when you enable a group.
+- The grant id is `stageflow.<tool>` (so `tools.mcp.stageflow` is reserved). Granted tools reach the model as `stageflow_<tool>` and pass the same grant and ask-first gate as any other tool.
+- An agent can never give another agent a tool it does not hold: `create_agent`, `save_agent`, `restore_agent_revision` and `enable_agent` refuse grants beyond the caller's, an agent cannot edit or archive itself, and it cannot decide approvals on its own sessions.
+- The Workshop and Agent-author profiles check their tools through the same grant-id layer (`src/toolkit/profiles.ts`).
+

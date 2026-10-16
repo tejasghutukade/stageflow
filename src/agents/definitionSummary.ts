@@ -54,6 +54,8 @@ const SECTIONS: Array<{ label: string; keys: Array<keyof AgentDefinition>; descr
           ...Object.entries(d.tools.mcp).map(([server, tools]) => `${server} (${tools.includes("*") ? "all" : tools.join(", ")})`),
           ...d.tools.skills.map((skill) => `skill ${skill}`),
           ...(d.tools.browser ? ["browser"] : []),
+          ...d.tools.stageflow.groups.map((group) => `stageflow ${group}`),
+          ...(d.tools.stageflow.tools.length > 0 ? [`stageflow ${d.tools.stageflow.tools.join(", ")}`] : []),
         ],
         "none",
       ),

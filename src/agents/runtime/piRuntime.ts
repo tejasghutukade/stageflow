@@ -26,12 +26,15 @@ import { getModelCatalog } from "../../models/catalog.js";
 import { AgentError } from "../errors.js";
 import { isWritePathForbidden } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
-import { grantIdForPiTool, type CompleteInput, type CompleteResult, type ConversationBackend, type TurnHooks } from "./types.js";
+import { grantedStageflowTools, type ToolkitTool } from "../../toolkit/index.js";
+import { grantIdForPiTool, STAGEFLOW_PI_PREFIX, type CompleteInput, type CompleteResult, type ConversationBackend, type TurnHooks } from "./types.js";
 
 export type PiRuntimeOptions = {
   cwd: string;
   agentDir: string;
   sandbox?: SandboxRunner;
+  /** Stageflow's own tools, built lazily because they need Host services that start after the runtime. */
+  toolkit?: () => ToolkitTool[];
   /** Test seam: replaces session construction. */
   openSession?: (input: OpenSessionInput) => Promise<OpenedSession>;
 };
@@ -45,6 +48,8 @@ export type OpenSessionInput = {
   /** Runs before each tool call; the session wires it to `pi.on("tool_call")`. */
   gate: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }) => Promise<{ block: true; reason: string; terminate?: boolean } | undefined>;
   delegateTool?: (agentId: string, message: string) => Promise<string>;
+  /** Stageflow tools this agent is granted. */
+  stageflowTools?: ToolkitTool[];
   hooks: () => TurnHooks | undefined;
 };
 
@@ -200,6 +205,23 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
       }
     }
 
+    for (const tool of input.stageflowTools ?? []) {
+      customTools.push(
+        defineTool({
+          name: `${STAGEFLOW_PI_PREFIX}${tool.name}`,
+          label: tool.name,
+          description: tool.description,
+          parameters: Type.Unsafe(tool.parameters),
+          execute: async (_id: string, args: Record<string, unknown>, signal?: AbortSignal) => {
+            const result = await tool.run(args ?? {}, { signal: signal ?? new AbortController().signal, caller: { agentId: definition.id, definition } });
+            if (!result.ok) throw new Error(result.text);
+            return { content: [{ type: "text" as const, text: result.text }], details: {} };
+          },
+        }),
+      );
+      toolNames.push(`${STAGEFLOW_PI_PREFIX}${tool.name}`);
+    }
+
     const sessionDir = path.join(globalStageflowHome(), "agents", "pi-sessions");
     await mkdir(sessionDir, { recursive: true });
     const created = await createPiAgentSession({
@@ -276,6 +298,8 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     await prepareExecutionLaunch(definition, projectRoot, options.sandbox);
     const mcpServers = Object.keys(definition.tools.mcp);
     const subAgents = [...definition.sub_agents];
+    const grantedSf = new Set(grantedStageflowTools(definition.tools.stageflow));
+    const stageflowTools = (options.toolkit?.() ?? []).filter((tool) => grantedSf.has(tool.name));
     const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
     const systemPrompt = `${definition.instructions}${context}`;
@@ -285,6 +309,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       systemPrompt,
       toolNames: piToolNames(definition),
       hooks: () => state.hooks,
+      ...(stageflowTools.length > 0 ? { stageflowTools } : {}),
       ...(subAgents.length > 0 ? { delegateTool: (agentId, message) => state.hooks!.delegate(agentId, message) } : {}),
       gate: async (call) => {
         const hooks = state.hooks;
