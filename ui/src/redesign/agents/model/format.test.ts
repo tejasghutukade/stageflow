@@ -18,6 +18,10 @@ describe("agent formatting", () => {
     expect(formatCost(null)).toBe("—");
     expect(formatCost(0.004)).toBe("$0.004");
     expect(formatCost(2.181)).toBe("$2.18");
+    expect(formatCost(0)).toBe("$0.00");
+    expect(formatCost(5.466e-5)).toBe("$0.000055");
+    expect(formatCost(0.00083186)).toBe("$0.00083");
+    expect(formatCost(3.541e-5)).toBe("$0.000035");
     expect(formatDuration(450)).toBe("450 ms");
     expect(formatDuration(16_200)).toBe("16.2 s");
     expect(formatDuration(390_000)).toBe("6 m 30 s");

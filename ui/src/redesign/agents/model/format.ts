@@ -25,7 +25,11 @@ export function formatTokens(tokens: number): string {
 
 export function formatCost(usd: number | null | undefined): string {
   if (usd === null || usd === undefined) return "—";
-  return usd < 0.01 ? `$${usd.toFixed(3)}` : `$${usd.toFixed(2)}`;
+  if (usd <= 0) return "$0.00";
+  if (usd >= 0.01) return `$${usd.toFixed(2)}`;
+  if (usd >= 0.001) return `$${usd.toFixed(3)}`;
+  // A cheap model costs fractions of a cent per turn: keep two significant digits so it does not read as free.
+  return `$${usd.toFixed(Math.min(8, 1 + Math.ceil(-Math.log10(usd))))}`;
 }
 
 export function formatDuration(ms: number | null | undefined): string {
