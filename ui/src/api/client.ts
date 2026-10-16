@@ -1,7 +1,5 @@
 import type {
   CapacityHealth,
-  CreatePipelineInput,
-  CreatePipelineResult,
   CreateStageInput,
   CreateStageResult,
   CreateTriggerInput,
@@ -435,35 +433,6 @@ export function fetchModels(): Promise<ModelsResponse> {
 /** Asks each connected provider for its current model list. */
 export function refreshModels(): Promise<ModelsResponse> {
   return api("/api/models/refresh", { method: "POST" });
-}
-
-export async function createPipelineWithDetails(
-  input: CreatePipelineInput,
-): Promise<CreatePipelineResult> {
-  try {
-    const res = await fetch("/api/pipelines", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
-      body: JSON.stringify(input),
-    });
-    const body = (await res.json().catch(() => ({}))) as PipelineListing & {
-      error?: string;
-    };
-    if (res.ok && typeof body.id === "string") {
-      return { ok: true, pipeline: body };
-    }
-    return {
-      ok: false,
-      status: res.status,
-      error: body.error ?? `Request failed (${res.status})`,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      status: 0,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
 }
 
 export async function createStageWithDetails(

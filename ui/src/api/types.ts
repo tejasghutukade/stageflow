@@ -550,27 +550,6 @@ export type SkillInstallResult =
   | ({ ok: true } & SkillInstallOk)
   | { ok: false; status?: number; error: string };
 
-export type CreatePipelineStageRef = {
-  id: string;
-  needs?: string;
-  uses?: string;
-  inline?: {
-    system_prompt: string;
-    model?: string;
-    gate_kinds?: StageGateKind[];
-  };
-};
-
-export type CreatePipelineInput = {
-  directory: string;
-  id: string;
-  stages: CreatePipelineStageRef[];
-};
-
-export type CreatePipelineResult =
-  | { ok: true; pipeline: PipelineListing }
-  | { ok: false; status: number; error: string };
-
 export type ValidationFinding = {
   severity: "error" | "warning";
   code: string;

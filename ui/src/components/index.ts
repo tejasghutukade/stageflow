@@ -70,11 +70,7 @@ export type { SpatialRunMapProps } from "./SpatialRunMap";
 export { TrackDetailList } from "./TrackDetailList";
 export type { TrackDetailListProps, TrackDetailRow } from "./TrackDetailList";
 
-export { NewPipelinePanel } from "./NewPipelinePanel";
-export type { NewPipelinePanelProps } from "./NewPipelinePanel";
 
-export { NewStagePanel } from "./NewStagePanel";
-export type { NewStagePanelProps } from "./NewStagePanel";
 
 export { SettingsProviders } from "./SettingsProviders";
 

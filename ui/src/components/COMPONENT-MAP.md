@@ -41,7 +41,7 @@ Inventory mapping prototype concepts to React modules.
 | useStageAnswer | `useStageAnswer.ts` | exists | Shared submit/error/lock for ReplyZone and decide column. |
 | StatusLabel | `StatusLabel.tsx` | exists | Inline `.status` + `.dot` from prototype CSS. Used in transcript stream and run detail. |
 | StageActivityLog | `StageActivityLog.tsx` | exists | Timestamped event list with raw JSON collapsible. Unused on run detail after Phase 2. |
-| PipelineList | `pages/PipelinesPage.tsx` | wired | Catalog table + stage library; detail at `#/pipelines/:id` with definition track and run history. |
+| PipelineList | `redesign/pipelines/PipelinesList.tsx` | wired | Catalog table and inspector; New pipeline opens the Workshop. Detail at `#/pipelines/:id` is `PipelineEditorPage`. |
 | TaskList | `pages/TasksPage.tsx` | wired | Task table + detail at `#/tasks/:id`. Last-run joined client-side on `task_id`. |
 | TriggerList | `pages/TriggersPage.tsx` + `pages/EmailTriggerView.tsx` | wired | Catalog and account-email rules in one table. Email detail routes use `#/triggers/email%3A<id>` and show inbox, matching filters, and task without a manual Fire action. |
 | ConnectionList | `pages/ConnectionsPage.tsx` | wired | Read-only communication account table at `#/connections`. Email account identity, enabled state, and watched folders only; credentials and server configuration are not rendered. |

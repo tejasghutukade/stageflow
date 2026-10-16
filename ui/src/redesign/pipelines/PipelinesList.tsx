@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LuPlus, LuSearch, LuSparkles, LuWrench } from "react-icons/lu";
+import { LuPlus, LuSearch, LuWrench } from "react-icons/lu";
 import {
   fetchPipelines,
   fetchTasks,
@@ -8,9 +8,7 @@ import {
 } from "../../api";
 import { useRunCatalog } from "../../catalog/useRunCatalog";
 import { relativeTime } from "../../catalogJoin";
-import { NewPipelinePanel } from "../../components/NewPipelinePanel";
-import { navigate, pipelinePath, workshopPath } from "../../routes";
-import { showToast } from "../../toast";
+import { navigate, workshopPath } from "../../routes";
 import { Keycap } from "../Keycap";
 import { useHotkeys, type HotkeyDef } from "../keys";
 import {
@@ -44,11 +42,7 @@ function nextSort(sort: PipelineSort): PipelineSort {
   return SORT_ORDER[(index + 1) % SORT_ORDER.length] ?? "last-run";
 }
 
-export function PipelinesList({
-  onNew,
-}: {
-  onNew: (path: string) => void;
-}) {
+export function PipelinesList() {
   const { snapshot, error: catalogError, loading: catalogLoading } =
     useRunCatalog();
   const [pipelines, setPipelines] = useState<PipelineListing[]>([]);
@@ -62,7 +56,6 @@ export function PipelinesList({
   const [selectionPin, setSelectionPin] = useState<string | null | undefined>(
     undefined,
   );
-  const [panelOpen, setPanelOpen] = useState(false);
   const [loadedAt, setLoadedAt] = useState<string | null>(null);
   const settledRef = useRef(false);
   const requestId = useRef(0);
@@ -164,6 +157,11 @@ export function PipelinesList({
     if (path) navigate(path);
   }
 
+  /** A new pipeline is drafted in the Workshop. */
+  function newPipeline() {
+    navigate(workshopPath());
+  }
+
   function openWorkshop(row: PipelineListRow | null) {
     const path = pipelineWorkshopPath(row);
     if (path) navigate(path);
@@ -204,7 +202,7 @@ export function PipelinesList({
       scope: "pipelines",
       handler: (event) => {
         event.preventDefault();
-        setPanelOpen(true);
+        newPipeline();
       },
     },
     {
@@ -235,23 +233,7 @@ export function PipelinesList({
     },
   ];
 
-  useHotkeys(
-    hotkeys.map((def) => ({ ...def, when: () => !panelOpen })),
-    "pipelines",
-  );
-
-  async function onPipelineCreated(pipeline: PipelineListing) {
-    setPanelOpen(false);
-    await load();
-    showToast(`Pipeline created · ${pipeline.id}`);
-    onNew(
-      pipelinePath(pipeline.id, {
-        ...(pipeline.project_root
-          ? { project_root: pipeline.project_root }
-          : {}),
-      }),
-    );
-  }
+  useHotkeys(hotkeys, "pipelines");
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -292,16 +274,8 @@ export function PipelinesList({
           </button>
           <button
             type="button"
-            className="sf-btn sf-btn--secondary shrink-0"
-            onClick={() => navigate(workshopPath())}
-          >
-            <LuSparkles className="size-3.5" aria-hidden />
-            Draft with Workshop
-          </button>
-          <button
-            type="button"
             className="sf-btn sf-btn--primary shrink-0"
-            onClick={() => setPanelOpen(true)}
+            onClick={newPipeline}
           >
             <LuPlus className="size-3.5" aria-hidden />
             New pipeline
@@ -364,7 +338,7 @@ export function PipelinesList({
                 <button
                   type="button"
                   className="sf-btn sf-btn--primary"
-                  onClick={() => setPanelOpen(true)}
+                  onClick={newPipeline}
                 >
                   New pipeline
                 </button>
@@ -435,12 +409,6 @@ export function PipelinesList({
           />
         </aside>
       </div>
-      <NewPipelinePanel
-        isOpen={panelOpen}
-        onClose={() => setPanelOpen(false)}
-        onCreated={(pipeline) => void onPipelineCreated(pipeline)}
-        pipelines={pipelines}
-      />
     </div>
   );
 }
