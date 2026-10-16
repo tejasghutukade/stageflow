@@ -45,6 +45,8 @@ export type AgentEnvironment = {
   mcpServerNames(projectRoot: string): Promise<string[] | undefined>;
   skillNames(projectRoot: string): Promise<string[] | undefined>;
   connectionIds(): Promise<string[] | undefined>;
+  /** What a connection talks to (inbox, Photon project), so two connections on one inbox count as one channel. */
+  connectionIdentity?(connectionId: string): Promise<string | undefined>;
   /** What the model catalog says about an id, or undefined when it cannot be checked. */
   modelInfo?(id: string): Promise<{ known: boolean; nativeTools: boolean } | undefined>;
 };
@@ -503,24 +505,33 @@ export class AgentService {
   }
 
   /** One connection answers for one agent: another agent already on this connection is an error. */
-  private channelConflicts(projectRoot: string, definition: AgentDefinition): AgentIssue[] {
+  private async channelConflicts(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
     const connectionId = definition.channel?.connection_id;
     if (!connectionId) return [];
     const projectKey = agentProjectKey(projectRoot);
-    const other = this.store
+    const identityOf = async (id: string) => (await this.environment.connectionIdentity?.(id).catch(() => undefined)) ?? `connection:${id}`;
+    const mine = await identityOf(connectionId);
+    const others = this.store
       .listDefinitions(projectKey)
       .filter((row) => !row.archived && row.currentRevision > 0 && row.agentId !== definition.id)
-      .find((row) => this.store.getRevision(projectKey, row.agentId, row.currentRevision)?.definition.channel?.connection_id === connectionId);
-    return other
-      ? [{ path: "channel.connection_id", code: "agent.channel_in_use", message: `${connectionId} already answers for the agent ${other.agentId}. An agent has one channel and a connection has one agent.` }]
-      : [];
+      .map((row) => ({ agentId: row.agentId, connection: this.store.getRevision(projectKey, row.agentId, row.currentRevision)?.definition.channel?.connection_id }));
+    for (const other of others) {
+      if (!other.connection) continue;
+      if (other.connection === connectionId) {
+        return [{ path: "channel.connection_id", code: "agent.channel_in_use", message: `${connectionId} already answers for the agent ${other.agentId}. An agent has one channel and a connection has one agent.` }];
+      }
+      if ((await identityOf(other.connection)) === mine) {
+        return [{ path: "channel.connection_id", code: "agent.channel_in_use", message: `${connectionId} reaches the same inbox or line as ${other.connection}, which ${other.agentId} already answers. One inbox has one agent.` }];
+      }
+    }
+    return [];
   }
 
   async validate(projectRoot: string, rawInput: unknown): Promise<ValidationResult> {
     const raw = this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "preview");
     const parsed = parseAgentDefinition(raw);
     if (!parsed.ok) return { definition: null, issues: parsed.issues, warnings: [], yaml: null };
-    const conflicts = this.channelConflicts(projectRoot, parsed.value);
+    const conflicts = await this.channelConflicts(projectRoot, parsed.value);
     if (conflicts.length > 0) return { definition: null, issues: conflicts, warnings: [], yaml: null };
     return {
       definition: parsed.value,
@@ -542,7 +553,7 @@ export class AgentService {
     const definition = this.parseOrThrow(this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "create"));
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
-      const conflicts = this.channelConflicts(projectRoot, definition);
+      const conflicts = await this.channelConflicts(projectRoot, definition);
       if (conflicts.length > 0) throw new AgentError("agent.invalid", "Agent definition is invalid", conflicts);
       const existing = this.store.getDefinition(agentProjectKey(projectRoot), definition.id);
       const onDisk = await access(this.file(projectRoot, definition.id)).then(
@@ -583,7 +594,7 @@ export class AgentService {
       await this.sync(projectRoot);
       const { row, revision } = this.currentRevision(projectRoot, agentId);
       if (row.currentRevision !== input.baseRevision) throw new AgentError("agent.conflict");
-      const conflicts = this.channelConflicts(projectRoot, definition);
+      const conflicts = await this.channelConflicts(projectRoot, definition);
       if (conflicts.length > 0) throw new AgentError("agent.invalid", "Agent definition is invalid", conflicts);
       if (sameDefinition(revision.definition, definition)) return;
       await this.writeRevision(projectRoot, definition, actor, input.summary?.trim() || null);

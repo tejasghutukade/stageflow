@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { channelIdentity } from "./identity.js";
 import type { AgentService } from "../service.js";
 import { createAgentMailListener, sdkAgentMailTransport } from "./agentmailListener.js";
 import { createIMessageListener, sdkIMessageTransport } from "./imessageListener.js";
@@ -23,7 +24,7 @@ export const DEFAULT_FACTORIES: Record<string, ListenerFactory> = {
   },
 };
 
-type Running = { listener: ChannelListener; fingerprint: string };
+type Running = { listener: ChannelListener; fingerprint: string; identity: string };
 
 const fingerprintOf = (connection: ListenerConnection): string =>
   createHash("sha256").update(JSON.stringify([connection.provider, connection.config, connection.secrets, connection.credential?.secrets])).digest("hex");
@@ -38,6 +39,7 @@ export class ChannelSupervisor {
   private chain: Promise<void> = Promise.resolve();
   private timer: NodeJS.Timeout | undefined;
   private stopped = false;
+  private readonly warned = new Set<string>();
 
   constructor(
     private readonly options: {
@@ -74,14 +76,23 @@ export class ChannelSupervisor {
       await entry.listener.stop().catch(() => undefined);
       this.running.delete(id);
     }
-    for (const id of wanted) {
+    for (const id of [...wanted].sort()) {
       if (this.running.has(id) || this.stopped) continue;
       const connection = this.options.resolve(id);
       const factory = connection ? (this.options.factories ?? DEFAULT_FACTORIES)[connection.provider] : undefined;
       if (!connection || !factory) continue;
+      // Two connections can point at one inbox; a second stream would deliver every message twice.
+      const identity = channelIdentity(connection);
+      const holder = [...this.running].find(([, entry]) => entry.identity === identity)?.[0];
+      if (holder) {
+        if (!this.warned.has(id)) this.options.log(`channel listeners: ${id} reaches the same inbox or line as ${holder}; only ${holder} is listened to`);
+        this.warned.add(id);
+        continue;
+      }
+      this.warned.delete(id);
       const listener = factory(connection, { onMessage: async (message) => void (await this.options.deliver(message)), log: this.options.log });
       if (!listener) continue;
-      this.running.set(id, { listener, fingerprint: fingerprintOf(connection) });
+      this.running.set(id, { listener, fingerprint: fingerprintOf(connection), identity });
       await listener.start();
     }
   }

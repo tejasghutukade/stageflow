@@ -115,6 +115,27 @@ describe("channel supervisor", () => {
     expect(stopped).toEqual(["mail", "line"]);
   });
 
+  it("opens one stream for connections that reach the same inbox", async () => {
+    const logs: string[] = [];
+    const started: string[] = [];
+    const factory: ListenerFactory = (connection) => ({ start: async () => void started.push(connection.id), stop: async () => undefined, state: () => ({ status: "connected", since: "now", received: 0 }) });
+    const supervisor = new ChannelSupervisor({
+      service: { list: async () => [{ id: "a", enabled: true, channelConnection: "mail-b" }, { id: "b", enabled: true, channelConnection: "mail-a" }] as never, onChange: () => undefined },
+      projectRoot: "/p",
+      resolve: (id) => ({ id, provider: "agentmail", config: { inbox: "Support@agentmail.to" }, secrets: {} }),
+      deliver: async () => undefined,
+      log: (message) => void logs.push(message),
+      factories: { agentmail: factory },
+    });
+    await supervisor.reconcile();
+    await supervisor.reconcile();
+    expect(started).toEqual(["mail-a"]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("mail-b reaches the same inbox or line as mail-a");
+    expect(supervisor.status("mail-b")).toBeUndefined();
+    await supervisor.stop();
+  });
+
   it("restarts a listener when its connection settings change, and starts once for repeated reconciles", async () => {
     const { supervisor, started, stopped, connections } = setup([{ id: "a", enabled: true, channelConnection: "mail" }], { mail: { provider: "agentmail", config: { inbox: "one@x" } } });
     await supervisor.reconcile();

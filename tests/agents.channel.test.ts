@@ -3,6 +3,7 @@ import { normalizeSender, senderAllowed } from "../src/agents/communications/all
 import { parseAgentDefinition, parseAgentYaml, serializeAgentDefinition } from "../src/config/loadAgent.js";
 import { agentInput, agentsFixture, scriptedBackend, type AgentsFixture } from "./helpers/agentsHarness.js";
 import { AgentChatController } from "../src/agents/chatTurn.js";
+import { channelIdentity } from "../src/agents/communications/identity.js";
 
 const fixtures: AgentsFixture[] = [];
 afterEach(async () => {
@@ -81,6 +82,38 @@ describe("channel service rules", () => {
     expect((await service.receive(project, message("Jane <jane@x.com>", "e2"))).duplicate).toBe(false);
     const empty = await service.validate(project, agentInput("quiet", { channel: { connection_id: "other", allow_from: [] } }));
     expect(empty.warnings.map((w) => w.code)).toContain("agent.channel_nobody_allowed");
+  });
+});
+
+describe("one inbox, one agent", () => {
+  it("names what a connection talks to", () => {
+    const mail = (id: string, inbox: string, region?: string) => channelIdentity({ id, provider: "agentmail", config: { inbox, ...(region ? { region } : {}) } });
+    expect(mail("a", "Support@AgentMail.to")).toBe(mail("b", "support@agentmail.to", "us"));
+    expect(mail("a", "support@agentmail.to")).not.toBe(mail("a", "support@agentmail.to", "eu"));
+    const line = (id: string, projectId: string) => channelIdentity({ id, provider: "imessage", credential: { secrets: { projectId, projectSecret: "s" } } });
+    expect(line("x", "p1")).toBe(line("y", "p1"));
+    expect(line("x", "p1")).not.toBe(line("x", "p2"));
+    expect(channelIdentity({ id: "s1", provider: "slack" })).not.toBe(channelIdentity({ id: "s2", provider: "slack" }));
+  });
+
+  it("refuses a second agent on another connection that reaches the same inbox", async () => {
+    const identities: Record<string, string> = { "mail-a": "agentmail:us:support@agentmail.to", "mail-b": "agentmail:us:support@agentmail.to", "mail-c": "agentmail:us:sales@agentmail.to" };
+    const fixture = await agentsFixture({
+      environment: {
+        mcpServerNames: async () => undefined,
+        skillNames: async () => undefined,
+        connectionIds: async () => undefined,
+        connectionIdentity: async (id) => identities[id],
+      },
+    });
+    fixtures.push(fixture);
+    const { service, project } = fixture;
+    await service.create(project, agentInput("first", { channel: { connection_id: "mail-a", allow_from: ["*"] } }), { source: "console" });
+    const same = await service.validate(project, agentInput("second", { channel: { connection_id: "mail-b", allow_from: ["*"] } }));
+    expect(same.issues.map((i) => i.code)).toEqual(["agent.channel_in_use"]);
+    expect(same.issues[0]!.message).toContain("same inbox");
+    await expect(service.create(project, agentInput("second", { channel: { connection_id: "mail-b", allow_from: ["*"] } }), { source: "console" })).rejects.toMatchObject({ code: "agent.invalid" });
+    expect((await service.validate(project, agentInput("second", { channel: { connection_id: "mail-c", allow_from: ["*"] } }))).issues).toEqual([]);
   });
 });
 

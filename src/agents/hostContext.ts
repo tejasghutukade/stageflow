@@ -3,6 +3,8 @@ import type { ChannelService } from "../channels/service.js";
 import { listSkills } from "../config/listSkills.js";
 import { listProjectMcpCatalog } from "../config/resolveStageMcpServers.js";
 import { channelInboundConnections } from "./communications/channelConnections.js";
+import { channelHostFor } from "../channels/host.js";
+import { channelIdentity } from "./communications/identity.js";
 import { AgentInboundRouter } from "./communications/inbound.js";
 import { ChannelSupervisor } from "./communications/supervisor.js";
 import { AgentChatController } from "./chatTurn.js";
@@ -49,6 +51,14 @@ export function createAgentEnvironment(options: {
       if (!snapshot || snapshot.providers.length === 0) return undefined;
       const model = snapshot.providers.flatMap((provider) => provider.models).find((entry) => entry.id === id);
       return { known: model !== undefined, nativeTools: model?.nativeTools ?? false };
+    },
+    async connectionIdentity(connectionId) {
+      try {
+        const connection = channelHostFor(options.cwd).registry.resolve(connectionId, false);
+        return channelIdentity({ id: connection.id, provider: connection.provider, config: connection.config, credential: connection.credential ? { secrets: connection.credential.secrets } : undefined });
+      } catch {
+        return undefined;
+      }
     },
     async connectionIds() {
       if (!options.channels) return undefined;

@@ -140,5 +140,6 @@ For AgentMail and iMessage the Host opens the stream itself, so no public URL is
 - A listener runs for each enabled agent with a channel, starts on enable, restarts when the connection changes and stops when the agent is disabled. A dropped stream reconnects with backoff (2 s up to 60 s). After a reconnect AgentMail mail from the last 15 minutes is answered too (deduped by message id). The agent page shows "Listening", "Reconnecting" or the failure. `STAGEFLOW_AGENT_CHANNEL_LISTENERS=0` turns listening off.
 - Mail loops are cut off: the agent's own inbox, `Auto-Submitted`, bulk/list precedence, `mailer-daemon`, `postmaster` and no-reply senders are ignored. Each sender may send 20 messages a minute; the rest are ignored.
 - **Always on:** with `limits.always_on: true` a session never ends by time or turns. If the Host restarts mid-turn, the interrupted iMessage turn is retried once on start (the message is not asked twice), and the next message continues the same conversation.
+- One inbox has one agent: two connections that reach the same AgentMail inbox (or the same Photon project) count as one channel, so a second agent is refused with `agent.channel_in_use`, and the Host opens a single stream for them.
 - iMessage on a Free or Pro Photon project: only registered project users can message the line, and each must text it once first.
 
