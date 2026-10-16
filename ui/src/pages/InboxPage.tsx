@@ -8,6 +8,8 @@ import {
   inboxWaitingView,
   inFlightView,
 } from "../catalog/views";
+import { AgentApprovalFocusPane } from "../redesign/inbox/AgentApprovalFocusPane";
+import { mergeNeedsQueue, type AgentApprovalItem } from "../redesign/inbox/needsQueue";
 import { DoneFocusPane } from "../redesign/inbox/DoneFocusPane";
 import { FailedFocusPane } from "../redesign/inbox/FailedFocusPane";
 import {
@@ -41,10 +43,16 @@ export function InboxPage({
   onOpen,
   onNew,
   onOpenRuns,
+  agentApprovals = [],
+  onAgentApprovalDecided,
+  onOpenAgentSession,
 }: {
   onOpen: (runId: string) => void;
   onNew: () => void;
   onOpenRuns?: () => void;
+  agentApprovals?: AgentApprovalItem[];
+  onAgentApprovalDecided?: () => void;
+  onOpenAgentSession?: (agentId: string, sessionId: string) => void;
 }) {
   const catalog = useRunCatalogHandle();
   const { snapshot, error, loading } = useRunCatalog();
@@ -68,6 +76,7 @@ export function InboxPage({
   }, []);
 
   const waiting = useMemo(() => inboxWaitingView(snapshot), [snapshot]);
+  const needs = useMemo(() => mergeNeedsQueue(waiting, agentApprovals), [waiting, agentApprovals]);
   const brokenRaw = useMemo(() => brokenView(snapshot), [snapshot]);
   const broken = useMemo(
     () => filterDismissedFailed(brokenRaw),
@@ -82,40 +91,45 @@ export function InboxPage({
     return flattenFailedQueue(partitionFailedRuns(sorted));
   }, [broken, failedSortOrder]);
 
-  const activeList =
-    tab === "needs"
-      ? waiting
-      : tab === "failed"
-        ? failedQueue
-        : finished;
+  const activeKeys = useMemo(
+    () =>
+      tab === "needs"
+        ? needs.map((item) => item.key)
+        : (tab === "failed" ? failedQueue : finished).map((r) => r.run_id),
+    [tab, needs, failedQueue, finished],
+  );
 
   const selectedRun = useMemo(() => {
     if (!selectedId) return null;
-    return activeList.find((r) => r.run_id === selectedId) ?? null;
-  }, [activeList, selectedId]);
+    const runs = tab === "needs" ? waiting : tab === "failed" ? failedQueue : finished;
+    return runs.find((r) => r.run_id === selectedId) ?? null;
+  }, [tab, waiting, failedQueue, finished, selectedId]);
 
-  const selectedIndex =
-    selectedRun != null
-      ? activeList.findIndex((r) => r.run_id === selectedRun.run_id)
-      : -1;
+  const selectedApproval = useMemo(() => {
+    if (tab !== "needs" || !selectedId) return null;
+    const item = needs.find((entry) => entry.key === selectedId);
+    return item?.kind === "agent" ? item.approval : null;
+  }, [tab, needs, selectedId]);
+
+  const selectedIndex = selectedId ? activeKeys.indexOf(selectedId) : -1;
 
   useEffect(() => {
     if (selectedIndex >= 0) selectionIndexRef.current = selectedIndex;
   }, [selectedIndex]);
 
   useEffect(() => {
-    if (activeList.length === 0) {
+    if (activeKeys.length === 0) {
       setSelectedId(null);
       return;
     }
-    if (!selectedId || !activeList.some((r) => r.run_id === selectedId)) {
+    if (!selectedId || !activeKeys.includes(selectedId)) {
       const idx = Math.min(
         Math.max(selectionIndexRef.current, 0),
-        activeList.length - 1,
+        activeKeys.length - 1,
       );
-      setSelectedId(activeList[idx].run_id);
+      setSelectedId(activeKeys[idx]);
     }
-  }, [activeList, selectedId, tab]);
+  }, [activeKeys, selectedId, tab]);
 
   const retryRunId =
     tab === "failed" && selectedRun?.failed_stage_id ? selectedRun.run_id : "";
@@ -127,12 +141,12 @@ export function InboxPage({
 
   const moveSelection = useCallback(
     (delta: 1 | -1) => {
-      if (activeList.length === 0) return;
+      if (activeKeys.length === 0) return;
       const current = selectedIndex >= 0 ? selectedIndex : 0;
-      const next = nextGateIndex(current, activeList.length, delta);
-      setSelectedId(activeList[next].run_id);
+      const next = nextGateIndex(current, activeKeys.length, delta);
+      setSelectedId(activeKeys[next]);
     },
-    [activeList, selectedIndex],
+    [activeKeys, selectedIndex],
   );
 
   const onDismissFailed = useCallback(() => {
@@ -162,7 +176,7 @@ export function InboxPage({
       {
         key: "j",
         scope: "inbox",
-        when: () => activeList.length > 0 && tab !== "needs",
+        when: () => activeKeys.length > 0 && tab !== "needs",
         handler: (e) => {
           e.preventDefault();
           moveSelection(1);
@@ -171,7 +185,7 @@ export function InboxPage({
       {
         key: "k",
         scope: "inbox",
-        when: () => activeList.length > 0 && tab !== "needs",
+        when: () => activeKeys.length > 0 && tab !== "needs",
         handler: (e) => {
           e.preventDefault();
           moveSelection(-1);
@@ -180,7 +194,7 @@ export function InboxPage({
       {
         key: "j",
         scope: "inbox",
-        when: () => tab === "needs" && waiting.length > 0,
+        when: () => tab === "needs" && needs.length > 0,
         handler: (e) => {
           e.preventDefault();
           moveSelection(1);
@@ -189,7 +203,7 @@ export function InboxPage({
       {
         key: "k",
         scope: "inbox",
-        when: () => tab === "needs" && waiting.length > 0,
+        when: () => tab === "needs" && needs.length > 0,
         handler: (e) => {
           e.preventDefault();
           moveSelection(-1);
@@ -220,7 +234,7 @@ export function InboxPage({
       {
         key: "g",
         scope: "inbox",
-        when: () => tab === "needs" && waiting.length === 0 && !loading,
+        when: () => tab === "needs" && needs.length === 0 && !loading,
         handler: (e) => {
           e.preventDefault();
           openRuns();
@@ -262,17 +276,18 @@ export function InboxPage({
       {
         key: "o",
         scope: "inbox-gate",
-        when: () => Boolean(selectedRun),
+        when: () => Boolean(selectedRun || selectedApproval),
         handler: (e) => {
           e.preventDefault();
           if (selectedRun) onOpen(selectedRun.run_id);
+          else if (selectedApproval) onOpenAgentSession?.(selectedApproval.agentId, selectedApproval.sessionId);
         },
       },
     ],
     "inbox-gate",
   );
 
-  const showZero = tab === "needs" && waiting.length === 0 && !loading;
+  const showZero = tab === "needs" && needs.length === 0 && !loading;
 
   const retrying =
     Boolean(selectedRun?.failed_stage_id) &&
@@ -300,7 +315,7 @@ export function InboxPage({
         <InboxZero
           tab={tab}
           onTabChange={onTabChange}
-          waitingCount={waiting.length}
+          waitingCount={needs.length}
           brokenCount={broken.length}
           doneCount={finished.length}
           inFlight={inFlight}
@@ -314,7 +329,7 @@ export function InboxPage({
           <InboxQueue
             tab={tab}
             onTabChange={onTabChange}
-            waiting={waiting}
+            needs={needs}
             broken={broken}
             finished={finished}
             alsoRunning={inFlight}
@@ -328,11 +343,24 @@ export function InboxPage({
             }
             loading={loading}
           />
-          {tab === "needs" ? (
+          {tab === "needs" && selectedApproval ? (
+            <AgentApprovalFocusPane
+              approval={selectedApproval}
+              index={selectedIndex >= 0 ? selectedIndex : 0}
+              total={needs.length}
+              onDecided={() => {
+                selectionIndexRef.current = selectedIndex >= 0 ? selectedIndex : 0;
+                onAgentApprovalDecided?.();
+              }}
+              onOpenSession={(agentId, sessionId) => onOpenAgentSession?.(agentId, sessionId)}
+              onRegisterHotkeys={setGateHotkeys}
+            />
+          ) : null}
+          {tab === "needs" && !selectedApproval ? (
             <GateFocusPane
               run={selectedRun}
               index={selectedIndex >= 0 ? selectedIndex : 0}
-              total={waiting.length}
+              total={needs.length}
               onOpenRun={onOpen}
               onRegisterHotkeys={setGateHotkeys}
               onAnswered={() => {

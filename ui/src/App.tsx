@@ -34,11 +34,13 @@ import {
   runEnvelopePath,
   runStagePath,
   runStreamPath,
+  agentSessionPath,
   catalogPath,
   type Route,
 } from "./routes";
 import { applyRedesignAttribute, useRedesign } from "./redesign/flag";
 import { AgentSessionsPage } from "./redesign/agents/sessions/AgentSessionsPage";
+import { useAgentApprovals } from "./redesign/agents/model/useAgentApprovals";
 import { useActiveSessionCount } from "./redesign/agents/model/useActiveSessionCount";
 import { StageEditorPage } from "./redesign/editor/StageEditorPage";
 import { AppShell as RedesignAppShell } from "./redesign/shell/AppShell";
@@ -125,7 +127,8 @@ function ConsoleRoot() {
     };
   }, []);
 
-  const waitingCount = waitingView(snapshot).length;
+  const { approvals: agentApprovals, refresh: refreshAgentApprovals } = useAgentApprovals();
+  const waitingCount = waitingView(snapshot).length + agentApprovals.length;
   const inFlightCount = bucketViews(snapshot).inFlight.length;
   const agentActiveCount = useActiveSessionCount();
   const health = snapshot.health;
@@ -167,6 +170,9 @@ function ConsoleRoot() {
         onOpen={(id) => go(runStreamPath(id))}
         onNew={() => go("/new")}
         onOpenRuns={() => go("/runs")}
+        agentApprovals={agentApprovals}
+        onAgentApprovalDecided={refreshAgentApprovals}
+        onOpenAgentSession={(agentId, sessionId) => go(agentSessionPath(agentId, sessionId))}
       />
     );
   } else if (route.name === "new") {
