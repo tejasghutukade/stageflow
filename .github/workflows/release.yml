@@ -99,7 +99,8 @@ jobs:
             node scripts/release-range.mjs changelog --through "${RELEASE_VERSION}" --file CHANGELOG.md > "${SLICE}"
           fi
           export RELEASE_CHANGELOG_SLICE="${SLICE}"
-          sf validate --strict --json
+          sf validate --strict --json \
+            --pipeline examples/github-release/github-release.pipeline.yaml
           set +e
           sf run \
             --pipeline examples/github-release/github-release.pipeline.yaml \

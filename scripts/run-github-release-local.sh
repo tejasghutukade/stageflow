@@ -47,7 +47,9 @@ echo "Using sf: $(command -v sf) ($(sf --version))"
 echo "STAGEFLOW_HOME=$STAGEFLOW_HOME"
 echo "Release ${TAG} (previous GitHub release: ${PREVIOUS:-none})"
 
-sf validate --strict --json >/dev/null
+sf validate --strict --json \
+  --pipeline examples/github-release/github-release.pipeline.yaml \
+  >/dev/null
 
 set +e
 sf run \
