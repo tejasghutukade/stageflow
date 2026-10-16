@@ -130,7 +130,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
     const mcpServers = Object.keys(definition.tools.mcp);
     const resolvedMcp =
       mcpServers.length > 0
-        ? await resolveStageMcpServers({ projectRoot, allowlist: mcpServers, env: process.env })
+        ? await resolveStageMcpServers({ projectRoot, allowlist: mcpServers, env: process.env, host: true })
         : undefined;
     attached = await attachIsolatedMcp(resolvedMcp, { lifecycle: "lazy" });
 

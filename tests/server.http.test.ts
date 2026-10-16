@@ -3704,8 +3704,8 @@ describe("project MCP catalog HTTP", () => {
       expect(listed.body).toEqual({
         status: "ok",
         servers: [
-          { name: "local", transport: "stdio" },
-          { name: "github", transport: "http" },
+          { name: "local", transport: "stdio", origin: "project" },
+          { name: "github", transport: "http", origin: "project" },
         ],
       });
       const payload = JSON.stringify(listed.body);
@@ -3819,7 +3819,7 @@ describe("project MCP catalog HTTP", () => {
       expect(listed.status).toBe(200);
       expect(listed.body).toEqual({
         status: "ok",
-        servers: [{ name: "factory", transport: "stdio" }],
+        servers: [{ name: "factory", transport: "stdio", origin: "project" }],
       });
       const payload = JSON.stringify(listed.body);
       expect(payload).not.toContain("decoy");

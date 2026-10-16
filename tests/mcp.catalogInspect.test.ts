@@ -164,14 +164,14 @@ describe("MCP catalog inspect", () => {
       expect(mcp.payload).toEqual({
         status: "ok",
         servers: [
-          { name: "local", transport: "stdio" },
-          { name: "github", transport: "http" },
+          { name: "local", transport: "stdio", origin: "project" },
+          { name: "github", transport: "http", origin: "project" },
         ],
       });
       expect(mcp.payload).toEqual(expected);
       expect(mcp.payload).toEqual(http.body);
       for (const row of mcp.payload.servers as { name: string }[]) {
-        expect(Object.keys(row).sort()).toEqual(["name", "transport"]);
+        expect(Object.keys(row).sort()).toEqual(["name", "origin", "transport"]);
       }
     } finally {
       await closeServer(server);

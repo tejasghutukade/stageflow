@@ -253,12 +253,13 @@ async function resolveAttemptMcpServers(
     options.stageId !== undefined ? { stageId: options.stageId } : {};
   const bindingKind = bindingKindForOrigin(options.bindingKind);
 
-  if (factoryCwd !== undefined && (await mcpCatalogExists(factoryCwd))) {
+  if (factoryCwd !== undefined && (await mcpCatalogExists(factoryCwd, { host: true }))) {
     await mkdir(artifactsDir, { recursive: true });
     const resolved = await resolveStageMcpServers({
       projectRoot: factoryCwd,
       allowlist: names,
       env,
+      host: true,
       bindingKind,
       trustWorkspaceConfig: options.trustWorkspaceConfig,
       ...stageIdOpt,

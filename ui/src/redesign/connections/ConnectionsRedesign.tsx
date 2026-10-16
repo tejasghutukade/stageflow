@@ -257,10 +257,13 @@ export function ConnectionsRedesign() {
               </div>
             ) : null}
             {loaded ? (
-              <div className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-[#ffffff1a] px-4 py-3 text-[13px] text-[#8b8f98]">
+              <a
+                href="#/settings"
+                className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-[#ffffff1a] px-4 py-3 text-[13px] text-[#8b8f98] hover:text-[#c9ccd3]"
+              >
                 <LuPlus className="size-3.5 block" aria-hidden />
-                Add tools by listing MCP servers in <span className={MONO}>.mcp.json</span> beside <span className={MONO}>stageflow.yaml</span>
-              </div>
+                Add an MCP server in Settings — a form, or paste JSON from its docs
+              </a>
             ) : null}
           </section>
         </div>

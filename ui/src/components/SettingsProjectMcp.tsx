@@ -9,11 +9,12 @@ import {
 } from "../api";
 
 export const PROJECT_MCP_SETTINGS_COPY =
-  "Servers from this project's git-root .mcp.json. Check tests whether a server can connect. It does not start a run and does not attach tools to stages. YAML mcp: still allowlists what a stage receives.";
+  "Servers agents and stages can use: those you add here, plus the project's git-root .mcp.json. Check tests whether a server can connect. It does not start a run and does not attach tools to stages. YAML mcp: still allowlists what a stage receives.";
 
 export type ProjectMcpRow = {
   name: string;
   transport: "stdio" | "http";
+  origin: "project" | "console";
   status: ProjectMcpRowStatus;
   error?: string;
 };
@@ -44,7 +45,7 @@ export function projectMcpStatusLabel(status: ProjectMcpRowStatus): string {
     case "connected":
       return "Connected";
     case "needs_auth":
-      return "Needs auth";
+      return "Needs sign-in";
     case "connect_failed":
       return "Connect failed";
     case "unresolved_var":
@@ -83,7 +84,7 @@ export function projectMcpSectionError(
   status: ProjectMcpCatalogListStatus,
 ): string | null {
   if (status === "missing_catalog") {
-    return "No git-root .mcp.json in this project.";
+    return null;
   }
   if (status === "invalid_config") {
     return "Project .mcp.json is invalid.";
@@ -146,6 +147,7 @@ export function createProjectMcpSettingsSession(deps: ProjectMcpSettingsDeps) {
         servers: listed.servers.map((server) => ({
           name: server.name,
           transport: server.transport,
+          origin: server.origin,
           status: "not-yet-probed",
         })),
         error: null,
@@ -186,6 +188,20 @@ export function createProjectMcpSettingsSession(deps: ProjectMcpSettingsDeps) {
     }
   };
 
+  /** Check every row that has not been probed yet, a few at a time (each probe may start a process). */
+  const checkAll = async (concurrency = 3) => {
+    const queue = state.servers.filter((row) => row.status === "not-yet-probed").map((row) => row.name);
+    const worker = async () => {
+      for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
+        if (disposed) return;
+        // Another checkAll (or a click) may have taken this row since the queue was built.
+        if (state.servers.find((row) => row.name === name)?.status !== "not-yet-probed") continue;
+        await check(name);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  };
+
   const dispose = () => {
     disposed = true;
     for (const controller of controllers.values()) {
@@ -201,7 +217,7 @@ export function createProjectMcpSettingsSession(deps: ProjectMcpSettingsDeps) {
     };
   };
 
-  return { getState, load, check, dispose, subscribe };
+  return { getState, load, check, checkAll, dispose, subscribe };
 }
 
 export function SettingsProjectMcp() {

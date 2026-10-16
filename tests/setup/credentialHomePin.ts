@@ -14,6 +14,11 @@ if (realEnv.STAGEFLOW_HOME?.trim() && !realEnv.STAGEFLOW_CREDENTIAL_HOME?.trim()
   realEnv.STAGEFLOW_CREDENTIAL_HOME = realEnv.STAGEFLOW_HOME;
 }
 
+// Attaching a URL MCP server links an OAuth store into the Pi agent dir; keep that off the real ~/.pi.
+if (!realEnv.PI_CODING_AGENT_DIR?.trim()) {
+  realEnv.PI_CODING_AGENT_DIR = path.join(realEnv.STAGEFLOW_HOME!, "agent");
+}
+
 process.env = new Proxy(realEnv, {
   set(target, prop, value) {
     const key = typeof prop === "string" ? prop : undefined;

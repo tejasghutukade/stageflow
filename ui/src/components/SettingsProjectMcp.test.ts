@@ -11,7 +11,7 @@ describe("project MCP status paint", () => {
   it("keeps not-yet-probed, connected, needs_auth, and connect_failed distinct", () => {
     expect(projectMcpStatusLabel("not-yet-probed")).toBe("Not yet probed");
     expect(projectMcpStatusLabel("connected")).toBe("Connected");
-    expect(projectMcpStatusLabel("needs_auth")).toBe("Needs auth");
+    expect(projectMcpStatusLabel("needs_auth")).toBe("Needs sign-in");
     expect(projectMcpStatusLabel("connect_failed")).toBe("Connect failed");
     expect(projectMcpStatusLabel("probing")).toBe("Probing…");
 
@@ -35,7 +35,7 @@ describe("project MCP status paint", () => {
 
   it("renders catalog failures as section errors, not rows", () => {
     expect(projectMcpSectionError("ok")).toBeNull();
-    expect(projectMcpSectionError("missing_catalog")).toMatch(/\.mcp\.json/);
+    expect(projectMcpSectionError("missing_catalog")).toBeNull();
     expect(projectMcpSectionError("invalid_config")).toMatch(/invalid/i);
   });
 });
@@ -45,8 +45,8 @@ describe("createProjectMcpSettingsSession", () => {
     const list = vi.fn(async () => ({
       status: "ok" as const,
       servers: [
-        { name: "local", transport: "stdio" as const },
-        { name: "github", transport: "http" as const },
+        { name: "local", transport: "stdio" as const, origin: "project" as const },
+        { name: "github", transport: "http" as const, origin: "project" as const },
       ],
     }));
     const probe = vi.fn();
@@ -58,8 +58,8 @@ describe("createProjectMcpSettingsSession", () => {
       loading: false,
       catalogStatus: "ok",
       servers: [
-        { name: "local", transport: "stdio", status: "not-yet-probed" },
-        { name: "github", transport: "http", status: "not-yet-probed" },
+        { name: "local", transport: "stdio", origin: "project", status: "not-yet-probed" },
+        { name: "github", transport: "http", origin: "project", status: "not-yet-probed" },
       ],
       error: null,
     });
@@ -69,8 +69,8 @@ describe("createProjectMcpSettingsSession", () => {
     const list = vi.fn(async () => ({
       status: "ok" as const,
       servers: [
-        { name: "local", transport: "stdio" as const },
-        { name: "github", transport: "http" as const },
+        { name: "local", transport: "stdio" as const, origin: "project" as const },
+        { name: "github", transport: "http" as const, origin: "project" as const },
       ],
     }));
     const probe = vi.fn(async (name: string) => {
@@ -106,7 +106,7 @@ describe("createProjectMcpSettingsSession", () => {
     let release!: (value: { name: string; status: "connected" }) => void;
     const list = vi.fn(async () => ({
       status: "ok" as const,
-      servers: [{ name: "github", transport: "http" as const }],
+      servers: [{ name: "github", transport: "http" as const, origin: "project" as const }],
     }));
     const probe = vi.fn(
       () =>
@@ -126,7 +126,7 @@ describe("createProjectMcpSettingsSession", () => {
   it("remount resets every row to not-yet-probed", async () => {
     const list = vi.fn(async () => ({
       status: "ok" as const,
-      servers: [{ name: "github", transport: "http" as const }],
+      servers: [{ name: "github", transport: "http" as const, origin: "project" as const }],
     }));
     const probe = vi.fn(async (name: string) => ({
       name,
@@ -145,7 +145,7 @@ describe("createProjectMcpSettingsSession", () => {
   it("dispose aborts the in-flight probe", async () => {
     const list = vi.fn(async () => ({
       status: "ok" as const,
-      servers: [{ name: "github", transport: "http" as const }],
+      servers: [{ name: "github", transport: "http" as const, origin: "project" as const }],
     }));
     let seen: AbortSignal | undefined;
     const probe = vi.fn((_name: string, init?: { signal?: AbortSignal }) => {
@@ -188,5 +188,32 @@ describe("project catalog Settings copy and wiring", () => {
     expect(PROJECT_MCP_SETTINGS_COPY).toMatch(/mcp:/);
     expect(PROJECT_MCP_SETTINGS_COPY).not.toMatch(/enable|disable/i);
     expect(PROJECT_MCP_SETTINGS_COPY).not.toMatch(/SDLC/i);
+  });
+
+  it("checkAll probes every unprobed row, a few at a time, and skips ones already checked", async () => {
+    let running = 0;
+    let peak = 0;
+    const probe = vi.fn(async (name: string) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 5));
+      running -= 1;
+      return { name, status: "connected" as const };
+    });
+    const names = ["a", "b", "c", "d", "e"];
+    const session = createProjectMcpSettingsSession({
+      list: async () => ({
+        status: "ok",
+        servers: names.map((name) => ({ name, transport: "http" as const, origin: "project" as const })),
+      }),
+      probe,
+    });
+    await session.load();
+    await session.check("a");
+    probe.mockClear();
+    await session.checkAll(2);
+    expect(probe.mock.calls.map((c) => c[0]).sort()).toEqual(["b", "c", "d", "e"]);
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(session.getState().servers.every((row) => row.status === "connected")).toBe(true);
   });
 });

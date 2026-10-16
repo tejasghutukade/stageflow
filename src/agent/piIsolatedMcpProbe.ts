@@ -5,6 +5,7 @@ import {
   type ResolvedMcpServerConfig,
   type ResolvedMcpServers,
 } from "../config/resolveStageMcpServers.js";
+import { listCachedMcpTools, type McpToolInfo } from "../config/mcpToolCache.js";
 import * as piIsolatedMcp from "./piIsolatedMcp.js";
 import type { IsolatedMcpAttach } from "./piIsolatedMcp.js";
 
@@ -25,6 +26,8 @@ export type ProjectMcpProbeResult = {
   name: string;
   status: ProjectMcpProbeStatus;
   error?: string;
+  /** Tools the server lists, set when the probe connected. */
+  tools?: McpToolInfo[];
 };
 
 export type ProbeProjectMcpServerOptions = {
@@ -295,6 +298,7 @@ export async function probeProjectMcpServer(
       projectRoot: options.projectRoot,
       allowlist: [name],
       env,
+      host: true,
     });
   } catch (err) {
     return (
@@ -363,7 +367,8 @@ export async function probeProjectMcpServer(
           : {}),
       };
     }
-    return { name, status: waited.status };
+    const tools = waited.status === "connected" ? listCachedMcpTools(name)?.tools : undefined;
+    return { name, status: waited.status, ...(tools ? { tools } : {}) };
   } catch (err) {
     if (options.signal?.aborted) {
       return { name, status: "cancelled" };

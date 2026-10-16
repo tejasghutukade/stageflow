@@ -1,6 +1,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { STAGEFLOW_MCP_SERVER_NAME } from "../agent/claudeTools.js";
+import {
+  readHostMcpServers,
+  readMcpSecrets,
+} from "./mcpHostCatalog.js";
 
 export type StageMcpErrorCode =
   | "missing_catalog"
@@ -40,10 +44,17 @@ export function stampStagePromptArtifactsDir(
 
 export type McpCatalogServers = Record<string, Record<string, unknown>>;
 
+export type McpServerOrigin = "project" | "console";
+
 export type InspectedMcpCatalog = {
   path: string;
   servers: McpCatalogServers;
+  /** Where each server came from; `console` = saved from the UI under $STAGEFLOW_HOME. */
+  origins: Record<string, McpServerOrigin>;
 };
+
+/** `host: true` also merges servers saved from the console (console entry wins on a name clash). */
+export type McpCatalogLoadOptions = { host?: boolean };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -104,7 +115,13 @@ export function parseMcpCatalog(
   return servers;
 }
 
-export async function mcpCatalogExists(projectRoot: string): Promise<boolean> {
+export async function mcpCatalogExists(
+  projectRoot: string,
+  options: McpCatalogLoadOptions = {},
+): Promise<boolean> {
+  if (options.host === true && Object.keys(readHostMcpServers()).length > 0) {
+    return true;
+  }
   try {
     await readFile(mcpCatalogPath(projectRoot), "utf8");
     return true;
@@ -115,25 +132,39 @@ export async function mcpCatalogExists(projectRoot: string): Promise<boolean> {
   }
 }
 
-export async function loadMcpCatalog(projectRoot: string): Promise<InspectedMcpCatalog> {
+export async function loadMcpCatalog(
+  projectRoot: string,
+  options: McpCatalogLoadOptions = {},
+): Promise<InspectedMcpCatalog> {
   const catalogPath = mcpCatalogPath(projectRoot);
-  let raw: string;
+  const hostServers = options.host === true ? readHostMcpServers() : {};
+  let raw: string | undefined;
   try {
     raw = await readFile(catalogPath, "utf8");
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
+    if (code !== "ENOENT") {
+      throw new StageMcpError(
+        `MCP catalog "${MCP_CATALOG_FILENAME}" could not be read`,
+        "invalid_config",
+      );
+    }
+    if (Object.keys(hostServers).length === 0) {
       throw new StageMcpError(
         `MCP catalog "${MCP_CATALOG_FILENAME}" is missing`,
         "missing_catalog",
       );
     }
-    throw new StageMcpError(
-      `MCP catalog "${MCP_CATALOG_FILENAME}" could not be read`,
-      "invalid_config",
-    );
   }
-  return { path: catalogPath, servers: parseMcpCatalog(raw, catalogPath) };
+  const servers: McpCatalogServers =
+    raw !== undefined ? parseMcpCatalog(raw, catalogPath) : {};
+  const origins: Record<string, McpServerOrigin> = {};
+  for (const name of Object.keys(servers)) origins[name] = "project";
+  for (const [name, entry] of Object.entries(hostServers)) {
+    servers[name] = entry;
+    origins[name] = "console";
+  }
+  return { path: catalogPath, servers, origins };
 }
 
 export type ProjectMcpCatalogTransport = "stdio" | "http";
@@ -141,6 +172,7 @@ export type ProjectMcpCatalogTransport = "stdio" | "http";
 export type ProjectMcpCatalogEntry = {
   name: string;
   transport: ProjectMcpCatalogTransport;
+  origin: McpServerOrigin;
 };
 
 export type ProjectMcpCatalogListStatus = "ok" | "missing_catalog" | "invalid_config";
@@ -166,14 +198,18 @@ export async function listProjectMcpCatalog(
   projectRoot: string,
 ): Promise<ProjectMcpCatalogList> {
   try {
-    const catalog = await loadMcpCatalog(projectRoot);
+    const catalog = await loadMcpCatalog(projectRoot, { host: true });
     const servers: ProjectMcpCatalogEntry[] = [];
     for (const [name, entry] of Object.entries(catalog.servers)) {
       const transport = coarseMcpTransport(entry);
       if (transport === undefined) {
         return { status: "invalid_config", servers: [] };
       }
-      servers.push({ name, transport });
+      servers.push({
+        name,
+        transport,
+        origin: catalog.origins[name] ?? "project",
+      });
     }
     return { status: "ok", servers };
   } catch (err) {
@@ -345,6 +381,8 @@ export async function resolveStageMcpServers(options: {
   trustProjectRoot?: string;
   /** When true, .mcp.json is treated as workspace-sourced. */
   workspaceSourced?: boolean;
+  /** Merge console-saved servers and let console-saved secrets fill `${VAR}` after `env`. */
+  host?: boolean;
 }): Promise<ResolvedMcpServers> {
   const allowlist = options.allowlist ?? [];
   if (allowlist.length === 0) {
@@ -365,13 +403,17 @@ export async function resolveStageMcpServers(options: {
       );
     }
   }
-  const catalog = await loadMcpCatalog(options.projectRoot);
+  const host = options.host === true && options.workspaceSourced !== true;
+  const catalog = await loadMcpCatalog(options.projectRoot, { host });
   assertMcpAllowlistKnown(catalog.servers, allowlist);
+  const env: NodeJS.ProcessEnv = host
+    ? { ...readMcpSecrets(), ...options.env }
+    : options.env;
   const resolved: ResolvedMcpServers = {};
   for (const name of allowlist) {
     resolved[name] = interpolateServer(
       catalog.servers[name],
-      options.env,
+      env,
       name,
       options.projectRoot,
       options.stageId,

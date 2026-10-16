@@ -331,8 +331,8 @@ List git-root `.mcp.json` servers as names and coarse transport only (same helpe
 {
   "status": "ok",
   "servers": [
-    { "name": "local", "transport": "stdio" },
-    { "name": "github", "transport": "http" }
+    { "name": "local", "transport": "stdio", "origin": "project" },
+    { "name": "github", "transport": "http", "origin": "console" }
   ]
 }
 ```
@@ -340,6 +340,25 @@ List git-root `.mcp.json` servers as names and coarse transport only (same helpe
 `status` is `ok`, `missing_catalog`, or `invalid_config`. A reserved `stageflow` entry fails the whole catalog (`invalid_config`, empty `servers`), matching HTTP.
 
 Inspect is not attach. Stage MCP YAML `mcp:` still allowlists what a stage receives — see [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
+
+### Adding servers without a `.mcp.json`
+
+The console (Settings → Project MCP) and HTTP can add servers, so a Host does not need a `.mcp.json` file (for example the Docker image):
+
+| Route | Does |
+|---|---|
+| `PUT /api/project-mcp/:name` body `{ "config": { "command"/"args"/"env" \| "url"/"headers" } }` | Add or replace one server |
+| `GET /api/project-mcp/:name` | Read back a console-added server |
+| `DELETE /api/project-mcp/:name` | Remove a console-added server (`409` if it is defined in the project file) |
+| `POST /api/project-mcp/import` body `{ "json": { "mcpServers": { … } } }` | Add several from pasted JSON |
+
+Remote servers take `url` plus optional `headers` and `httpTransport: "sse"` (streamable HTTP is the default and falls back to SSE). Pasted snippets using `serverUrl`, `httpUrl` or `type: sse | http | stdio` are mapped onto this shape.
+
+These servers are saved in `$STAGEFLOW_HOME/mcp/.mcp.json` and merged over the project `.mcp.json` (console wins on a name clash; list rows carry `origin`). A repository checkout's own `.mcp.json` never sees them.
+
+**OAuth sign-in.** A URL server that answers `401` with OAuth metadata shows `needs_auth` on probe. `POST /api/project-mcp/:name/oauth/start` returns `{ authorizationUrl }`; after approval the browser lands on a `localhost` callback. A local Host receives it itself; otherwise send the full address with `POST .../oauth/complete` body `{ "input": "http://localhost:…/callback?code=…&state=…" }`. `GET .../oauth` returns `authenticated`, `expired` or `not_authenticated`; `DELETE .../oauth` signs out. Tokens are AES-256-GCM encrypted in `$STAGEFLOW_HOME/agent/mcp-oauth-encrypted` (key: `$STAGEFLOW_HOME/secrets/mcp-oauth.key`, mode 0600, or `PI_MCP_ADAPTER_OAUTH_FILE_KEY`). Signed-in servers are usable by agents and probes, not pipeline stages: stage attempts run in a sealed agent dir and the adapter refuses a symlinked store. For stages use a bearer token in `headers` backed by a secret.
+
+**Secrets.** Never put a token in the file. Write `${NAME}` and store the value with `PUT /api/mcp-secrets/:name` body `{ "value": "…" }`. A literal token in `env` or `headers` (known prefixes such as `ghp_` or `sk-`, keys like `*_TOKEN` / `Authorization`, or long random strings) is moved there for you. Stored values fill `${NAME}` after the stage or process environment, are never returned (`GET /api/mcp-secrets` lists names, `usedBy` and `set` only) and live in `$STAGEFLOW_HOME/secrets/mcp-secrets.json` with mode `0600`. The stage's curated environment is unchanged.
 
 ### `probe_project_mcp`
 

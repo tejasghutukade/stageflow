@@ -33,7 +33,7 @@ Left rail items (`ui/src/redesign/shell/navConfig.ts`):
 | **Tasks** | `#/tasks` | Browse task files |
 | **Catalog** | `#/catalog` | Stages and skills. `#/skills` redirects here |
 | **Triggers** | `#/triggers` | Catalog triggers |
-| **Connections** | `#/connections` | Communication channels (connect, test, replace a key, disconnect), email accounts and `.mcp.json` tool servers. See [Communication channels](channels.md#connections-page-and-api) |
+| **Connections** | `#/connections` | Communication channels (connect, test, replace a key, disconnect), email accounts and MCP tool servers (add them in Settings → Project MCP). See [Communication channels](channels.md#connections-page-and-api) |
 | **Settings** | `#/settings` | General, Providers, MCP, Concurrency, Project MCP, Notifications |
 
 **Start a run** — `#/new` opens the Start Run dialog (optional `?pipeline=` and `?task=` query params).

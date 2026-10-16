@@ -44,6 +44,12 @@ import type {
   ChannelHealth,
   ProjectMcpCatalogList,
   ProjectMcpProbeResult,
+  ProjectMcpServerConfig,
+  ProjectMcpSaveResult,
+  ProjectMcpImportResult,
+  McpSecretsList,
+  McpOAuthStatus,
+  McpToolInfo,
   AttachTaskInput,
   AttachTaskResult,
   ClearWorkshopAutosaveResult,
@@ -1052,6 +1058,75 @@ export async function postFeedbackDecisionWithDetails(
 
 export function fetchProjectMcp(): Promise<ProjectMcpCatalogList> {
   return api("/api/project-mcp");
+}
+
+export function fetchProjectMcpServer(
+  name: string,
+): Promise<{ name: string; origin: "console"; config: ProjectMcpServerConfig }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}`);
+}
+
+export function saveProjectMcpServer(
+  name: string,
+  config: ProjectMcpServerConfig,
+): Promise<ProjectMcpSaveResult> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify({ config }),
+  });
+}
+
+export function deleteProjectMcpServer(name: string): Promise<{ name: string }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
+export function importProjectMcp(json: unknown): Promise<ProjectMcpImportResult> {
+  return api("/api/project-mcp/import", {
+    method: "POST",
+    body: JSON.stringify({ json }),
+  });
+}
+
+/** Tools the Host last saw on this server; `tools` is null when it has never connected. */
+export function fetchProjectMcpTools(name: string): Promise<{ name: string; tools: McpToolInfo[] | null }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/tools`);
+}
+
+export function fetchMcpOAuthStatus(name: string): Promise<{ name: string; status: McpOAuthStatus }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/oauth`);
+}
+
+export function startMcpOAuthSignIn(name: string): Promise<{ name: string; authorizationUrl: string }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/oauth/start`, { method: "POST" });
+}
+
+export function completeMcpOAuthSignIn(
+  name: string,
+  input: string,
+): Promise<{ name: string; status: McpOAuthStatus }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/oauth/complete`, {
+    method: "POST",
+    body: JSON.stringify({ input }),
+  });
+}
+
+export function signOutMcpOAuth(name: string): Promise<{ name: string; status: McpOAuthStatus }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/oauth`, { method: "DELETE" });
+}
+
+export function fetchMcpSecrets(): Promise<McpSecretsList> {
+  return api("/api/mcp-secrets");
+}
+
+export function setMcpSecretValue(name: string, value: string): Promise<{ name: string }> {
+  return api(`/api/mcp-secrets/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify({ value }),
+  });
+}
+
+export function deleteMcpSecretValue(name: string): Promise<{ name: string }> {
+  return api(`/api/mcp-secrets/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
 export function postProjectMcpProbe(

@@ -45,6 +45,7 @@ import {
   Toggle,
 } from "../ui";
 import { InstructionsEditor } from "./InstructionsEditor";
+import { McpToolPicker } from "./McpToolPicker";
 import { PermissionTree } from "./PermissionTree";
 import { BUILTIN_PERMISSION_GROUPS, grantedToolIds, operatorOnlyToolNames, stageflowPermissionGroups } from "../model/permissions";
 
@@ -405,14 +406,14 @@ export function AgentDefinitionForm({
         </div>
 
         <div className="flex flex-col gap-2">
-          <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">MCP servers from .mcp.json</span>
+          <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">MCP servers</span>
           {mcpNames.length === 0 ? (
             <div className="rounded-lg border border-dashed border-[var(--sf-hairline-strong)] px-3.5 py-3 text-xs text-[var(--sf-text-3)]">
               {options.mcpServers === undefined
                 ? "Loading servers…"
                 : options.mcpStatus === "invalid_config"
                   ? ".mcp.json could not be read. Fix it to grant MCP tools."
-                  : "No .mcp.json in this project. Add servers there to grant their tools."}
+                  : "No MCP servers yet. Add one in Settings → Project MCP to grant its tools."}
             </div>
           ) : (
             <ListGroup>
@@ -459,12 +460,7 @@ export function AgentDefinitionForm({
                       )}
                     </div>
                     {granted && !all ? (
-                      <ChipListField
-                        values={granted}
-                        onChange={update ? (tools) => setMcp(server, tools) : undefined}
-                        placeholder="Tool names this agent may call, e.g. search"
-                        ariaLabel={`${server} tools`}
-                      />
+                      <McpToolPicker server={server} granted={granted} onChange={update ? (tools) => setMcp(server, tools) : undefined} />
                     ) : null}
                     <FieldMessages {...at(`tools.mcp.${server}`)} />
                   </div>

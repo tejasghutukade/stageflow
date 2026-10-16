@@ -3378,6 +3378,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         if (
           await handleProjectMcpRoutes(req, res, {
             projectRoot: rootDir,
+            readJsonBody,
             json,
           })
         ) {
