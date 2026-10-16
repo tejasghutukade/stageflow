@@ -313,6 +313,14 @@ export const agentsApi = {
     const qs = params.toString();
     return request<SessionPage>(agentUrl(id, `/sessions${qs ? `?${qs}` : ""}`));
   },
+  allSessions: (
+    query: { agent?: string; status?: SessionStatus; source?: string; q?: string; cursor?: string; limit?: number } = {},
+  ) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== "") params.set(key, String(value));
+    const qs = params.toString();
+    return request<SessionPage>(`/api/agents/sessions${qs ? `?${qs}` : ""}`);
+  },
   session: (id: string, sessionId: string) => request<AgentSessionDetail>(agentUrl(id, `/sessions/${enc(sessionId)}`)),
   decide: (id: string, sessionId: string, decision: "approve" | "deny") =>
     request<{ approval: AgentApproval; session: AgentSessionDetail }>(

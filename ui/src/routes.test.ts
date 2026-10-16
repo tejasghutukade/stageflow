@@ -4,6 +4,7 @@ import {
   agentCreatePath,
   agentRunPath,
   agentSessionPath,
+  agentSessionsPath,
   agentsPath,
   catalogPath,
   extensionFilePath,
@@ -208,6 +209,7 @@ describe("parseHash", () => {
 describe("agent routes", () => {
   it("opens the directory", () => {
     expect(parseHash(`#${agentsPath()}`)).toEqual({ name: "agents" });
+    expect(parseHash(`#${agentSessionsPath()}`)).toEqual({ name: "agentSessions" });
     expect(parseHash(`#${agentCreatePath()}`)).toEqual({ name: "agentCreate" });
   });
 

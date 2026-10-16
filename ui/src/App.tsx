@@ -38,6 +38,8 @@ import {
   type Route,
 } from "./routes";
 import { applyRedesignAttribute, useRedesign } from "./redesign/flag";
+import { AgentSessionsPage } from "./redesign/agents/sessions/AgentSessionsPage";
+import { useActiveSessionCount } from "./redesign/agents/model/useActiveSessionCount";
 import { StageEditorPage } from "./redesign/editor/StageEditorPage";
 import { AppShell as RedesignAppShell } from "./redesign/shell/AppShell";
 import { AppRail as RedesignAppRail } from "./redesign/shell/AppRail";
@@ -58,6 +60,7 @@ function railActiveId(route: Route, redesignOn: boolean): string {
   if (route.name === "task") return "tasks";
   if (route.name === "trigger") return "triggers";
   if (route.name === "connection") return "connections";
+  if (route.name === "agentSessions") return "agent-sessions";
   if (route.name === "agent" || route.name === "agentSession" || route.name === "agentRun") return "agents";
   if (redesignOn) {
     if (route.name === "catalog" || route.name === "stage") return "catalog";
@@ -124,6 +127,7 @@ function ConsoleRoot() {
 
   const waitingCount = waitingView(snapshot).length;
   const inFlightCount = bucketViews(snapshot).inFlight.length;
+  const agentActiveCount = useActiveSessionCount();
   const health = snapshot.health;
   const workspace = workspaceLabelFromSnapshot(snapshot);
   const heldCount = heldWaitingCount(snapshot, health);
@@ -221,6 +225,8 @@ function ConsoleRoot() {
     content = <ConnectionsPage />;
   } else if (route.name === "connection") {
     content = <ConnectionDetailPage connectionId={route.connectionId} />;
+  } else if (route.name === "agentSessions") {
+    content = <AgentSessionsPage />;
   } else if (route.name === "agents") {
     content = <AgentsPage />;
   } else if (route.name === "agentCreate") {
@@ -334,6 +340,7 @@ function ConsoleRoot() {
               onNavigate={onRailNavigate}
               waitingCount={waitingCount}
               inFlightCount={inFlightCount}
+              agentActiveCount={agentActiveCount}
               health={health}
               workspaceName={workspace.name}
               workspaceSubtitle={workspace.subtitle}

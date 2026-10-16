@@ -21,6 +21,7 @@ export type AppRailProps = {
   onNavigate: (id: string) => void;
   waitingCount?: number;
   inFlightCount?: number;
+  agentActiveCount?: number;
   health?: CapacityHealth | null;
   workspaceName: string;
   workspaceSubtitle?: string;
@@ -39,6 +40,7 @@ export function AppRail({
   onNavigate,
   waitingCount = 0,
   inFlightCount = 0,
+  agentActiveCount = 0,
   health,
   workspaceName,
   workspaceSubtitle,
@@ -181,6 +183,14 @@ export function AppRail({
                       <span className="block size-1.5 rounded-full bg-[var(--sf-running)]" />
                       <span className="font-['Geist_Mono',monospace] text-xs text-[var(--sf-running)]">
                         {inFlightCount}
+                      </span>
+                    </span>
+                  ) : null}
+                  {item.badge === "agentsActive" && agentActiveCount > 0 ? (
+                    <span className="flex items-center gap-[5px]">
+                      <span className="block size-1.5 rounded-full bg-[var(--sf-running)]" />
+                      <span className="font-['Geist_Mono',monospace] text-xs text-[var(--sf-running)]">
+                        {agentActiveCount}
                       </span>
                     </span>
                   ) : null}

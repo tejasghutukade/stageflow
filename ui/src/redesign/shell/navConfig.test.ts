@@ -5,7 +5,7 @@ describe("sidebar", () => {
   it("groups by what the person is doing, with Inbox pinned above the sections", () => {
     expect(NAV_GROUPS.map((group) => [group.label ?? null, group.items.map((item) => item.id)])).toEqual([
       [null, ["inbox"]],
-      ["Activity", ["runs"]],
+      ["Activity", ["runs", "agent-sessions"]],
       ["Build", ["pipelines", "agents", "tasks", "workshop", "catalog"]],
       ["Connect", ["triggers", "connections"]],
     ]);

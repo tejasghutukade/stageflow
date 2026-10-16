@@ -152,6 +152,9 @@ describe("agents HTTP API", () => {
     const listed = await call("GET", "/api/agents/research_assistant/sessions?limit=10");
     expect(listed.body).toMatchObject({ sessions: [{ id: sessionId, title: "hello" }], stats: { total: 1 } });
     expect((await call("GET", "/api/agents/research_assistant/sessions?status=bogus")).status).toBe(422);
+    const everyAgent = await call("GET", "/api/agents/sessions?limit=10");
+    expect(everyAgent.status).toBe(200);
+    expect(everyAgent.body).toMatchObject({ sessions: [{ id: sessionId, agentId: "research_assistant" }], stats: { total: 1 } });
     expect((await call("GET", "/api/agents/other_agent/sessions/" + sessionId)).status).toBe(404);
   });
 

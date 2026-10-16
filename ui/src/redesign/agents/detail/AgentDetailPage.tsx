@@ -16,6 +16,7 @@ import { AgentDefinitionForm } from "../config/AgentDefinitionForm";
 import { modelLabel, webChatLink, webChatState, type WebChatState } from "../model/definition";
 import { formatCost, formatTokens, relativeTime, sessionSubtitle, sourceLabel } from "../model/format";
 import { useAgentDetail, useEditorOptions } from "../model/hooks";
+import { sessionStatusView } from "../model/sessionStatus";
 import { consumeAgentCreated } from "../useAgent";
 import { Button, KeyValue, PageFooter, PageHeader, SelectField, Tabs } from "../ui";
 
@@ -142,21 +143,6 @@ function EmptySessions({ detail, onReview }: { detail: AgentDetail; onReview: ()
   );
 }
 
-function statusOf(row: AgentSessionListItem): { symbol: string; label: string; color: string } {
-  if (row.status === "waiting") return { symbol: "●", label: "Waiting on you", color: "text-[var(--sf-needs)]" };
-  if (row.status === "running") return { symbol: "●", label: "Running", color: "text-[var(--sf-running)]" };
-  switch (row.lastTurnStatus) {
-    case "succeeded":
-      return { symbol: "✓", label: "Succeeded", color: "text-[var(--sf-ok)]" };
-    case "failed":
-      return { symbol: "×", label: "Failed", color: "text-[var(--sf-fail)]" };
-    case "cancelled":
-      return { symbol: "○", label: "Stopped", color: "text-[var(--sf-text-3)]" };
-    default:
-      return { symbol: "○", label: "No runs", color: "text-[var(--sf-text-3)]" };
-  }
-}
-
 function Metrics({ stats }: { stats: SessionStats }) {
   const rate = stats.turnsFinished7d > 0 ? `${Math.round((stats.turnsSucceeded7d / stats.turnsFinished7d) * 100)}%` : "—";
   return (
@@ -279,7 +265,7 @@ function SessionsList({ agentId, stats: initialStats }: { agentId: string; stats
           <p className="border-t border-t-[var(--sf-hairline)] px-7 py-6 text-xs text-[var(--sf-text-3)]">No sessions match these filters.</p>
         ) : (
           rows.map((row) => {
-            const state = statusOf(row);
+            const state = sessionStatusView(row);
             const open = () => navigate(agentSessionPath(agentId, row.id));
             return (
               <div

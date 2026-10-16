@@ -20,6 +20,7 @@ export type Route =
   | { name: "connections" }
   | { name: "connection"; connectionId: string }
   | { name: "agents" }
+  | { name: "agentSessions" }
   | { name: "agentCreate" }
   | { name: "agent"; agentId: string; screen: "detail" | "edit" }
   | { name: "agentSession"; agentId: string; sessionId: string }
@@ -163,6 +164,10 @@ export function agentsPath(): string {
   return "/agents";
 }
 
+export function agentSessionsPath(): string {
+  return "/agent-sessions";
+}
+
 export function agentCreatePath(): string {
   return "/agents/new";
 }
@@ -261,6 +266,7 @@ export function parseHash(hash = window.location.hash): Route {
     const connectionId = firstSegment(path.slice("connections/".length));
     if (connectionId) return { name: "connection", connectionId };
   }
+  if (path === "agent-sessions") return { name: "agentSessions" };
   if (path === "agents") return { name: "agents" };
   if (path === "agents/new") return { name: "agentCreate" };
   if (path.startsWith("agents/")) {

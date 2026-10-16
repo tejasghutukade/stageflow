@@ -762,6 +762,24 @@ export class AgentService {
     });
   }
 
+  /** Sessions of every agent in the project (or of one, when `agentId` is given), newest first, with matching stats. */
+  async listAllSessions(
+    projectRoot: string,
+    query: SessionQuery,
+    agentId?: string,
+  ): Promise<{ sessions: AgentSessionListItem[]; nextCursor: string | null; stats: SessionStats }> {
+    return this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const projectKey = agentProjectKey(projectRoot);
+      this.expireApprovals();
+      const since = new Date(this.now().getTime() - RECENT_WINDOW_MS).toISOString();
+      return {
+        ...this.store.listSessions(projectKey, agentId, query),
+        stats: this.store.sessionStats(projectKey, agentId, since),
+      };
+    });
+  }
+
   listSpans(projectRoot: string, sessionId: string): AgentSpan[] {
     this.sessionInProject(projectRoot, sessionId);
     return this.store.listSpansForSession(sessionId);

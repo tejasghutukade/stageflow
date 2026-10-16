@@ -30,6 +30,8 @@ Each session keeps one Pi model session on the revision it started with. What th
 
 ## Traces and evals
 
+The sidebar's **Agent sessions** page lists sessions across all agents (`GET /api/agents/sessions`, same filters as the per-agent list plus `agent`); an agent's own page lists only its sessions.
+
 Every turn records a span tree: an `invoke_agent` root with `chat` (model), `execute_tool`, approval (`gate`), sub-agent and guardrail children, with tokens and cost. `observability.capture` controls content: `off`, `metadata` (default) or `full` (secrets masked). Export a session as OTLP/JSON from the session page, `GET .../sessions/:sid/otlp`, or set `observability.otlp: true` and the Host pushes each finished turn to the collector named by `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, plus `OTEL_EXPORTER_OTLP_HEADERS`). A collector outage never fails a turn.
 
 `evals.groundedness` scores (0–1) how well a reply that used tools is supported by those tool results; the average shows on the session page.

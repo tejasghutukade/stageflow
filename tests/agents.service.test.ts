@@ -320,6 +320,30 @@ describe("AgentService sessions", () => {
     expect(first.sessions[0]).toMatchObject({ turnCount: 1, lastTurnStatus: "succeeded", inputTokens: 0 });
   });
 
+  it("lists sessions of every agent with project-wide stats", async () => {
+    const { service, project, clock } = await setup();
+    const made: Record<string, string> = {};
+    for (const agent of ["helper", "writer"]) {
+      await service.create(project, agentInput(agent), { source: "console" });
+      await service.setEnabled(project, agent, true, { source: "console" });
+      clock.advance(1_000);
+      const session = await service.openSession(project, agent, { source: "console" });
+      const turn = await service.beginTurn(project, session.id, { text: `hello ${agent}` });
+      await service.completeTurn(project, turn.turn.id, { status: "succeeded", assistantText: "ok" });
+      made[agent] = session.id;
+    }
+    const all = await service.listAllSessions(project, { limit: 10 });
+    expect(all.sessions.map((session) => [session.agentId, session.id])).toEqual([
+      ["writer", made.writer],
+      ["helper", made.helper],
+    ]);
+    expect(all.stats).toMatchObject({ total: 2, active: 0, last7Days: 2, turnsFinished7d: 2, turnsSucceeded7d: 2 });
+    expect((await service.listAllSessions(project, { limit: 10, search: "hello helper" })).sessions.map((session) => session.agentId)).toEqual(["helper"]);
+    const onlyWriter = await service.listAllSessions(project, { limit: 10 }, "writer");
+    expect(onlyWriter.sessions.map((session) => session.id)).toEqual([made.writer]);
+    expect(onlyWriter.stats.total).toBe(1);
+  });
+
   it("fails turns left running by a stopped host", async () => {
     const { service, project } = await setup();
     await service.create(project, agentInput("helper"), { source: "console" });

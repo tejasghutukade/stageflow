@@ -527,13 +527,18 @@ export class AgentStore {
       .run({ ...patch, now, sessionId });
   }
 
+  /** One agent's sessions, or every agent's when `agentId` is omitted. */
   listSessions(
     projectKey: string,
-    agentId: string,
+    agentId: string | undefined,
     query: SessionQuery,
   ): { sessions: AgentSessionListItem[]; nextCursor: string | null } {
-    const where = ["project_key = @projectKey", "agent_id = @agentId"];
-    const params: Record<string, unknown> = { projectKey, agentId, limit: query.limit + 1 };
+    const where = ["project_key = @projectKey"];
+    const params: Record<string, unknown> = { projectKey, limit: query.limit + 1 };
+    if (agentId !== undefined) {
+      where.push("agent_id = @agentId");
+      params.agentId = agentId;
+    }
     if (query.status) {
       where.push("status = @status");
       params.status = query.status;
@@ -599,7 +604,11 @@ export class AgentStore {
     ).map(toSession);
   }
 
-  sessionStats(projectKey: string, agentId: string, since: string): SessionStats {
+  /** Stats for one agent, or for every agent when `agentId` is omitted. */
+  sessionStats(projectKey: string, agentId: string | undefined, since: string): SessionStats {
+    const agentFilter = agentId === undefined ? "" : " AND agent_id = @agentId";
+    const sessionAgentFilter = agentId === undefined ? "" : " AND s.agent_id = @agentId";
+    const bind = (extra: Record<string, unknown>) => (agentId === undefined ? extra : { ...extra, agentId });
     const row = this.db
       .prepare(
         `SELECT COUNT(*) AS total,
@@ -607,18 +616,18 @@ export class AgentStore {
                 SUM(CASE WHEN status = 'waiting' THEN 1 ELSE 0 END) AS waiting,
                 SUM(CASE WHEN created_at >= @since THEN 1 ELSE 0 END) AS recent,
                 MAX(updated_at) AS last_activity
-           FROM agent_sessions WHERE project_key = @projectKey AND agent_id = @agentId`,
+           FROM agent_sessions WHERE project_key = @projectKey${agentFilter}`,
       )
-      .get({ projectKey, agentId, since }) as Row;
+      .get(bind({ projectKey, since })) as Row;
     const turns = this.db
       .prepare(
         `SELECT SUM(CASE WHEN t.status IN ('succeeded', 'failed', 'cancelled') THEN 1 ELSE 0 END) AS finished,
                 SUM(CASE WHEN t.status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
                 SUM(t.cost_usd) AS cost
            FROM agent_turns t JOIN agent_sessions s ON s.session_id = t.session_id
-          WHERE s.project_key = @projectKey AND s.agent_id = @agentId AND t.started_at >= @since`,
+          WHERE s.project_key = @projectKey${sessionAgentFilter} AND t.started_at >= @since`,
       )
-      .get({ projectKey, agentId, since }) as Row;
+      .get(bind({ projectKey, since })) as Row;
     return {
       total: Number(row.total ?? 0),
       active: Number(row.active ?? 0),

@@ -220,6 +220,16 @@ const routes: Route[] = [
   },
   {
     method: "GET",
+    pattern: /^\/api\/agents\/sessions$/,
+    handle: async (ctx) =>
+      ctx.json(
+        ctx.res,
+        200,
+        await ctx.host.service.listAllSessions(ctx.projectRoot, sessionQuery(ctx.url), ctx.url.searchParams.get("agent") || undefined),
+      ),
+  },
+  {
+    method: "GET",
     pattern: /^\/api\/agents\/approvals$/,
     handle: async (ctx) =>
       ctx.json(ctx.res, 200, { approvals: await ctx.host.service.pendingApprovals(ctx.projectRoot) }),

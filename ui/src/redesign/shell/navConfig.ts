@@ -4,6 +4,7 @@ import {
   LuInbox,
   LuLayers,
   LuList,
+  LuMessagesSquare,
   LuPenLine,
   LuPlug,
   LuSparkles,
@@ -15,7 +16,7 @@ export type NavItem = {
   label: string;
   href: string;
   icon: IconType;
-  badge?: "waiting" | "inFlight";
+  badge?: "waiting" | "inFlight" | "agentsActive";
   soon?: boolean;
 };
 
@@ -31,7 +32,10 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     label: "Activity",
-    items: [{ id: "runs", label: "Pipeline runs", href: "#/runs", icon: LuList, badge: "inFlight" }],
+    items: [
+      { id: "runs", label: "Pipeline runs", href: "#/runs", icon: LuList, badge: "inFlight" },
+      { id: "agent-sessions", label: "Agent sessions", href: "#/agent-sessions", icon: LuMessagesSquare, badge: "agentsActive" },
+    ],
   },
   {
     label: "Build",
