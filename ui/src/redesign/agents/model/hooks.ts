@@ -10,7 +10,7 @@ export type EditorOptions = {
   mcpStatus?: "ok" | "missing_catalog" | "invalid_config" | "error";
   skills?: Array<{ name: string; description: string }>;
   connections?: Array<{ id: string; provider: string; displayName: string; enabled: boolean }>;
-  agents?: Array<{ id: string; name: string; enabled: boolean; model: string }>;
+  agents?: Array<{ id: string; name: string; enabled: boolean; model: string; channelConnection: string | null }>;
 };
 
 export function useEditorOptions(): EditorOptions {
@@ -50,7 +50,7 @@ export function useEditorOptions(): EditorOptions {
         set({
           agents: agents
             .filter((agent) => agent.revision > 0)
-            .map((agent) => ({ id: agent.id, name: agent.name, enabled: agent.enabled, model: agent.model?.id ?? "project default" })),
+            .map((agent) => ({ id: agent.id, name: agent.name, enabled: agent.enabled, model: agent.model?.id ?? "project default", channelConnection: agent.channelConnection })),
         }),
       () => set({ agents: [] }),
     );

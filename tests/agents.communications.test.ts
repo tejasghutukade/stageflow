@@ -15,7 +15,7 @@ async function inboxAgent(enabled: boolean) {
   fixtures.push(fixture);
   await fixture.service.create(
     fixture.project,
-    agentInput("inbox", { channels: [{ connection_id: "mail-inbox" }] }),
+    agentInput("inbox", { channel: { connection_id: "mail-inbox", allow_from: ["*"] } }),
     { source: "console" },
   );
   if (enabled) await fixture.service.setEnabled(fixture.project, "inbox", true, { source: "console" });

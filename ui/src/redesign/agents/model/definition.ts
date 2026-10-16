@@ -29,9 +29,8 @@ export function defaultDefinition(): AgentDefinition {
     guardrails: { block_patterns: [] },
     evals: { groundedness: false },
     observability: { capture: "metadata", otlp: false },
-    channels: [],
     web_chat: { ...DEFAULT_WEB_CHAT },
-    limits: { session_minutes: 10, max_turns: 40, cost_usd: null, long_context: "summarize" },
+    limits: { session_minutes: 10, max_turns: 40, cost_usd: null, long_context: "summarize", always_on: false },
   };
 }
 
@@ -214,7 +213,7 @@ const SECTION_KEYS: Record<Exclude<SectionId, "versions">, Array<keyof AgentDefi
   evals: ["guardrails", "evals"],
   observability: ["observability"],
   webchat: ["web_chat"],
-  channels: ["channels", "schedule"],
+  channels: ["channel", "schedule"],
   limits: ["limits"],
 };
 
@@ -234,7 +233,7 @@ const CHANGE_LABEL: Record<string, string> = {
   evals: "evals",
   observability: "capture",
   web_chat: "web chat",
-  channels: "channels",
+  channel: "channel",
   schedule: "schedule",
   limits: "limits",
 };

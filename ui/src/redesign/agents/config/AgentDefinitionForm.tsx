@@ -177,6 +177,7 @@ export function AgentDefinitionForm({
   const text = (key: "name" | "description" | "greeting") =>
     update ? (value: string) => update({ ...def, [key]: value || undefined } as AgentDefinition) : undefined;
 
+  const usedBy = Object.fromEntries((options.agents ?? []).filter((agent) => agent.channelConnection && agent.id !== def.id).map((agent) => [agent.channelConnection!, agent.name]));
   const mcpCatalog = options.mcpServers ?? [];
   const mcpNames = [...new Set([...mcpCatalog.map((server) => server.name), ...Object.keys(def.tools.mcp)])];
   const rows = approvalRows(def);
@@ -874,54 +875,54 @@ export function AgentDefinitionForm({
               </div>
               <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">Always on</span>
             </div>
-            {(options.connections ?? []).map((connection) => {
-              const bound = def.channels.some((channel) => channel.connection_id === connection.id);
-              return (
-                <div key={connection.id} className="flex items-center justify-between px-3.5 py-3">
+            <div className="flex flex-col gap-3 px-3.5 py-3" data-testid="agent-channel">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-col gap-0.5">
                   <div className="flex items-center gap-2.5">
-                    <RowIcon muted={!bound}>
+                    <RowIcon muted={!def.channel}>
                       <LuPlug />
                     </RowIcon>
-                    <span className={`text-[13px] leading-normal ${bound ? "text-[var(--sf-text-1)]" : "text-[var(--sf-text-2)]"}`}>{connection.displayName}</span>
-                    <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">
-                      {connection.provider}
-                      {connection.enabled ? "" : " · connection disabled"}
-                    </span>
+                    <span className={`text-[13px] leading-normal ${def.channel ? "text-[var(--sf-text-1)]" : "text-[var(--sf-text-2)]"}`}>Channel</span>
+                    <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">One connection this agent answers on, like an AgentMail inbox or an iMessage line</span>
                   </div>
-                  <Toggle
-                    on={bound}
-                    label={`Reply on ${connection.displayName}`}
-                    onChange={
-                      update
-                        ? (next) =>
-                            update({
-                              ...def,
-                              channels: next
-                                ? [...def.channels, { connection_id: connection.id }]
-                                : def.channels.filter((channel) => channel.connection_id !== connection.id),
-                            })
-                        : undefined
-                    }
+                </div>
+                <SelectField
+                  value={def.channel?.connection_id ?? ""}
+                  ariaLabel="Channel connection"
+                  options={[
+                    { value: "", label: "None" },
+                    ...(options.connections ?? []).map((connection) => ({
+                      value: connection.id,
+                      label: `${connection.displayName} · ${connection.provider}${connection.enabled ? "" : " (disabled)"}${usedBy[connection.id] ? ` · used by ${usedBy[connection.id]}` : ""}`,
+                    })),
+                    ...(def.channel && !(options.connections ?? []).some((c) => c.id === def.channel!.connection_id)
+                      ? [{ value: def.channel.connection_id, label: `${def.channel.connection_id} (not in this project)` }]
+                      : []),
+                  ]}
+                  onChange={
+                    update
+                      ? (value) => update({ ...def, channel: value === "" ? undefined : { connection_id: value, allow_from: def.channel?.allow_from ?? [] } })
+                      : undefined
+                  }
+                />
+              </div>
+              {def.channel ? (
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Who can message this agent</span>
+                  <ChipListField
+                    values={def.channel.allow_from}
+                    onChange={update ? (allow_from) => update({ ...def, channel: { ...def.channel!, allow_from } }) : undefined}
+                    placeholder="jane@example.com, +14155550123, @acme.com, or * for anyone"
+                    ariaLabel="Allowed senders"
                   />
-                </div>
-              );
-            })}
-            {def.channels
-              .filter((channel) => !(options.connections ?? []).some((c) => c.id === channel.connection_id))
-              .map((channel) => (
-                <div key={channel.connection_id} className="flex items-center justify-between px-3.5 py-3">
-                  <span className="flex items-center gap-1.5 text-xs text-[var(--sf-needs)]">
-                    <LuTriangleAlert aria-hidden className="size-3" />
-                    {channel.connection_id} is not a connection in this project
+                  <span className="text-[11px] leading-normal text-[var(--sf-text-3)]">
+                    Emails, phone numbers in +country format, <span className={MONO}>@domain</span> for everyone at a domain, or <span className={MONO}>*</span> for anyone. Messages from anyone else are ignored, so an empty list means nobody.
                   </span>
-                  <LinkButton
-                    tone="text-3"
-                    onClick={update ? () => update({ ...def, channels: def.channels.filter((c) => c !== channel) }) : undefined}
-                  >
-                    Remove
-                  </LinkButton>
+                  <FieldMessages {...at("channel.allow_from")} />
+                  <FieldMessages {...at("channel.connection_id")} />
                 </div>
-              ))}
+              ) : null}
+            </div>
             <div className="flex flex-col gap-3 px-3.5 py-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
@@ -1022,6 +1023,13 @@ export function AgentDefinitionForm({
                 onChange={update ? (value) => update({ ...def, limits: { ...def.limits, cost_usd: value } }) : undefined}
               />
               <FieldMessages {...at("limits.cost_usd")} />
+            </Field>
+            <Field
+              label="Always on"
+              changed={changed(def.limits.always_on, saved?.limits.always_on)}
+              hint="One conversation that never ends by time or turns, for a channel like iMessage. It carries on after a failure or restart. The cost limit then counts per day."
+            >
+              <Toggle on={def.limits.always_on} onChange={update ? (always_on) => update({ ...def, limits: { ...def.limits, always_on } }) : undefined} label="Always on" />
             </Field>
             <Field label="Long conversations" changed={changed(def.limits.long_context, saved?.limits.long_context)}>
               <SelectField

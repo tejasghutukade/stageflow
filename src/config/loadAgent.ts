@@ -1,3 +1,4 @@
+import { normalizeEntry, SENDER_ENTRY } from "../agents/communications/allowlist.js";
 import { grantedStageflowTools, isOperatorOnlyGroup, isOperatorOnlyTool, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
 import { Cron } from "croner";
 import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
@@ -111,6 +112,8 @@ const limitsSchema = z
     max_turns: z.number().int().positive().max(1_000).default(40),
     cost_usd: z.number().positive().nullable().default(null),
     long_context: z.enum(["summarize", "truncate"]).default("summarize"),
+    /** A session never ends by time or turn count (a cost cap still applies per day); it resumes after a failure. */
+    always_on: z.boolean().default(false),
   })
   .prefault({});
 
@@ -131,7 +134,16 @@ const webChatSchema = z
   })
   .prefault({});
 
-export const agentDefinitionSchema = z.strictObject({
+const channelSchema = z.strictObject({
+  connection_id: nonEmpty,
+  /** Who may message the agent: emails, E.164 phones, `@domain`, or `*`. Empty lets nobody in. */
+  allow_from: z
+    .array(z.string().trim().regex(SENDER_ENTRY, "Use an email, a +phone number, @domain or *"))
+    .default([])
+    .refine((list) => new Set(list.map(normalizeEntry)).size === list.length, "Duplicate sender"),
+});
+
+const agentDefinitionObject = z.strictObject({
   id: z.string().regex(AGENT_ID_PATTERN, "Use lowercase letters, digits and _, starting with a letter"),
   name: nonEmpty.max(120),
   description: z.string().trim().max(500).optional(),
@@ -160,15 +172,31 @@ export const agentDefinitionSchema = z.strictObject({
       otlp: z.boolean().default(false),
     })
     .prefault({}),
-  channels: z.array(z.strictObject({ connection_id: nonEmpty })).default([]),
+  /** The one connection (AgentMail inbox, iMessage line, ...) this agent answers on. */
+  channel: channelSchema.optional(),
   web_chat: webChatSchema,
   schedule: scheduleSchema.optional(),
   limits: limitsSchema,
 });
 
-export type AgentDefinition = z.output<typeof agentDefinitionSchema>;
+/** The earlier `channels: [{ connection_id }]` list becomes the single `channel`; more than one is an error. */
+function migrateLegacyChannels(raw: unknown, ctx: z.core.$RefinementCtx): unknown {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw) || !("channels" in raw)) return raw;
+  const { channels, ...rest } = raw as Record<string, unknown>;
+  if (!Array.isArray(channels)) return raw;
+  if (channels.length > 1) {
+    ctx.issues.push({ code: "custom", message: "An agent can have only one channel", input: raw, path: ["channels"] });
+    return rest;
+  }
+  if (channels.length === 1 && rest.channel === undefined) return { ...rest, channel: channels[0] };
+  return rest;
+}
+
+export const agentDefinitionSchema = z.preprocess(migrateLegacyChannels, agentDefinitionObject);
+
+export type AgentDefinition = z.output<typeof agentDefinitionObject>;
 /** What callers may send: every block optional, defaults filled on parse. */
-export type AgentDefinitionInput = z.input<typeof agentDefinitionSchema>;
+export type AgentDefinitionInput = z.input<typeof agentDefinitionObject>;
 
 export type AgentModelConfig = AgentDefinition["model"];
 export type AgentTools = AgentDefinition["tools"];
@@ -182,7 +210,7 @@ export type AgentObservability = AgentDefinition["observability"];
 export type AgentTraceCapture = AgentObservability["capture"];
 export type AgentExecutionMode = AgentDefinition["execution"];
 export type AgentWebChat = AgentDefinition["web_chat"];
-export type AgentCommunicationBinding = AgentDefinition["channels"][number];
+export type AgentCommunicationBinding = NonNullable<AgentDefinition["channel"]>;
 
 export type AgentIssue = {
   /** Dotted field path, e.g. `tools.mcp.notion` or `instructions`. Empty for file-level problems. */
@@ -314,7 +342,7 @@ export function serializeAgentDefinition(definition: AgentDefinition): string {
     "guardrails",
     "evals",
     "observability",
-    "channels",
+    "channel",
     "web_chat",
     "schedule",
     "limits",

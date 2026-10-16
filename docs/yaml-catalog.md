@@ -1047,10 +1047,10 @@ An agent is a project-owned definition. The file name is the agent id: `agents/<
 | `guardrails` | no | `{ block_patterns: [regex] }` — applied to assistant text after each turn |
 | `evals` | no | `{ groundedness: bool }` |
 | `observability` | no | `{ capture: off\|metadata\|full, otlp: bool }` |
-| `channels` | no | `[{ connection_id }]` — inbound routing by connection id |
+| `channel` | no | `{ connection_id, allow_from: [email \| +phone \| @domain \| *] }` — the one connection the agent answers on; an empty `allow_from` lets nobody in. The old `channels: [{ connection_id }]` list still loads as one `channel` |
 | `web_chat` | no | `{ enabled, slug?, rate_limit_per_minute (1-120, default 10), max_message_chars (1-20000, default 4000) }` — the public chat page at `/chat/<slug>`; see [Agents](agents.md#web-chat-public-page). Agents created through the console, API, CLI or MCP start with it on and a generated `slug` (the link is the credential); a save that omits the block keeps the current one |
 | `schedule` | no | `{ cron, timezone?, message? }` |
-| `limits` | no | `{ session_minutes, max_turns, cost_usd: number\|null, long_context: summarize\|truncate }` |
+| `limits` | no | `{ session_minutes, max_turns, cost_usd: number\|null, long_context: summarize\|truncate, always_on: bool }` — `always_on` ends no session by time or turns and counts `cost_usd` per day |
 
 Unknown keys are rejected. Defaults are omitted when the console writes the file. Every issue carries a field path (`tools.mcp.web`); missing MCP servers, skills or connections are warnings, not errors.
 

@@ -83,15 +83,15 @@ const SECTIONS: Array<{ label: string; keys: Array<keyof AgentDefinition>; descr
   },
   {
     label: "Channels",
-    keys: ["channels", "schedule"],
+    keys: ["channel", "schedule"],
     describe: (d) =>
-      list([...d.channels.map((c) => c.connection_id), ...(d.schedule ? [`schedule ${d.schedule.cron}`] : [])], "console only"),
+      list([...(d.channel ? [`${d.channel.connection_id} (${d.channel.allow_from.length === 0 ? "nobody allowed" : d.channel.allow_from.join(", ")})`] : []), ...(d.schedule ? [`schedule ${d.schedule.cron}`] : [])], "console only"),
   },
   {
     label: "Limits",
     keys: ["limits"],
     describe: (d) =>
-      `${d.limits.session_minutes} min · ${d.limits.max_turns} turns · ${d.limits.cost_usd === null ? "no cost cap" : `$${d.limits.cost_usd}`}`,
+      `${d.limits.always_on ? "always on" : `${d.limits.session_minutes} min · ${d.limits.max_turns} turns`} · ${d.limits.cost_usd === null ? "no cost cap" : `$${d.limits.cost_usd}${d.limits.always_on ? " per day" : ""}`}`,
   },
 ];
 

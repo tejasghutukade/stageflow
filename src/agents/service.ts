@@ -1,4 +1,5 @@
 import { grantedStageflowTools } from "../toolkit/meta.js";
+import { senderAllowed } from "./communications/allowlist.js";
 import { createHash, randomBytes } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -65,6 +66,8 @@ export type AgentSummary = {
   model: AgentDefinition["model"] | null;
   tools: { builtin: string[]; builtinTools: string[]; mcpServers: string[]; skills: string[]; browser: boolean };
   askFirst: string[];
+  /** Connection the agent answers on, if any. */
+  channelConnection: string | null;
   subAgents: string[];
   capture: AgentDefinition["observability"]["capture"] | null;
   /** Path of the public chat page (`/chat/<slug>`) while web chat is switched on and has a link. */
@@ -301,6 +304,7 @@ export class AgentService {
         browser: definition?.tools.browser ?? false,
       },
       askFirst: definition?.approvals.ask_first ?? [],
+      channelConnection: definition?.channel?.connection_id ?? null,
       subAgents: definition?.sub_agents ?? [],
       capture: definition?.observability.capture ?? null,
       webChatUrl: definition?.web_chat.enabled && definition.web_chat.slug ? `/chat/${definition.web_chat.slug}` : null,
@@ -415,17 +419,16 @@ export class AgentService {
         }
       });
     }
-    if (definition.channels.length > 0) {
+    if (definition.channel) {
       const known = await this.environment.connectionIds();
-      definition.channels.forEach((channel, index) => {
-        if (known && !known.includes(channel.connection_id)) {
-          warnings.push({
-            path: `channels.${index}`,
-            code: "agent.connection_unknown",
-            message: `Connection ${channel.connection_id} not found`,
-          });
-        }
-      });
+      if (known && !known.includes(definition.channel.connection_id)) {
+        warnings.push({ path: "channel.connection_id", code: "agent.connection_unknown", message: `Connection ${definition.channel.connection_id} not found` });
+      }
+      if (definition.channel.allow_from.length === 0) {
+        warnings.push({ path: "channel.allow_from", code: "agent.channel_nobody_allowed", message: "Nobody is allowed to message this agent yet. Add the people or domains it should answer." });
+      } else if (definition.channel.allow_from.includes("*")) {
+        warnings.push({ path: "channel.allow_from", code: "agent.channel_open_to_anyone", message: "Anyone who can reach this connection can talk to this agent" });
+      }
     }
     return warnings;
   }
@@ -480,10 +483,26 @@ export class AgentService {
     return { ...input, id };
   }
 
+  /** One connection answers for one agent: another agent already on this connection is an error. */
+  private channelConflicts(projectRoot: string, definition: AgentDefinition): AgentIssue[] {
+    const connectionId = definition.channel?.connection_id;
+    if (!connectionId) return [];
+    const projectKey = agentProjectKey(projectRoot);
+    const other = this.store
+      .listDefinitions(projectKey)
+      .filter((row) => !row.archived && row.currentRevision > 0 && row.agentId !== definition.id)
+      .find((row) => this.store.getRevision(projectKey, row.agentId, row.currentRevision)?.definition.channel?.connection_id === connectionId);
+    return other
+      ? [{ path: "channel.connection_id", code: "agent.channel_in_use", message: `${connectionId} already answers for the agent ${other.agentId}. An agent has one channel and a connection has one agent.` }]
+      : [];
+  }
+
   async validate(projectRoot: string, rawInput: unknown): Promise<ValidationResult> {
     const raw = this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "preview");
     const parsed = parseAgentDefinition(raw);
     if (!parsed.ok) return { definition: null, issues: parsed.issues, warnings: [], yaml: null };
+    const conflicts = this.channelConflicts(projectRoot, parsed.value);
+    if (conflicts.length > 0) return { definition: null, issues: conflicts, warnings: [], yaml: null };
     return {
       definition: parsed.value,
       issues: [],
@@ -504,6 +523,8 @@ export class AgentService {
     const definition = this.parseOrThrow(this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "create"));
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
+      const conflicts = this.channelConflicts(projectRoot, definition);
+      if (conflicts.length > 0) throw new AgentError("agent.invalid", "Agent definition is invalid", conflicts);
       const existing = this.store.getDefinition(agentProjectKey(projectRoot), definition.id);
       const onDisk = await access(this.file(projectRoot, definition.id)).then(
         () => true,
@@ -543,6 +564,8 @@ export class AgentService {
       await this.sync(projectRoot);
       const { row, revision } = this.currentRevision(projectRoot, agentId);
       if (row.currentRevision !== input.baseRevision) throw new AgentError("agent.conflict");
+      const conflicts = this.channelConflicts(projectRoot, definition);
+      if (conflicts.length > 0) throw new AgentError("agent.invalid", "Agent definition is invalid", conflicts);
       if (sameDefinition(revision.definition, definition)) return;
       await this.writeRevision(projectRoot, definition, actor, input.summary?.trim() || null);
     });
@@ -787,17 +810,21 @@ export class AgentService {
   private assertWithinLimits(definition: AgentDefinition, session: AgentSession): void {
     const { limits } = definition;
     const turns = this.store.listTurns(session.id);
-    if (turns.length >= limits.max_turns) {
-      throw new AgentError("agent.limit_reached", `This session reached its limit of ${limits.max_turns} turns.`);
-    }
-    const ageMinutes = (this.now().getTime() - Date.parse(session.createdAt)) / 60_000;
-    if (ageMinutes >= limits.session_minutes) {
-      throw new AgentError("agent.limit_reached", `This session reached its limit of ${limits.session_minutes} minutes.`);
+    if (!limits.always_on) {
+      if (turns.length >= limits.max_turns) {
+        throw new AgentError("agent.limit_reached", `This session reached its limit of ${limits.max_turns} turns.`);
+      }
+      const ageMinutes = (this.now().getTime() - Date.parse(session.createdAt)) / 60_000;
+      if (ageMinutes >= limits.session_minutes) {
+        throw new AgentError("agent.limit_reached", `This session reached its limit of ${limits.session_minutes} minutes.`);
+      }
     }
     if (limits.cost_usd !== null) {
-      const spent = turns.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
+      // An always-on session has no end, so its cap is per day instead of per session.
+      const since = limits.always_on ? this.now().getTime() - 24 * 60 * 60_000 : 0;
+      const spent = turns.filter((turn) => Date.parse(turn.startedAt) >= since).reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
       if (spent >= limits.cost_usd) {
-        throw new AgentError("agent.limit_reached", `This session reached its cost limit of $${limits.cost_usd}.`);
+        throw new AgentError("agent.limit_reached", `This session reached its cost limit of $${limits.cost_usd}${limits.always_on ? " for today" : ""}.`);
       }
     }
   }
@@ -981,10 +1008,11 @@ export class AgentService {
         .listDefinitions(projectKey)
         .filter((row) => !row.archived && row.currentRevision > 0)
         .map((row) => this.store.getRevision(projectKey, row.agentId, row.currentRevision)!)
-        .filter((revision) => revision.definition.channels.some((c) => c.connection_id === message.connectionId));
+        .filter((revision) => revision.definition.channel?.connection_id === message.connectionId);
       const target = bound.find((revision) => revision.definition.enabled) ?? bound[0];
       if (!target) throw new AgentError("agent.unbound");
       if (!target.definition.enabled) throw new AgentError("agent.disabled");
+      if (!senderAllowed(target.definition.channel?.allow_from ?? [], message.from)) throw new AgentError("agent.sender_not_allowed");
       const threadKey = agentThreadKey(message);
       const now = this.iso();
       const existing = this.store.findSessionByThread(projectKey, target.agentId, threadKey);

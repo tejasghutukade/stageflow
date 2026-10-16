@@ -205,7 +205,7 @@ describe("AgentService definitions", () => {
       agentInput("lead", {
         tools: { mcp: { notion: ["search"], slack: ["post_message"] }, skills: ["web-research", "ghost"] },
         sub_agents: ["helper"],
-        channels: [{ connection_id: "slack-main" }, { connection_id: "gone" }],
+        channel: { connection_id: "gone", allow_from: ["*"] },
       }),
     );
     expect(result.issues).toEqual([]);
@@ -213,7 +213,8 @@ describe("AgentService definitions", () => {
       ["tools.mcp.slack", "agent.mcp_server_unknown"],
       ["tools.skills.1", "agent.skill_unknown"],
       ["sub_agents.0", "agent.sub_agent_unknown"],
-      ["channels.1", "agent.connection_unknown"],
+      ["channel.connection_id", "agent.connection_unknown"],
+      ["channel.allow_from", "agent.channel_open_to_anyone"],
     ]);
     expect(result.yaml).toContain("sub_agents:");
   });

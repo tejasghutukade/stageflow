@@ -36,7 +36,7 @@ export type AgentDefinition = {
   guardrails: { block_patterns: string[] };
   evals: { groundedness: boolean };
   observability: { capture: CaptureMode; otlp: boolean };
-  channels: Array<{ connection_id: string }>;
+  channel?: { connection_id: string; allow_from: string[] };
   schedule?: { cron: string; timezone?: string; message?: string };
   web_chat: WebChatConfig;
   limits: {
@@ -44,6 +44,7 @@ export type AgentDefinition = {
     max_turns: number;
     cost_usd: number | null;
     long_context: "summarize" | "truncate";
+    always_on: boolean;
   };
 };
 
@@ -70,6 +71,7 @@ export type AgentSummary = {
   model: AgentDefinition["model"] | null;
   tools: { builtin: BuiltinToolGroup[]; builtinTools: string[]; mcpServers: string[]; skills: string[]; browser: boolean };
   askFirst: string[];
+  channelConnection: string | null;
   subAgents: string[];
   capture: CaptureMode | null;
   stats: SessionStats;

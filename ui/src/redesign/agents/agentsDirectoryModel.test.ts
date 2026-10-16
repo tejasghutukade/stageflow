@@ -14,6 +14,7 @@ function agent(over: Partial<AgentSummary> & { id: string }): AgentSummary {
     model: { backend: "pi", thinking: "medium" },
     tools: { builtin: ["read"], builtinTools: [], mcpServers: [], skills: [], browser: false },
     askFirst: [],
+    channelConnection: null,
     subAgents: [],
     capture: "metadata",
     stats,

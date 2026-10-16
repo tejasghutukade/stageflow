@@ -13,8 +13,10 @@ async function setup(overrides: Record<string, unknown> = {}) {
   const fixture = await agentsFixture();
   fixtures.push(fixture);
   const { service, project } = fixture;
-  await service.create(project, agentInput("support", { channels: [{ connection_id: "ops-slack" }, { connection_id: "tg" }], ...overrides }), { source: "console" });
+  await service.create(project, agentInput("support", { channel: { connection_id: "ops-slack", allow_from: ["*"] }, ...overrides }), { source: "console" });
   await service.setEnabled(project, "support", true, { source: "console" });
+  await service.create(project, agentInput("telegram_support", { channel: { connection_id: "tg", allow_from: ["*"] } }), { source: "console" });
+  await service.setEnabled(project, "telegram_support", true, { source: "console" });
   const replies: Array<{ connectionId: string; to: string; text: string; key: string }> = [];
   const connections: InboundConnections = {
     find: (id) => ({ "ops-slack": { provider: "slack", secret: "sign" }, tg: { provider: "telegram", secret: "tok" }, "no-secret": { provider: "slack", secret: undefined } })[id],
@@ -80,7 +82,7 @@ describe("agent inbound webhooks", () => {
   });
 
   it("ignores bot messages and messages for a connection no agent is bound to", async () => {
-    const { router, replies } = await setup({ channels: [] });
+    const { router, replies } = await setup({ channel: undefined });
     const unbound = slackRequest(slackEvent);
     expect(await router.handle("ops-slack", unbound.headers, unbound.raw)).toEqual({ status: 200, body: { ignored: true } });
     const bot = slackRequest({ event: { ...slackEvent.event, bot_id: "B1" } });

@@ -16,6 +16,7 @@ export type AgentErrorCode =
   | "agent.approval_expired"
   | "agent.approval_forbidden"
   | "agent.unbound"
+  | "agent.sender_not_allowed"
   | "agent.outbound_unknown"
   | "agent.trace_metadata_body"
   | "agent.guardrail_blocked"
@@ -40,6 +41,7 @@ const STATUS: Partial<Record<AgentErrorCode, number>> = {
   "agent.limit_reached": 409,
   "agent.model_timeout": 504,
   "agent.approval_forbidden": 403,
+  "agent.sender_not_allowed": 403,
 };
 
 /** Domain failure with a stable code; the HTTP, CLI and MCP layers map it, they don't parse messages. */

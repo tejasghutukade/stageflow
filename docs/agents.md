@@ -36,7 +36,17 @@ Every turn records a span tree: an `invoke_agent` root with `chat` (model), `exe
 
 ## Channels (inbound)
 
-Bind an agent to connections with `channels: [{ connection_id }]`. Slack, Telegram and AgentMail connections accept an optional `inboundSecret` and then receive webhooks at `POST /api/agent-inbound/<connection id>`:
+An agent answers on **one** connection, and a connection has one agent:
+
+```yaml
+channel:
+  connection_id: support-inbox
+  allow_from: [jane@example.com, "@acme.com", "+14155550123"]   # "*" lets anyone in; empty lets nobody in
+limits:
+  always_on: true     # one conversation that never ends by time or turns, and carries on after a failure
+```
+
+`allow_from` takes emails, phone numbers (`+country…`), `@domain` and `*`; a message from anyone else is ignored. `always_on` skips `session_minutes` and `max_turns`; `cost_usd` then counts per day. The older `channels: [{ connection_id }]` list still loads as the one `channel` (more than one is an error). Slack, Telegram and AgentMail connections accept an optional `inboundSecret` and then receive webhooks at `POST /api/agent-inbound/<connection id>`:
 
 | Provider | `inboundSecret` is | Verified by |
 |----------|--------------------|-------------|

@@ -114,7 +114,7 @@ function SummaryAside({ detail }: { detail: AgentDetail }) {
           Internal access
         </summary>
         <p className="mt-2 leading-[1.6]">
-          Console, CLI and MCP{definition && definition.channels.length > 0 ? ` · ${definition.channels.length} channel${definition.channels.length === 1 ? "" : "s"}` : ""}
+          Console, CLI and MCP{definition?.channel ? ` · ${definition.channel.connection_id}` : ""}
         </p>
         {definition?.schedule ? <p className={`${MONO} mt-1`}>Schedule {definition.schedule.cron}</p> : null}
       </details>
