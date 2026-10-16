@@ -27,6 +27,7 @@ const needsSetup = (agent: AgentSummary) => agent.issues.length > 0;
 function toolsLine(agent: AgentSummary): string {
   const parts: string[] = [];
   if (agent.tools.builtin.length > 0) parts.push(agent.tools.builtin.join(" · "));
+  if (agent.tools.builtinTools.length > 0) parts.push(agent.tools.builtinTools.join(" · "));
   if (agent.tools.mcpServers.length > 0) parts.push(`${agent.tools.mcpServers.length} MCP`);
   if (agent.tools.skills.length > 0) parts.push(`${agent.tools.skills.length} skill${agent.tools.skills.length === 1 ? "" : "s"}`);
   if (agent.tools.browser) parts.push("browser");

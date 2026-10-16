@@ -12,7 +12,7 @@ function agent(over: Partial<AgentSummary> & { id: string }): AgentSummary {
     revision: 1,
     issues: [],
     model: { backend: "pi", thinking: "medium" },
-    tools: { builtin: ["read"], mcpServers: [], skills: [], browser: false },
+    tools: { builtin: ["read"], builtinTools: [], mcpServers: [], skills: [], browser: false },
     askFirst: [],
     subAgents: [],
     capture: "metadata",
@@ -29,7 +29,7 @@ const research = agent({
   description: "Finds sources",
   revision: 3,
   model: { backend: "pi", id: "sonnet", thinking: "high" },
-  tools: { builtin: ["read", "shell"], mcpServers: ["web"], skills: [], browser: false },
+  tools: { builtin: ["read", "shell"], builtinTools: [], mcpServers: ["web"], skills: [], browser: false },
   askFirst: ["web.post"],
   stats: { ...stats, last7Days: 4 },
 });

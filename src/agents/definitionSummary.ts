@@ -1,4 +1,4 @@
-import { agentDefinitionSchema, type AgentDefinition } from "../config/loadAgent.js";
+import { agentDefinitionSchema, BUILTIN_TOOL_GROUPS, type AgentDefinition } from "../config/loadAgent.js";
 
 export type SummaryLine = { label: string; value: string };
 
@@ -51,6 +51,7 @@ const SECTIONS: Array<{ label: string; keys: Array<keyof AgentDefinition>; descr
       list(
         [
           ...d.tools.builtin,
+          ...d.tools.builtin_tools.filter((tool) => !d.tools.builtin.some((group) => BUILTIN_TOOL_GROUPS[group].includes(tool as never))),
           ...Object.entries(d.tools.mcp).map(([server, tools]) => `${server} (${tools.includes("*") ? "all" : tools.join(", ")})`),
           ...d.tools.skills.map((skill) => `skill ${skill}`),
           ...(d.tools.browser ? ["browser"] : []),

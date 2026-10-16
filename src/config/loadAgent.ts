@@ -22,6 +22,8 @@ export const BUILTIN_TOOL_GROUPS = {
 } as const;
 
 export type BuiltinToolGroup = keyof typeof BUILTIN_TOOL_GROUPS;
+/** Every individual builtin tool id (read, grep, find, ls, write, edit, bash), in group order. */
+export const BUILTIN_TOOL_IDS = Object.values(BUILTIN_TOOL_GROUPS).flat() as string[];
 export const BUILTIN_TOOL_GROUP_IDS = Object.keys(BUILTIN_TOOL_GROUPS) as BuiltinToolGroup[];
 
 export type AgentCommunicationProvider = "agentmail" | "slack" | "telegram" | "photon" | "email";
@@ -63,6 +65,11 @@ const toolsSchema = z
       .array(z.enum(BUILTIN_TOOL_GROUP_IDS as [BuiltinToolGroup, ...BuiltinToolGroup[]]))
       .default([])
       .refine((list) => new Set(list).size === list.length, "Duplicate tool group"),
+    /** Single builtin tools on top of the groups, e.g. `grep` without the rest of `read`. */
+    builtin_tools: z
+      .array(z.enum(BUILTIN_TOOL_IDS as [string, ...string[]]))
+      .default([])
+      .refine((list) => new Set(list).size === list.length, "Duplicate tool"),
     mcp: z
       .record(
         z.string().regex(MCP_NAME, "Invalid MCP server name"),
@@ -337,12 +344,17 @@ function pruneDefaults(value: unknown, fallback: unknown): unknown {
   return value;
 }
 
+/** Builtin tool ids granted by whole groups and by single tools, in group order. */
+export function grantedBuiltinTools(definition: Pick<AgentDefinition, "tools">): string[] {
+  const granted = new Set<string>(definition.tools.builtin_tools ?? []);
+  for (const group of definition.tools.builtin) for (const tool of BUILTIN_TOOL_GROUPS[group]) granted.add(tool);
+  return BUILTIN_TOOL_IDS.filter((tool) => granted.has(tool));
+}
+
 /** Every tool id the definition grants: builtin tool names, `<server>.<tool>`, and `agent:<id>`. */
 export function grantedToolIds(definition: Pick<AgentDefinition, "tools" | "sub_agents">): Set<string> {
   const ids = new Set<string>();
-  for (const group of definition.tools.builtin) {
-    for (const tool of BUILTIN_TOOL_GROUPS[group]) ids.add(tool);
-  }
+  for (const tool of grantedBuiltinTools(definition)) ids.add(tool);
   for (const [server, tools] of Object.entries(definition.tools.mcp)) {
     for (const tool of tools) ids.add(`${server}.${tool}`);
   }

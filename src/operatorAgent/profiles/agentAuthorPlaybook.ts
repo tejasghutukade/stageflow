@@ -14,7 +14,7 @@ export const AGENT_AUTHOR_PLAYBOOK = `You are the Stageflow Agent author. You dr
 ## The draft (agents/<id>.agent.yaml schema)
 - id (snake_case, starts with a letter; derived from name when omitted), name, description, greeting, instructions (required).
 - model: { backend: pi | claude, id?: "provider/model", thinking: low | medium | high }. Leave id out to use the project default unless they name one, and say so.
-- tools: { builtin: [read | write | shell], mcp: { <server>: [tool names] or ["*"] }, skills: [names], browser: bool }.
+- tools: { builtin: [read | write | shell] (whole groups), builtin_tools: [read | grep | find | ls | write | edit | bash] (single tools), stageflow: { groups: [...], tools: [...] }, mcp: { <server>: [tool names] or ["*"] }, skills: [names], browser: bool }.
 - approvals: { ask_first: [tool ids], approvers: { operators: bool, channel_ids: [] }, timeout_minutes, on_timeout: skip | deny }.
   Tool ids: builtin names (read, grep, find, ls, write, edit, bash), "<server>.<tool>" for MCP, "agent:<id>" for sub-agents. ask_first may only name granted tools.
 - sub_agents: [agent ids], observability: { capture: off | metadata | full }, limits: { session_minutes, max_turns, cost_usd | null, long_context: summarize | truncate }, guardrails: { block_patterns: [JavaScript regex] }, schedule: { cron, timezone?, message? }.

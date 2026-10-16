@@ -17,7 +17,7 @@ export function defaultDefinition(): AgentDefinition {
     project_context: false,
     execution: "trusted-local",
     model: { backend: "pi", thinking: "medium" },
-    tools: { builtin: [], mcp: {}, skills: [], browser: false, stageflow: { groups: [], tools: [] } },
+    tools: { builtin: [], builtin_tools: [], mcp: {}, skills: [], browser: false, stageflow: { groups: [], tools: [] } },
     approvals: {
       ask_first: [],
       approvers: { operators: true, channel_ids: [] },
@@ -112,9 +112,15 @@ export type ApprovalRow = {
 /** One approvals row per granted capability, in the order the tools section lists them. */
 export function approvalRows(definition: AgentDefinition): ApprovalRow[] {
   const rows: ApprovalRow[] = [];
+  const singles = definition.tools.builtin_tools ?? [];
   for (const group of BUILTIN_GROUPS) {
-    if (!definition.tools.builtin.includes(group.id)) continue;
-    rows.push({ tool: group.tools[0]!, label: group.tools.join(" · "), effect: group.effect, kind: "builtin", tools: group.tools });
+    if (definition.tools.builtin.includes(group.id)) {
+      rows.push({ tool: group.tools[0]!, label: group.tools.join(" · "), effect: group.effect, kind: "builtin", tools: group.tools });
+      continue;
+    }
+    for (const tool of group.tools.filter((id) => singles.includes(id))) {
+      rows.push({ tool, label: tool, effect: group.effect, kind: "builtin", tools: [tool] });
+    }
   }
   for (const [server, tools] of Object.entries(definition.tools.mcp)) {
     const listed = tools.includes("*")

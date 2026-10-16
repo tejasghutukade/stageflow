@@ -62,7 +62,7 @@ export type AgentSummary = {
   /** Problems with the file on disk; a non-empty list on a revision-0 agent means it never loaded. */
   issues: AgentIssue[];
   model: AgentDefinition["model"] | null;
-  tools: { builtin: string[]; mcpServers: string[]; skills: string[]; browser: boolean };
+  tools: { builtin: string[]; builtinTools: string[]; mcpServers: string[]; skills: string[]; browser: boolean };
   askFirst: string[];
   subAgents: string[];
   capture: AgentDefinition["observability"]["capture"] | null;
@@ -291,6 +291,7 @@ export class AgentService {
       model: definition?.model ?? null,
       tools: {
         builtin: definition?.tools.builtin ?? [],
+        builtinTools: definition?.tools.builtin_tools ?? [],
         mcpServers: Object.keys(definition?.tools.mcp ?? {}),
         skills: definition?.tools.skills ?? [],
         browser: definition?.tools.browser ?? false,

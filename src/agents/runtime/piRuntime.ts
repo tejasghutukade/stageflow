@@ -17,7 +17,7 @@ import { warmIsolatedMcpMetadata } from "../../agent/piIsolatedMcpProbe.js";
 import { createPiAgentSession, createSealedResourceLoader } from "../../agent/piSessionFactory.js";
 import { bindCursorApiKey, isCursorModelRef } from "../../agent/cursorProvider.js";
 import { findProviderSupport } from "../../agent/providerSupport.js";
-import { BUILTIN_TOOL_GROUPS, type AgentDefinition } from "../../config/loadAgent.js";
+import { grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
 import { resolveSkillByName } from "../../config/listSkills.js";
 import { resolveStageMcpServers } from "../../config/resolveStageMcpServers.js";
 import { globalStageflowHome } from "../../project/globalHome.js";
@@ -61,7 +61,7 @@ export type OpenedSession = {
 };
 
 function piToolNames(definition: AgentDefinition): string[] {
-  return definition.tools.builtin.flatMap((group) => [...BUILTIN_TOOL_GROUPS[group]]);
+  return grantedBuiltinTools(definition);
 }
 
 async function projectContext(projectRoot: string): Promise<string> {
@@ -440,7 +440,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     async judge(input) {
       const opened = await open({
         projectRoot: input.projectRoot,
-        definition: { ...input.definition, tools: { ...input.definition.tools, builtin: [], mcp: {}, skills: [] }, sub_agents: [] },
+        definition: { ...input.definition, tools: { ...input.definition.tools, builtin: [], builtin_tools: [], mcp: {}, skills: [] }, sub_agents: [] },
         systemPrompt: "You are a strict evaluator. Answer only with the requested number.",
         toolNames: [],
         gate: async () => ({ block: true, reason: "No tools" }),

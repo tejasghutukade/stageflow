@@ -143,3 +143,31 @@ describe("profile grants", () => {
     expect(profileMayUse("someone-else", "save")).toBe(false);
   });
 });
+
+describe("single builtin tools", () => {
+  it("grants individual tools next to groups and round-trips through YAML", async () => {
+    const { grantedBuiltinTools } = await import("../src/config/loadAgent.js");
+    const definition = agent("scout", { builtin: ["write"], builtin_tools: ["grep", "ls"] });
+    expect(grantedBuiltinTools(definition)).toEqual(["grep", "ls", "write", "edit"]);
+    const ids = grantedToolIds(definition);
+    expect(ids.has("grep")).toBe(true);
+    expect(ids.has("read")).toBe(false);
+    expect(ids.has("bash")).toBe(false);
+    const yaml = serializeAgentDefinition(definition);
+    expect(yaml).toContain("builtin_tools:");
+    const again = parseAgentYaml(yaml);
+    expect(again.ok && again.value.tools.builtin_tools).toEqual(["grep", "ls"]);
+    expect(serializeAgentDefinition(agent("plain"))).not.toContain("builtin_tools");
+  });
+
+  it("rejects unknown and duplicate tool names", () => {
+    expect(parseAgentDefinition({ id: "x", name: "x", instructions: "x", tools: { builtin_tools: ["teleport"] } }).ok).toBe(false);
+    expect(parseAgentDefinition({ id: "x", name: "x", instructions: "x", tools: { builtin_tools: ["grep", "grep"] } }).ok).toBe(false);
+  });
+
+  it("counts single tools in the escalation check", () => {
+    const caller = agent("c", { builtin_tools: ["grep"] });
+    expect(grantsBeyond(caller, agent("k", { builtin_tools: ["grep"] }))).toEqual([]);
+    expect(grantsBeyond(caller, agent("k", { builtin: ["read"] }))).toEqual(["find", "ls", "read"]);
+  });
+});

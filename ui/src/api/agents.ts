@@ -24,7 +24,7 @@ export type AgentDefinition = {
   project_context: boolean;
   execution: "trusted-local" | "sandbox";
   model: { backend: "pi" | "claude"; id?: string; thinking: ThinkingLevel };
-  tools: { builtin: BuiltinToolGroup[]; mcp: Record<string, string[]>; skills: string[]; browser: boolean; stageflow: { groups: string[]; tools: string[] } };
+  tools: { builtin: BuiltinToolGroup[]; builtin_tools: string[]; mcp: Record<string, string[]>; skills: string[]; browser: boolean; stageflow: { groups: string[]; tools: string[] } };
   approvals: {
     ask_first: string[];
     approvers: { operators: boolean; channel_ids: string[] };
@@ -68,7 +68,7 @@ export type AgentSummary = {
   revision: number;
   issues: AgentIssue[];
   model: AgentDefinition["model"] | null;
-  tools: { builtin: BuiltinToolGroup[]; mcpServers: string[]; skills: string[]; browser: boolean };
+  tools: { builtin: BuiltinToolGroup[]; builtinTools: string[]; mcpServers: string[]; skills: string[]; browser: boolean };
   askFirst: string[];
   subAgents: string[];
   capture: CaptureMode | null;

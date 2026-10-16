@@ -4,10 +4,8 @@ import { ModelPicker } from "../../../components/ModelPicker";
 import {
   LuClock,
   LuCopy,
-  LuChevronDown,
   LuCpu,
   LuGlobe,
-  LuFileText,
   LuLock,
   LuMessageSquare,
   LuPencil,
@@ -15,8 +13,6 @@ import {
   LuPlus,
   LuRotateCcw,
   LuShield,
-  LuSquarePen,
-  LuTerminal,
   LuTriangleAlert,
   LuUserCheck,
 } from "react-icons/lu";
@@ -26,7 +22,6 @@ import {
   addedLineCount,
   approvalRows,
   riskyGrantIds,
-  BUILTIN_GROUPS,
   DEFAULT_WEB_CHAT,
   issuesAt,
   pruneAskFirst,
@@ -49,6 +44,8 @@ import {
   Toggle,
 } from "../ui";
 import { InstructionsEditor } from "./InstructionsEditor";
+import { PermissionTree } from "./PermissionTree";
+import { BUILTIN_PERMISSION_GROUPS, grantedToolIds, stageflowPermissionGroups } from "../model/permissions";
 
 export type FormMode = "create" | "edit" | "view";
 
@@ -196,11 +193,6 @@ export function AgentDefinitionForm({
   // Rotating = the saved link is dropped from the draft; the server mints a new slug on save.
   const rotating = Boolean(savedSlug) && !webChat.slug;
   const setTools = (tools: AgentDefinition["tools"]) => update?.({ ...def, tools });
-  const toggleBuiltin = (group: BuiltinToolGroup, on: boolean) =>
-    setTools({
-      ...def.tools,
-      builtin: on ? [...def.tools.builtin, group] : def.tools.builtin.filter((item) => item !== group),
-    });
   const [openGroups, setOpenGroups] = useState<string[]>([]);
   const stageflow = def.tools.stageflow ?? { groups: [], tools: [] };
   const catalog = options.stageflow;
@@ -208,23 +200,9 @@ export function AgentDefinitionForm({
     const ask = [...new Set([...def.approvals.ask_first, ...askAdd])];
     update?.({ ...def, tools: { ...def.tools, stageflow: next }, approvals: { ...def.approvals, ask_first: ask } });
   };
-  const toggleGroup = (groupId: string, on: boolean) => {
-    if (!catalog) return;
-    const names = catalog.groups.find((g) => g.id === groupId)?.tools.map((t) => t.name) ?? [];
-    setStageflow(
-      on
-        ? { groups: [...stageflow.groups, groupId], tools: stageflow.tools.filter((tool) => !names.includes(tool)) }
-        : { groups: stageflow.groups.filter((g) => g !== groupId), tools: stageflow.tools },
-      on ? riskyGrantIds(catalog, groupId) : [],
-    );
-  };
-  const toggleTool = (groupId: string, name: string, on: boolean) => {
-    if (!catalog) return;
-    setStageflow(
-      { groups: stageflow.groups, tools: on ? [...stageflow.tools, name] : stageflow.tools.filter((tool) => tool !== name) },
-      on ? riskyGrantIds(catalog, groupId, name) : [],
-    );
-  };
+  const toggleOpen = (id: string) => setOpenGroups((open) => (open.includes(id) ? open.filter((item) => item !== id) : [...open, id]));
+  const stageflowGroups = catalog ? stageflowPermissionGroups(catalog) : [];
+  const grantsWrite = grantedToolIds({ groups: def.tools.builtin, tools: def.tools.builtin_tools ?? [] }, BUILTIN_PERMISSION_GROUPS).some((id) => id === "write" || id === "edit" || id === "bash");
   const setMcp = (server: string, tools: string[] | null) => {
     const mcp = { ...def.tools.mcp };
     if (tools === null) delete mcp[server];
@@ -339,29 +317,23 @@ export function AgentDefinitionForm({
       {/* ---------- tools ---------- */}
       <Section id="tools">
         <SectionHeading aside={markChanges && changed(def.tools, saved?.tools) ? <ChangedDot /> : undefined}>Tools and access</SectionHeading>
-        <ListGroup>
-          {BUILTIN_GROUPS.map((group) => {
-            const on = def.tools.builtin.includes(group.id);
-            return (
-              <div key={group.id} className="flex items-center justify-between px-3.5 py-3">
-                <div className="flex items-center gap-2.5">
-                  <RowIcon muted={!on}>{group.id === "read" ? <LuFileText /> : group.id === "write" ? <LuSquarePen /> : <LuTerminal />}</RowIcon>
-                  <span className={`text-[13px] leading-normal ${on ? "text-[var(--sf-text-1)]" : "text-[var(--sf-text-2)]"}`}>{group.title}</span>
-                  <span className={`${MONO} text-[11px] leading-normal text-[var(--sf-text-3)]`}>{group.tools.join(" · ")}</span>
-                </div>
-                <Toggle on={on} onChange={update ? (next) => toggleBuiltin(group.id, next) : undefined} label={group.title} />
-              </div>
-            );
-          })}
-          <div className="flex items-start gap-2.5 px-3.5 py-3">
-            <LuLock aria-hidden className="mt-0.5 size-3.5 shrink-0 text-[var(--sf-text-3)]" />
-            <span className="text-xs leading-normal text-[var(--sf-text-3)]">
-              {def.tools.builtin.includes("write") || def.tools.builtin.includes("shell")
-                ? "Writes stay inside the project root. Agent definitions and Stageflow state are never writable."
-                : "Can't write anywhere. Turn on write tools to change files. Stageflow sets the project root; the agent can never choose a path."}
-            </span>
-          </div>
-        </ListGroup>
+        <div className="flex flex-col gap-2" data-testid="builtin-tools">
+          <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Files and shell</span>
+          <PermissionTree
+            groups={BUILTIN_PERMISSION_GROUPS}
+            grants={{ groups: def.tools.builtin, tools: def.tools.builtin_tools ?? [] }}
+            onChange={update ? (next) => setTools({ ...def.tools, builtin: next.groups as BuiltinToolGroup[], builtin_tools: next.tools }) : undefined}
+            openGroups={openGroups}
+            onToggleOpen={toggleOpen}
+            askFirst={def.approvals.ask_first}
+          />
+          <span className="flex items-start gap-2 text-xs leading-normal text-[var(--sf-text-3)]">
+            <LuLock aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+            {grantsWrite
+              ? "Writes stay inside the project root. Agent definitions and Stageflow state are never writable."
+              : "Can't write anywhere. Tick a write tool to change files. Stageflow sets the project root; the agent can never choose a path."}
+          </span>
+        </div>
 
         <div className="flex flex-col gap-2">
           <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">MCP servers from .mcp.json</span>
@@ -436,66 +408,20 @@ export function AgentDefinitionForm({
         <div className="flex flex-col gap-2" data-testid="stageflow-tools">
           <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Stageflow tools</span>
           <span className="text-xs leading-normal text-[var(--sf-text-3)]">
-            Let this agent run Stageflow itself: watch and start runs, author pipelines, manage triggers and agents. It can never give another agent a tool it does not hold. Anything that changes things is set to ask first when you turn a group on.
+            Let this agent run Stageflow itself: watch and start runs, author pipelines, manage triggers and agents. It can never give another agent a tool it does not hold. Ticking a group sets everything that is not read-only to ask first.
           </span>
           {!catalog ? (
             <div className="rounded-lg border border-dashed border-[var(--sf-hairline-strong)] px-3.5 py-3 text-xs text-[var(--sf-text-3)]">Loading tools…</div>
           ) : (
-            <ListGroup>
-              {catalog.groups.map((group) => {
-                const on = stageflow.groups.includes(group.id);
-                const single = group.tools.filter((tool) => stageflow.tools.includes(tool.name)).length;
-                const open = openGroups.includes(group.id);
-                return (
-                  <div key={group.id} className="flex flex-col">
-                    <div className="flex items-center justify-between gap-3 px-3.5 py-3">
-                      <button
-                        type="button"
-                        aria-expanded={open}
-                        onClick={() => setOpenGroups(open ? openGroups.filter((id) => id !== group.id) : [...openGroups, group.id])}
-                        className="flex min-w-0 flex-1 flex-col gap-0.5 text-left"
-                      >
-                        <span className="flex items-center gap-2">
-                          <span className={`text-[13px] leading-normal ${on || single > 0 ? "text-[var(--sf-text-1)]" : "text-[var(--sf-text-2)]"}`}>{group.title}</span>
-                          <span className={`${MONO} text-[11px] text-[var(--sf-text-3)]`}>{on ? `all ${group.tools.length}` : single > 0 ? `${single} of ${group.tools.length}` : `${group.tools.length} tools`}</span>
-                          <LuChevronDown aria-hidden className={`size-3 text-[var(--sf-text-3)] transition-transform ${open ? "rotate-180" : ""}`} />
-                        </span>
-                        <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">{group.summary}</span>
-                      </button>
-                      <Toggle on={on} onChange={update ? (next) => toggleGroup(group.id, next) : undefined} label={`${group.title} (all tools)`} />
-                    </div>
-                    {open ? (
-                      <div className="flex flex-col gap-1.5 border-t border-t-[var(--sf-hairline)] bg-[var(--sf-panel)] px-3.5 py-2.5">
-                        {group.tools.map((tool) => {
-                          const granted = on || stageflow.tools.includes(tool.name);
-                          return (
-                            <label key={tool.name} className="flex items-start justify-between gap-3">
-                              <span className="flex min-w-0 flex-col">
-                                <span className="flex items-center gap-2">
-                                  <span className={`${MONO} text-xs ${granted ? "text-[var(--sf-text-1)]" : "text-[var(--sf-text-2)]"}`}>{tool.name}</span>
-                                  {tool.risk !== "read" ? (
-                                    <span className={`rounded-md px-1 text-[10px] ${tool.risk === "destructive" ? "bg-[var(--sf-fail-bg)] text-[var(--sf-fail)]" : "bg-[#f5b5441f] text-[var(--sf-needs)]"}`}>{tool.risk}</span>
-                                  ) : null}
-                                </span>
-                                <span className="line-clamp-2 text-[11px] leading-normal text-[var(--sf-text-3)]">{tool.description}</span>
-                              </span>
-                              <input
-                                type="checkbox"
-                                aria-label={`Allow ${tool.name}`}
-                                checked={granted}
-                                disabled={!update || on}
-                                onChange={(event) => toggleTool(group.id, tool.name, event.target.checked)}
-                                className="mt-0.5 size-3.5 shrink-0"
-                              />
-                            </label>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </ListGroup>
+            <PermissionTree
+              groups={stageflowGroups}
+              grants={stageflow}
+              onChange={update ? (next, added) => setStageflow(next, added.toolIds.flatMap((id) => riskyGrantIds(catalog, added.groupId, id))) : undefined}
+              openGroups={openGroups}
+              onToggleOpen={toggleOpen}
+              askFirst={def.approvals.ask_first}
+              askId={(id) => `stageflow.${id}`}
+            />
           )}
           <FieldMessages {...at("tools.stageflow")} />
         </div>

@@ -82,6 +82,21 @@ Error codes (always friendly `message`, never internals): `web_chat.rate_limited
 
 CORS: same-origin by default. `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma-separated) lets a page hosted elsewhere call the API, so the chat page can be deployed separately later; it only needs its API base URL. Exposing the Host to the internet (restricting the console) is a later follow-up.
 
+## Granular permissions
+
+Every tool an agent can use is one checkbox in the editor's **Tools and access** tree: a group box selects all of its tools, a tool box selects one, and a partly ticked group shows the mixed state. The YAML stores the compact form (a full group as the group, a partial one as single tools):
+
+```yaml
+tools:
+  builtin: [read]            # read, grep, find, ls
+  builtin_tools: [edit]      # just edit, not write
+  stageflow:
+    groups: [runs.read]
+    tools: [start_run]
+```
+
+Ask-first lives in `approvals.ask_first` by tool id (`edit`, `bash`, `stageflow.start_run`, `<server>.<tool>`, `agent:<id>`).
+
 ## Stageflow tools for agents
 
 An agent can be granted Stageflow's own tools (the MCP tools in [mcp.md](mcp.md)), as whole groups or one tool at a time:

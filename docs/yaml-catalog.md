@@ -1041,7 +1041,7 @@ An agent is a project-owned definition. The file name is the agent id: `agents/<
 | `execution` | no | `trusted-local` (default) or `sandbox` |
 | `project_context` | no | Default `false`. Give sessions the project context |
 | `model` | no | `{ backend: pi\|claude, id?, thinking: off\|low\|medium\|high }` |
-| `tools` | no | `{ builtin: [read\|write\|shell], mcp: { <server>: [tool names or "*"] }, skills: [], browser: bool }` |
+| `tools` | no | `{ builtin: [read\|write\|shell] (whole groups), builtin_tools: [read\|grep\|find\|ls\|write\|edit\|bash] (single tools), stageflow: { groups: [...], tools: [...] }, mcp: { <server>: [tool names or "*"] }, skills: [], browser: bool }`. Groups and single tools combine: `builtin: [read]` plus `builtin_tools: [edit]` allows the four read tools and `edit`. `read` = read, grep, find, ls; `write` = write, edit; `shell` = bash |
 | `approvals` | no | `{ ask_first: [tool ids], approvers: { operators, channel_ids }, timeout_minutes, on_timeout: skip\|deny }` |
 | `sub_agents`, `sub_agent_depth` | no | Agent ids this agent may delegate to; max nesting (default 1) |
 | `guardrails` | no | `{ block_patterns: [regex] }` — applied to assistant text after each turn |
