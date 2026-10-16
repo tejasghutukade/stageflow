@@ -1,8 +1,22 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { STAGEFLOW_MCP_SERVER_NAME } from "../agent/claudeTools.js";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { isForeverDeniedSecret } from "../runtime/stageEnvironment.js";
+import { isForeverDeniedSecret, isProviderOrCloudName } from "../runtime/stageEnvironment.js";
+import {
+  assertSafeMcpUrl,
+  extractSecrets,
+  McpUrlPolicyError,
+} from "./mcpRedaction.js";
 
 /**
  * Host-level MCP state kept under $STAGEFLOW_HOME so it survives image rebuilds:
@@ -18,6 +32,26 @@ function hostError(code: HostMcpError["code"], message: string): HostMcpError {
   return Object.assign(new Error(message), { code }) as HostMcpError;
 }
 
+/**
+ * A host-state file exists but cannot be trusted (unparseable, wrong shape, unreadable). It is
+ * never read as empty and never overwritten: the owner has to fix or remove the file.
+ */
+export class McpHostStateError extends Error {
+  readonly code = "host_state_corrupt" as const;
+  readonly file: string;
+  constructor(file: string, detail: string) {
+    super(
+      `MCP host state file "${file}" ${detail}. Fix or remove it; nothing was changed.`,
+    );
+    this.name = "McpHostStateError";
+    this.file = file;
+  }
+}
+
+export function isMcpHostStateError(err: unknown): err is McpHostStateError {
+  return err instanceof McpHostStateError;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -30,31 +64,57 @@ export function mcpSecretsPath(home: string = globalStageflowHome()): string {
   return path.join(home, "secrets", "mcp-secrets.json");
 }
 
+/** Write via a uniquely named tmp file created with the final mode, then rename into place. */
 function atomicWrite(file: string, body: string, mode: number): void {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, body, { mode });
-  chmodSync(tmp, mode);
-  renameSync(tmp, file);
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tmp, body, { mode, flag: "wx" });
+    renameSync(tmp, file);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* tmp never created */
+    }
+    throw err;
+  }
 }
 
-/** Servers the console saved; a missing or unreadable file is an empty catalog. */
+function readJsonState(file: string): unknown | undefined {
+  if (!existsSync(file)) return undefined;
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch (err) {
+    throw new McpHostStateError(file, `could not be read (${(err as NodeJS.ErrnoException).code ?? "error"})`);
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new McpHostStateError(file, "is not valid JSON");
+  }
+}
+
+/** Servers the console saved. Missing file = empty; a corrupt file throws McpHostStateError. */
 export function readHostMcpServers(
   home: string = globalStageflowHome(),
 ): Record<string, Record<string, unknown>> {
   const file = hostMcpCatalogPath(home);
-  if (!existsSync(file)) return {};
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
-    if (!isPlainObject(parsed) || !isPlainObject(parsed.mcpServers)) return {};
-    const out: Record<string, Record<string, unknown>> = {};
-    for (const [name, entry] of Object.entries(parsed.mcpServers)) {
-      if (isPlainObject(entry) && name !== STAGEFLOW_MCP_SERVER_NAME) out[name] = entry;
-    }
-    return out;
-  } catch {
-    return {};
+  const parsed = readJsonState(file);
+  if (parsed === undefined) return {};
+  if (!isPlainObject(parsed) || !isPlainObject(parsed.mcpServers)) {
+    throw new McpHostStateError(file, "does not have an mcpServers object");
   }
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [name, entry] of Object.entries(parsed.mcpServers)) {
+    if (name === STAGEFLOW_MCP_SERVER_NAME) continue;
+    if (!isPlainObject(entry)) {
+      throw new McpHostStateError(file, `has a non-object entry for "${name}"`);
+    }
+    out[name] = entry;
+  }
+  return out;
 }
 
 function writeHostMcpServers(
@@ -66,6 +126,18 @@ function writeHostMcpServers(
     `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`,
     0o600,
   );
+}
+
+/** Host env names an owner explicitly lets agents and probes use to fill `${NAME}`. */
+export const MCP_ENV_ALLOW = "STAGEFLOW_MCP_ENV_ALLOW";
+
+export function mcpEnvAllowNames(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env[MCP_ENV_ALLOW];
+  if (raw === undefined || raw.trim() === "") return [];
+  return raw
+    .split(",")
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0 && !isForeverDeniedSecret(n));
 }
 
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -83,19 +155,6 @@ export function assertServerName(name: string): void {
       "Server name must be 1-64 letters, digits, '.', '_' or '-'",
     );
   }
-}
-
-/** Keys that carry a literal secret in env/headers, or a value that looks like a token. */
-const SECRET_KEY = /token|secret|password|passwd|api[-_]?key|auth|credential|bearer|private[-_]?key/i;
-const TOKEN_PREFIX =
-  /^(?:gh[pousr]_|github_pat_|sk-|xox[abprs]-|AKIA|AIza|glpat-|npm_|pk_live_|sk_live_|ya29\.)/;
-
-function literalLooksSecret(key: string, value: string): boolean {
-  if (value.length === 0 || value.includes("${")) return false;
-  const bare = value.replace(/^(?:Bearer|Basic|Token)\s+/i, "");
-  if (TOKEN_PREFIX.test(bare)) return true;
-  if (SECRET_KEY.test(key)) return true;
-  return bare.length >= 32 && /^[A-Za-z0-9_\-+/=.]+$/.test(bare) && /\d/.test(bare) && /[A-Za-z]/.test(bare);
 }
 
 /**
@@ -152,6 +211,12 @@ export function validateServerEntry(name: string, rawEntry: unknown): Record<str
     if (!/^(?:https?:\/\/|\$\{)/i.test(url)) {
       throw hostError("invalid_server", `"url" must start with http:// or https://`);
     }
+    try {
+      assertSafeMcpUrl(url);
+    } catch (err) {
+      if (err instanceof McpUrlPolicyError) throw hostError("invalid_server", err.message);
+      throw err;
+    }
     out.url = url;
     const transport = entry.httpTransport;
     if (transport !== undefined) {
@@ -186,7 +251,48 @@ export function validateServerEntry(name: string, rawEntry: unknown): Record<str
   }
   const cwd = text("cwd");
   if (cwd !== undefined) out.cwd = cwd;
+  assertPlaceholderNamesAllowed(name, out);
   return out;
+}
+
+/** Every `${NAME}` / `${NAME:-x}` name in an entry, in order of appearance. */
+function placeholderNames(entry: Record<string, unknown>): string[] {
+  const found = new Set<string>();
+  const scan = (value: unknown): void => {
+    if (typeof value !== "string") return;
+    for (const m of value.matchAll(PLACEHOLDER)) {
+      const inner = (m[1] ?? "").split(":-")[0] ?? "";
+      if (SECRET_NAME.test(inner)) found.add(inner);
+    }
+  };
+  scan(entry.command);
+  scan(entry.url);
+  scan(entry.cwd);
+  if (Array.isArray(entry.args)) entry.args.forEach(scan);
+  for (const key of ["env", "headers"]) {
+    const bag = entry[key];
+    if (isPlainObject(bag)) Object.values(bag).forEach(scan);
+  }
+  return [...found];
+}
+
+/**
+ * A server entry may not ask for the Host's own credentials: control tokens (forever denied) or
+ * provider/cloud credentials, unless the owner put the name in STAGEFLOW_MCP_ENV_ALLOW.
+ */
+function assertPlaceholderNamesAllowed(server: string, entry: Record<string, unknown>): void {
+  const allowed = new Set(mcpEnvAllowNames());
+  for (const name of placeholderNames(entry)) {
+    if (isForeverDeniedSecret(name)) {
+      throw hostError("invalid_server", `Server "${server}" uses \${${name}}, which can never be provided to an MCP server`);
+    }
+    if (isProviderOrCloudName(name) && !allowed.has(name)) {
+      throw hostError(
+        "invalid_server",
+        `Server "${server}" uses \${${name}}, a provider or cloud credential name. Use a different variable name, or list it in ${MCP_ENV_ALLOW} to allow it.`,
+      );
+    }
+  }
 }
 
 function secretNameFor(
@@ -203,7 +309,7 @@ function secretNameFor(
       : key.toUpperCase().replace(/[^A-Z0-9_]/g, "_").replace(/^(\d)/, "_$1") || "SECRET";
   const prefixed = `${server.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_${base}`;
   for (const candidate of [base, prefixed]) {
-    if (isForeverDeniedSecret(candidate)) continue;
+    if (isForeverDeniedSecret(candidate) || isProviderOrCloudName(candidate)) continue;
     if (existing[candidate] === undefined || existing[candidate] === value) return candidate;
   }
   return `${prefixed}_2`;
@@ -237,36 +343,47 @@ export type SaveServerResult = {
 };
 
 /**
- * Save one server. Literal tokens in env/headers are moved into the secrets store and replaced
- * with `${NAME}`, so the catalog file never holds a secret.
+ * Save one server. Literal tokens in env, headers, url (query/userinfo) and args are moved into the
+ * secrets store and replaced with `${NAME}`, so the catalog file never holds a secret.
+ *
+ * Both files are read first (a corrupt one aborts before anything is written). The secrets file is
+ * written before the catalog and put back if the catalog write fails.
  */
 export function saveHostMcpServer(
   name: string,
   entry: unknown,
   home: string = globalStageflowHome(),
 ): SaveServerResult {
-  const valid = validateServerEntry(name, entry);
+  const validated = validateServerEntry(name, entry);
   const secrets = readMcpSecrets(home);
-  const stored: string[] = [];
-  const pending: Record<string, string> = {};
-  for (const key of ["env", "headers"] as const) {
-    const bag = valid[key] as Record<string, string> | undefined;
-    if (!bag) continue;
-    for (const [field, value] of Object.entries(bag)) {
-      if (!literalLooksSecret(field, value)) continue;
-      const prefix = /^(Bearer|Basic|Token)\s+/i.exec(value)?.[0] ?? "";
-      const secretValue = value.slice(prefix.length);
-      const secretName = secretNameFor(field, name, secretValue, { ...secrets, ...pending });
-      pending[secretName] = secretValue;
-      bag[field] = `${prefix}\${${secretName}}`;
-      stored.push(secretName);
-    }
-  }
   const servers = readHostMcpServers(home);
-  servers[name] = valid;
-  for (const [secretName, value] of Object.entries(pending)) setMcpSecret(secretName, value, home);
-  writeHostMcpServers(servers, home);
-  return { name, secretsStored: stored };
+  const { entry: stored, secrets: pending } = extractSecrets(
+    validated,
+    (key, value, taken) => secretNameFor(key, name, value, taken),
+    secrets,
+  );
+  for (const secretName of Object.keys(pending)) assertUsableSecret(secretName, pending[secretName]!);
+  servers[name] = stored;
+  const names = Object.keys(pending);
+  if (names.length === 0) {
+    writeHostMcpServers(servers, home);
+    return { name, secretsStored: [] };
+  }
+  const secretsFile = mcpSecretsPath(home);
+  const previous = existsSync(secretsFile) ? readFileSync(secretsFile, "utf8") : undefined;
+  writeMcpSecretsFile({ ...secrets, ...pending }, home);
+  try {
+    writeHostMcpServers(servers, home);
+  } catch (err) {
+    try {
+      if (previous === undefined) rmSync(secretsFile, { force: true });
+      else atomicWrite(secretsFile, previous, 0o600);
+    } catch {
+      /* best effort: the original error is the one to report */
+    }
+    throw err;
+  }
+  return { name, secretsStored: names };
 }
 
 export function removeHostMcpServer(
@@ -300,17 +417,28 @@ export function parsePastedMcpJson(raw: unknown): Record<string, unknown> {
 
 export function readMcpSecrets(home: string = globalStageflowHome()): Record<string, string> {
   const file = mcpSecretsPath(home);
-  if (!existsSync(file)) return {};
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
-    if (!isPlainObject(parsed)) return {};
-    const out: Record<string, string> = {};
-    for (const [name, value] of Object.entries(parsed)) {
-      if (typeof value === "string" && SECRET_NAME.test(name)) out[name] = value;
-    }
-    return out;
-  } catch {
-    return {};
+  const parsed = readJsonState(file);
+  if (parsed === undefined) return {};
+  if (!isPlainObject(parsed)) {
+    throw new McpHostStateError(file, "is not a JSON object of secret names to values");
+  }
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(parsed)) {
+    if (typeof value === "string" && SECRET_NAME.test(name)) out[name] = value;
+  }
+  return out;
+}
+
+function writeMcpSecretsFile(secrets: Record<string, string>, home: string): void {
+  atomicWrite(mcpSecretsPath(home), `${JSON.stringify(secrets, null, 2)}\n`, 0o600);
+}
+
+function assertUsableSecret(name: string, value: string): void {
+  if (!SECRET_NAME.test(name) || isForeverDeniedSecret(name)) {
+    throw hostError("invalid_secret", `"${name}" is not a usable secret name`);
+  }
+  if (value.length === 0 || Buffer.byteLength(value) > MAX_SECRET_BYTES) {
+    throw hostError("invalid_secret", "Secret value must be 1 byte to 16 KB");
   }
 }
 
@@ -319,15 +447,10 @@ export function setMcpSecret(
   value: string,
   home: string = globalStageflowHome(),
 ): void {
-  if (!SECRET_NAME.test(name) || isForeverDeniedSecret(name)) {
-    throw hostError("invalid_secret", `"${name}" is not a usable secret name`);
-  }
-  if (value.length === 0 || Buffer.byteLength(value) > MAX_SECRET_BYTES) {
-    throw hostError("invalid_secret", "Secret value must be 1 byte to 16 KB");
-  }
+  assertUsableSecret(name, value);
   const secrets = readMcpSecrets(home);
   secrets[name] = value;
-  atomicWrite(mcpSecretsPath(home), `${JSON.stringify(secrets, null, 2)}\n`, 0o600);
+  writeMcpSecretsFile(secrets, home);
 }
 
 export function deleteMcpSecret(
@@ -337,7 +460,7 @@ export function deleteMcpSecret(
   const secrets = readMcpSecrets(home);
   if (!Object.hasOwn(secrets, name)) return false;
   delete secrets[name];
-  atomicWrite(mcpSecretsPath(home), `${JSON.stringify(secrets, null, 2)}\n`, 0o600);
+  writeMcpSecretsFile(secrets, home);
   return true;
 }
 

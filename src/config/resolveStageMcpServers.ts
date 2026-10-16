@@ -2,9 +2,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { STAGEFLOW_MCP_SERVER_NAME } from "../agent/claudeTools.js";
 import {
+  isMcpHostStateError,
+  mcpEnvAllowNames,
   readHostMcpServers,
   readMcpSecrets,
 } from "./mcpHostCatalog.js";
+import { assertSafeMcpUrl, McpUrlPolicyError } from "./mcpRedaction.js";
 
 export type StageMcpErrorCode =
   | "missing_catalog"
@@ -13,7 +16,8 @@ export type StageMcpErrorCode =
   | "unresolved_var"
   | "invalid_config"
   | "untrusted_config_origin"
-  | "connect_failed";
+  | "connect_failed"
+  | "host_state_corrupt";
 
 export class StageMcpError extends Error {
   readonly code: StageMcpErrorCode;
@@ -53,8 +57,23 @@ export type InspectedMcpCatalog = {
   origins: Record<string, McpServerOrigin>;
 };
 
-/** `host: true` also merges servers saved from the console (console entry wins on a name clash). */
-export type McpCatalogLoadOptions = { host?: boolean };
+/**
+ * Who is asking. Without a scope only the project `.mcp.json` is visible; with one, servers saved
+ * from the console are merged in (console entry wins on a name clash) and secrets are filled by
+ * the rules of that scope:
+ * - stage:    console secrets whose names the stage declared in `secrets:`, plus the stage env
+ * - agent:    console secrets plus Host env names listed in STAGEFLOW_MCP_ENV_ALLOW
+ * - probe:    same as agent, so a probe and an agent run resolve one config identically
+ * - validate: placeholders are checked but no secret value is ever read into the output
+ * Console secrets always win over Host env for the same name.
+ */
+export type McpResolveScope =
+  | { kind: "stage"; secrets: readonly string[] }
+  | { kind: "agent" }
+  | { kind: "probe" }
+  | { kind: "validate" };
+
+export type McpCatalogLoadOptions = { scope?: McpResolveScope };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -115,11 +134,30 @@ export function parseMcpCatalog(
   return servers;
 }
 
+/** Console servers; a corrupt host file surfaces as a StageMcpError instead of reading as empty. */
+function hostServersOrThrow(): Record<string, Record<string, unknown>> {
+  try {
+    return readHostMcpServers();
+  } catch (err) {
+    if (isMcpHostStateError(err)) throw new StageMcpError(err.message, "host_state_corrupt");
+    throw err;
+  }
+}
+
+function hostSecretsOrThrow(): Record<string, string> {
+  try {
+    return readMcpSecrets();
+  } catch (err) {
+    if (isMcpHostStateError(err)) throw new StageMcpError(err.message, "host_state_corrupt");
+    throw err;
+  }
+}
+
 export async function mcpCatalogExists(
   projectRoot: string,
   options: McpCatalogLoadOptions = {},
 ): Promise<boolean> {
-  if (options.host === true && Object.keys(readHostMcpServers()).length > 0) {
+  if (options.scope !== undefined && Object.keys(hostServersOrThrow()).length > 0) {
     return true;
   }
   try {
@@ -137,7 +175,7 @@ export async function loadMcpCatalog(
   options: McpCatalogLoadOptions = {},
 ): Promise<InspectedMcpCatalog> {
   const catalogPath = mcpCatalogPath(projectRoot);
-  const hostServers = options.host === true ? readHostMcpServers() : {};
+  const hostServers = options.scope !== undefined ? hostServersOrThrow() : {};
   let raw: string | undefined;
   try {
     raw = await readFile(catalogPath, "utf8");
@@ -198,7 +236,9 @@ export async function listProjectMcpCatalog(
   projectRoot: string,
 ): Promise<ProjectMcpCatalogList> {
   try {
-    const catalog = await loadMcpCatalog(projectRoot, { host: true });
+    const catalog = await loadMcpCatalog(projectRoot, {
+      scope: { kind: "validate" },
+    });
     const servers: ProjectMcpCatalogEntry[] = [];
     for (const [name, entry] of Object.entries(catalog.servers)) {
       const transport = coarseMcpTransport(entry);
@@ -370,10 +410,81 @@ function interpolateServer(
   return stampSpawnRoot(resolved, projectRoot, serverName);
 }
 
+function bagOfStrings(value: unknown): boolean {
+  return isPlainObject(value) && Object.values(value).every((v) => typeof v === "string");
+}
+
+/** Shape check for any entry about to be used (project or console). */
+function assertEntryShape(name: string, entry: Record<string, unknown>): void {
+  const bad = (what: string): never => {
+    throw new StageMcpError(`MCP catalog server "${name}" ${what}`, "invalid_config");
+  };
+  const hasCommand = Object.hasOwn(entry, "command");
+  const hasUrl = Object.hasOwn(entry, "url");
+  if (hasCommand === hasUrl) bad('needs exactly one of "command" or "url"');
+  if (hasCommand && (typeof entry.command !== "string" || entry.command.length === 0)) {
+    bad('"command" must be a non-empty string');
+  }
+  if (hasUrl && (typeof entry.url !== "string" || entry.url.length === 0)) {
+    bad('"url" must be a non-empty string');
+  }
+  if (
+    entry.args !== undefined &&
+    (!Array.isArray(entry.args) || entry.args.some((a) => typeof a !== "string"))
+  ) {
+    bad('"args" must be an array of strings');
+  }
+  for (const key of ["env", "headers"] as const) {
+    if (entry[key] !== undefined && !bagOfStrings(entry[key])) bad(`"${key}" must map names to strings`);
+  }
+  if (entry.cwd !== undefined && typeof entry.cwd !== "string") bad('"cwd" must be a string');
+}
+
+function assertResolvedUrlSafe(name: string, resolved: ResolvedMcpServerConfig): void {
+  if (typeof resolved.url !== "string") return;
+  try {
+    assertSafeMcpUrl(resolved.url);
+  } catch (err) {
+    if (err instanceof McpUrlPolicyError) {
+      throw new StageMcpError(`MCP catalog server "${name}": ${err.message}`, "invalid_config");
+    }
+    throw err;
+  }
+}
+
+const VALIDATE_PLACEHOLDER = "<redacted>";
+
+/** The values `${NAME}` may be filled from, by scope. Console secrets win over Host env. */
+function envForScope(
+  scope: McpResolveScope,
+  stageEnv: NodeJS.ProcessEnv,
+  hostEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const secrets = hostSecretsOrThrow();
+  if (scope.kind === "stage") {
+    const declared = new Set(scope.secrets);
+    const own = Object.fromEntries(Object.entries(secrets).filter(([n]) => declared.has(n)));
+    return { ...stageEnv, ...own };
+  }
+  const allowed: NodeJS.ProcessEnv = {};
+  for (const n of mcpEnvAllowNames(hostEnv)) {
+    if (hostEnv[n] !== undefined) allowed[n] = hostEnv[n];
+  }
+  if (scope.kind === "validate") {
+    const names = new Set([...Object.keys(secrets), ...Object.keys(allowed), ...Object.keys(stageEnv)]);
+    return Object.fromEntries([...names].map((n) => [n, VALIDATE_PLACEHOLDER]));
+  }
+  // agent and probe: one rule, so the same config resolves the same way in both.
+  return { ...allowed, ...secrets };
+}
+
 export async function resolveStageMcpServers(options: {
   projectRoot: string;
   allowlist?: readonly string[];
+  /** Stage env for the project-only and stage scopes; agent/probe/validate do not read it as a secret source. */
   env: NodeJS.ProcessEnv;
+  /** Host env that STAGEFLOW_MCP_ENV_ALLOW may draw from (agent/probe scopes). Defaults to process.env. */
+  hostEnv?: NodeJS.ProcessEnv;
   stageId?: string;
   bindingKind?: "repository" | "checkout" | "none";
   trustWorkspaceConfig?: string[];
@@ -381,8 +492,8 @@ export async function resolveStageMcpServers(options: {
   trustProjectRoot?: string;
   /** When true, .mcp.json is treated as workspace-sourced. */
   workspaceSourced?: boolean;
-  /** Merge console-saved servers and let console-saved secrets fill `${VAR}` after `env`. */
-  host?: boolean;
+  /** Merge console-saved servers and fill `${VAR}` by the scope's rules. Omit for project-only. */
+  scope?: McpResolveScope;
 }): Promise<ResolvedMcpServers> {
   const allowlist = options.allowlist ?? [];
   if (allowlist.length === 0) {
@@ -403,21 +514,19 @@ export async function resolveStageMcpServers(options: {
       );
     }
   }
-  const host = options.host === true && options.workspaceSourced !== true;
-  const catalog = await loadMcpCatalog(options.projectRoot, { host });
+  // Workspace-sourced catalogs never see console servers or secrets.
+  const scope = options.workspaceSourced === true ? undefined : options.scope;
+  const catalog = await loadMcpCatalog(options.projectRoot, scope ? { scope } : {});
   assertMcpAllowlistKnown(catalog.servers, allowlist);
-  const env: NodeJS.ProcessEnv = host
-    ? { ...readMcpSecrets(), ...options.env }
+  const env: NodeJS.ProcessEnv = scope
+    ? envForScope(scope, options.env, options.hostEnv ?? process.env)
     : options.env;
   const resolved: ResolvedMcpServers = {};
   for (const name of allowlist) {
-    resolved[name] = interpolateServer(
-      catalog.servers[name],
-      env,
-      name,
-      options.projectRoot,
-      options.stageId,
-    );
+    const entry = catalog.servers[name]!;
+    assertEntryShape(name, entry);
+    resolved[name] = interpolateServer(entry, env, name, options.projectRoot, options.stageId);
+    if (scope?.kind !== "validate") assertResolvedUrlSafe(name, resolved[name]!);
   }
   return resolved;
 }

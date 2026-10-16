@@ -43,7 +43,7 @@ describe("host MCP catalog", () => {
   it("works with no project .mcp.json and keeps the file private", async () => {
     expect(await listProjectMcpCatalog(root)).toEqual({ status: "missing_catalog", servers: [] });
     saveHostMcpServer("fs", { command: "npx", args: ["-y", "server-fs"] }, home);
-    expect(await mcpCatalogExists(root, { host: true })).toBe(true);
+    expect(await mcpCatalogExists(root, { scope: { kind: "validate" } })).toBe(true);
     expect(await mcpCatalogExists(root)).toBe(false);
     const list = await listProjectMcpCatalog(root);
     expect(list.status).toBe("ok");
@@ -57,7 +57,7 @@ describe("host MCP catalog", () => {
       JSON.stringify({ mcpServers: { a: { command: "one" }, b: { url: "https://b.test" } } }),
     );
     saveHostMcpServer("b", { command: "override" }, home);
-    const cat = await loadMcpCatalog(root, { host: true });
+    const cat = await loadMcpCatalog(root, { scope: { kind: "validate" } });
     expect(cat.origins).toEqual({ a: "project", b: "console" });
     expect(cat.servers.b).toEqual({ command: "override" });
     const projectOnly = await loadMcpCatalog(root);
@@ -73,12 +73,13 @@ describe("host MCP catalog", () => {
       },
       home,
     );
-    expect(res.secretsStored).toEqual(["GITHUB_TOKEN"]);
+    // provider-credential names are not reused for stored secrets
+    expect(res.secretsStored).toEqual(["GH_GITHUB_TOKEN"]);
     const file = await readFile(hostMcpCatalogPath(home), "utf8");
     expect(file).not.toContain("ghp_");
-    expect(file).toContain("${GITHUB_TOKEN}");
+    expect(file).toContain("${GH_GITHUB_TOKEN}");
     expect(file).toContain("debug");
-    expect(readMcpSecrets(home).GITHUB_TOKEN).toBe("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
+    expect(readMcpSecrets(home).GH_GITHUB_TOKEN).toBe("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
     expect((await stat(mcpSecretsPath(home))).mode & 0o777).toBe(0o600);
   });
 
@@ -110,24 +111,27 @@ describe("host MCP catalog", () => {
     expect(() => parsePastedMcpJson([])).toThrow(/object/);
   });
 
-  it("reports vars and fills them from stored secrets, env still wins", async () => {
+  it("fills vars from stored secrets; Host env never shadows them", async () => {
     saveHostMcpServer("api", { url: "https://api.test", headers: { "X-Key": "${API_KEY}" } }, home);
+    const agent = { kind: "agent" } as const;
     await expect(
-      resolveStageMcpServers({ projectRoot: root, allowlist: ["api"], env: {}, host: true }),
+      resolveStageMcpServers({ projectRoot: root, allowlist: ["api"], env: {}, hostEnv: {}, scope: agent }),
     ).rejects.toMatchObject({ code: "unresolved_var" });
     setMcpSecret("API_KEY", "stored", home);
-    const filled = await resolveStageMcpServers({ projectRoot: root, allowlist: ["api"], env: {}, host: true });
+    const filled = await resolveStageMcpServers({ projectRoot: root, allowlist: ["api"], env: {}, hostEnv: {}, scope: agent });
     expect((filled.api?.headers as Record<string, string>)["X-Key"]).toBe("stored");
-    const overridden = await resolveStageMcpServers({
+    // stored console secret wins over an allow-listed Host env value
+    const shadowed = await resolveStageMcpServers({
       projectRoot: root,
       allowlist: ["api"],
-      env: { API_KEY: "from-env" },
-      host: true,
+      env: {},
+      hostEnv: { API_KEY: "from-env", STAGEFLOW_MCP_ENV_ALLOW: "API_KEY" },
+      scope: agent,
     });
-    expect((overridden.api?.headers as Record<string, string>)["X-Key"]).toBe("from-env");
+    expect((shadowed.api?.headers as Record<string, string>)["X-Key"]).toBe("stored");
     // workspace-sourced catalogs never see console servers or secrets
     await expect(
-      resolveStageMcpServers({ projectRoot: root, allowlist: ["api"], env: {}, host: true, workspaceSourced: true, bindingKind: "checkout" }),
+      resolveStageMcpServers({ projectRoot: root, allowlist: ["api"], env: {}, scope: agent, workspaceSourced: true, bindingKind: "checkout" }),
     ).rejects.toMatchObject({ code: "missing_catalog" });
   });
 

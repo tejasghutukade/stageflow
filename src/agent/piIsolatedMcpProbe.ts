@@ -5,6 +5,7 @@ import {
   type ResolvedMcpServerConfig,
   type ResolvedMcpServers,
 } from "../config/resolveStageMcpServers.js";
+import { collectSecretValues, scrubText } from "../config/mcpRedaction.js";
 import { listCachedMcpTools, type McpToolInfo } from "../config/mcpToolCache.js";
 import * as piIsolatedMcp from "./piIsolatedMcp.js";
 import type { IsolatedMcpAttach } from "./piIsolatedMcp.js";
@@ -33,34 +34,14 @@ export type ProjectMcpProbeResult = {
 export type ProbeProjectMcpServerOptions = {
   projectRoot: string;
   name: string;
-  env?: NodeJS.ProcessEnv;
+  /** Host env that STAGEFLOW_MCP_ENV_ALLOW may draw from. Defaults to process.env; nothing else is read. */
+  hostEnv?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   timeoutMs?: number;
 };
 
 function scrub(message: string, secrets: string[]): string {
-  let out = message;
-  for (const secret of secrets) {
-    if (secret.length === 0) continue;
-    out = out.split(secret).join("[redacted]");
-  }
-  return out;
-}
-
-function collectInterpolatedSecrets(entry: ResolvedMcpServerConfig): string[] {
-  const secrets: string[] = [];
-  for (const field of ["env", "headers"] as const) {
-    const value = entry[field];
-    if (value === null || typeof value !== "object" || Array.isArray(value)) {
-      continue;
-    }
-    for (const item of Object.values(value)) {
-      if (typeof item === "string" && item.length > 0) {
-        secrets.push(item);
-      }
-    }
-  }
-  return secrets;
+  return scrubText(message, secrets);
 }
 
 function catalogErrorResult(
@@ -73,6 +54,9 @@ function catalogErrorResult(
   }
   if (err.code === "missing_catalog") {
     return { name, status: "missing_catalog" };
+  }
+  if (err.code === "host_state_corrupt") {
+    return { name, status: "invalid_config", error: err.message };
   }
   if (
     err.code === "invalid_config" ||
@@ -192,6 +176,7 @@ function instantiateProbeFactories(
 function mapConnectingError(
   err: unknown,
   aborted: boolean,
+  secrets: readonly string[] = [],
 ):
   | { kind: "cancelled" }
   | { kind: "mapped"; status: "needs_auth" | "connect_failed"; error?: string } {
@@ -205,7 +190,7 @@ function mapConnectingError(
   return {
     kind: "mapped",
     status: "connect_failed",
-    error: message.length > 0 ? message : undefined,
+    error: message.length > 0 ? scrubText(message, secrets) : undefined,
   };
 }
 
@@ -213,7 +198,7 @@ async function waitForProbeStatus(
   eventBus: EventBus,
   serverName: string,
   connecting: Promise<void> | undefined,
-  options: { timeoutMs: number; signal?: AbortSignal },
+  options: { timeoutMs: number; signal?: AbortSignal; secrets?: readonly string[] },
 ): Promise<
   | { kind: "mapped"; status: "connected" | "needs_auth" | "connect_failed"; error?: string }
   | { kind: "cancelled" }
@@ -268,7 +253,7 @@ async function waitForProbeStatus(
 
     void (connecting ?? Promise.resolve()).then(
       () => finish({ kind: "mapped", status: "connected" }),
-      (err: unknown) => finish(mapConnectingError(err, options.signal?.aborted === true)),
+      (err: unknown) => finish(mapConnectingError(err, options.signal?.aborted === true, options.secrets)),
     );
 
     timer = setTimeout(() => {
@@ -286,7 +271,6 @@ export async function probeProjectMcpServer(
 ): Promise<ProjectMcpProbeResult> {
   const name = options.name;
   const timeoutMs = options.timeoutMs ?? PROJECT_MCP_PROBE_TIMEOUT_MS;
-  const env = options.env ?? process.env;
 
   if (options.signal?.aborted) {
     return { name, status: "cancelled" };
@@ -297,8 +281,9 @@ export async function probeProjectMcpServer(
     snapshot = await resolveStageMcpServers({
       projectRoot: options.projectRoot,
       allowlist: [name],
-      env,
-      host: true,
+      env: {},
+      hostEnv: options.hostEnv ?? process.env,
+      scope: { kind: "probe" },
     });
   } catch (err) {
     return (
@@ -314,7 +299,7 @@ export async function probeProjectMcpServer(
     return { name, status: "invalid_config" };
   }
 
-  const secrets = collectInterpolatedSecrets(resolved);
+  const secrets = collectSecretValues(resolved);
   let attached: IsolatedMcpAttach | undefined;
   let shutdownFactories: (() => Promise<void>) | undefined;
 
@@ -352,7 +337,7 @@ export async function probeProjectMcpServer(
       attached.eventBus,
       name,
       attached.connecting,
-      { timeoutMs, signal: options.signal },
+      { timeoutMs, signal: options.signal, secrets },
     );
 
     if (waited.kind === "cancelled") {

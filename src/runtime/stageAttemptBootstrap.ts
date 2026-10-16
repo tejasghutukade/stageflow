@@ -238,6 +238,7 @@ async function resolveAttemptMcpServers(
     trustWorkspaceConfig: string[];
     stageEnv?: Record<string, string>;
     stageId?: string;
+    declaredSecrets?: readonly string[];
   },
 ): Promise<{
   servers: ResolvedMcpServers | undefined;
@@ -253,13 +254,13 @@ async function resolveAttemptMcpServers(
     options.stageId !== undefined ? { stageId: options.stageId } : {};
   const bindingKind = bindingKindForOrigin(options.bindingKind);
 
-  if (factoryCwd !== undefined && (await mcpCatalogExists(factoryCwd, { host: true }))) {
+  if (factoryCwd !== undefined && (await mcpCatalogExists(factoryCwd, { scope: { kind: "validate" } }))) {
     await mkdir(artifactsDir, { recursive: true });
     const resolved = await resolveStageMcpServers({
       projectRoot: factoryCwd,
       allowlist: names,
       env,
-      host: true,
+      scope: { kind: "stage", secrets: options.declaredSecrets ?? [] },
       bindingKind,
       trustWorkspaceConfig: options.trustWorkspaceConfig,
       ...stageIdOpt,
@@ -380,6 +381,7 @@ async function openStageWithOperatorCatalog(
         trustWorkspaceConfig: resolveOptions.trustWorkspaceConfig,
         stageEnv: resolveOptions.stageEnv,
         stageId: input.stageId,
+        declaredSecrets: (input.stage.secrets ?? []).map((d) => d.name),
       },
     );
     resolvedMcpServers = mcp.servers;

@@ -193,9 +193,9 @@ Project agents (`agents/*.agent.yaml`) — same service contract as `/api/agents
 | `list_agent_revisions` / `restore_agent_revision` | Version history; restore creates a new revision |
 | `enable_agent` / `disable_agent` | Toggle `enabled` |
 | `agent_chat` | One non-streaming turn (`id`, `message`, optional `sessionId`) |
-| `get_agent_session` | Session transcript and metadata |
-| `approve_agent_action` / `deny_agent_action` | Resolve pending ask-first approvals |
-| `list_agent_sessions` / `stop_agent_session` | Browse an agent's sessions; stop the running turn |
+| `get_agent_session` | Session transcript and metadata (`id` of the agent and `sessionId`; a session opens only under its own agent) |
+| `approve_agent_action` / `deny_agent_action` | Resolve pending ask-first approvals (`id` of the agent and `sessionId`) |
+| `list_agent_sessions` / `stop_agent_session` | Browse an agent's sessions; stop the running turn (takes the agent `id`; a session of another agent is refused) |
 | `archive_agent` | Archive an agent (keeps its sessions) |
 
 See [Agents](agents.md).
@@ -358,7 +358,11 @@ These servers are saved in `$STAGEFLOW_HOME/mcp/.mcp.json` and merged over the p
 
 **OAuth sign-in.** A URL server that answers `401` with OAuth metadata shows `needs_auth` on probe. `POST /api/project-mcp/:name/oauth/start` returns `{ authorizationUrl }`; after approval the browser lands on a `localhost` callback. A local Host receives it itself; otherwise send the full address with `POST .../oauth/complete` body `{ "input": "http://localhost:…/callback?code=…&state=…" }`. `GET .../oauth` returns `authenticated`, `expired` or `not_authenticated`; `DELETE .../oauth` signs out. Tokens are AES-256-GCM encrypted in `$STAGEFLOW_HOME/agent/mcp-oauth-encrypted` (key: `$STAGEFLOW_HOME/secrets/mcp-oauth.key`, mode 0600, or `PI_MCP_ADAPTER_OAUTH_FILE_KEY`). Signed-in servers are usable by agents and probes, not pipeline stages: stage attempts run in a sealed agent dir and the adapter refuses a symlinked store. For stages use a bearer token in `headers` backed by a secret.
 
-**Secrets.** Never put a token in the file. Write `${NAME}` and store the value with `PUT /api/mcp-secrets/:name` body `{ "value": "…" }`. A literal token in `env` or `headers` (known prefixes such as `ghp_` or `sk-`, keys like `*_TOKEN` / `Authorization`, or long random strings) is moved there for you. Stored values fill `${NAME}` after the stage or process environment, are never returned (`GET /api/mcp-secrets` lists names, `usedBy` and `set` only) and live in `$STAGEFLOW_HOME/secrets/mcp-secrets.json` with mode `0600`. The stage's curated environment is unchanged.
+**Secrets.** Never put a token in the file. Write `${NAME}` and store the value with `PUT /api/mcp-secrets/:name` body `{ "value": "…" }`. A literal token in `env`, `headers`, the `url` (query parameters or `user:password@`) or an arg (`--token=…`, `--api-key <value>`) is moved there for you and the file keeps `${NAME}`. `GET /api/project-mcp/:name` returns the config with any remaining literal secret masked as `••••`. Who may fill `${NAME}`: a **stage** gets console servers but only the console secrets whose names the stage declared in `secrets:` (plus its curated environment); **agents and Check (probe)** fill from console secrets and from Host env names listed in `STAGEFLOW_MCP_ENV_ALLOW` (comma-separated), never from arbitrary Host env, so a probe and an agent run resolve one config identically. A stored console secret is not shadowed by Host env. Stored values are never returned (`GET /api/mcp-secrets` lists names, `usedBy` and `set`; `set` means a console secret exists or an allow-listed Host variable is present) and live in `$STAGEFLOW_HOME/secrets/mcp-secrets.json` (directory `0700`, file `0600`, written atomically). A server entry cannot use `${NAME}` for a forever-denied name (control tokens, `PI_MCP_ADAPTER_OAUTH_FILE_KEY`) or a provider/cloud credential name (`ANTHROPIC_API_KEY`, `AWS_*`, `GITHUB_TOKEN`, …) unless that name is in `STAGEFLOW_MCP_ENV_ALLOW`; an auto-created secret for such a key gets a `GH_`-style prefixed name instead. Error text from Check and sign-in has secret values (6+ characters) replaced with `[redacted]`.
+
+**URL policy.** `url` servers may not point at link-local or cloud-metadata addresses (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`, `metadata.google.internal`). Loopback and private LAN addresses are allowed. The check runs at save, when a project `.mcp.json` entry is resolved (after `${…}` is filled), for Check and for OAuth sign-in. Project entries are also shape-checked (`command` xor `url`, string `args`, string maps for `env`/`headers`).
+
+**Corrupt state.** If `mcp/.mcp.json` or `secrets/mcp-secrets.json` is unreadable or not the expected shape, it is never treated as empty or overwritten: the API answers `409` (`host_state_corrupt`) and resolve/Check report `invalid_config` with the file name. Fix or remove the file. Saving a server writes the secrets file first and restores it if the catalog write fails.
 
 ### `probe_project_mcp`
 

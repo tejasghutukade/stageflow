@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { globalStageflowHome } from "../project/globalHome.js";
+import { assertServerName, readMcpSecrets } from "./mcpHostCatalog.js";
+import { assertSafeMcpUrl, collectSecretValues, McpUrlPolicyError, oauthDefinition, scrubText } from "./mcpRedaction.js";
 import {
   loadMcpCatalog,
   resolveStageMcpServers,
@@ -27,7 +29,21 @@ export type McpOAuthErrorCode =
   | "not_found"
   | "not_http"
   | "store_unavailable"
-  | "flow_failed";
+  | "flow_failed"
+  | "invalid_input"
+  | "blocked_url"
+  | "host_state_corrupt";
+
+/** HTTP status for each OAuth error code; the routes use this one table. */
+export const MCP_OAUTH_HTTP_STATUS: Record<McpOAuthErrorCode, number> = {
+  not_found: 404,
+  not_http: 400,
+  flow_failed: 400,
+  invalid_input: 400,
+  blocked_url: 400,
+  store_unavailable: 500,
+  host_state_corrupt: 409,
+};
 
 export class McpOAuthError extends Error {
   readonly code: McpOAuthErrorCode;
@@ -42,21 +58,44 @@ export function oauthKeyPath(home: string = globalStageflowHome()): string {
   return path.join(home, "secrets", "mcp-oauth.key");
 }
 
-/** Make the Host's file key available to the adapter, creating it on first use. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function readKeyWithRetry(file: string): string {
+  for (let i = 0; i < 20; i += 1) {
+    const value = readFileSync(file, "utf8").trim();
+    if (value !== "") return value;
+    sleepSync(25);
+  }
+  throw new Error(`OAuth key file "${file}" is empty; remove it so a new key can be generated`);
+}
+
+/**
+ * Make the Host's file key available to the adapter, creating it on first use. The key is written
+ * to a private tmp file and linked into place, so a concurrent reader never sees a half-written key.
+ */
 export function ensureOAuthFileKey(home: string = globalStageflowHome()): void {
   if ((process.env[OAUTH_FILE_KEY_ENV] ?? "").trim() !== "") return;
   const file = oauthKeyPath(home);
   if (!existsSync(file)) {
-    mkdirSync(path.dirname(file), { recursive: true });
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
     try {
-      writeFileSync(file, `${randomBytes(32).toString("base64")}\n`, { mode: 0o600, flag: "wx" });
+      writeFileSync(tmp, `${randomBytes(32).toString("base64")}\n`, { mode: 0o600, flag: "wx" });
+      linkSync(tmp, file);
     } catch (err) {
-      // Another process created it first; read theirs.
+      // Another process linked its key first; read theirs.
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    } finally {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        /* already gone */
+      }
     }
-    chmodSync(file, 0o600);
   }
-  process.env[OAUTH_FILE_KEY_ENV] = readFileSync(file, "utf8").trim();
+  process.env[OAUTH_FILE_KEY_ENV] = readKeyWithRetry(file);
 }
 
 /** Everything the adapter needs before it can read or write OAuth tokens in this process. */
@@ -111,35 +150,82 @@ export function resetMcpOAuthFlowCacheForTests(): void {
 
 const STORAGE = { authStorageOptions: { credentialStore: "encrypted-file" } } as const;
 
-type RemoteServer = { url: string; definition: Record<string, unknown> };
+type RemoteServer = { url: string; definition: Record<string, unknown>; secrets: string[] };
 
-async function remoteServer(projectRoot: string, name: string): Promise<RemoteServer> {
+function consoleSecretValues(): string[] {
+  try {
+    return Object.values(readMcpSecrets());
+  } catch {
+    return [];
+  }
+}
+
+/** Confirm `name` is a known URL server; no secrets are resolved. */
+async function requireRemoteEntry(projectRoot: string, name: string): Promise<Record<string, unknown>> {
+  try {
+    assertServerName(name);
+  } catch {
+    throw new McpOAuthError(`Server "${name}" not found`, "not_found");
+  }
   let catalog;
   try {
-    catalog = await loadMcpCatalog(projectRoot, { host: true });
+    catalog = await loadMcpCatalog(projectRoot, { scope: { kind: "validate" } });
   } catch (err) {
-    if (err instanceof StageMcpError) throw new McpOAuthError(`Server "${name}" not found`, "not_found");
+    if (err instanceof StageMcpError) {
+      if (err.code === "host_state_corrupt") throw new McpOAuthError(err.message, "host_state_corrupt");
+      throw new McpOAuthError(`Server "${name}" not found`, "not_found");
+    }
     throw err;
   }
   if (!Object.hasOwn(catalog.servers, name)) {
     throw new McpOAuthError(`Server "${name}" not found`, "not_found");
   }
-  if (typeof catalog.servers[name]?.url !== "string") {
+  const entry = catalog.servers[name]!;
+  if (typeof entry.url !== "string") {
     throw new McpOAuthError(`Server "${name}" is a local command; OAuth applies to URL servers`, "not_http");
   }
-  const resolved = await resolveStageMcpServers({
-    projectRoot,
-    allowlist: [name],
-    env: process.env,
-    host: true,
-  });
-  const entry = resolved[name] ?? {};
-  return { url: String(entry.url), definition: { ...entry, auth: "oauth" } };
+  return entry;
 }
 
-function wrapFlowError(err: unknown): never {
+/** Name must be a known URL server when a project root is given (the routes always give one). */
+async function checkKnown(name: string, projectRoot: string | undefined): Promise<void> {
+  if (projectRoot !== undefined) await requireRemoteEntry(projectRoot, name);
+}
+
+async function remoteServer(projectRoot: string, name: string): Promise<RemoteServer> {
+  await requireRemoteEntry(projectRoot, name);
+  let resolved;
+  try {
+    resolved = await resolveStageMcpServers({
+      projectRoot,
+      allowlist: [name],
+      env: {},
+      scope: { kind: "agent" },
+    });
+  } catch (err) {
+    if (err instanceof StageMcpError && err.code === "host_state_corrupt") {
+      throw new McpOAuthError(err.message, "host_state_corrupt");
+    }
+    if (err instanceof StageMcpError && err.code === "invalid_config") {
+      throw new McpOAuthError(err.message, "blocked_url");
+    }
+    throw err;
+  }
+  const entry = resolved[name] ?? {};
+  const url = String(entry.url);
+  try {
+    assertSafeMcpUrl(url);
+  } catch (err) {
+    if (err instanceof McpUrlPolicyError) throw new McpOAuthError(err.message, "blocked_url");
+    throw err;
+  }
+  return { url, definition: { ...oauthDefinition(entry), auth: "oauth" }, secrets: collectSecretValues(entry) };
+}
+
+function wrapFlowError(err: unknown, extraSecrets: readonly string[] = []): never {
   if (err instanceof McpOAuthError) throw err;
-  const message = err instanceof Error ? err.message : String(err);
+  const raw = err instanceof Error ? err.message : String(err);
+  const message = scrubText(raw, [...extraSecrets, ...consoleSecretValues()]);
   if (/OAUTH_FILE_KEY|credential store/i.test(message)) {
     throw new McpOAuthError(message, "store_unavailable");
   }
@@ -163,17 +249,38 @@ export async function startMcpOAuth(
   name: string,
 ): Promise<{ authorizationUrl: string }> {
   prepare();
-  const { url, definition } = await remoteServer(projectRoot, name);
+  const { url, definition, secrets } = await remoteServer(projectRoot, name);
   try {
     const flow = await loadFlow();
     return await flow.startAuth(name, url, definition, STORAGE);
   } catch (err) {
-    return wrapFlowError(err);
+    return wrapFlowError(err, secrets);
+  }
+}
+
+const MAX_OAUTH_INPUT = 4096;
+
+/** The pasted redirect address, or a bare authorization code of sane length. */
+export function assertOAuthInput(input: string): void {
+  const value = input.trim();
+  const looksLikeUrl = /^https?:\/\/\S+$/i.test(value);
+  const looksLikeCode = /^[A-Za-z0-9._~+/=-]{4,512}$/.test(value);
+  if (value.length > MAX_OAUTH_INPUT || !(looksLikeUrl || looksLikeCode)) {
+    throw new McpOAuthError(
+      "Paste the full address from the browser (or the authorization code)",
+      "invalid_input",
+    );
   }
 }
 
 /** Finish sign-in from the redirect URL the browser landed on (or a bare code). */
-export async function completeMcpOAuth(name: string, input: string): Promise<McpOAuthStatus> {
+export async function completeMcpOAuth(
+  name: string,
+  input: string,
+  projectRoot?: string,
+): Promise<McpOAuthStatus> {
+  await checkKnown(name, projectRoot);
+  assertOAuthInput(input);
   prepare();
   try {
     const flow = await loadFlow();
@@ -183,7 +290,8 @@ export async function completeMcpOAuth(name: string, input: string): Promise<Mcp
   }
 }
 
-export async function mcpOAuthStatus(name: string): Promise<McpOAuthStatus> {
+export async function mcpOAuthStatus(name: string, projectRoot?: string): Promise<McpOAuthStatus> {
+  await checkKnown(name, projectRoot);
   prepare();
   try {
     const flow = await loadFlow();
@@ -193,7 +301,8 @@ export async function mcpOAuthStatus(name: string): Promise<McpOAuthStatus> {
   }
 }
 
-export async function removeMcpOAuth(name: string): Promise<void> {
+export async function removeMcpOAuth(name: string, projectRoot?: string): Promise<void> {
+  await checkKnown(name, projectRoot);
   prepare();
   try {
     const flow = await loadFlow();
