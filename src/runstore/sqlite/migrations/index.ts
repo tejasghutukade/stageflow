@@ -13,6 +13,7 @@ import { MIGRATION_010 } from "./010-trigger-adapter-state.js";
 import { MIGRATION_011 } from "./011-email-dispatch-key.js";
 import { MIGRATION_012 } from "./012-trigger-fires.js";
 import { MIGRATION_013 } from "./013-agents.js";
+import { MIGRATION_014 } from "./014-agent-deliveries.js";
 
 export type SqliteMigration = {
   version: number;
@@ -35,6 +36,7 @@ const DEFAULT_MIGRATIONS: SqliteMigration[] = [
   MIGRATION_011,
   MIGRATION_012,
   MIGRATION_013,
+  MIGRATION_014,
 ];
 
 export const CURRENT_SCHEMA_VERSION =

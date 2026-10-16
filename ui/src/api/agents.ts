@@ -209,6 +209,23 @@ export type AgentSpan = {
   outputText: string | null;
 };
 
+export type AgentDelivery = {
+  turnId: string;
+  sessionId: string;
+  connectionId: string;
+  provider: string;
+  replyTo: string;
+  text: string;
+  state: "pending" | "sending" | "delivered" | "failed" | "unknown";
+  attempts: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+  retryable: boolean;
+  nextAttemptAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type AgentSessionDetail = {
   session: AgentSession;
   messages: AgentMessage[];
@@ -217,6 +234,7 @@ export type AgentSessionDetail = {
   approvals: AgentApproval[];
   pendingApproval: AgentApproval | null;
   evalScores: Array<{ turnId: string; metric: string; score: number; recordedAt: string }>;
+  deliveries: AgentDelivery[];
 };
 
 export type AgentSessionListItem = AgentSession & {
@@ -263,10 +281,16 @@ export const agentsApi = {
   list: () => request<{ agents: AgentSummary[] }>("/api/agents").then((body) => body.agents),
   get: (id: string) => request<AgentDetail>(agentUrl(id)),
   validate: (definition: unknown) => request<AgentValidation>("/api/agents/validate", "POST", { definition }),
+  /** Send a reply that failed or whose outcome was unknown again. */
+  resendReply: (id: string, sessionId: string, turnId: string) =>
+    request<AgentSessionDetail>(agentUrl(id, `/sessions/${enc(sessionId)}/turns/${enc(turnId)}/delivery/resend`), "POST"),
+  /** Confirm a reply did reach the person. */
+  markReplyDelivered: (id: string, sessionId: string, turnId: string) =>
+    request<AgentSessionDetail>(agentUrl(id, `/sessions/${enc(sessionId)}/turns/${enc(turnId)}/delivery/delivered`), "POST"),
   channelContact: (id: string) =>
     request<{ connectionId: string | null; provider?: string; contact?: ChannelContact }>(agentUrl(id, "/channel/contact")),
   channelStatus: (id: string) =>
-    request<{ connectionId: string | null; listener?: ChannelListenerState }>(agentUrl(id, "/channel")),
+    request<{ connectionId: string | null; listener?: ChannelListenerState; lastUndelivered?: { turnId: string; sessionId: string; state: string; code: string | null; message: string | null; at: string } }>(agentUrl(id, "/channel")),
   stageflowTools: () => request<StageflowToolCatalog>("/api/agents/stageflow-tools"),
   create: (definition: unknown) => request<AgentDetail>("/api/agents", "POST", { definition }),
   save: (id: string, input: { baseRevision: number; definition: unknown; summary?: string }) =>

@@ -6,6 +6,7 @@ import { channelInboundConnections } from "./communications/channelConnections.j
 import { channelHostFor } from "../channels/host.js";
 import { channelIdentity } from "./communications/identity.js";
 import { AgentInboundRouter } from "./communications/inbound.js";
+import { ReplyDelivery } from "./communications/delivery.js";
 import { ChannelSupervisor } from "./communications/supervisor.js";
 import { AgentChatController } from "./chatTurn.js";
 import { otlpSinkFromEnv, type OtlpSink } from "./otlpSink.js";
@@ -28,6 +29,8 @@ export type AgentHostContext = {
   backend: ConversationBackend;
   /** Streams held open to AgentMail and iMessage; absent unless the Host listens (not in tests). */
   channelListeners?: ChannelSupervisor;
+  /** Replies to people on channels: retries, resend, mark delivered. */
+  delivery: ReplyDelivery;
   /** How people reach a connection (the number to text), cached for a minute. */
   channelContact(connectionId: string): Promise<{ provider: string; contact: ContactInfo } | undefined>;
   /** Stop what the Host started for agents (listeners). */
@@ -125,13 +128,20 @@ export function createAgentHostContext(options: {
     logError: (message) => console.error(message),
   });
   chatRef = chat;
+  // The send ledger lives under the project root, so use the agents' writable root, not a read-only install dir.
+  const channelConnectionsForAgents = channelInboundConnections(defaultAgentProjectRoot(options.cwd));
+  const delivery = new ReplyDelivery({
+    service,
+    reply: (connectionId, to, text, key) => channelConnectionsForAgents.reply(connectionId, to, text, key),
+    log: (message) => console.error(message),
+  });
   const inbound = new AgentInboundRouter({
     service,
     chat,
-    // The send ledger lives under the project root, so use the agents' writable root, not a read-only install dir.
-    connections: channelInboundConnections(defaultAgentProjectRoot(options.cwd)),
+    connections: channelConnectionsForAgents,
     projectRoot: defaultAgentProjectRoot(options.cwd),
     logError: (message) => console.error(message),
+    delivery,
   });
   const publicChat = new PublicWebChat({
     service,
@@ -143,7 +153,7 @@ export function createAgentHostContext(options: {
       .filter((origin) => origin.length > 0),
     logError: (message) => console.error(message),
   });
-  const connections = channelInboundConnections(defaultAgentProjectRoot(options.cwd));
+  const connections = channelConnectionsForAgents;
   const channelListeners = options.listenOnChannels
     ? new ChannelSupervisor({
         service,
@@ -165,6 +175,10 @@ export function createAgentHostContext(options: {
     return value;
   };
   channelListeners?.start();
+  if (options.listenOnChannels) delivery.start();
   if (options.listenOnChannels) void inbound.resumeInterrupted().catch((error) => console.error(`agent resume failed: ${String(error)}`));
-  return { service, chat, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), stop: async () => void (await channelListeners?.stop()) };
+  return { service, chat, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), delivery, stop: async () => {
+      delivery.stop();
+      await channelListeners?.stop();
+    } };
 }

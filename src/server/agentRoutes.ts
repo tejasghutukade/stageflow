@@ -188,7 +188,24 @@ const routes: Route[] = [
       const connectionId = detail.definition?.channel?.connection_id ?? null;
       // `listener` is absent for webhook providers and for agents that are disabled.
       const listener = connectionId ? ctx.host.channelListeners?.status(connectionId) : undefined;
-      ctx.json(ctx.res, 200, { connectionId, ...(listener ? { listener } : {}) });
+      const failed = ctx.host.service.latestUndelivered(ctx.projectRoot, ctx.params[0]!);
+      ctx.json(ctx.res, 200, {
+        connectionId,
+        ...(listener ? { listener } : {}),
+        ...(failed ? { lastUndelivered: { turnId: failed.turnId, sessionId: failed.sessionId, state: failed.state, code: failed.errorCode, message: failed.errorMessage, at: failed.updatedAt } } : {}),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/agents\/([^/]+)\/sessions\/([^/]+)\/turns\/([^/]+)\/delivery\/(resend|delivered)$/,
+    handle: async (ctx) => {
+      const [agentId, sessionId, turnId, action] = ctx.params as [string, string, string, string];
+      const session = await ctx.host.service.getSession(ctx.projectRoot, sessionId);
+      if (session.session.agentId !== agentId || !session.turns.some((turn) => turn.id === turnId)) throw new AgentError("agent.session_not_found");
+      if (action === "resend") await ctx.host.delivery.resend(turnId);
+      else ctx.host.delivery.markDelivered(turnId);
+      ctx.json(ctx.res, 200, await ctx.host.service.getSession(ctx.projectRoot, sessionId));
     },
   },
   {

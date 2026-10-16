@@ -1,5 +1,6 @@
 import type { ContactInfo } from "../../channels/types.js";
 import { isAgentError } from "../errors.js";
+import { ReplyDelivery } from "./delivery.js";
 import { SlidingWindowLimiter } from "../webChat/rateLimit.js";
 import type { AgentChatController } from "../chatTurn.js";
 import type { AgentService } from "../service.js";
@@ -41,6 +42,8 @@ const SENDER_LIMIT_PER_MINUTE = 20;
  */
 export class AgentInboundRouter {
   private readonly limiter = new SlidingWindowLimiter();
+  /** Sends each reply back and keeps track of whether it got through. */
+  readonly delivery: ReplyDelivery;
 
   constructor(
     private readonly options: {
@@ -50,8 +53,17 @@ export class AgentInboundRouter {
       projectRoot: string;
       logError?: (message: string) => void;
       senderLimitPerMinute?: number;
+      delivery?: ReplyDelivery;
     },
-  ) {}
+  ) {
+    this.delivery =
+      options.delivery ??
+      new ReplyDelivery({
+        service: options.service,
+        reply: (connectionId, to, text, key) => options.connections.reply(connectionId, to, text, key),
+        ...(options.logError ? { log: options.logError } : {}),
+      });
+  }
 
   async handle(connectionId: string, headers: Headers, rawBody: string): Promise<InboundResponse> {
     const connection = this.options.connections.find(connectionId);
@@ -147,9 +159,15 @@ export class AgentInboundRouter {
       const turn = detail.turns.at(-1);
       const reply = [...detail.messages].reverse().find((m) => m.role === "assistant" && m.turnId === turn?.id);
       if (!turn || !reply || !message.replyTo) return;
-      await this.options.service.sendOutbound(this.options.projectRoot, routed.sessionId, `reply:${turn.id}`, () =>
-        connections.reply(message.connectionId, message.replyTo!, reply.text.slice(0, MAX_REPLY_CHARS), `agent-reply:${routed.sessionId}:${turn.id}`),
-      );
+      // The turn only counts as succeeded once this reaches the person; failures are retried or left for a person.
+      await this.delivery.deliver({
+        turnId: turn.id,
+        sessionId: routed.sessionId,
+        connectionId: message.connectionId,
+        provider: message.provider,
+        replyTo: message.replyTo,
+        text: reply.text.slice(0, MAX_REPLY_CHARS),
+      });
     } catch (error) {
       if (isAgentError(error) && error.code === "agent.limit_reached" && message.replyTo) {
         await connections.reply(message.connectionId, message.replyTo, error.message, `agent-limit:${routed.sessionId}:${message.eventId}`).catch(() => undefined);

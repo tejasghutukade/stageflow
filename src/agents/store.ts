@@ -89,6 +89,27 @@ export type AgentTurn = {
   endedAt: string | null;
 };
 
+export type DeliveryState = "pending" | "sending" | "delivered" | "failed" | "unknown";
+
+/** A reply on a channel and how getting it to the person went. */
+export type AgentDelivery = {
+  turnId: string;
+  sessionId: string;
+  connectionId: string;
+  provider: string;
+  replyTo: string;
+  text: string;
+  state: DeliveryState;
+  attempts: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+  /** True when a later attempt may work (a definite failure that is not a configuration problem). */
+  retryable: boolean;
+  nextAttemptAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type AgentSpan = {
   id: string;
   turnId: string;
@@ -235,6 +256,25 @@ function toTurn(row: Row): AgentTurn {
     costUsd: numOrNull(row.cost_usd),
     startedAt: str(row.started_at),
     endedAt: strOrNull(row.ended_at),
+  };
+}
+
+function toDelivery(row: Row): AgentDelivery {
+  return {
+    turnId: str(row.turn_id),
+    sessionId: str(row.session_id),
+    connectionId: str(row.connection_id),
+    provider: str(row.provider),
+    replyTo: str(row.reply_to),
+    text: str(row.text),
+    state: str(row.state) as DeliveryState,
+    attempts: Number(row.attempts),
+    errorCode: strOrNull(row.error_code),
+    errorMessage: strOrNull(row.error_message),
+    retryable: Number(row.retryable) === 1,
+    nextAttemptAt: strOrNull(row.next_attempt_at),
+    createdAt: str(row.created_at),
+    updatedAt: str(row.updated_at),
   };
 }
 
@@ -670,6 +710,67 @@ export class AgentStore {
           WHERE turn_id = @turnId`,
       )
       .run({ ...patch, turnId });
+  }
+
+  /** Change a finished turn's outcome after the fact, for example when its reply could not be delivered. */
+  setTurnOutcome(turnId: string, status: TurnStatus, errorCode: string | null): void {
+    this.db.prepare(`UPDATE agent_turns SET status = ?, error_code = ? WHERE turn_id = ?`).run(status, errorCode, turnId);
+  }
+
+  insertDelivery(delivery: AgentDelivery): void {
+    this.db
+      .prepare(
+        `INSERT INTO agent_deliveries
+           (turn_id, session_id, connection_id, provider, reply_to, text, state, attempts, error_code, error_message, retryable, next_attempt_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(delivery.turnId, delivery.sessionId, delivery.connectionId, delivery.provider, delivery.replyTo, delivery.text, delivery.state, delivery.attempts, delivery.errorCode, delivery.errorMessage, delivery.retryable ? 1 : 0, delivery.nextAttemptAt, delivery.createdAt, delivery.updatedAt);
+  }
+
+  getDelivery(turnId: string): AgentDelivery | undefined {
+    const row = this.db.prepare(`SELECT * FROM agent_deliveries WHERE turn_id = ?`).get(turnId) as Row | undefined;
+    return row ? toDelivery(row) : undefined;
+  }
+
+  listDeliveries(sessionId: string): AgentDelivery[] {
+    return (this.db.prepare(`SELECT * FROM agent_deliveries WHERE session_id = ? ORDER BY created_at`).all(sessionId) as Row[]).map(toDelivery);
+  }
+
+  updateDelivery(turnId: string, patch: Partial<Pick<AgentDelivery, "state" | "attempts" | "errorCode" | "errorMessage" | "retryable" | "nextAttemptAt">>, now: string): void {
+    const current = this.getDelivery(turnId);
+    if (!current) return;
+    const next = { ...current, ...patch };
+    this.db
+      .prepare(`UPDATE agent_deliveries SET state = ?, attempts = ?, error_code = ?, error_message = ?, retryable = ?, next_attempt_at = ?, updated_at = ? WHERE turn_id = ?`)
+      .run(next.state, next.attempts, next.errorCode, next.errorMessage, next.retryable ? 1 : 0, next.nextAttemptAt, now, turnId);
+  }
+
+  /** Failed deliveries a retry is due for. */
+  dueDeliveries(now: string): AgentDelivery[] {
+    return (
+      this.db.prepare(`SELECT * FROM agent_deliveries WHERE state = 'failed' AND retryable = 1 AND next_attempt_at IS NOT NULL AND next_attempt_at <= ? ORDER BY next_attempt_at`).all(now) as Row[]
+    ).map(toDelivery);
+  }
+
+  /** Sends cut off mid-flight by a restart: whether they arrived is unknown. Returns the turns affected. */
+  settleInterruptedDeliveries(now: string): string[] {
+    const ids = (this.db.prepare(`SELECT turn_id FROM agent_deliveries WHERE state = 'sending'`).all() as Row[]).map((row) => str(row.turn_id));
+    this.db
+      .prepare(`UPDATE agent_deliveries SET state = 'unknown', error_code = 'CHANNEL_SEND_OUTCOME_UNKNOWN', error_message = 'The Host restarted while the reply was being sent', retryable = 0, next_attempt_at = NULL, updated_at = ? WHERE state = 'sending'`)
+      .run(now);
+    return ids;
+  }
+
+  /** The most recent delivery of an agent that did not get through, for the channel status line. */
+  latestUndelivered(agentId: string, projectKey: string): AgentDelivery | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT d.* FROM agent_deliveries d JOIN agent_sessions s ON s.session_id = d.session_id
+          WHERE s.project_key = ? AND s.agent_id = ? AND d.state IN ('failed', 'unknown')
+          ORDER BY d.updated_at DESC LIMIT 1`,
+      )
+      .get(projectKey, agentId) as Row | undefined;
+    return row ? toDelivery(row) : undefined;
   }
 
   setTurnStatus(turnId: string, status: TurnStatus): void {

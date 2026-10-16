@@ -174,7 +174,7 @@ describe("delivering messages", () => {
 });
 
 describe("a reply that cannot be sent", () => {
-  it("is logged with the reason and never retried on its own", async () => {
+  it("is logged with the reason and fails the turn", async () => {
     const fixture = await agentsFixture();
     fixtures.push(fixture);
     const { service, project } = fixture;
@@ -186,7 +186,11 @@ describe("a reply that cannot be sent", () => {
     const router = new AgentInboundRouter({ service, chat, connections, projectRoot: project, logError: (m) => void logs.push(m) });
     await router.deliver({ provider: "imessage", connectionId: "line", eventId: "imessage:1", threadId: "+1", text: "hi", from: "+14155550123", replyTo: "+14155550123" });
     await vi.waitFor(() => expect(logs).toHaveLength(1));
-    expect(logs[0]).toContain("agent.outbound_unknown (The reply could not be sent: EACCES)");
+    expect(logs[0]).toContain("failed (EACCES) after attempt 1");
+    const sessions = (await service.listSessions(project, "pal", { limit: 5 })).sessions;
+    const detail = await service.getSession(project, sessions[0]!.id);
+    expect(detail.turns[0]).toMatchObject({ status: "failed", errorCode: "agent.reply_undelivered" });
+    expect(detail.deliveries[0]).toMatchObject({ state: "failed", errorCode: "EACCES", errorMessage: "denied" });
   });
 });
 

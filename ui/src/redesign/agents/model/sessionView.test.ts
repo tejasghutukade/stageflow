@@ -36,6 +36,7 @@ const detail: AgentSessionDetail = {
   ],
   pendingApproval: null,
   evalScores: [],
+  deliveries: [],
 };
 
 describe("session view model", () => {

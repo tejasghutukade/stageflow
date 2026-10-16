@@ -29,6 +29,7 @@ import {
   type AgentRevisionMeta,
   type AgentSession,
   type AgentSessionListItem,
+  type AgentDelivery,
   type AgentSpan,
   type AgentTurn,
   type ApprovalActor,
@@ -105,6 +106,8 @@ export type AgentSessionDetail = {
   approvals: AgentApproval[];
   pendingApproval: AgentApproval | null;
   evalScores: AgentEvalScore[];
+  /** Channel replies and how they went, one per turn that had to reach someone. */
+  deliveries: AgentDelivery[];
 };
 
 export type ActiveTurn = {
@@ -737,6 +740,7 @@ export class AgentService {
       approvals,
       pendingApproval: approvals.find((approval) => approval.status === "pending") ?? null,
       evalScores: this.store.listEvalScores(session.id),
+      deliveries: this.store.listDeliveries(sessionId),
     };
   }
 
@@ -957,6 +961,50 @@ export class AgentService {
       resumable.push({ agentId: session.agentId, sessionId: session.id, turnId, text: user.text, from: session.sourceRef, connectionId, provider: session.source, threadId });
     }
     return resumable;
+  }
+
+  /* ---------- channel deliveries ---------- */
+
+  createDelivery(input: { turnId: string; sessionId: string; connectionId: string; provider: string; replyTo: string; text: string }): AgentDelivery {
+    const now = this.iso();
+    const delivery: AgentDelivery = { ...input, state: "pending", attempts: 0, errorCode: null, errorMessage: null, retryable: false, nextAttemptAt: null, createdAt: now, updatedAt: now };
+    this.store.insertDelivery(delivery);
+    return delivery;
+  }
+
+  getDelivery(turnId: string): AgentDelivery | undefined {
+    return this.store.getDelivery(turnId);
+  }
+
+  patchDelivery(turnId: string, patch: Parameters<AgentStore["updateDelivery"]>[1]): AgentDelivery | undefined {
+    this.store.updateDelivery(turnId, patch, this.iso());
+    return this.store.getDelivery(turnId);
+  }
+
+  dueDeliveries(): AgentDelivery[] {
+    return this.store.dueDeliveries(this.iso());
+  }
+
+  /** Sends a restart cut off may or may not have arrived; they wait for a person. */
+  settleInterruptedDeliveries(): string[] {
+    const ids = this.store.settleInterruptedDeliveries(this.iso());
+    for (const turnId of ids) this.store.setTurnOutcome(turnId, "failed", "agent.reply_undelivered");
+    return ids;
+  }
+
+  /** A reply that did not get through makes its turn a failure; one that finally does puts it right. */
+  setReplyDelivered(turnId: string, delivered: boolean): void {
+    const turn = this.store.getTurn(turnId);
+    if (!turn) return;
+    if (delivered) {
+      if (turn.errorCode === "agent.reply_undelivered") this.store.setTurnOutcome(turnId, "succeeded", null);
+    } else if (turn.status === "succeeded" || turn.errorCode === "agent.reply_undelivered") {
+      this.store.setTurnOutcome(turnId, "failed", "agent.reply_undelivered");
+    }
+  }
+
+  latestUndelivered(projectRoot: string, agentId: string): AgentDelivery | undefined {
+    return this.store.latestUndelivered(agentId, agentProjectKey(projectRoot));
   }
 
   /* ---------- approvals ---------- */

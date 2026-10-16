@@ -53,10 +53,11 @@ const STREAMED_PROVIDERS = ["agentmail", "imessage"];
 /** Whether the Host is listening on this agent's connection, refreshed while the page is open. */
 function ChannelStatus({ agentId, provider, enabled }: { agentId: string; provider: string | undefined; enabled: boolean }) {
   const [state, setState] = useState<ChannelListenerState | undefined>();
+  const [undelivered, setUndelivered] = useState<{ message: string | null; code: string | null } | undefined>();
   useEffect(() => {
     if (!provider || !STREAMED_PROVIDERS.includes(provider)) return;
     let live = true;
-    const load = () => agentsApi.channelStatus(agentId).then((body) => live && setState(body.listener), () => undefined);
+    const load = () => agentsApi.channelStatus(agentId).then((body) => { if (!live) return; setState(body.listener); setUndelivered(body.lastUndelivered ? { message: body.lastUndelivered.message, code: body.lastUndelivered.code } : undefined); }, () => undefined);
     void load();
     const timer = window.setInterval(load, 5000);
     return () => {
@@ -75,11 +76,19 @@ function ChannelStatus({ agentId, provider, enabled }: { agentId: string; provid
         : state.status === "connected"
           ? { text: `Listening · ${state.received} message${state.received === 1 ? "" : "s"} since it started`, tone: "ok" }
           : { text: `${state.status === "failed" ? "Cannot connect" : "Reconnecting"}${state.error ? `: ${state.error}` : ""}`, tone: "bad" };
+  const failure = undelivered ? (
+    <span className="text-xs leading-normal text-[var(--sf-fail)]" data-testid="channel-undelivered">
+      The last reply that failed to send: {undelivered.message ?? undelivered.code ?? "unknown reason"} Open that run to resend it.
+    </span>
+  ) : null;
   return (
+    <div className="flex flex-col gap-1">
+    {failure}
     <span className={`flex items-center gap-1.5 text-xs leading-normal ${tone === "ok" ? "text-[var(--sf-ok)]" : tone === "bad" ? "text-[var(--sf-fail)]" : "text-[var(--sf-text-3)]"}`} data-testid="channel-status">
       <span className={`block size-1.5 rounded-full ${tone === "ok" ? "bg-[var(--sf-ok)]" : tone === "bad" ? "bg-[var(--sf-fail)]" : "bg-[var(--sf-text-3)]"}`} />
       {text}
     </span>
+    </div>
   );
 }
 

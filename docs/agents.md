@@ -144,3 +144,16 @@ For AgentMail and iMessage the Host opens the stream itself, so no public URL is
 - **Which number to text (iMessage).** Numbers belong to the Photon project, not to the agent. On a Free or Pro project (shared pool) you register each person as a user in Photon, who is then assigned a number to text (it can differ per person); on a Business project (dedicated lines) everyone texts the project's line. The agent editor shows it: "Jane (+1415…) texts +1999…", "Text +1415… to reach this agent", or a warning when an allowed phone is not registered in Photon. An agent needing its own number needs its own Photon project and credential; one project cannot serve two agents.
 - iMessage on a Free or Pro Photon project: only registered project users can message the line, and each must text it once first.
 
+### Replies that do not arrive
+
+On a channel the system, not the agent, sends the reply, and a turn only counts as succeeded once the reply has reached the person. Each reply is tracked (`agent_deliveries`):
+
+| What happened | What the system does |
+|---------------|----------------------|
+| Delivered | Turn succeeded. |
+| Definitely not sent and possibly transient (network, rate limit) | Retried automatically after 5 s, 30 s and 2 min. The turn shows as succeeded until the retries run out. |
+| Definitely not sent and not transient (credentials rejected, recipient refused, an error on this side) | Turn fails at once as `agent.reply_undelivered`, with the reason. |
+| Outcome unknown (timeout after the send left, restart mid-send) | Never resent on its own, because it could arrive twice. Turn fails as `agent.reply_undelivered`. |
+
+The run page shows the reason with **Resend** (one attempt, no automatic retries) and **Mark as delivered** (when you can see it arrived). A resend or a confirmation puts the turn back to succeeded. The agent's channel status line shows the last reply that failed to send. API: `POST /api/agents/<id>/sessions/<session>/turns/<turn>/delivery/resend` and `.../delivery/delivered`. Retries survive a restart; sends a restart cut off become "unknown".
+

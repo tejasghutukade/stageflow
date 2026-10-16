@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { LuCheck, LuCopy, LuDownload, LuTriangleAlert, LuUserCheck } from "react-icons/lu";
 import { agentsApi, type AgentSessionDetail } from "../../../api/agents";
+import { deliveryNotice } from "../model/deliveryNotice";
+import { sourceLabel } from "../model/format";
 import { agentPath, agentSessionPath, agentsPath, navigate } from "../../../routes";
 import { showToast } from "../../../toast";
 import { AgentLoadError } from "../AgentLoadState";
@@ -45,6 +47,13 @@ function Chip({ tone, icon, children }: { tone: "ok" | "needs" | "fail" | "runni
 
 function StatusChip({ run }: { run: RunView }) {
   const { status } = run.turn;
+  if (run.turn.errorCode === "agent.reply_undelivered") {
+    return (
+      <Chip tone="fail" icon={<LuTriangleAlert aria-hidden className="size-3.5" />}>
+        Reply not delivered
+      </Chip>
+    );
+  }
   if (status === "waiting") return <Chip tone="needs" icon={<LuUserCheck aria-hidden className="size-3.5" />}>Waiting on you · {formatDuration(run.waitingMs)}</Chip>;
   if (status === "succeeded") return <Chip tone="ok" icon={<LuCheck aria-hidden className="size-3.5" />}>Status OK</Chip>;
   if (status === "running") return <Chip tone="running">Running</Chip>;
@@ -64,6 +73,7 @@ export function AgentRunPage({ agentId, sessionId, runId }: { agentId: string; s
   const [spanId, setSpanId] = useState<string | null>(null);
   const [stepId, setStepId] = useState<string | null>(null);
   const [deciding, setDeciding] = useState(false);
+  const [resending, setResending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   const load = useCallback(async () => {
@@ -82,7 +92,8 @@ export function AgentRunPage({ agentId, sessionId, runId }: { agentId: string; s
   }, [load, agentId]);
 
   const run = useMemo(() => (detail ? runViews(detail, now).find((r) => String(r.turn.seq) === runId) ?? null : null), [detail, now, runId]);
-  const active = run?.turn.status === "running" || run?.turn.status === "waiting";
+  const deliveryInFlight = detail?.deliveries?.some((d) => d.turnId === run?.turn.id && (d.state === "pending" || d.state === "sending" || (d.state === "failed" && d.retryable))) ?? false;
+  const active = run?.turn.status === "running" || run?.turn.status === "waiting" || deliveryInFlight;
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(() => void load(), 1500);
@@ -128,6 +139,23 @@ export function AgentRunPage({ agentId, sessionId, runId }: { agentId: string; s
       showToast(err instanceof Error ? err.message : "Could not record the decision");
     } finally {
       setDeciding(false);
+    }
+  }
+
+  const delivery = detail.deliveries?.find((d) => d.turnId === run.turn.id);
+  const notice = deliveryNotice(delivery, sourceLabel(detail.session.source));
+
+  async function fixDelivery(action: "resend" | "delivered") {
+    setResending(true);
+    try {
+      if (action === "resend") await agentsApi.resendReply(agentId, sessionId, run!.turn.id);
+      else await agentsApi.markReplyDelivered(agentId, sessionId, run!.turn.id);
+      showToast(action === "resend" ? "Reply sent again" : "Marked as delivered");
+      await load();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not update the reply");
+    } finally {
+      setResending(false);
     }
   }
 
@@ -189,6 +217,22 @@ export function AgentRunPage({ agentId, sessionId, runId }: { agentId: string; s
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        {notice ? (
+          <div role="alert" data-testid="delivery-notice" className={`flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-b-[var(--sf-hairline)] px-7 py-3 ${notice.tone === "bad" ? "bg-[var(--sf-fail-bg)]" : "bg-[#f5b5441f]"}`}>
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <span className={`text-[13px] font-medium ${notice.tone === "bad" ? "text-[var(--sf-fail)]" : "text-[var(--sf-needs)]"}`}>{notice.title}</span>
+              <span className="text-xs leading-normal text-[var(--sf-text-2)]">{notice.detail}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button disabled={resending} onClick={() => void fixDelivery("resend")}>
+                Resend
+              </Button>
+              <Button disabled={resending} onClick={() => void fixDelivery("delivered")}>
+                Mark as delivered
+              </Button>
+            </div>
+          </div>
+        ) : null}
         <div className="grid shrink-0 grid-cols-2 gap-5 border-b border-b-[var(--sf-hairline)] px-7 py-4 md:grid-cols-3 xl:grid-cols-6">
           <Metric label="Duration" value={formatDuration(run.elapsedMs)} detail={run.waitingMs > 0 ? `${formatDuration(run.workingMs)} working · ${formatDuration(run.waitingMs)} waiting` : `from ${clockTime(run.turn.startedAt)}`} />
           <Metric label="Spans" value={String(spans.length)} detail={errors > 0 ? `${errors} with errors` : "no errors"} />
