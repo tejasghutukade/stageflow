@@ -45,7 +45,7 @@ import {
 } from "../ui";
 import { InstructionsEditor } from "./InstructionsEditor";
 import { PermissionTree } from "./PermissionTree";
-import { BUILTIN_PERMISSION_GROUPS, grantedToolIds, stageflowPermissionGroups } from "../model/permissions";
+import { BUILTIN_PERMISSION_GROUPS, grantedToolIds, operatorOnlyToolNames, stageflowPermissionGroups } from "../model/permissions";
 
 export type FormMode = "create" | "edit" | "view";
 
@@ -423,6 +423,12 @@ export function AgentDefinitionForm({
               askId={(id) => `stageflow.${id}`}
             />
           )}
+          {catalog && operatorOnlyToolNames(catalog).length > 0 ? (
+            <span className="flex items-start gap-2 text-xs leading-normal text-[var(--sf-text-3)]">
+              <LuLock aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+              Not offered to agents, because only a person should do them: {operatorOnlyToolNames(catalog).join(", ")}.
+            </span>
+          ) : null}
           <FieldMessages {...at("tools.stageflow")} />
         </div>
 

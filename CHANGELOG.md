@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Agents can use Stageflow's own tools.** One registry groups the MCP tools (discover, runs, gates, triggers, agents, pipeline authoring) with a risk level, and an agent definition grants groups or single tools under `tools.stageflow`. The console has a Stageflow tools section in the agent editor and turns on ask-first for everything that is not read-only. An agent can never grant a tool it does not hold, edit or archive itself, or decide its own approvals.
 - **Granular permissions.** The agent editor shows files, shell and Stageflow tools as one grouped checkbox tree: tick a group to select its tools, or tick single tools. `tools.builtin_tools` (read, grep, find, ls, write, edit, bash) joins `tools.builtin` groups in the YAML; the saved form stays compact.
+- Some Stageflow tools are operator-only and cannot be granted to an agent: answering gates, deciding feedback loops and approving agent actions. Destructive tools moved into their own groups (`runs.cleanup`, `agents.cleanup`), gates split into `gates.read` and `gates.decide`, a web-chat agent that can read sessions gets a warning, and a copied agent can no longer drop an ask-first its creator is bound by.
 - New MCP tools: `read_pipeline`, `create_pipeline`, `edit_pipeline`, `create_stage`, `edit_stage`, `create_task`, `edit_task` (author pipelines on disk with the Workshop's validation), `update_trigger`, `set_trigger_enabled`, `list_agent_sessions`, `stop_agent_session`, `archive_agent`.
 
 ### Changed

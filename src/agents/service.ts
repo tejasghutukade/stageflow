@@ -1,3 +1,4 @@
+import { grantedStageflowTools } from "../toolkit/meta.js";
 import { createHash, randomBytes } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -72,6 +73,9 @@ export type AgentSummary = {
   pendingApprovals: number;
   updatedAt: string;
 };
+
+/** Tools that return session transcripts, which hold visitors' messages. */
+const CONVERSATION_READING_TOOLS = new Set(["get_agent_session", "list_agent_sessions"]);
 
 export type AgentDetail = {
   agent: AgentSummary;
@@ -356,6 +360,16 @@ export class AgentService {
     const warnings: AgentIssue[] = [];
     if (definition.web_chat.enabled && !definition.web_chat.slug) {
       warnings.push({ path: "web_chat.slug", code: "agent.web_chat_slug_missing", message: "Web chat has no link yet; save the agent in the console to generate one" });
+    }
+    if (definition.web_chat.enabled) {
+      const readsChats = grantedStageflowTools(definition.tools.stageflow).filter((tool) => CONVERSATION_READING_TOOLS.has(tool));
+      if (readsChats.length > 0) {
+        warnings.push({
+          path: "tools.stageflow",
+          code: "agent.web_chat_reads_conversations",
+          message: `Web chat is on and this agent can read every agent's sessions (${readsChats.join(", ")}), including what customers wrote`,
+        });
+      }
     }
     if (definition.model.backend === "claude") {
       warnings.push({ path: "model.backend", code: "agent.backend_unavailable", message: "Agents run on Pi today; sessions on the claude backend fail" });

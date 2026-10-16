@@ -1,4 +1,4 @@
-import { grantedStageflowTools, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
+import { grantedStageflowTools, isOperatorOnlyGroup, isOperatorOnlyTool, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
 import { Cron } from "croner";
 import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
 import { z } from "zod";
@@ -231,11 +231,15 @@ function semanticIssues(definition: AgentDefinition): AgentIssue[] {
   definition.tools.stageflow.groups.forEach((group, index) => {
     if (!isToolGroupId(group)) {
       issues.push({ path: `tools.stageflow.groups.${index}`, code: "agent.stageflow_group_unknown", message: `${group} is not a Stageflow tool group` });
+    } else if (isOperatorOnlyGroup(group)) {
+      issues.push({ path: `tools.stageflow.groups.${index}`, code: "agent.stageflow_operator_only", message: `${group} decides things a person must decide, so it cannot be granted to an agent` });
     }
   });
   definition.tools.stageflow.tools.forEach((tool, index) => {
     if (!(tool in TOOL_META)) {
       issues.push({ path: `tools.stageflow.tools.${index}`, code: "agent.stageflow_tool_unknown", message: `${tool} is not a Stageflow tool` });
+    } else if (isOperatorOnlyTool(tool)) {
+      issues.push({ path: `tools.stageflow.tools.${index}`, code: "agent.stageflow_operator_only", message: `${tool} is for operators only and cannot be granted to an agent` });
     }
   });
   if ("stageflow" in definition.tools.mcp) {

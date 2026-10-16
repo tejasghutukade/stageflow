@@ -173,7 +173,8 @@ export type StageflowToolCatalog = {
     id: string;
     title: string;
     summary: string;
-    tools: Array<{ name: string; grantId: string; risk: StageflowToolRisk; description: string }>;
+    operatorOnly: boolean;
+    tools: Array<{ name: string; grantId: string; risk: StageflowToolRisk; description: string; operatorOnly: boolean }>;
   }>;
 };
 

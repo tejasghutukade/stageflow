@@ -26,7 +26,7 @@ import { getModelCatalog } from "../../models/catalog.js";
 import { AgentError } from "../errors.js";
 import { isWritePathForbidden } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
-import { grantedStageflowTools, type ToolkitTool } from "../../toolkit/index.js";
+import { grantedStageflowTools, isOperatorOnlyTool, type ToolkitTool } from "../../toolkit/index.js";
 import { grantIdForPiTool, STAGEFLOW_PI_PREFIX, type CompleteInput, type CompleteResult, type ConversationBackend, type TurnHooks } from "./types.js";
 
 export type PiRuntimeOptions = {
@@ -299,7 +299,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     const mcpServers = Object.keys(definition.tools.mcp);
     const subAgents = [...definition.sub_agents];
     const grantedSf = new Set(grantedStageflowTools(definition.tools.stageflow));
-    const stageflowTools = (options.toolkit?.() ?? []).filter((tool) => grantedSf.has(tool.name));
+    const stageflowTools = (options.toolkit?.() ?? []).filter((tool) => grantedSf.has(tool.name) && !isOperatorOnlyTool(tool.name));
     const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
     const systemPrompt = `${definition.instructions}${context}`;

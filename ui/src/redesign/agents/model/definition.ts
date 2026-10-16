@@ -95,7 +95,7 @@ const RISK_EFFECT = {
 /** Grant ids a toggled group or tool adds that should ask first by default: everything that is not read-only. */
 export function riskyGrantIds(catalog: StageflowToolCatalog, groupId: string, only?: string): string[] {
   const group = catalog.groups.find((g) => g.id === groupId);
-  return (group?.tools ?? []).filter((tool) => tool.risk !== "read" && (only === undefined || tool.name === only)).map((tool) => tool.grantId);
+  return (group?.tools ?? []).filter((tool) => !tool.operatorOnly && tool.risk !== "read" && (only === undefined || tool.name === only)).map((tool) => tool.grantId);
 }
 
 export type ApprovalRow = {
@@ -135,9 +135,10 @@ export function approvalRows(definition: AgentDefinition): ApprovalRow[] {
   if (catalog) {
     const covered = new Set<string>();
     for (const group of catalog.groups) {
-      if (!grants.groups.includes(group.id)) continue;
-      group.tools.forEach((tool) => covered.add(tool.name));
-      rows.push({ tool: group.tools[0]!.grantId, label: `${group.title} · Stageflow`, effect: `${group.tools.length} tools: ${group.summary}`, kind: "stageflow", tools: group.tools.map((t) => t.grantId) });
+      const tools = group.tools.filter((tool) => !tool.operatorOnly);
+      if (!grants.groups.includes(group.id) || tools.length === 0) continue;
+      tools.forEach((tool) => covered.add(tool.name));
+      rows.push({ tool: tools[0]!.grantId, label: `${group.title} · Stageflow`, effect: `${tools.length} tools: ${group.summary}`, kind: "stageflow", tools: tools.map((t) => t.grantId) });
     }
     for (const group of catalog.groups) {
       for (const tool of group.tools) {

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { McpToolDeps } from "../mcp/deps.js";
 import { defaultAgentProjectRoot } from "../agents/projectRoot.js";
 import { checkAgentCaller, type ToolCaller } from "./guard.js";
-import { stageflowGrantId, TOOL_GROUPS, TOOL_META, type ToolMeta } from "./meta.js";
+import { isOperatorOnlyTool, stageflowGrantId, TOOL_GROUPS, TOOL_META, type ToolMeta } from "./meta.js";
 import { recordMcpTools } from "./record.js";
 
 export * from "./meta.js";
@@ -29,6 +29,13 @@ function toResult(raw: unknown): ToolkitResult {
   return { ok: result.isError !== true, text };
 }
 
+/** Drop mentions of HTTP routes: a model cannot call them, and the text only confuses it. */
+export function plainDescription(text: string): string {
+  const withoutParens = text.replace(/\s*\([^()]*\/api\/[^()]*\)/g, "");
+  const sentences = withoutParens.split(/(?<=\.)\s+/).filter((sentence) => !sentence.includes("/api/"));
+  return sentences.join(" ").replace(/\s+([.,:])/g, "$1").trim();
+}
+
 function jsonSchema(schema: ZodType | undefined): Record<string, unknown> {
   if (!schema) return { type: "object", properties: {} };
   const { $schema: _ignored, ...rest } = z.toJSONSchema(schema, { io: "input", unrepresentable: "any" }) as Record<string, unknown>;
@@ -51,7 +58,7 @@ export function buildToolkit(deps: McpToolDeps): ToolkitTool[] {
       ...meta,
       name: tool.name,
       grantId: stageflowGrantId(tool.name),
-      description: tool.description,
+      description: plainDescription(tool.description),
       parameters: jsonSchema(tool.inputSchema),
       async run(args, ctx) {
         const parsed = tool.inputSchema ? tool.inputSchema.safeParse(args) : { success: true as const, data: args };
@@ -73,7 +80,14 @@ export function toolkitNames(toolkit: readonly ToolkitTool[]): string[] {
 }
 
 export type ToolkitCatalog = {
-  groups: Array<{ id: string; title: string; summary: string; tools: Array<{ name: string; grantId: string; risk: ToolMeta["risk"]; description: string }> }>;
+  groups: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    /** True when the whole group is for operators only; the console lists it as locked. */
+    operatorOnly: boolean;
+    tools: Array<{ name: string; grantId: string; risk: ToolMeta["risk"]; description: string; operatorOnly: boolean }>;
+  }>;
 };
 
 let catalogCache: ToolkitCatalog | undefined;
@@ -85,10 +99,13 @@ export function describeToolkit(): ToolkitCatalog {
   const byName = new Map(described.map((tool) => [tool.name, tool.description]));
   catalogCache = {
     groups: TOOL_GROUPS.map((group) => ({
-      ...group,
+      id: group.id,
+      title: group.title,
+      summary: group.summary,
+      operatorOnly: group.operatorOnly === true,
       tools: Object.entries(TOOL_META)
         .filter(([, meta]) => meta.group === group.id)
-        .map(([name, meta]) => ({ name, grantId: stageflowGrantId(name), risk: meta.risk, description: byName.get(name) ?? "" })),
+        .map(([name, meta]) => ({ name, grantId: stageflowGrantId(name), risk: meta.risk, description: plainDescription(byName.get(name) ?? ""), operatorOnly: isOperatorOnlyTool(name) })),
     })),
   };
   return catalogCache;

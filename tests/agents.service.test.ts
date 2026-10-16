@@ -239,6 +239,18 @@ describe("AgentService model warnings", () => {
   });
 });
 
+describe("AgentService web chat with conversation-reading tools", () => {
+  it("warns when a web-chat agent can read other agents' sessions", async () => {
+    const { service, project } = await setup();
+    const codes = async (extra: Record<string, unknown>) =>
+      (await service.validate(project, agentInput("helper", extra))).warnings.filter((w) => w.code === "agent.web_chat_reads_conversations").map((w) => w.path);
+    const reading = { tools: { stageflow: { groups: ["agents.read"] } } };
+    expect(await codes({ ...reading, web_chat: { enabled: true, slug: "abcdefghijklmnop" } })).toEqual(["tools.stageflow"]);
+    expect(await codes({ ...reading })).toEqual([]);
+    expect(await codes({ tools: { stageflow: { groups: ["discover"] } }, web_chat: { enabled: true, slug: "abcdefghijklmnop" } })).toEqual([]);
+  });
+});
+
 describe("AgentService sessions", () => {
   it("pins a session to the revision it started on (AE1)", async () => {
     const { service, project } = await setup();

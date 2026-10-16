@@ -104,13 +104,16 @@ An agent can be granted Stageflow's own tools (the MCP tools in [mcp.md](mcp.md)
 ```yaml
 tools:
   stageflow:
-    groups: [runs.read, gates]   # discover, runs.read, runs.control, gates, triggers, agents.read, agents.manage, agents.converse, pipelines.author
+    groups: [runs.read, gates.read]   # discover, runs.read, runs.control, runs.cleanup, gates.read, triggers, agents.read, agents.manage, agents.cleanup, agents.converse, pipelines.author
     tools: [start_run]           # single tools on top of the groups
 approvals:
   ask_first: [stageflow.start_run]
 ```
 
 - One registry (`src/toolkit`) is derived from the MCP registrations plus a metadata table (group and risk: `read`, `write`, `destructive`, `external`); `GET /api/agents/stageflow-tools` serves it to the console, which turns on ask-first for every non-read tool when you enable a group.
+- Operator-only: `gates.decide` (`answer_gate`, `decide_feedback_loop`, `approve_agent_action`) and `get_started` cannot be granted to an agent (validation error `agent.stageflow_operator_only`). Only a person decides gates and approvals, so one agent can never approve another's action.
+- Destructive tools sit in their own groups (`runs.cleanup`, `agents.cleanup`) so ticking "Run and recover pipelines" never selects `delete_run`. A web-chat agent that can read agent sessions gets a warning, because those hold visitors' messages.
+- A created or saved agent cannot drop an ask-first its creator is bound by.
 - The grant id is `stageflow.<tool>` (so `tools.mcp.stageflow` is reserved). Granted tools reach the model as `stageflow_<tool>` and pass the same grant and ask-first gate as any other tool.
 - An agent can never give another agent a tool it does not hold: `create_agent`, `save_agent`, `restore_agent_revision` and `enable_agent` refuse grants beyond the caller's, an agent cannot edit or archive itself, and it cannot decide approvals on its own sessions.
 - The Workshop and Agent-author profiles check their tools through the same grant-id layer (`src/toolkit/profiles.ts`).

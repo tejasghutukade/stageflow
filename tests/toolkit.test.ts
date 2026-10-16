@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseAgentDefinition, parseAgentYaml, serializeAgentDefinition, grantedToolIds } from "../src/config/loadAgent.js";
 import type { AgentDefinition } from "../src/config/loadAgent.js";
-import { buildToolkit, grantedStageflowTools, grantsBeyond, TOOL_GROUPS, TOOL_META } from "../src/toolkit/index.js";
+import { buildToolkit, describeToolkit, grantedStageflowTools, grantsBeyond, plainDescription, TOOL_GROUPS, TOOL_META } from "../src/toolkit/index.js";
 import { recordMcpTools } from "../src/toolkit/record.js";
 import { checkAgentCaller } from "../src/toolkit/guard.js";
 import { grantIdForPiTool } from "../src/agents/runtime/types.js";
@@ -35,12 +35,41 @@ describe("toolkit registry", () => {
   });
 
   it("expands groups and single tools into one sorted list", () => {
-    expect(grantedStageflowTools({ groups: ["gates"], tools: ["get_run", "nope"] })).toEqual(["answer_gate", "decide_feedback_loop", "get_run", "get_waiting_summary", "list_waiting"]);
+    expect(grantedStageflowTools({ groups: ["gates.read"], tools: ["get_run", "nope"] })).toEqual(["get_run", "get_waiting_summary", "list_waiting"]);
   });
 
   it("maps Pi tool names to grant ids", () => {
     expect(grantIdForPiTool("stageflow_start_run", [], [])).toBe("stageflow.start_run");
     expect(grantIdForPiTool("stageflow_unknown", [], [])).toBe("stageflow_unknown");
+  });
+});
+
+describe("operator-only tools", () => {
+  const defn = (tools: Record<string, unknown>) => parseAgentDefinition({ id: "x", name: "x", instructions: "x", tools: { stageflow: tools } });
+
+  it("cannot be granted as a group or one by one", () => {
+    const group = defn({ groups: ["gates.decide"] });
+    const single = defn({ tools: ["approve_agent_action", "answer_gate", "get_started"] });
+    expect(group.ok).toBe(false);
+    expect(single.ok).toBe(false);
+    if (!single.ok) expect(single.issues.map((i) => i.code)).toEqual(["agent.stageflow_operator_only", "agent.stageflow_operator_only", "agent.stageflow_operator_only"]);
+  });
+
+  it("are left out when a group is expanded and hidden from the grant ids", () => {
+    expect(grantedStageflowTools({ groups: ["discover", "gates.decide"], tools: [] })).not.toContain("get_started");
+    expect(grantedStageflowTools({ groups: ["gates.decide"], tools: [] })).toEqual([]);
+  });
+
+  it("is split from the destructive tools, which have their own groups", () => {
+    expect(TOOL_META.delete_run!.group).toBe("runs.cleanup");
+    expect(TOOL_META.archive_agent!.group).toBe("agents.cleanup");
+    expect(TOOL_META.start_run!.group).toBe("runs.control");
+    expect(describeToolkit().groups.find((g) => g.id === "gates.decide")).toMatchObject({ operatorOnly: true });
+  });
+
+  it("strips HTTP route mentions from tool text", () => {
+    expect(plainDescription("List triggers (same source as GET /api/triggers): manual or schedule. Same write path as PUT /api/triggers/:id.")).toBe("List triggers: manual or schedule.");
+    expect(describeToolkit().groups.flatMap((g) => g.tools).some((tool) => tool.description.includes("/api/"))).toBe(false);
   });
 });
 

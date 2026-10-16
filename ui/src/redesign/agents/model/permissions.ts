@@ -85,11 +85,20 @@ export const BUILTIN_PERMISSION_GROUPS: PermissionGroup[] = [
 
 export const BUILTIN_GROUP_IDS = BUILTIN_PERMISSION_GROUPS.map((group) => group.id) as BuiltinToolGroup[];
 
+/** Groups an agent can be granted; operator-only tools and groups are left out. */
 export function stageflowPermissionGroups(catalog: StageflowToolCatalog): PermissionGroup[] {
-  return catalog.groups.map((group) => ({
-    id: group.id,
-    title: group.title,
-    summary: group.summary,
-    tools: group.tools.map((tool) => ({ id: tool.name, label: tool.name, description: tool.description, risk: tool.risk })),
-  }));
+  return catalog.groups
+    .filter((group) => !group.operatorOnly)
+    .map((group) => ({
+      id: group.id,
+      title: group.title,
+      summary: group.summary,
+      tools: group.tools.filter((tool) => !tool.operatorOnly).map((tool) => ({ id: tool.name, label: tool.name, description: tool.description, risk: tool.risk })),
+    }))
+    .filter((group) => group.tools.length > 0);
+}
+
+/** Names of the tools agents are never offered, for the editor's note. */
+export function operatorOnlyToolNames(catalog: StageflowToolCatalog): string[] {
+  return catalog.groups.flatMap((group) => group.tools.filter((tool) => tool.operatorOnly).map((tool) => tool.name));
 }
