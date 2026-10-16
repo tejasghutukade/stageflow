@@ -28,6 +28,20 @@ export function grantsBeyond(caller: AgentDefinition, candidate: AgentDefinition
   return [...new Set(beyond)].sort();
 }
 
+/**
+ * Tools the caller must ask a person about that the candidate could run without asking.
+ * Handing out a tool is not enough to check: the copy must not drop the approval too.
+ */
+export function approvalsWeakened(caller: AgentDefinition, candidate: AgentDefinition): string[] {
+  const held = grantedToolIds(candidate);
+  const holds = (id: string) => {
+    if (held.has(id)) return true;
+    const dot = id.indexOf(".");
+    return dot > 0 && candidate.tools.mcp[id.slice(0, dot)]?.includes("*") === true;
+  };
+  return caller.approvals.ask_first.filter((id) => holds(id) && !candidate.approvals.ask_first.includes(id)).sort();
+}
+
 const refusal = (message: string) => ({ ok: false as const, message });
 
 /**
@@ -46,7 +60,9 @@ export async function checkAgentCaller(
   const self = caller.agentId;
   const checkDefinition = (candidate: AgentDefinition, what: string) => {
     const beyond = grantsBeyond(caller.definition, candidate);
-    return beyond.length > 0 ? refusal(`${what} would grant tools this agent does not hold: ${beyond.join(", ")}.`) : null;
+    if (beyond.length > 0) return refusal(`${what} would grant tools this agent does not hold: ${beyond.join(", ")}.`);
+    const weakened = approvalsWeakened(caller.definition, candidate);
+    return weakened.length > 0 ? refusal(`${what} would let tools run without asking first that this agent must ask about: ${weakened.join(", ")}.`) : null;
   };
   switch (tool) {
     case "create_agent": {

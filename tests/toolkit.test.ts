@@ -88,6 +88,16 @@ describe("escalation guard", () => {
     expect(ok).toBeNull();
   });
 
+  it("refuses a copy that drops an ask-first the caller is bound by", async () => {
+    const asked = parseAgentDefinition({ id: "careful", name: "c", instructions: "x", tools: { builtin: ["shell"] }, approvals: { ask_first: ["bash"] } });
+    if (!asked.ok) throw new Error("bad fixture");
+    const who = { agentId: "careful", definition: asked.value };
+    const loose = await checkAgentCaller("create_agent", { definition: { id: "kid", name: "kid", instructions: "x", tools: { builtin: ["shell"] } } }, who, fakeService as never, "/x");
+    expect(loose?.message).toContain("without asking first");
+    const same = await checkAgentCaller("create_agent", { definition: { id: "kid", name: "kid", instructions: "x", tools: { builtin: ["shell"] }, approvals: { ask_first: ["bash"] } } }, who, fakeService as never, "/x");
+    expect(same).toBeNull();
+  });
+
   it("refuses editing itself, restoring or enabling a stronger agent, and deciding its own approvals", async () => {
     const def = { id: "boss", name: "boss", instructions: "x" };
     expect((await checkAgentCaller("save_agent", { id: "boss", definition: def }, caller, fakeService as never, "/x"))?.message).toContain("own definition");
