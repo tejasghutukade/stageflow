@@ -47,7 +47,7 @@ DRY_RUN=1 bash scripts/run-github-release-local.sh
 Manual equivalent:
 
 ```bash
-sf validate --strict
+sf validate --strict --pipeline examples/github-release/github-release.pipeline.yaml
 export CURSOR_API_KEY=…   # no trailing newline; or use repo-root .env
 export GH_TOKEN=…
 CURRENT="$(node -p "require('./package.json').version")"
