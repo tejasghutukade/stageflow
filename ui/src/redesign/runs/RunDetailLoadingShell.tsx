@@ -9,7 +9,7 @@ export function RunDetailLoadingShell({
 }) {
   return (
     <div className="flex h-screen min-h-0 flex-col overflow-hidden">
-      <header className="flex w-full shrink-0 items-end justify-between gap-6 border-b border-b-[#ffffff12] px-6 py-4">
+      <header className="flex w-full shrink-0 items-end justify-between gap-6 border-b border-b-[#ffffff12] px-5 py-4">
         <div className="flex min-w-0 flex-col gap-2">
           <div className="flex items-center gap-1.5">
             <button

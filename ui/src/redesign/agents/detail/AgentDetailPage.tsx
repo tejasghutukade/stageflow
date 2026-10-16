@@ -18,7 +18,9 @@ import { formatCost, formatTokens, relativeTime, sessionSubtitle, sourceLabel } 
 import { useAgentDetail, useEditorOptions } from "../model/hooks";
 import { sessionStatusView } from "../model/sessionStatus";
 import { consumeAgentCreated } from "../useAgent";
-import { Button, KeyValue, PageFooter, PageHeader, SelectField, Tabs } from "../ui";
+import { ConfirmDialog } from "../editor/Dialogs";
+import { Button, KeyValue, PageFooter, SelectField, Tabs } from "../ui"
+import { PageHeader } from "../../shell/PageHeader";;
 
 const SESSION_GRID = "grid grid-cols-[minmax(0,1fr)_96px_130px_50px_70px_70px_96px] items-center gap-4 px-7 min-w-[880px]";
 const PAGE_SIZE = 25;
@@ -311,13 +313,14 @@ function SessionsList({ agentId, stats: initialStats }: { agentId: string; stats
 }
 
 export function AgentDetailPage({ agentId }: { agentId: string }) {
-  const { detail, loading, error, setDetail } = useAgentDetail(agentId);
+  const { detail, loading, error, missing, setDetail } = useAgentDetail(agentId);
   const [tab, setTab] = useState<DetailTab>("sessions");
   const [justCreated] = useState(() => consumeAgentCreated(agentId));
   const [busy, setBusy] = useState(false);
+  const [confirmDisable, setConfirmDisable] = useState(false);
   const options = useEditorOptions();
 
-  if (!detail) return <AgentLoadError loading={loading} error={error} />;
+  if (!detail) return <AgentLoadError loading={loading} error={error} missing={missing} />;
   if (!detail.definition) return <AgentLoadError loading={false} error={null} invalid={detail} />;
   const { agent } = detail;
 
@@ -325,6 +328,7 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
     if (busy) return;
     setBusy(true);
     try {
+      setConfirmDisable(false);
       const next = await agentsApi.setEnabled(agent.id, !agent.enabled);
       setDetail(next);
       showToast(next.agent.enabled ? "Enabled" : "Disabled");
@@ -340,7 +344,6 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
   return (
     <div className={PAGE_BG}>
       <PageHeader
-        roomy
         crumbs={[{ label: "Agents", onClick: () => navigate(agentsPath()) }, { label: agent.name }]}
         title={agent.name}
         description={agent.description ?? undefined}
@@ -349,7 +352,7 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
             <AvailabilityStatus enabled={agent.enabled} />
             {agent.enabled ? (
               <>
-                <Button disabled={busy} onClick={() => void onToggle()}>
+                <Button disabled={busy} onClick={() => setConfirmDisable(true)}>
                   Disable agent
                 </Button>
                 <Button onClick={() => navigate(agentPath(agent.id, "edit"))}>Edit agent</Button>
@@ -384,6 +387,15 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
             <span className="text-[var(--sf-text-2)]">{agent.issues.map((issue) => `${issue.path || "file"}: ${issue.message}`).join(" · ")}</span>
           </span>
         </div>
+      ) : null}
+      {confirmDisable ? (
+        <ConfirmDialog title={`Disable ${agent.name}?`} confirmLabel="Disable agent" busy={busy} onConfirm={() => void onToggle()} onClose={() => setConfirmDisable(false)}>
+          <p>
+            {agent.name} will stop accepting new work: no new sessions, and its web chat page and channel stop answering
+            {agent.stats.active > 0 ? `. ${agent.stats.active} active session${agent.stats.active === 1 ? " is" : "s are"} put on hold` : ""}.
+          </p>
+          <p>Nothing is deleted. Definition, revisions and session history stay, and you can enable it again any time.</p>
+        </ConfirmDialog>
       ) : null}
       {justCreated && tab === "sessions" ? (
         <div className="flex shrink-0 items-center gap-3 border-b border-b-[var(--sf-hairline)] px-7 py-4 text-[13px] leading-normal">

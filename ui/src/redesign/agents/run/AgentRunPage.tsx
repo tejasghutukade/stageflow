@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { LuCheck, LuCopy, LuDownload, LuTriangleAlert, LuUserCheck } from "react-icons/lu";
-import { agentsApi, type AgentSessionDetail } from "../../../api/agents";
+import { agentsApi } from "../../../api/agents";
 import { deliveryNotice } from "../model/deliveryNotice";
 import { sourceLabel } from "../model/format";
 import { agentPath, agentSessionPath, agentsPath, navigate } from "../../../routes";
@@ -8,16 +8,17 @@ import { showToast } from "../../../toast";
 import { AgentLoadError } from "../AgentLoadState";
 import { MONO, NOWRAP, PAGE_BG } from "../agentsTokens";
 import { clockTime, formatCost, formatDuration, formatTokens, shortSessionId } from "../model/format";
-import { runViews, SPAN_COLOR, type RunView } from "../model/sessionView";
+import { useResource } from "../model/hooks";
+import { isRunActive, runViews, SPAN_COLOR, type RunView } from "../model/sessionView";
 import { Breadcrumb, Button, PageFooter } from "../ui";
 import { ApprovalPane, Configuration, Logs, Messages, Steps } from "./otherTabs";
 import { defaultSpanId, filterCounts, KIND_LABEL, kindGroup, type FilterId } from "./runModel";
 import { SpanPanel } from "./SpanPanel";
-import { FlameGraph, SpanList, Waterfall } from "./traceViews";
+import { Waterfall } from "./traceViews";
 
-type Tab = "steps" | "waterfall" | "flame" | "spans" | "messages" | "logs" | "config";
+type Tab = "steps" | "waterfall" | "messages" | "logs" | "config";
 
-const TRACE_TABS: Tab[] = ["waterfall", "flame", "spans"];
+const TRACE_TABS: Tab[] = ["waterfall"];
 const KINDS = ["agent", "model", "tool", "gate", "guardrail", "internal"] as const;
 
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
@@ -65,8 +66,6 @@ function StatusChip({ run }: { run: RunView }) {
 }
 
 export function AgentRunPage({ agentId, sessionId, runId }: { agentId: string; sessionId: string; runId: string }) {
-  const [detail, setDetail] = useState<AgentSessionDetail | null>(null);
-  const [error, setError] = useState<Error | null>(null);
   const [name, setName] = useState(agentId);
   const [tab, setTab] = useState<Tab>("steps");
   const [filter, setFilter] = useState<FilterId>("all");
@@ -76,37 +75,37 @@ export function AgentRunPage({ agentId, sessionId, runId }: { agentId: string; s
   const [resending, setResending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
-  const load = useCallback(async () => {
-    try {
-      setDetail(await agentsApi.session(agentId, sessionId));
-      setNow(Date.now());
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
-    }
-  }, [agentId, sessionId]);
-
+  const sessionRes = useResource(`${agentId}/${sessionId}`, () => agentsApi.session(agentId, sessionId), {
+    kind: "session",
+    pollMs: 1500,
+    active: (d) => isRunActive(d, runId),
+  });
+  const { data: detail, error, reload: load } = sessionRes;
   useEffect(() => {
-    void load();
+    setNow(Date.now());
+  }, [sessionRes.updatedAt]);
+  useEffect(() => {
     void agentsApi.get(agentId).then((d) => setName(d.agent.name)).catch(() => undefined);
-  }, [load, agentId]);
+  }, [agentId]);
 
   const run = useMemo(() => (detail ? runViews(detail, now).find((r) => String(r.turn.seq) === runId) ?? null : null), [detail, now, runId]);
-  const deliveryInFlight = detail?.deliveries?.some((d) => d.turnId === run?.turn.id && (d.state === "pending" || d.state === "sending" || (d.state === "failed" && d.retryable))) ?? false;
-  const active = run?.turn.status === "running" || run?.turn.status === "waiting" || deliveryInFlight;
-  useEffect(() => {
-    if (!active) return;
-    const timer = window.setInterval(() => void load(), 1500);
-    return () => window.clearInterval(timer);
-  }, [active, load]);
 
+  const active = detail ? isRunActive(detail, runId) : false;
   const spans = run?.spans ?? [];
   const firstSpan = useMemo(() => defaultSpanId(spans), [spans]);
   const selectedSpan = spans.find((s) => s.id === (spanId ?? firstSpan)) ?? null;
   const counts = useMemo(() => filterCounts(spans), [spans]);
 
   if (!detail || !run) {
-    return <AgentLoadError loading={!error && !detail} error={error ?? (detail ? new Error(`Run #${runId} not found in this session.`) : null)} />;
+    return (
+      <AgentLoadError
+        loading={!error && !detail}
+        error={error}
+        kind="session"
+        missing={detail ? "run" : sessionRes.missing}
+        onBack={() => navigate(detail ? agentSessionPath(agentId, sessionId) : agentPath(agentId))}
+      />
+    );
   }
 
   const errors = counts.errors;
@@ -162,8 +161,6 @@ export function AgentRunPage({ agentId, sessionId, runId }: { agentId: string; s
   const tabs: Array<[Tab, string]> = [
     ["steps", "Steps"],
     ["waterfall", "Waterfall"],
-    ["flame", "Flame graph"],
-    ["spans", "Span list"],
     ["messages", "Messages"],
     ["logs", `Logs ${run.spans.length + run.approvals.length + 1}`],
     ["config", `Configuration v${run.turn.revision}`],
@@ -281,13 +278,7 @@ export function AgentRunPage({ agentId, sessionId, runId }: { agentId: string; s
         {traceView ? (
           <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
             <div className="min-w-0 flex-1">
-              {tab === "waterfall" ? (
-                <Waterfall run={run} now={now} filter={filter} selectedId={selectedSpan?.id ?? null} onSelect={setSpanId} />
-              ) : tab === "flame" ? (
-                <FlameGraph run={run} now={now} filter={filter} selectedId={selectedSpan?.id ?? null} onSelect={setSpanId} />
-              ) : (
-                <SpanList run={run} filter={filter} selectedId={selectedSpan?.id ?? null} onSelect={setSpanId} />
-              )}
+              <Waterfall run={run} now={now} filter={filter} selectedId={selectedSpan?.id ?? null} onSelect={setSpanId} />
             </div>
             {spans.length > 0 ? spanPanel : null}
           </div>

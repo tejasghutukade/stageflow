@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { LuRefreshCw } from "react-icons/lu";
-import { fetchProjectMcpTools, postProjectMcpProbe, type McpToolInfo } from "../../../api";
+import type { McpToolInfo } from "../../../api";
+import { projectMcpApi, type ProjectMcpApi } from "../../settings/mcpApi";
 import { MONO } from "../agentsTokens";
 import { filterRows, setMany, toggleTool, toolRows } from "../model/mcpTools";
 import { ChipListField } from "../ui";
@@ -22,21 +23,27 @@ export function McpToolPicker({
   server,
   granted,
   onChange,
+  api = projectMcpApi,
 }: {
   server: string;
   granted: string[];
   onChange?: (tools: string[]) => void;
+  api?: Pick<ProjectMcpApi, "probe" | "tools">;
 }) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const live = useRef(true);
+  const probing = useRef<AbortController | null>(null);
 
   const refresh = async () => {
+    probing.current?.abort();
+    const controller = new AbortController();
+    probing.current = controller;
     setBusy(true);
     try {
-      const result = await postProjectMcpProbe(server);
-      if (!live.current) return;
+      const result = await api.probe(server, { signal: controller.signal });
+      if (!live.current || controller.signal.aborted) return;
       if (result.status === "connected" && result.tools) setLoad({ state: "ready", tools: result.tools });
       else
         setLoad({
@@ -47,16 +54,16 @@ export function McpToolPicker({
               : result.error ?? `Could not connect (${result.status.replace(/_/g, " ")}).`,
         });
     } catch (err) {
-      if (live.current) setLoad({ state: "failed", message: err instanceof Error ? err.message : String(err) });
+      if (live.current && !controller.signal.aborted) setLoad({ state: "failed", message: err instanceof Error ? err.message : String(err) });
     } finally {
-      if (live.current) setBusy(false);
+      if (live.current && probing.current === controller) setBusy(false);
     }
   };
 
   useEffect(() => {
     live.current = true;
     setLoad({ state: "loading" });
-    fetchProjectMcpTools(server).then(
+    api.tools(server).then(
       (result) => {
         if (!live.current) return;
         if (result.tools) setLoad({ state: "ready", tools: result.tools });
@@ -69,6 +76,7 @@ export function McpToolPicker({
     );
     return () => {
       live.current = false;
+      probing.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [server]);

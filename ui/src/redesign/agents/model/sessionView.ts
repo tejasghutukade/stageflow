@@ -23,6 +23,16 @@ function approvalWaitMs(approval: AgentApproval, now: number): number {
   return Math.max(0, ms(approval.decidedAt, now) - Date.parse(approval.createdAt));
 }
 
+/** A run still changes while it is running or waiting, or while a delivery of its reply is in flight. */
+export function isRunActive(detail: AgentSessionDetail, runId: string): boolean {
+  const turn = detail.turns.find((t) => String(t.seq) === runId);
+  if (!turn) return false;
+  if (turn.status === "running" || turn.status === "waiting") return true;
+  return (detail.deliveries ?? []).some(
+    (d) => d.turnId === turn.id && (d.state === "pending" || d.state === "sending" || (d.state === "failed" && d.retryable)),
+  );
+}
+
 export function runViews(detail: AgentSessionDetail, now: number = Date.now()): RunView[] {
   return detail.turns.map((turn) => {
     const messages = detail.messages.filter((message) => message.turnId === turn.id);
@@ -81,7 +91,7 @@ export function sessionRollups(detail: AgentSessionDetail, now: number = Date.no
   };
 }
 
-export type TimelineView = {
+type TimelineView = {
   messages: Array<{ at: number; user: boolean }>;
   agent: Array<{ at: number; width: number; live: boolean; failed: boolean }>;
   gates: Array<{ at: number; width: number; open: boolean }>;

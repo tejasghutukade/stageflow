@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSessionDetail } from "../../../api/agents";
-import { runViews, sessionRollups, sessionTimeline } from "./sessionView";
+import { isRunActive, runViews, sessionRollups, sessionTimeline } from "./sessionView";
 
 const t = (seconds: number) => new Date(Date.parse("2026-10-15T12:00:00Z") + seconds * 1000).toISOString();
 
@@ -76,5 +76,20 @@ describe("session view model", () => {
     expect(timeline.messages.map((m) => m.at)).toEqual([0, 10, 50]);
     expect(timeline.ticks).toHaveLength(5);
     expect(timeline.ticks.at(-1)).toMatch(/now$/);
+  });
+});
+
+describe("isRunActive", () => {
+  it("is true for running or waiting runs, false for settled or unknown ones", () => {
+    expect(isRunActive(detail, "2")).toBe(true);
+    expect(isRunActive(detail, "1")).toBe(false);
+    expect(isRunActive(detail, "9")).toBe(false);
+  });
+  it("stays active while a delivery of a settled run is in flight or retryable", () => {
+    const delivery = { turnId: "t1", state: "sending", retryable: false } as unknown as AgentSessionDetail["deliveries"][number];
+    expect(isRunActive({ ...detail, deliveries: [delivery] }, "1")).toBe(true);
+    expect(isRunActive({ ...detail, deliveries: [{ ...delivery, state: "failed", retryable: true } as typeof delivery] }, "1")).toBe(true);
+    expect(isRunActive({ ...detail, deliveries: [{ ...delivery, state: "failed", retryable: false } as typeof delivery] }, "1")).toBe(false);
+    expect(isRunActive({ ...detail, deliveries: [{ ...delivery, state: "delivered" } as typeof delivery] }, "1")).toBe(false);
   });
 });

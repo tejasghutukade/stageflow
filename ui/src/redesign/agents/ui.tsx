@@ -3,72 +3,7 @@ import { MONO, NOWRAP } from "./agentsTokens";
 
 /** Shared Agents-page atoms, transcribed from the Wonder agent artboards. */
 
-export type Crumb = { label: string; onClick?: () => void };
-
-export function Breadcrumb({ items }: { items: Crumb[] }) {
-  return (
-    <nav className="flex items-center text-xs leading-[1.33333] text-[var(--sf-text-3)]" aria-label="Breadcrumb">
-      {items.map((item, index) => (
-        <span key={`${item.label}-${index}`} className="flex items-center">
-          {index > 0 ? <span className="px-1">/</span> : null}
-          {item.onClick ? (
-            <button type="button" onClick={item.onClick} className="hover:text-[var(--sf-text-2)]">
-              {item.label}
-            </button>
-          ) : (
-            <span>{item.label}</span>
-          )}
-        </span>
-      ))}
-    </nav>
-  );
-}
-
-export function PageHeader({
-  crumbs,
-  title,
-  titleExtras,
-  description,
-  actions,
-  meta,
-  roomy = false,
-}: {
-  crumbs: Crumb[];
-  title: ReactNode;
-  titleExtras?: ReactNode;
-  description?: ReactNode;
-  actions?: ReactNode;
-  meta?: ReactNode;
-  /** Detail pages use py-5/gap-5 and a looser title stack. */
-  roomy?: boolean;
-}) {
-  return (
-    <header
-      className={`flex shrink-0 flex-col border-b border-b-[var(--sf-hairline)] px-7 ${
-        roomy ? "gap-5 py-5" : "gap-3 pb-4 pt-5"
-      }`}
-    >
-      <Breadcrumb items={crumbs} />
-      <div className="flex items-center justify-between gap-6">
-        <div className={`flex min-w-0 flex-1 flex-col ${roomy ? "gap-2" : "gap-1.5"}`}>
-          <div className="flex min-w-0 items-center gap-2.5">
-            <h1
-              className={`truncate text-2xl font-semibold tracking-[-0.5px] text-[var(--sf-text-1)] ${
-                roomy ? "leading-normal" : "leading-[1.33333]"
-              }`}
-            >
-              {title}
-            </h1>
-            {titleExtras}
-          </div>
-          {description ? <div className="text-[13px] leading-normal text-[var(--sf-text-2)]">{description}</div> : null}
-          {meta}
-        </div>
-        {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
-      </div>
-    </header>
-  );
-}
+export { Breadcrumb, type Crumb } from "../shell/Breadcrumb";
 
 export function PageFooter({ left, right }: { left: ReactNode; right?: ReactNode }) {
   return (
@@ -322,26 +257,6 @@ export function Tabs<T extends string>({
         })}
       </div>
       {aside}
-    </div>
-  );
-}
-
-export function Stat({
-  label,
-  value,
-  detail,
-  valueClassName = "text-[var(--sf-text-1)]",
-}: {
-  label: string;
-  value: ReactNode;
-  detail?: ReactNode;
-  valueClassName?: string;
-}) {
-  return (
-    <div className="flex min-w-0 flex-col gap-1">
-      <span className="text-xs leading-normal text-[var(--sf-text-3)]">{label}</span>
-      <span className={`${MONO} text-xl font-medium leading-normal ${valueClassName}`}>{value}</span>
-      {detail ? <span className="text-[11px] leading-normal text-[var(--sf-text-3)]">{detail}</span> : null}
     </div>
   );
 }

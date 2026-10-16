@@ -10,7 +10,8 @@ import { DiffDialog, diffText, YamlDialog } from "../editor/Dialogs";
 import { useSectionSpy } from "../editor/useSectionSpy";
 import { changedFields, changedSections, webChatLink } from "../model/definition";
 import { useAgentDetail, useDefinitionValidation, useEditorOptions } from "../model/hooks";
-import { Button, ChangedDot, PageFooter, PageHeader } from "../ui";
+import { Button, ChangedDot, PageFooter } from "../ui"
+import { PageHeader } from "../../shell/PageHeader";;
 
 type Compare = { revision: number; lines: DiffLine[] | null };
 
@@ -140,8 +141,8 @@ function EditView({ initial, onReload }: { initial: AgentDetail & { definition: 
           { label: saved.name, onClick: () => navigate(agentPath(agent.id)) },
           { label: "Edit" },
         ]}
-        title={saved.name}
-        titleExtras={
+        title="Edit"
+        titleAddon={
           <>
             {agent.enabled ? (
               <span className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-[#4cc38a1a] px-2">
@@ -327,8 +328,8 @@ function EditView({ initial, onReload }: { initial: AgentDetail & { definition: 
 }
 
 export function AgentEditPage({ agentId }: { agentId: string }) {
-  const { detail, loading, error, reload } = useAgentDetail(agentId);
-  if (!detail) return <AgentLoadError loading={loading} error={error} />;
+  const { detail, loading, error, missing, reload } = useAgentDetail(agentId);
+  if (!detail) return <AgentLoadError loading={loading} error={error} missing={missing} />;
   if (!detail.definition) return <AgentLoadError loading={false} error={null} invalid={detail} />;
   return <EditView key={`${detail.agent.id}:${detail.agent.revision}`} initial={{ ...detail, definition: detail.definition }} onReload={reload} />;
 }

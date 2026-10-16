@@ -9,7 +9,8 @@ import { useSectionSpy } from "../editor/useSectionSpy";
 import { newAgentDefinition } from "../model/definition";
 import { useDefinitionValidation, useEditorOptions } from "../model/hooks";
 import { markAgentCreated } from "../useAgent";
-import { Button, PageFooter, PageHeader } from "../ui";
+import { Button, PageFooter } from "../ui"
+import { PageHeader } from "../../shell/PageHeader";;
 import { AgentAuthorChatColumn } from "./AgentAuthorChatColumn";
 
 export function AgentCreatePage() {
@@ -84,7 +85,7 @@ export function AgentCreatePage() {
       <PageHeader
         crumbs={[{ label: "Agents", onClick: () => navigate(agentsPath()) }, { label: "New agent" }]}
         title={definition.name.trim() || "New agent"}
-        titleExtras={
+        titleAddon={
           <span className="flex h-6 shrink-0 items-center gap-1.5 rounded-md bg-[var(--sf-raised)] px-2">
             <LuCircle aria-hidden className="size-2.5 text-[var(--sf-text-3)]" />
             <span className={`text-xs leading-[1.33333] text-[var(--sf-text-2)] ${NOWRAP}`}>Draft · not saved</span>

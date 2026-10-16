@@ -59,6 +59,7 @@ export type SessionStats = {
   turnsFinished7d: number;
   turnsSucceeded7d: number;
   cost7d: number | null;
+  costTotal: number | null;
 };
 
 export type AgentSummary = {
@@ -72,6 +73,7 @@ export type AgentSummary = {
   tools: { builtin: BuiltinToolGroup[]; builtinTools: string[]; mcpServers: string[]; skills: string[]; browser: boolean };
   askFirst: string[];
   channelConnection: string | null;
+  scheduleCron?: string | null;
   subAgents: string[];
   capture: CaptureMode | null;
   stats: SessionStats;

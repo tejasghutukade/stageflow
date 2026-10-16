@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  completeMcpOAuthSignIn,
-  fetchMcpOAuthStatus,
-  startMcpOAuthSignIn,
-} from "../../api";
+import { projectMcpApi, type ProjectMcpApi } from "./mcpApi";
+import { pollOAuthSignIn } from "./mcpSession";
 
 const INPUT =
   "h-8 w-full rounded-lg border border-[#ffffff1a] bg-[var(--sf-raised)] px-2.5 font-['Geist_Mono',monospace] text-[13px] text-[var(--sf-text-1)] outline-none focus:border-[#ffffff40]";
@@ -15,59 +12,78 @@ const LABEL = "font-sans text-xs text-[var(--sf-text-3)]";
  * Sign-in for a server that asks for OAuth. The Host starts the flow and returns a link; the user
  * approves in their own browser and, when that browser cannot reach the Host's callback (Docker,
  * a remote machine), pastes the address it ended on. On a local Host the callback completes the
- * flow by itself, so the dialog also polls.
+ * flow by itself, so the dialog also polls (for up to five minutes, and only while it is mounted).
  */
 export function McpSignIn({
   name,
   onDone,
   onCancel,
+  api = projectMcpApi,
 }: {
   name: string;
   onDone: () => void;
   onCancel: () => void;
+  api?: Pick<ProjectMcpApi, "oauthStart" | "oauthComplete" | "oauthStatus">;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [pasted, setPasted] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const done = useRef(onDone);
-  done.current = onDone;
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+  const live = useRef(true);
+  const finished = useRef(false);
+  // The poll, the paste path and a re-render can all see "signed in"; only the first reports it.
+  const done = () => {
+    if (finished.current || !live.current) return;
+    finished.current = true;
+    onDoneRef.current();
+  };
 
   useEffect(() => {
-    let live = true;
-    startMcpOAuthSignIn(name).then(
-      (res) => live && setUrl(res.authorizationUrl),
-      (err) => live && setError(err instanceof Error ? err.message : String(err)),
-    );
+    live.current = true;
+    finished.current = false;
     return () => {
-      live = false;
+      live.current = false;
     };
   }, [name]);
 
   useEffect(() => {
+    let current = true;
+    setUrl(null);
+    setError(null);
+    api.oauthStart(name).then(
+      (res) => current && setUrl(res.authorizationUrl),
+      (err) => current && setError(err instanceof Error ? err.message : String(err)),
+    );
+    return () => {
+      current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name]);
+
+  useEffect(() => {
     if (!url) return;
-    const timer = setInterval(() => {
-      fetchMcpOAuthStatus(name).then(
-        (res) => {
-          if (res.status === "authenticated") done.current();
-        },
-        () => {},
-      );
-    }, 2000);
-    return () => clearInterval(timer);
+    return pollOAuthSignIn({
+      api,
+      name,
+      onSignedIn: done,
+      onTimeout: () => setError("Timed out waiting for sign-in. Finish it with the pasted address, or cancel and start again."),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, url]);
 
   const finish = async () => {
     setBusy(true);
     setError(null);
     try {
-      const res = await completeMcpOAuthSignIn(name, pasted.trim());
-      if (res.status === "authenticated") done.current();
+      const res = await api.oauthComplete(name, pasted.trim());
+      if (res.status === "authenticated") done();
       else setError("Sign-in did not complete. Start again.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false);
+      if (live.current) setBusy(false);
     }
   };
 

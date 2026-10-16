@@ -18,7 +18,6 @@ import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TriggersPage } from "./pages/TriggersPage";
 import { ConnectionsPage } from "./pages/ConnectionsPage";
-import { AgentsPage } from "./pages/AgentsPage";
 import { ConnectionDetailPage } from "./redesign/connections/ConnectionDetailPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
@@ -39,6 +38,8 @@ import {
   type Route,
 } from "./routes";
 import { applyRedesignAttribute, useRedesign } from "./redesign/flag";
+import { AgentsRedesign } from "./redesign/agents/AgentsRedesign";
+import { agentsRouteProps, railActiveId } from "./routeNav";
 import { AgentSessionsPage } from "./redesign/agents/sessions/AgentSessionsPage";
 import { useAgentApprovals } from "./redesign/agents/model/useAgentApprovals";
 import { useActiveSessionCount } from "./redesign/agents/model/useActiveSessionCount";
@@ -53,38 +54,6 @@ import {
   useWaitingNotifications,
   type NotifyPreference,
 } from "./useWaitingNotifications";
-
-function railActiveId(route: Route, redesignOn: boolean): string {
-  if (route.name === "connect") return "settings";
-  if (route.name === "detail") return "runs";
-  if (route.name === "new") return "inbox";
-  if (route.name === "pipeline" || route.name === "workshop") return "pipelines";
-  if (route.name === "task") return "tasks";
-  if (route.name === "trigger") return "triggers";
-  if (route.name === "connection") return "connections";
-  if (route.name === "agentSessions") return "agent-sessions";
-  if (route.name === "agent" || route.name === "agentSession" || route.name === "agentRun") return "agents";
-  if (redesignOn) {
-    if (route.name === "catalog" || route.name === "stage") return "catalog";
-    if (route.name === "skill" || route.name === "skills") return "catalog";
-    if (
-      route.name === "extensions" ||
-      route.name === "extensionPackage" ||
-      route.name === "extensionFile"
-    ) {
-      return "catalog";
-    }
-  } else {
-    if (route.name === "skill") return "skills";
-    if (
-      route.name === "extensionPackage" ||
-      route.name === "extensionFile"
-    ) {
-      return "extensions";
-    }
-  }
-  return route.name;
-}
 
 function ConsoleRoot() {
   const redesignOn = useRedesign();
@@ -233,16 +202,8 @@ function ConsoleRoot() {
     content = <ConnectionDetailPage connectionId={route.connectionId} />;
   } else if (route.name === "agentSessions") {
     content = <AgentSessionsPage />;
-  } else if (route.name === "agents") {
-    content = <AgentsPage />;
-  } else if (route.name === "agentCreate") {
-    content = <AgentsPage screen="create" />;
-  } else if (route.name === "agent") {
-    content = <AgentsPage agentId={route.agentId} screen={route.screen} />;
-  } else if (route.name === "agentSession") {
-    content = <AgentsPage agentId={route.agentId} sessionId={route.sessionId} screen="session" />;
-  } else if (route.name === "agentRun") {
-    content = <AgentsPage agentId={route.agentId} sessionId={route.sessionId} runId={route.runId} screen="run" />;
+  } else if (agentsRouteProps(route)) {
+    content = <AgentsRedesign {...agentsRouteProps(route)!} />;
   } else if (route.name === "trigger") {
     content = (
       <TriggersPage

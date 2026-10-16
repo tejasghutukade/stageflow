@@ -32,6 +32,7 @@ import { navigate, newRunPath, runStreamPath, taskPath, workshopPath } from "../
 import { showToast } from "../../toast";
 import { formatDurationShort } from "../editor/editorGraphLayout";
 import { useHotkeys } from "../keys";
+import { PageHeader } from "../shell/PageHeader";
 import { TaskFormDialog, type TaskFormInitial, type TaskFormMode } from "./TaskFormDialog";
 import { TaskRunPill, TasksColumnHeader, TasksTableRow } from "./TasksTableRow";
 import {
@@ -717,58 +718,61 @@ export function TasksRedesign({
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[#0c0d0f]">
-      <div className="flex w-full h-14 shrink-0 justify-between items-center border-b px-5 py-0 gap-4 border-b-[#ffffff12]">
-        <div className="flex shrink-0 items-baseline gap-2.5">
-          <h1 className="text-[#ecedee] font-sans text-xl font-semibold leading-normal tracking-[-0.4px]">
-            Tasks
-          </h1>
-          <span className={`text-[#8b8f98] ${MONO} text-[13px] leading-normal`}>{tasks.length}</span>
-          <span className="flex items-center gap-[5px] self-center">
-            <LuFolder className="size-3 block text-[#8b8f98]" aria-hidden />
-            <span className={`text-[#8b8f98] ${MONO} text-xs leading-normal ${NOWRAP}`}>{folder}</span>
+      <PageHeader
+        title="Tasks"
+        titleAddon={
+          <>
+            <span className={`text-[#8b8f98] ${MONO} text-[13px] leading-normal`}>{tasks.length}</span>
+            <span className="flex items-center gap-[5px] self-center">
+              <LuFolder className="size-3 block text-[#8b8f98]" aria-hidden />
+              <span className={`text-[#8b8f98] ${MONO} text-xs leading-normal ${NOWRAP}`}>{folder}</span>
+            </span>
+          </>
+        }
+        actions={
+          <>
+            <button type="button" onClick={openImport} className={`${SECONDARY_BTN} px-3 gap-2`}>
+              <LuGithub className="size-3.5 block text-[#a7aab2]" aria-hidden />
+              <span className={`text-[#ecedee] font-sans text-[13px] font-medium leading-normal ${NOWRAP}`}>
+                Import from issue
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={openCreate}
+              className="flex h-8 shrink-0 items-center bg-[#ecedee] rounded-lg px-3 py-0 gap-2"
+            >
+              <LuPlus className="size-3.5 block text-[#0c0d0f]" aria-hidden />
+              <span className={`text-[#0c0d0f] font-sans text-[13px] font-medium leading-normal ${NOWRAP}`}>
+                New task
+              </span>
+              <span className={KEYCAP_LIGHT}>N</span>
+            </button>
+          </>
+        }
+      >
+        <label className="flex w-[280px] h-8 items-center bg-[#1a1c21] border border-[#ffffff1a] rounded-lg px-2.5 py-0 gap-2">
+          <LuSearch className="size-3.5 block shrink-0 text-[#8b8f98]" aria-hidden />
+          <input
+            ref={searchRef}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setSearch("");
+                e.currentTarget.blur();
+              }
+            }}
+            placeholder="Search tasks by id or goal"
+            aria-label="Search tasks by id or goal"
+            className="min-w-0 flex-1 bg-transparent text-[#ecedee] font-sans text-[13px] leading-normal outline-none placeholder:text-[#8b8f98]"
+            spellCheck={false}
+          />
+          <span className={`bg-[#131418] border border-[#ffffff1a] text-[#8b8f98] ${MONO} text-[11px] leading-normal rounded-sm px-[5px] py-0`}>
+            /
           </span>
-        </div>
-        <div className="flex min-w-0 items-center gap-2">
-          <label className="flex w-[280px] h-8 items-center bg-[#1a1c21] border border-[#ffffff1a] rounded-lg px-2.5 py-0 gap-2">
-            <LuSearch className="size-3.5 block shrink-0 text-[#8b8f98]" aria-hidden />
-            <input
-              ref={searchRef}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  setSearch("");
-                  e.currentTarget.blur();
-                }
-              }}
-              placeholder="Search tasks by id or goal"
-              aria-label="Search tasks by id or goal"
-              className="min-w-0 flex-1 bg-transparent text-[#ecedee] font-sans text-[13px] leading-normal outline-none placeholder:text-[#8b8f98]"
-              spellCheck={false}
-            />
-            <span className={`bg-[#131418] border border-[#ffffff1a] text-[#8b8f98] ${MONO} text-[11px] leading-normal rounded-sm px-[5px] py-0`}>
-              /
-            </span>
-          </label>
-          <button type="button" onClick={openImport} className={`${SECONDARY_BTN} px-3 gap-2`}>
-            <LuGithub className="size-3.5 block text-[#a7aab2]" aria-hidden />
-            <span className={`text-[#ecedee] font-sans text-[13px] font-medium leading-normal ${NOWRAP}`}>
-              Import from issue
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={openCreate}
-            className="flex h-8 shrink-0 items-center bg-[#ecedee] rounded-lg px-3 py-0 gap-2"
-          >
-            <LuPlus className="size-3.5 block text-[#0c0d0f]" aria-hidden />
-            <span className={`text-[#0c0d0f] font-sans text-[13px] font-medium leading-normal ${NOWRAP}`}>
-              New task
-            </span>
-            <span className={KEYCAP_LIGHT}>N</span>
-          </button>
-        </div>
-      </div>
+        </label>
+      </PageHeader>
 
       <div className="flex w-full h-12 shrink-0 justify-between items-center border-b px-5 py-0 border-b-[#ffffff12]">
         <div className="flex items-center gap-0.5">

@@ -5,7 +5,8 @@ import { agentSessionPath, navigate } from "../../../routes";
 import { MONO, PAGE_BG } from "../agentsTokens";
 import { formatCost, formatTokens, relativeTime, sessionSubtitle, sourceLabel } from "../model/format";
 import { sessionStatusView } from "../model/sessionStatus";
-import { Button, PageFooter, PageHeader, SelectField } from "../ui";
+import { Button, PageFooter, SelectField } from "../ui"
+import { PageHeader } from "../../shell/PageHeader";;
 
 const GRID = "grid grid-cols-[minmax(0,1fr)_150px_96px_130px_50px_70px_70px_96px] items-center gap-4 px-7 min-w-[1040px]";
 const PAGE_SIZE = 25;

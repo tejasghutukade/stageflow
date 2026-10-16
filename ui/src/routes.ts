@@ -266,7 +266,7 @@ export function parseHash(hash = window.location.hash): Route {
     const connectionId = firstSegment(path.slice("connections/".length));
     if (connectionId) return { name: "connection", connectionId };
   }
-  if (path === "agent-sessions") return { name: "agentSessions" };
+  if (path === "agent-sessions" || path === "agents/sessions") return { name: "agentSessions" };
   if (path === "agents") return { name: "agents" };
   if (path === "agents/new") return { name: "agentCreate" };
   if (path.startsWith("agents/")) {

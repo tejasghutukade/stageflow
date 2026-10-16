@@ -1,4 +1,10 @@
-import type { ProjectMcpServerConfig } from "../../api";
+import type {
+  McpOAuthStatus,
+  McpSecretsList,
+  ProjectMcpImportResult,
+  ProjectMcpRowStatus,
+  ProjectMcpServerConfig,
+} from "../../api";
 
 export type McpKv = { key: string; value: string };
 
@@ -36,9 +42,42 @@ export function emptyMcpForm(): McpFormState {
   };
 }
 
-function kvToRecord(rows: readonly McpKv[]): Record<string, string> | undefined {
+/** Header/env names whose values are credentials: shown masked, never echoed in clear. */
+export function looksSecretKey(key: string): boolean {
+  return /authorization|token|secret|key|password/i.test(key);
+}
+
+const PLACEHOLDER_ONLY = /^(?:Bearer\s+)?(?:\$\{[^}]*\}\s*)*$/i;
+
+/** A value input is masked when its key looks secret and the value is a literal, not a `${NAME}` reference. */
+export function shouldMaskValue(key: string, value: string): boolean {
+  if (!looksSecretKey(key) && !/^\s*authorization\s*:/i.test(value)) return false;
+  return !PLACEHOLDER_ONLY.test(value.trim());
+}
+
+/** The name field holds a pasted `Authorization: Bearer <token>` line: mask it too. */
+export function shouldMaskKey(key: string): boolean {
+  return /^\s*authorization\s*:\s*\S/i.test(key);
+}
+
+/**
+ * Pasting a whole `Name: value` header into either box still saves as a header: the line is split
+ * here, and the host moves a literal token into secrets.
+ */
+export function normalizeHeaderRow(row: McpKv): McpKv {
+  const inKey = /^\s*([A-Za-z0-9_-]+)\s*:\s*(.+)$/.exec(row.key);
+  if (inKey && row.value.trim() === "") return { key: inKey[1]!, value: inKey[2]!.trim() };
+  const inValue = /^\s*authorization\s*:\s*(.+)$/i.exec(row.value);
+  if (inValue && (row.key.trim() === "" || /^authorization$/i.test(row.key.trim()))) {
+    return { key: "Authorization", value: inValue[1]!.trim() };
+  }
+  return row;
+}
+
+function kvToRecord(rows: readonly McpKv[], headers = false): Record<string, string> | undefined {
   const out: Record<string, string> = {};
-  for (const row of rows) {
+  for (const raw of rows) {
+    const row = headers ? normalizeHeaderRow(raw) : raw;
     const key = row.key.trim();
     if (key) out[key] = row.value;
   }
@@ -113,14 +152,14 @@ export function formToConfig(form: McpFormState): McpFormResult {
     ...(form.httpTransport === "sse" ? { httpTransport: "sse" as const } : {}),
   };
   if (form.authMode === "bearer") {
-    const token = form.bearerToken.trim().replace(/^Bearer\s+/i, "");
+    const token = form.bearerToken.trim().replace(/^(?:authorization\s*:\s*)?Bearer\s+/i, "");
     if (token) return { ok: true, name, config: { ...base, headers: { Authorization: `Bearer ${token}` } } };
     if (form.bearerRef) {
       return { ok: true, name, config: { ...base, headers: { Authorization: `Bearer \${${form.bearerRef}}` } } };
     }
     return { ok: false, error: "Paste the token this server expects." };
   }
-  const headers = form.authMode === "headers" ? kvToRecord(form.headers) : undefined;
+  const headers = form.authMode === "headers" ? kvToRecord(form.headers, true) : undefined;
   return { ok: true, name, config: { ...base, ...(headers ? { headers } : {}) } };
 }
 
@@ -164,4 +203,63 @@ export function secretsSummary(stored: readonly string[]): string | null {
   if (stored.length === 0) return null;
   const unique = [...new Set(stored)];
   return `Moved ${unique.length === 1 ? "a token" : `${unique.length} tokens`} out of the config into secrets: ${unique.join(", ")}.`;
+}
+
+/** Notice shown after a save; null when nothing was moved into secrets. */
+export function saveNotice(res: { secretsStored: readonly string[] }): string | null {
+  return secretsSummary(res.secretsStored);
+}
+
+export type ImportOutcome = { ok: true; notice: string | null } | { ok: false; error: string };
+
+/** An import that added nothing is a failure; skipped entries are listed in the notice. */
+export function importOutcome(res: ProjectMcpImportResult): ImportOutcome {
+  if (res.added.length === 0) {
+    return { ok: false, error: res.errors.map((e) => `${e.name}: ${e.error}`).join(" · ") || "Nothing was added." };
+  }
+  const skipped =
+    res.errors.length > 0 ? `Skipped: ${res.errors.map((e) => `${e.name} (${e.error})`).join(", ")}.` : "";
+  return { ok: true, notice: [secretsSummary(res.secretsStored), skipped].filter(Boolean).join(" ") || null };
+}
+
+export function deleteNotice(name: string): string {
+  return `Removed ${name}.`;
+}
+
+export function signedInNotice(name: string): string {
+  return `Signed in to ${name}.`;
+}
+
+export function isSignedIn(oauth: McpOAuthStatus | undefined): boolean {
+  return oauth === "authenticated";
+}
+
+/** Sign in is offered for remote servers that asked for it (probe said so, or a stored token expired). */
+export function canSignIn(
+  row: { transport: "stdio" | "http"; status: ProjectMcpRowStatus },
+  oauth: McpOAuthStatus | undefined,
+): boolean {
+  return row.transport === "http" && !isSignedIn(oauth) && (row.status === "needs_auth" || oauth === "expired");
+}
+
+export type SecretRowLabel = "stored" | "set on the Host" | "missing";
+export type SecretRow = { name: string; usedBy: string[]; stored: boolean; label: SecretRowLabel };
+
+/** Needed placeholders first, then stored values nothing references. */
+export function secretRows(secrets: McpSecretsList): SecretRow[] {
+  const stored = new Set(secrets.secrets.map((s) => s.name));
+  const row = (name: string, usedBy: string[], set: boolean): SecretRow => ({
+    name,
+    usedBy,
+    stored: stored.has(name),
+    label: set ? (stored.has(name) ? "stored" : "set on the Host") : "missing",
+  });
+  return [
+    ...secrets.needed.map((n) => row(n.name, n.usedBy, n.set)),
+    ...secrets.secrets.filter((s) => !secrets.needed.some((n) => n.name === s.name)).map((s) => row(s.name, s.usedBy, true)),
+  ];
+}
+
+export function secretRowDetail(row: SecretRow): string {
+  return `${row.usedBy.length > 0 ? `used by ${row.usedBy.join(", ")}` : "not used by any server"} · ${row.label}`;
 }

@@ -240,7 +240,7 @@ export function SettingsProvidersPanel({
     <div className="flex flex-col gap-6">
       <header className="flex w-full items-end justify-between gap-6">
         <div className="flex flex-col gap-1.5">
-          <h1 className="font-sans text-[22px] font-semibold tracking-[-0.44px] text-[var(--sf-text-1)]">
+          <h1 className="font-sans text-xl font-semibold tracking-[-0.4px] text-[var(--sf-text-1)]">
             Providers
           </h1>
           <p className="max-w-xl font-sans text-[13px] text-[var(--sf-text-2)]">

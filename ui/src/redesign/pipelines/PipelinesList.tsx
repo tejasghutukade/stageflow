@@ -10,6 +10,7 @@ import { useRunCatalog } from "../../catalog/useRunCatalog";
 import { relativeTime } from "../../catalogJoin";
 import { navigate, workshopPath } from "../../routes";
 import { Keycap } from "../Keycap";
+import { PageHeader } from "../shell/PageHeader";
 import { useHotkeys, type HotkeyDef } from "../keys";
 import {
   movePipelineSelection,
@@ -237,52 +238,53 @@ export function PipelinesList() {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <header className="flex h-14 w-full shrink-0 items-center justify-between gap-4 border-b border-b-[#ffffff12] px-5">
-        <div className="flex shrink-0 items-baseline gap-2.5">
-          <h1 className="text-[18px] font-semibold text-[var(--sf-text-1)]">
-            Pipelines
-          </h1>
+      <PageHeader
+        title="Pipelines"
+        titleAddon={
           <span className="font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-2)]">
             {view.filteredCount}
           </span>
-        </div>
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
-          <label className="flex h-9 min-w-[240px] max-w-[420px] flex-1 items-center gap-2 rounded-lg border border-[#ffffff12] bg-[var(--sf-ground)] px-3">
-            <LuSearch
-              className="size-3.5 shrink-0 text-[var(--sf-text-3)]"
-              aria-hidden
-            />
-            <input
-              ref={searchRef}
-              type="search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search pipelines by id, path, or stage"
-              aria-label="Search pipelines"
-              className="min-w-0 flex-1 border-none bg-transparent text-[13px] text-[var(--sf-text-1)] outline-none placeholder:text-[var(--sf-text-3)]"
-            />
-            <Keycap>/</Keycap>
-          </label>
-          <button
-            type="button"
-            className="sf-btn sf-btn--secondary shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={selectedRow === null}
-            onClick={() => openWorkshop(selectedRow)}
-          >
-            <LuWrench className="size-3.5" aria-hidden />
-            Open in Workshop
-          </button>
-          <button
-            type="button"
-            className="sf-btn sf-btn--primary shrink-0"
-            onClick={newPipeline}
-          >
-            <LuPlus className="size-3.5" aria-hidden />
-            New pipeline
-            <Keycap className="border-[#0c0d0f2e] text-[#5a5d66]">N</Keycap>
-          </button>
-        </div>
-      </header>
+        }
+        actions={
+          <>
+            <button
+              type="button"
+              className="sf-btn sf-btn--secondary shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={selectedRow === null}
+              onClick={() => openWorkshop(selectedRow)}
+            >
+              <LuWrench className="size-3.5" aria-hidden />
+              Open in Workshop
+            </button>
+            <button
+              type="button"
+              className="sf-btn sf-btn--primary shrink-0"
+              onClick={newPipeline}
+            >
+              <LuPlus className="size-3.5" aria-hidden />
+              New pipeline
+              <Keycap className="border-[#0c0d0f2e] text-[#5a5d66]">N</Keycap>
+            </button>
+          </>
+        }
+      >
+        <label className="flex h-9 min-w-[240px] max-w-[420px] flex-1 items-center gap-2 rounded-lg border border-[#ffffff12] bg-[var(--sf-ground)] px-3">
+          <LuSearch
+            className="size-3.5 shrink-0 text-[var(--sf-text-3)]"
+            aria-hidden
+          />
+          <input
+            ref={searchRef}
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search pipelines by id, path, or stage"
+            aria-label="Search pipelines"
+            className="min-w-0 flex-1 border-none bg-transparent text-[13px] text-[var(--sf-text-1)] outline-none placeholder:text-[var(--sf-text-3)]"
+          />
+          <Keycap>/</Keycap>
+        </label>
+      </PageHeader>
 
       {showTableChrome ? (
         <div className="flex h-10 w-full shrink-0 items-center border-b border-b-[#ffffff12] px-5">

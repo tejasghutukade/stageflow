@@ -3,6 +3,8 @@ import { LuPlus, LuX } from "react-icons/lu";
 import {
   formToConfig,
   parsePastedMcp,
+  shouldMaskKey,
+  shouldMaskValue,
   type McpFormState,
   type McpKv,
 } from "./mcpForm";
@@ -42,6 +44,8 @@ function KvRows({
       {rows.map((row, i) => (
         <div key={i} className="flex gap-1.5">
           <input
+            type={shouldMaskKey(row.key) ? "password" : "text"}
+            autoComplete="off"
             className={INPUT}
             aria-label={`${label} name`}
             placeholder={namePlaceholder}
@@ -49,6 +53,8 @@ function KvRows({
             onChange={(e) => onChange(rows.map((r, j) => (j === i ? { ...r, key: e.target.value } : r)))}
           />
           <input
+            type={shouldMaskValue(row.key, row.value) ? "password" : "text"}
+            autoComplete="off"
             className={INPUT}
             aria-label={`${label} value`}
             placeholder={valuePlaceholder}

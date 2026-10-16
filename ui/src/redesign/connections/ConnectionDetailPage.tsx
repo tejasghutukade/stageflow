@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { LuArrowLeft, LuCheck, LuCopy, LuMinus, LuPlug, LuRefreshCw, LuTriangleAlert } from "react-icons/lu";
+import { PageHeader } from "../shell/PageHeader";
+import { LuCheck, LuCopy, LuMinus, LuPlug, LuRefreshCw, LuTriangleAlert } from "react-icons/lu";
 import {
   ChannelApiError, checkChannelConnection, deleteChannelConnection, fetchChannelConnections, updateChannelConnection,
   type ChannelConnectionListing, type ChannelMeta,
@@ -115,47 +116,39 @@ export function ConnectionDetailPage({ connectionId }: { connectionId: string })
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[#0c0d0f]">
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <header className="flex w-full shrink-0 items-start justify-between gap-4 border-b border-b-[#ffffff12] px-7 pb-5 pt-5">
-          <div className="flex min-w-0 flex-col gap-1.5">
-            <button type="button" onClick={back} className="flex w-fit items-center gap-1.5 text-xs text-[#8b8f98] hover:text-[#ecedee]">
-              <LuArrowLeft className="size-3 block" aria-hidden />
-              Connections
-              <span aria-hidden>/</span>
-              <span className="text-[#a7aab2]">{label ?? connectionId}</span>
-            </button>
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className={`truncate text-2xl font-semibold leading-normal tracking-[-0.48px] text-[#ecedee] ${MONO}`}>
-                {connection?.identity ?? connectionId}
-              </h1>
-              {connection ? <StatusPill connection={connection} meta={meta} /> : null}
-            </div>
-            {connection ? (
-              <p className="text-[13px] leading-normal text-[#a7aab2]">
-                {label ?? connection.provider} · Communication channel ·{" "}
-                {connection.health ? `Last checked ${ageLabel(connection.health.checkedAt, now)}` : "Not checked yet"}
-              </p>
-            ) : null}
-          </div>
-          {connection ? (
-            <div className="flex shrink-0 items-center gap-2">
-              {connection.enabled ? (
+        <PageHeader
+          crumbs={[{ label: "Connections", onClick: back }]}
+          title={<span className={MONO}>{connection?.identity ?? connectionId}</span>}
+          titleAddon={connection ? <StatusPill connection={connection} meta={meta} /> : null}
+          description={
+            connection
+              ? `${label ?? connection.provider} · Communication channel · ${
+                  connection.health ? `Last checked ${ageLabel(connection.health.checkedAt, now)}` : "Not checked yet"
+                }`
+              : undefined
+          }
+          actions={
+            connection ? (
+              <>
+                {connection.enabled ? (
+                  <button
+                    type="button" onClick={check} disabled={checking || busy}
+                    className="flex h-8 items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] font-medium text-[#ecedee] disabled:opacity-60"
+                  >
+                    <LuRefreshCw className={`size-3.5 block ${checking ? "animate-spin" : ""}`} aria-hidden />
+                    {checking ? "Checking" : "Test connection"}
+                  </button>
+                ) : null}
                 <button
-                  type="button" onClick={check} disabled={checking || busy}
-                  className="flex h-8 items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] font-medium text-[#ecedee] disabled:opacity-60"
+                  type="button" onClick={() => void setEnabled(!connection.enabled)} disabled={busy}
+                  className="flex h-8 items-center rounded-lg border border-[#ffffff1a] px-3 text-[13px] text-[#a7aab2] hover:bg-[#1a1c21] disabled:opacity-60"
                 >
-                  <LuRefreshCw className={`size-3.5 block ${checking ? "animate-spin" : ""}`} aria-hidden />
-                  {checking ? "Checking" : "Test connection"}
+                  {connection.enabled ? "Disable" : "Enable"}
                 </button>
-              ) : null}
-              <button
-                type="button" onClick={() => void setEnabled(!connection.enabled)} disabled={busy}
-                className="flex h-8 items-center rounded-lg border border-[#ffffff1a] px-3 text-[13px] text-[#a7aab2] hover:bg-[#1a1c21] disabled:opacity-60"
-              >
-                {connection.enabled ? "Disable" : "Enable"}
-              </button>
-            </div>
-          ) : null}
-        </header>
+              </>
+            ) : undefined
+          }
+        />
 
         {state === "loading" ? <div className="px-7 py-7 text-[13px] text-[#8b8f98]">Loading…</div> : null}
         {state === "missing" ? (

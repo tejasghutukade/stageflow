@@ -1,19 +1,59 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { DiffLine } from "../../../api/agents";
 import { MONO } from "../agentsTokens";
 
-function Dialog({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+export function Dialog({ title, onClose, children, footer, narrow }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; narrow?: boolean }) {
+  const panel = useRef<HTMLDivElement>(null);
+  // Callers pass a new onClose every render; the Escape listener should not re-subscribe for it.
+  const close = useRef(onClose);
+  close.current = onClose;
+
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") close.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, []);
+
+  // Move focus in on open and give it back to whatever opened the dialog on close.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    (panel.current?.querySelector<HTMLElement>(FOCUSABLE) ?? panel.current)?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
+
+  // Keep Tab inside the dialog.
+  const trapTab = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Tab" || !panel.current) return;
+    const items = [...panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
+    if (items.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = items[0]!;
+    const last = items[items.length - 1]!;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !panel.current.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (active === last || !panel.current.contains(active))) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#000000aa] p-6" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
       <div
-        className="flex max-h-[min(80vh,720px)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)]"
+        ref={panel}
+        tabIndex={-1}
+        onKeyDown={trapTab}
+        className={`flex max-h-[min(80vh,720px)] w-full ${narrow ? "max-w-md" : "max-w-3xl"} flex-col overflow-hidden rounded-xl outline-none border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)]`}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-b-[var(--sf-hairline)] px-4 py-3">
@@ -105,4 +145,45 @@ export function diffText(before: string, after: string): DiffLine[] {
   while (i < a.length) out.push({ kind: "removed", text: a[i++]!, before: i });
   while (j < b.length) out.push({ kind: "added", text: b[j++]!, after: j });
   return out;
+}
+
+export function ConfirmDialog({
+  title,
+  confirmLabel,
+  busy,
+  onConfirm,
+  onClose,
+  children,
+}: {
+  title: string;
+  confirmLabel: string;
+  busy?: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Dialog
+      title={title}
+      onClose={onClose}
+      narrow
+      footer={
+        <>
+          <button type="button" onClick={onClose} className="rounded-md border border-[var(--sf-hairline-strong)] px-3 py-1.5 text-[13px] text-[var(--sf-text-2)]">
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onConfirm}
+            className="rounded-md bg-[var(--sf-text-1)] px-3 py-1.5 text-[13px] font-medium text-[var(--sf-bg,#0b0b0c)] disabled:opacity-50"
+          >
+            {confirmLabel}
+          </button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-2 px-4 py-4 text-[13px] leading-[1.5] text-[var(--sf-text-2)]">{children}</div>
+    </Dialog>
+  );
 }

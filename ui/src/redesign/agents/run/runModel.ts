@@ -52,7 +52,7 @@ export function orderSpans(spans: AgentSpan[]): SpanRow[] {
   return rows;
 }
 
-export function spanModel(span: AgentSpan): string | null {
+function spanModel(span: AgentSpan): string | null {
   const model = span.attributes["gen_ai.request.model"];
   return typeof model === "string" ? model : null;
 }
@@ -100,7 +100,7 @@ export function defaultSpanId(spans: AgentSpan[]): string | null {
   return (rows.find((r) => r.span.status === "error") ?? rows.find((r) => r.span.kind === "tool") ?? rows[0])?.span.id ?? null;
 }
 
-export type TimeSlice = { id: string; label: string; ms: number; percent: number; color: string };
+type TimeSlice = { id: string; label: string; ms: number; percent: number; color: string };
 
 export function timeBreakdown(run: RunView): TimeSlice[] {
   const sum = (kind: string) => run.spans.filter((s) => s.kind === kind).reduce((total, s) => total + (s.durationMs ?? 0), 0);

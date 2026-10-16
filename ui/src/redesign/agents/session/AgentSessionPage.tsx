@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   LuArrowUp,
   LuArrowUpRight,
@@ -20,7 +20,7 @@ import { showToast } from "../../../toast";
 import { AgentLoadError } from "../AgentLoadState";
 import { MONO, NOWRAP, PAGE_BG } from "../agentsTokens";
 import { clockTime, formatCost, formatDuration, formatTokens, shortSessionId, sourceLabel } from "../model/format";
-import { useAgentDetail } from "../model/hooks";
+import { useAgentDetail, useResource } from "../model/hooks";
 import { runViews, sessionRollups, sessionTimeline, spanColor, type RunView } from "../model/sessionView";
 import { Breadcrumb, Button, PageFooter } from "../ui";
 
@@ -297,53 +297,41 @@ function Timeline({ detail, now }: { detail: AgentSessionDetail; now: number }) 
 
 function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: string | null }) {
   const agentId = agent.agent.id;
-  const [detail, setDetail] = useState<AgentSessionDetail | null>(null);
-  const [loadError, setLoadError] = useState<AgentApiError | Error | null>(null);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState<{ prompt: string; reply: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [deciding, setDeciding] = useState(false);
   // A first message opens its session before the reply ends; an approval can park the turn meanwhile.
   const [openedId, setOpenedId] = useState<string | null>(null);
-  const [liveDetail, setLiveDetail] = useState<AgentSessionDetail | null>(null);
   const [filter, setFilter] = useState<"all" | "errors" | "waiting">("all");
   const [now, setNow] = useState(Date.now());
   const abort = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const refresh = useCallback(async () => {
-    if (!sessionId) return;
-    try {
-      setDetail(await agentsApi.session(agentId, sessionId));
-      setLoadError(null);
-    } catch (error) {
-      setLoadError(error instanceof Error ? error : new Error(String(error)));
-    }
-  }, [agentId, sessionId]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
   // Live updates while something can still change: a running turn or a pending approval.
+  const sessionRes = useResource(
+    sessionId ? `${agentId}/${sessionId}` : null,
+    () => agentsApi.session(agentId, sessionId!),
+    {
+      kind: "session",
+      pollMs: streaming ? undefined : POLL_MS,
+      active: (d) => d.session.status === "running" || d.session.status === "waiting",
+    },
+  );
+  const { data: detail, error: loadError, reload: refresh, setData: setDetail } = sessionRes;
   const live = detail?.session.status === "running" || detail?.session.status === "waiting";
-  useEffect(() => {
-    if (!streaming || sessionId || !openedId) return;
-    const timer = window.setInterval(() => {
-      setNow(Date.now());
-      agentsApi.session(agentId, openedId).then(setLiveDetail, () => undefined);
-    }, POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [streaming, sessionId, openedId, agentId]);
+  // A first message opens its session before the reply ends; follow it until the URL catches up.
+  const opened = useResource(
+    streaming && !sessionId && openedId ? `${agentId}/${openedId}` : null,
+    () => agentsApi.session(agentId, openedId!),
+    { kind: "session", pollMs: POLL_MS, active: () => true },
+  );
+  const liveDetail = opened.data;
+  const setLiveDetail = opened.setData;
 
   useEffect(() => {
-    if (!live || streaming) return;
-    const timer = window.setInterval(() => {
-      setNow(Date.now());
-      void refresh();
-    }, POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [live, streaming, refresh]);
+    setNow(Date.now());
+  }, [sessionRes.updatedAt, opened.updatedAt]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -386,7 +374,6 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
       abort.current = null;
       setStreaming(null);
       setOpenedId(null);
-      setLiveDetail(null);
       setBusy(false);
     }
   }
@@ -429,7 +416,15 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
   }
 
   if (sessionId && !detail) {
-    return <AgentLoadError loading={!loadError} error={loadError} />;
+    return (
+      <AgentLoadError
+        loading={!loadError}
+        error={loadError}
+        kind="session"
+        missing={sessionRes.missing}
+        onBack={() => navigate(agentPath(agentId))}
+      />
+    );
   }
 
   const session = detail?.session ?? null;
@@ -656,7 +651,7 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
 }
 
 export function AgentSessionPage({ agentId, sessionId }: { agentId: string; sessionId: string }) {
-  const { detail, loading, error } = useAgentDetail(agentId);
-  if (!detail) return <AgentLoadError loading={loading} error={error} />;
+  const { detail, loading, error, missing } = useAgentDetail(agentId);
+  if (!detail) return <AgentLoadError loading={loading} error={error} missing={missing} />;
   return <SessionView key={sessionId} agent={detail} sessionId={sessionId === "new" ? null : sessionId} />;
 }

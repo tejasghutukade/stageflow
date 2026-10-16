@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSummary } from "../../api/agents";
-import { directoryFooterText, filterAgents, filterCounts, searchAgents, toDirectoryRow } from "./agentsDirectoryModel";
+import { directoryFooterText, directoryHint, directoryTotals, filterAgents, filterCounts, searchAgents, toDirectoryRow } from "./agentsDirectoryModel";
 
-const stats = { total: 0, active: 0, last7Days: 0, waiting: 0, lastActivityAt: null, turnsFinished7d: 0, turnsSucceeded7d: 0, cost7d: null };
+const stats = { total: 0, active: 0, last7Days: 0, waiting: 0, lastActivityAt: null, turnsFinished7d: 0, turnsSucceeded7d: 0, cost7d: null, costTotal: null };
 
 function agent(over: Partial<AgentSummary> & { id: string }): AgentSummary {
   return {
@@ -69,5 +69,46 @@ describe("agents directory model", () => {
   it("builds footer text", () => {
     expect(directoryFooterText([])).toBe("No agents yet");
     expect(directoryFooterText(catalog)).toBe("3 agents in agents/ · 1 enabled · 1 needs setup");
+  });
+});
+
+describe("directoryTotals", () => {
+  it("sums session counts and known costs, dash when none", () => {
+    expect(directoryTotals([agent({ id: "a" })])).toEqual({ sessions: 0, cost: "—" });
+    const a = agent({ id: "a", stats: { ...stats, total: 2, costTotal: 0.5 } });
+    const b = agent({ id: "b", stats: { ...stats, total: 1, costTotal: 0.25 } });
+    expect(directoryTotals([a, b])).toEqual({ sessions: 3, cost: "$0.75" });
+  });
+  it("labels disabled rows as paused", () => {
+    const row = toDirectoryRow(agent({ id: "a", enabled: false }));
+    expect([row.statusLabel, row.statusNote]).toEqual(["Disabled", "Paused"]);
+  });
+});
+
+describe("reach", () => {
+  it("shows web chat link, channel provider, schedule, else console only", () => {
+    const web = toDirectoryRow(agent({ id: "w", webChatUrl: "/chat/abc", publicBaseUrl: "https://x.test" }));
+    expect(web.reach).toMatchObject([{ kind: "web", label: "Web chat", href: "https://x.test/chat/abc" }]);
+    const ch = toDirectoryRow(agent({ id: "c", channelConnection: "im_1", scheduleCron: "0 9 * * *" }), 0, (id) => (id === "im_1" ? "iMessage" : undefined));
+    expect(ch.reach.map((r) => [r.kind, r.label, r.detail])).toEqual([["channel", "iMessage", "im_1"], ["schedule", "Schedule", "0 9 * * *"]]);
+    expect(toDirectoryRow(agent({ id: "n" })).reach).toMatchObject([{ kind: "console" }]);
+  });
+  it("search finds by provider", () => {
+    const a = agent({ id: "c", channelConnection: "im_1" });
+    expect(searchAgents([a], "imessage", () => "iMessage")).toHaveLength(1);
+  });
+});
+
+describe("directoryHint", () => {
+  it("is null when every agent is enabled and valid", () => {
+    expect(directoryHint([research])).toBeNull();
+    expect(directoryHint([])).toBeNull();
+  });
+  it("explains the first issue of each broken agent and what disabled means", () => {
+    expect(directoryHint([research, digest])).toBe("Disabled agents keep their history but can't start sessions.");
+    expect(directoryHint([insights])).toBe("insights can't be enabled until dovetail server not connected.");
+    expect(directoryHint(catalog)).toBe(
+      "insights can't be enabled until dovetail server not connected. Disabled agents keep their history but can't start sessions.",
+    );
   });
 });

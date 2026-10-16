@@ -16,7 +16,7 @@ Grouped nav, capacity meter, compact provider row, pins, workspace switcher, sea
 
 ## `PageHeader`
 
-Props: `title`, `subtitle?`, `actions?`, `titleAddon?`, `variant?: "bar" | "inbox"`, `className?`.
+Props: `title`, `subtitle?`, `titleAddon?`, `crumbs?` (only linked ones render, as a back path), `children?` (right slot before actions: search/filters), `actions?`, `description?`/`meta?` (band below the bar), `variant?`, `className?`. Single owner of the bar chrome; do not hand-copy it.
 
 `bar`: standard page title row (`h-14`, border). `inbox`: inbox zero title row with optional addon pill.
 

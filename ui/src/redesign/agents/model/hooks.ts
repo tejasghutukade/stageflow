@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { fetchChannelConnections, fetchProjectMcp, fetchSkills } from "../../../api";
 import { setStageflowCatalog } from "./definition";
-import { agentsApi, AgentApiError, type AgentDefinition, type AgentDetail, type AgentIssue, type StageflowToolCatalog } from "../../../api/agents";
+import { agentsApi, type AgentDefinition, type AgentDetail, type AgentIssue, type StageflowToolCatalog } from "../../../api/agents";
+import { asError, initialResource, missingKind, resourceReducer, type MissingKind } from "./resourceState";
 
 /** Choices the editor offers. Each list is undefined while loading and [] when unavailable. */
 export type EditorOptions = {
@@ -99,31 +100,99 @@ export function useDefinitionValidation(definition: AgentDefinition, delayMs = 3
   return state;
 }
 
+export type Resource<T> = {
+  data: T | null;
+  loading: boolean;
+  error: Error | null;
+  /** Set when the host said 404 for this resource. */
+  missing: MissingKind | null;
+  /** When the data last arrived, for "now" clocks that follow polling. */
+  updatedAt: number | null;
+  reload: () => Promise<void>;
+  setData: (data: T) => void;
+};
+
+/**
+ * One fetch-with-state hook for agent pages. `key` identifies the resource (null = idle): a new key
+ * drops the old data, and a response for an old key is ignored. While `active(data)` is true the
+ * resource refetches every `pollMs` without flipping `loading`.
+ */
+export function useResource<T>(
+  key: string | null,
+  fetcher: () => Promise<T>,
+  opts: { kind: MissingKind; pollMs?: number; active?: (data: T) => boolean },
+): Resource<T> {
+  const [state, dispatch] = useReducer(resourceReducer<T>, key, initialResource<T>);
+  const fetchRef = useRef(fetcher);
+  fetchRef.current = fetcher;
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  const ticket = useRef(0);
+
+  // Until the effect catches up with a new key, show it clean rather than the previous resource.
+  const view = state.key === key ? state : initialResource<T>(key);
+
+  const run = useCallback(async (silent: boolean) => {
+    const forKey = keyRef.current;
+    const mine = ++ticket.current;
+    dispatch({ type: "start", key: forKey, silent });
+    if (forKey === null) return;
+    try {
+      const data = await fetchRef.current();
+      if (mine === ticket.current) dispatch({ type: "ok", key: forKey, data, at: Date.now() });
+    } catch (err) {
+      if (mine === ticket.current) dispatch({ type: "fail", key: forKey, error: asError(err) });
+    }
+  }, []);
+
+  useEffect(() => {
+    void run(false);
+    return () => {
+      ticket.current++;
+    };
+  }, [key, run]);
+
+  const polling = opts.pollMs !== undefined && view.data !== null && (opts.active ? opts.active(view.data) : true);
+  useEffect(() => {
+    if (!polling || opts.pollMs === undefined) return;
+    const timer = window.setInterval(() => void run(true), opts.pollMs);
+    return () => window.clearInterval(timer);
+  }, [polling, opts.pollMs, run]);
+
+  const reload = useCallback(() => run(false), [run]);
+  const setData = useCallback(
+    (data: T) => dispatch({ type: "set", key: keyRef.current, data, at: Date.now() }),
+    [],
+  );
+
+  return {
+    data: view.data,
+    loading: view.loading,
+    error: view.error,
+    missing: missingKind(view.error, opts.kind),
+    updatedAt: view.updatedAt,
+    reload,
+    setData,
+  };
+}
+
 export type AgentLoad = {
   detail: AgentDetail | null;
   loading: boolean;
-  error: AgentApiError | Error | null;
+  error: Error | null;
+  missing: MissingKind | null;
   reload: () => Promise<void>;
   setDetail: (detail: AgentDetail) => void;
 };
 
 export function useAgentDetail(agentId: string): AgentLoad {
-  const [detail, setDetail] = useState<AgentDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<AgentApiError | Error | null>(null);
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      setDetail(await agentsApi.get(agentId));
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      setLoading(false);
-    }
-  }, [agentId]);
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-  return { detail, loading, error, reload, setDetail };
+  const resource = useResource(agentId, () => agentsApi.get(agentId), { kind: "agent" });
+  return {
+    detail: resource.data,
+    loading: resource.loading,
+    error: resource.error,
+    missing: resource.missing,
+    reload: resource.reload,
+    setDetail: resource.setData,
+  };
 }

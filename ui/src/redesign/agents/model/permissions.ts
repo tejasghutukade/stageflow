@@ -1,4 +1,4 @@
-import type { BuiltinToolGroup, StageflowToolCatalog } from "../../../api/agents";
+import type { StageflowToolCatalog } from "../../../api/agents";
 
 /**
  * Grants as the YAML stores them: whole groups plus single tools. The editor
@@ -82,8 +82,6 @@ export const BUILTIN_PERMISSION_GROUPS: PermissionGroup[] = [
     tools: [{ id: "bash", label: "bash", description: "Run a shell command", risk: "destructive" }],
   },
 ];
-
-export const BUILTIN_GROUP_IDS = BUILTIN_PERMISSION_GROUPS.map((group) => group.id) as BuiltinToolGroup[];
 
 /** Groups an agent can be granted; operator-only tools and groups are left out. */
 export function stageflowPermissionGroups(catalog: StageflowToolCatalog): PermissionGroup[] {

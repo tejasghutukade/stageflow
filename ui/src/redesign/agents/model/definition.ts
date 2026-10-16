@@ -56,17 +56,6 @@ export function completeDefinition(partial: Record<string, unknown>): AgentDefin
   return out as unknown as AgentDefinition;
 }
 
-export function slugAgentId(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/^[^a-z]+/, "")
-    .slice(0, 64);
-  return AGENT_ID_PATTERN.test(slug) ? slug : "";
-}
-
 export const BUILTIN_GROUPS: Array<{ id: BuiltinToolGroup; title: string; tools: string[]; effect: string }> = [
   { id: "read", title: "Read project files", tools: ["read", "grep", "find", "ls"], effect: "Reads project files" },
   { id: "write", title: "Write and edit files", tools: ["write", "edit"], effect: "Changes project files" },
@@ -271,12 +260,8 @@ export function modelLabel(model: AgentDefinition["model"] | null): string {
   return model?.id ?? "project default";
 }
 
-export function backendLabel(backend: AgentDefinition["model"]["backend"]): string {
-  return backend === "claude" ? "Claude" : "Pi";
-}
-
 /** Absolute shareable link, or null until web chat has a slug. */
-export function webChatLink(agent: Pick<AgentSummary, "webChatUrl" | "publicBaseUrl"> | null | undefined, origin = window.location.origin): string | null {
+export function webChatLink(agent: Pick<AgentSummary, "webChatUrl" | "publicBaseUrl"> | null | undefined, origin = typeof window === "undefined" ? "" : window.location.origin): string | null {
   const path = agent?.webChatUrl;
   if (!path) return null;
   if (/^https?:\/\//.test(path)) return path;
