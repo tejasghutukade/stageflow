@@ -56,7 +56,7 @@ function railActiveId(route: Route, redesignOn: boolean): string {
   if (route.name === "connect") return "settings";
   if (route.name === "detail") return "runs";
   if (route.name === "new") return "inbox";
-  if (route.name === "pipeline") return "pipelines";
+  if (route.name === "pipeline" || route.name === "workshop") return "pipelines";
   if (route.name === "task") return "tasks";
   if (route.name === "trigger") return "triggers";
   if (route.name === "connection") return "connections";

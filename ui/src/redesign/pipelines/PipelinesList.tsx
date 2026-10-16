@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LuPlus, LuSearch, LuWrench } from "react-icons/lu";
+import { LuPlus, LuSearch, LuSparkles, LuWrench } from "react-icons/lu";
 import {
   fetchPipelines,
   fetchTasks,
@@ -9,7 +9,7 @@ import {
 import { useRunCatalog } from "../../catalog/useRunCatalog";
 import { relativeTime } from "../../catalogJoin";
 import { NewPipelinePanel } from "../../components/NewPipelinePanel";
-import { navigate, pipelinePath } from "../../routes";
+import { navigate, pipelinePath, workshopPath } from "../../routes";
 import { showToast } from "../../toast";
 import { Keycap } from "../Keycap";
 import { useHotkeys, type HotkeyDef } from "../keys";
@@ -289,6 +289,14 @@ export function PipelinesList({
           >
             <LuWrench className="size-3.5" aria-hidden />
             Open in Workshop
+          </button>
+          <button
+            type="button"
+            className="sf-btn sf-btn--secondary shrink-0"
+            onClick={() => navigate(workshopPath())}
+          >
+            <LuSparkles className="size-3.5" aria-hidden />
+            Draft with Workshop
           </button>
           <button
             type="button"

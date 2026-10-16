@@ -6,7 +6,7 @@ describe("sidebar", () => {
     expect(NAV_GROUPS.map((group) => [group.label ?? null, group.items.map((item) => item.id)])).toEqual([
       [null, ["inbox"]],
       ["Activity", ["runs", "agent-sessions"]],
-      ["Build", ["pipelines", "agents", "tasks", "workshop", "catalog"]],
+      ["Build", ["pipelines", "agents", "tasks", "catalog"]],
       ["Connect", ["triggers", "connections"]],
     ]);
   });
