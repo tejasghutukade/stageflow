@@ -3640,6 +3640,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
   return Object.assign(handler, {
     dispose: async () => {
       await agentScheduleSource?.stop();
+      if (!injectedHost) await agentHost?.stop();
       await liveView.dispose();
     },
   });

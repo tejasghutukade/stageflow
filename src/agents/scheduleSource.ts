@@ -95,15 +95,15 @@ export class AgentScheduleSource {
         );
         continue;
       }
-      const stored = this.service.scheduleNextRun(this.projectRoot, candidate.agentId);
+      const stored = this.service.schedules.nextRun(this.projectRoot, candidate.agentId);
       if (stored === undefined) {
-        if (following) this.service.setScheduleNextRun(this.projectRoot, candidate.agentId, following.toISOString());
+        if (following) this.service.schedules.setNextRun(this.projectRoot, candidate.agentId, following.toISOString());
         continue;
       }
       if (Date.parse(stored) > now.getTime()) {
         // A schedule edited to fire sooner must not wait out the old next run.
         if (following && following.getTime() < Date.parse(stored)) {
-          this.service.setScheduleNextRun(this.projectRoot, candidate.agentId, following.toISOString());
+          this.service.schedules.setNextRun(this.projectRoot, candidate.agentId, following.toISOString());
         }
         continue;
       }
@@ -117,7 +117,7 @@ export class AgentScheduleSource {
           `scheduled turn failed for agent "${candidate.agentId}": ${err instanceof Error ? err.message : String(err)}`,
         );
       } finally {
-        if (following) this.service.setScheduleNextRun(this.projectRoot, candidate.agentId, following.toISOString());
+        if (following) this.service.schedules.setNextRun(this.projectRoot, candidate.agentId, following.toISOString());
       }
     }
   }

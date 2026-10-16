@@ -4,6 +4,7 @@ import type { AgentChatController } from "../chatTurn.js";
 import { isAgentError } from "../errors.js";
 import type { AgentService } from "../service.js";
 import type { AgentSession } from "../store.js";
+import { BodyError, readJsonBody, writeFrame } from "../ndjson.js";
 import { SlidingWindowLimiter } from "./rateLimit.js";
 
 const SOURCE = "web";
@@ -265,7 +266,13 @@ export class PublicWebChat {
     res.setHeader("Vary", "Origin");
     res.setHeader("Cache-Control", "no-store");
     if (!origin) return;
-    const sameOrigin = req.headers.host !== undefined && new URL(origin).host === req.headers.host;
+    // `Origin: null` (sandboxed frames, file pages) and malformed values are not same-origin and get no CORS headers.
+    let sameOrigin = false;
+    try {
+      sameOrigin = req.headers.host !== undefined && new URL(origin).host === req.headers.host;
+    } catch {
+      sameOrigin = false;
+    }
     if (sameOrigin || (this.options.allowedOrigins ?? []).includes(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Headers", "content-type, x-visitor-id");
@@ -282,33 +289,10 @@ export class PublicWebChat {
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
-    size += buffer.length;
-    if (size > MAX_BODY_BYTES) throw new WebChatError("web_chat.message_too_long");
-    chunks.push(buffer);
-  }
   try {
-    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  } catch {
-    // fall through
+    return await readJsonBody(req, MAX_BODY_BYTES);
+  } catch (error) {
+    if (error instanceof BodyError && error.reason === "too_large") throw new WebChatError("web_chat.message_too_long");
+    throw new WebChatError("web_chat.invalid");
   }
-  throw new WebChatError("web_chat.invalid");
-}
-
-async function writeFrame(res: ServerResponse, frame: unknown): Promise<void> {
-  if (res.writableEnded || res.destroyed) return;
-  if (res.write(`${JSON.stringify(frame)}\n`)) return;
-  await new Promise<void>((resolve) => {
-    const done = () => {
-      res.off("drain", done);
-      res.off("close", done);
-      resolve();
-    };
-    res.once("drain", done);
-    res.once("close", done);
-  });
 }

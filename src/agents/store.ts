@@ -10,7 +10,15 @@ import { agentDefinitionSchema, type AgentDefinition, type AgentIssue } from "..
  */
 
 export type RevisionSource = "console" | "file" | "author" | "restore" | "api";
-export type SessionStatus = "open" | "running" | "waiting" | "held" | "closed";
+/**
+ * The one list of session statuses. The database CHECK (migration 013), the HTTP filter and the MCP tool schema all
+ * read this. `held` is kept because the CHECK allows it and old rows may carry it; nothing writes it any more.
+ */
+export const SESSION_STATUSES = ["open", "running", "waiting", "held", "closed"] as const;
+export type SessionStatus = (typeof SESSION_STATUSES)[number];
+export function isSessionStatus(value: string): value is SessionStatus {
+  return (SESSION_STATUSES as readonly string[]).includes(value);
+}
 export type TurnStatus = "running" | "waiting" | "succeeded" | "failed" | "cancelled";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
 export type ApprovalActor = { kind: "operator" } | { kind: "channel"; channelId: string };
@@ -163,6 +171,8 @@ export type SessionStats = {
   turnsSucceeded7d: number;
   /** Sum of known turn costs in the window; null when no turn reported a cost. */
   cost7d: number | null;
+  /** Sum of known turn costs across every session, all time; null when no turn reported a cost. */
+  costTotal: number | null;
 };
 
 export function agentProjectKey(projectRoot: string): string {
@@ -621,11 +631,12 @@ export class AgentStore {
       .get(bind({ projectKey, since })) as Row;
     const turns = this.db
       .prepare(
-        `SELECT SUM(CASE WHEN t.status IN ('succeeded', 'failed', 'cancelled') THEN 1 ELSE 0 END) AS finished,
-                SUM(CASE WHEN t.status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
-                SUM(t.cost_usd) AS cost
+        `SELECT SUM(CASE WHEN t.started_at >= @since AND t.status IN ('succeeded', 'failed', 'cancelled') THEN 1 ELSE 0 END) AS finished,
+                SUM(CASE WHEN t.started_at >= @since AND t.status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
+                SUM(CASE WHEN t.started_at >= @since THEN t.cost_usd END) AS cost,
+                SUM(t.cost_usd) AS cost_all
            FROM agent_turns t JOIN agent_sessions s ON s.session_id = t.session_id
-          WHERE s.project_key = @projectKey${sessionAgentFilter} AND t.started_at >= @since`,
+          WHERE s.project_key = @projectKey${sessionAgentFilter}`,
       )
       .get(bind({ projectKey, since })) as Row;
     return {
@@ -637,17 +648,13 @@ export class AgentStore {
       turnsFinished7d: Number(turns.finished ?? 0),
       turnsSucceeded7d: Number(turns.succeeded ?? 0),
       cost7d: numOrNull(turns.cost),
+      costTotal: numOrNull(turns.cost_all),
     };
   }
 
-  /** Mark every non-terminal session of an agent held (disable/archive while work is queued). */
-  holdOpenSessions(projectKey: string, agentId: string, now: string): void {
-    this.db
-      .prepare(
-        `UPDATE agent_sessions SET status = 'held', updated_at = ?
-          WHERE project_key = ? AND agent_id = ? AND status = 'open'`,
-      )
-      .run(now, projectKey, agentId);
+  /** Ids of every session an agent has had, for releasing what a runtime holds for them. */
+  sessionIdsOf(projectKey: string, agentId: string): string[] {
+    return (this.db.prepare(`SELECT session_id FROM agent_sessions WHERE project_key = ? AND agent_id = ?`).all(projectKey, agentId) as Row[]).map((row) => str(row.session_id));
   }
 
   appendMessage(message: Omit<AgentMessage, "seq">): AgentMessage {
@@ -752,6 +759,24 @@ export class AgentStore {
     this.db
       .prepare(`UPDATE agent_deliveries SET state = ?, attempts = ?, error_code = ?, error_message = ?, retryable = ?, next_attempt_at = ?, updated_at = ? WHERE turn_id = ?`)
       .run(next.state, next.attempts, next.errorCode, next.errorMessage, next.retryable ? 1 : 0, next.nextAttemptAt, now, turnId);
+  }
+
+  /**
+   * Atomically take a delivery for sending: one UPDATE that only matches while it is still in an allowed state (and,
+   * for a retry, still due), so two overlapping attempts cannot both win. Returns the claimed row or undefined.
+   */
+  claimDelivery(turnId: string, states: string[], now: string, options: { dueRetry?: boolean } = {}): AgentDelivery | undefined {
+    const placeholders = states.map(() => "?").join(", ");
+    const due = options.dueRetry ? " AND retryable = 1 AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?" : "";
+    const result = this.db
+      .prepare(
+        `UPDATE agent_deliveries
+            SET state = 'sending', attempts = attempts + 1, error_code = NULL, error_message = NULL,
+                retryable = 0, next_attempt_at = NULL, updated_at = ?
+          WHERE turn_id = ? AND state IN (${placeholders})${due}`,
+      )
+      .run(now, turnId, ...states, ...(options.dueRetry ? [now] : []));
+    return result.changes === 1 ? this.getDelivery(turnId) : undefined;
   }
 
   /** Failed deliveries a retry is due for. */
@@ -966,8 +991,8 @@ export class AgentStore {
       .run(patch.status, patch.decidedAt, patch.actor ? JSON.stringify(patch.actor) : null, approvalId);
   }
 
-  /** Expire every pending approval past its deadline; returns the affected session ids. */
-  expireApprovals(now: string): string[] {
+  /** Expire every pending approval past its deadline; returns the affected approvals. */
+  expireApprovals(now: string): Array<{ approvalId: string; sessionId: string }> {
     return this.transaction(() => {
       const rows = this.db
         .prepare(`SELECT approval_id, session_id FROM agent_approvals WHERE status = 'pending' AND expires_at <= ?`)
@@ -975,8 +1000,22 @@ export class AgentStore {
       for (const row of rows) {
         this.decideApproval(str(row.approval_id), { status: "expired", decidedAt: now, actor: null });
       }
-      return [...new Set(rows.map((row) => str(row.session_id)))];
+      return rows.map((row) => ({ approvalId: str(row.approval_id), sessionId: str(row.session_id) }));
     });
+  }
+
+  /** Close (as expired) the pending approvals raised by a turn that is over; returns their ids. */
+  closePendingApprovalsOfTurn(turnId: string, now: string): string[] {
+    return this.transaction(() => {
+      const rows = this.db.prepare(`SELECT approval_id FROM agent_approvals WHERE turn_id = ? AND status = 'pending'`).all(turnId) as Row[];
+      for (const row of rows) this.decideApproval(str(row.approval_id), { status: "expired", decidedAt: now, actor: null });
+      return rows.map((row) => str(row.approval_id));
+    });
+  }
+
+  getApproval(approvalId: string): AgentApproval | undefined {
+    const row = this.db.prepare(`SELECT * FROM agent_approvals WHERE approval_id = ?`).get(approvalId) as Row | undefined;
+    return row ? toApproval(row) : undefined;
   }
 
   markPayloadExecuted(sessionId: string, payloadHash: string, now: string): void {
@@ -1038,9 +1077,5 @@ export class AgentStore {
          ON CONFLICT (project_key, agent_id) DO UPDATE SET next_run_at = excluded.next_run_at`,
       )
       .run(projectKey, agentId, nextRunAt);
-  }
-
-  clearSchedule(projectKey: string, agentId: string): void {
-    this.db.prepare(`DELETE FROM agent_schedules WHERE project_key = ? AND agent_id = ?`).run(projectKey, agentId);
   }
 }

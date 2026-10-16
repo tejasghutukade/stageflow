@@ -441,13 +441,15 @@ sf agents validate <file.agent.yaml> [--json]
 sf agents enable <id> [--json]
 sf agents disable <id> [--json]
 sf agents history <id> [--json]
-sf agents restore <id> <revision> [--json]
+sf agents restore <id> <revision> --base <current revision> [--json]
 sf agents sessions <id> [--status <status>] [--json]
 sf agents session <id> <sessionId> [--json]
 sf agents chat <id> --message <text> [--session <sessionId>] [--json]
 sf agents approve <id> <sessionId> [--json]
 sf agents deny <id> <sessionId> [--json]
 ```
+
+`restore` needs `--base`, the revision you looked at; if the agent has moved on since, the restore is refused instead of overwriting a newer edit. Without `--base` it prints the current revision. `chat` exits non-zero when the Host closes the stream before a reply or an error arrives (with `--json` it prints an error object).
 
 See [Agents](agents.md) and [YAML catalog — Agents](yaml-catalog.md#agents-agent-yaml).
 

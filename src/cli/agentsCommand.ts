@@ -12,12 +12,15 @@ export const AGENTS_USAGE = `Usage:
   sf agents enable <id> [--json]
   sf agents disable <id> [--json]
   sf agents history <id> [--json]
-  sf agents restore <id> <revision> [--json]
+  sf agents restore <id> <revision> --base <current revision> [--json]
   sf agents sessions <id> [--status <status>] [--json]
   sf agents session <id> <sessionId> [--json]
   sf agents chat <id> --message <text> [--session <sessionId>] [--json]
   sf agents approve <id> <sessionId> [--json]
   sf agents deny <id> <sessionId> [--json]
+
+restore needs --base: the revision you looked at. If the agent has moved on since, the restore is refused instead of
+overwriting a newer edit. Run it without --base to see the current revision.
 
 Talks to the running Stageflow Host for the project in the current directory.`;
 
@@ -41,9 +44,10 @@ type Parsed = {
   message?: string;
   session?: string;
   status?: string;
+  base?: string;
 };
 
-const FLAGS_WITH_VALUE = new Set(["--message", "--session", "--status"]);
+const FLAGS_WITH_VALUE = new Set(["--message", "--session", "--status", "--base"]);
 
 function parseArgs(args: string[]): Parsed {
   const parsed: Parsed = { help: false, json: false, positional: [] };
@@ -56,6 +60,7 @@ function parseArgs(args: string[]): Parsed {
       if (value === undefined || value.length === 0) throw new Error(`Missing value for ${arg}`);
       if (arg === "--message") parsed.message = value;
       else if (arg === "--session") parsed.session = value;
+      else if (arg === "--base") parsed.base = value;
       else parsed.status = value;
     } else if (arg.startsWith("-")) throw new Error(`Unknown flag: ${arg}`);
     else if (parsed.subcommand === undefined) parsed.subcommand = arg;
@@ -224,10 +229,14 @@ export async function runAgentsCommand(
         const [id, raw] = need(2, "<id> <revision>");
         const revision = Number(raw);
         if (!Number.isInteger(revision) || revision < 1) throw new HostError("usage", "revision must be a positive integer");
-        const current = await client.get<{ agent: AgentRow }>(agentPath(id!));
-        const detail = await client.post<{ agent: AgentRow }>(agentPath(id!, `/revisions/${revision}/restore`), {
-          baseRevision: current.agent.revision,
-        });
+        if (parsed.base === undefined) {
+          // The lock only means something if the caller names the revision they saw; reading it here and echoing it back would not.
+          const current = await client.get<{ agent: AgentRow }>(agentPath(id!));
+          throw new HostError("usage", `restore needs --base: ${id} is at v${current.agent.revision}. Pass --base ${current.agent.revision} to restore v${revision} over it`);
+        }
+        const baseRevision = Number(parsed.base);
+        if (!Number.isInteger(baseRevision) || baseRevision < 1) throw new HostError("usage", "--base must be a positive integer");
+        const detail = await client.post<{ agent: AgentRow }>(agentPath(id!, `/revisions/${revision}/restore`), { baseRevision });
         print(detail, () => io.log(`${id} restored v${revision} as v${detail.agent.revision}`));
         return 0;
       }
@@ -266,6 +275,8 @@ export async function runAgentsCommand(
           },
         );
         if (failure) throw failure;
+        // A stream that ends with neither a result nor an error was cut off: not a success.
+        if (done === undefined) throw new HostError("agent.stream_closed", "The Host closed the connection before the reply finished");
         if (parsed.json) io.log(JSON.stringify(done, null, 2));
         else io.write("\n");
         return 0;

@@ -21,8 +21,11 @@ Schema: [YAML catalog — Agents](yaml-catalog.md#agents-agent-yaml). Every save
 
 Each session keeps one Pi model session on the revision it started with. What the definition says is enforced:
 
-- **Tools.** `tools.builtin` groups map to Pi tools (`read` = read/grep/find/ls, `write` = write/edit, `shell` = bash). MCP servers come from the project `.mcp.json`; only the tools named under `tools.mcp.<server>` are exposed (`"*"` for all). Skills load from `tools.skills`. Every call is checked against the grants again before it runs. Agent definitions and Stageflow state can never be written by an agent.
+- **Tools.** `tools.builtin` groups map to Pi tools (`read` = read/grep/find/ls, `write` = write/edit, `shell` = bash). MCP servers come from the project `.mcp.json`; only the tools named under `tools.mcp.<server>` are exposed (`"*"` for all). Skills load from `tools.skills`. Every call is checked against the grants again before it runs. Agent definitions and Stageflow state cannot be written through a tool that names the path: `write`, `edit` and any other tool with a `path`/`file_path`/`file`/`destination`-style argument (an MCP file tool, say) are refused for them. **`bash` is not path-confined.** The runtime sees a command string, not what it does, so an agent granted `bash` can still change agent files and Stageflow state; the editor warns (`agent.shell_not_path_confined`). For that reason every `bash` call is always ask-first, whether or not it is listed in `approvals.ask_first`: a person reads the command before it runs. Do not grant `bash` to an agent that must stay confined.
 - **Ask first.** A call to a tool in `approvals.ask_first` pauses the turn (the session shows waiting) until an approver decides, from the console, CLI, MCP or an allowed channel. Approved runs once, denied tells the agent to continue without it. If nobody answers within `timeout_minutes`, `on_timeout: skip` lets the agent continue without the action; `deny` ends the turn. Pending approvals do not survive a Host restart: those turns are marked failed.
+- **Guardrails.** `guardrails.block_patterns` are checked on the finished reply and a match fails the turn. For an agent with patterns, streamed text is held back and released only after that check passes, so blocked text is never shown (the reply then appears at the end instead of word by word). Agents without patterns stream as before.
+- **Stopped turns.** Stopping a turn that is waiting for approval closes the approval (expired) with the turn: it leaves the pending list, cannot be approved later, and does not pre-approve a later identical call.
+- **Runtime lifetime.** The Host releases a session's Pi session and its isolated MCP processes after 30 idle minutes (`STAGEFLOW_AGENT_SESSION_IDLE_MINUTES`, `0` keeps them), when a turn is stopped, when its agent is archived, and on shutdown. The next message reopens the session from the stored transcript.
 - **Sub-agents.** `sub_agents` become tools (`agent_<id>`); the callee runs in its own session (source `agent`) and its reply returns to the caller. Nesting stops at `sub_agent_depth`.
 - **Limits.** A session refuses a new turn once it has used `max_turns`, `session_minutes` or `cost_usd`. When a restarted session replays a long transcript, `long_context` either drops (`truncate`) or condenses (`summarize`) the oldest messages.
 - **Cursor models.** `cursor/*` models run Cursor's own file and shell tools beside Pi's, so grants and ask-first cannot hold. Agents refuse them (`agent.backend_unavailable`) unless the Host sets `STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS=1`; use another provider's model for governed agents.
@@ -107,7 +110,7 @@ tools:
     tools: [start_run]
 ```
 
-Ask-first lives in `approvals.ask_first` by tool id (`edit`, `bash`, `stageflow.start_run`, `<server>.<tool>`, `agent:<id>`).
+Ask-first lives in `approvals.ask_first` by tool id (`edit`, `bash` (always on when granted), `stageflow.start_run`, `<server>.<tool>`, `agent:<id>`).
 
 ## Stageflow tools for agents
 

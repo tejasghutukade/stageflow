@@ -125,7 +125,7 @@ describe("reply delivery", () => {
     await router.deliver(inbound("1"));
     await vi.waitFor(async () => expect((await turnOf()).deliveries[0]?.state).toBe("delivered"));
     const turnId = (await turnOf()).turns[0]!.id;
-    service.patchDelivery(turnId, { state: "sending" });
+    service.deliveries.patch(turnId, { state: "sending" });
     delivery.start(60_000);
     delivery.stop();
     const detail = await turnOf();

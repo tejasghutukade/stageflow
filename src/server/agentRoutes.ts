@@ -2,7 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { AgentError, isAgentError } from "../agents/errors.js";
 import type { AgentHostContext } from "../agents/hostContext.js";
 import { describeToolkit } from "../toolkit/index.js";
-import type { SessionQuery, SessionStatus } from "../agents/store.js";
+import { isSessionStatus, type SessionQuery } from "../agents/store.js";
+import { BodyError, readJsonBody, writeFrame } from "../agents/ndjson.js";
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
 
@@ -19,29 +20,18 @@ type Ctx = {
 type Route = { method: string; pattern: RegExp; handle: (ctx: Ctx) => Promise<void> };
 
 const MAX_BODY_BYTES = 256 * 1024;
-const SESSION_STATUSES = new Set<SessionStatus>(["open", "running", "waiting", "held", "closed"]);
 const CONSOLE_ACTOR = { source: "console" as const };
 
 async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
-    size += buffer.length;
-    if (size > MAX_BODY_BYTES) throw new AgentError("agent.invalid", "Request body is too large");
-    chunks.push(buffer);
-  }
-  if (chunks.length === 0) return {};
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    throw new AgentError("agent.invalid", "Request body is not JSON");
+    return await readJsonBody(req, MAX_BODY_BYTES);
+  } catch (error) {
+    if (!(error instanceof BodyError)) throw error;
+    throw new AgentError(
+      "agent.invalid",
+      error.reason === "too_large" ? "Request body is too large" : error.reason === "not_json" ? "Request body is not JSON" : "Request body must be a JSON object",
+    );
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new AgentError("agent.invalid", "Request body must be a JSON object");
-  }
-  return parsed as Record<string, unknown>;
 }
 
 function requireInt(value: unknown, name: string): number {
@@ -62,13 +52,13 @@ function optionalText(value: unknown): string | undefined {
 
 function sessionQuery(url: URL): SessionQuery {
   const status = url.searchParams.get("status") ?? undefined;
-  if (status !== undefined && !SESSION_STATUSES.has(status as SessionStatus)) {
+  if (status !== undefined && !isSessionStatus(status)) {
     throw new AgentError("agent.invalid", "Unknown session status");
   }
   const limit = Number(url.searchParams.get("limit") ?? 25);
   return {
     limit: Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 25,
-    ...(status ? { status: status as SessionStatus } : {}),
+    ...(status && isSessionStatus(status) ? { status } : {}),
     ...(url.searchParams.get("source") ? { source: url.searchParams.get("source")! } : {}),
     ...(url.searchParams.get("q")?.trim() ? { search: url.searchParams.get("q")!.trim() } : {}),
     ...(url.searchParams.get("cursor") ? { cursor: url.searchParams.get("cursor")! } : {}),
@@ -80,21 +70,6 @@ async function sessionFor(ctx: Ctx, agentId: string, sessionId: string) {
   const detail = await ctx.host.service.getSession(ctx.projectRoot, sessionId);
   if (detail.session.agentId !== agentId) throw new AgentError("agent.session_not_found");
   return detail;
-}
-
-/** Write one NDJSON frame, waiting for drain. (The request is already consumed here, so only the response state matters.) */
-async function writeFrame(res: ServerResponse, frame: unknown): Promise<void> {
-  if (res.writableEnded || res.destroyed) return;
-  if (res.write(`${JSON.stringify(frame)}\n`)) return;
-  await new Promise<void>((resolve) => {
-    const done = () => {
-      res.off("drain", done);
-      res.off("close", done);
-      resolve();
-    };
-    res.once("drain", done);
-    res.once("close", done);
-  });
 }
 
 async function chat(ctx: Ctx, agentId: string): Promise<void> {

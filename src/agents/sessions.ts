@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { AgentDefinition } from "../config/loadAgent.js";
 import { assertDelegateAllowed } from "./delegate.js";
 import { AgentError, isAgentError } from "./errors.js";
-import { checkGuardrails } from "./guardrails.js";
+import { guardedStream } from "./guardrails.js";
 import { fitHistory } from "./historyFit.js";
 import type { OtlpSink } from "./otlpSink.js";
 import { isToolGranted, requiresAskFirst } from "./policy.js";
@@ -147,10 +147,18 @@ export class AgentConversation {
         turnId: turn.id,
       });
       if (approval.status === "approved") return { allow: true };
-      service.markTurnWaiting(input.projectRoot, turn.id, true);
-      const outcome = await service.approvalBroker.wait(approval.id, { expiresAt: approval.expiresAt, signal: controller.signal, now: () => service.clockMs() });
-      if (outcome === "expired") await service.pendingApprovals(input.projectRoot);
-      if (outcome !== "aborted") service.markTurnWaiting(input.projectRoot, turn.id, false);
+      // Parked unless the decision already landed between the request and now.
+      const parked = await service.waitOnApproval(input.projectRoot, turn.id, approval.id);
+      let outcome: "approved" | "denied" | "expired" | "aborted";
+      if (parked === "waiting") {
+        outcome = await service.approvalBroker.wait(approval.id, { expiresAt: approval.expiresAt, signal: controller.signal, now: () => service.clockMs() });
+        if (outcome === "expired") await service.pendingApprovals(input.projectRoot);
+        // A stopped turn must not leave its approval open: it could be approved later with nobody waiting.
+        if (outcome === "aborted") await service.closeApproval(input.projectRoot, approval.id);
+        else await service.resumeTurn(input.projectRoot, turn.id);
+      } else {
+        outcome = parked === "inactive" ? "aborted" : parked;
+      }
       record({
         turnId: turn.id,
         parentSpanId: rootId,
@@ -230,6 +238,7 @@ export class AgentConversation {
       },
     };
 
+    const stream = guardedStream(definition.guardrails, input.onDelta);
     let result: Awaited<ReturnType<ConversationBackend["complete"]>>;
     try {
       const transcript = [...active.history, active.userMessage].map((m) => ({ role: m.role, text: m.text }));
@@ -239,10 +248,11 @@ export class AgentConversation {
         definition,
         messages: [...fitHistory(transcript.slice(0, -1), definition.limits.long_context), transcript.at(-1)!],
         signal: controller.signal,
-        onDelta: input.onDelta ?? (() => undefined),
+        onDelta: (text) => stream.push(text),
         hooks,
       });
     } catch (error) {
+      stream.discard();
       const code = isAgentError(error) ? error.code : "agent.backend_failed";
       record({ turnId: turn.id, name: `invoke_agent ${definition.id}`, kind: "agent", status: "error", startedAt, endedAt: new Date(), attributes: { "error.type": code } });
       await service.completeTurn(input.projectRoot, turn.id, { status: "failed", errorCode: code });
@@ -272,7 +282,7 @@ export class AgentConversation {
       if (rootSpan) service.recordSpan(input.projectRoot, { ...rootSpan, id: rootId });
     };
 
-    const guard = checkGuardrails(definition.guardrails, result.text);
+    const guard = stream.release(result.text);
     if (!guard.ok) {
       record({ turnId: turn.id, parentSpanId: rootId, name: "guardrail", kind: "guardrail", status: "error", startedAt: new Date(), endedAt: new Date(), attributes: { "stageflow.guardrail.pattern": guard.pattern } });
       endRoot("error");

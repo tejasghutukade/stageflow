@@ -1,3 +1,4 @@
+import { AGENT_ID_PATTERN, isReservedAgentId, RESERVED_AGENT_IDS } from "../agents/agentId.js";
 import { normalizeEntry, SENDER_ENTRY } from "../agents/communications/allowlist.js";
 import { grantedStageflowTools, isOperatorOnlyGroup, isOperatorOnlyTool, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
 import { Cron } from "croner";
@@ -13,7 +14,7 @@ import { yamlParsePosition } from "./yamlParsePosition.js";
  * the canonical YAML serialization used for saves, previews, and diffs.
  */
 
-export const AGENT_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+export { AGENT_ID_PATTERN };
 
 /** Builtin tool groups an agent can be granted, and the Pi tools each unlocks. */
 export const BUILTIN_TOOL_GROUPS = {
@@ -144,7 +145,10 @@ const channelSchema = z.strictObject({
 });
 
 const agentDefinitionObject = z.strictObject({
-  id: z.string().regex(AGENT_ID_PATTERN, "Use lowercase letters, digits and _, starting with a letter"),
+  id: z
+    .string()
+    .regex(AGENT_ID_PATTERN, "Use lowercase letters, digits and _, starting with a letter")
+    .refine((value) => !isReservedAgentId(value), `That id is reserved (${[...RESERVED_AGENT_IDS].join(", ")} are part of the agents URLs); choose another id`),
   name: nonEmpty.max(120),
   description: z.string().trim().max(500).optional(),
   greeting: z.string().trim().max(500).optional(),

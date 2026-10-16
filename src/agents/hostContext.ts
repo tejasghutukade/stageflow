@@ -128,6 +128,10 @@ export function createAgentHostContext(options: {
     logError: (message) => console.error(message),
   });
   chatRef = chat;
+  // Archived agents will not run again: let the runtime drop what it holds for their sessions.
+  service.onArchived((_agentId, sessionIds) => {
+    for (const sessionId of sessionIds) void chat.release(sessionId);
+  });
   // The send ledger lives under the project root, so use the agents' writable root, not a read-only install dir.
   const channelConnectionsForAgents = channelInboundConnections(defaultAgentProjectRoot(options.cwd));
   const delivery = new ReplyDelivery({
@@ -180,5 +184,7 @@ export function createAgentHostContext(options: {
   return { service, chat, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), delivery, stop: async () => {
       delivery.stop();
       await channelListeners?.stop();
+      // The Host owns every runtime session's lifetime: nothing outlives it.
+      await backend.dispose?.().catch((error: unknown) => console.error(`agent runtime dispose failed: ${String(error)}`));
     } };
 }

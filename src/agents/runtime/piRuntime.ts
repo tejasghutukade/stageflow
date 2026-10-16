@@ -24,7 +24,7 @@ import { globalStageflowHome } from "../../project/globalHome.js";
 import { isUsableAuthFile, resolveCredentialBinding } from "../../runtime/credentialBinding.js";
 import { getModelCatalog } from "../../models/catalog.js";
 import { AgentError } from "../errors.js";
-import { isWritePathForbidden } from "../policy.js";
+import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
 import { grantedStageflowTools, isOperatorOnlyTool, type ToolkitTool } from "../../toolkit/index.js";
 import { grantIdForPiTool, STAGEFLOW_PI_PREFIX, type CompleteInput, type CompleteResult, type ConversationBackend, type TurnHooks } from "./types.js";
@@ -35,6 +35,11 @@ export type PiRuntimeOptions = {
   sandbox?: SandboxRunner;
   /** Stageflow's own tools, built lazily because they need Host services that start after the runtime. */
   toolkit?: () => ToolkitTool[];
+  /**
+   * How long a session may sit unused before its Pi session and isolated MCP processes are released. A later message
+   * reopens it from the stored transcript. Default 30 minutes; 0 keeps sessions until released or disposed.
+   */
+  idleReleaseMs?: number;
   /** Test seam: replaces session construction. */
   openSession?: (input: OpenSessionInput) => Promise<OpenedSession>;
 };
@@ -130,7 +135,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
     const mcpServers = Object.keys(definition.tools.mcp);
     const resolvedMcp =
       mcpServers.length > 0
-        ? await resolveStageMcpServers({ projectRoot, allowlist: mcpServers, env: process.env, host: true })
+        ? await resolveStageMcpServers({ projectRoot, allowlist: mcpServers, env: {}, scope: { kind: "agent" } })
         : undefined;
     attached = await attachIsolatedMcp(resolvedMcp, { lifecycle: "lazy" });
 
@@ -274,6 +279,8 @@ type Bound = {
   hooks: TurnHooks | undefined;
   mcpServers: string[];
   subAgents: string[];
+  /** Armed while no turn runs; releases the session when it fires. */
+  idleTimer?: ReturnType<typeof setTimeout> | undefined;
   /** Set while a turn runs: the stall watchdog's pause handle. */
   stall?: { hold(): () => void } | undefined;
 };
@@ -284,8 +291,35 @@ function stallTimeoutMs(): number {
   return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 180_000;
 }
 
+export const DEFAULT_IDLE_RELEASE_MS = 30 * 60_000;
+
+/** Idle window from the option, else STAGEFLOW_AGENT_SESSION_IDLE_MINUTES, else 30 minutes. 0 disables. */
+function idleReleaseMs(options: PiRuntimeOptions): number {
+  if (options.idleReleaseMs !== undefined) return Math.max(0, options.idleReleaseMs);
+  const minutes = Number(process.env.STAGEFLOW_AGENT_SESSION_IDLE_MINUTES);
+  return process.env.STAGEFLOW_AGENT_SESSION_IDLE_MINUTES !== undefined && Number.isFinite(minutes) && minutes >= 0 ? minutes * 60_000 : DEFAULT_IDLE_RELEASE_MS;
+}
+
 export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBackend {
   const bound = new Map<string, Bound>();
+  const idleMs = idleReleaseMs(options);
+
+  const disarmIdle = (state: Bound) => {
+    if (state.idleTimer) clearTimeout(state.idleTimer);
+    state.idleTimer = undefined;
+  };
+  const armIdle = (sessionId: string, state: Bound) => {
+    disarmIdle(state);
+    if (idleMs <= 0) return;
+    state.idleTimer = setTimeout(() => {
+      state.idleTimer = undefined;
+      // A turn that started since is not idle; its end re-arms the timer.
+      if (state.hooks || bound.get(sessionId) !== state) return;
+      bound.delete(sessionId);
+      void state.opened.shutdown().catch(() => undefined);
+    }, idleMs);
+    state.idleTimer.unref?.();
+  };
   const open = options.openSession ?? ((input: OpenSessionInput) => openPiSession(options, input));
 
   async function ensure(input: CompleteInput): Promise<{ state: Bound; fresh: boolean }> {
@@ -315,12 +349,9 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         const hooks = state.hooks;
         if (!hooks) return { block: true, reason: "No turn is active" };
         const tool = grantIdForPiTool(call.toolName, mcpServers, subAgents);
-        const target = typeof call.input.path === "string" ? call.input.path : undefined;
-        if ((call.toolName === "write" || call.toolName === "edit") && target) {
-          const resolved = path.isAbsolute(target) ? target : path.resolve(projectRoot, target);
-          if (isWritePathForbidden(projectRoot, globalStageflowHome(), resolved)) {
-            return { block: true, reason: "Agent definitions and Stageflow state cannot be written by an agent." };
-          }
+        // Every tool whose arguments name a path is checked, not only write/edit. `bash` cannot be: see forbiddenWriteTarget.
+        if (forbiddenWriteTarget(projectRoot, globalStageflowHome(), call.toolName, call.input) !== undefined) {
+          return { block: true, reason: "Agent definitions and Stageflow state cannot be written by an agent." };
         }
         const release = state.stall?.hold();
         const decision = await hooks.gate({ id: call.toolCallId, tool, input: call.input }).finally(() => release?.());
@@ -335,6 +366,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     id: "pi",
     async complete(input) {
       const { state, fresh } = await ensure(input);
+      disarmIdle(state);
       state.hooks = input.hooks;
       const user = input.messages.at(-1);
       if (!user || user.role !== "user") return { text: "", toolOutputs: [] };
@@ -428,6 +460,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         unsubscribe();
         state.hooks = undefined;
         state.stall = undefined;
+        if (bound.get(input.sessionId) === state) armIdle(input.sessionId, state);
       }
       if (stalled) {
         throw new AgentError(
@@ -465,11 +498,13 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     async release(sessionId) {
       const state = bound.get(sessionId);
       bound.delete(sessionId);
+      if (state) disarmIdle(state);
       await state?.opened.shutdown();
     },
     async dispose() {
       const all = [...bound.values()];
       bound.clear();
+      for (const state of all) disarmIdle(state);
       await Promise.all(all.map((state) => state.opened.shutdown()));
     },
   };

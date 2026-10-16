@@ -1,9 +1,10 @@
 import { grantedStageflowTools } from "../toolkit/meta.js";
 import { senderAllowed } from "./communications/allowlist.js";
 import { createHash, randomBytes } from "node:crypto";
-import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  grantedBuiltinTools,
   parseAgentDefinition,
   parseAgentYaml,
   serializeAgentDefinition,
@@ -14,10 +15,12 @@ import { agentThreadKey, inboundDedupeKey, type AgentInboundMessage } from "./co
 import { generateAgentId } from "./agentId.js";
 import { newWebChatSlug } from "./webChat/slug.js";
 import { ApprovalBroker } from "./approvalBroker.js";
+import { deliveryLedger, scheduleLedger, type DeliveryLedger, type ScheduleLedger } from "./ledgers.js";
+import { TurnLifecycle, type FinishInput } from "./turnLifecycle.js";
 import { AgentError } from "./errors.js";
 import { diffLines, type DiffLine } from "./lineDiff.js";
 import { exportTurnsToOtlp } from "./otlpExport.js";
-import { canApprove, isToolGranted, requiresAskFirst } from "./policy.js";
+import { canApprove, effectiveAskFirst, isToolGranted, requiresAskFirst } from "./policy.js";
 import {
   agentProjectKey,
   AgentStore,
@@ -37,7 +40,6 @@ import {
   type SessionQuery,
   type SessionStats,
   type SessionStatus,
-  type TurnStatus,
 } from "./store.js";
 
 /** Lookups outside the agents directory, used only to produce non-blocking warnings. */
@@ -71,6 +73,8 @@ export type AgentSummary = {
   askFirst: string[];
   /** Connection the agent answers on, if any. */
   channelConnection: string | null;
+  /** Cron expression when the agent starts sessions on a schedule. */
+  scheduleCron: string | null;
   subAgents: string[];
   capture: AgentDefinition["observability"]["capture"] | null;
   /** Path of the public chat page (`/chat/<slug>`) while web chat is switched on and has a link. */
@@ -141,11 +145,21 @@ export class AgentService {
   private readonly tails = new Map<string, Promise<unknown>>();
   /** Wakes a turn paused at an ask-first tool when its approval is decided. */
   readonly approvalBroker = new ApprovalBroker();
+  /** Owns every legal change of a turn, its session and its approval. */
+  private readonly lifecycle: TurnLifecycle;
+  /** Reply delivery bookkeeping, for ReplyDelivery. */
+  readonly deliveries: DeliveryLedger;
+  /** Next-run bookkeeping, for the scheduler. */
+  readonly schedules: ScheduleLedger;
 
-  constructor(options: { store: AgentStore; environment?: AgentEnvironment; now?: () => Date }) {
+  constructor(options: { store: AgentStore; environment?: AgentEnvironment; now?: () => Date; /** How long a file must be unchanged before its stamp is trusted (default 2 s). */ treeTrustMs?: number }) {
     this.store = options.store;
+    this.treeTrustMs = options.treeTrustMs ?? 2_000;
     this.environment = options.environment ?? NO_ENVIRONMENT;
     this.now = options.now ?? (() => new Date());
+    this.lifecycle = new TurnLifecycle(this.store, this.approvalBroker, () => this.iso());
+    this.deliveries = deliveryLedger(this.store, () => this.iso());
+    this.schedules = scheduleLedger(this.store);
   }
 
   /** The service clock, so waits and expiries agree with stored timestamps. */
@@ -183,11 +197,55 @@ export class AgentService {
   /* ---------- file sync ---------- */
 
   /**
+   * What the agents directory looked like at the last full sync, per project: names, sizes and modification times.
+   * While it is unchanged (and old enough to trust), a sync is one readdir and one stat per file, with no reads or
+   * hashing. Cleared by our own writes and archives.
+   */
+  private readonly syncedTree = new Map<string, string>();
+
+  /** A file touched this recently may be edited again within the clock's resolution, so its stamp is not trusted yet. */
+  private readonly treeTrustMs: number;
+
+  private async treeStamp(projectRoot: string): Promise<{ stamp: string; trusted: boolean }> {
+    let names: string[];
+    try {
+      names = await readdir(this.dir(projectRoot));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return { stamp: "", trusted: true };
+    }
+    const parts: string[] = [];
+    let newest = 0;
+    for (const name of names.sort()) {
+      if (!name.endsWith(".agent.yaml")) continue;
+      try {
+        const info = await stat(path.join(this.dir(projectRoot), name));
+        newest = Math.max(newest, info.mtimeMs, info.ctimeMs);
+        parts.push(`${name}:${info.size}:${info.mtimeMs}:${info.ino}`);
+      } catch {
+        parts.push(`${name}:gone`);
+      }
+    }
+    return { stamp: parts.join("|"), trusted: Date.now() - Math.floor(newest) >= this.treeTrustMs };
+  }
+
+  /**
    * Bring the database in line with `agents/*.agent.yaml`. Only files whose
-   * content hash changed are parsed; an unchanged tree costs one readdir and a
-   * read per file, and writes nothing.
+   * content hash changed are parsed. An unchanged tree costs a readdir and a
+   * stat per file, and writes nothing; a changed or freshly touched one is
+   * read and hashed in full.
    */
   private async sync(projectRoot: string): Promise<void> {
+    const key = path.resolve(projectRoot);
+    const before = await this.treeStamp(projectRoot);
+    if (before.trusted && this.syncedTree.get(key) === before.stamp) return;
+    this.syncedTree.delete(key);
+    await this.fullSync(projectRoot);
+    // The stamp from before the sync: an edit that landed meanwhile differs from it and is picked up next time.
+    if (before.trusted) this.syncedTree.set(key, before.stamp);
+  }
+
+  private async fullSync(projectRoot: string): Promise<void> {
     const projectKey = agentProjectKey(projectRoot);
     let names: string[];
     try {
@@ -265,6 +323,7 @@ export class AgentService {
     const temporary = `${target}.${randomBytes(4).toString("hex")}.tmp`;
     await writeFile(temporary, yaml);
     await rename(temporary, target);
+    this.syncedTree.delete(path.resolve(projectRoot));
     const revision = this.store.appendRevision(agentProjectKey(projectRoot), {
       definition,
       yaml,
@@ -327,8 +386,9 @@ export class AgentService {
         skills: definition?.tools.skills ?? [],
         browser: definition?.tools.browser ?? false,
       },
-      askFirst: definition?.approvals.ask_first ?? [],
+      askFirst: definition ? effectiveAskFirst(definition) : [],
       channelConnection: definition?.channel?.connection_id ?? null,
+      scheduleCron: definition?.schedule?.cron ?? null,
       subAgents: definition?.sub_agents ?? [],
       capture: definition?.observability.capture ?? null,
       webChatUrl: definition?.web_chat.enabled && definition.web_chat.slug ? `/chat/${definition.web_chat.slug}` : null,
@@ -398,6 +458,13 @@ export class AgentService {
           message: `Web chat is on and this agent can read every agent's sessions (${readsChats.join(", ")}), including what customers wrote`,
         });
       }
+    }
+    if (grantedBuiltinTools(definition).includes("bash")) {
+      warnings.push({
+        path: "tools.builtin",
+        code: "agent.shell_not_path_confined",
+        message: "Shell access is not path-confined: this agent can change agent definitions and Stageflow state through bash even though file tools are blocked from them. Every shell command waits for approval",
+      });
     }
     if (definition.model.backend === "claude") {
       warnings.push({ path: "model.backend", code: "agent.backend_unavailable", message: "Agents run on Pi today; sessions on the claude backend fail" });
@@ -618,15 +685,31 @@ export class AgentService {
     return this.get(projectRoot, agentId);
   }
 
+  private readonly archiveListeners: Array<(agentId: string, sessionIds: string[]) => void> = [];
+
+  /** Called after an agent is archived with the ids of its sessions, so a runtime can let go of what it holds for them. */
+  onArchived(listener: (agentId: string, sessionIds: string[]) => void): void {
+    this.archiveListeners.push(listener);
+  }
+
   /** Remove the file; history stays readable (R5). */
   async archive(projectRoot: string, agentId: string): Promise<void> {
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const row = this.store.getDefinition(agentProjectKey(projectRoot), agentId);
       if (!row || row.archived) throw new AgentError("agent.not_found");
+      this.syncedTree.delete(path.resolve(projectRoot));
       await rm(this.file(projectRoot, agentId), { force: true });
       this.store.updateDefinitionState(agentProjectKey(projectRoot), agentId, { archived: true, fileHash: null }, this.iso());
     });
+    const sessionIds = this.store.sessionIdsOf(agentProjectKey(projectRoot), agentId);
+    for (const listener of this.archiveListeners) {
+      try {
+        listener(agentId, sessionIds);
+      } catch {
+        // a listener must never break an archive
+      }
+    }
     this.notifyChanged();
   }
 
@@ -890,20 +973,48 @@ export class AgentService {
     }
   }
 
-  /** A turn paused for a person shows as waiting; resuming puts it back to running. */
-  markTurnWaiting(projectRoot: string, turnId: string, waiting: boolean): void {
+  /**
+   * A turn is about to pause for a person. Returns "waiting" once it is parked, or the approval's outcome when it was
+   * already decided in between (nothing to wait for), or "inactive" when the turn is no longer running.
+   */
+  async waitOnApproval(projectRoot: string, turnId: string, approvalId: string): Promise<"waiting" | "approved" | "denied" | "expired" | "inactive"> {
     const turn = this.store.getTurn(turnId);
     if (!turn) throw new AgentError("agent.session_not_found");
     this.sessionInProject(projectRoot, turn.sessionId);
-    this.store.setTurnStatus(turnId, waiting ? "waiting" : "running");
-    this.store.updateSession(turn.sessionId, { status: waiting ? "waiting" : "running" }, this.iso());
+    return this.exclusive(projectRoot, async () => this.lifecycle.wait(turnId, approvalId));
   }
 
+  /** The wait is over (decided, expired): the turn runs again. */
+  async resumeTurn(projectRoot: string, turnId: string): Promise<void> {
+    const turn = this.store.getTurn(turnId);
+    if (!turn) throw new AgentError("agent.session_not_found");
+    this.sessionInProject(projectRoot, turn.sessionId);
+    await this.exclusive(projectRoot, async () => {
+      this.lifecycle.resume(turnId);
+    });
+  }
+
+  /** A stopped turn leaves its ask-first approval behind; close it so it cannot be approved later. */
+  async closeApproval(projectRoot: string, approvalId: string): Promise<void> {
+    await this.exclusive(projectRoot, async () => {
+      const approval = this.store.getApproval(approvalId);
+      if (!approval) return;
+      this.sessionInProject(projectRoot, approval.sessionId);
+      this.lifecycle.closeApproval(approvalId);
+      const session = this.store.getSession(approval.sessionId);
+      if (session?.status === "waiting") this.store.updateSession(session.id, { status: "open" }, this.iso());
+    });
+  }
+
+  /**
+   * End a turn. Guarded: a turn that is already over is left as it is (the session detail is returned unchanged), so a
+   * late failure handler cannot rewrite a finished outcome.
+   */
   async completeTurn(
     projectRoot: string,
     turnId: string,
     input: {
-      status: Exclude<TurnStatus, "running">;
+      status: FinishInput["status"];
       assistantText?: string;
       errorCode?: string | null;
       usage?: { inputTokens?: number; outputTokens?: number };
@@ -915,31 +1026,16 @@ export class AgentService {
     const turn = this.store.getTurn(turnId);
     if (!turn) throw new AgentError("agent.session_not_found");
     const session = this.sessionInProject(projectRoot, turn.sessionId);
-    const now = this.iso();
-    this.store.transaction(() => {
-      if (input.assistantText !== undefined && input.assistantText.length > 0) {
-        this.store.appendMessage({
-          id: id("msg"),
-          sessionId: session.id,
-          turnId,
-          role: "assistant",
-          author: session.agentId,
-          text: input.assistantText,
-          createdAt: now,
-        });
-      }
-      this.store.finishTurn(turnId, {
+    await this.exclusive(projectRoot, async () => {
+      this.lifecycle.finish(turnId, {
         status: input.status,
         errorCode: input.errorCode ?? null,
-        inputTokens: input.usage?.inputTokens ?? null,
-        outputTokens: input.usage?.outputTokens ?? null,
-        costUsd: input.costUsd ?? null,
-        endedAt: input.status === "waiting" ? null : now,
+        ...(input.assistantText ? { assistant: { id: id("msg"), author: session.agentId, text: input.assistantText } } : {}),
+        ...(input.usage ? { usage: input.usage } : {}),
+        ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
+        ...(input.evalScores ? { evalScores: input.evalScores } : {}),
+        ...(input.sessionStatus ? { sessionStatus: input.sessionStatus } : {}),
       });
-      for (const score of input.evalScores ?? []) {
-        this.store.recordEvalScore({ turnId, metric: score.metric, score: score.score, recordedAt: now });
-      }
-      this.store.updateSession(session.id, { status: input.sessionStatus ?? "open" }, now);
     });
     return this.getSession(projectRoot, session.id);
   }
@@ -956,7 +1052,7 @@ export class AgentService {
 
   recoverInterruptedTurns(): number {
     this.interrupted = this.store.interruptedTurnIds();
-    return this.store.failInterruptedTurns(this.iso());
+    return this.lifecycle.interruptedByRestart();
   }
 
   /**
@@ -983,42 +1079,16 @@ export class AgentService {
 
   /* ---------- channel deliveries ---------- */
 
-  createDelivery(input: { turnId: string; sessionId: string; connectionId: string; provider: string; replyTo: string; text: string }): AgentDelivery {
-    const now = this.iso();
-    const delivery: AgentDelivery = { ...input, state: "pending", attempts: 0, errorCode: null, errorMessage: null, retryable: false, nextAttemptAt: null, createdAt: now, updatedAt: now };
-    this.store.insertDelivery(delivery);
-    return delivery;
-  }
-
-  getDelivery(turnId: string): AgentDelivery | undefined {
-    return this.store.getDelivery(turnId);
-  }
-
-  patchDelivery(turnId: string, patch: Parameters<AgentStore["updateDelivery"]>[1]): AgentDelivery | undefined {
-    this.store.updateDelivery(turnId, patch, this.iso());
-    return this.store.getDelivery(turnId);
-  }
-
-  dueDeliveries(): AgentDelivery[] {
-    return this.store.dueDeliveries(this.iso());
-  }
-
   /** Sends a restart cut off may or may not have arrived; they wait for a person. */
   settleInterruptedDeliveries(): string[] {
     const ids = this.store.settleInterruptedDeliveries(this.iso());
-    for (const turnId of ids) this.store.setTurnOutcome(turnId, "failed", "agent.reply_undelivered");
+    this.lifecycle.replyUnconfirmed(ids);
     return ids;
   }
 
   /** A reply that did not get through makes its turn a failure; one that finally does puts it right. */
   setReplyDelivered(turnId: string, delivered: boolean): void {
-    const turn = this.store.getTurn(turnId);
-    if (!turn) return;
-    if (delivered) {
-      if (turn.errorCode === "agent.reply_undelivered") this.store.setTurnOutcome(turnId, "succeeded", null);
-    } else if (turn.status === "succeeded" || turn.errorCode === "agent.reply_undelivered") {
-      this.store.setTurnOutcome(turnId, "failed", "agent.reply_undelivered");
-    }
+    this.lifecycle.replyDelivery(turnId, delivered);
   }
 
   latestUndelivered(projectRoot: string, agentId: string): AgentDelivery | undefined {
@@ -1028,11 +1098,7 @@ export class AgentService {
   /* ---------- approvals ---------- */
 
   private expireApprovals(): void {
-    const now = this.iso();
-    for (const sessionId of this.store.expireApprovals(now)) {
-      const session = this.store.getSession(sessionId);
-      if (session?.status === "waiting") this.store.updateSession(sessionId, { status: "open" }, now);
-    }
+    this.lifecycle.expireDue();
   }
 
   async requestApproval(
@@ -1095,7 +1161,6 @@ export class AgentService {
       if (!canApprove(definition, actor)) throw new AgentError("agent.approval_forbidden");
       const pending = this.store.getPendingApproval(sessionId);
       if (!pending) throw new AgentError("agent.approval_not_pending");
-      const now = this.iso();
       if (Date.parse(pending.expiresAt) <= this.now().getTime()) {
         this.expireApprovals();
         throw new AgentError("agent.approval_expired");
@@ -1105,18 +1170,9 @@ export class AgentService {
         const { revision: live } = this.currentRevision(projectRoot, session.agentId);
         if (!live.definition.enabled) throw new AgentError("agent.disabled");
       }
-      this.store.transaction(() => {
-        this.store.decideApproval(pending.id, {
-          status: decision === "approve" ? "approved" : "denied",
-          decidedAt: now,
-          actor,
-        });
-        if (decision === "approve") this.store.markPayloadExecuted(sessionId, pending.payloadHash, now);
-        this.store.updateSession(sessionId, { status: "open" }, now);
-      });
-      const outcome = decision === "approve" ? "approved" : "denied";
-      this.approvalBroker.settle(pending.id, outcome);
-      return { ...pending, status: outcome, decidedAt: now, actor };
+      const decided = this.lifecycle.decide(pending, decision, actor);
+      if (decided === "stale") throw new AgentError("agent.approval_not_pending");
+      return decided.approval;
     });
   }
 
@@ -1209,14 +1265,6 @@ export class AgentService {
       }
       return rows;
     });
-  }
-
-  scheduleNextRun(projectRoot: string, agentId: string): string | undefined {
-    return this.store.getScheduleNextRun(agentProjectKey(projectRoot), agentId);
-  }
-
-  setScheduleNextRun(projectRoot: string, agentId: string, nextRunAt: string): void {
-    this.store.setScheduleNextRun(agentProjectKey(projectRoot), agentId, nextRunAt);
   }
 }
 

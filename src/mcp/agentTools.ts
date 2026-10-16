@@ -2,9 +2,10 @@ import { z } from "zod";
 import { defaultAgentProjectRoot } from "../agents/projectRoot.js";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { AGENT_ID_PATTERN } from "../config/loadAgent.js";
-import { isAgentError } from "../agents/errors.js";
+import { AgentError, isAgentError } from "../agents/errors.js";
 import type { AgentChatController } from "../agents/chatTurn.js";
 import type { AgentService } from "../agents/service.js";
+import { SESSION_STATUSES } from "../agents/store.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
 
@@ -40,6 +41,12 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
   const service = (): AgentService => required(deps.agentService, "agentService");
   const chat = (): AgentChatController => required(deps.agentChat, "agentChat");
   const root = () => defaultAgentProjectRoot(deps.cwd);
+  /** A session must belong to the agent named in the call, or it is not found (as in the HTTP routes). */
+  const sessionFor = async (id: string, sessionId: string) => {
+    const detail = await service().getSession(root(), sessionId);
+    if (detail.session.agentId !== id) throw new AgentError("agent.session_not_found");
+    return detail;
+  };
 
   server.registerTool(
     "list_agents",
@@ -146,10 +153,10 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
   server.registerTool(
     "get_agent_session",
     {
-      description: "Fetch a session: transcript, turns, approvals.",
-      inputSchema: z.object({ sessionId: z.string() }),
+      description: "Fetch a session of an agent: transcript, turns, approvals.",
+      inputSchema: z.object({ id: agentId, sessionId: z.string() }),
     },
-    ({ sessionId }) => call(() => service().getSession(root(), sessionId)),
+    ({ id, sessionId }) => call(() => sessionFor(id, sessionId)),
   );
 
   server.registerTool(
@@ -158,7 +165,7 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
       description: "List an agent's sessions, newest first, with turn counts, tokens and cost.",
       inputSchema: z.object({
         id: agentId,
-        status: z.enum(["open", "running", "waiting", "held", "closed"]).optional(),
+        status: z.enum(SESSION_STATUSES).optional(),
         search: z.string().optional(),
         limit: z.number().int().min(1).max(100).optional(),
         cursor: z.string().optional(),
@@ -179,9 +186,13 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
     "stop_agent_session",
     {
       description: "Stop the turn currently running in a session. The session stays open.",
-      inputSchema: z.object({ sessionId: z.string() }),
+      inputSchema: z.object({ id: agentId, sessionId: z.string() }),
     },
-    ({ sessionId }) => call(async () => ({ stopped: chat().stop(sessionId) })),
+    ({ id, sessionId }) =>
+      call(async () => {
+        await sessionFor(id, sessionId);
+        return { stopped: chat().stop(sessionId) };
+      }),
   );
 
   server.registerTool(
@@ -196,18 +207,26 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
   server.registerTool(
     "approve_agent_action",
     {
-      description: "Approve the pending ask-first action on a session, as an operator.",
-      inputSchema: z.object({ sessionId: z.string() }),
+      description: "Approve the pending ask-first action on a session of an agent, as an operator.",
+      inputSchema: z.object({ id: agentId, sessionId: z.string() }),
     },
-    ({ sessionId }) => call(() => service().decideApproval(root(), sessionId, "approve", { kind: "operator" })),
+    ({ id, sessionId }) =>
+      call(async () => {
+        await sessionFor(id, sessionId);
+        return service().decideApproval(root(), sessionId, "approve", { kind: "operator" });
+      }),
   );
 
   server.registerTool(
     "deny_agent_action",
     {
-      description: "Deny the pending ask-first action on a session. The agent is told it was refused.",
-      inputSchema: z.object({ sessionId: z.string() }),
+      description: "Deny the pending ask-first action on a session of an agent. The agent is told it was refused.",
+      inputSchema: z.object({ id: agentId, sessionId: z.string() }),
     },
-    ({ sessionId }) => call(() => service().decideApproval(root(), sessionId, "deny", { kind: "operator" })),
+    ({ id, sessionId }) =>
+      call(async () => {
+        await sessionFor(id, sessionId);
+        return service().decideApproval(root(), sessionId, "deny", { kind: "operator" });
+      }),
   );
 }

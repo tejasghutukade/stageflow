@@ -61,7 +61,15 @@ describe("agent MCP tools", () => {
     expect(chat.payload?.session).toMatchObject({ source: "mcp" });
     expect(chat.payload?.messages.map((message: { text: string }) => message.text)).toEqual(["Hi", "Hello back"]);
 
-    const fetched = await mcpCall(base, "get_agent_session", { sessionId: chat.payload?.session.id });
+    const fetched = await mcpCall(base, "get_agent_session", { id: "research", sessionId: chat.payload?.session.id });
     expect(fetched.payload?.turns).toHaveLength(1);
+
+    // A session id only opens under the agent it belongs to.
+    const wrong = await mcpCall(base, "get_agent_session", { id: "other", sessionId: chat.payload?.session.id });
+    expect(wrong).toMatchObject({ isError: true, payload: { code: "agent.session_not_found" } });
+    for (const tool of ["approve_agent_action", "deny_agent_action", "stop_agent_session"]) {
+      const refused = await mcpCall(base, tool, { id: "other", sessionId: chat.payload?.session.id });
+      expect(refused).toMatchObject({ isError: true, payload: { code: "agent.session_not_found" } });
+    }
   });
 });

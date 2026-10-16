@@ -24,13 +24,13 @@ describe("agent schedule source", () => {
 
     await source.tick(onFire);
     expect(onFire).not.toHaveBeenCalled();
-    expect(service.scheduleNextRun(project, "digest")).toBe("2026-10-16T09:00:00.000Z");
+    expect(service.schedules.nextRun(project, "digest")).toBe("2026-10-16T09:00:00.000Z");
 
     clock.advance(3 * 24 * 60 * 60 * 1000);
     await source.tick(onFire);
     expect(onFire).toHaveBeenCalledOnce();
     expect(onFire).toHaveBeenCalledWith({ agentId: "digest", message: "Post the digest" });
-    expect(service.scheduleNextRun(project, "digest")).toBe("2026-10-19T09:00:00.000Z");
+    expect(service.schedules.nextRun(project, "digest")).toBe("2026-10-19T09:00:00.000Z");
 
     await source.tick(onFire);
     expect(onFire).toHaveBeenCalledOnce();
@@ -43,6 +43,6 @@ describe("agent schedule source", () => {
     await service.create(project, agentInput("digest", { schedule: { cron: "* * * * *" } }), { source: "console" });
     const source = new AgentScheduleSource({ service, projectRoot: project, intervalMs: 0, now: () => clock.now });
     await source.tick(vi.fn());
-    expect(service.scheduleNextRun(project, "digest")).toBeUndefined();
+    expect(service.schedules.nextRun(project, "digest")).toBeUndefined();
   });
 });

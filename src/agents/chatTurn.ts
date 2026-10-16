@@ -9,6 +9,8 @@ export class AgentChatController {
   private readonly turnChains = new Map<string, Promise<void>>();
   private readonly activeBySession = new Map<string, AgentConversation>();
   private readonly activeByAgent = new Map<string, AgentConversation>();
+  /** Sessions whose turn was stopped: their runtime session is released once the turn has wound down. */
+  private readonly stopped = new Set<string>();
 
   constructor(private readonly options: ConversationOptions) {}
 
@@ -42,6 +44,7 @@ export class AgentChatController {
         });
       } finally {
         const sessionId = input.sessionId ?? openedSessionId;
+        if (sessionId && this.stopped.delete(sessionId)) await this.release(sessionId);
         if (sessionId && this.activeBySession.get(sessionId) === chat) this.activeBySession.delete(sessionId);
         if (this.activeByAgent.get(input.agentId) === chat) this.activeByAgent.delete(input.agentId);
       }
@@ -52,8 +55,18 @@ export class AgentChatController {
   stop(sessionId: string): boolean {
     const chat = this.activeBySession.get(sessionId);
     if (!chat) return false;
+    this.stopped.add(sessionId);
     chat.stop();
     return true;
+  }
+
+  /** Let the runtime drop what it holds for a session (model session, isolated MCP processes). Never throws. */
+  async release(sessionId: string): Promise<void> {
+    try {
+      await this.options.backend.release?.(sessionId);
+    } catch (error) {
+      this.options.logError?.(`releasing agent session ${sessionId} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** Stop a turn that is still opening its session (client left before the session id arrived). */

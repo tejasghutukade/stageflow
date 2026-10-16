@@ -316,7 +316,7 @@ describe("AgentService sessions", () => {
     expect(second.nextCursor).toBeNull();
     expect((await service.listSessions(project, "helper", { limit: 10, source: "slack" })).sessions).toHaveLength(1);
     expect((await service.listSessions(project, "helper", { limit: 10, search: "gamma" })).sessions[0]!.id).toBe(ids[2]);
-    expect(first.stats).toMatchObject({ total: 3, active: 0, last7Days: 3, turnsFinished7d: 3, turnsSucceeded7d: 3, cost7d: null });
+    expect(first.stats).toMatchObject({ total: 3, active: 0, last7Days: 3, turnsFinished7d: 3, turnsSucceeded7d: 3, cost7d: null, costTotal: null });
     expect(first.sessions[0]).toMatchObject({ turnCount: 1, lastTurnStatus: "succeeded", inputTokens: 0 });
   });
 

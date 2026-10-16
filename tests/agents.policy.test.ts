@@ -2,7 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { assertDelegateAllowed } from "../src/agents/delegate.js";
 import { checkGuardrails } from "../src/agents/guardrails.js";
-import { canApprove, isToolGranted, isWritePathForbidden, requiresAskFirst } from "../src/agents/policy.js";
+import { canApprove, effectiveAskFirst, isToolGranted, isWritePathForbidden, requiresAskFirst } from "../src/agents/policy.js";
 import { createFakeSandboxRunner, prepareExecutionLaunch } from "./helpers/agentsSandbox.js";
 import { parseAgentDefinition, type AgentDefinition } from "../src/config/loadAgent.js";
 
@@ -34,6 +34,15 @@ describe("agent policy", () => {
     expect(requiresAskFirst(poster, "slack.post_message")).toBe(true);
     expect(canApprove(poster, { kind: "operator" })).toBe(false);
     expect(canApprove(poster, { kind: "channel", channelId: "slack:U1" })).toBe(true);
+  });
+
+  it("always asks before bash, even when ask_first does not list it", () => {
+    const shell = definition({ tools: { builtin: ["write"], builtin_tools: ["bash"] }, approvals: { ask_first: ["write"] } });
+    expect(requiresAskFirst(shell, "bash")).toBe(true);
+    expect(effectiveAskFirst(shell)).toEqual(["write", "bash"]);
+    const noShell = definition({ tools: { builtin: ["read"] } });
+    expect(effectiveAskFirst(noShell)).toEqual([]);
+    expect(requiresAskFirst(noShell, "read")).toBe(false);
   });
 
   it("never lets an agent write agent definitions or Stageflow state", () => {
