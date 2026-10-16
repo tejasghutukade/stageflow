@@ -154,7 +154,7 @@ export class AgentInboundRouter {
       if (isAgentError(error) && error.code === "agent.limit_reached" && message.replyTo) {
         await connections.reply(message.connectionId, message.replyTo, error.message, `agent-limit:${routed.sessionId}:${message.eventId}`).catch(() => undefined);
       }
-      logError?.(`agent inbound ${message.provider} turn failed: ${isAgentError(error) ? error.code : error instanceof Error ? error.message : String(error)}`);
+      logError?.(`agent inbound ${message.provider} turn failed: ${isAgentError(error) ? `${error.code}${error.message !== error.code ? ` (${error.message})` : ""}` : error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

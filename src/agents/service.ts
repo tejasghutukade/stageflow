@@ -1120,8 +1120,10 @@ export class AgentService {
     this.store.setOutboundState(sessionId, operationKey, "unknown", this.iso());
     try {
       await submit();
-    } catch {
-      throw new AgentError("agent.outbound_unknown");
+    } catch (error) {
+      // Say why (a channel error code or system message, never the message text) so a lost reply can be diagnosed.
+      const why = (error as { code?: unknown } | null)?.code ?? (error instanceof Error ? error.message : String(error));
+      throw new AgentError("agent.outbound_unknown", `The reply could not be sent: ${String(why)}`);
     }
     this.store.setOutboundState(sessionId, operationKey, "submitted", this.iso());
     return { state: "submitted", resent: true };

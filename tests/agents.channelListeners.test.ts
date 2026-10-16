@@ -173,6 +173,23 @@ describe("delivering messages", () => {
   });
 });
 
+describe("a reply that cannot be sent", () => {
+  it("is logged with the reason and never retried on its own", async () => {
+    const fixture = await agentsFixture();
+    fixtures.push(fixture);
+    const { service, project } = fixture;
+    await service.create(project, agentInput("pal", { channel: { connection_id: "line", allow_from: ["*"] } }), { source: "console" });
+    await service.setEnabled(project, "pal", true, { source: "console" });
+    const logs: string[] = [];
+    const chat = new AgentChatController({ service, backend: scriptedBackend(() => "hello") });
+    const connections = { find: () => undefined, reply: async () => { throw Object.assign(new Error("denied"), { code: "EACCES" }); } };
+    const router = new AgentInboundRouter({ service, chat, connections, projectRoot: project, logError: (m) => void logs.push(m) });
+    await router.deliver({ provider: "imessage", connectionId: "line", eventId: "imessage:1", threadId: "+1", text: "hi", from: "+14155550123", replyTo: "+14155550123" });
+    await vi.waitFor(() => expect(logs).toHaveLength(1));
+    expect(logs[0]).toContain("agent.outbound_unknown (The reply could not be sent: EACCES)");
+  });
+});
+
 describe("resuming an always-on conversation", () => {
   it("retries the turn a restart cut off, once, without asking the question twice", async () => {
     const fixture = await agentsFixture();

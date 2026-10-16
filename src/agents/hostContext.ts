@@ -57,7 +57,7 @@ export function createAgentEnvironment(options: {
     },
     async connectionIdentity(connectionId) {
       try {
-        const connection = channelHostFor(options.cwd).registry.resolve(connectionId, false);
+        const connection = channelHostFor(defaultAgentProjectRoot(options.cwd)).registry.resolve(connectionId, false);
         return channelIdentity({ id: connection.id, provider: connection.provider, config: connection.config, credential: connection.credential ? { secrets: connection.credential.secrets } : undefined });
       } catch {
         return undefined;
@@ -128,7 +128,8 @@ export function createAgentHostContext(options: {
   const inbound = new AgentInboundRouter({
     service,
     chat,
-    connections: channelInboundConnections(options.cwd),
+    // The send ledger lives under the project root, so use the agents' writable root, not a read-only install dir.
+    connections: channelInboundConnections(defaultAgentProjectRoot(options.cwd)),
     projectRoot: defaultAgentProjectRoot(options.cwd),
     logError: (message) => console.error(message),
   });
@@ -142,7 +143,7 @@ export function createAgentHostContext(options: {
       .filter((origin) => origin.length > 0),
     logError: (message) => console.error(message),
   });
-  const connections = channelInboundConnections(options.cwd);
+  const connections = channelInboundConnections(defaultAgentProjectRoot(options.cwd));
   const channelListeners = options.listenOnChannels
     ? new ChannelSupervisor({
         service,
