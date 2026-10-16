@@ -18,9 +18,9 @@ http://127.0.0.1:3847/mcp
 
 The URL is printed on boot. Point Cursor or another MCP client at this URL while the host process is alive.
 
-Stage agents consuming author-declared MCP is a different surface. Operator-host MCP can list catalog models and list or probe git-root `.mcp.json` servers the same way Settings and HTTP do; inspect is not attach. YAML `mcp:` still allowlists what a stage receives. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
+Stage agents consuming author-declared MCP is a different surface. Operator-host MCP can list catalog models and list or probe the project's `.mcp.json` servers and the servers saved from the console (Settings → Project MCP) the same way Settings and HTTP do; inspect is not attach. YAML `mcp:` still allowlists what a stage receives. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp). Adding servers and secrets from the console, OAuth sign-in and who may fill `${VAR}` are covered in [MCP servers](mcp-servers.md).
 
-**Breaking (Slot 6):** stage `.mcp.json` `${VAR}` interpolation resolves against the curated stage environment only — not Host ambient env. Declare tokens in `secrets:` (often `as: env`) or use `${VAR:-default}`. See [migration-stage-environment.md](migration-stage-environment.md).
+**Breaking (Slot 6):** stage `.mcp.json` `${VAR}` interpolation resolves against the curated stage environment only — not Host ambient env. Declare tokens in `secrets:` (often `as: env`) or use `${VAR:-default}`. A secret saved from the console can be declared in `secrets:` too; it then fills `${VAR}` in the stage's MCP servers only and is never placed in the stage environment. See [migration-stage-environment.md](migration-stage-environment.md).
 
 ## Sessions (how MCP works)
 
@@ -181,38 +181,60 @@ There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an e
 
 ### Agent tools {#agent-tools}
 
-Project agents (`agents/*.agent.yaml`) — same service contract as `/api/agents`:
+Project agents (`agents/*.agent.yaml`) use the same service as the REST routes in [Agent API](agent-api.md#routes). The agent id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`.
 
-| Tool | Role |
-|------|------|
-| `list_agents` | List agents for the host project root |
-| `get_agent` | Fetch one agent view by id |
-| `validate_agent` | Check a definition; returns field-path issues, warnings and canonical YAML |
-| `create_agent` | Create a disabled agent from a definition |
-| `save_agent` | Full definition save with `baseRevision` optimistic locking |
-| `list_agent_revisions` / `restore_agent_revision` | Version history; restore creates a new revision |
-| `enable_agent` / `disable_agent` | Toggle `enabled` |
-| `agent_chat` | One non-streaming turn (`id`, `message`, optional `sessionId`) |
-| `get_agent_session` | Session transcript and metadata (`id` of the agent and `sessionId`; a session opens only under its own agent) |
-| `approve_agent_action` / `deny_agent_action` | Resolve pending ask-first approvals (`id` of the agent and `sessionId`) |
-| `list_agent_sessions` / `stop_agent_session` | Browse an agent's sessions; stop the running turn (takes the agent `id`; a session of another agent is refused) |
-| `archive_agent` | Archive an agent (keeps its sessions) |
+**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "code", "message", "issues"? }`: the stable `agent.*` code ([codes and meanings](agent-api.md#conventions)) and, for validation, field `issues` (`{ path, message }`). Branch on `code`.
 
-See [Agents](agents.md).
+| Tool | Input | Output |
+|------|-------|--------|
+| `list_agents` | `{}` | `{ agents: [summary] }` (id, name, enabled, revision, issues, tools, askFirst, channelConnection, scheduleCron, stats, pendingApprovals, …) |
+| `get_agent` | `{ id }` | `{ agent, definition, yaml, warnings }` ("detail"). `definition` is `null` when the file is invalid |
+| `validate_agent` | `{ definition }` | `{ definition, issues, warnings, yaml }`. Nothing is saved |
+| `create_agent` | `{ definition }` | Detail. Always disabled; `id` may be omitted and is made from `name` |
+| `save_agent` | `{ id, baseRevision, definition, summary? }` | Detail. `baseRevision` must be the current revision, else `agent.conflict`. `summary` up to 200 characters |
+| `enable_agent`, `disable_agent` | `{ id }` | Detail. Disabling refuses new sessions and turns; a running turn finishes |
+| `list_agent_revisions` | `{ id }` | `{ revisions: [{ revision, source, author, summary, restoredFrom, createdAt }] }`, newest first |
+| `restore_agent_revision` | `{ id, revision, baseRevision }` | Detail. Saves that revision as the newest |
+| `agent_chat` | `{ id, message, sessionId? }` | The whole session after one turn (`session`, `messages`, `turns`, `approvals`, …). Waits for the reply; omit `sessionId` to open a session (source `mcp`). |
+| `get_agent_session` | `{ id, sessionId }` | The session: transcript, turns, spans, approvals, deliveries |
+| `list_agent_sessions` | `{ id, status?, search?, limit?, cursor? }` | `{ sessions, nextCursor, stats }`. `status` is one of `open`, `running`, `waiting`, `held`, `closed`; `limit` 1–100 (default 25) |
+| `stop_agent_session` | `{ id, sessionId }` | `{ stopped: boolean }`. Stops the running turn; the session stays open |
+| `approve_agent_action`, `deny_agent_action` | `{ id, sessionId }` | The decided approval (`id`, `tool`, `status`, `actor`, …). Approving a disabled agent is `agent.disabled` |
+| `archive_agent` | `{ id }` | `{ archived: true }`. Sessions are kept; new ones are refused |
+
+A session id only opens under the agent it belongs to: `get_agent_session`, `stop_agent_session`, `approve_agent_action` and `deny_agent_action` answer `agent.session_not_found` for another agent's session.
+
+**Approvals are operator-only.** `approve_agent_action` and `deny_agent_action` are both in the `gates.decide` group, which cannot be granted to an agent (validation error `agent.stageflow_operator_only`), so an agent can never decide another agent's approval, and it cannot act on its own sessions. The other agent tools sit in `agents.read`, `agents.manage`, `agents.cleanup` and `agents.converse`; an agent granted `agents.converse` can chat with agents and stop sessions but not decide approvals. See [Agents](agents.md).
+
+See [Agents](agents.md). The REST, CLI and MCP surfaces side by side are in [Agent API](agent-api.md#cli-mcp-and-rest-side-by-side).
 
 ### Pipeline authoring tools {#pipeline-authoring-tools}
 
-Edit pipelines and tasks straight on disk, with the Workshop's builders and validation (nothing is written when validation fails unless `allow_invalid` is set).
+Edit pipelines and tasks straight on disk, with the Workshop's builders and validation: the tool loads the package, applies the same builder the Workshop uses, and writes it back through the Workshop's publish path. Nothing is written when validation fails unless `allow_invalid` is set. Paths are relative to the Host's project root and POSIX style (for example `workshop/release/release.pipeline.yaml`).
 
-| Tool | Role |
-|------|------|
-| `read_pipeline` | Pipeline package (stages, task) plus its validation result |
-| `create_pipeline` | New `<id>.pipeline.yaml` in `directory`; fails if it exists |
-| `edit_pipeline` | Patch pipeline fields |
-| `create_stage` / `edit_stage` | Add or edit a file-backed stage |
-| `create_task` / `edit_task` | Create or edit the task beside a pipeline |
+**Success:** `{ "pipelinePath", "stagePaths", "taskPath" }` (`taskPath` is `null` without a task). **Failure:** a tool error `{ "error", "status"? }`; a failed validation lists the findings in `error`. `allow_invalid` (boolean, default `false`) writes anyway so a pipeline can be built step by step.
 
-Triggers also gain `update_trigger` and `set_trigger_enabled`.
+| Tool | Input | Notes |
+|------|-------|-------|
+| `read_pipeline` | `{ path, task_path? }` | Returns `{ draft, destination, validation }`: the package (pipeline, stage files, optional task) and its validation result. Use before editing |
+| `create_pipeline` | `{ directory, id, model?, agent?, stages?, pipeline?, allow_invalid? }` | Writes `<directory>/<id>.pipeline.yaml`; fails if it exists (use `edit_pipeline`). `pipeline` passes a whole object instead of `id`/`model`/`stages`. A pipeline needs at least one stage to validate, so pass stages or `allow_invalid` and then `create_stage` |
+| `edit_pipeline` | `{ path, patch, allow_invalid? }` | `patch` holds the fields to change: id, model, agent, stage wiring, schemas, `requires` |
+| `create_stage` | `{ path, id?, summary?, system_prompt?, model?, entry?, route?, io?, body?, allow_invalid? }` | Adds a file-backed stage (`uses: ./<id>.yaml` plus its body). `body` carries extra stage fields |
+| `edit_stage` | `{ path, id, …fields, allow_invalid? }` | Edits an existing stage by id: its body and/or its pipeline entry (`route`, `entry`, `uses`). Extra fields are the changes |
+| `create_task` | `{ path, id?, goal?, filename?, body?, allow_invalid? }` | Creates or replaces the task beside the pipeline |
+| `edit_task` | `{ path, task_path, id?, goal?, patch?, body?, allow_invalid? }` | Edits an existing task file (`task_path`) |
+
+### `update_trigger`
+
+Replace a trigger's definition. Same validation and write path as `PUT /api/triggers/:id`; the id cannot change.
+
+**Input:** `{ id, project_root?, pipeline, task?, kind: "manual" | "schedule" | "event", schedule?: { cron, timezone? }, event?: { source, match?, config? }, enabled? }`. It is a full replacement, so omit `task` only for a dynamic-mode trigger. **Output:** the trigger, same shape as `list_triggers`. **Errors:** `{ "error", "status" }` with `isError: true` (the same statuses as `PUT /api/triggers/:id`).
+
+### `set_trigger_enabled`
+
+Enable or disable a trigger. Same write path as `PATCH /api/triggers/:id`.
+
+**Input:** `{ id, enabled, project_root? }`. **Output:** the trigger. **Errors:** `{ "error", "status" }`, the same statuses as `PATCH /api/triggers/:id`.
 
 ### `get_started`
 
@@ -321,7 +343,7 @@ List skills with `name`, `description`, and `origin` (`run` | `checkout` | `host
 
 ### `list_project_mcp`
 
-List git-root `.mcp.json` servers as names and coarse transport only (same helper as `GET /api/project-mcp`). List never interpolates, spawns, or returns env, headers, args, command, or URLs.
+List the project `.mcp.json` servers and the servers saved from the console as names and coarse transport only (same helper as `GET /api/project-mcp`). List never interpolates, spawns, or returns env, headers, args, command, or URLs.
 
 **Input:** `{}`
 
@@ -354,7 +376,7 @@ The console (Settings → Project MCP) and HTTP can add servers, so a Host does 
 
 Remote servers take `url` plus optional `headers` and `httpTransport: "sse"` (streamable HTTP is the default and falls back to SSE). Pasted snippets using `serverUrl`, `httpUrl` or `type: sse | http | stdio` are mapped onto this shape.
 
-These servers are saved in `$STAGEFLOW_HOME/mcp/.mcp.json` and merged over the project `.mcp.json` (console wins on a name clash; list rows carry `origin`). A repository checkout's own `.mcp.json` never sees them.
+These servers are saved in `$STAGEFLOW_HOME/mcp/.mcp.json` and merged over the project `.mcp.json` (console wins on a name clash; list rows carry `origin`). A stage bound to a repository checkout never sees console servers or console secrets, and a checkout's own `.mcp.json` never sees them either. With a console server saved, `sf validate` no longer needs a `.mcp.json` file for a stage's `mcp:` list to resolve.
 
 **OAuth sign-in.** A URL server that answers `401` with OAuth metadata shows `needs_auth` on probe. `POST /api/project-mcp/:name/oauth/start` returns `{ authorizationUrl }`; after approval the browser lands on a `localhost` callback. A local Host receives it itself; otherwise send the full address with `POST .../oauth/complete` body `{ "input": "http://localhost:…/callback?code=…&state=…" }`. `GET .../oauth` returns `authenticated`, `expired` or `not_authenticated`; `DELETE .../oauth` signs out. Tokens are AES-256-GCM encrypted in `$STAGEFLOW_HOME/agent/mcp-oauth-encrypted` (key: `$STAGEFLOW_HOME/secrets/mcp-oauth.key`, mode 0600, or `PI_MCP_ADAPTER_OAUTH_FILE_KEY`). Signed-in servers are usable by agents and probes, not pipeline stages: stage attempts run in a sealed agent dir and the adapter refuses a symlinked store. For stages use a bearer token in `headers` backed by a secret.
 
@@ -366,7 +388,7 @@ These servers are saved in `$STAGEFLOW_HOME/mcp/.mcp.json` and merged over the p
 
 ### `probe_project_mcp`
 
-Probe one named git-root `.mcp.json` server with isolated connect-and-exit (same helper as `POST /api/project-mcp/:name/probe`). Aborting the MCP request maps to helper `cancelled`, not `wait_run` `aborted`. Probe does not attach servers to a stage.
+Probe one named server (from the project `.mcp.json` or saved from the console) with isolated connect-and-exit (same helper as `POST /api/project-mcp/:name/probe`). Aborting the MCP request maps to helper `cancelled`, not `wait_run` `aborted`. Probe does not attach servers to a stage.
 
 **Input:** `{ "name": "github" }`
 

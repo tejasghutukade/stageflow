@@ -26,9 +26,8 @@ describe("web chat model", () => {
     expect(completeDefinition({ name: "A" }).web_chat?.enabled).toBe(true);
   });
 
-  it("builds the absolute link from the path, the Host origin or a public base URL", () => {
+  it("builds the absolute link from the path, or the address the console is opened from", () => {
     expect(webChatLink({ webChatUrl: "/chat/k7x9" }, "http://127.0.0.1:3847")).toBe("http://127.0.0.1:3847/chat/k7x9");
-    expect(webChatLink({ webChatUrl: "/chat/k7x9", publicBaseUrl: "https://chat.example.com/" }, "http://x")).toBe("https://chat.example.com/chat/k7x9");
     expect(webChatLink({ webChatUrl: "https://elsewhere.test/c/1" }, "http://x")).toBe("https://elsewhere.test/c/1");
     expect(webChatLink({ webChatUrl: null }, "http://x")).toBeNull();
     expect(webChatLink(null, "http://x")).toBeNull();

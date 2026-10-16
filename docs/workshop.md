@@ -7,7 +7,7 @@ title: Workshop Author
 
 Workshop is the console surface for designing a pipeline in chat. The agent asks when a missing detail would change the stages or the wiring, then edits the draft. The studio map shows the stages. Save writes catalog YAML, and Run lists the saved pipeline and task.
 
-Open it with `sf ui` (default `http://127.0.0.1:3847`) and choose **Workshop** in the rail, or go to `#/workshop`. There is no separate `sf workshop` command.
+Open it with `sf ui` (default `http://127.0.0.1:3847`) and choose **New pipeline** (`N`) on the Pipelines page, or **Open in Workshop** (`W`) on an existing pipeline, or go to `#/workshop` (the command palette opens it too). The Workshop has no rail item of its own. There is no separate `sf workshop` command.
 
 ## Chat and the studio
 
@@ -57,4 +57,4 @@ sf run \
 
 ## What stays out of the catalog
 
-Builds and sessions live under `$STAGEFLOW_HOME`. They are not catalog files. A refresh keeps an untitled build because it is on disk. See [Data directory](data-directory.md) and [Operator console](operator-console.md#workshop).
+Builds and sessions live under `$STAGEFLOW_HOME`. They are not catalog files. A refresh keeps an untitled build because it is on disk. See [Data directory](data-directory.md) and [Operator console](console-pipelines-catalog.md#workshop-workshop).

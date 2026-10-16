@@ -74,6 +74,12 @@ Slot 6 stages get a **curated** environment — not a copy of Host `process.env`
 
 The published image does **not** install the GitHub CLI. Catalogs that `requires:` `gh` need a [derived image](#derived-images) (or an install step in your Dockerfile). Stageflow never installs tools from `requires:` automatically.
 
+### MCP servers in the container
+
+The image has no `.mcp.json`, and you do not need one: add servers in **Settings → Project MCP** (form or Paste JSON). They are saved to `/data/mcp/.mcp.json`, with tokens moved to `/data/secrets/mcp-secrets.json`, both on the data volume. OAuth sign-in works too: after approving in the browser the callback lands on `localhost`, so paste that address back into the sign-in dialog. Signed-in servers work for agents and Check, not pipeline stages (use a bearer token secret there, and list it under the stage's `secrets:`).
+
+Agents and Check fill `${NAME}` from console secrets only. To use a variable that already exists in the container's environment, list its name in `STAGEFLOW_MCP_ENV_ALLOW` (comma-separated, for example `-e STAGEFLOW_MCP_ENV_ALLOW=NOTION_KEY`). Idle agent runtimes are released after 30 minutes; `STAGEFLOW_AGENT_SESSION_IDLE_MINUTES` changes that (`0` keeps them). Full walkthrough, secrets rules and routes: [MCP servers](mcp-servers.md). Back these files up with the table in [Precious vs disposable](#precious-vs-disposable); `sf backup` does not include them.
+
 ### Channels in the container
 
 [Communication channels](channels.md) need no extra setup in the image. Connections made in the console are written to `/data/connections.yaml` and the secrets to `/data/channel-secrets.json`, both on the data volume, so they survive restarts and rebuilds (they are lost only if you delete the volume). The image includes the optional Spectrum packages that iMessage and WhatsApp use. For a connection that should come from the environment instead (CI or a secrets manager), use `env:NAME` references in `connections.yaml` and pass the variables to the container. `STAGEFLOW_CONNECTIONS_FILE` can point the file elsewhere.
@@ -253,9 +259,13 @@ STAGEFLOW_DOCKER_SMOKE=1 npx vitest run tests/docker.containerBrowserHost.smoke.
 | `agent/auth.json` | **Irreplaceable** | Operator auth file. The image sets `STAGEFLOW_CREDENTIAL_HOME` to this data directory. |
 | `settings.json` | **Irreplaceable** | Concurrency and credential-source choice. |
 | `connections.yaml`, `channel-secrets.json` | **Irreplaceable** | [Channel](channels.md) connections and the secrets typed into the console. Not covered by `sf backup`; copy them yourself and keep the secrets file private (`0600`). |
+| `mcp/.mcp.json`, `secrets/mcp-secrets.json` | **Irreplaceable** | Servers and tokens added in Settings → Project MCP. Not covered by `sf backup`; copy them yourself and keep the secrets file private (`0600`). |
+| `secrets/mcp-oauth.key`, `agent/mcp-oauth-encrypted` | **Irreplaceable** | OAuth sign-ins for MCP servers. Keep the key and the store **together**; one without the other is useless. Not covered by `sf backup`. |
+| `agent/mcp-cache.json` | Disposable | Tool lists cached from the last successful connect; rebuilt by Check. |
+| `agents/pi-sessions/` | Situational | Agent session transcripts; history lives in `state.db`. |
 | `runs/<runId>/` | Situational | Artifact bytes; records live in `state.db`. |
 | `a2a-artifacts/` | Situational | Opt in with `sf backup --include-a2a-artifacts`. |
-| `repos/`, `worktrees/`, `cache/` | Disposable | Re-clonable / rebuildable. |
+| `repos/`, `worktrees/`, `cache/` (includes `cache/jiti`) | Disposable | Re-clonable / rebuildable. |
 | `backups/`, `restore-pending/` | Disposable | Products of backup/restore. |
 
 A volume snapshot of the whole data directory is **not** a substitute for `sf backup` — it is larger, includes disposable trees, and is taken while the WAL is moving.

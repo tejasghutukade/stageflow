@@ -261,11 +261,11 @@ export function modelLabel(model: AgentDefinition["model"] | null): string {
 }
 
 /** Absolute shareable link, or null until web chat has a slug. */
-export function webChatLink(agent: Pick<AgentSummary, "webChatUrl" | "publicBaseUrl"> | null | undefined, origin = typeof window === "undefined" ? "" : window.location.origin): string | null {
+export function webChatLink(agent: Pick<AgentSummary, "webChatUrl"> | null | undefined, origin = typeof window === "undefined" ? "" : window.location.origin): string | null {
   const path = agent?.webChatUrl;
   if (!path) return null;
   if (/^https?:\/\//.test(path)) return path;
-  const base = (agent?.publicBaseUrl || origin).replace(/\/+$/, "");
+  const base = origin.replace(/\/+$/, "");
   return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 

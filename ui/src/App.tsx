@@ -51,6 +51,7 @@ import { ControlTokenGate } from "./redesign/ControlTokenGate";
 import { workspaceLabelFromSnapshot } from "./redesign/inbox/inboxViews";
 import {
   readNotifyPreference,
+  useAgentApprovalNotifications,
   useWaitingNotifications,
   type NotifyPreference,
 } from "./useWaitingNotifications";
@@ -80,6 +81,7 @@ function ConsoleRoot() {
   }, []);
 
   useWaitingNotifications(notifyPreference === "system");
+  useAgentApprovalNotifications(notifyPreference === "system");
 
   useEffect(() => {
     let cancelled = false;

@@ -31,6 +31,19 @@ function tempHome(): string {
 }
 
 describe("loadHostConfig", () => {
+  it("accepts every documented agent and MCP env var", () => {
+    const home = tempHome();
+    const env = {
+      STAGEFLOW_MCP_ENV_ALLOW: "NOTION_KEY",
+      STAGEFLOW_AGENT_SESSION_IDLE_MINUTES: "30",
+      STAGEFLOW_AGENT_STALL_SECONDS: "180",
+      STAGEFLOW_AGENT_CHANNEL_LISTENERS: "0",
+      STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS: "1",
+      STAGEFLOW_PUBLIC_CHAT_ORIGINS: "https://example.com",
+    };
+    expect(() => loadHostConfig({ homeDir: home, env })).not.toThrow();
+  });
+
   it("fails on unknown config.yaml key with config_unknown_key", () => {
     const home = tempHome();
     writeFileSync(

@@ -765,9 +765,9 @@ Walkthrough: [`examples/archify-on-pr/`](../examples/archify-on-pr/) — GHA pro
 
 ### Stage MCP {#stage-mcp}
 
-Pass project MCP servers to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The loader also accepts `mcp:` in external stage files; a pipeline-entry `mcp` overrides the file value on merge, including `mcp: []` to clear a file list. Prefer the pipeline entry. Omit the field or set `mcp: []` for no author-declared MCP.
+Pass MCP servers (from the project `.mcp.json` and servers saved in the console, see [MCP servers](mcp-servers.md)) to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The loader also accepts `mcp:` in external stage files; a pipeline-entry `mcp` overrides the file value on merge, including `mcp: []` to clear a file list. Prefer the pipeline entry. Omit the field or set `mcp: []` for no author-declared MCP.
 
-Interpolation resolves against the **stage's curated environment** (not the Host ambient env). Default MCP connect timeout is **30s**. Missing catalog `command` binaries on `PATH` fail validate with a distinct error. See [migration-stage-environment.md](migration-stage-environment.md).
+Interpolation resolves against the **stage's curated environment** (not the Host ambient env), plus any console secret the stage lists under `secrets:` (a console secret fills MCP servers only and is never put in the stage environment; see [MCP servers](mcp-servers.md#from-a-pipeline-stage)). Default MCP connect timeout is **30s**. Missing catalog `command` binaries on `PATH` fail validate with a distinct error. See [migration-stage-environment.md](migration-stage-environment.md).
 
 ```yaml
 stages:
@@ -794,7 +794,7 @@ Project `.mcp.json` lives at the same root as `stageflow.yaml`:
 
 | Behavior | Detail |
 |----------|--------|
-| Catalog | `.mcp.json` `{ "mcpServers": { "NAME": { … } } }` at the project root that holds `stageflow.yaml` |
+| Catalog | `.mcp.json` `{ "mcpServers": { "NAME": { … } } }` at the project root that holds `stageflow.yaml`, merged with servers saved from the console (**Settings → Project MCP**; a console server wins on a name clash). Repository-bound stages read the repository's own `.mcp.json` as workspace content and never see console servers |
 | Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd`. Resolves against the curated stage env only. Stage attach sets `STAGEFLOW_STAGE_ARTIFACTS_DIR` to the attempt artifacts directory and substitutes `${STAGEFLOW_STAGE_ARTIFACTS_DIR}` in the stage `system_prompt` (Settings Check does not). |
 | Spawn root | stdio servers stamp `cwd` to the catalog project root. Relative `command`/`args` paths resolve against that root. A catalog `cwd` must already be an absolute path inside the project root. |
 | Validate | `sf validate` checks names, shape, reserved-name collision, and that each catalog `command` is on `PATH`. It does not require env vars to be set or a live connect. |
@@ -802,26 +802,26 @@ Project `.mcp.json` lives at the same root as `stageflow.yaml`:
 | Tools | On Pi, a stage gets the named tools of its listed servers (for example `exa_web_fetch_exa`). The adapter's `mcpScript` JavaScript tool and its `mcp` gateway tool are not exposed. On a first attempt Stageflow connects the listed servers once before the session starts so their tools are known when the stage tool list is fixed. |
 | Large results | On Pi, every stage tool result except `read`, `bash`, and the Stageflow tools is measured against the remaining context window (with a reserve for the rest of the stage, and at most 30% of the window per result). A result that does not fit is written to `stages/<stageId>/attempts/<n>/artifacts/tool-output/<toolCallId>-<tool>.json` (pretty-printed when the body is JSON) or `.txt`, and the model sees the path, the size, and a short preview. A result the MCP adapter already cut at its 8 MiB backstop is always spilled, with the full body taken from the adapter's temp file (which is then removed); if the adapter could not save that file, the notice says the rest is not available. The file is an ordinary attempt artifact: list it in the envelope `artifacts` and let the model `read` or grep it. Stage prompts should treat that file as the source and should not ask the model to copy tool output into `write_stage_artifact`. |
 | Reserved | The server name `stageflow` is reserved. Stageflow stage tools (`emit_stage_envelope`, `write_stage_artifact`, and `ask_operator` when the stage allows it) stay available without being listed in `mcp`. |
-| Settings inspect | Operator console Settings lists git-root `.mcp.json` names and Check connect without a run. Inspect is not attach. |
+| Settings inspect | Operator console Settings lists project `.mcp.json` and console server names and Check connects without a run. Inspect is not attach. |
 
 **Validate-time failures** (author language):
 
-- `.mcp.json` is missing when a stage lists one or more `mcp` names
-- A listed name is not in `mcpServers`
+- Neither a project `.mcp.json` nor any console server exists when a stage lists one or more `mcp` names
+- A listed name is in neither `mcpServers` nor the console servers
 - The catalog or a stage list uses the reserved name `stageflow`
 - The catalog is not valid JSON, is not an object, is missing `mcpServers`, or a server entry is not an object
 
-If `.mcp.json` is present, validate checks its shape and reserved names even when no stage lists `mcp`. Connect failure and unset required vars fail at **run**, not `sf validate`.
+A stage may now list a console secret under `secrets:` (`stage.unknown_secret` only fires when the name is neither a console secret nor a registered Host secret). If `.mcp.json` is present, validate checks its shape and reserved names even when no stage lists `mcp`. Connect failure and unset required vars fail at **run**, not `sf validate`.
 
-GitHub, Notion, or a company MCP use the same authoring shape when those servers exist in `.mcp.json`.
+GitHub, Notion, or a company MCP use the same authoring shape when those servers exist in `.mcp.json` or the console.
 
 Pi and Claude both receive the servers named on the stage; transports and protocol features may differ. Walkthroughs: [`examples/stage-mcp/`](../examples/stage-mcp/), [`examples/playwright-mcp/`](../examples/playwright-mcp/) (open a page and save a PNG screenshot; pass `${STAGEFLOW_STAGE_ARTIFACTS_DIR}/page.png` because Playwright named `filename` values resolve against the project checkout, not `--output-dir`), [`examples/context7-mcp/`](../examples/context7-mcp/) (resolve a library, fetch docs, write a brief).
 
 MCP elicitation is unsupported — a passed server cannot ask the operator a question through Stageflow.
 
-Settings can list git-root `.mcp.json` names and Check whether a server can connect without starting a run. That inspect is not attach: YAML `mcp:` still allowlists what a stage receives.
+Settings can list the project `.mcp.json` and console servers and Check whether a server can connect without starting a run. That inspect is not attach: YAML `mcp:` still allowlists what a stage receives.
 
-Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md).
+Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md). Adding servers and secrets from the console, OAuth and the routes: [MCP servers](mcp-servers.md).
 
 ### Stage channels {#stage-channels}
 
@@ -1042,7 +1042,7 @@ An agent is a project-owned definition. The file name is the agent id: `agents/<
 | `project_context` | no | Default `false`. Give sessions the project context |
 | `model` | no | `{ backend: pi\|claude, id?, thinking: off\|low\|medium\|high }` |
 | `tools` | no | `{ builtin: [read\|write\|shell] (whole groups), builtin_tools: [read\|grep\|find\|ls\|write\|edit\|bash] (single tools), stageflow: { groups: [...], tools: [...] }, mcp: { <server>: [tool names or "*"] }, skills: [], browser: bool }`. Groups and single tools combine: `builtin: [read]` plus `builtin_tools: [edit]` allows the four read tools and `edit`. `read` = read, grep, find, ls; `write` = write, edit; `shell` = bash |
-| `approvals` | no | `{ ask_first: [tool ids], approvers: { operators, channel_ids }, timeout_minutes, on_timeout: skip\|deny }` |
+| `approvals` | no | `{ ask_first: [tool ids], approvers: { operators, channel_ids }, timeout_minutes, on_timeout: skip\|deny }`. `bash` always asks first when granted, whether or not it is listed |
 | `sub_agents`, `sub_agent_depth` | no | Agent ids this agent may delegate to; max nesting (default 1) |
 | `guardrails` | no | `{ block_patterns: [regex] }` — applied to assistant text after each turn |
 | `evals` | no | `{ groundedness: bool }` |

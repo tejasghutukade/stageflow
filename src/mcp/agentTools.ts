@@ -33,9 +33,9 @@ async function call(work: () => Promise<unknown>) {
 }
 
 /**
- * Agent management for operators driving Stageflow over MCP. These tools are
- * never granted to a running agent (KTD9): the host does not expose its own
- * MCP server to agent sessions.
+ * Agent management for operators driving Stageflow over MCP. A running agent reaches these
+ * only through the Stageflow tool groups it is granted (`agents.*`); the guard in
+ * `toolkit/guard.ts` stops it acting on its own sessions.
  */
 export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
   const service = (): AgentService => required(deps.agentService, "agentService");

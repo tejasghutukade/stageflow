@@ -79,9 +79,8 @@ export type AgentSummary = {
   stats: SessionStats;
   pendingApprovals: number;
   updatedAt: string;
-  /** Path form `/chat/<slug>` once web chat has a slug; `publicBaseUrl` (when the Host sets one) prefixes it. */
+  /** Path form `/chat/<slug>` once web chat has a slug; the console prefixes the address it is opened from. */
   webChatUrl?: string | null;
-  publicBaseUrl?: string | null;
 };
 
 export type AgentDetail = {

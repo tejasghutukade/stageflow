@@ -48,6 +48,8 @@ export function parseAgentMailInbound(
     return { ok: false, code: "agent.invalid" };
   }
   const from = typeof record.from === "string" ? record.from : undefined;
+  // Replies go to a message id (AgentMail's reply endpoint), never to the sender's address.
+  const replyTo = typeof record.message_id === "string" ? record.message_id : eventId;
   return {
     ok: true,
     message: {
@@ -56,7 +58,8 @@ export function parseAgentMailInbound(
       eventId: `agentmail:${eventId}`,
       threadId,
       text,
-      ...(from !== undefined ? { from, replyTo: from } : {}),
+      replyTo,
+      ...(from !== undefined ? { from } : {}),
     },
   };
 }

@@ -28,10 +28,20 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Envelopes](envelopes.md) | Stage handoff contract (`emit_stage_envelope`, artifacts) |
 | [Verified Stage Execution](verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
+| [Agents](agents.md) | Project-owned agents (`agents/*.agent.yaml`): overview and where the pieces live |
+| [Agent definition](agent-definition.md) | Every field of an agent file, defaults and limits, reserved ids, revisions, validation issues |
+| [Agent runtime](agent-runtime.md) | Turns, tool grants, ask-first approvals, guardrails, sub-agents, limits, restart behaviour |
+| [Agent observability](agent-observability.md) | Spans, capture modes, redaction, OTLP export, groundedness evals |
+| [Agent API](agent-api.md) | REST routes, CLI and MCP tools for agents, webhooks and the public chat API |
+| [Set up your first agent](guides-agents-first-agent.md) | Create, test and enable an agent |
+| Agent channel guides | [Email (AgentMail)](guides-agents-email.md), [iMessage](guides-agents-imessage.md), [Slack](guides-agents-slack.md), [Telegram](guides-agents-telegram.md), [schedules](guides-agents-schedule.md), [web chat](guides-agents-web-chat.md) |
+| [MCP servers](mcp-servers.md) | Add MCP servers, secrets and OAuth from Settings or `.mcp.json`; use them from agents and stages |
+| [Glossary](glossary.md) | Agent, agent session, pipeline run, connection, Project MCP and other terms |
 | [Workshop Author](workshop.md) | Chat-draft a pipeline at `#/workshop`, save it into the catalog, and run it |
 | [Browser sessions](browser.md) | Stage `browser` field, saved logins (profiles), login check and human login pattern, queueing, teardown, headed vs headless, live view and watch-the-agent for Hosts with no screen, container browser host (development), Host config keys, what is not built |
 | [Browser sessions internals](browser-internals.md) | For contributors: module map, lifecycle, file layout, env contract, invariants, seams, extension recipes, test and debug guide for browser sessions |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
+| [Email accounts](email-accounts.md) | IMAP accounts for email triggers |
 | [Communication channels](channels.md) | connecting AgentMail, Slack, Telegram, iMessage and WhatsApp, linking a connection to a stage, `connections.yaml` and secret handling, run-start checks, the Connections page API, and troubleshooting |
 
 ## Operating Stageflow
@@ -40,7 +50,15 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 |-----|-------------------|
 | [Data directory](data-directory.md) | Durable root layout, keep vs disposable, image user, version support |
 | [Docker and self-hosting](docker.md) | Local Compose try (`.env.example`, control token, providers), pull/run, never mount docker.sock, browser image recipes (`Dockerfile.browser`, `Dockerfile.browser-sandbox`) and container browser host config, backup/restore, provenance, hardened egress (docs-only) |
-| [Operator console](operator-console.md) | Spatial stage map, gated workspace, navigation, settings |
+| [Operator console](operator-console.md) | Navigation, command palette, keyboard shortcuts and routes |
+| [Console: Inbox](console-inbox.md) | Gates and agent approvals waiting on you, desktop notifications |
+| [Console: Pipeline runs](console-runs.md) | Run list, Start a run, run detail (Timeline, Graph, List; Transcript, Events, Envelope, Artifacts) |
+| [Console: Pipelines, tasks and catalog](console-pipelines-catalog.md) | Pipeline editor, Tasks, Catalog, Triggers, Workshop |
+| [Console: Agents](console-agents.md) | Directory, create and edit, sessions, run inspector |
+| [Console: Connections](console-connections.md) | Channels, email accounts, tool servers |
+| [Console: Settings](console-settings.md) | Providers, Concurrency, MCP server, Project MCP, Notifications |
+| [Environment variables](environment-variables.md) | Every `STAGEFLOW_*` variable the Host reads |
+| [Migrating stage environments](migration-stage-environment.md) | Move stages to declared secrets and the curated stage environment |
 | [Triggers readiness](triggers-readiness.md) | Checklist: which trigger kinds and console options the Host runs today vs manual-only |
 | [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running, including standalone `run_stage` |
 | [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC, plus the wildcard-access `run_stage` operation |

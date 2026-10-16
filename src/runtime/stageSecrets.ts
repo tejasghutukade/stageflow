@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { shouldRegisterValue } from "../logging/redact.js";
+import { readMcpSecrets } from "../config/mcpHostCatalog.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
   attemptCredentialsDir,
@@ -18,7 +19,9 @@ import { isForeverDeniedSecret } from "./stageEnvironment.js";
 
 export type SecretRegistryEntry =
   | { kind: "env"; name: string }
-  | { kind: "file"; name: string; source: string; pointerVar: string };
+  | { kind: "file"; name: string; source: string; pointerVar: string }
+  /** A secret saved from the console (Settings → Project MCP). It only fills `${NAME}` in MCP servers; never the stage environment. */
+  | { kind: "console"; name: string };
 
 export type SecretRegistry = Map<string, SecretRegistryEntry>;
 
@@ -90,6 +93,14 @@ export function loadSecretRegistry(
     if (!name || isForeverDeniedSecret(name) || registry.has(name)) continue;
     registry.set(name, { kind: "env", name });
   }
+  // Console-stored MCP secrets: a stage may declare them so its `mcp:` servers can be filled.
+  try {
+    for (const name of Object.keys(readMcpSecrets(home))) {
+      if (!isForeverDeniedSecret(name) && !registry.has(name)) registry.set(name, { kind: "console", name });
+    }
+  } catch {
+    // A corrupt host-state file is reported by the MCP routes; it must not stop other stages.
+  }
   return registry;
 }
 
@@ -113,6 +124,7 @@ export function assertSecretPresent(
   name: string,
   registry: SecretRegistry,
   hostEnv: NodeJS.ProcessEnv,
+  home?: string,
 ): void {
   if (isForeverDeniedSecret(name)) {
     throw new Error(`secret "${name}" is permanently denied`);
@@ -129,9 +141,21 @@ export function assertSecretPresent(
     }
     return;
   }
+  if (entry.kind === "console") {
+    if (!readMcpSecretValue(name, home)) throw new SecretUnavailableError(name);
+    return;
+  }
   const value = readEnvSecretValue(name, hostEnv);
   if (value === undefined || value === "") {
     throw new SecretUnavailableError(name);
+  }
+}
+
+function readMcpSecretValue(name: string, home?: string): string | undefined {
+  try {
+    return readMcpSecrets(home)[name];
+  } catch {
+    return undefined;
   }
 }
 
@@ -175,6 +199,14 @@ export function resolveStageSecrets(
     const entry = input.registry.get(decl.name);
     if (entry === undefined) {
       throw new Error(`stage.unknown_secret: "${decl.name}"`);
+    }
+
+    if (entry.kind === "console") {
+      const stored = readMcpSecretValue(decl.name, input.home);
+      if (!stored) throw new SecretUnavailableError(decl.name);
+      if (shouldRegisterValue(stored)) knownValues.push({ name: decl.name, value: stored });
+      warnings.push(`secrets: ${decl.name} is a console secret; it fills MCP servers only and is not set in the stage environment`);
+      continue;
     }
 
     if (entry.kind === "file") {

@@ -1,43 +1,40 @@
 # Agents
 
-Project-owned agents live under `agents/<id>.agent.yaml`. They are separate from the stage `agent:` field (Pi vs Claude backend selection).
+Project-owned agents live under `agents/<id>.agent.yaml`. An agent is a configured assistant: instructions, a model, the tools it may use, who may talk to it, and how it is recorded. They are separate from the stage `agent:` field (Pi vs Claude backend selection).
+
+| Page | What it covers |
+|------|----------------|
+| This page | The overview, ways to reach an agent, channels, schedules, web chat |
+| [Agent definition](agent-definition.md) | Every YAML field, defaults, ranges, validation codes, revisions and file sync |
+| [Agent runtime](agent-runtime.md) | How a turn runs: tools, the gate, asking first, limits, sub-agents, restarts, environment variables |
+| [Agent observability](agent-observability.md) | Traces, capture modes, the run page, groundedness evals, OTLP export |
 
 ## Console, API, CLI, MCP
 
 - Console: **Agents** (`#/agents`) — directory, create (with an author chat), edit (diff review, version history), detail, session and run inspector.
+  - The directory shows how each agent is reached: the web chat link (open or copy), the channel provider with its connection, or the schedule; otherwise "Console only". It also shows all-time cost per agent and in total, a clear Enabled / Disabled / Needs setup status, and the first tools and approvals with a **View all** dialog for the rest. Search matches reach too.
+  - **Disable agent** (on the agent page) asks first. The agent stops accepting new sessions, and its web chat page and channel stop answering. A turn that is already running finishes; nothing new starts, and an approval that is waiting can only be denied, not approved. Nothing is deleted, and you can enable the agent again at any time. Stop a running turn from its session page if it should end now.
+  - The run page has five tabs: Steps, Waterfall, Messages, Logs and Configuration ([details](agent-observability.md#where-you-see-it)).
+  - Approvals waiting on a person appear in the **Inbox**; with desktop notifications on (Settings → Notifications) the console also raises one when an agent asks.
 - REST: `/api/agents` — definitions, validate, revisions/diff/restore, sessions, approvals, chat (NDJSON), OTLP export.
 - CLI: `sf agents` — [CLI reference](cli-reference.md#sf-agents).
-- MCP: [Agent tools](mcp.md#agent-tools).
+- MCP: [Agent tools](mcp.md#agent-tools). Deciding an approval (`approve_agent_action`, `deny_agent_action`) is for people only and cannot be granted to an agent.
 
 ## Storage
 
-Definitions stay in git-tracked YAML; the Host syncs them by content hash (a read never rewrites a file). Revisions, sessions, messages, turns, spans, approvals and schedules live in the run store SQLite database under `$STAGEFLOW_HOME` (`agent_*` tables). A turn left running when the Host stops is marked failed on restart.
+Definitions stay in git-tracked YAML; the Host syncs them by content hash (a read never rewrites a file). Revisions, sessions, messages, turns, spans, approvals and schedules live in the run store SQLite database under `$STAGEFLOW_HOME` (`agent_*` tables). A turn left running when the Host stops is marked failed on restart ([Restarts](agent-runtime.md#restarts)). Files and sync rules: [Agent definition](agent-definition.md#files-revisions-and-sync).
 
 ## Definition
 
-Schema: [YAML catalog — Agents](yaml-catalog.md#agents-agent-yaml). Every save is a revision with its source; a stale `baseRevision` is rejected as `agent.conflict`.
+Every field, default and validation code is in [Agent definition](agent-definition.md). Every save is a revision with its source; a stale `baseRevision` is rejected as `agent.conflict`. The schema summary is also in [YAML catalog — Agents](yaml-catalog.md#agents-agent-yaml).
 
 ## Runtime
 
-Each session keeps one Pi model session on the revision it started with. What the definition says is enforced:
-
-- **Tools.** `tools.builtin` groups map to Pi tools (`read` = read/grep/find/ls, `write` = write/edit, `shell` = bash). MCP servers come from the project `.mcp.json`; only the tools named under `tools.mcp.<server>` are exposed (`"*"` for all). Skills load from `tools.skills`. Every call is checked against the grants again before it runs. Agent definitions and Stageflow state cannot be written through a tool that names the path: `write`, `edit` and any other tool with a `path`/`file_path`/`file`/`destination`-style argument (an MCP file tool, say) are refused for them. **`bash` is not path-confined.** The runtime sees a command string, not what it does, so an agent granted `bash` can still change agent files and Stageflow state; the editor warns (`agent.shell_not_path_confined`). For that reason every `bash` call is always ask-first, whether or not it is listed in `approvals.ask_first`: a person reads the command before it runs. Do not grant `bash` to an agent that must stay confined.
-- **Ask first.** A call to a tool in `approvals.ask_first` pauses the turn (the session shows waiting) until an approver decides, from the console, CLI, MCP or an allowed channel. Approved runs once, denied tells the agent to continue without it. If nobody answers within `timeout_minutes`, `on_timeout: skip` lets the agent continue without the action; `deny` ends the turn. Pending approvals do not survive a Host restart: those turns are marked failed.
-- **Guardrails.** `guardrails.block_patterns` are checked on the finished reply and a match fails the turn. For an agent with patterns, streamed text is held back and released only after that check passes, so blocked text is never shown (the reply then appears at the end instead of word by word). Agents without patterns stream as before.
-- **Stopped turns.** Stopping a turn that is waiting for approval closes the approval (expired) with the turn: it leaves the pending list, cannot be approved later, and does not pre-approve a later identical call.
-- **Runtime lifetime.** The Host releases a session's Pi session and its isolated MCP processes after 30 idle minutes (`STAGEFLOW_AGENT_SESSION_IDLE_MINUTES`, `0` keeps them), when a turn is stopped, when its agent is archived, and on shutdown. The next message reopens the session from the stored transcript.
-- **Sub-agents.** `sub_agents` become tools (`agent_<id>`); the callee runs in its own session (source `agent`) and its reply returns to the caller. Nesting stops at `sub_agent_depth`.
-- **Limits.** A session refuses a new turn once it has used `max_turns`, `session_minutes` or `cost_usd`. When a restarted session replays a long transcript, `long_context` either drops (`truncate`) or condenses (`summarize`) the oldest messages.
-- **Cursor models.** `cursor/*` models run Cursor's own file and shell tools beside Pi's, so grants and ask-first cannot hold. Agents refuse them (`agent.backend_unavailable`) unless the Host sets `STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS=1`; use another provider's model for governed agents.
-- **Not yet.** The `claude` backend and `execution: sandbox` fail with a clear error (the editor warns). `tools.browser` is stored but not wired.
+Each session keeps one Pi model session on the revision it started with, and every tool call is checked against the grants before it runs. [Agent runtime](agent-runtime.md) covers the tools an agent can have (builtin, MCP servers from the project `.mcp.json` or the console, skills, sub-agents, Stageflow's own tools), [asking first](agent-runtime.md#asking-first), the [path guard and `bash`](agent-runtime.md#the-path-guard-and-bash), [guardrails](agent-runtime.md#guardrails-and-streaming), [limits](agent-runtime.md#limits), [restarts](agent-runtime.md#restarts) and the environment variables.
 
 ## Traces and evals
 
-The sidebar's **Agent sessions** page lists sessions across all agents (`GET /api/agents/sessions`, same filters as the per-agent list plus `agent`); an agent's own page lists only its sessions.
-
-Every turn records a span tree: an `invoke_agent` root with `chat` (model), `execute_tool`, approval (`gate`), sub-agent and guardrail children, with tokens and cost. `observability.capture` controls content: `off`, `metadata` (default) or `full` (secrets masked). Export a session as OTLP/JSON from the session page, `GET .../sessions/:sid/otlp`, or set `observability.otlp: true` and the Host pushes each finished turn to the collector named by `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, plus `OTEL_EXPORTER_OTLP_HEADERS`). A collector outage never fails a turn.
-
-`evals.groundedness` scores (0–1) how well a reply that used tools is supported by those tool results; the average shows on the session page.
+Every turn records a span tree, and `evals.groundedness` can score replies. See [Agent observability](agent-observability.md). The **Agent sessions** page in the sidebar lists sessions across all agents (`GET /api/agents/sessions`, same filters as the per-agent list plus `agent`); an agent's own page lists only its sessions.
 
 ## Channels (inbound)
 
@@ -51,7 +48,27 @@ limits:
   always_on: true     # one conversation that never ends by time or turns, and carries on after a failure
 ```
 
-`allow_from` takes emails, phone numbers (`+country…`), `@domain` and `*`; a message from anyone else is ignored. `always_on` skips `session_minutes` and `max_turns`; `cost_usd` then counts per day. The older `channels: [{ connection_id }]` list still loads as the one `channel` (more than one is an error). Slack, Telegram and AgentMail connections accept an optional `inboundSecret` and then receive webhooks at `POST /api/agent-inbound/<connection id>`:
+`allow_from` decides who may message the agent; a message from anyone else is ignored. What an entry looks like depends on what the provider tells us about the sender:
+
+| Provider | Entries that can match | Sender seen as |
+|----------|------------------------|----------------|
+| AgentMail | Email address, `@domain` | The `From` address |
+| iMessage | `+` phone number (E.164) | The sender's number |
+| Slack | Slack user id such as `U02ABC1234`, or `*` | The user id of the message author |
+| Telegram | `@username`, or `*` | The sender's username (no `@`). A sender with no username can only get in through `*`. |
+
+`always_on` skips `session_minutes` and `max_turns`; `cost_usd` then counts per day. The older `channels: [{ connection_id }]` list still loads as the one `channel` (more than one is an error). A saved agent shows `agent.channel_nobody_allowed` or `agent.channel_open_to_anyone` when the list is empty or `*`. See [Agent definition](agent-definition.md#channel) for the grammar.
+
+How messages arrive depends on the provider:
+
+| Provider | How the Host gets messages | Details |
+|----------|----------------------------|---------|
+| AgentMail | The Host holds a WebSocket open to the inbox; a webhook also works | [below](#agentmail-and-imessage-the-host-listens) |
+| iMessage (Photon) | The Host holds a stream open to the project | [below](#agentmail-and-imessage-the-host-listens) |
+| Slack | Webhook | `inboundSecret` on the connection |
+| Telegram | Webhook | `inboundSecret` on the connection |
+
+Slack, Telegram and AgentMail connections accept an optional `inboundSecret` and then receive webhooks at `POST /api/agent-inbound/<connection id>`:
 
 | Provider | `inboundSecret` is | Verified by |
 |----------|--------------------|-------------|
@@ -59,11 +76,11 @@ limits:
 | Telegram | `secret_token` from `setWebhook` | `x-telegram-bot-api-secret-token` |
 | AgentMail | Webhook secret | `x-agentmail-signature` (HMAC-SHA256 of the body) |
 
-The route needs no console token; the signature is the credential. A message starts or continues the session for its thread, the agent's reply goes back to the sender on the same connection once per turn, and a redelivered event is ignored. Messages for a connection no enabled agent is bound to are dropped. Email and iMessage inbound are not wired yet.
+The route needs no console token; the signature is the credential. A message starts or continues the session for its thread, the agent's reply goes back to the sender on the same connection once per turn, and a redelivered event is ignored. A webhook reply goes into the conversation: Slack in the channel, Telegram to the chat, AgentMail as a reply to the message. Messages for a connection no enabled agent is bound to are dropped.
 
 ## Schedules
 
-`schedule: { cron, timezone?, message? }`. While the Host runs, the schedule source ticks (default 30s, `STAGEFLOW_AGENT_SCHEDULE_TICK_INTERVAL_MS`) and starts a turn when due.
+`schedule: { cron, timezone?, message? }`. While the Host runs, the schedule source ticks (default 30s, `STAGEFLOW_AGENT_SCHEDULE_TICK_INTERVAL_MS`; `0` turns schedules off) and starts a turn when due, with `message` (default "Scheduled check-in.") as the user message. The first time a tick sees a scheduled agent it only stores the next run and does not fire. A Host that was down past a due time fires once, not once per missed occurrence. A schedule edited to fire sooner does not wait out the old next run.
 
 ## Web chat (public page)
 
@@ -97,43 +114,7 @@ Error codes (always friendly `message`, never internals): `web_chat.rate_limited
 
 CORS: same-origin by default. `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma-separated) lets a page hosted elsewhere call the API, so the chat page can be deployed separately later; it only needs its API base URL. Exposing the Host to the internet (restricting the console) is a later follow-up.
 
-## Granular permissions
-
-Every tool an agent can use is one checkbox in the editor's **Tools and access** tree: a group box selects all of its tools, a tool box selects one, and a partly ticked group shows the mixed state. The YAML stores the compact form (a full group as the group, a partial one as single tools):
-
-```yaml
-tools:
-  builtin: [read]            # read, grep, find, ls
-  builtin_tools: [edit]      # just edit, not write
-  stageflow:
-    groups: [runs.read]
-    tools: [start_run]
-```
-
-Ask-first lives in `approvals.ask_first` by tool id (`edit`, `bash` (always on when granted), `stageflow.start_run`, `<server>.<tool>`, `agent:<id>`).
-
-## Stageflow tools for agents
-
-An agent can be granted Stageflow's own tools (the MCP tools in [mcp.md](mcp.md)), as whole groups or one tool at a time:
-
-```yaml
-tools:
-  stageflow:
-    groups: [runs.read, gates.read]   # discover, runs.read, runs.control, runs.cleanup, gates.read, triggers, agents.read, agents.manage, agents.cleanup, agents.converse, pipelines.author
-    tools: [start_run]           # single tools on top of the groups
-approvals:
-  ask_first: [stageflow.start_run]
-```
-
-- One registry (`src/toolkit`) is derived from the MCP registrations plus a metadata table (group and risk: `read`, `write`, `destructive`, `external`); `GET /api/agents/stageflow-tools` serves it to the console, which turns on ask-first for every non-read tool when you enable a group.
-- Operator-only: `gates.decide` (`answer_gate`, `decide_feedback_loop`, `approve_agent_action`) and `get_started` cannot be granted to an agent (validation error `agent.stageflow_operator_only`). Only a person decides gates and approvals, so one agent can never approve another's action.
-- Destructive tools sit in their own groups (`runs.cleanup`, `agents.cleanup`) so ticking "Run and recover pipelines" never selects `delete_run`. A web-chat agent that can read agent sessions gets a warning, because those hold visitors' messages.
-- A created or saved agent cannot drop an ask-first its creator is bound by.
-- The grant id is `stageflow.<tool>` (so `tools.mcp.stageflow` is reserved). Granted tools reach the model as `stageflow_<tool>` and pass the same grant and ask-first gate as any other tool.
-- An agent can never give another agent a tool it does not hold: `create_agent`, `save_agent`, `restore_agent_revision` and `enable_agent` refuse grants beyond the caller's, an agent cannot edit or archive itself, and it cannot decide approvals on its own sessions.
-- The Workshop and Agent-author profiles check their tools through the same grant-id layer (`src/toolkit/profiles.ts`).
-
-### AgentMail and iMessage: the Host listens
+## AgentMail and iMessage: the Host listens
 
 For AgentMail and iMessage the Host opens the stream itself, so no public URL is needed (webhooks stay for Slack and Telegram):
 
@@ -149,7 +130,7 @@ For AgentMail and iMessage the Host opens the stream itself, so no public URL is
 - **Which number to text (iMessage).** Numbers belong to the Photon project, not to the agent. On a Free or Pro project (shared pool) you register each person as a user in Photon, who is then assigned a number to text (it can differ per person); on a Business project (dedicated lines) everyone texts the project's line. The agent editor shows it: "Jane (+1415…) texts +1999…", "Text +1415… to reach this agent", or a warning when an allowed phone is not registered in Photon. An agent needing its own number needs its own Photon project and credential; one project cannot serve two agents.
 - iMessage on a Free or Pro Photon project: only registered project users can message the line, and each must text it once first.
 
-### Replies that do not arrive
+## Replies that do not arrive
 
 On a channel the system, not the agent, sends the reply, and a turn only counts as succeeded once the reply has reached the person. Each reply is tracked (`agent_deliveries`):
 

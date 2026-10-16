@@ -391,9 +391,14 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
       {confirmDisable ? (
         <ConfirmDialog title={`Disable ${agent.name}?`} confirmLabel="Disable agent" busy={busy} onConfirm={() => void onToggle()} onClose={() => setConfirmDisable(false)}>
           <p>
-            {agent.name} will stop accepting new work: no new sessions, and its web chat page and channel stop answering
-            {agent.stats.active > 0 ? `. ${agent.stats.active} active session${agent.stats.active === 1 ? " is" : "s are"} put on hold` : ""}.
+            {agent.name} will stop accepting new work: no new sessions, and its web chat page and channel stop answering.
           </p>
+          {agent.stats.active > 0 ? (
+            <p>
+              {agent.stats.active} active session{agent.stats.active === 1 ? " is" : "s are"} not stopped: a turn already running finishes, but nothing new
+              starts and a waiting approval can only be denied. Stop a running turn from its session page to end it now.
+            </p>
+          ) : null}
           <p>Nothing is deleted. Definition, revisions and session history stay, and you can enable it again any time.</p>
         </ConfirmDialog>
       ) : null}

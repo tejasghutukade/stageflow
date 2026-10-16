@@ -23,6 +23,11 @@ describe("sender allow-list", () => {
     expect(senderAllowed(["*"], undefined)).toBe(true);
     expect(senderAllowed(["jane@x.com"], "Jane <JANE@x.com>")).toBe(true);
     expect(senderAllowed(["jane@x.com"], "bob@x.com")).toBe(false);
+    // Slack user ids and Telegram usernames (which arrive without the "@").
+    expect(senderAllowed(["U02ABC1234"], "U02ABC1234")).toBe(true);
+    expect(senderAllowed(["@Bob_Smith"], "bob_smith")).toBe(true);
+    expect(senderAllowed(["@bob_smith"], "alice_x")).toBe(false);
+    expect(senderAllowed(["@x.com"], "a@x.com")).toBe(true);
     expect(senderAllowed(["@acme.com"], "bob@Acme.com")).toBe(true);
     expect(senderAllowed(["@acme.com"], "bob@acme.com.evil.io")).toBe(false);
     expect(senderAllowed(["+14155550123"], "+1 415 555 0123")).toBe(true);

@@ -10,9 +10,9 @@ Full-viewport grid: `232px` rail + scrolling main (`h-screen`, `grid-cols-[232px
 
 ## `AppRail`
 
-Props: `activeId`, `onNavigate`, `waitingCount`, `inFlightCount`, `health`, `workspaceName`, `workspaceSubtitle`, `heldWaitingCount`, `onOpenPalette`.
+Props: see `AppRail.tsx` (`activeId`, `onNavigate`, counts and health, workspace, `onOpenPalette`; the nav itself comes from `navConfig.ts`).
 
-Grouped nav, capacity meter, compact provider row, pins, workspace switcher, search, start run.
+Grouped nav (Inbox pinned; Activity, Build, Connect), capacity meter, compact provider row, pins, workspace switcher, search, start run; Settings in the footer.
 
 ## `PageHeader`
 

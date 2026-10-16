@@ -87,8 +87,8 @@ describe("directoryTotals", () => {
 
 describe("reach", () => {
   it("shows web chat link, channel provider, schedule, else console only", () => {
-    const web = toDirectoryRow(agent({ id: "w", webChatUrl: "/chat/abc", publicBaseUrl: "https://x.test" }));
-    expect(web.reach).toMatchObject([{ kind: "web", label: "Web chat", href: "https://x.test/chat/abc" }]);
+    const web = toDirectoryRow(agent({ id: "w", webChatUrl: "/chat/abc" }));
+    expect(web.reach).toMatchObject([{ kind: "web", label: "Web chat", href: "/chat/abc" }]);
     const ch = toDirectoryRow(agent({ id: "c", channelConnection: "im_1", scheduleCron: "0 9 * * *" }), 0, (id) => (id === "im_1" ? "iMessage" : undefined));
     expect(ch.reach.map((r) => [r.kind, r.label, r.detail])).toEqual([["channel", "iMessage", "im_1"], ["schedule", "Schedule", "0 9 * * *"]]);
     expect(toDirectoryRow(agent({ id: "n" })).reach).toMatchObject([{ kind: "console" }]);

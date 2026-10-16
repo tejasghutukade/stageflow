@@ -488,7 +488,7 @@ export class AgentService {
           warnings.push({
             path: `tools.mcp.${server}`,
             code: "agent.mcp_server_unknown",
-            message: `${server} is not in .mcp.json`,
+            message: `${server} is not in the project .mcp.json or the servers saved from the console`,
           });
         }
       }
@@ -520,6 +520,13 @@ export class AgentService {
       } else if (definition.channel.allow_from.includes("*")) {
         warnings.push({ path: "channel.allow_from", code: "agent.channel_open_to_anyone", message: "Anyone who can reach this connection can talk to this agent" });
       }
+    }
+    if (definition.approvals.approvers.channel_ids.length > 0) {
+      warnings.push({
+        path: "approvals.approvers.channel_ids",
+        code: "agent.channel_approvers_unused",
+        message: "Approving from a chat channel is not supported yet; these ids are ignored and approvals are decided in the console",
+      });
     }
     return warnings;
   }

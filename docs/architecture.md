@@ -21,6 +21,8 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 | Backend selection | Resolves which adapter a stage runs on (stage > pipeline > global > Pi). **Model** (LLM id) resolves separately with the same tier order but no `"pi"` fallback — see [YAML catalog — Model defaults](yaml-catalog.md#model-defaults-and-precedence) | `src/agent/resolveStagePort.ts`, `src/agent/agentBackend.ts`, `src/config/resolveModel.ts` |
 | Pi adapter | Translate Stageflow stage execution into Pi coding-agent sessions and tools | `src/agent/piAdapter.ts` |
 | Claude adapter | Translate Stageflow stage execution into Claude Agent SDK sessions and tools | `src/agent/claudeAdapter.ts`, `claudeTools.ts`, `claudeActivity.ts`, `claudeSession.ts` |
+| Agent service | Agent definitions, revisions, sessions, turns, approvals, channels and schedules; one turn-lifecycle module owns every transition | `src/agents/` |
+| MCP resolver | Merges the project `.mcp.json` with servers and secrets saved from the console; fills `${VAR}` by caller scope (stage, agent, probe, validate) | `src/config/resolveStageMcpServers.ts`, `src/config/mcpHostCatalog.ts` |
 | Persistence | Store run metadata, DAG snapshots, attempts, events, envelopes, artifacts, and projections | `src/runstore/` |
 | Operator surfaces | Drive and inspect the same runtime through CLI, browser console, or MCP | `src/cli/`, `src/server/`, `src/mcp/`, `ui/` |
 
@@ -76,6 +78,10 @@ Persisted state lets the runtime reconstruct scheduler state for HITL resume and
 How an adapter actually survives that park is adapter-internal and deliberately allowed to differ: Pi reopens its own on-disk session and splices the answer directly into the pending tool call, then resumes mid-thought. The Claude adapter never lets a tool call go dangling in the first place — `ask_operator` returns an immediate placeholder and the turn ends cleanly (via an `interrupt()` backstop), so parking has nothing to repair; answering resumes the same session as a new turn with the real prior conversation reloaded, not mid-thought. Both satisfy the same `StageHandle` contract from the runtime's point of view.
 
 This same lifecycle supports interactive console use and headless automation: CI exits with code `2` when a run requires input, while MCP clients can discover waiting gates and answer them programmatically.
+
+## Agents
+
+Agents are a second, conversational way to run work beside pipelines. Each lives in `agents/<id>.agent.yaml` in the project (git-tracked), is synced into revisions in the run store, and runs on a Pi session sealed to the tools and approvals its definition grants. One turn-lifecycle module owns every change of a turn, its session and its approval, so a stopped turn cannot leave an approval pending. Channels, schedules, the console, CLI, MCP and the public web chat all enter through the same session and turn path. See [Agents](agents.md).
 
 ## Design decisions
 
@@ -133,6 +139,8 @@ A published `sf` binary runs each stage as compiled `dist/cli.js`. `npm run dev`
 - [Human-in-the-loop](hitl.md) — gate kinds, waiting behavior, and resume paths
 - [CI / headless](ci.md) — JSON output, exit codes, and GitHub Actions
 - [MCP](mcp.md) — tools and run resources
+- [Operator console](operator-console.md) and [Agents](agents.md)
+- [MCP servers](mcp-servers.md)
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — stage agents consuming project MCP servers
 - [Operator console](operator-console.md) — runtime inspection and gate handling
 - [Workshop Author](workshop.md) — chat-draft a pipeline and save it into the catalog

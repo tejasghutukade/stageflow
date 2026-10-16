@@ -4,7 +4,7 @@ Stageflow connects existing mailboxes. It does not create addresses or host emai
 
 Account management, connection tests, send, reply, retrieval, bounded search, incoming detection, and pipeline triggers are available. Account capabilities report only implemented mailbox operations.
 
-To send messages from a stage over AgentMail, Slack, Telegram, iMessage or WhatsApp instead of an IMAP/SMTP mailbox, see [Communication channels](channels.md). Email accounts and channels are separate and both keep working.
+To send messages from a stage over AgentMail, Slack, Telegram, iMessage or WhatsApp instead of an IMAP/SMTP mailbox, see [Communication channels](channels.md). Email accounts and channels are separate and both keep working. Agents answer only on channel connections, never on an IMAP/SMTP account.
 
 Mailbox passwords can come from the host environment or the local `email.yaml` file. Use an app password when your provider requires one. OAuth tokens must come from the environment. Do not put credentials in stage YAML, tasks, prompts, or model provider settings.
 
@@ -46,9 +46,9 @@ Restart the host after a file change. The host does not reload this file while a
 
 ## View accounts in the console
 
-Open **Connections** in the sidebar to see configured email accounts. This read-only page shows the account name, account ID, address, enabled state, and folders. It does not display credentials or credential references. Enabled means the account is available for use, not that connectivity has been tested. Edit `email.yaml` and restart the Host to load configuration changes.
+Open **Connections** in the sidebar to see configured email accounts next to your [channel connections](channels.md). The email account rows are read-only (channel connections can be added and edited on the same page) and show the account name, account ID, address, enabled state, and folders. It does not display credentials or credential references. Enabled means the account is available for use, not that connectivity has been tested. Edit `email.yaml` and restart the Host to load configuration changes.
 
-Email is the only communication channel listed today; Slack, Telegram, and WhatsApp connectors are not implemented.
+IMAP/SMTP email accounts are separate from channel connections. AgentMail, Slack, Telegram, iMessage and WhatsApp are [channel connections](channels.md), added on the same page, and a stage can send over them. A project [agent](agents.md#channels-inbound) can answer on an AgentMail, iMessage, Slack or Telegram connection, but **not** on an IMAP/SMTP account: to give an agent an email address, use an AgentMail inbox.
 
 ## Manage accounts through HTTP
 

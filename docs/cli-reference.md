@@ -432,7 +432,7 @@ sf runs gc [--dry-run] [--json]
 
 ## `sf agents`
 
-Manage project-owned agents (`agents/*.agent.yaml`). A client of the running Host (`sf ui` / `sf mcp`); `chat` streams a real reply.
+Manage project-owned agents (`agents/*.agent.yaml`). Like `sf run` and `sf trigger`, this is an HTTP client of the shared global Stageflow service, which it starts if nothing is listening. Every request carries the project of the current directory as `project_root`. There is no `sf agents create`, `save` or `archive`: write the YAML file (or use the console), and use the [`create_agent`/`save_agent`/`archive_agent` MCP tools](mcp.md#agent-tools) or the [REST API](agent-api.md) from scripts. `chat` streams a real reply.
 
 ```bash
 sf agents list [--json]
@@ -450,6 +450,23 @@ sf agents deny <id> <sessionId> [--json]
 ```
 
 `restore` needs `--base`, the revision you looked at; if the agent has moved on since, the restore is refused instead of overwriting a newer edit. Without `--base` it prints the current revision. `chat` exits non-zero when the Host closes the stream before a reply or an error arrives (with `--json` it prints an error object).
+
+| Subcommand | Human output (default) | `--json` |
+|------------|------------------------|----------|
+| `list` | `id`, `vN`, `enabled`/`disabled`/`invalid`, name (tab separated) | `{ "agents": [ … ] }` |
+| `get` | the canonical YAML (`(no valid revision)` when the file is invalid) | the full agent view |
+| `validate` | `error`/`warning` lines on stderr, then `valid` | `{ "issues": [ … ], "warnings": [ … ], … }` |
+| `enable`, `disable` | `<id> enabled (vN)` | `{ "agent": { … } }` |
+| `history` | `vN`, time, source, summary | `{ "revisions": [ … ] }` |
+| `restore` | `<id> restored vN as vM` | `{ "agent": { … } }` |
+| `sessions` | id, status, source, updated, title | `{ "sessions": [ … ], … }` |
+| `session` | the transcript, one message per block | the full session |
+| `chat` | the reply streams to stdout; `session <id>` goes to stderr | the final session object |
+| `approve`, `deny` | `Approved <tool>` / `Denied <tool>` | `{ "approval": { … }, "session": { … } }` |
+
+`--status` takes a session status (`open`, `running`, `waiting`, `held`, `closed`); an unknown one is refused. `sessions` shows the first page only (up to 25).
+
+**Exit codes:** `0` success, `1` any failure: a usage error (the usage text is printed), a refused request (the `agent.*` error code and message are printed, with field issues when there are any), the Host not reachable, or `validate` finding errors. With `--json` a failure prints `{ "code", "message", "issues" }` on stdout.
 
 See [Agents](agents.md) and [YAML catalog — Agents](yaml-catalog.md#agents-agent-yaml).
 

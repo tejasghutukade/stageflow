@@ -19,13 +19,18 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 
 | Path under `$STAGEFLOW_HOME` | Keep / disposable | Notes |
 |------------------------------|-------------------|-------|
-| `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode), including the durable **projects registry** |
+| `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode), including the durable **projects registry** and the agent tables ([agent](agents.md#storage)): `agent_definitions`, `agent_revisions`, `agent_sessions`, `agent_messages`, `agent_turns`, `agent_spans`, `agent_eval_scores`, `agent_approvals`, `agent_executed_payloads`, `agent_outbound_sends`, `agent_inbound_events`, `agent_deliveries`, `agent_schedules`. Agent YAML stays in the project; only history is here |
 | `settings.json` | **keep** | Global settings (credential source, concurrency, …) |
 | `agent/auth.json` | **keep** | Operator auth file when this directory is the credential root |
 | `connections.yaml` | **keep** | Host-level [communication channel](channels.md) connections (provider settings, `env:`/`store:` secret references; never a secret value). A project-root `connections.yaml` or `STAGEFLOW_CONNECTIONS_FILE` can replace it. **Not included in `sf backup`.** |
 | `channel-secrets.json` | **keep** | Secrets typed into the console Connections page, mode `0600`. Lives in the credential root (this directory when it is the credential root). Plaintext, same trust level as `agent/auth.json`. **Not included in `sf backup`.** |
 | `.stageflow/channel-sends.json` | **keep** | Per-workspace send ledger for channel messages (hashes and outcomes, never message text). Keeps an uncertain send from being repeated after a restart. Records older than 30 days are pruned. |
-| `agent/` | **keep** | Host Pi agent directory (`PI_CODING_AGENT_DIR` for the Host process) |
+| `agent/` | **keep** | Host Pi agent directory (`PI_CODING_AGENT_DIR` for the Host process). OAuth tokens for MCP servers you signed in to live in `agent/mcp-oauth-encrypted` (AES-256-GCM) |
+| `agents/pi-sessions/` | **keep** | Pi session files for [agent](agents.md) conversations (one per agent session; history and costs are in `state.db`) |
+| `agent/mcp-cache.json` | disposable | Tool lists cached from the last successful MCP connect or Check |
+| `mcp/.mcp.json` | **keep** | MCP servers added in Settings → Project MCP, merged over the project `.mcp.json`. Holds `${NAME}` references, never token values. Not included in `sf backup`; see [MCP servers](mcp-servers.md). Mode `0600`, written atomically. A corrupt file is reported, never overwritten |
+| `secrets/mcp-secrets.json` | **keep** | Write-only store for the values behind those `${NAME}` references (directory `0700`, file `0600`, plaintext at the same trust level as `channel-secrets.json`) |
+| `secrets/mcp-oauth.key` | **keep** | Host key for the encrypted OAuth store (`0600`); `PI_MCP_ADAPTER_OAUTH_FILE_KEY` overrides it |
 | `runs/` | disposable | Per-run workspaces, stage attempts, artifacts |
 | `a2a-artifacts/` | disposable | A2A artifact bytes |
 | `repos/` | disposable | Shared bare-clone cache (`repos/<host>/<owner>/<repo>.git`); Host-owned, used for repository-bound runs |

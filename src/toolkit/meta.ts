@@ -34,12 +34,12 @@ export const TOOL_GROUPS: readonly ToolGroup[] = [
   { id: "runs.control", title: "Run and recover pipelines", summary: "Start, rerun, retry, resume and recover runs." },
   { id: "runs.cleanup", title: "Cancel and delete runs", summary: "Cancel runs, abandon stages, delete runs and collect old ones. Destructive." },
   { id: "gates.read", title: "See what is waiting", summary: "List the gates and questions waiting on a person." },
-  { id: "gates.decide", title: "Decide gates and approvals", summary: "Answer gates and approve agent actions. Only a person can do this.", operatorOnly: true },
+  { id: "gates.decide", title: "Decide gates and approvals", summary: "Answer gates and approve or deny agent actions. Only a person can do this.", operatorOnly: true },
   { id: "triggers", title: "Triggers", summary: "List, create and fire triggers." },
   { id: "agents.read", title: "Look at agents", summary: "List agents, revisions and sessions." },
   { id: "agents.manage", title: "Manage agents", summary: "Create, save, enable, disable and restore agents." },
   { id: "agents.cleanup", title: "Archive agents", summary: "Archive an agent. Destructive." },
-  { id: "agents.converse", title: "Talk to agents", summary: "Chat with an agent and decide its approvals." },
+  { id: "agents.converse", title: "Talk to agents", summary: "Chat with an agent and stop its running turn." },
   { id: "pipelines.author", title: "Author pipelines and tasks", summary: "Read, create and edit pipelines, stages and tasks directly on disk." },
 ];
 
@@ -120,7 +120,7 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   agent_chat: t("agents.converse", "external"),
   stop_agent_session: t("agents.converse", "write"),
   approve_agent_action: t("gates.decide", "write", true),
-  deny_agent_action: t("agents.converse", "write"),
+  deny_agent_action: t("gates.decide", "write", true),
 
   read_pipeline: t("pipelines.author", "read"),
   create_pipeline: t("pipelines.author", "write"),

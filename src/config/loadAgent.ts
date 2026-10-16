@@ -137,9 +137,9 @@ const webChatSchema = z
 
 const channelSchema = z.strictObject({
   connection_id: nonEmpty,
-  /** Who may message the agent: emails, E.164 phones, `@domain`, or `*`. Empty lets nobody in. */
+  /** Who may message the agent: emails, E.164 phones, `@domain`, Slack user ids, Telegram `@username`, or `*`. Empty lets nobody in. */
   allow_from: z
-    .array(z.string().trim().regex(SENDER_ENTRY, "Use an email, a +phone number, @domain or *"))
+    .array(z.string().trim().regex(SENDER_ENTRY, "Use an email, a +phone number, @domain, a Slack user id, a Telegram @username or *"))
     .default([])
     .refine((list) => new Set(list.map(normalizeEntry)).size === list.length, "Duplicate sender"),
 });
