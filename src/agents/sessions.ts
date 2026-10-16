@@ -23,6 +23,8 @@ export type SendTurnInput = {
   source?: string;
   onDelta?: (text: string) => void;
   onSessionOpened?: (sessionId: string) => void;
+  /** Retry this earlier, interrupted turn: its user message is reused, not asked again. */
+  resumeTurnId?: string;
 };
 
 export type ConversationOptions = {
@@ -89,6 +91,7 @@ export class AgentConversation {
       const active = await service.beginTurn(input.projectRoot, sessionId, {
         text: input.text,
         author: input.author ?? null,
+        ...(input.resumeTurnId ? { resumeTurnId: input.resumeTurnId } : {}),
       });
       if (active.session.agentId !== input.agentId) {
         await service.completeTurn(input.projectRoot, active.turn.id, { status: "failed", errorCode: "agent.session_not_found" });

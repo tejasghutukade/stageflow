@@ -688,6 +688,16 @@ export class AgentStore {
   }
 
   /** Turns left `running` by a host that stopped mid-turn. */
+  /** Turns a restart is about to fail: they were mid-flight when the Host went down. */
+  interruptedTurnIds(): string[] {
+    return (this.db.prepare(`SELECT turn_id FROM agent_turns WHERE status IN ('running', 'waiting')`).all() as Row[]).map((row) => str(row.turn_id));
+  }
+
+  /** Give an unanswered user message to a new turn, so a retry does not repeat it in the transcript. */
+  moveMessageToTurn(messageId: string, turnId: string): void {
+    this.db.prepare(`UPDATE agent_messages SET turn_id = ? WHERE message_id = ?`).run(turnId, messageId);
+  }
+
   failInterruptedTurns(now: string): number {
     return this.transaction(() => {
       const result = this.db

@@ -242,7 +242,7 @@ function SessionsList({ agentId, stats: initialStats }: { agentId: string; stats
               onChange={setSource}
               options={[
                 { value: "", label: "All sources" },
-                ...["web", "console", "cli", "mcp", "schedule", "slack", "email", "telegram", "photon", "agentmail"].map((value) => ({
+                ...["web", "console", "cli", "mcp", "schedule", "slack", "email", "telegram", "photon", "imessage", "agentmail"].map((value) => ({
                   value,
                   label: sourceLabel(value),
                 })),

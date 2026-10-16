@@ -260,7 +260,7 @@ export class AgentService {
     const temporary = `${target}.${randomBytes(4).toString("hex")}.tmp`;
     await writeFile(temporary, yaml);
     await rename(temporary, target);
-    return this.store.appendRevision(agentProjectKey(projectRoot), {
+    const revision = this.store.appendRevision(agentProjectKey(projectRoot), {
       definition,
       yaml,
       source: actor.source,
@@ -270,6 +270,25 @@ export class AgentService {
       fileHash: sha256(yaml),
       now: this.iso(),
     });
+    this.notifyChanged();
+    return revision;
+  }
+
+  private readonly changeListeners: Array<() => void> = [];
+
+  /** Called after an agent is saved, enabled, disabled, restored or archived, so listeners on channels can follow. */
+  onChange(listener: () => void): void {
+    this.changeListeners.push(listener);
+  }
+
+  private notifyChanged(): void {
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
+      } catch {
+        // a listener must never break a save
+      }
+    }
   }
 
   private currentRevision(projectRoot: string, agentId: string): { row: AgentDefinitionRow; revision: AgentRevision } {
@@ -594,6 +613,7 @@ export class AgentService {
       await rm(this.file(projectRoot, agentId), { force: true });
       this.store.updateDefinitionState(agentProjectKey(projectRoot), agentId, { archived: true, fileHash: null }, this.iso());
     });
+    this.notifyChanged();
   }
 
   /* ---------- revisions ---------- */
@@ -761,7 +781,7 @@ export class AgentService {
   async beginTurn(
     projectRoot: string,
     sessionId: string,
-    input: { text: string; author?: string | null },
+    input: { text: string; author?: string | null; resumeTurnId?: string },
   ): Promise<ActiveTurn> {
     return this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
@@ -773,7 +793,9 @@ export class AgentService {
       this.assertWithinLimits(definition, session);
       const now = this.iso();
       return this.store.transaction(() => {
-        const history = this.store.listMessages(sessionId);
+        // A retry takes over the earlier turn's unanswered message instead of adding it a second time.
+        const retried = input.resumeTurnId ? this.store.listMessages(sessionId).find((m) => m.turnId === input.resumeTurnId && m.role === "user") : undefined;
+        const history = this.store.listMessages(sessionId).filter((m) => m.id !== retried?.id);
         const turn = this.store.insertTurn({
           id: id("turn"),
           sessionId,
@@ -787,15 +809,21 @@ export class AgentService {
           startedAt: now,
           endedAt: null,
         });
-        const userMessage = this.store.appendMessage({
-          id: id("msg"),
-          sessionId,
-          turnId: turn.id,
-          role: "user",
-          author: input.author ?? null,
-          text: input.text,
-          createdAt: now,
-        });
+        let userMessage: AgentMessage;
+        if (retried) {
+          this.store.moveMessageToTurn(retried.id, turn.id);
+          userMessage = { ...retried, turnId: turn.id };
+        } else {
+          userMessage = this.store.appendMessage({
+            id: id("msg"),
+            sessionId,
+            turnId: turn.id,
+            role: "user",
+            author: input.author ?? null,
+            text: input.text,
+            createdAt: now,
+          });
+        }
         this.store.updateSession(
           sessionId,
           { status: "running", ...(session.title ? {} : { title: titleFrom(input.text) }) },
@@ -891,8 +919,33 @@ export class AgentService {
   }
 
   /** Called at host start: turns that were running when the host stopped can't resume. */
+  private interrupted: string[] = [];
+
   recoverInterruptedTurns(): number {
+    this.interrupted = this.store.interruptedTurnIds();
     return this.store.failInterruptedTurns(this.iso());
+  }
+
+  /**
+   * Turns a restart cut off on an always-on agent, on a channel where a reply goes back to the sender's own handle
+   * (iMessage). Each is retried once; the person's message is not asked again.
+   */
+  async resumableTurns(projectRoot: string): Promise<Array<{ agentId: string; sessionId: string; turnId: string; text: string; from: string; connectionId: string; provider: string; threadId: string }>> {
+    const resumable = [];
+    for (const turnId of this.interrupted.splice(0)) {
+      const turn = this.store.getTurn(turnId);
+      if (!turn) continue;
+      const session = this.store.getSession(turn.sessionId);
+      if (!session || session.source !== "imessage" || !session.sourceRef || !session.threadKey) continue;
+      const definition = await this.definitionAt(projectRoot, session.agentId, session.revision).catch(() => undefined);
+      if (!definition?.limits.always_on || !definition.enabled) continue;
+      const messages = this.store.listMessages(session.id).filter((m) => m.turnId === turnId);
+      const user = messages.find((m) => m.role === "user");
+      if (!user || messages.some((m) => m.role === "assistant")) continue;
+      const [, connectionId = "", threadId = ""] = session.threadKey.split("\0");
+      resumable.push({ agentId: session.agentId, sessionId: session.id, turnId, text: user.text, from: session.sourceRef, connectionId, provider: session.source, threadId });
+    }
+    return resumable;
   }
 
   /* ---------- approvals ---------- */

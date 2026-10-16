@@ -18,14 +18,23 @@ export function channelInboundConnections(cwd: string): InboundConnections {
     },
     async reply(connectionId, to, text, operationKey) {
       const host = channelHostFor(cwd);
-      const target = host.registry.validateTarget(connectionId, { to });
       const provider = host.registry.providerFor(connectionId);
       const connection = host.registry.resolve(connectionId);
       const message = { text };
-      await host.sends.send(
-        { connectionId, operationKey, hash: hashOf([connectionId, to, message]) },
-        () => provider.send(connection, target, message, { operationKey }),
-      );
+      // A provider that can answer inside the conversation does; otherwise the reply is a new message to the sender.
+      const submit = provider.reply
+        ? () => provider.reply!(connection, to, message, { operationKey })
+        : () => provider.send(connection, host.registry.validateTarget(connectionId, { to }), message, { operationKey });
+      await host.sends.send({ connectionId, operationKey, hash: hashOf([connectionId, to, message]) }, submit);
+    },
+    resolve(connectionId) {
+      try {
+        const host = channelHostFor(cwd);
+        const connection = host.registry.resolve(connectionId);
+        return { id: connection.id, provider: connection.provider, config: connection.config, secrets: connection.secrets, credential: connection.credential ? { secrets: connection.credential.secrets } : undefined };
+      } catch {
+        return undefined;
+      }
     },
   };
 }

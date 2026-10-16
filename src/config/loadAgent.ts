@@ -27,7 +27,7 @@ export type BuiltinToolGroup = keyof typeof BUILTIN_TOOL_GROUPS;
 export const BUILTIN_TOOL_IDS = Object.values(BUILTIN_TOOL_GROUPS).flat() as string[];
 export const BUILTIN_TOOL_GROUP_IDS = Object.keys(BUILTIN_TOOL_GROUPS) as BuiltinToolGroup[];
 
-export type AgentCommunicationProvider = "agentmail" | "slack" | "telegram" | "photon" | "email";
+export type AgentCommunicationProvider = "agentmail" | "slack" | "telegram" | "photon" | "imessage" | "email";
 
 const MCP_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 const TOOL_ID = /^(agent:[a-z][a-z0-9_]{0,63}|[A-Za-z0-9_.-]{1,128})$/;

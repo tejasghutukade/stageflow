@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { showToast } from "../../../toast";
 import { ModelPicker } from "../../../components/ModelPicker";
 import {
@@ -16,7 +16,7 @@ import {
   LuTriangleAlert,
   LuUserCheck,
 } from "react-icons/lu";
-import type { AgentDefinition, AgentIssue, AgentRevisionMeta, BuiltinToolGroup } from "../../../api/agents";
+import { agentsApi, type AgentDefinition, type AgentIssue, type AgentRevisionMeta, type BuiltinToolGroup, type ChannelListenerState } from "../../../api/agents";
 import { MONO, NOWRAP } from "../agentsTokens";
 import {
   addedLineCount,
@@ -46,6 +46,41 @@ import {
 import { InstructionsEditor } from "./InstructionsEditor";
 import { PermissionTree } from "./PermissionTree";
 import { BUILTIN_PERMISSION_GROUPS, grantedToolIds, operatorOnlyToolNames, stageflowPermissionGroups } from "../model/permissions";
+
+const STREAMED_PROVIDERS = ["agentmail", "imessage"];
+
+/** Whether the Host is listening on this agent's connection, refreshed while the page is open. */
+function ChannelStatus({ agentId, provider, enabled }: { agentId: string; provider: string | undefined; enabled: boolean }) {
+  const [state, setState] = useState<ChannelListenerState | undefined>();
+  useEffect(() => {
+    if (!provider || !STREAMED_PROVIDERS.includes(provider)) return;
+    let live = true;
+    const load = () => agentsApi.channelStatus(agentId).then((body) => live && setState(body.listener), () => undefined);
+    void load();
+    const timer = window.setInterval(load, 5000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [agentId, provider]);
+  if (!provider) return null;
+  const streamed = STREAMED_PROVIDERS.includes(provider);
+  const { text, tone } = !streamed
+    ? { text: "Receives messages by webhook", tone: "muted" }
+    : !enabled
+      ? { text: "Not listening. Enable the agent to start.", tone: "muted" }
+      : !state
+        ? { text: "Starting…", tone: "muted" }
+        : state.status === "connected"
+          ? { text: `Listening · ${state.received} message${state.received === 1 ? "" : "s"} since it started`, tone: "ok" }
+          : { text: `${state.status === "failed" ? "Cannot connect" : "Reconnecting"}${state.error ? `: ${state.error}` : ""}`, tone: "bad" };
+  return (
+    <span className={`flex items-center gap-1.5 text-xs leading-normal ${tone === "ok" ? "text-[var(--sf-ok)]" : tone === "bad" ? "text-[var(--sf-fail)]" : "text-[var(--sf-text-3)]"}`} data-testid="channel-status">
+      <span className={`block size-1.5 rounded-full ${tone === "ok" ? "bg-[var(--sf-ok)]" : tone === "bad" ? "bg-[var(--sf-fail)]" : "bg-[var(--sf-text-3)]"}`} />
+      {text}
+    </span>
+  );
+}
 
 export type FormMode = "create" | "edit" | "view";
 
@@ -918,6 +953,7 @@ export function AgentDefinitionForm({
                   <span className="text-[11px] leading-normal text-[var(--sf-text-3)]">
                     Emails, phone numbers in +country format, <span className={MONO}>@domain</span> for everyone at a domain, or <span className={MONO}>*</span> for anyone. Messages from anyone else are ignored, so an empty list means nobody.
                   </span>
+                  <ChannelStatus agentId={def.id} provider={(options.connections ?? []).find((c) => c.id === def.channel!.connection_id)?.provider} enabled={def.enabled} />
                   <FieldMessages {...at("channel.allow_from")} />
                   <FieldMessages {...at("channel.connection_id")} />
                 </div>

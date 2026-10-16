@@ -81,6 +81,18 @@ export function createAgentMailProvider(options: AgentMailOptions = {}): Channel
       if (result.status >= 200 && result.status < 300) return;
       throw result.status === 404 ? new ChannelError("CHANNEL_INVALID_INPUT") : statusFailure(result.status, "check", connection.id);
     }),
+    async reply(connection, replyTo, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
+      const result = await httpCall({
+        fetch: doFetch, url: `${inboxUrl(connection)}/messages/${encodeURIComponent(replyTo)}/reply`, method: "POST", headers: auth(connection),
+        body: { text: message.text },
+        timeoutMs: options.sendTimeoutMs ?? 30000, mode: "send", connectionId: connection.id,
+      });
+      if (result.status < 200 || result.status >= 300) {
+        throw result.status === 404 ? new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id }) : statusFailure(result.status, "send", connection.id);
+      }
+      const body = parseJson(result.text) as { message_id?: unknown } | undefined;
+      return receiptFor(typeof body?.message_id === "string" ? body.message_id : undefined);
+    },
     async send(connection, target, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
       const result = await httpCall({
         fetch: doFetch, url: `${inboxUrl(connection)}/messages/send`, method: "POST", headers: auth(connection),

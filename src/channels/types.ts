@@ -106,6 +106,11 @@ export interface ChannelProvider<C = unknown, T = unknown> {
    */
   checkTargets?(connection: ResolvedConnection<C>, targets: T[], signal?: AbortSignal): Promise<ConnectionHealth>;
   send(connection: ResolvedConnection<C>, target: T, message: OutboundMessage, context: SendContext): Promise<SendReceipt>;
+  /**
+   * Answers a message the provider delivered, inside its conversation (an email reply keeps the thread and
+   * subject). `replyTo` is the opaque handle the inbound message carried. Providers without it fall back to `send`.
+   */
+  reply?(connection: ResolvedConnection<C>, replyTo: string, message: OutboundMessage, context: SendContext): Promise<SendReceipt>;
 }
 
 export type AnyChannelProvider = ChannelProvider<any, any>;

@@ -182,6 +182,17 @@ const routes: Route[] = [
   },
   {
     method: "GET",
+    pattern: /^\/api\/agents\/([^/]+)\/channel$/,
+    handle: async (ctx) => {
+      const detail = await ctx.host.service.get(ctx.projectRoot, ctx.params[0]!);
+      const connectionId = detail.definition?.channel?.connection_id ?? null;
+      // `listener` is absent for webhook providers and for agents that are disabled.
+      const listener = connectionId ? ctx.host.channelListeners?.status(connectionId) : undefined;
+      ctx.json(ctx.res, 200, { connectionId, ...(listener ? { listener } : {}) });
+    },
+  },
+  {
+    method: "GET",
     pattern: /^\/api\/agents\/approvals$/,
     handle: async (ctx) =>
       ctx.json(ctx.res, 200, { approvals: await ctx.host.service.pendingApprovals(ctx.projectRoot) }),

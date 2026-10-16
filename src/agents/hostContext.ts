@@ -4,6 +4,7 @@ import { listSkills } from "../config/listSkills.js";
 import { listProjectMcpCatalog } from "../config/resolveStageMcpServers.js";
 import { channelInboundConnections } from "./communications/channelConnections.js";
 import { AgentInboundRouter } from "./communications/inbound.js";
+import { ChannelSupervisor } from "./communications/supervisor.js";
 import { AgentChatController } from "./chatTurn.js";
 import { otlpSinkFromEnv, type OtlpSink } from "./otlpSink.js";
 import type { McpToolDeps } from "../mcp/deps.js";
@@ -22,6 +23,10 @@ export type AgentHostContext = {
   publicChat: PublicWebChat;
   chat: AgentChatController;
   backend: ConversationBackend;
+  /** Streams held open to AgentMail and iMessage; absent unless the Host listens (not in tests). */
+  channelListeners?: ChannelSupervisor;
+  /** Stop what the Host started for agents (listeners). */
+  stop(): Promise<void>;
 };
 
 /** Read-only lookups the editor warnings use: `.mcp.json`, skills, and channel connections. */
@@ -66,6 +71,8 @@ export function createAgentHostContext(options: {
   environment?: AgentEnvironment;
   otlpSink?: OtlpSink | undefined;
   /** Host services the Stageflow tools need; agent services are added here. Without it agents get no Stageflow tools. */
+  /** Hold streams open to AgentMail and iMessage for agents linked to them. Only a running Host does this. */
+  listenOnChannels?: boolean;
   toolkitDeps?: Pick<McpToolDeps, "manager" | "store" | "agentDir" | "providerAuthContext" | "projectRoot" | "providerBoot">;
 }): AgentHostContext {
   const service = new AgentService({
@@ -122,5 +129,17 @@ export function createAgentHostContext(options: {
       .filter((origin) => origin.length > 0),
     logError: (message) => console.error(message),
   });
-  return { service, chat, backend, inbound, publicChat };
+  const connections = channelInboundConnections(options.cwd);
+  const channelListeners = options.listenOnChannels
+    ? new ChannelSupervisor({
+        service,
+        projectRoot: defaultAgentProjectRoot(options.cwd),
+        resolve: (id) => connections.resolve?.(id),
+        deliver: (message) => inbound.deliver(message),
+        log: (message) => console.error(message),
+      })
+    : undefined;
+  channelListeners?.start();
+  if (options.listenOnChannels) void inbound.resumeInterrupted().catch((error) => console.error(`agent resume failed: ${String(error)}`));
+  return { service, chat, backend, inbound, publicChat, ...(channelListeners ? { channelListeners } : {}), stop: async () => void (await channelListeners?.stop()) };
 }

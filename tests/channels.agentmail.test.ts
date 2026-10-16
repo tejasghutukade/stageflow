@@ -77,6 +77,24 @@ describe("agentmail check", () => {
   });
 });
 
+describe("agentmail reply", () => {
+  it("answers inside the thread with the message id, key in the header only", async () => {
+    server.queue.push({ status: 200, body: JSON.stringify({ message_id: "msg_2" }) });
+    const receipt = await make().reply!(conn(), "<abc@agentmail.to>", { text: "Thanks, on it." }, context);
+    expect(receipt).toMatchObject({ providerMessageId: "msg_2" });
+    const req = server.requests[0]!;
+    expect(req.method).toBe("POST");
+    expect(req.url).toBe("/v0/inboxes/support%40agentmail.to/messages/%3Cabc%40agentmail.to%3E/reply");
+    expect(req.headers.authorization).toBe(`Bearer ${KEY}`);
+    expect(JSON.parse(req.body)).toEqual({ text: "Thanks, on it." });
+  });
+
+  it("reports a missing message as invalid input", async () => {
+    server.queue.push({ status: 404, body: "{}" });
+    expect((await code(make().reply!(conn(), "<gone>", message, context)))?.code).toBe("CHANNEL_INVALID_INPUT");
+  });
+});
+
 describe("agentmail send", () => {
   it("posts to the inbox with the key in the header only", async () => {
     server.queue.push({ status: 200, body: JSON.stringify({ message_id: "msg_1", thread_id: "thr_1" }) });

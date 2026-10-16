@@ -1,4 +1,5 @@
 import { isAgentError } from "../errors.js";
+import { SlidingWindowLimiter } from "../webChat/rateLimit.js";
 import type { AgentChatController } from "../chatTurn.js";
 import type { AgentService } from "../service.js";
 import { parseAgentMailInbound, verifyAgentMailSignature } from "./agentmail.js";
@@ -10,6 +11,16 @@ import { parseTelegramInbound, verifyTelegramSecret } from "./telegram.js";
 export type InboundConnections = {
   find(connectionId: string): { provider: string; secret: string | undefined } | undefined;
   reply(connectionId: string, to: string, text: string, operationKey: string): Promise<void>;
+  /** The connection with its secrets, for providers the Host listens on itself (a stream instead of a webhook). */
+  resolve?(connectionId: string): ListenerConnection | undefined;
+};
+
+export type ListenerConnection = {
+  id: string;
+  provider: string;
+  config: unknown;
+  secrets: Record<string, string>;
+  credential?: { secrets: Record<string, string> } | undefined;
 };
 
 export type InboundResponse = { status: number; body?: unknown };
@@ -17,6 +28,8 @@ export type InboundResponse = { status: number; body?: unknown };
 type Headers = Record<string, string | undefined>;
 
 const MAX_REPLY_CHARS = 3500;
+/** Messages one sender may send an agent per minute before the rest are ignored. */
+const SENDER_LIMIT_PER_MINUTE = 20;
 
 /**
  * Receives provider webhooks for agents. A request is accepted only when the connection has an
@@ -24,6 +37,8 @@ const MAX_REPLY_CHARS = 3500;
  * saying why. Replies go back on the same connection to the sender, once per turn.
  */
 export class AgentInboundRouter {
+  private readonly limiter = new SlidingWindowLimiter();
+
   constructor(
     private readonly options: {
       service: AgentService;
@@ -31,6 +46,7 @@ export class AgentInboundRouter {
       connections: InboundConnections;
       projectRoot: string;
       logError?: (message: string) => void;
+      senderLimitPerMinute?: number;
     },
   ) {}
 
@@ -52,17 +68,29 @@ export class AgentInboundRouter {
     const parsed = this.parse(connection.provider, connectionId, connection.secret, headers, payload);
     if (!parsed) return { status: 400 };
     if ("ignored" in parsed) return { status: 200, body: { ignored: true } };
+    return this.deliver(parsed.message);
+  }
 
+  /**
+   * A message from any source (a webhook or a stream the Host listens on): enforce the sender allow-list and
+   * rate limit, route it to its session and answer on the same connection.
+   */
+  async deliver(message: AgentInboundMessage): Promise<InboundResponse> {
+    const limit = this.limiter.take(`${message.connectionId}\0${message.from ?? ""}`, this.options.senderLimitPerMinute ?? SENDER_LIMIT_PER_MINUTE, Date.now());
+    if (!limit.ok) {
+      this.options.logError?.(`agent inbound ${message.provider}: sender over the rate limit, message ignored`);
+      return { status: 200, body: { ignored: true } };
+    }
     let routed: Awaited<ReturnType<AgentService["receive"]>>;
     try {
-      routed = await this.options.service.receive(this.options.projectRoot, parsed.message);
+      routed = await this.options.service.receive(this.options.projectRoot, message);
     } catch (error) {
-      // An unbound or disabled agent looks the same as success to the sender; nothing is retried.
+      // An unbound, disabled or not-allowed sender looks the same as success to the sender; nothing is retried.
       if (isAgentError(error)) return { status: 200, body: { ignored: true } };
       throw error;
     }
     if (routed.duplicate) return { status: 200, body: { duplicate: true } };
-    void this.converse(routed, parsed.message);
+    void this.converse(routed, message);
     return { status: 200, body: { ok: true } };
   }
 
@@ -91,7 +119,17 @@ export class AgentInboundRouter {
     return { message: result.message };
   }
 
-  private async converse(routed: { agentId: string; sessionId: string }, message: AgentInboundMessage): Promise<void> {
+  /** After a restart: retry the turns it cut off on always-on iMessage agents, answering the same sender once. */
+  async resumeInterrupted(): Promise<number> {
+    const turns = await this.options.service.resumableTurns(this.options.projectRoot);
+    for (const turn of turns) {
+      const message: AgentInboundMessage = { provider: turn.provider as AgentInboundMessage["provider"], connectionId: turn.connectionId, eventId: `resume:${turn.turnId}`, threadId: turn.threadId, text: turn.text, from: turn.from, replyTo: turn.from };
+      void this.converse({ agentId: turn.agentId, sessionId: turn.sessionId }, message, turn.turnId);
+    }
+    return turns.length;
+  }
+
+  private async converse(routed: { agentId: string; sessionId: string }, message: AgentInboundMessage, resumeTurnId?: string): Promise<void> {
     const { chat, connections, logError } = this.options;
     try {
       const detail = await chat.send({
@@ -101,6 +139,7 @@ export class AgentInboundRouter {
         text: message.text,
         author: message.from ?? null,
         source: message.provider,
+        ...(resumeTurnId ? { resumeTurnId } : {}),
       });
       const turn = detail.turns.at(-1);
       const reply = [...detail.messages].reverse().find((m) => m.role === "assistant" && m.turnId === turn?.id);

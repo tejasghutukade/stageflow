@@ -478,6 +478,7 @@ export async function bootstrapStageflowHost(
   }
   const channels = startChannelService(cwd);
   const stopEmailSource = () => {
+    void agentHost?.stop();
     void emailSource.stop();
     void stopAccountEmail();
     void channels.stop();
@@ -495,6 +496,7 @@ export async function bootstrapStageflowHost(
           connection: sqliteConnection,
           channels,
           ...(options.agentConversationBackend ? { backend: options.agentConversationBackend } : {}),
+          listenOnChannels: process.env.STAGEFLOW_AGENT_CHANNEL_LISTENERS !== "0",
           toolkitDeps: {
             manager,
             store,
