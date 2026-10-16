@@ -193,6 +193,16 @@ const routes: Route[] = [
   },
   {
     method: "GET",
+    pattern: /^\/api\/agents\/([^/]+)\/channel\/contact$/,
+    handle: async (ctx) => {
+      const detail = await ctx.host.service.get(ctx.projectRoot, ctx.params[0]!);
+      const connectionId = detail.definition?.channel?.connection_id;
+      const found = connectionId ? await ctx.host.channelContact(connectionId) : undefined;
+      ctx.json(ctx.res, 200, { connectionId: connectionId ?? null, ...(found ?? {}) });
+    },
+  },
+  {
+    method: "GET",
     pattern: /^\/api\/agents\/approvals$/,
     handle: async (ctx) =>
       ctx.json(ctx.res, 200, { approvals: await ctx.host.service.pendingApprovals(ctx.projectRoot) }),

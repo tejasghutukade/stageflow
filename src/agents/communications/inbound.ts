@@ -1,3 +1,4 @@
+import type { ContactInfo } from "../../channels/types.js";
 import { isAgentError } from "../errors.js";
 import { SlidingWindowLimiter } from "../webChat/rateLimit.js";
 import type { AgentChatController } from "../chatTurn.js";
@@ -11,6 +12,8 @@ import { parseTelegramInbound, verifyTelegramSecret } from "./telegram.js";
 export type InboundConnections = {
   find(connectionId: string): { provider: string; secret: string | undefined } | undefined;
   reply(connectionId: string, to: string, text: string, operationKey: string): Promise<void>;
+  /** How people reach the connection (the number to text), when the provider can tell. */
+  contact?(connectionId: string): Promise<ContactInfo | undefined>;
   /** The connection with its secrets, for providers the Host listens on itself (a stream instead of a webhook). */
   resolve?(connectionId: string): ListenerConnection | undefined;
 };

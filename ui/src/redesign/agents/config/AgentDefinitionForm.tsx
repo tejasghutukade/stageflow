@@ -16,7 +16,8 @@ import {
   LuTriangleAlert,
   LuUserCheck,
 } from "react-icons/lu";
-import { agentsApi, type AgentDefinition, type AgentIssue, type AgentRevisionMeta, type BuiltinToolGroup, type ChannelListenerState } from "../../../api/agents";
+import { contactLines } from "../model/channelContact";
+import { agentsApi, type AgentDefinition, type ChannelContact, type AgentIssue, type AgentRevisionMeta, type BuiltinToolGroup, type ChannelListenerState } from "../../../api/agents";
 import { MONO, NOWRAP } from "../agentsTokens";
 import {
   addedLineCount,
@@ -79,6 +80,29 @@ function ChannelStatus({ agentId, provider, enabled }: { agentId: string; provid
       <span className={`block size-1.5 rounded-full ${tone === "ok" ? "bg-[var(--sf-ok)]" : tone === "bad" ? "bg-[var(--sf-fail)]" : "bg-[var(--sf-text-3)]"}`} />
       {text}
     </span>
+  );
+}
+
+/** The number to text for an iMessage agent, looked up from Photon. */
+function ChannelContactInfo({ agentId, allowFrom }: { agentId: string; allowFrom: readonly string[] }) {
+  const [contact, setContact] = useState<ChannelContact | undefined | null>(undefined);
+  useEffect(() => {
+    let live = true;
+    agentsApi.channelContact(agentId).then((body) => live && setContact(body.contact ?? null), () => live && setContact(null));
+    return () => {
+      live = false;
+    };
+  }, [agentId]);
+  if (contact === undefined) return <span className="text-xs text-[var(--sf-text-3)]">Looking up the number…</span>;
+  if (contact === null) return null;
+  return (
+    <div className="flex flex-col gap-1" data-testid="channel-contact">
+      {contactLines(contact, allowFrom).map((line, index) => (
+        <span key={index} className={`text-xs leading-normal ${line.tone === "ok" ? "text-[var(--sf-text-1)]" : line.tone === "warn" ? "text-[var(--sf-needs)]" : "text-[var(--sf-text-3)]"}`}>
+          {line.text}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -953,6 +977,7 @@ export function AgentDefinitionForm({
                   <span className="text-[11px] leading-normal text-[var(--sf-text-3)]">
                     Emails, phone numbers in +country format, <span className={MONO}>@domain</span> for everyone at a domain, or <span className={MONO}>*</span> for anyone. Messages from anyone else are ignored, so an empty list means nobody.
                   </span>
+                  {(options.connections ?? []).find((c) => c.id === def.channel!.connection_id)?.provider === "imessage" ? <ChannelContactInfo agentId={def.id} allowFrom={def.channel.allow_from} /> : null}
                   <ChannelStatus agentId={def.id} provider={(options.connections ?? []).find((c) => c.id === def.channel!.connection_id)?.provider} enabled={def.enabled} />
                   <FieldMessages {...at("channel.allow_from")} />
                   <FieldMessages {...at("channel.connection_id")} />

@@ -9,6 +9,7 @@ import { AgentInboundRouter } from "./communications/inbound.js";
 import { ChannelSupervisor } from "./communications/supervisor.js";
 import { AgentChatController } from "./chatTurn.js";
 import { otlpSinkFromEnv, type OtlpSink } from "./otlpSink.js";
+import type { ContactInfo } from "../channels/types.js";
 import type { McpToolDeps } from "../mcp/deps.js";
 import { buildToolkit, type ToolkitTool } from "../toolkit/index.js";
 import { createPiAgentRuntime } from "./runtime/piRuntime.js";
@@ -27,6 +28,8 @@ export type AgentHostContext = {
   backend: ConversationBackend;
   /** Streams held open to AgentMail and iMessage; absent unless the Host listens (not in tests). */
   channelListeners?: ChannelSupervisor;
+  /** How people reach a connection (the number to text), cached for a minute. */
+  channelContact(connectionId: string): Promise<{ provider: string; contact: ContactInfo } | undefined>;
   /** Stop what the Host started for agents (listeners). */
   stop(): Promise<void>;
 };
@@ -149,7 +152,18 @@ export function createAgentHostContext(options: {
         log: (message) => console.error(message),
       })
     : undefined;
+  const contactCache = new Map<string, { at: number; value: { provider: string; contact: ContactInfo } | undefined }>();
+  const channelContact = async (connectionId: string) => {
+    const cached = contactCache.get(connectionId);
+    if (cached && Date.now() - cached.at < 60_000) return cached.value;
+    const provider = connections.resolve?.(connectionId)?.provider;
+    const contact = provider ? await connections.contact?.(connectionId) : undefined;
+    const value = provider && contact ? { provider, contact } : undefined;
+    // A failed lookup is retried on the next ask rather than remembered.
+    if (value?.contact.ok !== false) contactCache.set(connectionId, { at: Date.now(), value });
+    return value;
+  };
   channelListeners?.start();
   if (options.listenOnChannels) void inbound.resumeInterrupted().catch((error) => console.error(`agent resume failed: ${String(error)}`));
-  return { service, chat, backend, inbound, publicChat, ...(channelListeners ? { channelListeners } : {}), stop: async () => void (await channelListeners?.stop()) };
+  return { service, chat, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), stop: async () => void (await channelListeners?.stop()) };
 }

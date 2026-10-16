@@ -34,6 +34,35 @@ async function fail(promise: Promise<unknown>): Promise<ChannelError | undefined
   return undefined;
 }
 
+describe("imessage contact", () => {
+  it("lists the dedicated lines people text", async () => {
+    server.queue.push({ status: 200, body: JSON.stringify({ succeed: true, data: { type: "dedicated", auth: { a: "t1", b: "t2" }, numbers: { a: "+14155550001", b: "+14155550002" }, expiresIn: 3600 } }) });
+    expect(await make().contact!(conn())).toEqual({ ok: true, kind: "dedicated", numbers: ["+14155550001", "+14155550002"] });
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0]!.url).toBe(`/projects/${PROJECT}/imessage/tokens`);
+  });
+
+  it("lists the registered users with the number each one texts on a shared project", async () => {
+    server.queue.push(tokens("shared"));
+    server.queue.push({ status: 200, body: JSON.stringify({ succeed: true, data: { users: [{ phoneNumber: "+14155550123", assignedPhoneNumber: "+19998887777", firstName: "Jane", lastName: "Doe" }, { phoneNumber: "+14155550124", assignedPhoneNumber: null }, { id: "no-phone" }], total: 3 } }) });
+    expect(await make().contact!(conn())).toEqual({
+      ok: true,
+      kind: "shared",
+      users: [{ phone: "+14155550123", assignedNumber: "+19998887777", name: "Jane Doe" }, { phone: "+14155550124", assignedNumber: null, name: null }],
+    });
+    expect(server.requests[1]!.url).toBe(`/projects/${PROJECT}/users/?type=shared&limit=500`);
+    expect(server.requests[1]!.headers.authorization).toMatch(/^Basic /);
+  });
+
+  it("reports a failure instead of throwing, without the secret", async () => {
+    server.queue.push({ status: 401, body: "{}" });
+    const result = await make().contact!(conn());
+    expect(result).toEqual({ ok: false, error: "Photon answered 401" });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    expect(await make().contact!(conn(false))).toEqual({ ok: false, error: "Could not reach Photon" });
+  });
+});
+
 describe("imessage config and targets", () => {
   const p = createPhotonImessageProvider();
   it("is built in, needs a photon credential, and has no connection secrets", () => {

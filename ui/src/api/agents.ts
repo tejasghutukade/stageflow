@@ -168,6 +168,11 @@ export type AgentApproval = {
   actor: { kind: "operator" } | { kind: "channel"; channelId: string } | null;
 };
 
+export type ChannelContact =
+  | { ok: true; kind: "dedicated"; numbers: string[] }
+  | { ok: true; kind: "shared"; users: Array<{ phone: string; assignedNumber: string | null; name: string | null }> }
+  | { ok: false; error: string };
+
 export type ChannelListenerState = {
   status: "starting" | "connected" | "reconnecting" | "failed" | "stopped";
   since: string;
@@ -258,6 +263,8 @@ export const agentsApi = {
   list: () => request<{ agents: AgentSummary[] }>("/api/agents").then((body) => body.agents),
   get: (id: string) => request<AgentDetail>(agentUrl(id)),
   validate: (definition: unknown) => request<AgentValidation>("/api/agents/validate", "POST", { definition }),
+  channelContact: (id: string) =>
+    request<{ connectionId: string | null; provider?: string; contact?: ChannelContact }>(agentUrl(id, "/channel/contact")),
   channelStatus: (id: string) =>
     request<{ connectionId: string | null; listener?: ChannelListenerState }>(agentUrl(id, "/channel")),
   stageflowTools: () => request<StageflowToolCatalog>("/api/agents/stageflow-tools"),

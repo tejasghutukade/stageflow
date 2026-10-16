@@ -27,6 +27,16 @@ export function channelInboundConnections(cwd: string): InboundConnections {
         : () => provider.send(connection, host.registry.validateTarget(connectionId, { to }), message, { operationKey });
       await host.sends.send({ connectionId, operationKey, hash: hashOf([connectionId, to, message]) }, submit);
     },
+    async contact(connectionId) {
+      try {
+        const host = channelHostFor(cwd);
+        const provider = host.registry.providerFor(connectionId);
+        if (!provider.contact) return undefined;
+        return await provider.contact(host.registry.resolve(connectionId, false));
+      } catch {
+        return undefined;
+      }
+    },
     resolve(connectionId) {
       try {
         const host = channelHostFor(cwd);
