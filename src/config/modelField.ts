@@ -2,6 +2,13 @@ export type ParsedModelField =
   | { ok: true; value: string | undefined }
   | { ok: false; message: string };
 
+/** `sf init` writes this prefix when it cannot resolve a real model id. */
+export const MODEL_PLACEHOLDER_PREFIX = "CHANGE_ME";
+
+export function isPlaceholderModel(model: string): boolean {
+  return model.startsWith(MODEL_PLACEHOLDER_PREFIX);
+}
+
 /**
  * Validates a raw `model:` config value (stage, pipeline, or manifest YAML).
  * Callers own their own error shape — this only owns the shared rule: absent

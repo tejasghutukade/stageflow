@@ -1,6 +1,7 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getAuthStatus } from "../agent/providerAuth.js";
+import { isPlaceholderModel } from "../config/modelField.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import { ensureGlobalHome } from "../project/globalHome.js";
 import {
@@ -103,6 +104,14 @@ export async function runInitCommand(
       await mkdir(path.dirname(absPath), { recursive: true });
       await writeFile(absPath, target.content, "utf8");
       out.log(`Created ${target.relPath}`);
+    }
+
+    if (isPlaceholderModel(model)) {
+      out.log(
+        `pipelines/hello.pipeline.yaml has a placeholder model ("${model}"). ` +
+          `Connect a provider with "sf providers login <providerId>" (e.g. "sf providers login anthropic"), ` +
+          `run "sf providers models" to see valid ids, then set that model field before "sf run".`,
+      );
     }
 
     return 0;

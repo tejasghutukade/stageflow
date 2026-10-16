@@ -1,3 +1,5 @@
+import { MODEL_PLACEHOLDER_PREFIX } from "../config/modelField.js";
+
 export const STAGEFLOW_YAML = `version: 1
 catalog:
   pipelines:
@@ -11,7 +13,7 @@ catalog:
     task: "*.task.yaml"
 `;
 
-export const LOUD_MODEL_PLACEHOLDER = "CHANGE_ME/<provider-model>";
+export const LOUD_MODEL_PLACEHOLDER = `${MODEL_PLACEHOLDER_PREFIX}/<provider-model>`;
 
 const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
   anthropic: "anthropic/claude-sonnet-4-5",
@@ -31,7 +33,7 @@ export function resolveInitDefaultModel(
   ].sort((a, b) => a.localeCompare(b));
   if (ids.length === 1) {
     const id = ids[0]!;
-    return PROVIDER_DEFAULT_MODELS[id] ?? `CHANGE_ME/${id}-model`;
+    return PROVIDER_DEFAULT_MODELS[id] ?? `${MODEL_PLACEHOLDER_PREFIX}/${id}-model`;
   }
   return LOUD_MODEL_PLACEHOLDER;
 }

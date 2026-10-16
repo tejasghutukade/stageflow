@@ -900,6 +900,7 @@ sf providers detect
 sf providers source [get | set <pi_home|sf_owned>]
 sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
 sf providers logout <providerId>
+sf providers models
 ```
 
 | Subcommand | Description |
@@ -911,6 +912,7 @@ sf providers logout <providerId>
 | `source set pi_home\|sf_owned` | Pin storage mode |
 | `login` | API key (prompt or env var) or OAuth flow |
 | `logout` | Remove stored credentials for a provider |
+| `models` | List model ids a stage's `model:` field can use — baked defaults plus any already referenced by local pipelines; never prints the `sf init` placeholder |
 
 Raw `--api-key` on the command line is **not** supported; use a prompt or `--api-key-env`.
 

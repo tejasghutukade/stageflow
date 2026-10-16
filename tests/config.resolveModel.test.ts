@@ -3,7 +3,7 @@ import {
   globalModelFromManifest,
   resolveModelOutcome,
 } from "../src/config/resolveModel.js";
-import { parseModelField } from "../src/config/modelField.js";
+import { isPlaceholderModel, parseModelField } from "../src/config/modelField.js";
 import type { LoadedManifest } from "../src/types/stageflowManifest.js";
 
 describe("resolveModelOutcome — precedence", () => {
@@ -90,6 +90,27 @@ describe("resolveModelOutcome — precedence", () => {
     }
   });
 
+  it("rejects a placeholder model left behind by sf init", () => {
+    const outcome = resolveModelOutcome(
+      { stage: "CHANGE_ME/<provider-model>" },
+      ctx,
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_model");
+    expect(outcome.issues[0]?.message).toMatch(/sf providers models/);
+  });
+
+  it("rejects a provider-scoped placeholder regardless of tier", () => {
+    const outcome = resolveModelOutcome(
+      { global: "CHANGE_ME/omniroute-model" },
+      ctx,
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_model");
+  });
+
   it("trims a valid effective model", () => {
     const outcome = resolveModelOutcome(
       { stage: "  anthropic/claude-sonnet-4-5  " },
@@ -121,6 +142,18 @@ describe("parseModelField", () => {
       ok: true,
       value: "anthropic/claude-sonnet-4-5",
     });
+  });
+});
+
+describe("isPlaceholderModel", () => {
+  it("flags the loud placeholder and provider-scoped variants", () => {
+    expect(isPlaceholderModel("CHANGE_ME/<provider-model>")).toBe(true);
+    expect(isPlaceholderModel("CHANGE_ME/omniroute-model")).toBe(true);
+  });
+
+  it("does not flag real model ids", () => {
+    expect(isPlaceholderModel("anthropic/claude-sonnet-4-5")).toBe(false);
+    expect(isPlaceholderModel("openrouter/auto")).toBe(false);
   });
 });
 
