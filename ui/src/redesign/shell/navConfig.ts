@@ -46,7 +46,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "triggers", label: "Triggers", href: "#/triggers", icon: LuZap },
       { id: "connections", label: "Connections", href: "#/connections", icon: LuPlug },
-      { id: "agents", label: "Agents", href: "#", icon: LuBot, soon: true },
+      { id: "agents", label: "Agents", href: "#/agents", icon: LuBot },
     ],
   },
 ];

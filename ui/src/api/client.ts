@@ -397,8 +397,44 @@ export async function createTriggerWithDetails(
   }
 }
 
-export function fetchModels(): Promise<{ models: string[] }> {
+export type CatalogModel = {
+  /** `provider/model`, the form stage, pipeline and agent files store. */
+  id: string;
+  provider: string;
+  name: string;
+  free: boolean;
+  contextWindow?: number;
+  reasoning?: boolean;
+  /** The provider runs its own file and shell tools, so agent grants cannot hold. */
+  nativeTools: boolean;
+};
+
+export type CatalogProvider = {
+  id: string;
+  name: string;
+  models: CatalogModel[];
+  source: "live" | "fallback";
+  error?: string;
+};
+
+export type ModelsResponse = {
+  /** Catalog ids plus ids pipelines already use. */
+  models: string[];
+  /** Connected providers only. */
+  providers: CatalogProvider[];
+  default: string;
+  fetchedAt: string;
+  /** Ids in use that no connected provider lists. */
+  unlisted: string[];
+};
+
+export function fetchModels(): Promise<ModelsResponse> {
   return api("/api/models");
+}
+
+/** Asks each connected provider for its current model list. */
+export function refreshModels(): Promise<ModelsResponse> {
+  return api("/api/models/refresh", { method: "POST" });
 }
 
 export async function createPipelineWithDetails(

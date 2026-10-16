@@ -1,5 +1,8 @@
 import type { BootProviderResult } from "../agent/bootProviderConfig.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
+import type { AgentChatController } from "../agents/chatTurn.js";
+import type { ConversationBackend } from "../agents/sessions.js";
+import type { AgentService } from "../agents/service.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import type { RunManager } from "../runtime/runManager.js";
@@ -12,6 +15,9 @@ export type McpToolDeps = {
   providerAuthContext?: ProviderAuthContext;
   projectRoot?: string;
   providerBoot?: BootProviderResult;
+  agentService?: AgentService;
+  agentChat?: AgentChatController;
+  agentConversationBackend?: ConversationBackend;
 };
 
 export type McpHttpDeps = McpToolDeps & {

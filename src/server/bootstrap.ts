@@ -5,7 +5,7 @@ import { A2aStore } from "../a2a/store.js";
 import type { StagePort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type Database from "better-sqlite3";
-import { createRunStoreWithConnection, type RunStoreKind } from "../runstore/createStore.js";
+import { createRunStoreWithConnection, sqliteConnectionFromStore, type RunStoreKind } from "../runstore/createStore.js";
 import { resolveA2aConfigPath } from "../a2a/configDiscovery.js";
 import { ensureProjectRootsFromEnv } from "../project/ensureProjectRootsFromEnv.js";
 import { ensureGlobalHome, globalStageflowHome } from "../project/globalHome.js";
@@ -67,6 +67,9 @@ import {
 } from "../runstore/restore.js";
 import { assertTmpdirUsable } from "../runstore/assertTmpdir.js";
 import { logger as rootLogger } from "../logging/logger.js";
+import { getModelCatalog } from "../models/catalog.js";
+import { createAgentHostContext, type AgentHostContext } from "../agents/hostContext.js";
+import type { ConversationBackend } from "../agents/sessions.js";
 
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -88,6 +91,7 @@ export type StageflowHostOptions = {
   /** Browser support for the runs this Host executes; defaults to the local host with the live view relay. */
   browser?: StageBrowserSupport;
   emailTriggerQueue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"];
+  agentConversationBackend?: ConversationBackend;
 };
 
 export type StageflowHostBootstrap = {
@@ -118,6 +122,8 @@ export type StageflowHostBootstrap = {
   stopEmailSource: () => void;
   /** Connections page read model and background health checks. */
   channels?: ChannelService;
+  /** Shared agent store, chat controller, and conversation backend for HTTP/MCP. */
+  agentHost?: AgentHostContext;
   email?: ReturnType<typeof emailHostFor> & { triggers: EmailTriggers; stop: () => Promise<void> };
   /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
   storeFilesystem?: StoreFilesystemClassification;
@@ -128,19 +134,6 @@ export type StageflowHostBootstrap = {
   serveBlocked?: { code: string; reason: string };
 };
 
-function sqliteConnectionFromStore(
-  store: RunStore,
-): Database.Database | undefined {
-  const connection = (store as { connection?: unknown }).connection;
-  if (
-    connection !== undefined &&
-    connection !== null &&
-    typeof (connection as { prepare?: unknown }).prepare === "function"
-  ) {
-    return connection as Database.Database;
-  }
-  return undefined;
-}
 
 /** Parse `STAGEFLOW_GC_INTERVAL_MS`; default 1h; `0` disables. */
 export function gcIntervalMsFromEnv(
@@ -490,6 +483,20 @@ export async function bootstrapStageflowHost(
     void channels.stop();
   };
 
+  // Resolve the connected-provider list and the default model once at boot so sync callers see the catalog's answer.
+  void getModelCatalog(cwd)
+    .defaultModel()
+    .catch((error) => bootLog.warn("models.catalog_warm_failed", String(error)));
+  const agentHost =
+    sqliteConnection !== undefined
+      ? createAgentHostContext({
+          cwd,
+          agentDir,
+          connection: sqliteConnection,
+          channels,
+          ...(options.agentConversationBackend ? { backend: options.agentConversationBackend } : {}),
+        })
+      : undefined;
   const mcpStateless = resolveMcpStateless({
     mcpStateless: options.mcpStateless,
   });
@@ -502,6 +509,13 @@ export async function bootstrapStageflowHost(
       runChangeBus,
       providerAuthContext: options.providerAuthContext,
       projectRoot: rootDir,
+      ...(agentHost
+        ? {
+            agentService: agentHost.service,
+            agentChat: agentHost.chat,
+            agentConversationBackend: agentHost.backend,
+          }
+        : {}),
       ...(providerBoot !== undefined ? { providerBoot } : {}),
     },
     { mcpStateless },
@@ -538,5 +552,6 @@ export async function bootstrapStageflowHost(
     channels,
     storeFilesystem,
     workspaceCatalog,
+    ...(agentHost ? { agentHost } : {}),
   };
 }

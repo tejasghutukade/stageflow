@@ -63,7 +63,6 @@ export type WorkshopRedesignViewProps = {
   pickerRows: readonly StudioPickerRow[];
   selectedBuildId: string | null;
   onPickRow: (row: StudioPickerRow) => void;
-  models: string[];
   model: string | null;
   defaultModel: string | null;
   onModelChange: (model: string) => void;
@@ -133,7 +132,6 @@ export function WorkshopRedesignView({
   pickerRows,
   selectedBuildId,
   onPickRow,
-  models,
   model,
   defaultModel,
   onModelChange,
@@ -190,7 +188,6 @@ export function WorkshopRedesignView({
           pickerRows={pickerRows}
           selectedBuildId={selectedBuildId}
           onPickRow={onPickRow}
-          models={models}
           model={model}
           defaultModel={defaultModel}
           onModelChange={onModelChange}
@@ -295,7 +292,6 @@ export function WorkshopRedesignView({
             onDeleteStage={inspector.onDeleteStage}
             onRenameStage={inspector.onRenameStage}
             findings={graphFindings}
-            models={models}
             defaultModel={defaultModel}
             focusField={inspector.focusField}
             pipelinePath={inspector.pipelinePath}

@@ -41,6 +41,14 @@
           "input": "password",
           "required": true,
           "placeholder": "am_..."
+        },
+        {
+          "key": "inboundSecret",
+          "label": "Webhook secret (optional)",
+          "hint": "Lets agents receive mail for this inbox. Sign webhooks to /api/agent-inbound/<connection id> with this secret (HMAC-SHA256 of the body in the x-agentmail-signature header).",
+          "target": "secret",
+          "input": "password",
+          "required": false
         }
       ],
       "recipient": {
@@ -79,6 +87,14 @@
           "input": "text",
           "required": false,
           "placeholder": "T0123ABCD"
+        },
+        {
+          "key": "inboundSecret",
+          "label": "Signing secret (optional)",
+          "hint": "Lets agents receive messages from this workspace. From your Slack app (Basic Information). Point Event Subscriptions at /api/agent-inbound/<connection id>.",
+          "target": "secret",
+          "input": "password",
+          "required": false
         }
       ],
       "recipient": {
@@ -117,6 +133,14 @@
           "input": "text",
           "required": false,
           "placeholder": "acme_alerts_bot"
+        },
+        {
+          "key": "inboundSecret",
+          "label": "Webhook secret (optional)",
+          "hint": "Lets agents receive messages from this bot. Use it as secret_token in setWebhook with the URL /api/agent-inbound/<connection id>.",
+          "target": "secret",
+          "input": "password",
+          "required": false
         }
       ],
       "recipient": {

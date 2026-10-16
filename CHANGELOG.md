@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **One model list for every screen.** Stage, pipeline, Workshop, Settings and agent pickers now read the models of the providers you have connected, grouped by provider and searchable, through one catalog (`GET /api/models`). The Host asks each connected provider for its current list through Pi (OpenRouter's free models included) and falls back to Pi's built-in list when a provider is unreachable. `POST /api/models/refresh` and the picker's refresh button refetch. A model id no connected provider lists is still accepted and shows a "not in connected providers" warning; agent validation warns the same way. The default model comes from the same catalog: `stageflow.yaml` `model`, then the Settings Workshop model, then the first free model of a connected provider. Cursor models appear only when Cursor is connected.
+
+### Changed
+
+- `GET /api/models` and MCP `list_models` keep `models` and `entries`, and add `providers`, `default`, `fetchedAt` and `unlisted`. `models` no longer includes a baked-in list: it is the connected providers' models plus ids your pipelines already use.
+
 ## [0.36.0] - 2026-10-14
 
 ### Added
@@ -109,7 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Workshop chat opens on the `model` in `stageflow.yaml`. When that is unset, the default is `cursor/auto`.
+- Workshop chat opens on the `model` in `stageflow.yaml`. When that is unset, the default is `openrouter/nvidia/nemotron-3.5-lightning:free`.
 
 ### Fixed
 

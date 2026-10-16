@@ -96,7 +96,6 @@ import { resolveAgentPort, type AgentPort } from "../operatorAgent/index.js";
 import { browseCatalog, listPipelinesForContext } from "../config/browseCatalog.js";
 import { catalogContextFromStageflow } from "../config/resolveCatalogContext.js";
 import {
-  listModelsMultiProject,
   listPipelinesMultiProject,
   listTasksMultiProject,
 } from "../config/multiProjectCatalog.js";
@@ -130,7 +129,7 @@ import {
   readCheckoutFileBytes,
 } from "../mcp/checkoutTools.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
-import type { RunStoreKind } from "../runstore/createStore.js";
+import { sqliteConnectionFromStore, type RunStoreKind } from "../runstore/createStore.js";
 import {
   BackupError,
   createBackup,
@@ -179,7 +178,16 @@ import type { TaskFile } from "../types/task.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { emailHostFor, releaseEmailHost } from "../email/host.js";
 import { handleEmailRoutes } from "./emailRoutes.js";
-import { AgentService } from "../agents/service.js";
+import { defaultAgentProjectRoot } from "../agents/projectRoot.js";
+import { PublicWebChat } from "../agents/webChat/publicChat.js";
+import { buildModelsResponse } from "../models/response.js";
+import { createAgentHostContext, type AgentHostContext } from "../agents/hostContext.js";
+import {
+  AgentScheduleSource,
+  agentScheduleTickIntervalMsFromEnv,
+} from "../agents/scheduleSource.js";
+import type { ConversationBackend } from "../agents/sessions.js";
+import { handleAgentAuthorRoutes } from "./agentAuthorRoutes.js";
 import { handleAgentRoutes } from "./agentRoutes.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { EmailTriggers } from "../email/triggers.js";
@@ -261,6 +269,7 @@ export type UiServerOptions = {
   browser?: StageBrowserSupport;
   /** Optional AgentPort. Workshop is the caller today; tests inject a fake. */
   workshopOperatorHost?: AgentPort;
+  agentConversationBackend?: ConversationBackend;
 };
 
 function textPlain(res: ServerResponse, status: number, body: string): void {
@@ -408,6 +417,10 @@ export type OperatorRouteDeps = {
    * Defaults to a registry owned by this route surface.
    */
   workshopChatRegistry?: WorkshopChatSessionRegistry;
+  /** Injectable agent chat backend (tests). Defaults to Pi conversation host. */
+  agentConversationBackend?: ConversationBackend;
+  /** Shared with MCP when set by bootstrap. */
+  agentHost?: AgentHostContext;
 };
 
 /**
@@ -423,7 +436,6 @@ export type OperatorRoutes = ((ctx: HttpHostRouteContext) => Promise<boolean | v
 };
 
 export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
-  const agents = new AgentService({ homeDir: globalStageflowHome() });
   const {
     manager,
     store,
@@ -433,16 +445,43 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
     providerAuthContext,
     uiDistDir,
     workshopOperatorHost,
+    agentConversationBackend,
+    agentHost: injectedHost,
   } = deps;
-  const workshopChatRegistry =
-    deps.workshopChatRegistry ??
-    new WorkshopChatSessionRegistry(
-      workshopOperatorHost ??
-        resolveAgentPort({
+  const agentConnection = injectedHost ? undefined : sqliteConnectionFromStore(store);
+  const agentHost =
+    injectedHost ??
+    (agentConnection
+      ? createAgentHostContext({
           cwd,
-          projectRoot: cwd,
-        }),
-    );
+          agentDir,
+          connection: agentConnection,
+          ...(agentConversationBackend ? { backend: agentConversationBackend } : {}),
+        })
+      : undefined);
+  const agentScheduleSource = agentHost
+    ? new AgentScheduleSource({
+        service: agentHost.service,
+        projectRoot: defaultAgentProjectRoot(cwd),
+        intervalMs: agentScheduleTickIntervalMsFromEnv(),
+      })
+    : undefined;
+  void agentScheduleSource?.start(async (event) => {
+    await agentHost!.chat.send({
+      projectRoot: defaultAgentProjectRoot(cwd),
+      agentId: event.agentId,
+      text: event.message,
+      source: "schedule",
+    });
+  });
+  const operatorHost =
+    workshopOperatorHost ??
+    resolveAgentPort({
+      cwd,
+      projectRoot: cwd,
+    });
+  const workshopChatRegistry =
+    deps.workshopChatRegistry ?? new WorkshopChatSessionRegistry(operatorHost);
   const workshopSessionStoreRoot = (): string =>
     resolveWorkshopSessionStoreRoot();
   const workshopBuildStoreRoot = (): string => resolveWorkshopBuildStoreRoot();
@@ -489,8 +528,67 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
       try {
         if (await liveView.handle(req, res)) return true;
 
+        if (pathname === "/api/agent-author/chat" || pathname === "/api/agent-author/undo") {
+          if (await handleAgentAuthorRoutes(req, method, pathname, cwd, operatorHost, res, json)) return true;
+        }
+        if (PublicWebChat.owns(pathname)) {
+          if (!agentHost) { json(res, 503, { code: "web_chat.unavailable" }); return true; }
+          return await agentHost.publicChat.handle(req, res, method, pathname);
+        }
+        if (method === "GET" && uiDistDir !== undefined && /^\/chat\/[^/]+$/.test(pathname)) {
+          const page = path.join(uiDistDir, "chat.html");
+          try {
+            const html = await readFile(page);
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex" });
+            res.end(html);
+            return true;
+          } catch {
+            json(res, 404, { error: "Chat page not built. Run npm run ui:build." });
+            return true;
+          }
+        }
+        const agentInbound = method === "POST" ? pathname.match(/^\/api\/agent-inbound\/([^/]+)$/) : null;
+        if (agentInbound) {
+          if (!agentHost) { json(res, 503, { code: "agent.store_unavailable" }); return true; }
+          const declared = Number(req.headers["content-length"] ?? 0);
+          if (declared > 1024 * 1024) { json(res, 413, {}); return true; }
+          const chunks: Buffer[] = [];
+          let received = 0;
+          for await (const chunk of req) {
+            const buffer = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
+            received += buffer.length;
+            if (received > 1024 * 1024) { json(res, 413, {}); req.destroy(); return true; }
+            chunks.push(buffer);
+          }
+          const raw = Buffer.concat(chunks);
+          const headers: Record<string, string | undefined> = {};
+          for (const [name, value] of Object.entries(req.headers)) headers[name] = Array.isArray(value) ? value[0] : value;
+          const outcome = await agentHost.inbound.handle(decodeURIComponent(agentInbound[1]!), headers, raw.toString("utf8"));
+          json(res, outcome.status, outcome.body ?? {});
+          return true;
+        }
         if (pathname === "/api/agents" || pathname.startsWith("/api/agents/")) {
-          if (await handleAgentRoutes(req, method, pathname, agents, cwd, res, json)) return true;
+          if (!agentHost) { json(res, 503, { code: "agent.store_unavailable" }); return true; }
+          // Default: the Host's own project. An explicit project_root must be a known catalog root
+          // (writable for writes); its filesystem path, not its wire id, is where agents/ lives.
+          let agentProjectRoot = defaultAgentProjectRoot(cwd);
+          const requestedRoot = url.searchParams.get("project_root");
+          if (requestedRoot !== null && path.resolve(requestedRoot) !== path.resolve(agentProjectRoot)) {
+            try {
+              const resolved =
+                method === "GET"
+                  ? await resolveCatalogStartInput({ store, bootCwd: cwd }, requestedRoot)
+                  : await resolveWritableCatalogRoot({ store, bootCwd: cwd }, requestedRoot);
+              agentProjectRoot = resolved.wireRoot.path;
+            } catch (err) {
+              if (err instanceof CatalogPathError) {
+                json(res, 400, catalogPathErrorBody(err));
+                return true;
+              }
+              throw err;
+            }
+          }
+          if (await handleAgentRoutes(req, method, pathname, agentHost, agentProjectRoot, res, json)) return true;
         }
         if (pathname === "/api/connections" || pathname.startsWith("/api/connections/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
@@ -3242,29 +3340,27 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           return true;
         }
 
-        if (method === "GET" && pathname === "/api/models") {
+        if ((method === "GET" && pathname === "/api/models") || (method === "POST" && pathname === "/api/models/refresh")) {
+          if (method === "POST" && !assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: true })) return true;
           const filter = url.searchParams.get("project_root") ?? undefined;
-          const result = await listModelsMultiProject({
+          const { response, used } = await buildModelsResponse({
             store,
-            bootCwd: cwd,
+            cwd,
             projectRootFilter: filter,
+            refresh: method === "POST",
           });
           if (
-            result.root_errors.some((e) => e.code === "unknown_project_root") &&
-            result.items.length === 0
+            used.root_errors.some((e) => e.code === "unknown_project_root") &&
+            used.items.length === 0
           ) {
             json(res, 400, {
-              error: result.root_errors[0]!.message,
+              error: used.root_errors[0]!.message,
               code: "unknown_project_root",
-              root_errors: result.root_errors,
+              root_errors: used.root_errors,
             });
             return true;
           }
-          json(res, 200, {
-            models: result.models,
-            entries: result.items,
-            root_errors: result.root_errors,
-          });
+          json(res, 200, response);
           return true;
         }
 
@@ -3540,7 +3636,12 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
       }
       }
   };
-  return Object.assign(handler, { dispose: () => liveView.dispose() });
+  return Object.assign(handler, {
+    dispose: async () => {
+      await agentScheduleSource?.stop();
+      await liveView.dispose();
+    },
+  });
 }
 
 export async function startUiServer(
@@ -3574,6 +3675,10 @@ export async function startUiServer(
           getShutdown: () => shutdown,
           ...(options.workshopOperatorHost
             ? { workshopOperatorHost: options.workshopOperatorHost }
+            : {}),
+          ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
+          ...(options.agentConversationBackend
+            ? { agentConversationBackend: options.agentConversationBackend }
             : {}),
         });
   const envelope = await createHttpHost({

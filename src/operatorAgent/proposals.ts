@@ -1,4 +1,5 @@
 import type { DraftPackage } from "../config/draftPackage.js";
+import { isAgentAuthorContext } from "./agentAuthorContext.js";
 import { readDraftFromContext } from "./draftContext.js";
 import type { OperatorAgentProposal } from "./types.js";
 
@@ -30,6 +31,11 @@ const UNDO_CONFLICT_NOTICE =
 
 export function draftFingerprint(draft: DraftPackage): string {
   return JSON.stringify(draft);
+}
+
+export function operatorContextFingerprint(context: unknown): string {
+  if (isAgentAuthorContext(context)) return JSON.stringify(context.draft);
+  return draftFingerprint(readDraftFromContext(context));
 }
 
 export function formatArtifact(value: unknown): string {
@@ -171,6 +177,24 @@ export function enrichProposal(
   proposal: OperatorAgentProposal,
   currentContext: unknown,
 ): OperatorAgentProposal {
+  if (
+    isAgentAuthorContext(proposal.nextContext) ||
+    isAgentAuthorContext(currentContext) ||
+    isAgentAuthorContext(proposal.baseContext)
+  ) {
+    const base = isAgentAuthorContext(proposal.baseContext)
+      ? proposal.baseContext
+      : currentContext;
+    return {
+      ...proposal,
+      baseContext: base,
+      baseFingerprint: proposal.baseFingerprint ?? operatorContextFingerprint(base),
+      appliedFingerprint:
+        proposal.appliedFingerprint ?? operatorContextFingerprint(proposal.nextContext),
+      artifacts: proposal.artifacts ?? [],
+      affectedStageIds: proposal.affectedStageIds ?? [],
+    };
+  }
   const baseDraft = readDraftFromContext(
     proposal.baseContext ?? currentContext,
   );
@@ -197,11 +221,11 @@ export function isMutationConflict(
   mutation: OperatorAgentProposal,
   currentContext: unknown,
 ): boolean {
-  const current = draftFingerprint(readDraftFromContext(currentContext));
+  const current = operatorContextFingerprint(currentContext);
   if (mutation.appliedFingerprint) {
     return mutation.appliedFingerprint !== current;
   }
-  const next = draftFingerprint(readDraftFromContext(mutation.nextContext));
+  const next = operatorContextFingerprint(mutation.nextContext);
   return next !== current;
 }
 

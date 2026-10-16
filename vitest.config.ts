@@ -7,6 +7,7 @@ export default defineConfig({
     setupFiles: ["tests/setup/credentialHomePin.ts"],
     env: {
       STAGEFLOW_MIN_FREE_DISK_BYTES: "0",
+      STAGEFLOW_AGENT_SCHEDULE_TICK_INTERVAL_MS: "0",
       TMPDIR: process.env.TMPDIR ?? "/tmp",
       SQLITE_TMPDIR: process.env.SQLITE_TMPDIR ?? process.env.TMPDIR ?? "/tmp",
     },

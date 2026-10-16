@@ -27,24 +27,19 @@ describe("listModelsFromManifest", () => {
         issues: [],
       });
       expect(models).toContain("cursor/auto");
-      expect(models).toContain("anthropic/claude-sonnet-4-5");
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
     }
   });
 
-  it("returns baked defaults when manifest missing", async () => {
+  it("lists no models when the manifest is missing; the provider catalog owns the choosable list", async () => {
     const models = await listModelsFromManifest({
       projectRoot: null,
       manifest: null,
       manifestStatus: "missing",
       issues: [],
     });
-    expect(models).toEqual([
-      "anthropic/claude-sonnet-4-5",
-      "cursor/auto",
-      "cursor/composer-2-5",
-    ]);
+    expect(models).toEqual([]);
   });
 });

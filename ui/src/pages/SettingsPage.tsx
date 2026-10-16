@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ModelPicker } from "../components/ModelPicker";
 import { SettingsLayout } from "../redesign/settings/SettingsLayout";
 import {
   parseSettingsSection,
@@ -17,7 +18,6 @@ import {
 } from "../redesign/settings/SettingsSectionPanels";
 import { navigate } from "../routes";
 import {
-  fetchModels,
   fetchSettings,
   postSettings,
   postWorkshopModel,
@@ -36,7 +36,6 @@ import {
   type NotifyPreference,
 } from "../useWaitingNotifications";
 
-const DEFAULT_WORKSHOP_MODEL = "cursor/auto";
 
 function scrollSettingsSectionIntoView(
   section: SettingsSection,
@@ -87,7 +86,6 @@ export function SettingsPage({
   const [slotsSaving, setSlotsSaving] = useState(false);
   const [permission, setPermission] = useState(notificationPermission);
   const [workshopModel, setWorkshopModel] = useState<string>("");
-  const [workshopModels, setWorkshopModels] = useState<string[]>([]);
   const [workshopModelError, setWorkshopModelError] = useState<string | null>(
     null,
   );
@@ -167,13 +165,9 @@ export function SettingsPage({
     let cancelled = false;
     void (async () => {
       try {
-        const [settings, models] = await Promise.all([
-          fetchSettings(),
-          fetchModels(),
-        ]);
+        const settings = await fetchSettings();
         if (cancelled) return;
         setWorkshopModel(settings.workshopModel ?? "");
-        setWorkshopModels(models.models);
       } catch (err) {
         if (cancelled) return;
         setWorkshopModelError(
@@ -213,7 +207,8 @@ export function SettingsPage({
     setWorkshopModelSaving(true);
     setWorkshopModelError(null);
     try {
-      const next = value.trim() || DEFAULT_WORKSHOP_MODEL;
+      const next = value.trim();
+      if (!next) return;
       const result = await postWorkshopModel(next);
       setWorkshopModel(result.workshopModel ?? next);
     } catch (err) {
@@ -257,7 +252,6 @@ export function SettingsPage({
         <section id={settingsSectionDomId("general")} className="scroll-mt-1">
           <SettingsGeneralPanel
             workshopModel={workshopModel}
-            workshopModels={workshopModels}
             workshopModelSaving={workshopModelSaving}
             workshopModelError={workshopModelError}
             onWorkshopModelChange={(v) => void onWorkshopModelChange(v)}
@@ -325,29 +319,14 @@ export function SettingsPage({
               session in Workshop chrome.
             </p>
           </span>
-          <select
-            className="select"
-            value={workshopModel || DEFAULT_WORKSHOP_MODEL}
-            disabled={workshopModelSaving}
-            onChange={(e) => void onWorkshopModelChange(e.target.value)}
-          >
-            {!workshopModels.includes(workshopModel || DEFAULT_WORKSHOP_MODEL) ? (
-              <option value={workshopModel || DEFAULT_WORKSHOP_MODEL}>
-                {workshopModel || DEFAULT_WORKSHOP_MODEL}
-              </option>
-            ) : null}
-            {workshopModels.length === 0 ? (
-              <option value={DEFAULT_WORKSHOP_MODEL}>
-                {DEFAULT_WORKSHOP_MODEL}
-              </option>
-            ) : (
-              workshopModels.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))
-            )}
-          </select>
+          <div className="w-[min(320px,100%)]">
+            <ModelPicker
+              ariaLabel="Workshop model"
+              value={workshopModel || null}
+              disabled={workshopModelSaving}
+              onChange={(next) => next && void onWorkshopModelChange(next)}
+            />
+          </div>
         </div>
         {workshopModelError ? (
           <p

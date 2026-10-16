@@ -132,3 +132,12 @@ export function createRunStore(config: RunStoreConfig): RunStore {
 }
 
 export type { RunStore };
+
+/** The SQLite connection behind a RunStore, when it has one (tests may inject a fake store). */
+export function sqliteConnectionFromStore(store: RunStore): Database.Database | undefined {
+  const connection = (store as { connection?: unknown }).connection;
+  if (connection !== null && typeof (connection as { prepare?: unknown } | undefined)?.prepare === "function") {
+    return connection as Database.Database;
+  }
+  return undefined;
+}

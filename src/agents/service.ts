@@ -1,333 +1,1065 @@
-import { randomBytes } from "node:crypto";
-import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { stringify } from "yaml";
-import { parseAgentYaml, type AgentDefinition } from "../config/loadAgent.js";
 import {
+  parseAgentDefinition,
+  parseAgentYaml,
+  serializeAgentDefinition,
+  type AgentDefinition,
+  type AgentIssue,
+} from "../config/loadAgent.js";
+import { agentThreadKey, inboundDedupeKey, type AgentInboundMessage } from "./communications/port.js";
+import { generateAgentId } from "./agentId.js";
+import { newWebChatSlug } from "./webChat/slug.js";
+import { ApprovalBroker } from "./approvalBroker.js";
+import { AgentError } from "./errors.js";
+import { diffLines, type DiffLine } from "./lineDiff.js";
+import { exportTurnsToOtlp } from "./otlpExport.js";
+import { canApprove, isToolGranted, requiresAskFirst } from "./policy.js";
+import {
+  agentProjectKey,
   AgentStore,
+  type AgentApproval,
+  type AgentDefinitionRow,
+  type AgentEvalScore,
   type AgentMessage,
-  type AgentRecord,
-  type AgentRevisionRecord,
-  type AgentSessionRecord,
+  type AgentRevision,
+  type AgentRevisionMeta,
+  type AgentSession,
+  type AgentSessionListItem,
+  type AgentSpan,
+  type AgentTurn,
+  type ApprovalActor,
+  type RevisionSource,
+  type SessionQuery,
+  type SessionStats,
+  type SessionStatus,
+  type TurnStatus,
 } from "./store.js";
 
-const INVALID = { code: "agent.invalid", message: "Agent YAML is invalid" };
-
-export type AgentView = {
-  id: string;
-  name: string;
-  instructions: string;
-  enabled: boolean;
-  revision: number;
-  archived: boolean;
-  description?: string;
-  error?: { code: string; message: string };
+/** Lookups outside the agents directory, used only to produce non-blocking warnings. */
+export type AgentEnvironment = {
+  /** Server names in the project's `.mcp.json`, or undefined when there is no usable catalog. */
+  mcpServerNames(projectRoot: string): Promise<string[] | undefined>;
+  skillNames(projectRoot: string): Promise<string[] | undefined>;
+  connectionIds(): Promise<string[] | undefined>;
+  /** What the model catalog says about an id, or undefined when it cannot be checked. */
+  modelInfo?(id: string): Promise<{ known: boolean; nativeTools: boolean } | undefined>;
 };
 
-export type AgentMutation =
-  | { ok: true; agent: AgentView }
-  | { ok: false; code: string };
+const NO_ENVIRONMENT: AgentEnvironment = {
+  mcpServerNames: async () => undefined,
+  skillNames: async () => undefined,
+  connectionIds: async () => undefined,
+};
 
-export type OpenSessionResult =
-  | { ok: true; session: AgentSessionRecord }
-  | { ok: false; code: string };
+export type AgentSummary = {
+  id: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  revision: number;
+  /** Problems with the file on disk; a non-empty list on a revision-0 agent means it never loaded. */
+  issues: AgentIssue[];
+  model: AgentDefinition["model"] | null;
+  tools: { builtin: string[]; mcpServers: string[]; skills: string[]; browser: boolean };
+  askFirst: string[];
+  subAgents: string[];
+  capture: AgentDefinition["observability"]["capture"] | null;
+  /** Path of the public chat page (`/chat/<slug>`) while web chat is switched on and has a link. */
+  webChatUrl: string | null;
+  stats: SessionStats;
+  pendingApprovals: number;
+  updatedAt: string;
+};
 
-export type StartTurnResult =
-  | { ok: true; turnId: string }
-  | { ok: false; code: string };
+export type AgentDetail = {
+  agent: AgentSummary;
+  definition: AgentDefinition | null;
+  yaml: string | null;
+  warnings: AgentIssue[];
+};
 
-function sameDefinition(revision: AgentRevisionRecord | undefined, next: AgentDefinition): boolean {
-  if (!revision) return false;
-  return (
-    revision.name === next.name &&
-    revision.instructions === next.instructions &&
-    revision.enabled === next.enabled &&
-    revision.description === next.description
-  );
+export type ValidationResult = {
+  definition: AgentDefinition | null;
+  issues: AgentIssue[];
+  warnings: AgentIssue[];
+  yaml: string | null;
+};
+
+export type AgentSessionDetail = {
+  session: AgentSession;
+  messages: AgentMessage[];
+  turns: AgentTurn[];
+  /** Every recorded span, ordered by turn then start time. Empty when capture is off. */
+  spans: AgentSpan[];
+  approvals: AgentApproval[];
+  pendingApproval: AgentApproval | null;
+  evalScores: AgentEvalScore[];
+};
+
+export type ActiveTurn = {
+  session: AgentSession;
+  definition: AgentDefinition;
+  turn: AgentTurn;
+  history: AgentMessage[];
+  userMessage: AgentMessage;
+};
+
+export type ChangeActor = { source: RevisionSource; author?: string | null };
+
+const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
-function viewOf(record: AgentRecord): AgentView | undefined {
-  const revision = record.revisions.find((item) => item.revision === record.currentRevision);
-  if (!revision) return undefined;
-  return {
-    id: record.id,
-    name: revision.name,
-    instructions: revision.instructions,
-    enabled: revision.enabled,
-    revision: revision.revision,
-    archived: record.archived,
-    ...(revision.description !== undefined ? { description: revision.description } : {}),
-    ...(record.error ? { error: record.error } : {}),
-  };
+function id(prefix: string): string {
+  return `${prefix}_${randomBytes(8).toString("hex")}`;
 }
 
-function blank(id: string): AgentRecord {
-  return { id, archived: false, currentRevision: 0, revisions: [], sessions: [] };
+function sameDefinition(left: AgentDefinition, right: AgentDefinition): boolean {
+  return serializeAgentDefinition(left) === serializeAgentDefinition(right);
 }
 
 export class AgentService {
   private readonly store: AgentStore;
+  private readonly environment: AgentEnvironment;
+  private readonly now: () => Date;
   private readonly tails = new Map<string, Promise<unknown>>();
+  /** Wakes a turn paused at an ask-first tool when its approval is decided. */
+  readonly approvalBroker = new ApprovalBroker();
 
-  constructor(options: { homeDir: string }) {
-    this.store = new AgentStore(options.homeDir);
+  constructor(options: { store: AgentStore; environment?: AgentEnvironment; now?: () => Date }) {
+    this.store = options.store;
+    this.environment = options.environment ?? NO_ENVIRONMENT;
+    this.now = options.now ?? (() => new Date());
   }
 
+  /** The service clock, so waits and expiries agree with stored timestamps. */
+  clockMs(): number {
+    return this.now().getTime();
+  }
+
+  private iso(): string {
+    return this.now().toISOString();
+  }
+
+  /** Serialize file-and-database work per project so a save and a sync never interleave. */
   private exclusive<T>(projectRoot: string, work: () => Promise<T>): Promise<T> {
     const key = path.resolve(projectRoot);
     const previous = this.tails.get(key) ?? Promise.resolve();
     const run = previous.then(work, work);
-    this.tails.set(key, run.then(() => undefined, () => undefined));
+    this.tails.set(
+      key,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
     return run;
   }
 
-  private file(projectRoot: string, id: string): string {
-    return path.join(projectRoot, "agents", `${id}.agent.yaml`);
+  private dir(projectRoot: string): string {
+    return path.join(projectRoot, "agents");
   }
 
-  private async writeDefinition(projectRoot: string, definition: AgentDefinition): Promise<void> {
-    const directory = path.join(projectRoot, "agents");
-    await mkdir(directory, { recursive: true });
-    await writeFile(
-      this.file(projectRoot, definition.id),
-      stringify({
-        id: definition.id,
-        name: definition.name,
-        instructions: definition.instructions,
-        enabled: definition.enabled,
-        ...(definition.description !== undefined ? { description: definition.description } : {}),
-      }),
-    );
+  private file(projectRoot: string, agentId: string): string {
+    return path.join(this.dir(projectRoot), `${agentId}.agent.yaml`);
   }
 
-  private async sync(projectRoot: string): Promise<Map<string, AgentRecord>> {
-    const state = await this.store.load(projectRoot);
-    const directory = path.join(projectRoot, "agents");
-    let names: string[] = [];
+  /* ---------- file sync ---------- */
+
+  /**
+   * Bring the database in line with `agents/*.agent.yaml`. Only files whose
+   * content hash changed are parsed; an unchanged tree costs one readdir and a
+   * read per file, and writes nothing.
+   */
+  private async sync(projectRoot: string): Promise<void> {
+    const projectKey = agentProjectKey(projectRoot);
+    let names: string[];
     try {
-      names = await readdir(directory);
-    } catch {
+      names = await readdir(this.dir(projectRoot));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       names = [];
     }
     const seen = new Set<string>();
-    for (const name of names) {
+    for (const name of names.sort()) {
       if (!name.endsWith(".agent.yaml")) continue;
-      const idFromFile = name.slice(0, -".agent.yaml".length);
-      seen.add(idFromFile);
-      const record = state.agents[idFromFile] ?? blank(idFromFile);
-      let text = "";
-      try {
-        text = await readFile(path.join(directory, name), "utf8");
-      } catch {
-        record.error = INVALID;
-        state.agents[idFromFile] = record;
-        continue;
-      }
-      const parsed = parseAgentYaml(text);
-      if (!parsed.ok || parsed.value.id !== idFromFile) {
-        record.error = INVALID;
-        state.agents[idFromFile] = record;
-        continue;
-      }
-      delete record.error;
-      const current = record.revisions.find((item) => item.revision === record.currentRevision);
-      if (!sameDefinition(current, parsed.value)) {
-        const revision = record.currentRevision + 1;
-        record.revisions.push({
-          revision,
-          createdAt: new Date().toISOString(),
-          ...parsed.value,
-        });
-        record.currentRevision = revision;
-      }
-      record.archived = false;
-      state.agents[idFromFile] = record;
+      const agentId = name.slice(0, -".agent.yaml".length);
+      seen.add(agentId);
+      const text = await readFile(path.join(this.dir(projectRoot), name), "utf8");
+      const fileHash = sha256(text);
+      const row = this.store.getDefinition(projectKey, agentId);
+      if (row && row.fileHash === fileHash && !row.archived) continue;
+      this.applyFile(projectKey, agentId, text, fileHash, row);
     }
-    for (const record of Object.values(state.agents)) {
-      if (!seen.has(record.id) && record.currentRevision > 0) record.archived = true;
+    for (const row of this.store.listDefinitions(projectKey)) {
+      if (!seen.has(row.agentId) && !row.archived) {
+        this.store.updateDefinitionState(projectKey, row.agentId, { archived: true, fileHash: null }, this.iso());
+      }
     }
-    await this.store.save(projectRoot, state);
-    return new Map(Object.entries(state.agents));
   }
 
-  async list(projectRoot: string): Promise<AgentView[]> {
-    return this.exclusive(projectRoot, async () => {
-      const agents = await this.sync(projectRoot);
-      return [...agents.values()].flatMap((record) => {
-        const view = viewOf(record);
-        return view ? [view] : [];
-      });
+  private applyFile(
+    projectKey: string,
+    agentId: string,
+    text: string,
+    fileHash: string,
+    row: AgentDefinitionRow | undefined,
+  ): void {
+    const now = this.iso();
+    const parsed = parseAgentYaml(text);
+    const issues: AgentIssue[] = !parsed.ok
+      ? parsed.issues
+      : parsed.value.id !== agentId
+        ? [{ path: "id", code: "agent.id_mismatch", message: `id must match the file name (${agentId})` }]
+        : [];
+    if (!parsed.ok || issues.length > 0) {
+      if (!row || row.currentRevision === 0) {
+        this.store.recordInvalidNewDefinition(projectKey, agentId, fileHash, issues, now);
+      } else {
+        this.store.updateDefinitionState(projectKey, agentId, { fileHash, issues, archived: false }, now);
+      }
+      return;
+    }
+    const current = row && row.currentRevision > 0 ? this.store.getRevision(projectKey, agentId, row.currentRevision) : undefined;
+    if (current && sameDefinition(current.definition, parsed.value)) {
+      this.store.updateDefinitionState(projectKey, agentId, { fileHash, issues: [], archived: false }, now);
+      return;
+    }
+    this.store.appendRevision(projectKey, {
+      definition: parsed.value,
+      yaml: text,
+      source: "file",
+      summary: current ? "Edited outside the console" : "Added outside the console",
+      fileHash,
+      now,
     });
   }
 
-  async get(projectRoot: string, id: string): Promise<AgentView | undefined> {
-    return this.exclusive(projectRoot, async () => viewOf((await this.sync(projectRoot)).get(id) ?? blank(id)));
-  }
-
-  async revision(
+  /** Write the canonical YAML and record the revision in one step. */
+  private async writeRevision(
     projectRoot: string,
-    id: string,
-    revision: number,
-  ): Promise<AgentRevisionRecord | undefined> {
-    return this.exclusive(projectRoot, async () => {
-      const record = (await this.sync(projectRoot)).get(id);
-      return record?.revisions.find((item) => item.revision === revision);
+    definition: AgentDefinition,
+    actor: ChangeActor,
+    summary: string | null,
+    restoredFrom: number | null = null,
+  ): Promise<number> {
+    const yaml = serializeAgentDefinition(definition);
+    await mkdir(this.dir(projectRoot), { recursive: true });
+    const target = this.file(projectRoot, definition.id);
+    const temporary = `${target}.${randomBytes(4).toString("hex")}.tmp`;
+    await writeFile(temporary, yaml);
+    await rename(temporary, target);
+    return this.store.appendRevision(agentProjectKey(projectRoot), {
+      definition,
+      yaml,
+      source: actor.source,
+      author: actor.author ?? null,
+      summary,
+      restoredFrom,
+      fileHash: sha256(yaml),
+      now: this.iso(),
     });
   }
 
-  async create(
-    projectRoot: string,
-    input: { id: string; name: string; instructions: string; description?: string },
-  ): Promise<AgentView> {
+  private currentRevision(projectRoot: string, agentId: string): { row: AgentDefinitionRow; revision: AgentRevision } {
+    const projectKey = agentProjectKey(projectRoot);
+    const row = this.store.getDefinition(projectKey, agentId);
+    if (!row || row.currentRevision === 0) throw new AgentError("agent.not_found");
+    if (row.archived) throw new AgentError("agent.archived");
+    const revision = this.store.getRevision(projectKey, agentId, row.currentRevision);
+    if (!revision) throw new AgentError("agent.revision_not_found");
+    return { row, revision };
+  }
+
+  /* ---------- reads ---------- */
+
+  private summarize(projectKey: string, row: AgentDefinitionRow, pending: Map<string, number>): AgentSummary {
+    const revision = row.currentRevision > 0 ? this.store.getRevision(projectKey, row.agentId, row.currentRevision) : undefined;
+    const definition = revision?.definition;
+    const since = new Date(this.now().getTime() - RECENT_WINDOW_MS).toISOString();
+    return {
+      id: row.agentId,
+      name: definition?.name ?? row.agentId,
+      description: definition?.description ?? null,
+      enabled: definition?.enabled ?? false,
+      revision: row.currentRevision,
+      issues: row.issues,
+      model: definition?.model ?? null,
+      tools: {
+        builtin: definition?.tools.builtin ?? [],
+        mcpServers: Object.keys(definition?.tools.mcp ?? {}),
+        skills: definition?.tools.skills ?? [],
+        browser: definition?.tools.browser ?? false,
+      },
+      askFirst: definition?.approvals.ask_first ?? [],
+      subAgents: definition?.sub_agents ?? [],
+      capture: definition?.observability.capture ?? null,
+      webChatUrl: definition?.web_chat.enabled && definition.web_chat.slug ? `/chat/${definition.web_chat.slug}` : null,
+      stats: this.store.sessionStats(projectKey, row.agentId, since),
+      pendingApprovals: pending.get(row.agentId) ?? 0,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private pendingByAgent(projectKey: string): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const approval of this.store.listPendingApprovals(projectKey)) {
+      counts.set(approval.agentId, (counts.get(approval.agentId) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  async list(projectRoot: string): Promise<AgentSummary[]> {
     return this.exclusive(projectRoot, async () => {
-      const definition: AgentDefinition = {
-        id: input.id,
-        name: input.name,
-        instructions: input.instructions,
-        enabled: false,
-        ...(input.description !== undefined ? { description: input.description } : {}),
+      await this.sync(projectRoot);
+      const projectKey = agentProjectKey(projectRoot);
+      this.expireApprovals();
+      const pending = this.pendingByAgent(projectKey);
+      return this.store
+        .listDefinitions(projectKey)
+        .filter((row) => !row.archived)
+        .map((row) => this.summarize(projectKey, row, pending));
+    });
+  }
+
+  async get(projectRoot: string, agentId: string): Promise<AgentDetail> {
+    return this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const projectKey = agentProjectKey(projectRoot);
+      const row = this.store.getDefinition(projectKey, agentId);
+      if (!row) throw new AgentError("agent.not_found");
+      const revision = row.currentRevision > 0 ? this.store.getRevision(projectKey, agentId, row.currentRevision) : undefined;
+      return {
+        agent: this.summarize(projectKey, row, this.pendingByAgent(projectKey)),
+        definition: revision?.definition ?? null,
+        yaml: revision?.yaml ?? null,
+        warnings: revision ? await this.warningsFor(projectRoot, revision.definition) : [],
       };
-      if (!parseAgentYaml(stringify(definition)).ok) {
-        throw Object.assign(new Error("Agent YAML is invalid"), { code: "agent.invalid" });
-      }
-      try {
-        await access(this.file(projectRoot, definition.id));
-        throw Object.assign(new Error("Agent already exists"), { code: "agent.exists" });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      await this.writeDefinition(projectRoot, definition);
-      const view = viewOf((await this.sync(projectRoot)).get(definition.id) ?? blank(definition.id));
-      if (!view) throw Object.assign(new Error("Agent YAML is invalid"), { code: "agent.invalid" });
-      return view;
     });
+  }
+
+  /** The definition a session is pinned to. */
+  async definitionAt(projectRoot: string, agentId: string, revision: number): Promise<AgentDefinition> {
+    const found = this.store.getRevision(agentProjectKey(projectRoot), agentId, revision);
+    if (!found) throw new AgentError("agent.revision_not_found");
+    return found.definition;
+  }
+
+  /* ---------- validation ---------- */
+
+  private async warningsFor(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
+    const warnings: AgentIssue[] = [];
+    if (definition.web_chat.enabled && !definition.web_chat.slug) {
+      warnings.push({ path: "web_chat.slug", code: "agent.web_chat_slug_missing", message: "Web chat has no link yet; save the agent in the console to generate one" });
+    }
+    if (definition.model.backend === "claude") {
+      warnings.push({ path: "model.backend", code: "agent.backend_unavailable", message: "Agents run on Pi today; sessions on the claude backend fail" });
+    }
+    if (definition.execution === "sandbox") {
+      warnings.push({ path: "execution", code: "agent.sandbox_unavailable", message: "No sandbox runner is installed; sessions on this agent fail" });
+    }
+    if (definition.model.id) {
+      const info = await this.environment.modelInfo?.(definition.model.id);
+      if (info && !info.known) {
+        warnings.push({ path: "model.id", code: "agent.model_unknown", message: `${definition.model.id} is not listed by a connected provider; it will still be tried` });
+      } else if (info?.nativeTools) {
+        warnings.push({ path: "model.id", code: "agent.model_native_tools", message: "This provider runs its own file and shell tools, so grants and approvals cannot hold; sessions fail unless the Host opts in" });
+      }
+    }
+    const servers = Object.keys(definition.tools.mcp);
+    if (servers.length > 0) {
+      const known = await this.environment.mcpServerNames(projectRoot);
+      for (const server of servers) {
+        if (known && !known.includes(server)) {
+          warnings.push({
+            path: `tools.mcp.${server}`,
+            code: "agent.mcp_server_unknown",
+            message: `${server} is not in .mcp.json`,
+          });
+        }
+      }
+    }
+    if (definition.tools.skills.length > 0) {
+      const known = await this.environment.skillNames(projectRoot);
+      definition.tools.skills.forEach((skill, index) => {
+        if (known && !known.includes(skill)) {
+          warnings.push({ path: `tools.skills.${index}`, code: "agent.skill_unknown", message: `Skill ${skill} not found` });
+        }
+      });
+    }
+    if (definition.sub_agents.length > 0) {
+      const projectKey = agentProjectKey(projectRoot);
+      definition.sub_agents.forEach((agentId, index) => {
+        const row = this.store.getDefinition(projectKey, agentId);
+        if (!row || row.archived || row.currentRevision === 0) {
+          warnings.push({ path: `sub_agents.${index}`, code: "agent.sub_agent_unknown", message: `No agent named ${agentId}` });
+        }
+      });
+    }
+    if (definition.channels.length > 0) {
+      const known = await this.environment.connectionIds();
+      definition.channels.forEach((channel, index) => {
+        if (known && !known.includes(channel.connection_id)) {
+          warnings.push({
+            path: `channels.${index}`,
+            code: "agent.connection_unknown",
+            message: `Connection ${channel.connection_id} not found`,
+          });
+        }
+      });
+    }
+    return warnings;
+  }
+
+  /**
+   * Web chat defaults and links: a new agent starts with web chat on, an enabled block without a link
+   * gets one, and `slug: ""` asks for a new link (rotate). Previews never mint links.
+   */
+  private prepareWebChat(raw: unknown, mode: "create" | "save" | "preview"): unknown {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+    const input = { ...(raw as Record<string, unknown>) };
+    let block = input.web_chat;
+    if (block === undefined && mode === "create") block = { enabled: true };
+    if (typeof block !== "object" || block === null || Array.isArray(block)) return mode === "create" ? { ...input, web_chat: block } : raw;
+    const webChat = { ...(block as Record<string, unknown>) };
+    const wantsLink = webChat.enabled === true && (webChat.slug === undefined || webChat.slug === "");
+    if (webChat.slug === "") delete webChat.slug;
+    if (wantsLink && mode !== "preview") webChat.slug = newWebChatSlug();
+    return { ...input, web_chat: webChat };
+  }
+
+  /** The enabled agent a public link points at, or null. */
+  async findWebChatAgent(projectRoot: string, slug: string): Promise<{ agentId: string; definition: AgentDefinition } | null> {
+    return this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const projectKey = agentProjectKey(projectRoot);
+      for (const row of this.store.listDefinitions(projectKey)) {
+        if (row.archived || row.currentRevision === 0) continue;
+        const definition = this.store.getRevision(projectKey, row.agentId, row.currentRevision)?.definition;
+        if (definition?.enabled && definition.web_chat.enabled && definition.web_chat.slug === slug) {
+          return { agentId: row.agentId, definition };
+        }
+      }
+      return null;
+    });
+  }
+
+  /** Fills a missing id from the agent's name so callers never have to choose one. */
+  private async withGeneratedId(projectRoot: string, raw: unknown): Promise<unknown> {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+    const input = raw as Record<string, unknown>;
+    if (typeof input.id === "string" && input.id.length > 0) return raw;
+    if (typeof input.name !== "string" || input.name.trim().length === 0) return raw;
+    const projectKey = agentProjectKey(projectRoot);
+    const id = await generateAgentId(input.name, async (candidate) => {
+      if (this.store.getDefinition(projectKey, candidate)) return true;
+      return access(this.file(projectRoot, candidate)).then(
+        () => true,
+        () => false,
+      );
+    });
+    return { ...input, id };
+  }
+
+  async validate(projectRoot: string, rawInput: unknown): Promise<ValidationResult> {
+    const raw = this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "preview");
+    const parsed = parseAgentDefinition(raw);
+    if (!parsed.ok) return { definition: null, issues: parsed.issues, warnings: [], yaml: null };
+    return {
+      definition: parsed.value,
+      issues: [],
+      warnings: await this.warningsFor(projectRoot, parsed.value),
+      yaml: serializeAgentDefinition(parsed.value),
+    };
+  }
+
+  private parseOrThrow(raw: unknown): AgentDefinition {
+    const parsed = parseAgentDefinition(raw);
+    if (!parsed.ok) throw new AgentError("agent.invalid", "Agent definition is invalid", parsed.issues);
+    return parsed.value;
+  }
+
+  /* ---------- writes ---------- */
+
+  async create(projectRoot: string, rawInput: unknown, actor: ChangeActor): Promise<AgentDetail> {
+    const definition = this.parseOrThrow(this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "create"));
+    await this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const existing = this.store.getDefinition(agentProjectKey(projectRoot), definition.id);
+      const onDisk = await access(this.file(projectRoot, definition.id)).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        },
+      );
+      if (onDisk || (existing && !existing.archived)) throw new AgentError("agent.exists");
+      // A new agent always starts disabled (R1); enabling is its own revision.
+      await this.writeRevision(projectRoot, { ...definition, enabled: false }, actor, "Created");
+    });
+    return this.get(projectRoot, definition.id);
   }
 
   async save(
     projectRoot: string,
-    id: string,
-    input: { baseRevision: number; name: string; instructions: string; description?: string },
-  ): Promise<AgentMutation> {
-    return this.exclusive(projectRoot, async () => {
-      const current = viewOf((await this.sync(projectRoot)).get(id) ?? blank(id));
-      if (!current || current.revision === 0) return { ok: false, code: "agent.not_found" };
-      if (current.archived) return { ok: false, code: "agent.archived" };
-      if (current.revision !== input.baseRevision) return { ok: false, code: "agent.conflict" };
-      await this.writeDefinition(projectRoot, {
-        id,
-        name: input.name,
-        instructions: input.instructions,
-        enabled: current.enabled,
-        ...(input.description !== undefined
-          ? { description: input.description }
-          : current.description !== undefined
-            ? { description: current.description }
-            : {}),
-      });
-      const agent = viewOf((await this.sync(projectRoot)).get(id) ?? blank(id));
-      if (!agent) return { ok: false, code: "agent.invalid" };
-      return { ok: true, agent };
+    agentId: string,
+    input: { baseRevision: number; definition: unknown; summary?: string | null },
+    actor: ChangeActor,
+  ): Promise<AgentDetail> {
+    // A client that leaves `web_chat` out (CLI, MCP, scripts) keeps the agent's current link and limits.
+    let incoming = input.definition;
+    if (typeof incoming === "object" && incoming !== null && !Array.isArray(incoming) && (incoming as Record<string, unknown>).web_chat === undefined) {
+      const projectKey = agentProjectKey(projectRoot);
+      const row = this.store.getDefinition(projectKey, agentId);
+      const current = row && row.currentRevision > 0 ? this.store.getRevision(projectKey, agentId, row.currentRevision)?.definition : undefined;
+      if (current) incoming = { ...(incoming as Record<string, unknown>), web_chat: current.web_chat };
+    }
+    const definition = this.parseOrThrow(this.prepareWebChat(incoming, "save"));
+    if (definition.id !== agentId) {
+      throw new AgentError("agent.invalid", "The id cannot change", [
+        { path: "id", code: "agent.id_immutable", message: "The id is fixed after creation" },
+      ]);
+    }
+    await this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const { row, revision } = this.currentRevision(projectRoot, agentId);
+      if (row.currentRevision !== input.baseRevision) throw new AgentError("agent.conflict");
+      if (sameDefinition(revision.definition, definition)) return;
+      await this.writeRevision(projectRoot, definition, actor, input.summary?.trim() || null);
+    });
+    return this.get(projectRoot, agentId);
+  }
+
+  async setEnabled(projectRoot: string, agentId: string, enabled: boolean, actor: ChangeActor): Promise<AgentDetail> {
+    await this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const { row, revision } = this.currentRevision(projectRoot, agentId);
+      if (row.issues.length > 0 && enabled) {
+        throw new AgentError("agent.invalid", "Fix the agent file before enabling it", row.issues);
+      }
+      if (revision.definition.enabled === enabled) return;
+      await this.writeRevision(projectRoot, { ...revision.definition, enabled }, actor, enabled ? "Enabled" : "Disabled");
+    });
+    return this.get(projectRoot, agentId);
+  }
+
+  /** Remove the file; history stays readable (R5). */
+  async archive(projectRoot: string, agentId: string): Promise<void> {
+    await this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const row = this.store.getDefinition(agentProjectKey(projectRoot), agentId);
+      if (!row || row.archived) throw new AgentError("agent.not_found");
+      await rm(this.file(projectRoot, agentId), { force: true });
+      this.store.updateDefinitionState(agentProjectKey(projectRoot), agentId, { archived: true, fileHash: null }, this.iso());
     });
   }
 
-  async setEnabled(projectRoot: string, id: string, enabled: boolean): Promise<AgentMutation> {
-    return this.exclusive(projectRoot, async () => {
-      const current = viewOf((await this.sync(projectRoot)).get(id) ?? blank(id));
-      if (!current || current.revision === 0) return { ok: false, code: "agent.not_found" };
-      if (current.archived) return { ok: false, code: "agent.archived" };
-      await this.writeDefinition(projectRoot, {
-        id,
-        name: current.name,
-        instructions: current.instructions,
-        enabled,
-        ...(current.description !== undefined ? { description: current.description } : {}),
-      });
-      const agent = viewOf((await this.sync(projectRoot)).get(id) ?? blank(id));
-      if (!agent) return { ok: false, code: "agent.invalid" };
-      return { ok: true, agent };
-    });
-  }
+  /* ---------- revisions ---------- */
 
-  async archive(projectRoot: string, id: string): Promise<AgentMutation> {
-    return this.exclusive(projectRoot, async () => {
-      const existing = (await this.sync(projectRoot)).get(id);
-      if (!existing || existing.currentRevision === 0) return { ok: false, code: "agent.not_found" };
-      await rm(this.file(projectRoot, id), { force: true });
-      const agent = viewOf((await this.sync(projectRoot)).get(id) ?? blank(id));
-      if (!agent) return { ok: false, code: "agent.not_found" };
-      return { ok: true, agent };
-    });
-  }
-
-  async openSession(projectRoot: string, id: string): Promise<OpenSessionResult> {
+  async listRevisions(projectRoot: string, agentId: string): Promise<AgentRevisionMeta[]> {
     return this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
-      const fresh = await this.store.load(projectRoot);
-      const record = fresh.agents[id];
-      const current = record ? viewOf(record) : undefined;
-      if (!current || current.revision === 0) return { ok: false, code: "agent.not_found" };
-      if (current.archived) return { ok: false, code: "agent.archived" };
-      if (!current.enabled) return { ok: false, code: "agent.disabled" };
-      const session: AgentSessionRecord = {
-        id: `ses_${randomBytes(8).toString("hex")}`,
-        agentId: id,
-        revision: current.revision,
-        backend: "pi",
-        status: "open",
-        messages: [],
-      };
-      record.sessions.push(session);
-      fresh.agents[id] = record;
-      await this.store.save(projectRoot, fresh);
-      return { ok: true, session };
+      const projectKey = agentProjectKey(projectRoot);
+      if (!this.store.getDefinition(projectKey, agentId)) throw new AgentError("agent.not_found");
+      return this.store.listRevisions(projectKey, agentId);
     });
   }
 
-  async startTurn(projectRoot: string, sessionId: string): Promise<StartTurnResult> {
+  async getRevision(projectRoot: string, agentId: string, revision: number): Promise<AgentRevision> {
+    const found = this.store.getRevision(agentProjectKey(projectRoot), agentId, revision);
+    if (!found) throw new AgentError("agent.revision_not_found");
+    return found;
+  }
+
+  async diffRevisions(projectRoot: string, agentId: string, from: number, to: number): Promise<DiffLine[]> {
+    const [before, after] = await Promise.all([
+      this.getRevision(projectRoot, agentId, from),
+      this.getRevision(projectRoot, agentId, to),
+    ]);
+    return diffLines(before.yaml, after.yaml);
+  }
+
+  /** Re-save an old revision as the newest one. Enabled state stays as it is now. */
+  async restore(
+    projectRoot: string,
+    agentId: string,
+    input: { revision: number; baseRevision: number },
+    actor: ChangeActor,
+  ): Promise<AgentDetail> {
+    await this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const { row, revision: current } = this.currentRevision(projectRoot, agentId);
+      if (row.currentRevision !== input.baseRevision) throw new AgentError("agent.conflict");
+      const target = this.store.getRevision(agentProjectKey(projectRoot), agentId, input.revision);
+      if (!target) throw new AgentError("agent.revision_not_found");
+      const definition = { ...target.definition, enabled: current.definition.enabled };
+      if (sameDefinition(definition, current.definition)) return;
+      await this.writeRevision(
+        projectRoot,
+        definition,
+        { ...actor, source: "restore" },
+        `Restored v${input.revision}`,
+        input.revision,
+      );
+    });
+    return this.get(projectRoot, agentId);
+  }
+
+  /* ---------- sessions ---------- */
+
+  async openSession(
+    projectRoot: string,
+    agentId: string,
+    input: { source: string; sourceRef?: string | null; threadKey?: string | null; title?: string | null },
+  ): Promise<AgentSession> {
     return this.exclusive(projectRoot, async () => {
-      const fresh = await this.sync(projectRoot).then(async () => this.store.load(projectRoot));
-      for (const record of Object.values(fresh.agents)) {
-        const session = record.sessions.find((item) => item.id === sessionId);
-        if (!session) continue;
-        const current = viewOf(record);
-        if (!current || current.archived) return { ok: false, code: "agent.archived" };
-        if (!current.enabled) return { ok: false, code: "agent.disabled" };
-        session.status = "running";
-        await this.store.save(projectRoot, fresh);
-        return { ok: true, turnId: `turn_${randomBytes(6).toString("hex")}` };
-      }
-      return { ok: false, code: "agent.session_not_found" };
+      await this.sync(projectRoot);
+      const { revision } = this.currentRevision(projectRoot, agentId);
+      if (!revision.definition.enabled) throw new AgentError("agent.disabled");
+      const now = this.iso();
+      const session: AgentSession = {
+        id: id("ses"),
+        agentId,
+        revision: revision.revision,
+        backend: revision.definition.model.backend,
+        status: "open",
+        source: input.source,
+        sourceRef: input.sourceRef ?? null,
+        threadKey: input.threadKey ?? null,
+        title: input.title ?? null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.store.insertSession(agentProjectKey(projectRoot), session);
+      return session;
     });
   }
 
-  async appendTurn(
+  /** Id of the session's pending approval, if a turn is waiting on a person. */
+  pendingApprovalFor(_projectRoot: string, sessionId: string): string | null {
+    return this.store.listApprovals(sessionId).find((approval) => approval.status === "pending")?.id ?? null;
+  }
+
+  listSessionsForRef(projectRoot: string, agentId: string, source: string, sourceRef: string, limit: number): AgentSession[] {
+    return this.store.listSessionsForRef(agentProjectKey(projectRoot), agentId, source, sourceRef, limit);
+  }
+
+  private sessionInProject(projectRoot: string, sessionId: string): AgentSession {
+    const session = this.store.getSession(sessionId);
+    if (!session || session.projectKey !== agentProjectKey(projectRoot)) {
+      throw new AgentError("agent.session_not_found");
+    }
+    return session;
+  }
+
+  async getSession(projectRoot: string, sessionId: string): Promise<AgentSessionDetail> {
+    this.expireApprovals();
+    const session = this.sessionInProject(projectRoot, sessionId);
+    const approvals = this.store.listApprovals(sessionId);
+    return {
+      session: this.store.getSession(sessionId)!,
+      messages: this.store.listMessages(sessionId),
+      turns: this.store.listTurns(sessionId),
+      spans: this.store.listSpansForSession(sessionId),
+      approvals,
+      pendingApproval: approvals.find((approval) => approval.status === "pending") ?? null,
+      evalScores: this.store.listEvalScores(session.id),
+    };
+  }
+
+  async listSessions(
+    projectRoot: string,
+    agentId: string,
+    query: SessionQuery,
+  ): Promise<{ sessions: AgentSessionListItem[]; nextCursor: string | null; stats: SessionStats }> {
+    return this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const projectKey = agentProjectKey(projectRoot);
+      if (!this.store.getDefinition(projectKey, agentId)) throw new AgentError("agent.not_found");
+      this.expireApprovals();
+      const since = new Date(this.now().getTime() - RECENT_WINDOW_MS).toISOString();
+      return {
+        ...this.store.listSessions(projectKey, agentId, query),
+        stats: this.store.sessionStats(projectKey, agentId, since),
+      };
+    });
+  }
+
+  listSpans(projectRoot: string, sessionId: string): AgentSpan[] {
+    this.sessionInProject(projectRoot, sessionId);
+    return this.store.listSpansForSession(sessionId);
+  }
+
+  /** OTLP/JSON for every turn of a session (what "Export session traces" downloads). */
+  exportSessionOtlp(projectRoot: string, sessionId: string): Record<string, unknown> {
+    const session = this.sessionInProject(projectRoot, sessionId);
+    const spans = this.store.listSpansForSession(sessionId);
+    return exportTurnsToOtlp(
+      this.store.listTurns(sessionId).map((turn) => ({ turn, spans: spans.filter((span) => span.turnId === turn.id) })),
+      { serviceName: "stageflow-agent-runtime", agentId: session.agentId },
+    );
+  }
+
+  /** OTLP/JSON for one finished turn, for live export to a collector. */
+  exportTurnOtlp(projectRoot: string, turnId: string): Record<string, unknown> {
+    const turn = this.store.getTurn(turnId);
+    if (!turn) throw new AgentError("agent.session_not_found");
+    const session = this.sessionInProject(projectRoot, turn.sessionId);
+    const spans = this.store.listSpansForSession(session.id).filter((span) => span.turnId === turnId);
+    return exportTurnsToOtlp([{ turn, spans }], { serviceName: "stageflow-agent-runtime", agentId: session.agentId });
+  }
+
+  /* ---------- turns ---------- */
+
+  /**
+   * Start a turn on a session's pinned revision: records the user message and
+   * marks the session running. The live agent state (enabled, not archived)
+   * gates new turns; the pinned revision supplies the configuration.
+   */
+  async beginTurn(
     projectRoot: string,
     sessionId: string,
-    input: { backend: AgentSessionRecord["backend"]; messages: AgentMessage[]; status: AgentSessionRecord["status"] },
-  ): Promise<AgentSessionRecord | undefined> {
+    input: { text: string; author?: string | null },
+  ): Promise<ActiveTurn> {
     return this.exclusive(projectRoot, async () => {
-      const fresh = await this.store.load(projectRoot);
-      for (const record of Object.values(fresh.agents)) {
-        const session = record.sessions.find((item) => item.id === sessionId);
-        if (!session) continue;
-        session.backend = input.backend;
-        session.messages.push(...input.messages);
-        session.status = input.status;
-        await this.store.save(projectRoot, fresh);
-        return session;
-      }
-      return undefined;
+      await this.sync(projectRoot);
+      const session = this.sessionInProject(projectRoot, sessionId);
+      const { revision: live } = this.currentRevision(projectRoot, session.agentId);
+      if (!live.definition.enabled) throw new AgentError("agent.disabled");
+      if (session.status === "running" || session.status === "waiting") throw new AgentError("agent.session_busy");
+      const definition = await this.definitionAt(projectRoot, session.agentId, session.revision);
+      this.assertWithinLimits(definition, session);
+      const now = this.iso();
+      return this.store.transaction(() => {
+        const history = this.store.listMessages(sessionId);
+        const turn = this.store.insertTurn({
+          id: id("turn"),
+          sessionId,
+          revision: session.revision,
+          traceId: randomBytes(16).toString("hex"),
+          status: "running",
+          errorCode: null,
+          inputTokens: null,
+          outputTokens: null,
+          costUsd: null,
+          startedAt: now,
+          endedAt: null,
+        });
+        const userMessage = this.store.appendMessage({
+          id: id("msg"),
+          sessionId,
+          turnId: turn.id,
+          role: "user",
+          author: input.author ?? null,
+          text: input.text,
+          createdAt: now,
+        });
+        this.store.updateSession(
+          sessionId,
+          { status: "running", ...(session.title ? {} : { title: titleFrom(input.text) }) },
+          now,
+        );
+        return { session: this.store.getSession(sessionId)!, definition, turn, history, userMessage };
+      });
     });
   }
 
-  async getSession(projectRoot: string, sessionId: string): Promise<AgentSessionRecord | undefined> {
-    return this.exclusive(projectRoot, async () => {
-      const fresh = await this.store.load(projectRoot);
-      for (const record of Object.values(fresh.agents)) {
-        const session = record.sessions.find((item) => item.id === sessionId);
-        if (session) return session;
+  /** Session limits (`limits` in the pinned revision) are checked before each new turn. */
+  private assertWithinLimits(definition: AgentDefinition, session: AgentSession): void {
+    const { limits } = definition;
+    const turns = this.store.listTurns(session.id);
+    if (turns.length >= limits.max_turns) {
+      throw new AgentError("agent.limit_reached", `This session reached its limit of ${limits.max_turns} turns.`);
+    }
+    const ageMinutes = (this.now().getTime() - Date.parse(session.createdAt)) / 60_000;
+    if (ageMinutes >= limits.session_minutes) {
+      throw new AgentError("agent.limit_reached", `This session reached its limit of ${limits.session_minutes} minutes.`);
+    }
+    if (limits.cost_usd !== null) {
+      const spent = turns.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
+      if (spent >= limits.cost_usd) {
+        throw new AgentError("agent.limit_reached", `This session reached its cost limit of $${limits.cost_usd}.`);
       }
-      return undefined;
+    }
+  }
+
+  /** A turn paused for a person shows as waiting; resuming puts it back to running. */
+  markTurnWaiting(projectRoot: string, turnId: string, waiting: boolean): void {
+    const turn = this.store.getTurn(turnId);
+    if (!turn) throw new AgentError("agent.session_not_found");
+    this.sessionInProject(projectRoot, turn.sessionId);
+    this.store.setTurnStatus(turnId, waiting ? "waiting" : "running");
+    this.store.updateSession(turn.sessionId, { status: waiting ? "waiting" : "running" }, this.iso());
+  }
+
+  async completeTurn(
+    projectRoot: string,
+    turnId: string,
+    input: {
+      status: Exclude<TurnStatus, "running">;
+      assistantText?: string;
+      errorCode?: string | null;
+      usage?: { inputTokens?: number; outputTokens?: number };
+      costUsd?: number | null;
+      evalScores?: Array<{ metric: string; score: number }>;
+      sessionStatus?: SessionStatus;
+    },
+  ): Promise<AgentSessionDetail> {
+    const turn = this.store.getTurn(turnId);
+    if (!turn) throw new AgentError("agent.session_not_found");
+    const session = this.sessionInProject(projectRoot, turn.sessionId);
+    const now = this.iso();
+    this.store.transaction(() => {
+      if (input.assistantText !== undefined && input.assistantText.length > 0) {
+        this.store.appendMessage({
+          id: id("msg"),
+          sessionId: session.id,
+          turnId,
+          role: "assistant",
+          author: session.agentId,
+          text: input.assistantText,
+          createdAt: now,
+        });
+      }
+      this.store.finishTurn(turnId, {
+        status: input.status,
+        errorCode: input.errorCode ?? null,
+        inputTokens: input.usage?.inputTokens ?? null,
+        outputTokens: input.usage?.outputTokens ?? null,
+        costUsd: input.costUsd ?? null,
+        endedAt: input.status === "waiting" ? null : now,
+      });
+      for (const score of input.evalScores ?? []) {
+        this.store.recordEvalScore({ turnId, metric: score.metric, score: score.score, recordedAt: now });
+      }
+      this.store.updateSession(session.id, { status: input.sessionStatus ?? "open" }, now);
+    });
+    return this.getSession(projectRoot, session.id);
+  }
+
+  recordSpan(projectRoot: string, span: AgentSpan): void {
+    const turn = this.store.getTurn(span.turnId);
+    if (!turn) throw new AgentError("agent.session_not_found");
+    this.sessionInProject(projectRoot, turn.sessionId);
+    this.store.insertSpan(span);
+  }
+
+  /** Called at host start: turns that were running when the host stopped can't resume. */
+  recoverInterruptedTurns(): number {
+    return this.store.failInterruptedTurns(this.iso());
+  }
+
+  /* ---------- approvals ---------- */
+
+  private expireApprovals(): void {
+    const now = this.iso();
+    for (const sessionId of this.store.expireApprovals(now)) {
+      const session = this.store.getSession(sessionId);
+      if (session?.status === "waiting") this.store.updateSession(sessionId, { status: "open" }, now);
+    }
+  }
+
+  async requestApproval(
+    projectRoot: string,
+    sessionId: string,
+    input: { tool: string; payload: Record<string, unknown>; turnId?: string | null },
+  ): Promise<AgentApproval> {
+    return this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      this.expireApprovals();
+      const session = this.sessionInProject(projectRoot, sessionId);
+      const { revision: live } = this.currentRevision(projectRoot, session.agentId);
+      if (!live.definition.enabled) throw new AgentError("agent.disabled");
+      const definition = await this.definitionAt(projectRoot, session.agentId, session.revision);
+      if (!isToolGranted(definition, input.tool)) throw new AgentError("agent.tool_not_granted");
+      if (!requiresAskFirst(definition, input.tool)) throw new AgentError("agent.approval_not_required");
+      const payloadHash = hashApprovalPayload(input.payload);
+      if (this.store.hasExecutedPayload(sessionId, payloadHash)) {
+        const prior = this.store.findApprovalByPayload(sessionId, payloadHash);
+        if (prior) return prior;
+      }
+      const existing = this.store.getPendingApproval(sessionId);
+      if (existing) {
+        // One pending approval per session, and it only stands for the exact call it was raised for.
+        if (existing.tool !== input.tool || existing.payloadHash !== payloadHash) throw new AgentError("agent.session_busy", "Another approval is already pending on this session");
+        return existing;
+      }
+      const now = this.now();
+      const approval: AgentApproval = {
+        id: id("appr"),
+        sessionId,
+        turnId: input.turnId ?? null,
+        tool: input.tool,
+        payload: input.payload,
+        payloadHash,
+        status: "pending",
+        createdAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + definition.approvals.timeout_minutes * 60_000).toISOString(),
+        decidedAt: null,
+        actor: null,
+      };
+      this.store.transaction(() => {
+        this.store.insertApproval(approval);
+        this.store.updateSession(sessionId, { status: "waiting" }, approval.createdAt);
+      });
+      return approval;
     });
   }
+
+  async decideApproval(
+    projectRoot: string,
+    sessionId: string,
+    decision: "approve" | "deny",
+    actor: ApprovalActor,
+  ): Promise<AgentApproval> {
+    return this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const session = this.sessionInProject(projectRoot, sessionId);
+      const definition = await this.definitionAt(projectRoot, session.agentId, session.revision);
+      if (!canApprove(definition, actor)) throw new AgentError("agent.approval_forbidden");
+      const pending = this.store.getPendingApproval(sessionId);
+      if (!pending) throw new AgentError("agent.approval_not_pending");
+      const now = this.iso();
+      if (Date.parse(pending.expiresAt) <= this.now().getTime()) {
+        this.expireApprovals();
+        throw new AgentError("agent.approval_expired");
+      }
+      if (decision === "approve") {
+        // Disable while waiting refuses the action (R9); denial is always allowed.
+        const { revision: live } = this.currentRevision(projectRoot, session.agentId);
+        if (!live.definition.enabled) throw new AgentError("agent.disabled");
+      }
+      this.store.transaction(() => {
+        this.store.decideApproval(pending.id, {
+          status: decision === "approve" ? "approved" : "denied",
+          decidedAt: now,
+          actor,
+        });
+        if (decision === "approve") this.store.markPayloadExecuted(sessionId, pending.payloadHash, now);
+        this.store.updateSession(sessionId, { status: "open" }, now);
+      });
+      const outcome = decision === "approve" ? "approved" : "denied";
+      this.approvalBroker.settle(pending.id, outcome);
+      return { ...pending, status: outcome, decidedAt: now, actor };
+    });
+  }
+
+  async pendingApprovals(projectRoot: string): Promise<Array<AgentApproval & { agentId: string }>> {
+    this.expireApprovals();
+    return this.store.listPendingApprovals(agentProjectKey(projectRoot));
+  }
+
+  /* ---------- communications ---------- */
+
+  async receive(
+    projectRoot: string,
+    message: AgentInboundMessage,
+  ): Promise<{ agentId: string; sessionId: string; duplicate: boolean }> {
+    return this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const projectKey = agentProjectKey(projectRoot);
+      const bound = this.store
+        .listDefinitions(projectKey)
+        .filter((row) => !row.archived && row.currentRevision > 0)
+        .map((row) => this.store.getRevision(projectKey, row.agentId, row.currentRevision)!)
+        .filter((revision) => revision.definition.channels.some((c) => c.connection_id === message.connectionId));
+      const target = bound.find((revision) => revision.definition.enabled) ?? bound[0];
+      if (!target) throw new AgentError("agent.unbound");
+      if (!target.definition.enabled) throw new AgentError("agent.disabled");
+      const threadKey = agentThreadKey(message);
+      const now = this.iso();
+      const existing = this.store.findSessionByThread(projectKey, target.agentId, threadKey);
+      if (!this.store.rememberInboundEvent(projectKey, inboundDedupeKey(message), now)) {
+        if (!existing) throw new AgentError("agent.session_not_found");
+        return { agentId: target.agentId, sessionId: existing.id, duplicate: true };
+      }
+      if (existing) return { agentId: target.agentId, sessionId: existing.id, duplicate: false };
+      const session: AgentSession = {
+        id: id("ses"),
+        agentId: target.agentId,
+        revision: target.revision,
+        backend: target.definition.model.backend,
+        status: "open",
+        source: message.provider,
+        sourceRef: message.from ?? null,
+        threadKey,
+        title: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.store.insertSession(projectKey, session);
+      return { agentId: target.agentId, sessionId: session.id, duplicate: false };
+    });
+  }
+
+  /**
+   * At-most-once outbound send keyed by operation. A send whose outcome is
+   * unknown (crash between submit and record) is never retried automatically.
+   */
+  async sendOutbound(
+    projectRoot: string,
+    sessionId: string,
+    operationKey: string,
+    submit: () => Promise<void>,
+  ): Promise<{ state: "submitted"; resent: boolean }> {
+    this.sessionInProject(projectRoot, sessionId);
+    const existing = this.store.getOutboundState(sessionId, operationKey);
+    if (existing === "submitted") return { state: "submitted", resent: false };
+    if (existing === "unknown") throw new AgentError("agent.outbound_unknown");
+    this.store.setOutboundState(sessionId, operationKey, "unknown", this.iso());
+    try {
+      await submit();
+    } catch {
+      throw new AgentError("agent.outbound_unknown");
+    }
+    this.store.setOutboundState(sessionId, operationKey, "submitted", this.iso());
+    return { state: "submitted", resent: true };
+  }
+
+  /* ---------- schedules ---------- */
+
+  async scheduledAgents(projectRoot: string): Promise<Array<{ agentId: string; schedule: NonNullable<AgentDefinition["schedule"]> }>> {
+    return this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const projectKey = agentProjectKey(projectRoot);
+      const rows: Array<{ agentId: string; schedule: NonNullable<AgentDefinition["schedule"]> }> = [];
+      for (const row of this.store.listDefinitions(projectKey)) {
+        if (row.archived || row.currentRevision === 0) continue;
+        const definition = this.store.getRevision(projectKey, row.agentId, row.currentRevision)?.definition;
+        if (definition?.enabled && definition.schedule) rows.push({ agentId: row.agentId, schedule: definition.schedule });
+      }
+      return rows;
+    });
+  }
+
+  scheduleNextRun(projectRoot: string, agentId: string): string | undefined {
+    return this.store.getScheduleNextRun(agentProjectKey(projectRoot), agentId);
+  }
+
+  setScheduleNextRun(projectRoot: string, agentId: string, nextRunAt: string): void {
+    this.store.setScheduleNextRun(agentProjectKey(projectRoot), agentId, nextRunAt);
+  }
+}
+
+export function hashApprovalPayload(payload: Record<string, unknown>): string {
+  return sha256(stableJson(payload));
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
+function titleFrom(text: string): string {
+  const line = text.trim().split("\n")[0] ?? "";
+  return line.length > 80 ? `${line.slice(0, 77)}…` : line;
 }

@@ -761,11 +761,11 @@ function mcpExtensionTools(loader: DefaultResourceLoader): string[] {
     .flatMap((ext) => [...ext.tools.keys()]);
 }
 
-function mcpToolMetadataMissing(loader: DefaultResourceLoader): boolean {
+export function mcpToolMetadataMissing(loader: DefaultResourceLoader): boolean {
   return mcpExtensionTools(loader).includes("mcp");
 }
 
-function collectMcpExtensionToolNames(
+export function collectMcpExtensionToolNames(
   loader: DefaultResourceLoader,
 ): { ok: true; names: string[] } | { ok: false; unrequested: string[] } {
   const names: string[] = [];

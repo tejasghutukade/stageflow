@@ -38,7 +38,7 @@ describe("agentmail config and targets", () => {
   it("is built in and registered", () => {
     expect(channelProviders().map(provider => provider.id)).toContain("agentmail");
     expect(p.operations).toEqual(["send"]);
-    expect(p.secrets).toEqual({ required: ["apiKey"] });
+    expect(p.secrets).toEqual({ required: ["apiKey"], optional: ["inboundSecret"] });
   });
 
   it("accepts an inbox with a default region and an explicit eu region", () => {

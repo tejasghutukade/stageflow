@@ -4,11 +4,7 @@ import {
   type ChatModelRunOptions,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import {
-  DropdownMenu,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from "@astryxdesign/core/DropdownMenu";
+import { ModelPicker } from "../components/ModelPicker";
 import {
   createContext,
   useCallback,
@@ -26,7 +22,6 @@ import {
   createDraftPackageWithDetails,
   createWorkshopSession,
   fetchCatalogRoots,
-  fetchModels,
   fetchPipelines,
   fetchSettings,
   fetchTasks,
@@ -991,78 +986,11 @@ function MapEmptyState() {
   );
 }
 
-const WORKSHOP_FALLBACK_MODEL = "cursor/auto";
-
+/** The Host resolves the default through the model catalog; blank means "let the Host choose". */
 export function composerModelFromSettings(
   defaultModel: string | null | undefined,
 ): string {
-  const trimmed = defaultModel?.trim() ?? "";
-  return trimmed.length > 0 ? trimmed : WORKSHOP_FALLBACK_MODEL;
-}
-
-function modelTail(id: string): string {
-  const tail = id.split("/").pop() ?? id;
-  return tail.endsWith(":free") ? tail.slice(0, -":free".length) : tail;
-}
-
-function shortModelLabels(ids: readonly string[]): Map<string, string> {
-  const tails = ids.map(modelTail);
-  const counts = new Map<string, number>();
-  for (const tail of tails) counts.set(tail, (counts.get(tail) ?? 0) + 1);
-  const labels = new Map<string, string>();
-  ids.forEach((id, index) => {
-    const tail = tails[index] ?? id;
-    const provider = id.split("/")[0] ?? id;
-    labels.set(id, (counts.get(tail) ?? 0) > 1 ? `${provider}/${tail}` : tail);
-  });
-  return labels;
-}
-
-function WorkshopModelPicker({
-  model,
-  models,
-  settingsDefault,
-  onChange,
-}: {
-  model: string;
-  models: string[];
-  settingsDefault: string | null;
-  onChange: (model: string) => void;
-}) {
-  const options =
-    models.length > 0
-      ? models
-      : [composerModelFromSettings(settingsDefault)];
-  const ids = options.includes(model) ? options : [model, ...options];
-  const shorts = shortModelLabels(ids);
-  const current = shorts.get(model) ?? modelTail(model);
-
-  return (
-    <DropdownMenu
-      placement="above"
-      menuWidth={420}
-      button={{
-        label: "Workshop chat model",
-        variant: "ghost",
-        size: "sm",
-        children: current,
-      }}
-    >
-      <DropdownMenuRadioGroup
-        label="Workshop chat model"
-        value={model}
-        onChange={onChange}
-      >
-        {ids.map((id) => (
-          <DropdownMenuRadioItem
-            key={id}
-            value={id}
-            label={id === settingsDefault ? `${id} (default)` : id}
-          />
-        ))}
-      </DropdownMenuRadioGroup>
-    </DropdownMenu>
-  );
+  return defaultModel?.trim() ?? "";
 }
 
 export function WorkshopPage({
@@ -1094,8 +1022,7 @@ export function WorkshopPage({
   const [pickerRows, setPickerRows] = useState<StudioPickerRow[]>([]);
   const [selectedBuildId, setSelectedBuildId] = useState<string | null>(null);
   const [studioError, setStudioError] = useState<string | null>(null);
-  const [chatModel, setChatModel] = useState(WORKSHOP_FALLBACK_MODEL);
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [chatModel, setChatModel] = useState("");
   const [settingsDefault, setSettingsDefault] = useState<string | null>(null);
   const redesignOn = useRedesign();
   const [autoApply, setAutoApply] = useState(false);
@@ -1181,7 +1108,7 @@ export function WorkshopPage({
 
   const sessionIdRef = useRef<string | null>(null);
   const draftRef = useRef<DraftPackagePayload>(EMPTY_DRAFT);
-  const modelRef = useRef<string>(WORKSHOP_FALLBACK_MODEL);
+  const modelRef = useRef<string>("");
   const stopChatRef = useRef<(() => void) | null>(null);
   const selectedBuildIdRef = useRef<string | null>(null);
   const cardsBuildIdRef = useRef<string | null>(null);
@@ -1296,18 +1223,13 @@ export function WorkshopPage({
     let cancelled = false;
     void (async () => {
       try {
-        const [settings, models] = await Promise.all([
-          fetchSettings(),
-          fetchModels(),
-        ]);
+        const settings = await fetchSettings();
         if (cancelled) return;
         const nextDefault = composerModelFromSettings(settings.defaultModel);
         setSettingsDefault(nextDefault);
-        setAvailableModels(models.models);
         setChatModel(nextDefault);
       } catch {
         if (cancelled) return;
-        setAvailableModels([]);
       }
     })();
     return () => {
@@ -2565,7 +2487,6 @@ export function WorkshopPage({
         pickerRows={pickerRows}
         selectedBuildId={selectedBuildId}
         onPickRow={(row) => void onPickCatalogRow(row)}
-        models={availableModels}
         model={chatModel}
         defaultModel={settingsDefault}
         onModelChange={setChatModel}
@@ -2874,11 +2795,13 @@ export function WorkshopPage({
                 MutationCard={MutationCardToolUI}
                 onStop={() => stopChatRef.current?.()}
                 composerActions={
-                  <WorkshopModelPicker
-                    model={chatModel}
-                    models={availableModels}
-                    settingsDefault={settingsDefault}
-                    onChange={setChatModel}
+                  <ModelPicker
+                    variant="chip"
+                    placement="up"
+                    ariaLabel="Workshop chat model"
+                    value={chatModel}
+                    defaultModel={settingsDefault}
+                    onChange={(next) => next && setChatModel(next)}
                   />
                 }
               />

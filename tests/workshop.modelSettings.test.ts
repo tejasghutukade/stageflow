@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { peekDefaultModel } from "../src/models/catalog.js";
 import {
-  DEFAULT_WORKSHOP_MODEL,
   parseWorkshopModel,
   readWorkshopOpenModel,
   resolveWorkshopModel,
@@ -69,7 +69,7 @@ describe("resolveWorkshopModel", () => {
         profileDefault: "google/gemini-2.5-flash",
       }),
     ).toBe("google/gemini-2.5-flash");
-    expect(resolveWorkshopModel({})).toBe(DEFAULT_WORKSHOP_MODEL);
+    expect(resolveWorkshopModel({})).toBe(peekDefaultModel());
     expect(parseWorkshopModel("  ")).toBeUndefined();
     expect(parseWorkshopModel("openai/gpt-5")).toBe("openai/gpt-5");
   });

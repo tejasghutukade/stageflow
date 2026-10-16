@@ -18,6 +18,7 @@ import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TriggersPage } from "./pages/TriggersPage";
 import { ConnectionsPage } from "./pages/ConnectionsPage";
+import { AgentsPage } from "./pages/AgentsPage";
 import { ConnectionDetailPage } from "./redesign/connections/ConnectionDetailPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
@@ -57,6 +58,7 @@ function railActiveId(route: Route, redesignOn: boolean): string {
   if (route.name === "task") return "tasks";
   if (route.name === "trigger") return "triggers";
   if (route.name === "connection") return "connections";
+  if (route.name === "agent" || route.name === "agentSession" || route.name === "agentRun") return "agents";
   if (redesignOn) {
     if (route.name === "catalog" || route.name === "stage") return "catalog";
     if (route.name === "skill" || route.name === "skills") return "catalog";
@@ -219,6 +221,16 @@ function ConsoleRoot() {
     content = <ConnectionsPage />;
   } else if (route.name === "connection") {
     content = <ConnectionDetailPage connectionId={route.connectionId} />;
+  } else if (route.name === "agents") {
+    content = <AgentsPage />;
+  } else if (route.name === "agentCreate") {
+    content = <AgentsPage screen="create" />;
+  } else if (route.name === "agent") {
+    content = <AgentsPage agentId={route.agentId} screen={route.screen} />;
+  } else if (route.name === "agentSession") {
+    content = <AgentsPage agentId={route.agentId} sessionId={route.sessionId} screen="session" />;
+  } else if (route.name === "agentRun") {
+    content = <AgentsPage agentId={route.agentId} sessionId={route.sessionId} runId={route.runId} screen="run" />;
   } else if (route.name === "trigger") {
     content = (
       <TriggersPage

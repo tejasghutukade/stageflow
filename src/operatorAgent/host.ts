@@ -1,8 +1,7 @@
-import { readDraftFromContext } from "./draftContext.js";
 import {
-  draftFingerprint,
   enrichProposal,
   isMutationConflict,
+  operatorContextFingerprint,
   UNDO_MUTATION_CONFLICT_NOTICE,
   type AcceptProposalResult,
   type UndoMutationResult,
@@ -79,7 +78,7 @@ function createSession(
       context = profile.contextAdapter.applyProposal(context, enriched);
       const applied: OperatorAgentProposal = {
         ...enriched,
-        appliedFingerprint: draftFingerprint(readDraftFromContext(context)),
+        appliedFingerprint: operatorContextFingerprint(context),
       };
       mutations.set(applied.id, applied);
       lastMutationId = applied.id;

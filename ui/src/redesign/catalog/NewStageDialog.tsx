@@ -4,25 +4,19 @@ import { LuX } from "react-icons/lu";
 import {
   createStageWithDetails,
   fetchCatalogRoots,
-  fetchModels,
   fetchPipelines,
   type CreateStageInput,
   type StageGateKind,
 } from "../../api";
 import { showToast } from "../../toast";
-import { SelectControl } from "../workshop/inspector/inspectorFields";
+import { ModelPicker } from "../../components/ModelPicker";
 import {
   GATE_KIND_OPTIONS,
-  MODEL_INHERIT,
-  MODEL_OTHER,
   createStageGateKindsPayload,
   newStageFormFrom,
-  newStageModelOptions,
   mergePipelineDirectoryOptionsWithCatalogRoots,
   optionalCreateStageSkill,
-  resolveNewStageModel,
   validateNewStage,
-  withLoadedModels,
   type NewStageErrors,
   type NewStageForm,
   type NewStageInitial,
@@ -43,8 +37,6 @@ export type NewStageDialogProps = {
 
 export function NewStageDialog({ open, initial, onClose }: NewStageDialogProps) {
   const [options, setOptions] = useState<PipelineDirectoryOption[]>([]);
-  const [models, setModels] = useState<string[]>([]);
-  const [useModelDropdown, setUseModelDropdown] = useState(false);
   const [form, setForm] = useState<NewStageForm>(() => newStageFormFrom(initial));
   const [errors, setErrors] = useState<NewStageErrors>({});
   const [banner, setBanner] = useState<string | null>(null);
@@ -55,25 +47,19 @@ export function NewStageDialog({ open, initial, onClose }: NewStageDialogProps) 
     setForm(newStageFormFrom(initial));
     setErrors({});
     setBanner(null);
-    setModels([]);
-    setUseModelDropdown(false);
     let cancelled = false;
-    Promise.all([fetchPipelines(), fetchCatalogRoots(), fetchModels()])
-      .then(([{ pipelines }, { roots }, { models: listed }]) => {
+    Promise.all([fetchPipelines(), fetchCatalogRoots()])
+      .then(([{ pipelines }, { roots }]) => {
         if (cancelled) return;
         const next = mergePipelineDirectoryOptionsWithCatalogRoots(pipelines, roots);
         setOptions(next);
-        const modelList = listed.length > 0 ? listed : [];
-        setModels(modelList);
-        setUseModelDropdown(modelList.length > 0);
         setForm(() => {
           const base = newStageFormFrom(initial);
           const directoryKey =
             base.directoryKey && next.some((o) => o.key === base.directoryKey)
               ? base.directoryKey
               : next[0]?.key ?? "";
-          const merged = { ...base, directoryKey };
-          return withLoadedModels(merged, modelList);
+          return { ...base, directoryKey };
         });
       })
       .catch((err) => {
@@ -123,12 +109,7 @@ export function NewStageDialog({ open, initial, onClose }: NewStageDialogProps) 
     setBanner(null);
     if (Object.keys(nextErrors).length > 0 || !selectedOption) return;
     setSubmitting(true);
-    const model = resolveNewStageModel({
-      useDropdown: useModelDropdown,
-      modelSelect: form.modelSelect,
-      customModel: form.customModel,
-      plainModel: form.model,
-    });
+    const model = form.model.trim();
     const body: CreateStageInput & { project_root?: string } = {
       pipeline_directory: selectedOption.directory,
       filename: form.filename.trim(),
@@ -247,55 +228,12 @@ export function NewStageDialog({ open, initial, onClose }: NewStageDialogProps) 
           </label>
           <div className="flex flex-col gap-[5px]">
             <span className={FIELD_LABEL}>Model (optional)</span>
-            {useModelDropdown ? (
-              <>
-                <SelectControl
-                  ariaLabel="Stage model"
-                  value={form.modelSelect}
-                  options={newStageModelOptions(models, [
-                    form.model,
-                    form.modelSelect !== MODEL_OTHER ? form.modelSelect : "",
-                  ])}
-                  onChange={(value) =>
-                    setForm((prev) => ({ ...prev, modelSelect: value }))
-                  }
-                  className="h-8 w-full"
-                >
-                  {form.modelSelect === MODEL_INHERIT ? (
-                    <span className="text-xs text-[#ecedee]">Inherits default</span>
-                  ) : form.modelSelect === MODEL_OTHER ? (
-                    <span className="text-xs text-[#ecedee]">Other…</span>
-                  ) : (
-                    <span
-                      className={`min-w-0 flex-1 truncate text-xs text-[#ecedee] ${MONO}`}
-                    >
-                      {form.modelSelect}
-                    </span>
-                  )}
-                </SelectControl>
-                {form.modelSelect === MODEL_OTHER ? (
-                  <input
-                    className={`${INPUT} ${MONO}`}
-                    value={form.customModel}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, customModel: e.target.value }))
-                    }
-                    placeholder="provider/model"
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                ) : null}
-              </>
-            ) : (
-              <input
-                className={`${INPUT} ${MONO}`}
-                value={form.model}
-                onChange={(e) => setForm((prev) => ({ ...prev, model: e.target.value }))}
-                placeholder="provider/model"
-                autoComplete="off"
-                spellCheck={false}
-              />
-            )}
+            <ModelPicker
+              ariaLabel="Stage model"
+              value={form.model || null}
+              inheritLabel="Inherits default"
+              onChange={(next) => setForm((prev) => ({ ...prev, model: next ?? "" }))}
+            />
             <p className="text-[11px] text-[#8b8f98]">
               Optional. Inherits pipeline then global default when omitted.
             </p>

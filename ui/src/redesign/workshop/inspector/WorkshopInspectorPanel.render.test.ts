@@ -65,7 +65,6 @@ function render(overrides: Partial<WorkshopInspectorPanelProps>): string {
     onDeleteStage: () => {},
     onRenameStage: () => {},
     findings,
-    models: ["anthropic/claude-sonnet-4-5"],
     defaultModel: "anthropic/claude-sonnet-4-5",
     focusField: null,
     ...overrides,

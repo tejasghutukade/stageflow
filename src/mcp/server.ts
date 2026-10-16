@@ -70,6 +70,11 @@ function toolDepsFrom(deps: McpHttpDeps): McpToolDeps {
       : {}),
     ...(deps.projectRoot !== undefined ? { projectRoot: deps.projectRoot } : {}),
     ...(deps.providerBoot !== undefined ? { providerBoot: deps.providerBoot } : {}),
+    ...(deps.agentService !== undefined ? { agentService: deps.agentService } : {}),
+    ...(deps.agentChat !== undefined ? { agentChat: deps.agentChat } : {}),
+    ...(deps.agentConversationBackend !== undefined
+      ? { agentConversationBackend: deps.agentConversationBackend }
+      : {}),
   };
 }
 

@@ -1,27 +1,19 @@
 import { useEffect, useState } from "react";
+import { ModelPicker } from "./ModelPicker";
 import {
   createStageWithDetails,
-  fetchModels,
   type StageGateKind,
   type CreatedStageListing,
 } from "../api";
 import {
   createStageGateKindsPayload,
-  MODEL_INHERIT,
-  MODEL_OTHER,
   optionalCreateStageSkill,
-  resolveNewStageModel,
   validateNewStageFields,
 } from "../redesign/catalog/catalogStageModel";
 
 export type GateKindsMode = "all" | "none" | "allowlist";
 
-export {
-  createStageGateKindsPayload,
-  MODEL_INHERIT,
-  MODEL_OTHER,
-  resolveNewStageModel as resolveCreateStageModel,
-};
+export { createStageGateKindsPayload };
 
 const GATE_KINDS: StageGateKind[] = [
   "free_text",
@@ -37,26 +29,19 @@ export type NewStagePanelProps = {
   pipelineDirectory: string;
 };
 
-type FieldErrors = Partial<Record<"id" | "model" | "system_prompt", string>>;
+type FieldErrors = Partial<Record<"id" | "system_prompt", string>>;
 
 export function validateFields(values: {
   id: string;
-  model: string;
   system_prompt: string;
-  modelSelect?: string;
-  useDropdown?: boolean;
 }): FieldErrors {
   const shared = validateNewStageFields({
     id: values.id,
     systemPrompt: values.system_prompt,
-    model: values.model,
-    modelSelect: values.modelSelect,
-    useDropdown: values.useDropdown,
   });
   const errors: FieldErrors = {};
   if (shared.id) errors.id = shared.id;
   if (shared.systemPrompt) errors.system_prompt = shared.systemPrompt;
-  if (shared.model) errors.model = shared.model;
   return errors;
 }
 
@@ -74,9 +59,7 @@ const emptyForm = () => ({
   system_prompt: "",
   gateMode: "all" as GateKindsMode,
   gateKinds: [] as StageGateKind[],
-  modelSelect: MODEL_INHERIT,
-  customModel: "",
-  plainModel: "",
+  model: "",
   skill: "",
 });
 
@@ -87,36 +70,9 @@ export function NewStagePanel({
   pipelineDirectory,
 }: NewStagePanelProps) {
   const [form, setForm] = useState(emptyForm);
-  const [models, setModels] = useState<string[] | null>(null);
-  const [useDropdown, setUseDropdown] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formBanner, setFormBanner] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const { models: listed } = await fetchModels();
-        if (cancelled) return;
-        if (listed.length > 0) {
-          setModels(listed);
-          setUseDropdown(true);
-        } else {
-          setModels([]);
-          setUseDropdown(false);
-        }
-      } catch {
-        if (cancelled) return;
-        setModels(null);
-        setUseDropdown(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -126,15 +82,6 @@ export function NewStagePanel({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, onClose]);
-
-  function resolvedModel(): string {
-    return resolveNewStageModel({
-      useDropdown,
-      modelSelect: form.modelSelect,
-      customModel: form.customModel,
-      plainModel: form.plainModel,
-    });
-  }
 
   function toggleGateKind(kind: StageGateKind) {
     setForm((prev) => ({
@@ -146,17 +93,13 @@ export function NewStagePanel({
   }
 
   async function onSubmit() {
-    const model = resolvedModel();
+    const model = form.model.trim();
     const payload = {
       id: form.id.trim(),
       system_prompt: form.system_prompt,
       model,
     };
-    const errors = validateFields({
-      ...payload,
-      useDropdown,
-      modelSelect: form.modelSelect,
-    });
+    const errors = validateFields({ id: payload.id, system_prompt: payload.system_prompt });
     setFieldErrors(errors);
     setFormBanner(null);
     if (Object.keys(errors).length > 0) return;
@@ -248,58 +191,16 @@ export function NewStagePanel({
           </div>
 
           <div className="form-field">
-            <label htmlFor="new-stage-model">Model</label>
-            {useDropdown && models ? (
-              <>
-                <select
-                  id="new-stage-model"
-                  className="select"
-                  value={form.modelSelect}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, modelSelect: e.target.value }))
-                  }
-                >
-                  <option value={MODEL_INHERIT}>Inherit default</option>
-                  {models.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                  <option value={MODEL_OTHER}>Other...</option>
-                </select>
-                {form.modelSelect === MODEL_OTHER ? (
-                  <input
-                    className="input"
-                    style={{ marginTop: "var(--spacing-2)" }}
-                    value={form.customModel}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, customModel: e.target.value }))
-                    }
-                    placeholder="Model id"
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                ) : null}
-              </>
-            ) : (
-              <input
-                id="new-stage-model"
-                className="input"
-                value={form.plainModel}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, plainModel: e.target.value }))
-                }
-                autoComplete="off"
-                spellCheck={false}
-              />
-            )}
-            {fieldErrors.model ? (
-              <p className="field-error">{fieldErrors.model}</p>
-            ) : (
-              <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
-                Optional. Inherits pipeline then global default when omitted.
-              </p>
-            )}
+            <span className="form-label">Model</span>
+            <ModelPicker
+              ariaLabel="Model"
+              value={form.model || null}
+              inheritLabel="Inherit default"
+              onChange={(next) => setForm((prev) => ({ ...prev, model: next ?? "" }))}
+            />
+            <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
+              Optional. Inherits pipeline then global default when omitted.
+            </p>
           </div>
 
           <div className="form-field">

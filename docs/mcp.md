@@ -179,6 +179,25 @@ There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an e
 
 ## Tools
 
+### Agent tools {#agent-tools}
+
+Project agents (`agents/*.agent.yaml`) — same service contract as `/api/agents`:
+
+| Tool | Role |
+|------|------|
+| `list_agents` | List agents for the host project root |
+| `get_agent` | Fetch one agent view by id |
+| `validate_agent` | Check a definition; returns field-path issues, warnings and canonical YAML |
+| `create_agent` | Create a disabled agent from a definition |
+| `save_agent` | Full definition save with `baseRevision` optimistic locking |
+| `list_agent_revisions` / `restore_agent_revision` | Version history; restore creates a new revision |
+| `enable_agent` / `disable_agent` | Toggle `enabled` |
+| `agent_chat` | One non-streaming turn (`id`, `message`, optional `sessionId`) |
+| `get_agent_session` | Session transcript and metadata |
+| `approve_agent_action` / `deny_agent_action` | Resolve pending ask-first approvals |
+
+See [Agents](agents.md).
+
 ### `get_started`
 
 No-argument first-run orientation for remote harnesses. Returns host version, provider/toolchain hints, catalog roots with pipeline/task counts, and a three-call `next_steps` list (`list_pipelines` → `list_tasks` → `start_run`) using catalog-relative paths and symbolic seeded `project_root` ids when applicable.
@@ -249,7 +268,7 @@ List manifest-declared task paths across every catalog root this Host knows (reg
 
 ### `list_models`
 
-List catalog model ids from the same browse source as `GET /api/models`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors`.
+List model ids from the providers connected on this host plus ids pipelines already use, from the same source as `GET /api/models` (see [Providers — Models](providers.md#models)). Optional `project_root` filter narrows the pipeline-used ids; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors`.
 
 **Input:** `{ "project_root": "string (optional)" }`
 
@@ -257,21 +276,24 @@ List catalog model ids from the same browse source as `GET /api/models`. Optiona
 
 ```json
 {
-  "models": [
-    "anthropic/claude-sonnet-4-5",
-    "cursor/auto",
-    "cursor/composer-2-5"
+  "models": ["anthropic/claude-sonnet-4-5", "openrouter/nvidia/nemotron-3.5-lightning:free"],
+  "providers": [
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "source": "live",
+      "models": [{ "id": "openrouter/nvidia/nemotron-3.5-lightning:free", "provider": "openrouter", "name": "Nemotron", "free": true, "nativeTools": false }]
+    }
   ],
-  "entries": [
-    { "id": "anthropic/claude-sonnet-4-5", "project_root": "/abs/registered" },
-    { "id": "cursor/auto", "project_root": "examples" },
-    { "id": "cursor/composer-2-5", "project_root": "examples" }
-  ],
+  "default": "openrouter/nvidia/nemotron-3.5-lightning:free",
+  "fetchedAt": "2026-10-16T00:00:00.000Z",
+  "unlisted": [],
+  "entries": [{ "id": "anthropic/claude-sonnet-4-5", "project_root": "/abs/registered" }],
   "root_errors": []
 }
 ```
 
-`models` is the deduped id list; `entries` tags each id with the `project_root` it came from. There is no model-write or provider-login tool.
+`models` is the deduped id list (catalog plus ids in use); `providers` groups the connected providers' models; `unlisted` are ids in use that no connected provider lists; `entries` tags pipeline-used ids with the `project_root` they came from. There is no model-write or provider-login tool.
 
 ### `list_skills`
 

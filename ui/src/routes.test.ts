@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentPath,
+  agentCreatePath,
+  agentRunPath,
+  agentSessionPath,
+  agentsPath,
   catalogPath,
   extensionFilePath,
   extensionPackagePath,
@@ -196,6 +201,45 @@ describe("parseHash", () => {
       pipelineId: "pipelines/demo.pipeline.yaml",
       taskPath: "pipelines/demo.task.yaml",
       projectRoot: "/repo/examples",
+    });
+  });
+});
+
+describe("agent routes", () => {
+  it("opens the directory", () => {
+    expect(parseHash(`#${agentsPath()}`)).toEqual({ name: "agents" });
+    expect(parseHash(`#${agentCreatePath()}`)).toEqual({ name: "agentCreate" });
+  });
+
+  it("opens detail, edit, and a missing agent id", () => {
+    expect(parseHash(`#${agentPath("research_assistant")}`)).toEqual({
+      name: "agent",
+      agentId: "research_assistant",
+      screen: "detail",
+    });
+    expect(parseHash(`#${agentPath("research_assistant", "edit")}`)).toEqual({
+      name: "agent",
+      agentId: "research_assistant",
+      screen: "edit",
+    });
+    expect(parseHash("#/agents/missing_agent")).toEqual({
+      name: "agent",
+      agentId: "missing_agent",
+      screen: "detail",
+    });
+  });
+
+  it("opens a session and a run inside it", () => {
+    expect(parseHash(`#${agentSessionPath("research_assistant", "ses_8f2c")}`)).toEqual({
+      name: "agentSession",
+      agentId: "research_assistant",
+      sessionId: "ses_8f2c",
+    });
+    expect(parseHash(`#${agentRunPath("research_assistant", "ses_8f2c", "4")}`)).toEqual({
+      name: "agentRun",
+      agentId: "research_assistant",
+      sessionId: "ses_8f2c",
+      runId: "4",
     });
   });
 });

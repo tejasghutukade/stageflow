@@ -1,3 +1,4 @@
+import { AGENT_AUTHOR_PROFILE_ID } from "../src/operatorAgent/profiles/agentAuthor.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,16 +18,18 @@ describe("resolveAgentPort", () => {
     const port = resolveAgentPort({ cwd, projectRoot: cwd });
     expect(port.listProfiles().map((profile) => profile.id)).toEqual([
       WORKSHOP_AUTHOR_PROFILE_ID,
+      AGENT_AUTHOR_PROFILE_ID,
     ]);
     expect(
       createPiAgentPort({ cwd, projectRoot: cwd }).listProfiles().map((profile) => profile.id),
-    ).toEqual([WORKSHOP_AUTHOR_PROFILE_ID]);
+    ).toEqual([WORKSHOP_AUTHOR_PROFILE_ID, AGENT_AUTHOR_PROFILE_ID]);
   });
 
   it("selects Pi when the backend is set", () => {
     const port = resolveAgentPort({ cwd, projectRoot: cwd, backend: "pi" });
     expect(port.listProfiles().map((profile) => profile.id)).toEqual([
       WORKSHOP_AUTHOR_PROFILE_ID,
+      AGENT_AUTHOR_PROFILE_ID,
     ]);
   });
 });

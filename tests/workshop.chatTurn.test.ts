@@ -24,7 +24,7 @@ import {
   focusWorkshopBuildPointer,
   pinWorkshopBuildOnCreate,
 } from "../src/workshop/workshopPin.js";
-import { DEFAULT_WORKSHOP_MODEL } from "../src/workshop/modelSettings.js";
+import { peekDefaultModel } from "../src/models/catalog.js";
 import {
   createWorkshopBuild,
   getWorkshopBuild,
@@ -106,7 +106,7 @@ describe("runWorkshopChatTurn", () => {
 
   it.each([
     { name: "settings default when session model is absent", settingsDefault: "openai/gpt-5", expected: "openai/gpt-5" },
-    { name: "DEFAULT_WORKSHOP_MODEL when nothing is configured", settingsDefault: undefined, expected: DEFAULT_WORKSHOP_MODEL },
+    { name: "the catalog default when nothing is configured", settingsDefault: undefined, expected: peekDefaultModel() },
   ])("resolves the turn model from $name", async ({ settingsDefault, expected }) => {
     await withIsolatedHome(async () => {
       const storeRoot = resolveWorkshopSessionStoreRoot();
@@ -784,7 +784,7 @@ describe("workshop chat stream frames", () => {
       expect(done?.type).toBe("done");
       if (done?.type === "done") {
         expect(done.sessionId).toBe("sess-stream");
-        expect(done.model).toBe(DEFAULT_WORKSHOP_MODEL);
+        expect(done.model).toBe(peekDefaultModel());
         expect(done.draft.pipeline.id).toBe("demo");
       }
     });
@@ -798,7 +798,7 @@ describe("workshop chat stream frames", () => {
       let completeResolved = false;
       const model: OperatorAgentModel = {
         async complete({ onDelta, modelId }) {
-          expect(modelId).toBe(DEFAULT_WORKSHOP_MODEL);
+          expect(modelId).toBe(peekDefaultModel());
           onDelta?.("Hel");
           await new Promise((r) => setTimeout(r, 15));
           expect(completeResolved).toBe(false);

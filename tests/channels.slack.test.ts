@@ -25,7 +25,7 @@ describe("slack config and targets", () => {
   const p = createSlackProvider();
   it("is built in", () => {
     expect(channelProviders().map(provider => provider.id)).toContain("slack");
-    expect(p.secrets).toEqual({ required: ["botToken"] });
+    expect(p.secrets).toEqual({ required: ["botToken"], optional: ["inboundSecret"] });
   });
   it("accepts empty config and a team id", () => {
     expect(p.validateConfig({})).toEqual({ ok: true, value: {} });

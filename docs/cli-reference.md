@@ -430,6 +430,27 @@ sf runs gc [--dry-run] [--json]
 
 `--dry-run` is report-only; omitting it mutates. Matching MCP tool is `gc_runs` with `execute` (default `false` = dry-run). No operator-console GC button in this release.
 
+## `sf agents`
+
+Manage project-owned agents (`agents/*.agent.yaml`). A client of the running Host (`sf ui` / `sf mcp`); `chat` streams a real reply.
+
+```bash
+sf agents list [--json]
+sf agents get <id> [--json]
+sf agents validate <file.agent.yaml> [--json]
+sf agents enable <id> [--json]
+sf agents disable <id> [--json]
+sf agents history <id> [--json]
+sf agents restore <id> <revision> [--json]
+sf agents sessions <id> [--status <status>] [--json]
+sf agents session <id> <sessionId> [--json]
+sf agents chat <id> --message <text> [--session <sessionId>] [--json]
+sf agents approve <id> <sessionId> [--json]
+sf agents deny <id> <sessionId> [--json]
+```
+
+See [Agents](agents.md) and [YAML catalog — Agents](yaml-catalog.md#agents-agent-yaml).
+
 ## `sf trigger`
 
 Inspect and fire catalog `*.trigger.yaml` definitions (see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)). Like `sf run`/`sf runs`, this is an HTTP client of the shared global Stageflow service (auto-started if nothing is listening).

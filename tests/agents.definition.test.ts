@@ -1,180 +1,138 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { parseAgentField } from "../src/agent/agentBackend.js";
-import { AgentService } from "../src/agents/service.js";
-import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import { describe, expect, it } from "vitest";
+import {
+  grantedToolIds,
+  parseAgentDefinition,
+  parseAgentYaml,
+  serializeAgentDefinition,
+} from "../src/config/loadAgent.js";
 
-const homes: string[] = [];
+describe("agent definition v2", () => {
+  it("fills every default from the three required fields", () => {
+    const parsed = parseAgentDefinition({ id: "helper", name: "Helper", instructions: "Help." });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).toMatchObject({
+      enabled: false,
+      execution: "trusted-local",
+      project_context: false,
+      model: { backend: "pi", thinking: "medium" },
+      tools: { builtin: [], mcp: {}, skills: [], browser: false },
+      approvals: {
+        ask_first: [],
+        approvers: { operators: true, channel_ids: [] },
+        timeout_minutes: 30,
+        on_timeout: "skip",
+      },
+      sub_agents: [],
+      sub_agent_depth: 1,
+      observability: { capture: "metadata", otlp: false },
+      limits: { session_minutes: 10, max_turns: 40, cost_usd: null, long_context: "summarize" },
+    });
+  });
 
-function yaml(fields: Record<string, string | boolean>): string {
-  return Object.entries(fields)
-    .map(([key, value]) =>
-      typeof value === "boolean" ? `${key}: ${value}` : `${key}: ${JSON.stringify(value)}`,
-    )
-    .join("\n");
-}
+  it("reports field-level issues with dotted paths", () => {
+    const parsed = parseAgentDefinition({
+      id: "Bad-Id",
+      name: " ",
+      instructions: "x",
+      tools: { builtin: ["read", "teleport"] },
+      approvals: { approvers: { operators: false } },
+      schedule: { cron: "every tuesday" },
+      surprise: true,
+    });
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    const byPath = Object.fromEntries(parsed.issues.map((issue) => [issue.path, issue.code]));
+    expect(byPath).toMatchObject({
+      id: "agent.invalid_format",
+      name: "agent.required",
+      "tools.builtin.1": "agent.invalid_value",
+      "approvals.approvers": "agent.invalid_value",
+      "schedule.cron": "agent.invalid_value",
+      "": "agent.unknown_field",
+    });
+  });
 
-async function fixture(): Promise<{ home: string; project: string; service: AgentService }> {
-  const home = path.join(tmpdir(), `sf-agents-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  const project = path.join(home, "project");
-  await mkdir(path.join(project, "agents"), { recursive: true });
-  homes.push(home);
-  process.env.STAGEFLOW_HOME = home;
-  resetGlobalStageflowHomeForTests();
-  return { home, project, service: new AgentService({ homeDir: home }) };
-}
-
-afterEach(async () => {
-  await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
-});
-
-describe("agent definitions", () => {
-  it("loads a valid file as revision 1", async () => {
-    const { project, service } = await fixture();
-    await writeFile(
-      path.join(project, "agents", "research_assistant.agent.yaml"),
-      yaml({
-        id: "research_assistant",
-        name: "Research assistant",
-        instructions: "Find sources.",
-        enabled: false,
-      }),
-    );
-
-    const listed = await service.list(project);
-    expect(listed).toEqual([
-      expect.objectContaining({
-        id: "research_assistant",
-        revision: 1,
-        enabled: false,
-        archived: false,
-      }),
+  it("refuses ask-first on a tool the agent is not granted, and self-delegation", () => {
+    const parsed = parseAgentDefinition({
+      id: "poster",
+      name: "Poster",
+      instructions: "Post.",
+      tools: { mcp: { slack: ["post_message"] } },
+      approvals: { ask_first: ["slack.post_message", "bash"] },
+      sub_agents: ["poster"],
+    });
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.issues.map((issue) => [issue.path, issue.code])).toEqual([
+      ["approvals.ask_first.1", "agent.ask_first_not_granted"],
+      ["sub_agents", "agent.sub_agent_self"],
     ]);
-    const revision = await service.revision(project, "research_assistant", 1);
-    expect(revision?.name).toBe("Research assistant");
   });
 
-  it("keeps revision 1 when a second valid write creates revision 2", async () => {
-    const { project, service } = await fixture();
-    const file = path.join(project, "agents", "research_assistant.agent.yaml");
-    await writeFile(
-      file,
-      yaml({
-        id: "research_assistant",
-        name: "Research assistant",
-        instructions: "Find sources.",
-        enabled: false,
-      }),
-    );
-    await service.list(project);
-    await writeFile(
-      file,
-      yaml({
-        id: "research_assistant",
-        name: "Research assistant",
-        instructions: "Find sources and cite them.",
-        enabled: false,
-      }),
-    );
-
-    const current = await service.get(project, "research_assistant");
-    const first = await service.revision(project, "research_assistant", 1);
-    expect(current?.revision).toBe(2);
-    expect(first?.instructions).toBe("Find sources.");
-    expect(current?.instructions).toBe("Find sources and cite them.");
-  });
-
-  it("keeps the last valid revision when a write is invalid and omits file contents", async () => {
-    const { project, service } = await fixture();
-    const file = path.join(project, "agents", "research_assistant.agent.yaml");
-    await writeFile(
-      file,
-      yaml({
-        id: "research_assistant",
-        name: "Research assistant",
-        instructions: "Find sources.",
-        enabled: false,
-      }),
-    );
-    await service.list(project);
-    await writeFile(file, "id: research_assistant\ninstructions: \"sk-live-secret\n");
-
-    const current = await service.get(project, "research_assistant");
-    expect(current?.revision).toBe(1);
-    expect(current?.error?.message ?? "").not.toContain("sk-live-secret");
-    expect(JSON.stringify(current)).not.toContain("sk-live-secret");
-  });
-
-  it("rejects a stale console save and leaves the file unchanged", async () => {
-    const { project, service } = await fixture();
-    const created = await service.create(project, {
-      id: "research_assistant",
-      name: "Research assistant",
-      instructions: "Find sources.",
+  it("allows ask-first on a tool of a wildcard MCP grant", () => {
+    const parsed = parseAgentDefinition({
+      id: "poster",
+      name: "Poster",
+      instructions: "Post.",
+      tools: { mcp: { slack: ["*"] } },
+      approvals: { ask_first: ["slack.post_message"] },
     });
-    await service.save(project, "research_assistant", {
-      baseRevision: created.revision,
-      name: "Research assistant",
-      instructions: "Cite sources.",
+    expect(parsed.ok).toBe(true);
+  });
+
+  it("serializes canonically: defaults omitted, round-trips to the same definition", () => {
+    const parsed = parseAgentDefinition({
+      id: "research",
+      name: "Research",
+      instructions: "Find sources.\nCite them.",
+      tools: { builtin: ["read"], mcp: { notion: ["search"] } },
+      limits: { cost_usd: 0.25 },
     });
-    const before = await readFile(
-      path.join(project, "agents", "research_assistant.agent.yaml"),
-      "utf8",
+    if (!parsed.ok) throw new Error("expected valid");
+    const yaml = serializeAgentDefinition(parsed.value);
+    expect(yaml).toBe(
+      [
+        "id: research",
+        "name: Research",
+        "enabled: false",
+        "instructions: |",
+        "  Find sources.",
+        "  Cite them.",
+        "tools:",
+        "  builtin:",
+        "    - read",
+        "  mcp:",
+        "    notion:",
+        "      - search",
+        "limits:",
+        "  cost_usd: 0.25",
+        "",
+      ].join("\n"),
     );
+    const again = parseAgentYaml(yaml);
+    expect(again.ok && serializeAgentDefinition(again.value)).toBe(yaml);
+  });
 
-    const conflict = await service.save(project, "research_assistant", {
-      baseRevision: created.revision,
-      name: "Research assistant",
-      instructions: "Overwrite.",
+  it("reports YAML syntax errors with a position", () => {
+    const parsed = parseAgentYaml("id: x\nname: [unclosed\n");
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.issues[0]).toMatchObject({ path: "", code: "agent.yaml_syntax" });
+    expect(parsed.issues[0]!.line).toBeGreaterThan(0);
+  });
+
+  it("lists granted tool ids across builtin groups, MCP servers and sub-agents", () => {
+    const parsed = parseAgentDefinition({
+      id: "lead",
+      name: "Lead",
+      instructions: "Lead.",
+      tools: { builtin: ["read", "shell"], mcp: { github: ["create_issue"] } },
+      sub_agents: ["helper"],
     });
-    const after = await readFile(
-      path.join(project, "agents", "research_assistant.agent.yaml"),
-      "utf8",
+    if (!parsed.ok) throw new Error("expected valid");
+    expect([...grantedToolIds(parsed.value)].sort()).toEqual(
+      ["agent:helper", "bash", "find", "github.create_issue", "grep", "ls", "read"].sort(),
     );
-    expect(conflict).toEqual({ ok: false, code: "agent.conflict" });
-    expect(after).toBe(before);
-  });
-
-  it("rejects new sessions and turns while disabled, and keeps a session readable after archive", async () => {
-    const { project, service } = await fixture();
-    await service.create(project, {
-      id: "research_assistant",
-      name: "Research assistant",
-      instructions: "Find sources.",
-    });
-    await service.setEnabled(project, "research_assistant", true);
-    const session = await service.openSession(project, "research_assistant");
-    expect(session.ok).toBe(true);
-    await service.setEnabled(project, "research_assistant", false);
-
-    const nextSession = await service.openSession(project, "research_assistant");
-    const turn = await service.startTurn(project, session.ok ? session.session.id : "");
-    expect(nextSession).toEqual({ ok: false, code: "agent.disabled" });
-    expect(turn).toEqual({ ok: false, code: "agent.disabled" });
-
-    await service.archive(project, "research_assistant");
-    const stored = await service.getSession(project, session.ok ? session.session.id : "");
-    expect(stored?.agentId).toBe("research_assistant");
-    expect((await service.get(project, "research_assistant"))?.archived).toBe(true);
-  });
-
-  it("archives an agent when its YAML file is removed", async () => {
-    const { project, service } = await fixture();
-    await service.create(project, {
-      id: "research_assistant",
-      name: "Research assistant",
-      instructions: "Find sources.",
-    });
-    await rm(path.join(project, "agents", "research_assistant.agent.yaml"));
-
-    const agent = await service.get(project, "research_assistant");
-    expect(agent?.archived).toBe(true);
-    expect(agent?.revision).toBe(1);
-  });
-
-  it("still treats stage agent: pi as a backend id", () => {
-    expect(parseAgentField("pi")).toEqual({ ok: true, value: "pi" });
   });
 });

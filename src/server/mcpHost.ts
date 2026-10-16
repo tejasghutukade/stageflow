@@ -72,6 +72,7 @@ export async function startMcpServer(
           allowedHosts,
           controlTokens,
           getShutdown: () => shutdown,
+          ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
         });
   const envelope = await createHttpHost({
     boot,

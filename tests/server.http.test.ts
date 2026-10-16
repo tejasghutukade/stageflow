@@ -3104,7 +3104,8 @@ describe("localhost HTTP API", () => {
         const models = await jsonFetch(`${base}/api/models`);
         expect(models.status).toBe(200);
         expect(Array.isArray(models.body.models)).toBe(true);
-        expect(models.body.providers).toBeUndefined();
+        // `providers` on /api/models is the connected-provider catalog, not the provider-auth list.
+        expect(Array.isArray(models.body.providers)).toBe(true);
       } finally {
         await closeServer(server);
       }

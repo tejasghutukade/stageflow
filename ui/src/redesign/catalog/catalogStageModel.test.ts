@@ -20,9 +20,6 @@ import {
   validateNewStage,
   validateNewStageFields,
   newStageFormFrom,
-  modelFieldsForInitial,
-  MODEL_INHERIT,
-  MODEL_OTHER,
 } from "./catalogStageModel";
 import { stagesFromPipelines, type StageRowFromPipelines } from "./stagesFromPipelines";
 
@@ -260,19 +257,6 @@ describe("skillStripEntries", () => {
   });
 });
 
-describe("new stage model picker", () => {
-  it("maps initial model to catalog options or Other", () => {
-    expect(modelFieldsForInitial(undefined, ["cursor/auto"]).modelSelect).toBe(MODEL_INHERIT);
-    expect(modelFieldsForInitial("cursor/auto", ["cursor/auto"]).modelSelect).toBe(
-      "cursor/auto",
-    );
-    expect(modelFieldsForInitial("custom/x", ["cursor/auto"])).toEqual({
-      modelSelect: MODEL_OTHER,
-      customModel: "custom/x",
-    });
-  });
-});
-
 describe("new stage form", () => {
   it("validates required fields and kebab-case id", () => {
     const form = newStageFormFrom({ id: "Bad_Id" });
@@ -289,29 +273,11 @@ describe("new stage form", () => {
     ).toEqual({});
   });
 
-  it("shares id, prompt, and model-other checks", () => {
+  it("shares id and prompt checks", () => {
     expect(validateNewStageFields({ id: "", systemPrompt: "  " })).toEqual({
       id: "Stage id is required",
       systemPrompt: "System prompt is required",
     });
-    expect(
-      validateNewStageFields({
-        id: "hello",
-        systemPrompt: "Say hello.",
-        model: "   ",
-        useDropdown: true,
-        modelSelect: MODEL_OTHER,
-      }).model,
-    ).toBe("Model is required when Other is selected.");
-    expect(
-      validateNewStageFields({
-        id: "hello",
-        systemPrompt: "Say hello.",
-        model: "",
-        useDropdown: true,
-        modelSelect: MODEL_INHERIT,
-      }),
-    ).toEqual({});
   });
 
   it("encodes panel gate modes and dialog chips", () => {
