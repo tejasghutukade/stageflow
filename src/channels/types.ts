@@ -88,6 +88,12 @@ export type ProviderMeta = {
   stageExample: string;
 };
 
+/** Where to text or write to reach an agent on a connection. */
+export type ContactInfo =
+  | { ok: true; kind: "dedicated"; numbers: string[] }
+  | { ok: true; kind: "shared"; users: Array<{ phone: string; assignedNumber: string | null; name: string | null }> }
+  | { ok: false; error: string };
+
 export interface ChannelProvider<C = unknown, T = unknown> {
   readonly id: string;
   readonly meta: ProviderMeta;
@@ -106,6 +112,16 @@ export interface ChannelProvider<C = unknown, T = unknown> {
    */
   checkTargets?(connection: ResolvedConnection<C>, targets: T[], signal?: AbortSignal): Promise<ConnectionHealth>;
   send(connection: ResolvedConnection<C>, target: T, message: OutboundMessage, context: SendContext): Promise<SendReceipt>;
+  /**
+   * How people reach this connection: the number or address to text or write, when the provider can tell.
+   * Read-only and best-effort; failures are returned, not thrown.
+   */
+  contact?(connection: ResolvedConnection<C>, signal?: AbortSignal): Promise<ContactInfo>;
+  /**
+   * Answers a message the provider delivered, inside its conversation (an email reply keeps the thread and
+   * subject). `replyTo` is the opaque handle the inbound message carried. Providers without it fall back to `send`.
+   */
+  reply?(connection: ResolvedConnection<C>, replyTo: string, message: OutboundMessage, context: SendContext): Promise<SendReceipt>;
 }
 
 export type AnyChannelProvider = ChannelProvider<any, any>;

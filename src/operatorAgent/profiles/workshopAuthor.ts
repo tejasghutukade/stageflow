@@ -1,4 +1,5 @@
 import { parse as parseYaml } from "yaml";
+import { peekDefaultModel } from "../../models/catalog.js";
 import {
   validateDraftPackage,
   type DraftPackage,
@@ -51,7 +52,6 @@ export {
   createWorkshopAuthorMutatingTools,
 } from "./workshopAuthorTools.js";
 
-const DEFAULT_MODEL = "anthropic/claude-sonnet-4-5";
 
 const REQUIRED_IO = {
   io: {
@@ -107,7 +107,7 @@ export function buildStageAddProposal(
           body: {
             id: stageId,
             system_prompt: `Stage for: ${userText.trim() || "workshop draft"}`,
-            model: DEFAULT_MODEL,
+            model: peekDefaultModel(),
             ...REQUIRED_IO,
           },
         },

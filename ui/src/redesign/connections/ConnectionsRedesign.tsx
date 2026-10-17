@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { PageHeader as ShellPageHeader } from "../shell/PageHeader";
 import { LuCheck, LuMinus, LuPlug, LuPlus, LuRefreshCw, LuTriangleAlert, LuWrench } from "react-icons/lu";
 import {
   checkChannelConnection, fetchChannelConnections, fetchConnections, fetchProjectMcp,
@@ -192,21 +193,20 @@ export function ConnectionsRedesign() {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[#0c0d0f]">
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <header className="flex w-full shrink-0 items-start justify-between gap-4 border-b border-b-[#ffffff12] px-7 pb-5 pt-5">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-xs leading-normal text-[#8b8f98]">Connections</span>
-            <h1 className="text-2xl font-semibold leading-normal tracking-[-0.48px] text-[#ecedee]">Connections</h1>
-            <p className="text-[13px] leading-normal text-[#a7aab2]">
-              Connect an account once, then let stages send through it. Channels carry messages from a stage; tools let an agent reach other services.
-            </p>
-          </div>
-          <button type="button" onClick={() => setDialog(meta?.providers[0]?.id ?? "")} className="flex h-8 shrink-0 items-center rounded-lg bg-[#ecedee] px-3 py-0 gap-2">
-            <LuPlus className="size-3.5 block text-[#0c0d0f]" aria-hidden />
-            <span className={`font-sans text-[13px] font-medium leading-normal text-[#0c0d0f] ${NOWRAP}`}>Add connection</span>
-          </button>
-        </header>
+        <ShellPageHeader
+          title="Connections"
+          actions={
+            <button type="button" onClick={() => setDialog(meta?.providers[0]?.id ?? "")} className="flex h-8 shrink-0 items-center rounded-lg bg-[#ecedee] px-3 py-0 gap-2">
+              <LuPlus className="size-3.5 block text-[#0c0d0f]" aria-hidden />
+              <span className={`font-sans text-[13px] font-medium leading-normal text-[#0c0d0f] ${NOWRAP}`}>Add connection</span>
+            </button>
+          }
+        />
 
-        <div className="flex flex-col gap-10 px-7 py-7">
+        <div className="flex flex-col gap-10 px-5 py-7">
+          <p className="text-[13px] leading-normal text-[#a7aab2]">
+            Connect an account once, then let stages send through it. Channels carry messages from a stage; tools let an agent reach other services.
+          </p>
           <section className="flex flex-col gap-4" aria-label="Communication channels">
             <SectionHead
               title="Communication channels"
@@ -257,10 +257,13 @@ export function ConnectionsRedesign() {
               </div>
             ) : null}
             {loaded ? (
-              <div className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-[#ffffff1a] px-4 py-3 text-[13px] text-[#8b8f98]">
+              <a
+                href="#/settings"
+                className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-[#ffffff1a] px-4 py-3 text-[13px] text-[#8b8f98] hover:text-[#c9ccd3]"
+              >
                 <LuPlus className="size-3.5 block" aria-hidden />
-                Add tools by listing MCP servers in <span className={MONO}>.mcp.json</span> beside <span className={MONO}>stageflow.yaml</span>
-              </div>
+                Add an MCP server in Settings — a form, or paste JSON from its docs
+              </a>
             ) : null}
           </section>
         </div>

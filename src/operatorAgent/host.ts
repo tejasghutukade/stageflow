@@ -1,8 +1,8 @@
-import { readDraftFromContext } from "./draftContext.js";
+import { profileMayUse } from "../toolkit/profiles.js";
 import {
-  draftFingerprint,
   enrichProposal,
   isMutationConflict,
+  operatorContextFingerprint,
   UNDO_MUTATION_CONFLICT_NOTICE,
   type AcceptProposalResult,
   type UndoMutationResult,
@@ -79,7 +79,7 @@ function createSession(
       context = profile.contextAdapter.applyProposal(context, enriched);
       const applied: OperatorAgentProposal = {
         ...enriched,
-        appliedFingerprint: draftFingerprint(readDraftFromContext(context)),
+        appliedFingerprint: operatorContextFingerprint(context),
       };
       mutations.set(applied.id, applied);
       lastMutationId = applied.id;
@@ -248,6 +248,9 @@ export async function invokeProfileTool(
   const tool = profile.tools.find((t) => t.name === name);
   if (!tool) {
     return { ok: false, content: null, error: `Unknown tool: ${name}` };
+  }
+  if (!profileMayUse(profile.id, name)) {
+    return { ok: false, content: null, error: `${profile.id} is not granted ${name}` };
   }
   const blocked = rejectUnlinkedWorkshopDraftTool(ctx.getContext(), name);
   if (blocked) return blocked;

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ModelPicker } from "../../components/ModelPicker";
 import type { CapacityHealth } from "../../api";
 import { getControlToken, setControlToken } from "../../api/controlToken";
 import type { CatalogSnapshot } from "../../catalog/source";
@@ -27,7 +28,6 @@ export function SettingsEyebrow({ children }: { children: string }) {
 
 export function SettingsGeneralPanel({
   workshopModel,
-  workshopModels,
   workshopModelSaving,
   workshopModelError,
   onWorkshopModelChange,
@@ -35,14 +35,12 @@ export function SettingsGeneralPanel({
   formatDiskBytes,
 }: {
   workshopModel: string;
-  workshopModels: string[];
   workshopModelSaving: boolean;
   workshopModelError: string | null;
   onWorkshopModelChange: (value: string) => void;
   health?: CapacityHealth | null;
   formatDiskBytes: (n: number) => string;
 }) {
-  const DEFAULT = "cursor/auto";
   const diskRef = useRef(health?.disk);
   if (health?.disk) diskRef.current = health.disk;
   const disk = health?.disk ?? diskRef.current;
@@ -55,27 +53,14 @@ export function SettingsGeneralPanel({
           label="Workshop model"
           hint="Default model for Workshop Author chat."
         >
-          <select
-            className="h-8 max-w-[min(280px,100%)] rounded-lg border border-[#ffffff1a] bg-[var(--sf-raised)] px-2.5 font-sans text-[13px] text-[var(--sf-text-1)]"
-            value={workshopModel || DEFAULT}
-            disabled={workshopModelSaving}
-            onChange={(e) => onWorkshopModelChange(e.target.value)}
-          >
-            {!workshopModels.includes(workshopModel || DEFAULT) ? (
-              <option value={workshopModel || DEFAULT}>
-                {workshopModel || DEFAULT}
-              </option>
-            ) : null}
-            {workshopModels.length === 0 ? (
-              <option value={DEFAULT}>{DEFAULT}</option>
-            ) : (
-              workshopModels.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))
-            )}
-          </select>
+          <div className="w-[min(280px,100%)]">
+            <ModelPicker
+              ariaLabel="Workshop model"
+              value={workshopModel || null}
+              disabled={workshopModelSaving}
+              onChange={(next) => next && onWorkshopModelChange(next)}
+            />
+          </div>
         </SettingsRow>
         {disk ? (
           <>

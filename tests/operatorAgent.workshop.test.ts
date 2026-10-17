@@ -1,3 +1,4 @@
+import { AGENT_AUTHOR_PROFILE_ID } from "../src/operatorAgent/profiles/agentAuthor.js";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createWorkshopDraftContext,
@@ -62,7 +63,7 @@ describe("Operator Agent Host — Workshop Author", () => {
   it("registers Workshop Author as the first profile", () => {
     const host = createWorkshopOperatorHost();
     const profiles = host.listProfiles();
-    expect(profiles.map((p) => p.id)).toEqual([WORKSHOP_AUTHOR_PROFILE_ID]);
+    expect(profiles.map((p) => p.id)).toEqual([WORKSHOP_AUTHOR_PROFILE_ID, AGENT_AUTHOR_PROFILE_ID]);
     expect(profiles[0]!.greeting).toBe(WORKSHOP_AUTHOR_GREETING);
   });
 

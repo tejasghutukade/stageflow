@@ -5,6 +5,7 @@ import {
   type InlineExtension,
   createEventBus,
 } from "@earendil-works/pi-coding-agent";
+import { prepareMcpOAuth } from "../config/mcpOAuth.js";
 import {
   StageMcpError,
   type ResolvedMcpServers,
@@ -28,6 +29,8 @@ export function resetCreateMcpAdapterCacheForTests(): void {
 }
 
 type IsolatedMcpSettings = {
+  /** Host-keyed file store for OAuth tokens; set only when a URL server is attached. */
+  oauthCredentialStore?: "encrypted-file";
   directTools: true;
   elicitation: false;
   hostConfigDiscovery: "off";
@@ -136,6 +139,7 @@ let cachedCreateMcpAdapter: CreateMcpAdapter | undefined;
 function toIsolatedMcpConfig(
   snapshot: ResolvedMcpServers,
   lifecycle: IsolatedMcpServerEntry["lifecycle"] = "lazy",
+  oauth = false,
 ): IsolatedMcpConfig {
   const mcpServers: Record<string, IsolatedMcpServerEntry> = {};
   for (const [name, entry] of Object.entries(snapshot)) {
@@ -153,6 +157,7 @@ function toIsolatedMcpConfig(
     mcpServers,
     settings: {
       ...ISOLATED_MCP_SETTINGS,
+      ...(oauth ? { oauthCredentialStore: "encrypted-file" as const } : {}),
       outputGuard: { ...ISOLATED_MCP_SETTINGS.outputGuard },
     },
   };
@@ -356,11 +361,20 @@ export async function attachIsolatedMcp(
     return EMPTY_ATTACH;
   }
   const createMcpAdapter = await loadCreateMcpAdapter();
+  let oauth = false;
+  if (Object.values(snapshot).some((entry) => typeof entry.url === "string")) {
+    try {
+      prepareMcpOAuth();
+      oauth = true;
+    } catch {
+      // Sign-in is optional; a store that cannot be prepared must not stop servers that need none.
+    }
+  }
   const extensionFactories: InlineExtension[] = [
     {
       name: STAGEFLOW_PI_MCP_EXTENSION_NAME,
       factory: createMcpAdapter({
-        config: toIsolatedMcpConfig(snapshot, options?.lifecycle ?? "lazy"),
+        config: toIsolatedMcpConfig(snapshot, options?.lifecycle ?? "lazy", oauth),
       }),
     },
   ];

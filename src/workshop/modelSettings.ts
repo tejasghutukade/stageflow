@@ -1,8 +1,4 @@
-import { globalModelFromManifest } from "../config/resolveModel.js";
-import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
-import { readFactorySettings } from "../runtime/settingsFile.js";
-
-export const DEFAULT_WORKSHOP_MODEL = "cursor/auto";
+import { getModelCatalog, peekDefaultModel } from "../models/catalog.js";
 
 export type ResolveWorkshopModelInput = {
   sessionOverride?: string | null;
@@ -11,7 +7,8 @@ export type ResolveWorkshopModelInput = {
 };
 
 /**
- * Effective Workshop chat model: session override → Settings default → profile fallback.
+ * Effective Workshop chat model: session override → Settings default → profile fallback → the
+ * model catalog's default.
  * Credentials stay on the shared Stageflow provider auth stack; this only picks a model id.
  */
 export function resolveWorkshopModel(
@@ -23,7 +20,7 @@ export function resolveWorkshopModel(
   if (settings) return settings;
   const profile = normalizeModelId(input.profileDefault);
   if (profile) return profile;
-  return DEFAULT_WORKSHOP_MODEL;
+  return peekDefaultModel();
 }
 
 export function parseWorkshopModel(value: unknown): string | undefined {
@@ -38,12 +35,7 @@ export function parseWorkshopModel(value: unknown): string | undefined {
  * when the manifest has none.
  */
 export async function readWorkshopOpenModel(cwd: string): Promise<string> {
-  const ctx = await resolveStageflowContext(cwd);
-  return resolveWorkshopModel({
-    settingsDefault:
-      globalModelFromManifest(ctx.manifest) ??
-      readFactorySettings(cwd).workshopModel,
-  });
+  return getModelCatalog(cwd).defaultModel();
 }
 
 function normalizeModelId(value: string | null | undefined): string | undefined {

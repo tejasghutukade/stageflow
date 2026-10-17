@@ -34,8 +34,11 @@ The same pipeline runs three ways without rewriting anything:
 - **Envelope handoffs** — typed stage payloads and artifacts via `write_stage_artifact` / `emit_stage_envelope`
 - **Verified stage execution** — after-phase `verify` checks with durable evidence, plus `on_verify_fail` repair or manual operator recovery ([guide](docs/verified-stage-execution.md))
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
-- **Operator console** — triage runs, connect providers, answer gates, inspect transcripts at `http://127.0.0.1:3847`
+- **Agents** — project-owned, revisioned agents (`agents/*.agent.yaml`) with granted tools, ask-first approvals, traces, channels, schedules and a public web chat page ([guide](docs/agents.md))
+- **Operator console** — an Inbox for gates and agent approvals, pipeline runs, agents and their sessions, connections, MCP servers and settings at `http://127.0.0.1:3847` ([guide](docs/operator-console.md))
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running
+- **MCP servers for agents and stages** — add servers, secrets and OAuth sign-in from Settings → Project MCP, or in the project `.mcp.json` ([guide](docs/mcp-servers.md))
+- **Connections** — Slack, Telegram, iMessage, WhatsApp and AgentMail channels, and email accounts, managed from one page ([guide](docs/channels.md))
 - **Standalone stage execution** — run a single stage directly with `run_stage` (MCP tool, `sf run-stage` CLI, or the A2A `run_stage` operation), no pipeline file required; chain calls with `envelope_ref` (one or many prior results) instead of a pipeline DAG
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
 - **Parallel stages** — pipeline DAG with fan-out, join, and Clone Chains (one Clone Instance per Clone Array element; see [YAML catalog](docs/yaml-catalog.md#clone-chain))
@@ -97,7 +100,7 @@ sf ui                          # operator console at http://127.0.0.1:3847
 sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 ```
 
-**Workshop** (rail → `#/workshop`) drafts a pipeline in chat and saves it under `workshop/<pipeline-id>/` so it shows up on Run. Guide: [docs/workshop.md](docs/workshop.md).
+**Workshop** (**New pipeline** on the Pipelines page, or `#/workshop`; it has no rail item) drafts a pipeline in chat and saves it under `workshop/<pipeline-id>/` so it shows up on Run. Guide: [docs/workshop.md](docs/workshop.md).
 
 Expanded walkthrough: [docs/quickstart.md](docs/quickstart.md)
 
@@ -140,11 +143,14 @@ Full reference: [docs/providers.md](docs/providers.md)
 
 Start the console with `sf ui` (default `http://127.0.0.1:3847`).
 
-- **Runs** — active and recent pipeline runs, capacity, and status at a glance
-- **Run detail** — spatial stage map; select a stage for the gated workspace (logs, files, envelopes, HITL). Created runs show **not started** with a **Start run** action until history exists
-- **HITL reply** — answer operator gates (`ask_operator`) without leaving the browser
-- **Pipelines** — browse manifest-declared pipeline definitions
-- **Settings → Providers** — connect model providers (`pi_home` or `sf_owned` credential storage)
+- **Inbox** — pipeline gates and agent approvals that wait on you, then failed and finished runs; Approve or Deny without leaving the page, with optional desktop notifications
+- **Pipeline runs** — active and recent runs, capacity, and status at a glance
+- **Run detail** — Timeline, Graph or List of the stages; select a stage for its transcript, events, envelope and artifacts. Created runs show **not started** with a **Start run** action until history exists
+- **Pipelines, Tasks, Catalog, Triggers** — browse and edit the YAML, start runs; **New pipeline** drafts one in the Workshop
+- **Agents** and **Agent sessions** — a directory with each agent's reach (web chat link, channel, schedule), cost and status; create and edit with version history; sessions, approvals and a run inspector
+- **Connections** — channels, email accounts and tool servers
+- **Settings** — Providers (`pi_home` or `sf_owned` credential storage), Concurrency, MCP server, Project MCP (servers, secrets, sign-in) and Notifications
+- **Command palette** — `⌘K` from any page. Page-by-page guide: [docs/operator-console.md](docs/operator-console.md)
 
 Brand assets live under `docs/img/` (`stageflow-og.svg`, `stageflow-icon.svg`).
 
@@ -266,7 +272,11 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A), plus the wildcard-access `run_stage` operation |
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/docker.md](docs/docker.md) | Docker Compose local try, image pull/run, backup, self-hosting |
-| [docs/operator-console.md](docs/operator-console.md) | Console IA and settings |
+| [docs/operator-console.md](docs/operator-console.md) | Console navigation, command palette, shortcuts and routes; one page per area ([Inbox](docs/console-inbox.md), [Runs](docs/console-runs.md), [Agents](docs/console-agents.md), [Connections](docs/console-connections.md), [Settings](docs/console-settings.md)) |
+| [docs/agents.md](docs/agents.md) | Agents: definition, runtime, approvals, channels, schedules, web chat |
+| [docs/mcp-servers.md](docs/mcp-servers.md) | Add MCP servers, secrets and OAuth; use them from agents and stages |
+| [docs/channels.md](docs/channels.md) | Connections and communication channels |
+| [docs/environment-variables.md](docs/environment-variables.md) | Every `STAGEFLOW_*` environment variable |
 | [docs/workshop.md](docs/workshop.md) | Workshop Author — chat-draft a pipeline, save it, and run it |
 | [docs/skills-suite.md](docs/skills-suite.md) | Harness skills — router + jobs for Cursor, Claude Code, Codex, Pi, OpenCode |
 

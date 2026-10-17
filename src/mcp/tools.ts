@@ -4,12 +4,14 @@ import { registerCatalogTools } from "./catalogTools.js";
 import { registerCheckoutTools } from "./checkoutTools.js";
 import { registerControlTools } from "./controlTools.js";
 import { registerProjectMcpTools } from "./projectMcpTools.js";
+import { registerPipelineAuthorTools } from "./pipelineAuthorTools.js";
 import { registerProviderTools } from "./providerTools.js";
 import { registerTriggerTools } from "./triggerTools.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
 import { DEFAULT_TIMEOUT_MS, waitRun } from "./waitRun.js";
 
+import { registerAgentTools } from "./agentTools.js";
 import { registerGetStartedTool } from "./getStartedTool.js";
 
 export type { McpToolDeps };
@@ -24,6 +26,8 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
   registerProviderTools(server, deps);
   registerProjectMcpTools(server, deps);
   registerTriggerTools(server, deps);
+  registerPipelineAuthorTools(server, deps);
+  registerAgentTools(server, deps);
 
   server.registerTool(
     "wait_run",

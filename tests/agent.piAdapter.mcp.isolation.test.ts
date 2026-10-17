@@ -127,6 +127,7 @@ const EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS = {
       },
     },
     settings: {
+      oauthCredentialStore: "encrypted-file",
       directTools: true,
       elicitation: false,
       hostConfigDiscovery: "off",

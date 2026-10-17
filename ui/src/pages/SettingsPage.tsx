@@ -17,7 +17,6 @@ import {
 } from "../redesign/settings/SettingsSectionPanels";
 import { navigate } from "../routes";
 import {
-  fetchModels,
   fetchSettings,
   postSettings,
   postWorkshopModel,
@@ -26,9 +25,6 @@ import {
   useRunCatalog,
   useRunCatalogHandle,
 } from "../catalog/useRunCatalog";
-import { SettingsMcp } from "../components/SettingsMcp";
-import { SettingsProjectMcp } from "../components/SettingsProjectMcp";
-import { SettingsProviders } from "../components/SettingsProviders";
 import {
   notificationPermission,
   requestNotificationPermission,
@@ -36,7 +32,6 @@ import {
   type NotifyPreference,
 } from "../useWaitingNotifications";
 
-const DEFAULT_WORKSHOP_MODEL = "cursor/auto";
 
 function scrollSettingsSectionIntoView(
   section: SettingsSection,
@@ -74,20 +69,16 @@ export function SettingsPage({
   notifyPreference: NotifyPreference;
   onNotifyChange: (value: NotifyPreference) => void;
 }) {
-  const redesignOn = true;
-  const { snapshot, loading } = useRunCatalog();
+  const { snapshot } = useRunCatalog();
   const catalog = useRunCatalogHandle();
   const health = snapshot.health;
   const healthEverLoadedRef = useRef(false);
   if (health) healthEverLoadedRef.current = true;
   const healthEverLoaded = healthEverLoadedRef.current;
-  const healthError =
-    healthEverLoaded && health == null ? "unavailable" : null;
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [slotsSaving, setSlotsSaving] = useState(false);
   const [permission, setPermission] = useState(notificationPermission);
   const [workshopModel, setWorkshopModel] = useState<string>("");
-  const [workshopModels, setWorkshopModels] = useState<string[]>([]);
   const [workshopModelError, setWorkshopModelError] = useState<string | null>(
     null,
   );
@@ -114,15 +105,14 @@ export function SettingsPage({
   }, []);
 
   useEffect(() => {
-    if (!redesignOn || initialScrollDoneRef.current) return;
+    if (initialScrollDoneRef.current) return;
     initialScrollDoneRef.current = true;
     requestAnimationFrame(() => {
       scrollSettingsSectionIntoView(parseSettingsSection(), "auto");
     });
-  }, [redesignOn]);
+  }, []);
 
   useEffect(() => {
-    if (!redesignOn) return;
     const root = document.getElementById("sf-settings-scroll");
     if (!root) return;
 
@@ -161,19 +151,15 @@ export function SettingsPage({
 
     for (const el of observed) observer.observe(el);
     return () => observer.disconnect();
-  }, [redesignOn]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [settings, models] = await Promise.all([
-          fetchSettings(),
-          fetchModels(),
-        ]);
+        const settings = await fetchSettings();
         if (cancelled) return;
         setWorkshopModel(settings.workshopModel ?? "");
-        setWorkshopModels(models.models);
       } catch (err) {
         if (cancelled) return;
         setWorkshopModelError(
@@ -213,7 +199,8 @@ export function SettingsPage({
     setWorkshopModelSaving(true);
     setWorkshopModelError(null);
     try {
-      const next = value.trim() || DEFAULT_WORKSHOP_MODEL;
+      const next = value.trim();
+      if (!next) return;
       const result = await postWorkshopModel(next);
       setWorkshopModel(result.workshopModel ?? next);
     } catch (err) {
@@ -239,263 +226,54 @@ export function SettingsPage({
     });
   }
 
-  const SLOT_CHOICES = [1, 2, 3, 4, 6];
-  const currentSlots = health?.maxConcurrent;
-  const slotOptions =
-    currentSlots != null && !SLOT_CHOICES.includes(currentSlots)
-      ? [currentSlots, ...SLOT_CHOICES]
-      : SLOT_CHOICES;
-  const healthLoading = loading && health == null;
-
-  if (redesignOn) {
-    return (
-      <SettingsLayout
-        section={section}
-        onSectionChange={onSectionChange}
-        providersNavCount={providersNavCount}
-      >
-        <section id={settingsSectionDomId("general")} className="scroll-mt-1">
-          <SettingsGeneralPanel
-            workshopModel={workshopModel}
-            workshopModels={workshopModels}
-            workshopModelSaving={workshopModelSaving}
-            workshopModelError={workshopModelError}
-            onWorkshopModelChange={(v) => void onWorkshopModelChange(v)}
-            health={health}
-            formatDiskBytes={formatDiskBytes}
-          />
-        </section>
-        <section id={settingsSectionDomId("providers")} className="scroll-mt-1">
-          <SettingsProvidersPanel onProvidersSummary={onProvidersSummary} />
-        </section>
-        <div className="grid w-full grid-cols-[1fr_1.25fr] gap-3">
-          <section
-            id={settingsSectionDomId("concurrency")}
-            className="min-w-0 scroll-mt-1"
-          >
-            <SettingsConcurrencyPanel
-              snapshot={snapshot}
-              health={health}
-              healthEverLoaded={healthEverLoaded}
-              slotsSaving={slotsSaving}
-              slotsError={slotsError}
-              onSlotsChange={(v) => void onSlotsChange(v)}
-            />
-          </section>
-          <section id={settingsSectionDomId("mcp")} className="min-w-0 scroll-mt-1">
-            <SettingsMcpPanel />
-          </section>
-        </div>
-        <section id={settingsSectionDomId("project-mcp")} className="scroll-mt-1">
-          <SettingsProjectMcpPanel />
-        </section>
-        <section id={settingsSectionDomId("notifications")} className="scroll-mt-1">
-          <SettingsNotificationsPanel
-            notifyPreference={notifyPreference}
-            permission={permission}
-            onNotifySelect={(v) => void onNotifySelect(v)}
-          />
-        </section>
-        <div className="min-h-[45vh] shrink-0" aria-hidden="true" />
-      </SettingsLayout>
-    );
-  }
-
   return (
-    <div className="main__inner">
-      <div className="page-head">
-        <div>
-          <h1>Settings</h1>
-          <p>Local to this machine. Nothing here is shared, because Stageflow runs as one operator's CLI.</p>
-        </div>
+    <SettingsLayout
+      section={section}
+      onSectionChange={onSectionChange}
+      providersNavCount={providersNavCount}
+    >
+      <section id={settingsSectionDomId("general")} className="scroll-mt-1">
+        <SettingsGeneralPanel
+          workshopModel={workshopModel}
+          workshopModelSaving={workshopModelSaving}
+          workshopModelError={workshopModelError}
+          onWorkshopModelChange={(v) => void onWorkshopModelChange(v)}
+          health={health}
+          formatDiskBytes={formatDiskBytes}
+        />
+      </section>
+      <section id={settingsSectionDomId("providers")} className="scroll-mt-1">
+        <SettingsProvidersPanel onProvidersSummary={onProvidersSummary} />
+      </section>
+      <div className="grid w-full grid-cols-[1fr_1.25fr] gap-3">
+        <section
+          id={settingsSectionDomId("concurrency")}
+          className="min-w-0 scroll-mt-1"
+        >
+          <SettingsConcurrencyPanel
+            snapshot={snapshot}
+            health={health}
+            healthEverLoaded={healthEverLoaded}
+            slotsSaving={slotsSaving}
+            slotsError={slotsError}
+            onSlotsChange={(v) => void onSlotsChange(v)}
+          />
+        </section>
+        <section id={settingsSectionDomId("mcp")} className="min-w-0 scroll-mt-1">
+          <SettingsMcpPanel />
+        </section>
       </div>
-
-      <SettingsProviders />
-
-      <section className="card">
-        <div className="card__head">
-          <h2>Workshop</h2>
-        </div>
-        <div className="setting">
-          <span>
-            <strong>Workshop model</strong>
-            <p>
-              Default model for Workshop Author chat. Uses the same configured
-              providers as stage runs — no separate credentials. Override per
-              session in Workshop chrome.
-            </p>
-          </span>
-          <select
-            className="select"
-            value={workshopModel || DEFAULT_WORKSHOP_MODEL}
-            disabled={workshopModelSaving}
-            onChange={(e) => void onWorkshopModelChange(e.target.value)}
-          >
-            {!workshopModels.includes(workshopModel || DEFAULT_WORKSHOP_MODEL) ? (
-              <option value={workshopModel || DEFAULT_WORKSHOP_MODEL}>
-                {workshopModel || DEFAULT_WORKSHOP_MODEL}
-              </option>
-            ) : null}
-            {workshopModels.length === 0 ? (
-              <option value={DEFAULT_WORKSHOP_MODEL}>
-                {DEFAULT_WORKSHOP_MODEL}
-              </option>
-            ) : (
-              workshopModels.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))
-            )}
-          </select>
-        </div>
-        {workshopModelError ? (
-          <p
-            style={{
-              color: "var(--color-text-red)",
-              fontSize: "var(--font-size-sm)",
-              marginBottom: "var(--spacing-3)",
-            }}
-          >
-            Could not update Workshop model: {workshopModelError}
-          </p>
-        ) : null}
+      <section id={settingsSectionDomId("project-mcp")} className="scroll-mt-1">
+        <SettingsProjectMcpPanel />
       </section>
-
-      <SettingsProjectMcp />
-
-      <SettingsMcp />
-
-      <section className="card">
-        <div className="card__head"><h2>Concurrency</h2></div>
-        {healthError ? <p style={{ color: "var(--color-text-red)", fontSize: "var(--font-size-sm)", marginBottom: "var(--spacing-3)" }}>Could not load capacity: {healthError}</p> : null}
-        <div className="setting">
-          <span>
-            <strong>Session slots</strong>
-            <p>How many stage sessions may be alive at once. A stage waiting on you still holds its slot. Lowering the cap does not stop runs that are already in flight.</p>
-          </span>
-          {healthLoading ? (
-            <span className="muted">—</span>
-          ) : health ? (
-            <select
-              className="select"
-              value={health.maxConcurrent}
-              disabled={slotsSaving}
-              onChange={(e) => void onSlotsChange(Number(e.target.value))}
-            >
-              {slotOptions.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                  {n === health.maxConcurrent ? " · current" : ""}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <span className="muted">—</span>
-          )}
-        </div>
-        {slotsError ? (
-          <p style={{ color: "var(--color-text-red)", fontSize: "var(--font-size-sm)", marginBottom: "var(--spacing-3)" }}>
-            Could not update slots: {slotsError}
-          </p>
-        ) : null}
-        <div className="setting">
-          <span>
-            <strong>Slots available</strong>
-            <p>Free slots that can accept a new run right now.</p>
-          </span>
-          <span className="muted">{healthLoading ? "—" : health ? String(health.slotsAvailable) : "—"}</span>
-        </div>
-        <div className="setting">
-          <span>
-            <strong>When slots are full</strong>
-            <p>
-              New starts enter the admission queue until{" "}
-              <span className="mono">STAGEFLOW_MAX_QUEUED</span> is full, then
-              reject with <span className="mono">busy_capacity</span>.
-            </p>
-          </span>
-          <span className="muted">Queue, then busy_capacity</span>
-        </div>
+      <section id={settingsSectionDomId("notifications")} className="scroll-mt-1">
+        <SettingsNotificationsPanel
+          notifyPreference={notifyPreference}
+          permission={permission}
+          onNotifySelect={(v) => void onNotifySelect(v)}
+        />
       </section>
-
-      <section className="card">
-        <div className="card__head"><h2>Disk</h2></div>
-        {healthError ? (
-          <p style={{ color: "var(--color-text-red)", fontSize: "var(--font-size-sm)", marginBottom: "var(--spacing-3)" }}>
-            Could not load disk: {healthError}
-          </p>
-        ) : null}
-        {healthLoading ? (
-          <p className="muted">—</p>
-        ) : health?.disk ? (
-          <>
-            <div className="setting">
-              <span>
-                <strong>Runs</strong>
-                <p>Cached workspaces under the durable root.</p>
-              </span>
-              <span className="muted">{formatDiskBytes(health.disk.runs_bytes)}</span>
-            </div>
-            <div className="setting">
-              <span>
-                <strong>Worktrees</strong>
-              </span>
-              <span className="muted">{formatDiskBytes(health.disk.worktrees_bytes)}</span>
-            </div>
-            <div className="setting">
-              <span>
-                <strong>Repos caches</strong>
-              </span>
-              <span className="muted">{formatDiskBytes(health.disk.repos_bytes)}</span>
-            </div>
-            <div className="setting">
-              <span>
-                <strong>State database</strong>
-              </span>
-              <span className="muted">{formatDiskBytes(health.disk.state_db_bytes)}</span>
-            </div>
-            <div className="setting">
-              <span>
-                <strong>A2A artifacts</strong>
-              </span>
-              <span className="muted">{formatDiskBytes(health.disk.a2a_artifacts_bytes)}</span>
-            </div>
-            <div className="setting">
-              <span>
-                <strong>Free on volume</strong>
-              </span>
-              <span className="muted">{formatDiskBytes(health.disk.free_bytes)}</span>
-            </div>
-          </>
-        ) : (
-          <p className="muted">Disk breakdown unavailable.</p>
-        )}
-      </section>
-
-      <section className="card">
-        <div className="card__head"><h2>Held stages</h2></div>
-        <div className="setting">
-          <span>
-            <strong>Hold timeout</strong>
-            <p>A held stage waits until you answer. There is no timeout yet.</p>
-          </span>
-          <span className="muted">—</span>
-        </div>
-        <div className="setting">
-          <span>
-            <strong>Notify me when a stage asks</strong>
-            <p>A held stage is invisible if this window is closed. A system notification is the only thing that reaches you.</p>
-          </span>
-          <select className="select" value={notifyPreference} onChange={e => void onNotifySelect(e.target.value)}>
-            <option value="system">System notification</option>
-            <option value="off">Nothing</option>
-          </select>
-        </div>
-        {notifyPreference === "system" && permission === "denied" ? (
-          <p className="muted" style={{ fontSize: "var(--font-size-xs)", padding: "var(--spacing-2) 0" }}>Notifications blocked — enable in browser settings</p>
-        ) : null}
-      </section>
-    </div>
+      <div className="min-h-[45vh] shrink-0" aria-hidden="true" />
+    </SettingsLayout>
   );
 }

@@ -21,6 +21,7 @@ export type AppRailProps = {
   onNavigate: (id: string) => void;
   waitingCount?: number;
   inFlightCount?: number;
+  agentActiveCount?: number;
   health?: CapacityHealth | null;
   workspaceName: string;
   workspaceSubtitle?: string;
@@ -39,6 +40,7 @@ export function AppRail({
   onNavigate,
   waitingCount = 0,
   inFlightCount = 0,
+  agentActiveCount = 0,
   health,
   workspaceName,
   workspaceSubtitle,
@@ -118,12 +120,16 @@ export function AppRail({
 
       <div className="flex w-full flex-1 flex-col gap-0.5">
         {NAV_GROUPS.map((group, groupIndex) => (
-          <div key={group.label}>
-            <div
-              className={`px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]${groupIndex > 0 ? " pt-3.5 pb-1.5" : ""}`}
-            >
-              {group.label}
-            </div>
+          <div key={group.label ?? "pinned"}>
+            {group.label ? (
+              <div
+                className={`px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]${groupIndex > 0 ? " pt-3.5 pb-1.5" : ""}`}
+              >
+                {group.label}
+              </div>
+            ) : groupIndex > 0 ? (
+              <div className="h-2" />
+            ) : null}
             {group.items.map((item) => {
               const active = activeId === item.id;
               const Icon = item.icon;
@@ -177,6 +183,14 @@ export function AppRail({
                       <span className="block size-1.5 rounded-full bg-[var(--sf-running)]" />
                       <span className="font-['Geist_Mono',monospace] text-xs text-[var(--sf-running)]">
                         {inFlightCount}
+                      </span>
+                    </span>
+                  ) : null}
+                  {item.badge === "agentsActive" && agentActiveCount > 0 ? (
+                    <span className="flex items-center gap-[5px]">
+                      <span className="block size-1.5 rounded-full bg-[var(--sf-running)]" />
+                      <span className="font-['Geist_Mono',monospace] text-xs text-[var(--sf-running)]">
+                        {agentActiveCount}
                       </span>
                     </span>
                   ) : null}

@@ -107,7 +107,7 @@ describe("connections view model", () => {
 
   it("counts totals for the footer", () => {
     const rows = channelRows([{ ...base, health: { state: "ok", checkedAt: "x" } }, failed("CHANNEL_AUTH_FAILED"), failed("CHANNEL_SECRET_UNAVAILABLE")], [], meta);
-    const tools = toolCards([{ name: "github", transport: "http" }]);
+    const tools = toolCards([{ name: "github", transport: "http", origin: "project" }]);
     expect(tools).toEqual([{ name: "github", detail: "http server · .mcp.json" }]);
     const totals = connectionTotals(rows, tools);
     expect(totals).toEqual({ connections: 4, channels: 3, tools: 1, needsAttention: 1, connectedChannels: 1 });

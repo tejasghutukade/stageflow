@@ -38,6 +38,7 @@ import {
   type OperatorAgentModel,
   type OperatorAgentModelTurn,
 } from "./host.js";
+import { createAgentAuthorProfile } from "./profiles/agentAuthor.js";
 import {
   createWorkshopAuthorProfile,
   type WorkshopAuthorProfileOptions,
@@ -798,6 +799,7 @@ export function createLiveWorkshopOperatorHost(
         retriever,
         ...(projectRoot !== undefined ? { projectRoot } : {}),
       }),
+      createAgentAuthorProfile(),
     ],
   );
 }

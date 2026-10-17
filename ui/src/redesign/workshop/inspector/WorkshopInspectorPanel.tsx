@@ -16,7 +16,6 @@ export type WorkshopInspectorPanelProps = {
   onDeleteStage: (stageId: string) => void;
   onRenameStage: (fromId: string, toId: string) => void;
   findings: ValidationFinding[];
-  models: string[];
   defaultModel: string | null;
   focusField?: { stageId: string; field: string; nonce: number } | null;
   pipelinePath?: string | null;
@@ -133,7 +132,6 @@ export function WorkshopInspectorPanel({
   onDeleteStage,
   onRenameStage,
   findings,
-  models,
   defaultModel,
   focusField,
   pipelinePath,
@@ -181,7 +179,6 @@ export function WorkshopInspectorPanel({
             draft={draft}
             baseline={baseline}
             findings={findings}
-            models={models}
             defaultModel={defaultModel}
             onDraftChange={onDraftChange}
             pipelinePath={pipelinePath}
@@ -195,7 +192,6 @@ export function WorkshopInspectorPanel({
             baseline={baseline}
             stageId={selectedStageId!}
             findings={findings}
-            models={models}
             defaultModel={defaultModel}
             onDraftChange={onDraftChange}
             onRenameStage={onRenameStage}

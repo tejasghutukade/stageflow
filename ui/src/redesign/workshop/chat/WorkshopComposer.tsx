@@ -1,6 +1,5 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
 import {
-  useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
@@ -11,9 +10,6 @@ import {
 } from "react";
 import {
   LuArrowUp,
-  LuCheck,
-  LuChevronDown,
-  LuCpu,
   LuFile,
   LuInfo,
   LuPaperclip,
@@ -30,7 +26,7 @@ import {
   userMessageCustom,
   type WorkshopChatAttachment,
 } from "./attachments";
-import { modelTail } from "./changeCardModel";
+import { ModelPicker } from "../../../components/ModelPicker";
 
 export type WorkshopComposerHandle = {
   prefill(text: string): void;
@@ -40,7 +36,6 @@ export type WorkshopComposerHandle = {
 
 export type WorkshopComposerProps = {
   emptyThread: boolean;
-  models: readonly string[];
   model: string | null;
   defaultModel: string | null;
   onModelChange: (model: string) => void;
@@ -57,104 +52,8 @@ const MONO = "font-['Geist_Mono',monospace]";
 const CHIP = `flex h-5 shrink-0 items-center rounded-sm border px-1.5 ${MONO} text-[11px] leading-normal`;
 const TEXTAREA_MAX_HEIGHT = 200;
 
-function ModelMenu({
-  models,
-  model,
-  defaultModel,
-  onModelChange,
-}: {
-  models: readonly string[];
-  model: string | null;
-  defaultModel: string | null;
-  onModelChange: (model: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const current = model ?? defaultModel ?? "";
-  const base = models.length > 0 ? [...models] : defaultModel ? [defaultModel] : [];
-  const options = current && !base.includes(current) ? [current, ...base] : base;
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        setOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", onPointer);
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointer);
-      document.removeEventListener("keydown", onKey, true);
-    };
-  }, [open]);
-
-  return (
-    <div ref={rootRef} className="relative flex min-w-0 items-center">
-      <button
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label="Workshop chat model"
-        title={current}
-        onClick={() => setOpen((value) => !value)}
-        className="flex h-6 min-w-0 items-center gap-[5px] rounded-md border border-[#ffffff1a] bg-[#1a1c21] px-[7px] hover:border-[#ffffff33]"
-      >
-        <LuCpu aria-hidden className="size-3 shrink-0 text-[#8b8f98]" />
-        <span className={`min-w-0 truncate ${MONO} text-[11px] leading-normal text-[#ecedee]`}>
-          {current ? modelTail(current) : "model"}
-        </span>
-        <LuChevronDown aria-hidden className="size-3 shrink-0 text-[#8b8f98]" />
-      </button>
-      {open ? (
-        <div
-          role="listbox"
-          aria-label="Workshop chat model"
-          className="absolute bottom-[calc(100%+6px)] left-0 z-30 flex max-h-[280px] w-[320px] flex-col overflow-auto rounded-[10px] border border-[#ffffff1a] bg-[#131418] py-1 shadow-[0px_12px_32px_rgba(0,0,0,0.45)]"
-        >
-          {options.length === 0 ? (
-            <div className="px-3 py-1.5 text-xs text-[#8b8f98]">No models available</div>
-          ) : (
-            options.map((id) => {
-              const selected = id === current;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  onClick={() => {
-                    onModelChange(id);
-                    setOpen(false);
-                  }}
-                  className={`flex h-7 min-w-0 items-center gap-2 px-3 text-left hover:bg-[#1a1c21] ${selected ? "bg-[#1a1c21]" : ""}`}
-                >
-                  <span className="flex size-3 shrink-0 items-center justify-center">
-                    {selected ? <LuCheck aria-hidden className="size-3 text-[#ecedee]" /> : null}
-                  </span>
-                  <span className={`min-w-0 flex-1 truncate ${MONO} text-xs leading-normal text-[#ecedee]`}>
-                    {id}
-                  </span>
-                  {id === defaultModel ? (
-                    <span className="shrink-0 text-[11px] leading-normal text-[#8b8f98]">default</span>
-                  ) : null}
-                </button>
-              );
-            })
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 export function WorkshopComposer({
   emptyThread,
-  models,
   model,
   defaultModel,
   onModelChange,
@@ -344,11 +243,13 @@ export function WorkshopComposer({
           />
         </div>
         <div className="flex items-center gap-1.5 px-2 pb-2">
-          <ModelMenu
-            models={models}
-            model={model}
+          <ModelPicker
+            variant="chip"
+            placement="up"
+            ariaLabel="Workshop chat model"
+            value={current}
             defaultModel={defaultModel}
-            onModelChange={onModelChange}
+            onChange={(next) => next && onModelChange(next)}
           />
           {current && current === defaultModel ? (
             <span className="whitespace-nowrap text-[11px] leading-normal text-[#8b8f98]">

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ModelPicker } from "../../components/ModelPicker";
 import {
   LuArrowUpRight,
   LuBraces,
@@ -56,7 +57,6 @@ export type PipelineEditorInspectorProps = {
   baseline?: DraftPackagePayload | null;
   selectedStageId: string | null;
   findings: ValidationFinding[];
-  models: string[];
   defaultModel: string | null;
   skills?: readonly string[];
   pipelines: readonly PipelineListing[] | null;
@@ -74,7 +74,6 @@ export function PipelineEditorInspector({
   draft,
   selectedStageId,
   findings,
-  models,
   defaultModel,
   skills = [],
   pipelines,
@@ -156,8 +155,6 @@ export function PipelineEditorInspector({
   const skill = readStageSkill(draft, form.id);
   const skillNames = skillSelectOptions(skills, skill);
   const resolved = resolvedStageModel(draft, form, defaultModel);
-  const modelValue = form.model ?? resolved ?? "";
-  const modelNames = modelSelectOptions(models, modelValue);
   const warned = new Set(warnedGateKinds(findings, form.id));
   const payloadLabel = payloadSchemaLabel({
     outputsRef: form.outputsRef,
@@ -271,30 +268,14 @@ export function PipelineEditorInspector({
               <div className="text-[11px] leading-normal text-[#8b8f98]">from defaults</div>
             )}
           </div>
-          <div className="relative flex h-[30px] items-center">
-            <select
-              ref={bindFocus("model")}
-              aria-label="model"
-              value={modelValue}
-              onChange={(event) =>
-                onDraftChange(
-                  setStageModel(draft, form.id, event.target.value ? event.target.value : null),
-                )
-              }
-              className={`${SELECT_CLASS} ${MONO}`}
-            >
-              <option value="">{resolved ? `Inherit (${resolved})` : "Inherit"}</option>
-              {modelNames.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-            <LuChevronDown
-              className="pointer-events-none absolute right-2.5 size-[13px] text-[#8b8f98]"
-              aria-hidden
-            />
-          </div>
+          <ModelPicker
+            triggerRef={bindFocus("model")}
+            ariaLabel="model"
+            value={form.model ?? null}
+            inheritLabel={resolved ? `Inherit (${resolved})` : "Inherit"}
+            defaultModel={defaultModel}
+            onChange={(next) => onDraftChange(setStageModel(draft, form.id, next))}
+          />
         </div>
         <StageChannelsSection
           entries={readStageChannels(draft, form.id)}
@@ -422,19 +403,6 @@ function skillSelectOptions(skills: readonly string[], current: string): string[
     out.push(name);
   }
   const selected = current.trim();
-  if (selected && !seen.has(selected)) out.unshift(selected);
-  return out;
-}
-
-function modelSelectOptions(models: readonly string[], selected: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const model of models) {
-    const name = model.trim();
-    if (!name || seen.has(name)) continue;
-    seen.add(name);
-    out.push(name);
-  }
   if (selected && !seen.has(selected)) out.unshift(selected);
   return out;
 }

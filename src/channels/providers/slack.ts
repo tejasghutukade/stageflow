@@ -17,6 +17,7 @@ export const SLACK_META: ProviderMeta = {
   fields: [
     { key: "botToken", label: "Bot token", hint: "xoxb-… from your Slack app (OAuth & Permissions). Needs chat:write.", target: "secret", input: "password", required: true, placeholder: "xoxb-..." },
     { key: "teamId", label: "Workspace ID (optional)", hint: "Pins the connection to one workspace, such as T0123ABCD.", target: "config", input: "text", required: false, placeholder: "T0123ABCD" },
+    { key: "inboundSecret", label: "Signing secret (optional)", hint: "Lets agents receive messages from this workspace. From your Slack app (Basic Information). Point Event Subscriptions at /api/agent-inbound/<connection id>.", target: "secret", input: "password", required: false },
   ],
   recipient: { label: "Channel id", placeholder: "C0123ABCD (channel, group, DM or user id)", multiple: false, cc: false, template: false },
   envNames: ["SLACK_BOT_TOKEN"],
@@ -79,7 +80,7 @@ export function createSlackProvider(options: SlackOptions = {}): ChannelProvider
     id: "slack",
     meta: SLACK_META,
     operations: ["send"],
-    secrets: { required: ["botToken"] },
+    secrets: { required: ["botToken"], optional: ["inboundSecret"] },
     validateConfig,
     validateTarget,
     describe: config => (config.teamId ? { identity: config.teamId } : {}),

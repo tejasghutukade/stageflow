@@ -25,7 +25,7 @@ describe("telegram config and targets", () => {
   const p = createTelegramProvider();
   it("is built in", () => {
     expect(channelProviders().map(provider => provider.id)).toContain("telegram");
-    expect(p.secrets).toEqual({ required: ["botToken"] });
+    expect(p.secrets).toEqual({ required: ["botToken"], optional: ["inboundSecret"] });
     expect(p.describe?.({ botUsername: "acme_bot" })).toEqual({ identity: "@acme_bot" });
   });
   it.each([[{}], [{ botUsername: "acme_bot" }]])("accepts config %j", config => { expect(p.validateConfig(config).ok).toBe(true); });

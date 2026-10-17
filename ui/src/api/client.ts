@@ -1,7 +1,5 @@
 import type {
   CapacityHealth,
-  CreatePipelineInput,
-  CreatePipelineResult,
   CreateStageInput,
   CreateStageResult,
   CreateTriggerInput,
@@ -46,6 +44,12 @@ import type {
   ChannelHealth,
   ProjectMcpCatalogList,
   ProjectMcpProbeResult,
+  ProjectMcpServerConfig,
+  ProjectMcpSaveResult,
+  ProjectMcpImportResult,
+  McpSecretsList,
+  McpOAuthStatus,
+  McpToolInfo,
   AttachTaskInput,
   AttachTaskResult,
   ClearWorkshopAutosaveResult,
@@ -397,37 +401,44 @@ export async function createTriggerWithDetails(
   }
 }
 
-export function fetchModels(): Promise<{ models: string[] }> {
+export type CatalogModel = {
+  /** `provider/model`, the form stage, pipeline and agent files store. */
+  id: string;
+  provider: string;
+  name: string;
+  free: boolean;
+  contextWindow?: number;
+  reasoning?: boolean;
+  /** The provider runs its own file and shell tools, so agent grants cannot hold. */
+  nativeTools: boolean;
+};
+
+export type CatalogProvider = {
+  id: string;
+  name: string;
+  models: CatalogModel[];
+  source: "live" | "fallback";
+  error?: string;
+};
+
+export type ModelsResponse = {
+  /** Catalog ids plus ids pipelines already use. */
+  models: string[];
+  /** Connected providers only. */
+  providers: CatalogProvider[];
+  default: string;
+  fetchedAt: string;
+  /** Ids in use that no connected provider lists. */
+  unlisted: string[];
+};
+
+export function fetchModels(): Promise<ModelsResponse> {
   return api("/api/models");
 }
 
-export async function createPipelineWithDetails(
-  input: CreatePipelineInput,
-): Promise<CreatePipelineResult> {
-  try {
-    const res = await fetch("/api/pipelines", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
-      body: JSON.stringify(input),
-    });
-    const body = (await res.json().catch(() => ({}))) as PipelineListing & {
-      error?: string;
-    };
-    if (res.ok && typeof body.id === "string") {
-      return { ok: true, pipeline: body };
-    }
-    return {
-      ok: false,
-      status: res.status,
-      error: body.error ?? `Request failed (${res.status})`,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      status: 0,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
+/** Asks each connected provider for its current model list. */
+export function refreshModels(): Promise<ModelsResponse> {
+  return api("/api/models/refresh", { method: "POST" });
 }
 
 export async function createStageWithDetails(
@@ -1047,6 +1058,75 @@ export async function postFeedbackDecisionWithDetails(
 
 export function fetchProjectMcp(): Promise<ProjectMcpCatalogList> {
   return api("/api/project-mcp");
+}
+
+export function fetchProjectMcpServer(
+  name: string,
+): Promise<{ name: string; origin: "console"; config: ProjectMcpServerConfig }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}`);
+}
+
+export function saveProjectMcpServer(
+  name: string,
+  config: ProjectMcpServerConfig,
+): Promise<ProjectMcpSaveResult> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify({ config }),
+  });
+}
+
+export function deleteProjectMcpServer(name: string): Promise<{ name: string }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
+export function importProjectMcp(json: unknown): Promise<ProjectMcpImportResult> {
+  return api("/api/project-mcp/import", {
+    method: "POST",
+    body: JSON.stringify({ json }),
+  });
+}
+
+/** Tools the Host last saw on this server; `tools` is null when it has never connected. */
+export function fetchProjectMcpTools(name: string): Promise<{ name: string; tools: McpToolInfo[] | null }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/tools`);
+}
+
+export function fetchMcpOAuthStatus(name: string): Promise<{ name: string; status: McpOAuthStatus }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/oauth`);
+}
+
+export function startMcpOAuthSignIn(name: string): Promise<{ name: string; authorizationUrl: string }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/oauth/start`, { method: "POST" });
+}
+
+export function completeMcpOAuthSignIn(
+  name: string,
+  input: string,
+): Promise<{ name: string; status: McpOAuthStatus }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/oauth/complete`, {
+    method: "POST",
+    body: JSON.stringify({ input }),
+  });
+}
+
+export function signOutMcpOAuth(name: string): Promise<{ name: string; status: McpOAuthStatus }> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/oauth`, { method: "DELETE" });
+}
+
+export function fetchMcpSecrets(): Promise<McpSecretsList> {
+  return api("/api/mcp-secrets");
+}
+
+export function setMcpSecretValue(name: string, value: string): Promise<{ name: string }> {
+  return api(`/api/mcp-secrets/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify({ value }),
+  });
+}
+
+export function deleteMcpSecretValue(name: string): Promise<{ name: string }> {
+  return api(`/api/mcp-secrets/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
 export function postProjectMcpProbe(

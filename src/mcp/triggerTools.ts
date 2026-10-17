@@ -6,6 +6,7 @@ import {
   resolveWritableCatalogRoot,
 } from "../config/catalogRelativePath.js";
 import { createTrigger, parseCreateTriggerBody } from "../config/createTrigger.js";
+import { parsePatchTriggerBody, parsePutTriggerBody, updateTriggerDefinition, updateTriggerEnabled } from "../config/updateTrigger.js";
 import { loadCatalogTriggers } from "../config/triggerCatalog.js";
 import { writeAudit } from "../logging/audit.js";
 import { logger as rootLogger } from "../logging/logger.js";
@@ -219,6 +220,45 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
         outcome: "ok",
       });
       return textResult(result.trigger);
+    },
+  );
+
+  server.registerTool(
+    "update_trigger",
+    {
+      description: "Replace a trigger's definition (pipeline, task, kind, schedule or event, enabled). Same validation and write path as PUT /api/triggers/:id; the id cannot change.",
+      inputSchema: z.object({
+        id: z.string(),
+        project_root: z.string().optional(),
+        pipeline: z.string(),
+        task: z.string().optional(),
+        kind: z.enum(["manual", "schedule", "event"]),
+        schedule: triggerScheduleSchema.optional(),
+        event: triggerEventSchema.optional(),
+        enabled: z.boolean().optional(),
+      }),
+    },
+    async ({ id, project_root, ...body }) => {
+      const parsed = parsePutTriggerBody(body, id);
+      if ("ok" in parsed) return textResult({ error: parsed.error, status: parsed.status }, true);
+      const result = await updateTriggerDefinition(cwd, store, id, parsed, { projectRootFilter: project_root });
+      writeAudit(auditLog, { caller_id: callerIdFromRequestAuth(), surface: getRequestAuth()?.surface ?? "mcp", action: "trigger_update", outcome: result.ok ? "ok" : "error" });
+      return result.ok ? textResult(result.trigger) : textResult({ error: result.error, status: result.status }, true);
+    },
+  );
+
+  server.registerTool(
+    "set_trigger_enabled",
+    {
+      description: "Enable or disable a trigger. Same write path as PATCH /api/triggers/:id.",
+      inputSchema: z.object({ id: z.string(), enabled: z.boolean(), project_root: z.string().optional() }),
+    },
+    async ({ id, enabled, project_root }) => {
+      const parsed = parsePatchTriggerBody({ enabled });
+      if ("ok" in parsed) return textResult({ error: parsed.error, status: parsed.status }, true);
+      const result = await updateTriggerEnabled(cwd, store, id, parsed.enabled, { projectRootFilter: project_root });
+      writeAudit(auditLog, { caller_id: callerIdFromRequestAuth(), surface: getRequestAuth()?.surface ?? "mcp", action: "trigger_patch", outcome: result.ok ? "ok" : "error" });
+      return result.ok ? textResult(result.trigger) : textResult({ error: result.error, status: result.status }, true);
     },
   );
 }

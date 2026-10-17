@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ModelPicker } from "../../../components/ModelPicker";
 import { LuMaximize2 } from "react-icons/lu";
 import type { DraftPackagePayload, ValidationFinding } from "../../../api";
 import {
@@ -54,7 +55,6 @@ export type WorkshopStageInspectorProps = {
   baseline: DraftPackagePayload | null;
   stageId: string;
   findings: ValidationFinding[];
-  models: string[];
   defaultModel: string | null;
   onDraftChange: (draft: DraftPackagePayload) => void;
   onRenameStage: (fromId: string, toId: string) => void;
@@ -241,7 +241,6 @@ export function WorkshopStageInspector({
   baseline,
   stageId,
   findings,
-  models,
   defaultModel,
   onDraftChange,
   onRenameStage,
@@ -305,10 +304,6 @@ export function WorkshopStageInspector({
     .stages.map((s) => s.id)
     .filter((id) => id !== stageId);
   const resolvedModel = resolvedStageModel(draft, form, defaultModel);
-  const modelOptions = [
-    { value: "", label: resolvedModel ? `Inherits default (${resolvedModel})` : "Inherits default" },
-    ...Array.from(new Set([...(form.model ? [form.model] : []), ...models])).map((m) => ({ value: m, label: m })),
-  ];
   const stats = promptStats(prompt.text);
   const pathLabel = form.path ?? `inline in ${pipelineFileLabel(draft.pipeline.id)}`;
   const verifyMode = form.onVerifyFail ?? "fail";
@@ -409,29 +404,15 @@ export function WorkshopStageInspector({
 
         <Field fieldKey="model" register={register}>
           <FieldLabel>model</FieldLabel>
-          <SelectControl
+          <ModelPicker
             ariaLabel="Stage model"
-            value={form.model ?? ""}
-            options={modelOptions}
+            value={form.model ?? null}
+            inheritLabel={resolvedModel ? `Inherits default (${resolvedModel})` : "Inherits default"}
+            defaultModel={defaultModel}
             error={hasError(byField.model)}
             flash={flashKey === "model"}
-            onChange={(value) => onDraftChange(setStageModel(draft, stageId, value || null))}
-          >
-            {form.model ? (
-              <span className={`min-w-0 flex-1 truncate text-xs leading-normal text-[#ecedee] ${MONO}`}>
-                {form.model}
-              </span>
-            ) : (
-              <>
-                <span className="whitespace-nowrap text-xs leading-normal text-[#ecedee]">Inherits default</span>
-                <span
-                  className={`min-w-0 flex-1 truncate text-right text-[11px] leading-normal text-[#8b8f98] ${MONO}`}
-                >
-                  {resolvedModel ?? "none set"}
-                </span>
-              </>
-            )}
-          </SelectControl>
+            onChange={(value) => onDraftChange(setStageModel(draft, stageId, value))}
+          />
           <FieldErrors findings={byField.model} />
         </Field>
 

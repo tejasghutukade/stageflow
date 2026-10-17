@@ -19,6 +19,12 @@ export type Route =
   | { name: "triggers" }
   | { name: "connections" }
   | { name: "connection"; connectionId: string }
+  | { name: "agents" }
+  | { name: "agentSessions" }
+  | { name: "agentCreate" }
+  | { name: "agent"; agentId: string; screen: "detail" | "edit" }
+  | { name: "agentSession"; agentId: string; sessionId: string }
+  | { name: "agentRun"; agentId: string; sessionId: string; runId: string }
   | { name: "trigger"; triggerId: string; projectRoot?: string }
   | { name: "skills" }
   | { name: "skill"; skillName: string }
@@ -154,6 +160,31 @@ export function connectionPath(connectionId: string): string {
   return `/connections/${encodeURIComponent(connectionId)}`;
 }
 
+export function agentsPath(): string {
+  return "/agents";
+}
+
+export function agentSessionsPath(): string {
+  return "/agent-sessions";
+}
+
+export function agentCreatePath(): string {
+  return "/agents/new";
+}
+
+export function agentPath(agentId: string, screen: "detail" | "edit" = "detail"): string {
+  const base = `/agents/${encodeURIComponent(agentId)}`;
+  return screen === "edit" ? `${base}/edit` : base;
+}
+
+export function agentSessionPath(agentId: string, sessionId: string): string {
+  return `${agentPath(agentId)}/sessions/${encodeURIComponent(sessionId)}`;
+}
+
+export function agentRunPath(agentId: string, sessionId: string, runId: string): string {
+  return `${agentSessionPath(agentId, sessionId)}/runs/${encodeURIComponent(runId)}`;
+}
+
 export function connectPath(): string {
   return "/connect";
 }
@@ -234,6 +265,25 @@ export function parseHash(hash = window.location.hash): Route {
   if (path.startsWith("connections/")) {
     const connectionId = firstSegment(path.slice("connections/".length));
     if (connectionId) return { name: "connection", connectionId };
+  }
+  if (path === "agent-sessions" || path === "agents/sessions") return { name: "agentSessions" };
+  if (path === "agents") return { name: "agents" };
+  if (path === "agents/new") return { name: "agentCreate" };
+  if (path.startsWith("agents/")) {
+    const rest = path.slice("agents/".length);
+    const slash = rest.indexOf("/");
+    const agentId = decodeURIComponent(slash < 0 ? rest : rest.slice(0, slash));
+    const tail = slash < 0 ? "" : rest.slice(slash + 1);
+    if (agentId === "new") return { name: "agentCreate" };
+    if (!agentId) return { name: "agents" };
+    if (tail === "edit") return { name: "agent", agentId, screen: "edit" };
+    const session = /^sessions\/([^/]+)(?:\/runs\/([^/]+))?$/.exec(tail);
+    if (session) {
+      const sessionId = decodeURIComponent(session[1]!);
+      if (session[2]) return { name: "agentRun", agentId, sessionId, runId: decodeURIComponent(session[2]) };
+      return { name: "agentSession", agentId, sessionId };
+    }
+    if (tail === "") return { name: "agent", agentId, screen: "detail" };
   }
   if (path.startsWith("triggers/")) {
     const triggerId = firstSegment(path.slice("triggers/".length));

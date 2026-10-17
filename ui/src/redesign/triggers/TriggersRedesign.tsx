@@ -11,6 +11,7 @@ import { useRunCatalog } from "../../catalog/useRunCatalog";
 import { navigate, triggerPath } from "../../routes";
 import { showToast } from "../../toast";
 import { useHotkeys } from "../keys";
+import { PageHeader } from "../shell/PageHeader";
 import {
   LuClock,
   LuFolder,
@@ -343,45 +344,26 @@ export function TriggersRedesign({
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[#0c0d0f]">
-      <header className="flex h-14 w-full shrink-0 items-center justify-between gap-4 border-b border-b-[#ffffff12] px-5">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <h1 className="whitespace-nowrap text-xl font-semibold tracking-[-0.4px] text-[#ecedee]">
-            Triggers
-          </h1>
-          <span className={`${MONO} text-[13px] text-[#8b8f98]`}>{triggers.length}</span>
-          {hostReady ? (
-            <span className="flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-[#ffffff12] bg-[#131418] px-2.5">
-              <span className="block size-1.5 rounded-full bg-[#4cc38a] shadow-[0px_0px_6px_rgba(76,195,138,0.6)]" />
-              <span className="whitespace-nowrap text-xs text-[#a7aab2]">
-                Scheduler running · ticks every 30s
+      <PageHeader
+        title="Triggers"
+        titleAddon={
+          <>
+            <span className={`${MONO} text-[13px] text-[#8b8f98]`}>{triggers.length}</span>
+            {hostReady ? (
+              <span className="flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-[#ffffff12] bg-[#131418] px-2.5">
+                <span className="block size-1.5 rounded-full bg-[#4cc38a] shadow-[0px_0px_6px_rgba(76,195,138,0.6)]" />
+                <span className="whitespace-nowrap text-xs text-[#a7aab2]">
+                  Scheduler running · ticks every 30s
+                </span>
               </span>
+            ) : null}
+            <span className="flex shrink-0 items-center gap-[5px]">
+              <LuFolder className="size-3 text-[#8b8f98]" aria-hidden />
+              <span className={`${MONO} whitespace-nowrap text-xs text-[#8b8f98]`}>{folder}</span>
             </span>
-          ) : null}
-          <span className="flex shrink-0 items-center gap-[5px]">
-            <LuFolder className="size-3 text-[#8b8f98]" aria-hidden />
-            <span className={`${MONO} whitespace-nowrap text-xs text-[#8b8f98]`}>{folder}</span>
-          </span>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <label className="flex h-8 w-[260px] items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-2.5">
-            <LuSearch className="size-3.5 shrink-0 text-[#8b8f98]" aria-hidden />
-            <input
-              ref={searchRef}
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") e.currentTarget.blur();
-              }}
-              placeholder="Search by id, pipeline or source"
-              className="min-w-0 flex-1 border-none bg-transparent text-[13px] text-[#ecedee] outline-none placeholder:text-[#8b8f98]"
-            />
-            <span
-              className={`rounded-sm border border-[#ffffff1a] bg-[#131418] px-[5px] ${MONO} text-[11px] text-[#8b8f98]`}
-            >
-              /
-            </span>
-          </label>
+          </>
+        }
+        actions={
           <button
             type="button"
             onClick={() => setModal({ mode: "create", initial: null })}
@@ -395,8 +377,28 @@ export function TriggersRedesign({
               N
             </span>
           </button>
-        </div>
-      </header>
+        }
+      >
+        <label className="flex h-8 w-[260px] items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-2.5">
+          <LuSearch className="size-3.5 shrink-0 text-[#8b8f98]" aria-hidden />
+          <input
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") e.currentTarget.blur();
+            }}
+            placeholder="Search by id, pipeline or source"
+            className="min-w-0 flex-1 border-none bg-transparent text-[13px] text-[#ecedee] outline-none placeholder:text-[#8b8f98]"
+          />
+          <span
+            className={`rounded-sm border border-[#ffffff1a] bg-[#131418] px-[5px] ${MONO} text-[11px] text-[#8b8f98]`}
+          >
+            /
+          </span>
+        </label>
+      </PageHeader>
 
       <div className="flex h-12 w-full shrink-0 items-center justify-between border-b border-b-[#ffffff12] px-5">
         <div className="flex items-center gap-0.5" role="tablist" aria-label="Trigger filters">

@@ -410,7 +410,7 @@ export function RunDetailHeader({
   };
 
   return (
-    <header className="flex w-full shrink-0 items-end justify-between gap-6 border-b border-b-[#ffffff12] px-6 py-4">
+    <header className="flex w-full shrink-0 items-end justify-between gap-6 border-b border-b-[#ffffff12] px-5 py-4">
       <div className="flex min-w-0 flex-col gap-2">
         <div className="flex items-center gap-1.5">
           <button
@@ -437,7 +437,7 @@ export function RunDetailHeader({
           </button>
         </div>
         <div className="flex min-w-0 items-center gap-2.5">
-          <h1 className="shrink-0 font-sans text-[21px] font-semibold leading-[1.2] tracking-[-0.42px] text-[var(--sf-text-1)]">
+          <h1 className="shrink-0 font-sans text-xl font-semibold leading-[1.2] tracking-[-0.4px] text-[var(--sf-text-1)]">
             {runTaskLabel(run)}
           </h1>
           <StatusPill

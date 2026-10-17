@@ -153,6 +153,7 @@ describe("attachIsolatedMcp", () => {
           },
         },
         settings: {
+          oauthCredentialStore: "encrypted-file",
           directTools: true,
           elicitation: false,
           hostConfigDiscovery: "off",

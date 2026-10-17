@@ -40,7 +40,6 @@ export type WorkshopChatColumnProps = {
   pickerRows: readonly StudioPickerRow[];
   selectedBuildId?: string | null;
   onPickRow: (row: StudioPickerRow) => void;
-  models: readonly string[];
   model: string | null;
   defaultModel: string | null;
   onModelChange: (model: string) => void;
@@ -82,7 +81,6 @@ function ThreadBody({
   mutationCards,
   onAccept,
   onReject,
-  models,
   model,
   defaultModel,
   onModelChange,
@@ -108,7 +106,6 @@ function ThreadBody({
       <WorkshopComposer
         handleRef={innerComposer}
         emptyThread={isEmpty}
-        models={models}
         model={model}
         defaultModel={defaultModel}
         onModelChange={onModelChange}

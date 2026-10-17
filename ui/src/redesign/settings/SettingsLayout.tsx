@@ -20,7 +20,7 @@ export function SettingsLayout({
 
   return (
     <div className="flex h-screen min-h-0 flex-col overflow-hidden">
-      <div className="flex h-[52px] w-full shrink-0 items-center justify-between border-b border-b-[#ffffff12] px-6 py-0">
+      <div className="flex h-14 w-full shrink-0 items-center justify-between border-b border-b-[#ffffff12] px-5 py-0">
         <div className="flex items-center gap-1.5">
           <LuSettings className="size-3.5 text-[var(--sf-text-3)]" aria-hidden="true" />
           <span className="font-sans text-[13px] text-[var(--sf-text-3)]">Settings</span>
@@ -44,11 +44,8 @@ export function SettingsLayout({
           onSelect={onSectionChange}
           providersConnected={providersNavCount}
         />
-        <div
-          id="sf-settings-scroll"
-          className="mr-auto flex min-h-0 w-full max-w-[840px] shrink-0 flex-col gap-6 overflow-y-auto px-10 pb-10 pt-7"
-        >
-          {children}
+        <div id="sf-settings-scroll" className="min-h-0 min-w-0 flex-1 overflow-y-auto px-10 pb-10 pt-7">
+          <div className="mx-auto flex max-w-[840px] flex-col gap-6">{children}</div>
         </div>
       </div>
     </div>

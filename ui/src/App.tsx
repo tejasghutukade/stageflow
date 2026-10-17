@@ -33,10 +33,16 @@ import {
   runEnvelopePath,
   runStagePath,
   runStreamPath,
+  agentSessionPath,
   catalogPath,
   type Route,
 } from "./routes";
 import { applyRedesignAttribute, useRedesign } from "./redesign/flag";
+import { AgentsRedesign } from "./redesign/agents/AgentsRedesign";
+import { agentsRouteProps, railActiveId } from "./routeNav";
+import { AgentSessionsPage } from "./redesign/agents/sessions/AgentSessionsPage";
+import { useAgentApprovals } from "./redesign/agents/model/useAgentApprovals";
+import { useActiveSessionCount } from "./redesign/agents/model/useActiveSessionCount";
 import { StageEditorPage } from "./redesign/editor/StageEditorPage";
 import { AppShell as RedesignAppShell } from "./redesign/shell/AppShell";
 import { AppRail as RedesignAppRail } from "./redesign/shell/AppRail";
@@ -45,39 +51,10 @@ import { ControlTokenGate } from "./redesign/ControlTokenGate";
 import { workspaceLabelFromSnapshot } from "./redesign/inbox/inboxViews";
 import {
   readNotifyPreference,
+  useAgentApprovalNotifications,
   useWaitingNotifications,
   type NotifyPreference,
 } from "./useWaitingNotifications";
-
-function railActiveId(route: Route, redesignOn: boolean): string {
-  if (route.name === "connect") return "settings";
-  if (route.name === "detail") return "runs";
-  if (route.name === "new") return "inbox";
-  if (route.name === "pipeline") return "pipelines";
-  if (route.name === "task") return "tasks";
-  if (route.name === "trigger") return "triggers";
-  if (route.name === "connection") return "connections";
-  if (redesignOn) {
-    if (route.name === "catalog" || route.name === "stage") return "catalog";
-    if (route.name === "skill" || route.name === "skills") return "catalog";
-    if (
-      route.name === "extensions" ||
-      route.name === "extensionPackage" ||
-      route.name === "extensionFile"
-    ) {
-      return "catalog";
-    }
-  } else {
-    if (route.name === "skill") return "skills";
-    if (
-      route.name === "extensionPackage" ||
-      route.name === "extensionFile"
-    ) {
-      return "extensions";
-    }
-  }
-  return route.name;
-}
 
 function ConsoleRoot() {
   const redesignOn = useRedesign();
@@ -104,6 +81,7 @@ function ConsoleRoot() {
   }, []);
 
   useWaitingNotifications(notifyPreference === "system");
+  useAgentApprovalNotifications(notifyPreference === "system");
 
   useEffect(() => {
     let cancelled = false;
@@ -120,8 +98,10 @@ function ConsoleRoot() {
     };
   }, []);
 
-  const waitingCount = waitingView(snapshot).length;
+  const { approvals: agentApprovals, refresh: refreshAgentApprovals } = useAgentApprovals();
+  const waitingCount = waitingView(snapshot).length + agentApprovals.length;
   const inFlightCount = bucketViews(snapshot).inFlight.length;
+  const agentActiveCount = useActiveSessionCount();
   const health = snapshot.health;
   const workspace = workspaceLabelFromSnapshot(snapshot);
   const heldCount = heldWaitingCount(snapshot, health);
@@ -161,6 +141,9 @@ function ConsoleRoot() {
         onOpen={(id) => go(runStreamPath(id))}
         onNew={() => go("/new")}
         onOpenRuns={() => go("/runs")}
+        agentApprovals={agentApprovals}
+        onAgentApprovalDecided={refreshAgentApprovals}
+        onOpenAgentSession={(agentId, sessionId) => go(agentSessionPath(agentId, sessionId))}
       />
     );
   } else if (route.name === "new") {
@@ -219,6 +202,10 @@ function ConsoleRoot() {
     content = <ConnectionsPage />;
   } else if (route.name === "connection") {
     content = <ConnectionDetailPage connectionId={route.connectionId} />;
+  } else if (route.name === "agentSessions") {
+    content = <AgentSessionsPage />;
+  } else if (agentsRouteProps(route)) {
+    content = <AgentsRedesign {...agentsRouteProps(route)!} />;
   } else if (route.name === "trigger") {
     content = (
       <TriggersPage
@@ -322,6 +309,7 @@ function ConsoleRoot() {
               onNavigate={onRailNavigate}
               waitingCount={waitingCount}
               inFlightCount={inFlightCount}
+              agentActiveCount={agentActiveCount}
               health={health}
               workspaceName={workspace.name}
               workspaceSubtitle={workspace.subtitle}

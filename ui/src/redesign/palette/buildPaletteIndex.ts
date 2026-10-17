@@ -13,7 +13,9 @@ import type {
 
 const NAV_ITEMS: PaletteNavDef[] = [
   { id: "inbox", label: "Inbox", path: "/inbox" },
-  { id: "runs", label: "Runs", path: "/runs" },
+  { id: "runs", label: "Pipeline runs", path: "/runs" },
+  { id: "agent-sessions", label: "Agent sessions", path: "/agent-sessions" },
+  { id: "agents", label: "Agents", path: "/agents" },
   { id: "pipelines", label: "Pipelines", path: "/pipelines" },
   { id: "workshop", label: "Workshop", path: "/workshop" },
   { id: "tasks", label: "Tasks", path: "/tasks" },

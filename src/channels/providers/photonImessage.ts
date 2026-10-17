@@ -153,6 +153,39 @@ export function createPhotonImessageProvider(options: PhotonImessageOptions = {}
         if (!containsString(parseJson(found.text), target.recipient)) throw new ChannelError("CHANNEL_RECIPIENT_REJECTED", false, { connectionId: connection.id });
       }
     }),
+    async contact(connection, signal) {
+      try {
+        const credentials = credentialsOf(connection);
+        const project = encodeURIComponent(credentials.projectId);
+        const call = (url: string, init: { method: "GET" | "POST"; body?: unknown }) => httpCall({
+          fetch: doFetch, url, method: init.method, headers: photonHeaders(credentials), ...(init.body !== undefined ? { body: init.body } : {}),
+          timeoutMs: options.checkTimeoutMs ?? 10000, ...(signal ? { signal } : {}), mode: "check", connectionId: connection.id,
+        });
+        const tokens = await call(`${base}/projects/${project}/imessage/tokens`, { method: "POST", body: {} });
+        if (tokens.status < 200 || tokens.status >= 300) return { ok: false, error: `Photon answered ${tokens.status}` };
+        const data = photonData(parseJson(tokens.text));
+        if (data?.type === "dedicated") {
+          const numbers = Object.values((data.numbers ?? {}) as Record<string, unknown>).filter((value): value is string => typeof value === "string");
+          return { ok: true, kind: "dedicated", numbers: [...new Set(numbers)] };
+        }
+        const users = await call(`${base}/projects/${project}/users/?type=shared&limit=500`, { method: "GET" });
+        if (users.status < 200 || users.status >= 300) return { ok: false, error: `Photon answered ${users.status}` };
+        const list = (photonData(parseJson(users.text))?.users ?? []) as Array<Record<string, unknown>>;
+        return {
+          ok: true,
+          kind: "shared",
+          users: list
+            .filter((user) => typeof user.phoneNumber === "string")
+            .map((user) => ({
+              phone: user.phoneNumber as string,
+              assignedNumber: typeof user.assignedPhoneNumber === "string" ? user.assignedPhoneNumber : null,
+              name: [user.firstName, user.lastName].filter((part): part is string => typeof part === "string" && part.length > 0).join(" ") || null,
+            })),
+        };
+      } catch {
+        return { ok: false, error: "Could not reach Photon" };
+      }
+    },
     async send(connection, target, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
       const credentials = credentialsOf(connection);
       const text = message.subject ? `${message.subject}\n\n${message.text}` : message.text;

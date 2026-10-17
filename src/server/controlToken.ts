@@ -231,6 +231,11 @@ function isTriggerWebhookRoute(method: string, pathname: string): boolean {
   return method === "POST" && /^\/api\/triggers\/[^/]+\/webhook$/.test(pathname);
 }
 
+/** Agent webhooks authenticate by the provider's own signature against the connection's inbound secret. */
+function isAgentInboundRoute(method: string, pathname: string): boolean {
+  return method === "POST" && /^\/api\/agent-inbound\/[^/]+$/.test(pathname);
+}
+
 /**
  * Live view routes authenticate themselves: the ticket route checks the bearer
  * scope for the requested mode, and the browser's event stream and input posts
@@ -247,6 +252,8 @@ export function requiredScopeFor(
   if (pathname === "/mcp") return "drive";
   if (!pathname.startsWith("/api/")) return null;
   if (isTriggerWebhookRoute(method, pathname)) return null;
+  if (isAgentInboundRoute(method, pathname)) return null;
+  if (pathname.startsWith("/api/public/chat/")) return null;
   if (isLiveViewRoute(pathname)) return null;
   if (pathname === "/api/backup" || pathname.startsWith("/api/backup/")) {
     return "drive";

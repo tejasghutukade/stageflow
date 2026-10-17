@@ -32,11 +32,11 @@ describe("workshop open model", () => {
     expect(composerModelFromSettings("  openai/gpt-5  ")).toBe("openai/gpt-5");
   });
 
-  it("shows cursor/auto when defaultModel is missing or blank", () => {
-    expect(composerModelFromSettings(undefined)).toBe("cursor/auto");
-    expect(composerModelFromSettings(null)).toBe("cursor/auto");
-    expect(composerModelFromSettings("")).toBe("cursor/auto");
-    expect(composerModelFromSettings("   ")).toBe("cursor/auto");
+  it("leaves the model blank when defaultModel is missing or blank, so the Host chooses", () => {
+    expect(composerModelFromSettings(undefined)).toBe("");
+    expect(composerModelFromSettings(null)).toBe("");
+    expect(composerModelFromSettings("")).toBe("");
+    expect(composerModelFromSettings("   ")).toBe("");
   });
 });
 

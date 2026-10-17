@@ -2,7 +2,7 @@
 
 Channels let a stage send a message over an external service. You define a **connection** once (in the console or in `connections.yaml`), then a stage lists it under [`channels:`](yaml-catalog.md#stage-channels) with the recipient pinned. The agent gets one tool, `send_message`, and cannot pick a different recipient.
 
-> **Status: send path built.** Sending works for AgentMail, Slack, Telegram, iMessage and WhatsApp. Channels are send-only; stages never receive messages, and agents do not have channels yet. The `send_message` tool is available on the Pi backend only; a stage with `channels:` on the Claude backend fails at start instead of running without it.
+> **Status: send path built.** Sending works for AgentMail, Slack, Telegram, iMessage and WhatsApp. For **stages**, channels are send-only: a stage never receives messages. A project [agent](agents.md#channels-inbound) can also *receive* on AgentMail, iMessage, Slack and Telegram connections and answer on the same one; WhatsApp is send-only for everyone. The `send_message` tool is available on the Pi backend only; a stage with `channels:` on the Claude backend fails at start instead of running without it.
 
 Channels are separate from [email accounts](email-accounts.md) (`email.yaml`, IMAP/SMTP), which keep working unchanged.
 
@@ -122,7 +122,7 @@ Every request other than `GET` needs a same-origin `Origin` header and the `driv
 
 ### AgentMail
 
-Sends plain-text mail from one **existing** AgentMail inbox through the REST API. Stageflow does not create inboxes or domains. Receiving mail is not supported.
+Sends plain-text mail from one **existing** AgentMail inbox through the REST API. Stageflow does not create inboxes or domains. A stage cannot receive mail; an [agent](agents.md#agentmail-and-imessage-the-host-listens) can answer mail to this inbox (the Host holds a WebSocket open, no public URL needed, or you can set an `inboundSecret` and point an AgentMail webhook at `/api/agent-inbound/<connection id>`).
 
 ```yaml
 - id: support-inbox
@@ -145,7 +145,7 @@ Provider reference: <https://docs.agentmail.to/>.
 
 ### Slack
 
-Posts as a Slack bot with `chat.postMessage`. Stageflow does not install the app; create it in your workspace and give Stageflow the bot token. Receiving is not supported.
+Posts as a Slack bot with `chat.postMessage`. Stageflow does not install the app; create it in your workspace and give Stageflow the bot token. A stage cannot receive messages. An [agent](agents.md#channels-inbound) can answer in Slack when the connection has an `inboundSecret` (the app signing secret) and Slack's Events API points at `POST /api/agent-inbound/<connection id>`; this needs a URL Slack can reach.
 
 ```yaml
 - id: ops-slack
@@ -167,7 +167,7 @@ Provider reference: <https://api.slack.com/methods/chat.postMessage>.
 
 ### Telegram
 
-Sends through the Telegram Bot API with a bot token from @BotFather. Receiving is not supported.
+Sends through the Telegram Bot API with a bot token from @BotFather. A stage cannot receive messages. An [agent](agents.md#channels-inbound) can answer when the connection has an `inboundSecret` (the `secret_token` you give `setWebhook`) and Telegram's webhook points at `POST /api/agent-inbound/<connection id>`; this needs a public HTTPS URL.
 
 ```yaml
 - id: alerts-telegram
@@ -188,7 +188,7 @@ Provider reference: <https://core.telegram.org/bots/api>.
 
 ### iMessage (Photon)
 
-Sends an iMessage DM through a [Photon](https://photon.codes) (Spectrum) project. The Photon project credentials are a shared `credential`; connections reference it. Receiving is not supported, and neither are group chats.
+Sends an iMessage DM through a [Photon](https://photon.codes) (Spectrum) project. The Photon project credentials are a shared `credential`; connections reference it. A stage cannot receive messages. An [agent](agents.md#agentmail-and-imessage-the-host-listens) can answer texts: the Host listens on the Photon project itself (no public URL) and keeps one session per sender. Group chats are not supported in either direction.
 
 ```yaml
 credentials:
@@ -215,7 +215,7 @@ Provider reference: <https://photon.codes/docs/spectrum-ts/providers/imessage>.
 
 ### WhatsApp (Photon)
 
-Sends WhatsApp Business messages, 1:1 only, through the same shared `photon` credential as iMessage. Enable WhatsApp for the project in the Photon dashboard first. Receiving is not supported.
+Sends WhatsApp Business messages, 1:1 only, through the same shared `photon` credential as iMessage. Enable WhatsApp for the project in the Photon dashboard first. WhatsApp is send-only: neither stages nor agents receive on it.
 
 ```yaml
 connections:

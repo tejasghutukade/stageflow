@@ -54,6 +54,23 @@ export {
   type DocsRetriever,
 } from "./docsRetrieval.js";
 export {
+  agentAuthorContextAdapter,
+  emptyAgentAuthorDraft,
+  isAgentAuthorContext,
+  readAgentAuthorDraft,
+  AGENT_AUTHOR_GREETING,
+  type AgentAuthorContext,
+  type AgentAuthorDraft,
+} from "./agentAuthorContext.js";
+export {
+  AGENT_AUTHOR_PROFILE_ID,
+  AGENT_AUTHOR_TOOL_NAMES,
+  createAgentAuthorContext,
+  createAgentAuthorProfile,
+} from "./profiles/agentAuthor.js";
+export { AGENT_AUTHOR_PLAYBOOK } from "./profiles/agentAuthorPlaybook.js";
+export { operatorContextFingerprint } from "./proposals.js";
+export {
   createWorkshopDraftContext,
   draftTrackStages,
   emptyDraftPackage,

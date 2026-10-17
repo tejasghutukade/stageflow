@@ -9,6 +9,8 @@ Stages can pause for **operator input** via the `ask_operator` Pi tool. The oper
 
 HITL is optional — pipelines with no `ask_operator` calls run fully headless.
 
+Agents (not pipeline stages) have their own approval gate: a call to an `ask_first` tool, and every `bash` call, pauses the agent until someone decides. Those approvals appear in the Inbox next to pipeline gates and can be decided from the console, CLI, MCP or an allowed channel. See [Agents](agents.md#runtime).
+
 ## Gate kinds
 
 Declared in stage YAML as `gate_kinds`:
@@ -89,7 +91,7 @@ Prompts from stages without `browser`, and gates stored before this field existe
 
 1. Stage agent calls `ask_operator` with a `kind` and message (and `artifacts` for `artifact_backed`)
 2. Run enters **waiting** state
-3. Operator replies in the console (select the stage on the spatial map — or open `#/runs/<runId>/stages/<stageId>` — and use the workspace reply surface), via MCP `answer_gate` while `sf ui` or `sf mcp` is running, or via `sf runs answer` when the host is down. Waiting cards on Today can also accept eligible gates.
+3. Operator replies in the console (select the stage in the run — or open `#/runs/<runId>/stages/<stageId>` — and use the answer panel), via MCP `answer_gate` while `sf ui` or `sf mcp` is running, or via `sf runs answer` when the host is down. The Inbox (**Needs you**) can also answer eligible gates.
 4. Stage agent continues; may call `ask_operator` again or finish with `emit_stage_envelope`
 
 `ask_operator` **does not** complete the stage — only `emit_stage_envelope` does.
@@ -152,13 +154,13 @@ model: anthropic/claude-sonnet-4-5
 
 ## Console reply
 
-Open `sf ui`, go to **Today** (waiting count badge) or **Runs**, open the run, and select the waiting stage on the spatial map — or open `#/runs/<runId>/stages/<stageId>`. The reply surface lives in that gated workspace. Eligible waiting cards on Today can also Accept. See [Operator console](operator-console.md).
+Open `sf ui`, go to **Inbox** (waiting count badge, **Needs you** tab) or **Pipeline runs**, open the run, and select the waiting stage — or open `#/runs/<runId>/stages/<stageId>`. The answer panel appears in the stage workspace. In the Inbox, press **1** to Accept, **3** to Reject (when the gate allows it) and **N** to write a note. See [Inbox](console-inbox.md) and [Pipeline runs](console-runs.md).
 
-Answers go to the **selected** stage instance id. Today shows the first waiter (`waiting_stage_id`) even when several clones wait — the same as dual named-sibling wait. Open the run and select the other clone to answer it. Waiting-card copy keeps the raw `waiting_stage_id`.
+Answers go to the **selected** stage instance id. The Inbox shows the first waiter (`waiting_stage_id`) even when several clones wait — the same as dual named-sibling wait. Open the run and select the other clone to answer it. Waiting-card copy keeps the raw `waiting_stage_id`.
 
 An `interrupted` stage (Host shutdown or orphan reconcile) is **not** a HITL wait — there is no `ask_operator` prompt. Resume the same attempt with **Resume session** in the console, MCP [`resume_stage`](mcp.md#resume_stage), or `sf runs resume`. Do not use `answer_gate` / `sf runs answer`.
 
-See [Operator console — Clone tracks](operator-console.md#clone-tracks).
+See [Pipeline runs](console-runs.md#run-detail-runsrunid).
 
 ## MCP
 

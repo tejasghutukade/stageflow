@@ -3,7 +3,6 @@ import {
   createDraftPackageWithDetails,
   fetchCatalogFile,
   fetchCatalogValidate,
-  fetchModels,
   fetchSettings,
   fetchSkills,
   openDraftPackage,
@@ -207,7 +206,6 @@ export function PipelineEditorPage({
   const [sourceOrigin, setSourceOrigin] = useState<DraftOrigin | null>(null);
   const catalogProjectRoot = projectRootProp ?? pipeline.project_root;
   const readOnlySource = !stageMode && sourceOrigin?.readOnly === true;
-  const [models, setModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
   const [skills, setSkills] = useState<string[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -334,17 +332,12 @@ export function PipelineEditorPage({
     let cancelled = false;
     void (async () => {
       try {
-        const [settings, listed] = await Promise.all([
-          fetchSettings(),
-          fetchModels(),
-        ]);
+        const settings = await fetchSettings();
         if (cancelled) return;
         const trimmed = settings.defaultModel?.trim() ?? "";
         setDefaultModel(trimmed.length > 0 ? trimmed : null);
-        setModels(listed.models);
       } catch {
         if (cancelled) return;
-        setModels([]);
         setDefaultModel(null);
       }
     })();
@@ -913,7 +906,6 @@ export function PipelineEditorPage({
               baseline={baseline}
               selectedStageId={selectedStageId}
               findings={backendFindings}
-              models={models}
               defaultModel={defaultModel}
               skills={skills}
               pipelines={pipelines}

@@ -193,7 +193,7 @@ describe("/api/connections", () => {
       const ids = meta.providers.map((provider: { id: string }) => provider.id);
       expect(ids).toEqual(expect.arrayContaining(["agentmail", "slack", "telegram", "imessage", "whatsapp"]));
       const agentmail = meta.providers.find((provider: { id: string }) => provider.id === "agentmail");
-      expect(agentmail.fields.map((field: { key: string }) => field.key)).toEqual(["inbox", "region", "apiKey"]);
+      expect(agentmail.fields.map((field: { key: string }) => field.key)).toEqual(["inbox", "region", "apiKey", "inboundSecret"]);
       expect(meta.errors.CHANNEL_RECIPIENT_REJECTED.reason).toMatch(/will not message/);
       expect(meta.errors.CHANNEL_NOT_FOUND.status).toBeUndefined();
       expect(JSON.stringify(meta)).not.toContain(SECRET);

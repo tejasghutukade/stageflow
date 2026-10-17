@@ -550,27 +550,6 @@ export type SkillInstallResult =
   | ({ ok: true } & SkillInstallOk)
   | { ok: false; status?: number; error: string };
 
-export type CreatePipelineStageRef = {
-  id: string;
-  needs?: string;
-  uses?: string;
-  inline?: {
-    system_prompt: string;
-    model?: string;
-    gate_kinds?: StageGateKind[];
-  };
-};
-
-export type CreatePipelineInput = {
-  directory: string;
-  id: string;
-  stages: CreatePipelineStageRef[];
-};
-
-export type CreatePipelineResult =
-  | { ok: true; pipeline: PipelineListing }
-  | { ok: false; status: number; error: string };
-
 export type ValidationFinding = {
   severity: "error" | "warning";
   code: string;
@@ -1111,9 +1090,42 @@ export type RetryStageResult =
 
 export type ProjectMcpCatalogTransport = "stdio" | "http";
 
+/** `console` = saved from the UI under the Host's data dir; `project` = the project's .mcp.json. */
+export type ProjectMcpOrigin = "project" | "console";
+
 export type ProjectMcpCatalogEntry = {
   name: string;
   transport: ProjectMcpCatalogTransport;
+  origin: ProjectMcpOrigin;
+};
+
+/** A server config as stored in .mcp.json. Secrets appear only as `${NAME}` placeholders. */
+export type ProjectMcpServerConfig = {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  /** Only `sse` is ever stored; streamable HTTP is the default and falls back to SSE by itself. */
+  httpTransport?: "sse";
+  cwd?: string;
+};
+
+export type McpOAuthStatus = "authenticated" | "expired" | "not_authenticated";
+
+export type ProjectMcpSaveResult = { name: string; secretsStored: string[] };
+
+export type ProjectMcpImportResult = {
+  added: string[];
+  secretsStored: string[];
+  errors: Array<{ name: string; error: string }>;
+};
+
+export type McpSecretsList = {
+  /** Secrets with a stored value (values are never returned). */
+  secrets: Array<{ name: string; usedBy: string[] }>;
+  /** Every `${VAR}` a server references and whether a value is available. */
+  needed: Array<{ name: string; usedBy: string[]; set: boolean }>;
 };
 
 export type ProjectMcpCatalogListStatus = "ok" | "missing_catalog" | "invalid_config";
@@ -1132,10 +1144,14 @@ export type ProjectMcpProbeStatus =
   | "missing_catalog"
   | "cancelled";
 
+export type McpToolInfo = { name: string; description?: string };
+
 export type ProjectMcpProbeResult = {
   name: string;
   status: ProjectMcpProbeStatus;
   error?: string;
+  /** Tools the server lists, set when the probe connected. */
+  tools?: McpToolInfo[];
 };
 
 export type ProjectMcpRowStatus =

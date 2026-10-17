@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import { LuDownload, LuPlus, LuSearch } from "react-icons/lu";
 import { catalogPath, navigate } from "../../routes";
+import { PageHeader } from "../shell/PageHeader";
 import type { CatalogTabId } from "./CatalogTabs";
 
 const MONO = "[font-family:'Geist_Mono',_monospace]";
@@ -75,28 +76,58 @@ export function CatalogHeaderBar({
   }
 
   return (
-    <div className="flex h-14 w-full shrink-0 items-center gap-3 border-b border-b-[#ffffff12] px-4 py-0">
-      <h1 className="w-fit shrink-0 font-sans text-xl font-semibold leading-normal tracking-[-0.4px] text-[#ecedee]">
-        Catalog
-      </h1>
-      <div
-        className="flex h-8 shrink-0 items-center gap-0.5 rounded-lg border border-[#ffffff12] bg-[#131418] p-0.5"
-        role="tablist"
-      >
-        <SegmentedTab
-          active={visibleTab === "stages"}
-          label="Stages"
-          count={stageCount}
-          onClick={() => go("stages")}
-        />
-        <SegmentedTab
-          active={visibleTab === "skills"}
-          label="Skills"
-          count={skillCount}
-          onClick={() => go("skills")}
-        />
-      </div>
-      <span className="block min-w-0 flex-1" />
+    <PageHeader
+      title="Catalog"
+      titleAddon={
+        <div
+          className="flex h-8 shrink-0 items-center gap-0.5 rounded-lg border border-[#ffffff12] bg-[#131418] p-0.5"
+          role="tablist"
+        >
+          <SegmentedTab
+            active={visibleTab === "stages"}
+            label="Stages"
+            count={stageCount}
+            onClick={() => go("stages")}
+          />
+          <SegmentedTab
+            active={visibleTab === "skills"}
+            label="Skills"
+            count={skillCount}
+            onClick={() => go("skills")}
+          />
+        </div>
+      }
+      actions={
+        <>
+          {active === "stages" ? (
+            <button
+              type="button"
+              onClick={onNewStage}
+              className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-[#ecedee] px-3 py-0"
+            >
+              <LuPlus className="size-3.5 text-[#0c0d0f]" aria-hidden />
+              <span className="font-sans text-[13px] font-medium leading-normal text-[#0c0d0f]">
+                New stage
+              </span>
+              <span className={PRIMARY_KEYCAP}>N</span>
+            </button>
+          ) : null}
+          {active === "skills" ? (
+            <button
+              type="button"
+              onClick={onInstallSkill}
+              className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-[#ecedee] px-3 py-0"
+            >
+              <LuDownload className="size-3.5 text-[#0c0d0f]" aria-hidden />
+              <span className="font-sans text-[13px] font-medium leading-normal text-[#0c0d0f]">
+                Install skill
+              </span>
+              <span className={PRIMARY_KEYCAP}>I</span>
+            </button>
+          ) : null}
+        </>
+      }
+    >
       <label className="flex h-8 w-[200px] shrink-0 items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[#131418] px-2.5 py-0 focus-within:border-[#ecedee73]">
         <LuSearch className="size-3.5 shrink-0 text-[#8b8f98]" aria-hidden />
         <input
@@ -123,32 +154,6 @@ export function CatalogHeaderBar({
           /
         </span>
       </label>
-      {active === "stages" ? (
-        <button
-          type="button"
-          onClick={onNewStage}
-          className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-[#ecedee] px-3 py-0"
-        >
-          <LuPlus className="size-3.5 text-[#0c0d0f]" aria-hidden />
-          <span className="font-sans text-[13px] font-medium leading-normal text-[#0c0d0f]">
-            New stage
-          </span>
-          <span className={PRIMARY_KEYCAP}>N</span>
-        </button>
-      ) : null}
-      {active === "skills" ? (
-        <button
-          type="button"
-          onClick={onInstallSkill}
-          className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-[#ecedee] px-3 py-0"
-        >
-          <LuDownload className="size-3.5 text-[#0c0d0f]" aria-hidden />
-          <span className="font-sans text-[13px] font-medium leading-normal text-[#0c0d0f]">
-            Install skill
-          </span>
-          <span className={PRIMARY_KEYCAP}>I</span>
-        </button>
-      ) : null}
-    </div>
+    </PageHeader>
   );
 }

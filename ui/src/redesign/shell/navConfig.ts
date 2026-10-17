@@ -4,7 +4,7 @@ import {
   LuInbox,
   LuLayers,
   LuList,
-  LuPenLine,
+  LuMessagesSquare,
   LuPlug,
   LuSparkles,
   LuZap,
@@ -15,38 +15,41 @@ export type NavItem = {
   label: string;
   href: string;
   icon: IconType;
-  badge?: "waiting" | "inFlight";
+  badge?: "waiting" | "inFlight" | "agentsActive";
   soon?: boolean;
 };
 
 export type NavGroup = {
-  label: string;
+  /** Omitted for a pinned group that sits above the sections (Inbox). */
+  label?: string;
   items: NavItem[];
 };
 
 export const NAV_GROUPS: NavGroup[] = [
   {
-    label: "Operate",
+    items: [{ id: "inbox", label: "Inbox", href: "#/inbox", icon: LuInbox, badge: "waiting" }],
+  },
+  {
+    label: "Activity",
     items: [
-      { id: "inbox", label: "Inbox", href: "#/inbox", icon: LuInbox, badge: "waiting" },
-      { id: "runs", label: "Runs", href: "#/runs", icon: LuList, badge: "inFlight" },
+      { id: "runs", label: "Pipeline runs", href: "#/runs", icon: LuList, badge: "inFlight" },
+      { id: "agent-sessions", label: "Agent sessions", href: "#/agent-sessions", icon: LuMessagesSquare, badge: "agentsActive" },
     ],
   },
   {
     label: "Build",
     items: [
       { id: "pipelines", label: "Pipelines", href: "#/pipelines", icon: LuLayers },
-      { id: "workshop", label: "Workshop", href: "#/workshop", icon: LuPenLine },
+      { id: "agents", label: "Agents", href: "#/agents", icon: LuBot },
       { id: "tasks", label: "Tasks", href: "#/tasks", icon: LuList },
       { id: "catalog", label: "Catalog", href: "#/catalog?tab=stages", icon: LuSparkles },
     ],
   },
   {
-    label: "Automate",
+    label: "Connect",
     items: [
       { id: "triggers", label: "Triggers", href: "#/triggers", icon: LuZap },
       { id: "connections", label: "Connections", href: "#/connections", icon: LuPlug },
-      { id: "agents", label: "Agents", href: "#", icon: LuBot, soon: true },
     ],
   },
 ];

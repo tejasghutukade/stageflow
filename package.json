@@ -1,6 +1,6 @@
 {
   "name": "stageflow",
-  "version": "0.36.0",
+  "version": "0.37.0",
   "description": "Stageflow — CLI pipeline runtime for configurable stages on Pi",
   "type": "module",
   "main": "./dist/index.js",
@@ -81,6 +81,7 @@
     "@earendil-works/pi-tui": "^0.99.1",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
+    "agentmail": "0.5.46",
     "better-sqlite3": "^13.0.3",
     "croner": "^10.0.1",
     "imapflow": "^2.2.5",

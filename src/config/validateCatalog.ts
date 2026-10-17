@@ -744,7 +744,7 @@ async function findingsForStageMcpCatalog(
 
   let catalog;
   try {
-    catalog = await loadMcpCatalog(projectRoot);
+    catalog = await loadMcpCatalog(projectRoot, { scope: { kind: "validate" } });
   } catch (err) {
     if (!(err instanceof StageMcpError)) throw err;
     if (err.code === "missing_catalog" && allowlist.length === 0) return [];

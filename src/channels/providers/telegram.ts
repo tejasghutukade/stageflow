@@ -18,6 +18,7 @@ export const TELEGRAM_META: ProviderMeta = {
   fields: [
     { key: "botToken", label: "Bot token", hint: "From @BotFather. People must start the bot before it can message them.", target: "secret", input: "password", required: true, placeholder: "123456:ABC..." },
     { key: "botUsername", label: "Bot username (optional)", hint: "Fails the check if the token belongs to another bot.", target: "config", input: "text", required: false, placeholder: "acme_alerts_bot" },
+    { key: "inboundSecret", label: "Webhook secret (optional)", hint: "Lets agents receive messages from this bot. Use it as secret_token in setWebhook with the URL /api/agent-inbound/<connection id>.", target: "secret", input: "password", required: false },
   ],
   recipient: { label: "Chat id", placeholder: "123456789 or @channelname", multiple: false, cc: false, template: false },
   envNames: ["TELEGRAM_BOT_TOKEN"],
@@ -80,7 +81,7 @@ export function createTelegramProvider(options: TelegramOptions = {}): ChannelPr
     id: "telegram",
     meta: TELEGRAM_META,
     operations: ["send"],
-    secrets: { required: ["botToken"] },
+    secrets: { required: ["botToken"], optional: ["inboundSecret"] },
     validateConfig,
     validateTarget,
     describe: config => (config.botUsername ? { identity: `@${config.botUsername}` } : {}),

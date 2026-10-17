@@ -189,6 +189,7 @@ export async function checkStageMcpResolution(
         allowlist,
         env: stageEnv,
         stageId: stage.id,
+        scope: { kind: "stage", secrets: (stage.secrets ?? []).map((d) => d.name) },
       });
       for (const server of allowlist) {
         items.push({

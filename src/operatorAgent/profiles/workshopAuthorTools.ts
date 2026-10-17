@@ -1,4 +1,5 @@
 import path from "node:path";
+import { peekDefaultModel } from "../../models/catalog.js";
 import { parse as parseYaml } from "yaml";
 import {
   CatalogPathError,
@@ -73,7 +74,6 @@ export const WORKSHOP_AUTHOR_TOOL_NAMES = [
 
 export const WORKSHOP_FORBIDDEN_AGENT_TOOLS = ["bash", "write", "edit"] as const;
 
-const DEFAULT_MODEL = "anthropic/claude-sonnet-4-5";
 
 const REQUIRED_IO = {
   io: {
@@ -276,7 +276,7 @@ export function buildCreateStageDraft(
       stringArg(args, "system_prompt") ??
       stringArg(args, "systemPrompt") ??
       `Stage for: ${stringArg(args, "summary") ?? stageId}`,
-    model: stringArg(args, "model") ?? DEFAULT_MODEL,
+    model: stringArg(args, "model") ?? peekDefaultModel(),
     ...REQUIRED_IO,
     ...(bodyFromArgs ?? {}),
   };
@@ -367,7 +367,7 @@ export function buildEditStageDraft(
     ...(existingArt?.body ?? {
       id: stageId,
       system_prompt: `Stage ${stageId}`,
-      model: DEFAULT_MODEL,
+      model: peekDefaultModel(),
       ...REQUIRED_IO,
     }),
     ...patch,

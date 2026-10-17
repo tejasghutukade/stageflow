@@ -18,9 +18,9 @@ http://127.0.0.1:3847/mcp
 
 The URL is printed on boot. Point Cursor or another MCP client at this URL while the host process is alive.
 
-Stage agents consuming author-declared MCP is a different surface. Operator-host MCP can list catalog models and list or probe git-root `.mcp.json` servers the same way Settings and HTTP do; inspect is not attach. YAML `mcp:` still allowlists what a stage receives. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
+Stage agents consuming author-declared MCP is a different surface. Operator-host MCP can list catalog models and list or probe the project's `.mcp.json` servers and the servers saved from the console (Settings → Project MCP) the same way Settings and HTTP do; inspect is not attach. YAML `mcp:` still allowlists what a stage receives. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp). Adding servers and secrets from the console, OAuth sign-in and who may fill `${VAR}` are covered in [MCP servers](mcp-servers.md).
 
-**Breaking (Slot 6):** stage `.mcp.json` `${VAR}` interpolation resolves against the curated stage environment only — not Host ambient env. Declare tokens in `secrets:` (often `as: env`) or use `${VAR:-default}`. See [migration-stage-environment.md](migration-stage-environment.md).
+**Breaking (Slot 6):** stage `.mcp.json` `${VAR}` interpolation resolves against the curated stage environment only — not Host ambient env. Declare tokens in `secrets:` (often `as: env`) or use `${VAR:-default}`. A secret saved from the console can be declared in `secrets:` too; it then fills `${VAR}` in the stage's MCP servers only and is never placed in the stage environment. See [migration-stage-environment.md](migration-stage-environment.md).
 
 ## Sessions (how MCP works)
 
@@ -179,6 +179,63 @@ There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an e
 
 ## Tools
 
+### Agent tools {#agent-tools}
+
+Project agents (`agents/*.agent.yaml`) use the same service as the REST routes in [Agent API](agent-api.md#routes). The agent id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`.
+
+**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "code", "message", "issues"? }`: the stable `agent.*` code ([codes and meanings](agent-api.md#conventions)) and, for validation, field `issues` (`{ path, message }`). Branch on `code`.
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `list_agents` | `{}` | `{ agents: [summary] }` (id, name, enabled, revision, issues, tools, askFirst, channelConnection, scheduleCron, stats, pendingApprovals, …) |
+| `get_agent` | `{ id }` | `{ agent, definition, yaml, warnings }` ("detail"). `definition` is `null` when the file is invalid |
+| `validate_agent` | `{ definition }` | `{ definition, issues, warnings, yaml }`. Nothing is saved |
+| `create_agent` | `{ definition }` | Detail. Always disabled; `id` may be omitted and is made from `name` |
+| `save_agent` | `{ id, baseRevision, definition, summary? }` | Detail. `baseRevision` must be the current revision, else `agent.conflict`. `summary` up to 200 characters |
+| `enable_agent`, `disable_agent` | `{ id }` | Detail. Disabling refuses new sessions and turns; a running turn finishes |
+| `list_agent_revisions` | `{ id }` | `{ revisions: [{ revision, source, author, summary, restoredFrom, createdAt }] }`, newest first |
+| `restore_agent_revision` | `{ id, revision, baseRevision }` | Detail. Saves that revision as the newest |
+| `agent_chat` | `{ id, message, sessionId? }` | The whole session after one turn (`session`, `messages`, `turns`, `approvals`, …). Waits for the reply; omit `sessionId` to open a session (source `mcp`). |
+| `get_agent_session` | `{ id, sessionId }` | The session: transcript, turns, spans, approvals, deliveries |
+| `list_agent_sessions` | `{ id, status?, search?, limit?, cursor? }` | `{ sessions, nextCursor, stats }`. `status` is one of `open`, `running`, `waiting`, `held`, `closed`; `limit` 1–100 (default 25) |
+| `stop_agent_session` | `{ id, sessionId }` | `{ stopped: boolean }`. Stops the running turn; the session stays open |
+| `approve_agent_action`, `deny_agent_action` | `{ id, sessionId }` | The decided approval (`id`, `tool`, `status`, `actor`, …). Approving a disabled agent is `agent.disabled` |
+| `archive_agent` | `{ id }` | `{ archived: true }`. Sessions are kept; new ones are refused |
+
+A session id only opens under the agent it belongs to: `get_agent_session`, `stop_agent_session`, `approve_agent_action` and `deny_agent_action` answer `agent.session_not_found` for another agent's session.
+
+**Approvals are operator-only.** `approve_agent_action` and `deny_agent_action` are both in the `gates.decide` group, which cannot be granted to an agent (validation error `agent.stageflow_operator_only`), so an agent can never decide another agent's approval, and it cannot act on its own sessions. The other agent tools sit in `agents.read`, `agents.manage`, `agents.cleanup` and `agents.converse`; an agent granted `agents.converse` can chat with agents and stop sessions but not decide approvals. See [Agents](agents.md).
+
+See [Agents](agents.md). The REST, CLI and MCP surfaces side by side are in [Agent API](agent-api.md#cli-mcp-and-rest-side-by-side).
+
+### Pipeline authoring tools {#pipeline-authoring-tools}
+
+Edit pipelines and tasks straight on disk, with the Workshop's builders and validation: the tool loads the package, applies the same builder the Workshop uses, and writes it back through the Workshop's publish path. Nothing is written when validation fails unless `allow_invalid` is set. Paths are relative to the Host's project root and POSIX style (for example `workshop/release/release.pipeline.yaml`).
+
+**Success:** `{ "pipelinePath", "stagePaths", "taskPath" }` (`taskPath` is `null` without a task). **Failure:** a tool error `{ "error", "status"? }`; a failed validation lists the findings in `error`. `allow_invalid` (boolean, default `false`) writes anyway so a pipeline can be built step by step.
+
+| Tool | Input | Notes |
+|------|-------|-------|
+| `read_pipeline` | `{ path, task_path? }` | Returns `{ draft, destination, validation }`: the package (pipeline, stage files, optional task) and its validation result. Use before editing |
+| `create_pipeline` | `{ directory, id, model?, agent?, stages?, pipeline?, allow_invalid? }` | Writes `<directory>/<id>.pipeline.yaml`; fails if it exists (use `edit_pipeline`). `pipeline` passes a whole object instead of `id`/`model`/`stages`. A pipeline needs at least one stage to validate, so pass stages or `allow_invalid` and then `create_stage` |
+| `edit_pipeline` | `{ path, patch, allow_invalid? }` | `patch` holds the fields to change: id, model, agent, stage wiring, schemas, `requires` |
+| `create_stage` | `{ path, id?, summary?, system_prompt?, model?, entry?, route?, io?, body?, allow_invalid? }` | Adds a file-backed stage (`uses: ./<id>.yaml` plus its body). `body` carries extra stage fields |
+| `edit_stage` | `{ path, id, …fields, allow_invalid? }` | Edits an existing stage by id: its body and/or its pipeline entry (`route`, `entry`, `uses`). Extra fields are the changes |
+| `create_task` | `{ path, id?, goal?, filename?, body?, allow_invalid? }` | Creates or replaces the task beside the pipeline |
+| `edit_task` | `{ path, task_path, id?, goal?, patch?, body?, allow_invalid? }` | Edits an existing task file (`task_path`) |
+
+### `update_trigger`
+
+Replace a trigger's definition. Same validation and write path as `PUT /api/triggers/:id`; the id cannot change.
+
+**Input:** `{ id, project_root?, pipeline, task?, kind: "manual" | "schedule" | "event", schedule?: { cron, timezone? }, event?: { source, match?, config? }, enabled? }`. It is a full replacement, so omit `task` only for a dynamic-mode trigger. **Output:** the trigger, same shape as `list_triggers`. **Errors:** `{ "error", "status" }` with `isError: true` (the same statuses as `PUT /api/triggers/:id`).
+
+### `set_trigger_enabled`
+
+Enable or disable a trigger. Same write path as `PATCH /api/triggers/:id`.
+
+**Input:** `{ id, enabled, project_root? }`. **Output:** the trigger. **Errors:** `{ "error", "status" }`, the same statuses as `PATCH /api/triggers/:id`.
+
 ### `get_started`
 
 No-argument first-run orientation for remote harnesses. Returns host version, provider/toolchain hints, catalog roots with pipeline/task counts, and a three-call `next_steps` list (`list_pipelines` → `list_tasks` → `start_run`) using catalog-relative paths and symbolic seeded `project_root` ids when applicable.
@@ -249,7 +306,7 @@ List manifest-declared task paths across every catalog root this Host knows (reg
 
 ### `list_models`
 
-List catalog model ids from the same browse source as `GET /api/models`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors`.
+List model ids from the providers connected on this host plus ids pipelines already use, from the same source as `GET /api/models` (see [Providers — Models](providers.md#models)). Optional `project_root` filter narrows the pipeline-used ids; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors`.
 
 **Input:** `{ "project_root": "string (optional)" }`
 
@@ -257,21 +314,24 @@ List catalog model ids from the same browse source as `GET /api/models`. Optiona
 
 ```json
 {
-  "models": [
-    "anthropic/claude-sonnet-4-5",
-    "cursor/auto",
-    "cursor/composer-2-5"
+  "models": ["anthropic/claude-sonnet-4-5", "openrouter/nvidia/nemotron-3.5-lightning:free"],
+  "providers": [
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "source": "live",
+      "models": [{ "id": "openrouter/nvidia/nemotron-3.5-lightning:free", "provider": "openrouter", "name": "Nemotron", "free": true, "nativeTools": false }]
+    }
   ],
-  "entries": [
-    { "id": "anthropic/claude-sonnet-4-5", "project_root": "/abs/registered" },
-    { "id": "cursor/auto", "project_root": "examples" },
-    { "id": "cursor/composer-2-5", "project_root": "examples" }
-  ],
+  "default": "openrouter/nvidia/nemotron-3.5-lightning:free",
+  "fetchedAt": "2026-10-16T00:00:00.000Z",
+  "unlisted": [],
+  "entries": [{ "id": "anthropic/claude-sonnet-4-5", "project_root": "/abs/registered" }],
   "root_errors": []
 }
 ```
 
-`models` is the deduped id list; `entries` tags each id with the `project_root` it came from. There is no model-write or provider-login tool.
+`models` is the deduped id list (catalog plus ids in use); `providers` groups the connected providers' models; `unlisted` are ids in use that no connected provider lists; `entries` tags pipeline-used ids with the `project_root` they came from. There is no model-write or provider-login tool.
 
 ### `list_skills`
 
@@ -283,7 +343,7 @@ List skills with `name`, `description`, and `origin` (`run` | `checkout` | `host
 
 ### `list_project_mcp`
 
-List git-root `.mcp.json` servers as names and coarse transport only (same helper as `GET /api/project-mcp`). List never interpolates, spawns, or returns env, headers, args, command, or URLs.
+List the project `.mcp.json` servers and the servers saved from the console as names and coarse transport only (same helper as `GET /api/project-mcp`). List never interpolates, spawns, or returns env, headers, args, command, or URLs.
 
 **Input:** `{}`
 
@@ -293,8 +353,8 @@ List git-root `.mcp.json` servers as names and coarse transport only (same helpe
 {
   "status": "ok",
   "servers": [
-    { "name": "local", "transport": "stdio" },
-    { "name": "github", "transport": "http" }
+    { "name": "local", "transport": "stdio", "origin": "project" },
+    { "name": "github", "transport": "http", "origin": "console" }
   ]
 }
 ```
@@ -303,9 +363,32 @@ List git-root `.mcp.json` servers as names and coarse transport only (same helpe
 
 Inspect is not attach. Stage MCP YAML `mcp:` still allowlists what a stage receives — see [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
 
+### Adding servers without a `.mcp.json`
+
+The console (Settings → Project MCP) and HTTP can add servers, so a Host does not need a `.mcp.json` file (for example the Docker image):
+
+| Route | Does |
+|---|---|
+| `PUT /api/project-mcp/:name` body `{ "config": { "command"/"args"/"env" \| "url"/"headers" } }` | Add or replace one server |
+| `GET /api/project-mcp/:name` | Read back a console-added server |
+| `DELETE /api/project-mcp/:name` | Remove a console-added server (`409` if it is defined in the project file) |
+| `POST /api/project-mcp/import` body `{ "json": { "mcpServers": { … } } }` | Add several from pasted JSON |
+
+Remote servers take `url` plus optional `headers` and `httpTransport: "sse"` (streamable HTTP is the default and falls back to SSE). Pasted snippets using `serverUrl`, `httpUrl` or `type: sse | http | stdio` are mapped onto this shape.
+
+These servers are saved in `$STAGEFLOW_HOME/mcp/.mcp.json` and merged over the project `.mcp.json` (console wins on a name clash; list rows carry `origin`). A stage bound to a repository checkout never sees console servers or console secrets, and a checkout's own `.mcp.json` never sees them either. With a console server saved, `sf validate` no longer needs a `.mcp.json` file for a stage's `mcp:` list to resolve.
+
+**OAuth sign-in.** A URL server that answers `401` with OAuth metadata shows `needs_auth` on probe. `POST /api/project-mcp/:name/oauth/start` returns `{ authorizationUrl }`; after approval the browser lands on a `localhost` callback. A local Host receives it itself; otherwise send the full address with `POST .../oauth/complete` body `{ "input": "http://localhost:…/callback?code=…&state=…" }`. `GET .../oauth` returns `authenticated`, `expired` or `not_authenticated`; `DELETE .../oauth` signs out. Tokens are AES-256-GCM encrypted in `$STAGEFLOW_HOME/agent/mcp-oauth-encrypted` (key: `$STAGEFLOW_HOME/secrets/mcp-oauth.key`, mode 0600, or `PI_MCP_ADAPTER_OAUTH_FILE_KEY`). Signed-in servers are usable by agents and probes, not pipeline stages: stage attempts run in a sealed agent dir and the adapter refuses a symlinked store. For stages use a bearer token in `headers` backed by a secret.
+
+**Secrets.** Never put a token in the file. Write `${NAME}` and store the value with `PUT /api/mcp-secrets/:name` body `{ "value": "…" }`. A literal token in `env`, `headers`, the `url` (query parameters or `user:password@`) or an arg (`--token=…`, `--api-key <value>`) is moved there for you and the file keeps `${NAME}`. `GET /api/project-mcp/:name` returns the config with any remaining literal secret masked as `••••`. Who may fill `${NAME}`: a **stage** gets console servers but only the console secrets whose names the stage declared in `secrets:` (plus its curated environment); **agents and Check (probe)** fill from console secrets and from Host env names listed in `STAGEFLOW_MCP_ENV_ALLOW` (comma-separated), never from arbitrary Host env, so a probe and an agent run resolve one config identically. A stored console secret is not shadowed by Host env. Stored values are never returned (`GET /api/mcp-secrets` lists names, `usedBy` and `set`; `set` means a console secret exists or an allow-listed Host variable is present) and live in `$STAGEFLOW_HOME/secrets/mcp-secrets.json` (directory `0700`, file `0600`, written atomically). A server entry cannot use `${NAME}` for a forever-denied name (control tokens, `PI_MCP_ADAPTER_OAUTH_FILE_KEY`) or a provider/cloud credential name (`ANTHROPIC_API_KEY`, `AWS_*`, `GITHUB_TOKEN`, …) unless that name is in `STAGEFLOW_MCP_ENV_ALLOW`; an auto-created secret for such a key gets a `GH_`-style prefixed name instead. Error text from Check and sign-in has secret values (6+ characters) replaced with `[redacted]`.
+
+**URL policy.** `url` servers may not point at link-local or cloud-metadata addresses (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`, `metadata.google.internal`). Loopback and private LAN addresses are allowed. The check runs at save, when a project `.mcp.json` entry is resolved (after `${…}` is filled), for Check and for OAuth sign-in. Project entries are also shape-checked (`command` xor `url`, string `args`, string maps for `env`/`headers`).
+
+**Corrupt state.** If `mcp/.mcp.json` or `secrets/mcp-secrets.json` is unreadable or not the expected shape, it is never treated as empty or overwritten: the API answers `409` (`host_state_corrupt`) and resolve/Check report `invalid_config` with the file name. Fix or remove the file. Saving a server writes the secrets file first and restores it if the catalog write fails.
+
 ### `probe_project_mcp`
 
-Probe one named git-root `.mcp.json` server with isolated connect-and-exit (same helper as `POST /api/project-mcp/:name/probe`). Aborting the MCP request maps to helper `cancelled`, not `wait_run` `aborted`. Probe does not attach servers to a stage.
+Probe one named server (from the project `.mcp.json` or saved from the console) with isolated connect-and-exit (same helper as `POST /api/project-mcp/:name/probe`). Aborting the MCP request maps to helper `cancelled`, not `wait_run` `aborted`. Probe does not attach servers to a stage.
 
 **Input:** `{ "name": "github" }`
 

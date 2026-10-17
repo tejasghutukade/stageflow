@@ -67,7 +67,7 @@ export function availableProviders(rows: readonly ConnectionRow[], meta: Channel
 export type ToolCard = { name: string; detail: string };
 
 export function toolCards(servers: readonly ProjectMcpCatalogEntry[]): ToolCard[] {
-  return servers.map((server) => ({ name: server.name, detail: `${server.transport} server · .mcp.json` }));
+  return servers.map((server) => ({ name: server.name, detail: `${server.transport} server · ${server.origin === "console" ? "added in Settings" : ".mcp.json"}` }));
 }
 
 export type ConnectionTotals = { connections: number; channels: number; tools: number; needsAttention: number; connectedChannels: number };

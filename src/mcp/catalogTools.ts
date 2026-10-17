@@ -1,4 +1,5 @@
 import path from "node:path";
+import { buildModelsResponse } from "../models/response.js";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import {
@@ -9,7 +10,6 @@ import {
   selectCatalogRootForStart,
 } from "../config/catalogRelativePath.js";
 import {
-  listModelsMultiProject,
   listPipelinesMultiProject,
   listTasksMultiProject,
 } from "../config/multiProjectCatalog.js";
@@ -330,15 +330,15 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "list_models",
     {
       description:
-        "List catalog model ids across every project this host knows about (same multi-root source as GET /api/models). Optional project_root filter narrows.",
+        "List model ids from the providers connected on this host, plus ids pipelines use (same source as GET /api/models). Returns models, providers (grouped), the default model and unlisted ids. Optional project_root filter narrows the pipeline-used ids.",
       inputSchema: z.object({
         project_root: z.string().optional(),
       }),
     },
     async ({ project_root }) => {
-      const result = await listModelsMultiProject({
+      const { response, used: result } = await buildModelsResponse({
         store,
-        bootCwd: cwd,
+        cwd,
         projectRootFilter: project_root,
       });
       if (
@@ -354,11 +354,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
           true,
         );
       }
-      return textResult({
-        models: result.models,
-        entries: result.items,
-        root_errors: result.root_errors,
-      });
+      return textResult(response);
     },
   );
 

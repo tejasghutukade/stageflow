@@ -18,6 +18,7 @@ export const AGENTMAIL_META: ProviderMeta = {
     { key: "inbox", label: "Inbox address", hint: "An existing AgentMail inbox. Stageflow does not create one.", target: "config", input: "text", required: true, placeholder: "research@agentmail.to" },
     { key: "region", label: "Region", target: "config", input: "select", required: false, defaultValue: "us", options: [{ value: "us", label: "United States" }, { value: "eu", label: "Europe" }] },
     { key: "apiKey", label: "API key", hint: "Needs to read the inbox and send messages.", target: "secret", input: "password", required: true, placeholder: "am_..." },
+    { key: "inboundSecret", label: "Webhook secret (optional)", hint: "Lets agents receive mail for this inbox. Sign webhooks to /api/agent-inbound/<connection id> with this secret (HMAC-SHA256 of the body in the x-agentmail-signature header).", target: "secret", input: "password", required: false },
   ],
   recipient: { label: "To", placeholder: "oncall@acme.com, lead@acme.com", multiple: true, cc: true, template: false },
   envNames: ["AGENTMAIL_API_KEY"],
@@ -68,7 +69,7 @@ export function createAgentMailProvider(options: AgentMailOptions = {}): Channel
     id: "agentmail",
     meta: AGENTMAIL_META,
     operations: ["send"],
-    secrets: { required: ["apiKey"] },
+    secrets: { required: ["apiKey"], optional: ["inboundSecret"] },
     validateConfig,
     validateTarget,
     describe: config => ({ identity: config.inbox }),
@@ -80,6 +81,18 @@ export function createAgentMailProvider(options: AgentMailOptions = {}): Channel
       if (result.status >= 200 && result.status < 300) return;
       throw result.status === 404 ? new ChannelError("CHANNEL_INVALID_INPUT") : statusFailure(result.status, "check", connection.id);
     }),
+    async reply(connection, replyTo, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
+      const result = await httpCall({
+        fetch: doFetch, url: `${inboxUrl(connection)}/messages/${encodeURIComponent(replyTo)}/reply`, method: "POST", headers: auth(connection),
+        body: { text: message.text },
+        timeoutMs: options.sendTimeoutMs ?? 30000, mode: "send", connectionId: connection.id,
+      });
+      if (result.status < 200 || result.status >= 300) {
+        throw result.status === 404 ? new ChannelError("CHANNEL_INVALID_INPUT", false, { connectionId: connection.id }) : statusFailure(result.status, "send", connection.id);
+      }
+      const body = parseJson(result.text) as { message_id?: unknown } | undefined;
+      return receiptFor(typeof body?.message_id === "string" ? body.message_id : undefined);
+    },
     async send(connection, target, message: OutboundMessage, _context: SendContext): Promise<SendReceipt> {
       const result = await httpCall({
         fetch: doFetch, url: `${inboxUrl(connection)}/messages/send`, method: "POST", headers: auth(connection),

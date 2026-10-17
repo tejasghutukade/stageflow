@@ -4,6 +4,7 @@ import {
   type OperatorAgentModel,
 } from "./host.js";
 import type { DocsRetriever } from "./docsRetrieval.js";
+import { createAgentAuthorProfile } from "./profiles/agentAuthor.js";
 import {
   createWorkshopAuthorProfile,
   isTaskProposalIntent,
@@ -152,6 +153,7 @@ export function createWorkshopOperatorHost(
         retriever: options.retriever,
         projectRoot: options.projectRoot,
       }),
+      createAgentAuthorProfile(),
     ],
   );
   return host;

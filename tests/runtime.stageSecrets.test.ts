@@ -16,7 +16,9 @@ import {
   materialiseCredentialFile,
   materialiseSecretBytes,
 } from "../src/runtime/credentialMaterialisation.js";
+import { setMcpSecret } from "../src/config/mcpHostCatalog.js";
 import {
+  assertSecretPresent,
   loadSecretRegistry,
   resolveStageSecrets,
   SecretUnavailableError,
@@ -285,6 +287,24 @@ describe("resolveStageSecrets", () => {
       );
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("console secrets in the stage registry", () => {
+  it("lets a stage declare a console secret without putting it in the stage environment", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-console-secret-"));
+    try {
+      setMcpSecret("LINEAR_KEY", "lin-secret-value-1", home);
+      const registry = loadSecretRegistry({}, home);
+      expect(registry.get("LINEAR_KEY")).toEqual({ kind: "console", name: "LINEAR_KEY" });
+      expect(() => assertSecretPresent("LINEAR_KEY", registry, {}, home)).not.toThrow();
+      const result = resolveStageSecrets({ decls: [{ name: "LINEAR_KEY" }], registry, hostEnv: {}, attemptDir: home, home });
+      expect(result.grants.env.LINEAR_KEY).toBeUndefined();
+      expect(result.knownValues).toEqual([{ name: "LINEAR_KEY", value: "lin-secret-value-1" }]);
+      expect(() => assertSecretPresent("NOPE", registry, {}, home)).toThrow(/unknown_secret/);
+    } finally {
+      await rm(home, { recursive: true, force: true });
     }
   });
 });

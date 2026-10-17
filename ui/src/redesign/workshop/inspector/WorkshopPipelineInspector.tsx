@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { ModelPicker } from "../../../components/ModelPicker";
 import { LuChevronDown, LuChevronUp } from "react-icons/lu";
 import type { DraftPackagePayload, ValidationFinding } from "../../../api";
 import {
@@ -7,7 +8,6 @@ import {
   FieldErrors,
   FieldLabel,
   MONO,
-  SelectControl,
   controlClass,
   hasError,
   useLocalText,
@@ -29,7 +29,6 @@ export type WorkshopPipelineInspectorProps = {
   draft: DraftPackagePayload;
   baseline: DraftPackagePayload | null;
   findings: ValidationFinding[];
-  models: string[];
   defaultModel: string | null;
   onDraftChange: (draft: DraftPackagePayload) => void;
   pipelinePath?: string | null;
@@ -95,7 +94,6 @@ export function WorkshopPipelineInspector({
   draft,
   baseline,
   findings,
-  models,
   defaultModel,
   onDraftChange,
   pipelinePath,
@@ -105,10 +103,6 @@ export function WorkshopPipelineInspector({
   const changed = pipelineChanged(draft, baseline);
   const fileLabel = pipelinePath ?? pipelineFileLabel(form.id);
   const ids = form.stages.map((s) => s.id);
-  const modelOptions = [
-    { value: "", label: defaultModel ? `Inherits default (${defaultModel})` : "Inherits default" },
-    ...Array.from(new Set([...(form.model ? [form.model] : []), ...models])).map((m) => ({ value: m, label: m })),
-  ];
 
   return (
     <div className="flex w-full flex-col">
@@ -139,28 +133,14 @@ export function WorkshopPipelineInspector({
 
         <div className="flex flex-col gap-[5px]">
           <FieldLabel>default model</FieldLabel>
-          <SelectControl
+          <ModelPicker
             ariaLabel="Pipeline default model"
-            value={form.model ?? ""}
-            options={modelOptions}
+            value={form.model ?? null}
+            inheritLabel={defaultModel ? `Inherits default (${defaultModel})` : "Inherits default"}
+            defaultModel={defaultModel}
             error={hasError(byField.model)}
-            onChange={(value) => onDraftChange(setPipelineModel(draft, value || null))}
-          >
-            {form.model ? (
-              <span className={`min-w-0 flex-1 truncate text-xs leading-normal text-[#ecedee] ${MONO}`}>
-                {form.model}
-              </span>
-            ) : (
-              <>
-                <span className="whitespace-nowrap text-xs leading-normal text-[#ecedee]">Inherits default</span>
-                <span
-                  className={`min-w-0 flex-1 truncate text-right text-[11px] leading-normal text-[#8b8f98] ${MONO}`}
-                >
-                  {defaultModel ?? "none set"}
-                </span>
-              </>
-            )}
-          </SelectControl>
+            onChange={(value) => onDraftChange(setPipelineModel(draft, value))}
+          />
           <FieldErrors findings={byField.model} />
         </div>
 

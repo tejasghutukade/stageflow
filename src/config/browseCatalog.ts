@@ -57,12 +57,6 @@ export type CatalogScanPaths = {
   triggerPaths: string[];
 };
 
-const BAKED_MODEL_IDS = [
-  "anthropic/claude-sonnet-4-5",
-  "cursor/auto",
-  "cursor/composer-2-5",
-] as const;
-
 function repoRelPath(projectRoot: string, absPath: string): string {
   return path.relative(projectRoot, absPath).replace(/\\/g, "/");
 }
@@ -88,10 +82,6 @@ function mapStageListing(
     listing.skill = stage.skill;
   }
   return listing;
-}
-
-function bakedModels(): string[] {
-  return [...BAKED_MODEL_IDS].sort((a, b) => a.localeCompare(b));
 }
 
 function catalogReadyFromStageflow(
@@ -189,11 +179,12 @@ async function listPipelinesFromManifest(
   return listings;
 }
 
+/** Model ids the project's pipelines already use. The provider catalog (src/models) owns the choosable list. */
 async function listModelsFromManifest(
   projectRoot: string,
   manifest: LoadedManifest,
 ): Promise<string[]> {
-  const models = new Set<string>(BAKED_MODEL_IDS);
+  const models = new Set<string>();
   const filePaths = await scanCatalogPaths(manifest, "pipeline");
   for (const filePath of filePaths) {
     try {
@@ -229,7 +220,7 @@ export async function browseCatalog(
       ...base,
       pipelines: [],
       tasks: [],
-      models: bakedModels(),
+      models: [],
       warnings: [],
     };
   }
@@ -268,7 +259,7 @@ export async function listTasksForContext(ctx: CatalogContext): Promise<TaskList
 
 export async function listModelsForContext(ctx: CatalogContext): Promise<string[]> {
   if (!catalogReady(ctx)) {
-    return bakedModels();
+    return [];
   }
   return listModelsFromManifest(ctx.projectRoot, ctx.manifest);
 }

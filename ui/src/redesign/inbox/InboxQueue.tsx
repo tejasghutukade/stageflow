@@ -8,14 +8,15 @@ import { formatRunElapsed } from "./inboxViews";
 import type { FailedSortOrder } from "./failedViews";
 import { partitionFailedRuns, sortFailedRuns } from "./failedViews";
 import type { InboxTabId } from "./inboxTab";
-import { LuCircleHelp, LuLoader, LuX } from "react-icons/lu";
+import { LuBot, LuCircleHelp, LuLoader, LuX } from "react-icons/lu";
+import { approvalPreview, type NeedsItem } from "./needsQueue";
 
 export type InboxTab = InboxTabId;
 
 export type InboxQueueProps = {
   tab: InboxTab;
   onTabChange: (tab: InboxTab) => void;
-  waiting: RunSummary[];
+  needs: NeedsItem[];
   broken: RunSummary[];
   finished: RunSummary[];
   alsoRunning: RunSummary[];
@@ -108,7 +109,7 @@ function GroupLabel({ children }: { children: string }) {
 export function InboxQueue({
   tab,
   onTabChange,
-  waiting,
+  needs,
   broken,
   finished,
   alsoRunning,
@@ -145,7 +146,7 @@ export function InboxQueue({
           activeId={tab}
           onChange={(id) => onTabChange(id as InboxTab)}
           tabs={[
-            { id: "needs", label: "Needs you", count: waiting.length },
+            { id: "needs", label: "Needs you", count: needs.length },
             { id: "failed", label: "Failed", count: broken.length },
             { id: "done_today", label: "Done today", count: finished.length },
           ]}
@@ -158,7 +159,40 @@ export function InboxQueue({
         ) : null}
 
         {tab === "needs"
-          ? waiting.map((run) => {
+          ? needs.map((item) => {
+              if (item.kind === "agent") {
+                const { approval } = item;
+                const selected = selectedId === item.key;
+                const preview = approvalPreview(approval.payload);
+                return (
+                  <DataTableRow key={item.key} variant="gate" selected={selected} needs onClick={() => onSelect(item.key)}>
+                    <span
+                      className={`flex size-7 shrink-0 items-center justify-center rounded-full${selected ? " bg-[#f5b54429]" : " bg-[#f5b5441a]"}`}
+                      aria-hidden="true"
+                    >
+                      <LuBot className="size-3.5 text-[var(--sf-needs)]" />
+                    </span>
+                    <div className="flex min-w-0 flex-1 flex-col gap-1">
+                      <div className="truncate text-[13px] font-medium text-[var(--sf-text-1)]">
+                        {approval.agentName ?? approval.agentId}
+                      </div>
+                      <div className="truncate font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-3)]">
+                        {approval.tool} · approval
+                      </div>
+                      <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--sf-text-3)]">
+                        <span className="min-w-0 truncate">Agent</span>
+                        <span className="shrink-0 font-['Geist_Mono',monospace]">{relativeTime(approval.createdAt)}</span>
+                      </div>
+                      {preview ? (
+                        <p className="line-clamp-2 break-all font-['Geist_Mono',monospace] text-[11px] leading-snug text-[var(--sf-text-2)]">
+                          {preview}
+                        </p>
+                      ) : null}
+                    </div>
+                  </DataTableRow>
+                );
+              }
+              const run = item.run;
               const selected = selectedId === run.run_id;
               return (
                 <DataTableRow
