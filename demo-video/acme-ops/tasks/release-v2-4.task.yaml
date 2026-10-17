@@ -1,6 +1,0 @@
-id: release-v2-4
-goal: Publish customer-facing release notes for Acme Cloud v2.4
-context: 41 merged pull requests since v2.3, including the new SSO audit log and a deprecated v1 export API.
-constraints: Plain language, no internal ticket ids, flag every breaking change.
-input:
-  version: v2.4.0

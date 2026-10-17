@@ -88,3 +88,6 @@ benchmarks/
 /runs/
 **/.stageflow*/runs/
 /email.yaml
+
+# Demo video project lives in the main checkout only
+/demo-video/

@@ -1,6 +1,0 @@
-id: vendor-evaluation
-goal: Recommend a transactional email vendor for a Series A SaaS company
-context: Volume is 2M emails per month, EU customers, SOC 2 report required.
-constraints: Compare at least three vendors; cite the evidence for each claim.
-input:
-  question: Which transactional email vendor should we adopt for 2027?
