@@ -18,3 +18,4 @@ catalog:
     - examples/route-wiring-smoke-test
     - examples/stage-mcp/stage-mcp-dead.pipeline.yaml
     - examples/stage-mcp/stage-mcp-dead.task.yaml
+    - examples/channels-smoke
