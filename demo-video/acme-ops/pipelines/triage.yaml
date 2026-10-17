@@ -1,0 +1,17 @@
+id: triage
+model: demo/demo-1
+system_prompt: |
+  You are the triage stage of the incident-postmortem pipeline.
+  Classify the incident severity and affected services, write triage.md.
+io:
+  input:
+    schema: {type: object}
+  output:
+    schema:
+      type: object
+      required: [severity, services]
+      properties:
+        severity: {type: string}
+        services: {type: integer}
+verify:
+  - {id: triage-on-disk, type: artifact, path: triage.md, nonempty: true, when: [after]}

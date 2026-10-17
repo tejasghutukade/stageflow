@@ -1,0 +1,17 @@
+id: draft-notes
+model: demo/demo-1
+system_prompt: |
+  You are the draft-notes stage of the release-notes pipeline.
+  Turn the grouped changes into customer-facing release notes in a friendly,
+  concrete tone. Write release-notes.md and emit success.
+io:
+  input:
+    schema: {type: object}
+  output:
+    schema:
+      type: object
+      required: [word_count]
+      properties:
+        word_count: {type: integer}
+verify:
+  - {id: notes-on-disk, type: artifact, path: release-notes.md, nonempty: true, when: [after]}

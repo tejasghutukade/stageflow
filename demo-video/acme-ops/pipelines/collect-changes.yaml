@@ -1,0 +1,20 @@
+id: collect-changes
+model: demo/demo-1
+system_prompt: |
+  You are the collect-changes stage of the release-notes pipeline.
+  Read the release task input and group merged changes into features, fixes and
+  breaking changes. Write changes.md, then emit the counts as the payload.
+io:
+  input:
+    schema: {type: object}
+  output:
+    schema:
+      type: object
+      required: [version, features, fixes, breaking]
+      properties:
+        version: {type: string}
+        features: {type: integer}
+        fixes: {type: integer}
+        breaking: {type: integer}
+verify:
+  - {id: changes-on-disk, type: artifact, path: changes.md, nonempty: true, when: [after]}

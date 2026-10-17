@@ -1,0 +1,16 @@
+id: editor-review
+model: demo/demo-1
+gate_kinds: [artifact_backed]
+system_prompt: |
+  You are the editor-review stage of the release-notes pipeline.
+  Ask the human editor to approve release-notes.md together with risks.md
+  before anything is published. Never publish without an approval.
+io:
+  input:
+    schema: {type: object}
+  output:
+    schema:
+      type: object
+      required: [approved]
+      properties:
+        approved: {type: boolean}

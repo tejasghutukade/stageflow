@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-17
+
 ### Fixed
 
 - **Agent turns, approvals and replies are safer.** One module (`turnLifecycle`) now owns every change of a turn, its session and its approval. Stopping a turn at an ask-first gate used to leave the approval pending, so it could be approved later and then wave through a later identical call; it is now closed with the turn. Finishing a turn that already ended is ignored, and a late reply-delivery result no longer rewrites a finished turn. Guardrail block patterns now hold streamed text until the finished reply passes, on the console and the public chat. Path protection covers every tool with a path argument, not only `write` and `edit`; `bash` is not path-confined, so the editor warns about it and every `bash` call now always waits for approval, even when `ask_first` does not list it. Overlapping retry sweeps can no longer send a channel reply twice. A public-chat request with `Origin: null` or a malformed origin no longer throws. Reserved agent ids (`sessions`, `approvals`, `new`) are rejected wherever an id is parsed, not only when generated. `sf agents chat` exits non-zero when the stream closes without a result, and `sf agents restore` needs `--base` so its optimistic lock means something. The MCP tools `get_agent_session`, `approve_agent_action`, `deny_agent_action` and `stop_agent_session` now take the agent `id` and refuse a session that belongs to another agent.

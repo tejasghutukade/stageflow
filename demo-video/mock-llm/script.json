@@ -1,0 +1,313 @@
+{
+ "stages": {
+  "collect-changes": {
+   "match": [
+    "You are the collect-changes stage"
+   ],
+   "artifacts": [
+    {
+     "path": "changes.md",
+     "content": "# Acme Cloud v2.4 \u2014 grouped changes\n\n## Features (14)\n- SSO audit log with CSV export and 400-day retention\n- Workspace-level API rate limits\n- Dark mode for the billing portal\n- Bulk member import from CSV\n\n## Fixes (26)\n- Invoice PDF no longer clips long company names\n- Webhook retries now back off exponentially\n- Fixed duplicate seat charges when a member is re-invited\n\n## Breaking changes (1)\n- The v1 export API is deprecated and returns HTTP 410 from 2027-01-15\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Grouped 41 merged pull requests into 14 features, 26 fixes and 1 breaking change.",
+    "payload": {
+     "version": "v2.4.0",
+     "features": 14,
+     "fixes": 26,
+     "breaking": 1
+    }
+   },
+   "thinking": "Reading the 41 merged pull requests since v2.3 and grouping them by impact.",
+   "wrapup": "Changes grouped; handing off to drafting and risk scan."
+  },
+  "draft-notes": {
+   "match": [
+    "You are the draft-notes stage"
+   ],
+   "artifacts": [
+    {
+     "path": "release-notes.md",
+     "content": "# Acme Cloud v2.4\n\n**Know exactly who did what.** The new **SSO audit log** records every sign-in and\npermission change, exports to CSV, and keeps 400 days of history.\n\n## Also new\n- Set API rate limits per workspace\n- Bulk-invite teammates from a CSV file\n- Dark mode in the billing portal\n\n## Fixed\n- Invoice PDFs no longer cut off long company names\n- Webhooks retry with exponential backoff\n- Re-inviting a member no longer double-charges the seat\n\n## Heads up\nThe v1 export API is deprecated and will return HTTP 410 from **15 January 2027**.\nMove to the v2 export endpoint before then.\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Drafted 118-word customer release notes in a friendly tone.",
+    "payload": {
+     "word_count": 118
+    }
+   },
+   "thinking": "Turning the grouped changes into plain-language release notes.",
+   "wrapup": "Draft ready for editor review."
+  },
+  "risk-scan": {
+   "match": [
+    "You are the risk-scan stage"
+   ],
+   "artifacts": [
+    {
+     "path": "risks.md",
+     "content": "# Release risk scan \u2014 v2.4.0\n\n| Change | Risk | Mitigation |\n|--------|------|------------|\n| v1 export API removal (2027-01-15) | Medium | Email 212 active v1 integrators; link the migration guide |\n| Webhook retry backoff | Low | Behaviour is additive; no config change |\n| SSO audit log retention | Low | Storage growth forecast under 2 GB per month |\n\n**Overall: medium.** One migration note required.\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Flagged one medium-risk change that needs a migration note.",
+    "payload": {
+     "risk_level": "medium",
+     "migration_notes": 1
+    }
+   },
+   "thinking": "Scanning breaking changes for anything customers must act on.",
+   "wrapup": "Risk scan complete."
+  },
+  "editor-review": {
+   "match": [
+    "You are the editor-review stage"
+   ],
+   "artifacts": [
+    {
+     "path": "review-brief.md",
+     "content": "# Editor review \u2014 v2.4.0\n\nPlease approve before publishing:\n\n1. `release-notes.md` \u2014 118 words, friendly tone\n2. `risks.md` \u2014 overall risk **medium**, one migration note\n\nPublishing posts to the changelog, the in-app banner and the customer email list.\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Waiting on the human editor to approve the notes and risk scan.",
+    "payload": {
+     "approved": true
+    }
+   },
+   "thinking": "The notes and risk scan are ready. A human editor must approve before anything ships.",
+   "ask": {
+    "preamble": "Both drafts are ready. I will not publish without an editor's approval.",
+    "params": {
+     "kind": "artifact_backed",
+     "message": "Approve the v2.4 release notes and risk scan for publishing? The notes announce a v1 export API deprecation.",
+     "artifacts": [
+      "release-notes.md",
+      "risks.md"
+     ]
+    }
+   },
+   "wrapup": "Approved. Moving on to publishing."
+  },
+  "publish-notes": {
+   "match": [
+    "You are the publish-notes stage"
+   ],
+   "artifacts": [
+    {
+     "path": "publish.md",
+     "content": "# Published \u2014 Acme Cloud v2.4.0\n\n- Changelog page updated\n- In-app banner scheduled for 09:00 UTC\n- Email queued for 18,402 subscribers\n- Migration note sent to 212 v1 export integrators\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Published the approved notes to 3 channels and notified v1 integrators.",
+    "payload": {
+     "channels": 3
+    }
+   },
+   "thinking": "Publishing the approved notes.",
+   "wrapup": "Release notes are live."
+  },
+  "scope": {
+   "match": [
+    "You are the scope stage"
+   ],
+   "artifacts": [
+    {
+     "path": "scope.md",
+     "content": "# Scope \u2014 transactional email vendor\n\n**Question:** Which vendor should we adopt for 2027?\n\n**Constraints:** 2M emails per month \u00b7 EU customers \u00b7 SOC 2 Type II report\n\n## Tracks\n1. **Pricing** \u2014 total cost at 2M/month incl. dedicated IP\n2. **Security** \u2014 SOC 2, EU data residency, SSO for the dashboard\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Split the question into pricing and security tracks.",
+    "payload": {
+     "question": "Which transactional email vendor should we adopt for 2027?",
+     "tracks": 2
+    }
+   },
+   "thinking": "Breaking the question into two parallel tracks.",
+   "wrapup": "Scope set."
+  },
+  "research-pricing": {
+   "match": [
+    "You are the research-pricing stage"
+   ],
+   "artifacts": [
+    {
+     "path": "pricing.md",
+     "content": "# Pricing at 2M emails per month\n\n| Vendor | Monthly cost | Dedicated IP | Notes |\n|--------|-------------:|-------------:|-------|\n| Postmark | $1,150 | included | Highest deliverability, strict on bulk |\n| Amazon SES | $200 + ops | $24.95 | Cheapest, you run reputation yourself |\n| SendGrid | $1,000 | $90 | Familiar, noisier support |\n| Resend | $900 | included | Good DX, younger platform |\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Compared four vendors at 2M emails per month.",
+    "payload": {
+     "vendors_compared": 4
+    }
+   },
+   "thinking": "Comparing list prices and add-ons at the expected volume.",
+   "wrapup": "Pricing track done."
+  },
+  "research-security": {
+   "match": [
+    "You are the research-security stage"
+   ],
+   "artifacts": [
+    {
+     "path": "security.md",
+     "content": "# Security posture\n\n| Vendor | SOC 2 Type II | EU data residency | Dashboard SSO |\n|--------|:-------------:|:-----------------:|:-------------:|\n| Postmark | Yes | Yes (EU region) | Yes |\n| Amazon SES | Yes | Yes (eu-west-1) | Via IAM |\n| SendGrid | Yes | Limited | Yes |\n| Resend | In progress | Yes | Yes |\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Checked 12 certifications across four vendors.",
+    "payload": {
+     "certifications_checked": 12
+    }
+   },
+   "thinking": "Checking SOC 2 reports, data residency and SSO for each vendor.",
+   "wrapup": "Security track done."
+  },
+  "synthesize": {
+   "match": [
+    "You are the synthesize stage"
+   ],
+   "artifacts": [
+    {
+     "path": "recommendation.md",
+     "content": "# Recommendation: Postmark\n\nPostmark meets every hard requirement (SOC 2 Type II, EU region, dashboard SSO)\nand trades roughly $950 per month over Amazon SES for deliverability and support.\n\n**Runner-up:** Amazon SES, if the team can own sender reputation.\n**Rule out:** Resend until its SOC 2 audit completes.\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Recommended Postmark; Amazon SES as runner-up.",
+    "payload": {
+     "recommendation": "Adopt Postmark; keep Amazon SES as the fallback."
+    }
+   },
+   "thinking": "Joining pricing and security into one memo.",
+   "wrapup": "Memo ready."
+  },
+  "triage": {
+   "match": [
+    "You are the triage stage"
+   ],
+   "artifacts": [
+    {
+     "path": "triage.md",
+     "content": "# INC-2043 \u2014 triage\n\n- **Severity:** SEV-1 (customer-facing checkout)\n- **Impact:** 100% of checkout requests returned 5xx for 47 minutes\n- **Services:** checkout-api, payments-gateway, order-worker\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Classified INC-2043 as SEV-1 affecting three services.",
+    "payload": {
+     "severity": "SEV-1",
+     "services": 3
+    }
+   },
+   "thinking": "Classifying severity and blast radius.",
+   "wrapup": "Triage done."
+  },
+  "timeline": {
+   "match": [
+    "You are the timeline stage"
+   ],
+   "artifacts": [
+    {
+     "path": "timeline.md",
+     "content": "# Timeline (UTC)\n\n- 14:02 Deploy config-change #8841 reduces DB connection pool from 80 to 8\n- 14:09 First 5xx alert fires on checkout-api\n- 14:21 On-call pages the platform team\n- 14:44 Root cause identified: pool exhaustion\n- 14:49 Pool restored to 80; error rate returns to baseline\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Rebuilt a 5-event timeline from alerts and deploy logs.",
+    "payload": {
+     "events": 5
+    }
+   },
+   "thinking": "Reconstructing the timeline from alerts and deploy logs.",
+   "wrapup": "Timeline done."
+  },
+  "postmortem": {
+   "match": [
+    "You are the postmortem stage"
+   ],
+   "artifacts": [
+    {
+     "path": "postmortem.md",
+     "content": "# Postmortem \u2014 INC-2043\n\n**Root cause:** a config change set the checkout DB connection pool to 8 instead of 80;\nthe service exhausted connections under normal load.\n\n## What went well\n- On-call acknowledged within 3 minutes of paging\n\n## Action items\n1. Add a lint rule that rejects pool sizes below 20 \u2014 *Platform*\n2. Canary config changes to 5% of traffic for 10 minutes \u2014 *Release*\n3. Alert on connection-pool saturation above 80% \u2014 *SRE*\n"
+    }
+   ],
+   "envelope": {
+    "summary": "Wrote a blameless postmortem with 3 action items.",
+    "payload": {
+     "action_items": 3
+    }
+   },
+   "thinking": "Writing the blameless postmortem.",
+   "wrapup": "Postmortem ready."
+  }
+ },
+ "agents": {
+  "support": {
+   "match": [
+    "You are Acme Support"
+   ],
+   "fallback": "I'm not sure about that one \u2014 I can hand you to a human teammate if you'd like.",
+   "rules": [
+    {
+     "when": [
+      "sso",
+      "audit"
+     ],
+     "reply": "The SSO audit log shipped in **v2.4**. It records every sign-in and permission change, exports to CSV, and keeps 400 days of history. You'll find it under *Settings \u2192 Security \u2192 Audit log*."
+    },
+    {
+     "when": [
+      "v1",
+      "export",
+      "deprecat"
+     ],
+     "reply": "The **v1 export API** is deprecated and will return HTTP 410 from **15 January 2027**. Please move to the v2 export endpoint \u2014 the migration guide is at docs.acme.example/export-v2."
+    },
+    {
+     "when": [
+      "invoice",
+      "billing",
+      "charge",
+      "seat"
+     ],
+     "reply": "Re-inviting a member used to double-charge the seat. That's fixed in v2.4, and any duplicate charges from the last 30 days are credited automatically."
+    }
+   ]
+  },
+  "release_ops": {
+   "match": [
+    "You are Release Ops"
+   ],
+   "fallback": "Tell me which release you want to prepare.",
+   "rules": [
+    {
+     "when": [
+      "changelog",
+      "update",
+      "notes"
+     ],
+     "preamble": "I'll add the v2.4 entry to the changelog.",
+     "tool": {
+      "name": "edit",
+      "args": {
+       "path": "CHANGELOG.md",
+       "edits": [
+        {
+         "oldText": "## Unreleased",
+         "newText": "## Unreleased\n\n## v2.4.0\n- SSO audit log with CSV export\n- v1 export API deprecated (HTTP 410 from 2027-01-15)"
+        }
+       ]
+      }
+     },
+     "reply": "Done.",
+     "after": "Changelog updated with the v2.4.0 entry."
+    }
+   ]
+  }
+ }
+}

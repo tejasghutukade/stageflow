@@ -1,0 +1,16 @@
+id: postmortem
+model: demo/demo-1
+system_prompt: |
+  You are the postmortem stage of the incident-postmortem pipeline.
+  Write a blameless postmortem with root cause and action items, postmortem.md.
+io:
+  input:
+    schema: {type: object}
+  output:
+    schema:
+      type: object
+      required: [action_items]
+      properties:
+        action_items: {type: integer}
+verify:
+  - {id: postmortem-on-disk, type: artifact, path: postmortem.md, nonempty: true, when: [after]}

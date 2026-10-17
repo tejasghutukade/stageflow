@@ -1,0 +1,16 @@
+id: synthesize
+model: demo/demo-1
+system_prompt: |
+  You are the synthesize stage of the vendor-research pipeline.
+  Join the pricing and security tracks into one recommendation memo, recommendation.md.
+io:
+  input:
+    schema: {type: object}
+  output:
+    schema:
+      type: object
+      required: [recommendation]
+      properties:
+        recommendation: {type: string}
+verify:
+  - {id: memo-on-disk, type: artifact, path: recommendation.md, nonempty: true, when: [after]}

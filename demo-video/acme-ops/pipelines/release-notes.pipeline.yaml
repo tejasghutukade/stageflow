@@ -1,0 +1,22 @@
+id: release-notes
+stages:
+  - id: collect-changes
+    uses: ./collect-changes.yaml
+    entry: true
+    route:
+      - to: draft-notes
+      - to: risk-scan
+  - id: draft-notes
+    uses: ./draft-notes.yaml
+    route:
+      - to: editor-review
+  - id: risk-scan
+    uses: ./risk-scan.yaml
+    route:
+      - to: editor-review
+  - id: editor-review
+    uses: ./editor-review.yaml
+    route:
+      - to: publish-notes
+  - id: publish-notes
+    uses: ./publish-notes.yaml

@@ -1,0 +1,13 @@
+id: incident-postmortem
+stages:
+  - id: triage
+    uses: ./triage.yaml
+    entry: true
+    route:
+      - to: timeline
+  - id: timeline
+    uses: ./timeline.yaml
+    route:
+      - to: postmortem
+  - id: postmortem
+    uses: ./postmortem.yaml

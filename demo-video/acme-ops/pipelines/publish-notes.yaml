@@ -1,0 +1,16 @@
+id: publish-notes
+model: demo/demo-1
+system_prompt: |
+  You are the publish-notes stage of the release-notes pipeline.
+  Write the final publish.md summarising where the approved notes went, then emit success.
+io:
+  input:
+    schema: {type: object}
+  output:
+    schema:
+      type: object
+      required: [channels]
+      properties:
+        channels: {type: integer}
+verify:
+  - {id: publish-on-disk, type: artifact, path: publish.md, nonempty: true, when: [after]}

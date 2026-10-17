@@ -1,0 +1,6 @@
+id: checkout-outage
+goal: Write the postmortem for the checkout outage on 2026-10-09
+context: Checkout API returned 5xx for 47 minutes after a connection pool config change.
+constraints: Blameless tone; list concrete action items with owners.
+input:
+  incident: INC-2043

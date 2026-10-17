@@ -1,0 +1,8 @@
+version: 1
+model: demo/demo-1
+catalog:
+  pipelines: [pipelines]
+  tasks: [tasks]
+  patterns:
+    pipeline: "*.pipeline.yaml"
+    task: "*.task.yaml"

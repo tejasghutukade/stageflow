@@ -1,0 +1,26 @@
+{
+  "name": "stageflow-demo-video",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Demo out/stageflow-demo.mp4 --codec h264 --crf 16",
+    "still": "remotion still src/index.ts Demo"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.536",
+    "@remotion/media-utils": "^4.0.536",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.536"
+  },
+  "private": true
+}
