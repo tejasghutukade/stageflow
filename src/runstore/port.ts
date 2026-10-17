@@ -12,6 +12,7 @@ import type {
 import type { CompletionCheck } from "../types/completion.js";
 import type { StageGateKind } from "../types/stage.js";
 import type { StageUsage } from "../types/usage.js";
+import type { OverviewRunRow } from "./overviewSummary.js";
 
 export type { ConfigOriginRecord };
 
@@ -625,6 +626,8 @@ export interface RunStore {
     attempt?: number,
   ): Promise<StageLogEvent[]>;
   listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
+  /** One light row per run created at or after `since` (ISO), newest first, with summed stage cost. No stages are loaded. */
+  listRunOverviewRows(since: string): Promise<OverviewRunRow[]>;
   /** Idempotent upsert; returns the realpath/resolve-normalized absolute key. */
   ensureProject(absPath: string): Promise<string>;
   /** Absolute roots from the durable projects registry. */

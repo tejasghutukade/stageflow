@@ -59,6 +59,7 @@ import {
 } from "./migrations/index.js";
 import { StoreSchemaError } from "./storeSchemaError.js";
 import { applyStorePragmas } from "./applyStorePragmas.js";
+import type { OverviewRunRow } from "../overviewSummary.js";
 import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
 
 type SqliteRunStoreOpenerMode = "assert" | "migrate";
@@ -1283,6 +1284,34 @@ export class SqliteRunStore implements RunStore {
       );
     }
     return summaries;
+  }
+
+  async listRunOverviewRows(since: string): Promise<OverviewRunRow[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(
+        `SELECT r.run_id, r.pipeline_id, r.status, r.created_at, r.finished_at,
+                (SELECT SUM(e.cost_usd) FROM stage_executions e WHERE e.run_id = r.run_id) AS cost_usd
+         FROM runs r
+         WHERE r.created_at >= ?
+         ORDER BY r.created_at DESC`,
+      )
+      .all(since) as Array<{
+      run_id: string;
+      pipeline_id: string;
+      status: RunStatus;
+      created_at: string;
+      finished_at: string | null;
+      cost_usd: number | null;
+    }>;
+    return rows.map((row) => ({
+      run_id: row.run_id,
+      pipeline_id: row.pipeline_id,
+      status: row.status,
+      created_at: row.created_at,
+      ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
+      ...(row.cost_usd != null ? { cost_usd: row.cost_usd } : {}),
+    }));
   }
 
   async ensureProject(absPath: string): Promise<string> {

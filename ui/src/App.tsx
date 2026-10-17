@@ -14,6 +14,7 @@ import { RunsPage } from "./pages/RunsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { NewRunPage } from "./pages/NewRunPage";
 import { InboxPage } from "./pages/InboxPage";
+import { OverviewRedesign } from "./redesign/overview/OverviewRedesign";
 import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TriggersPage } from "./pages/TriggersPage";
@@ -135,7 +136,9 @@ function ConsoleRoot() {
   const homeAfterConnect = "/inbox";
 
   let content;
-  if (route.name === "inbox") {
+  if (route.name === "overview") {
+    content = <OverviewRedesign />;
+  } else if (route.name === "inbox") {
     content = (
       <InboxPage
         onOpen={(id) => go(runStreamPath(id))}
