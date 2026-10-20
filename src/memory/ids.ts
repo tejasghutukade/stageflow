@@ -1,6 +1,14 @@
+import { createHash } from "node:crypto";
+
 export const MEMORY_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 export const MEMORY_PAGE_CAP = 64_000;
 export const MEMORY_DESCRIPTION_MAX = 500;
+export const MEMORY_KEY_MAX = 1024;
+export const MEMORY_CARD_MAX = 200;
+
+export function memoryCardFileName(key: string): string {
+  return createHash("sha256").update(key, "utf8").digest("hex");
+}
 
 export function isMemoryId(value: string): boolean {
   return MEMORY_ID_PATTERN.test(value);
