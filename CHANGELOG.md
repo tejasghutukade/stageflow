@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-10-20
+
+### Added
+
+- **Overview, a control center for the console.** `#/overview` (pinned above Inbox in the rail) shows what needs you (gates, agent approvals and failed runs, with Accept, Reject and Retry in place for approvals and failed stages), live runs and agent sessions, system health (agent slots, providers, connections, triggers, run store size), run and success-rate trends with spend, runs by outcome, and per-pipeline success, median time and cost with a flaky tag. A 24h / 7d / 30d control sets the window. Inbox stays the home page. See [Overview](docs/console-overview.md).
+- **`GET /api/overview?range=24h|7d|30d`.** One aggregate over runs and summed stage cost: totals, the previous window for comparison, rolling outcome buckets and per-pipeline rows. It reads one light row per run and loads no stages; no schema change.
+
 ## [0.37.0] - 2026-10-17
 
 ### Fixed
