@@ -1300,3 +1300,7 @@ export type CreateTriggerInput = {
 export type CreateTriggerResult =
   | { ok: true; trigger: TriggerListItem }
   | { ok: false; status: number; error: string };
+
+export type MemoryCardList = { keys: string[] };
+
+export type MemoryCardBody = { body: string };

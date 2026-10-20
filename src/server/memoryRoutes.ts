@@ -37,6 +37,28 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
+function memoryId(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw new MemoryError("MEMORY_INVALID_ID");
+  }
+}
+
+function queryKey(req: IncomingMessage): string | null {
+  const raw = req.url ?? "";
+  const mark = raw.indexOf("?");
+  if (mark < 0) return null;
+  const params = new URLSearchParams(raw.slice(mark + 1));
+  if (!params.has("key")) return null;
+  return params.get("key") ?? "";
+}
+
+function textField(value: unknown, code: MemoryErrorCode): string {
+  if (typeof value !== "string") throw new MemoryError(code);
+  return value;
+}
+
 export async function handleMemoryRoutes(
   req: IncomingMessage,
   method: string,
@@ -45,9 +67,13 @@ export async function handleMemoryRoutes(
   res: ServerResponse,
   json: Json,
 ): Promise<boolean> {
+  const previousCard = pathname.match(/^\/api\/memories\/([^/]+)\/cards\/previous$/);
+  const cards = pathname.match(/^\/api\/memories\/([^/]+)\/cards$/);
+  const previousCover = pathname.match(/^\/api\/memories\/([^/]+)\/previous$/);
   const detail = pathname.match(/^\/api\/memories\/([^/]+)$/);
   const collection = pathname === "/api/memories";
-  if (!collection && !detail) return false;
+  if (!collection && !detail && !cards && !previousCard && !previousCover) return false;
+  if (cards && method === "POST") return false;
 
   try {
     if (collection && method === "GET") {
@@ -64,15 +90,57 @@ export async function handleMemoryRoutes(
       return true;
     }
     if (detail && method === "GET") {
-      let id: string;
-      try {
-        id = decodeURIComponent(detail[1]!);
-      } catch {
-        throw new MemoryError("MEMORY_INVALID_ID");
-      }
+      const id = memoryId(detail[1]!);
       const meta = await host.readMeta(id);
       const page = await host.read(id);
       json(res, 200, { ...meta, body: page });
+      return true;
+    }
+    if (detail && method === "PATCH") {
+      const id = memoryId(detail[1]!);
+      const payload = await readBody(req) as { body?: unknown };
+      const body = textField(payload.body, "MEMORY_TOO_LARGE");
+      await host.replace(id, body);
+      const meta = await host.readMeta(id);
+      json(res, 200, { ...meta, body });
+      return true;
+    }
+    if (previousCover && method === "GET") {
+      const id = memoryId(previousCover[1]!);
+      json(res, 200, { body: await host.readPreviousCover(id) });
+      return true;
+    }
+    if (cards && method === "GET") {
+      const id = memoryId(cards[1]!);
+      const key = queryKey(req);
+      if (key === null) {
+        json(res, 200, { keys: await host.listCards(id) });
+        return true;
+      }
+      json(res, 200, { body: await host.readCard(id, key) });
+      return true;
+    }
+    if (cards && method === "PATCH") {
+      const id = memoryId(cards[1]!);
+      const payload = await readBody(req) as { key?: unknown; body?: unknown };
+      const key = textField(payload.key, "MEMORY_INVALID_KEY");
+      const body = textField(payload.body, "MEMORY_TOO_LARGE");
+      await host.updateCard(id, key, body);
+      json(res, 200, { body });
+      return true;
+    }
+    if (cards && method === "DELETE") {
+      const id = memoryId(cards[1]!);
+      const payload = await readBody(req) as { key?: unknown };
+      await host.deleteCard(id, textField(payload.key, "MEMORY_INVALID_KEY"));
+      json(res, 200, { removed: true });
+      return true;
+    }
+    if (previousCard && method === "GET") {
+      const id = memoryId(previousCard[1]!);
+      const key = queryKey(req);
+      if (key === null) throw new MemoryError("MEMORY_INVALID_KEY");
+      json(res, 200, { body: await host.readPreviousCard(id, key) });
       return true;
     }
   } catch (error) {
