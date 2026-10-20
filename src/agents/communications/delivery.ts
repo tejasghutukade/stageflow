@@ -93,10 +93,17 @@ export class ReplyDelivery {
   private later(delayMs: number): void {
     const timer = setTimeout(() => {
       this.timers.delete(timer);
-      void this.sweep();
+      this.sweepInBackground();
     }, delayMs + 50);
     timer.unref?.();
     this.timers.add(timer);
+  }
+
+  /** A timer-driven sweep has no caller to report to; a failure (a store closing mid-sweep) must not escape as an unhandled rejection. */
+  private sweepInBackground(): void {
+    this.sweep().catch((error: unknown) => {
+      this.options.log?.(`agent reply sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   /** Retry what is due. Also run on a timer, so retries survive a restart. */
@@ -117,8 +124,8 @@ export class ReplyDelivery {
   start(intervalMs = 15_000): void {
     const settled = this.options.service.settleInterruptedDeliveries();
     if (settled.length > 0) this.options.log?.(`agent replies: ${settled.length} send(s) were cut off by a restart and need a person to resend or mark delivered`);
-    void this.sweep();
-    this.sweeping = setInterval(() => void this.sweep(), intervalMs);
+    this.sweepInBackground();
+    this.sweeping = setInterval(() => this.sweepInBackground(), intervalMs);
     this.sweeping.unref?.();
   }
 
