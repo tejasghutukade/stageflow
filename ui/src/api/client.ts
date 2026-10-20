@@ -2261,3 +2261,18 @@ export async function writeCatalogFile(input: {
     content: body.content ?? input.content,
   };
 }
+
+export type MemorySummary = { id: string; description: string };
+export type MemoryDetail = MemorySummary & { body: string };
+
+export function fetchMemories(): Promise<{ memories: MemorySummary[] }> {
+  return api("/api/memories");
+}
+
+export function fetchMemory(id: string): Promise<MemoryDetail> {
+  return api(`/api/memories/${encodeURIComponent(id)}`);
+}
+
+export function createMemory(input: { id: string; description: string }): Promise<MemoryDetail> {
+  return api("/api/memories", { method: "POST", body: JSON.stringify(input) });
+}

@@ -600,6 +600,7 @@ export type DraftPackagePayload = {
     schemas?: unknown;
     requires?: unknown;
     channels?: unknown;
+    memories?: unknown;
   };
   stages?: Array<{ path: string; body: Record<string, unknown> }>;
   task?: { filename: string; body: Record<string, unknown> };

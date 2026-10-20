@@ -1,6 +1,9 @@
 import { emailHostFor, stageEmail, workerStageEmail, validateStageEmailAccounts } from "../email/host.js";
 import { ChannelError } from "../channels/errors.js";
 import { channelHostFor, stageChannels, validateStageChannelConnections, workerStageChannels } from "../channels/host.js";
+import { bindStageMemory } from "../memory/access.js";
+import { memoryHostFor } from "../memory/host.js";
+import { workerMemoryForStage } from "../memory/worker.js";
 import { EmailError } from "../email/port.js";
 import type {
   StagePort,
@@ -766,6 +769,11 @@ export async function openStageAttempt(
       ...(input.stage.channels?.length ? {
         channels: process.env.SF_STAGE_WORKER === "1" ? workerStageChannels()
           : stageChannels(channelHostFor(input.factoryCwd ?? process.cwd()), input.stage, input.runId),
+      } : {}),
+      ...(input.stage.memories?.length ? {
+        memory: process.env.SF_STAGE_WORKER === "1"
+          ? await workerMemoryForStage(input.stage.memories)
+          : await bindStageMemory(memoryHostFor(), input.stage.memories),
       } : {}),
       ...(input.sessionMode !== undefined ? { sessionMode: input.sessionMode } : {}),
       onActivity: (event) => {

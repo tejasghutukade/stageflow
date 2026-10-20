@@ -81,6 +81,8 @@ import {
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
 import { createSendEmailTool } from "../tools/sendEmail.js";
 import { createSendMessageTool } from "../tools/sendMessage.js";
+import { createReadMemoryTool, createReplaceMemoryTool } from "../tools/memoryTools.js";
+import { formatMemoryPrompt } from "../memory/access.js";
 import { createReplyEmailTool } from "../tools/replyEmail.js";
 import { createGetEmailTool, createSearchEmailTool, createDownloadEmailAttachmentTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
@@ -665,6 +667,7 @@ function buildUserPrompt(
     ...(input.stage.channels?.length ? [
       `Stageflow channels: ${JSON.stringify(input.stage.channels.map(channel => ({ channel: channel.alias ?? channel.connection, operations: channel.operations })))}. Use send_message with the channel name. Recipients are fixed by configuration and you cannot change them. Use a stable operationKey for each intended message. Provider acceptance does not prove delivery. Never resend an unknown submission automatically.`,
     ] : []),
+    ...(input.memory ? [formatMemoryPrompt(input.memory.attachments)] : []),
     ...(input.stage.email?.length ? [
       `Stageflow email permissions: ${JSON.stringify(input.stage.email)}. Use only declared accounts and operations. Use a stable operationKey for each intended message. Provider acceptance does not prove delivery. Never resend an unknown submission automatically.`,
     ] : []),
@@ -1339,6 +1342,12 @@ async function prepareStageSessionWiring(
       const definition = createSendMessageTool(input.channels);
       customTools.push(defineTool(definition));
       tools.push(definition.name);
+    }
+    if (input.memory) {
+      for (const definition of [createReadMemoryTool(input.memory), createReplaceMemoryTool(input.memory)]) {
+        customTools.push(defineTool(definition));
+        tools.push(definition.name);
+      }
     }
     if (input.email) {
       const permitted = new Set(input.stage.email?.flatMap(permission => permission.operations));

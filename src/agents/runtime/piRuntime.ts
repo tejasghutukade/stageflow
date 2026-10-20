@@ -18,6 +18,9 @@ import { createPiAgentSession, createSealedResourceLoader } from "../../agent/pi
 import { bindCursorApiKey, isCursorModelRef } from "../../agent/cursorProvider.js";
 import { findProviderSupport } from "../../agent/providerSupport.js";
 import { grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
+import { bindStageMemory, formatMemoryPrompt, type StageMemory } from "../../memory/access.js";
+import { MemoryError, memoryHostFor } from "../../memory/host.js";
+import { createReadMemoryTool, createReplaceMemoryTool } from "../../tools/memoryTools.js";
 import { resolveSkillByName } from "../../config/listSkills.js";
 import { resolveStageMcpServers } from "../../config/resolveStageMcpServers.js";
 import { globalStageflowHome } from "../../project/globalHome.js";
@@ -55,6 +58,7 @@ export type OpenSessionInput = {
   delegateTool?: (agentId: string, message: string) => Promise<string>;
   /** Stageflow tools this agent is granted. */
   stageflowTools?: ToolkitTool[];
+  memory?: StageMemory;
   hooks: () => TurnHooks | undefined;
 };
 
@@ -210,6 +214,13 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
       }
     }
 
+    if (input.memory) {
+      for (const definition of [createReadMemoryTool(input.memory), createReplaceMemoryTool(input.memory)]) {
+        customTools.push(defineTool(definition));
+        toolNames.push(definition.name);
+      }
+    }
+
     for (const tool of input.stageflowTools ?? []) {
       customTools.push(
         defineTool({
@@ -336,13 +347,23 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     const stageflowTools = (options.toolkit?.() ?? []).filter((tool) => grantedSf.has(tool.name) && !isOperatorOnlyTool(tool.name));
     const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
-    const systemPrompt = `${definition.instructions}${context}`;
+    let memory: StageMemory | undefined;
+    if (definition.memories?.length) {
+      try {
+        memory = await bindStageMemory(memoryHostFor(), definition.memories);
+      } catch (error) {
+        const code = error instanceof MemoryError ? error.code : "MEMORY_UNREADABLE";
+        throw new AgentError("agent.invalid", `Memory could not be opened (${code})`);
+      }
+    }
+    const systemPrompt = `${definition.instructions}${context}${memory ? `\n\n${formatMemoryPrompt(memory.attachments)}` : ""}`;
     state.opened = await open({
       projectRoot,
       definition,
       systemPrompt,
       toolNames: piToolNames(definition),
       hooks: () => state.hooks,
+      ...(memory ? { memory } : {}),
       ...(stageflowTools.length > 0 ? { stageflowTools } : {}),
       ...(subAgents.length > 0 ? { delegateTool: (agentId, message) => state.hooks!.delegate(agentId, message) } : {}),
       gate: async (call) => {

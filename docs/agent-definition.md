@@ -113,6 +113,16 @@ An `allow_from` entry is one of:
 
 A message from a sender who matches nothing is ignored. The earlier `channels: [{ connection_id }]` list still loads as the one `channel`; more than one is an error.
 
+### `memories`
+
+| Field | Type | Default | Rules |
+|-------|------|---------|-------|
+| `memories` | list of ids | none | Each id is `[a-z][a-z0-9_-]{0,63}` and must already exist under `$STAGEFLOW_HOME/memories/`. Duplicates are rejected. An empty list is omitted when the file is written. |
+
+Every session of this agent can call `read_memory` and `replace_memory` for those ids. The prompt lists the ids and descriptions. The page is not pasted in, and the session never receives a file path. A missing, unreadable, or mismatched id is `agent.memory_unavailable`: create, save, and enable all fail. Enable checks the data directory again even when the agent file has not changed. Sub-agents do not inherit the list.
+
+Create the memory in the console (**Memories**) before attaching it. See [YAML catalog — Memories](yaml-catalog.md#memories).
+
 ### `web_chat`
 
 ```yaml
@@ -184,6 +194,7 @@ Issue codes:
 | `agent.mcp_name_reserved` | `tools.mcp.stageflow`. |
 | `agent.sub_agent_self` | The agent lists itself. |
 | `agent.channel_in_use` | The connection (or the inbox behind it) already answers for another agent. |
+| `agent.memory_unavailable` | A `memories` id is missing, unreadable, or does not match its file. |
 
 Warning codes:
 

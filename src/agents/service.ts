@@ -18,6 +18,7 @@ import { ApprovalBroker } from "./approvalBroker.js";
 import { deliveryLedger, scheduleLedger, type DeliveryLedger, type ScheduleLedger } from "./ledgers.js";
 import { TurnLifecycle, type FinishInput } from "./turnLifecycle.js";
 import { AgentError } from "./errors.js";
+import { agentMemoryIssues } from "../memory/agentIssues.js";
 import { diffLines, type DiffLine } from "./lineDiff.js";
 import { exportTurnsToOtlp } from "./otlpExport.js";
 import { canApprove, effectiveAskFirst, isToolGranted, requiresAskFirst } from "./policy.js";
@@ -285,7 +286,7 @@ export class AgentService {
       ? parsed.issues
       : parsed.value.id !== agentId
         ? [{ path: "id", code: "agent.id_mismatch", message: `id must match the file name (${agentId})` }]
-        : [];
+        : agentMemoryIssues(parsed.value.memories);
     if (!parsed.ok || issues.length > 0) {
       if (!row || row.currentRevision === 0) {
         this.store.recordInvalidNewDefinition(projectKey, agentId, fileHash, issues, now);
@@ -609,7 +610,8 @@ export class AgentService {
     const parsed = parseAgentDefinition(raw);
     if (!parsed.ok) return { definition: null, issues: parsed.issues, warnings: [], yaml: null };
     const conflicts = await this.channelConflicts(projectRoot, parsed.value);
-    if (conflicts.length > 0) return { definition: null, issues: conflicts, warnings: [], yaml: null };
+    const missing = agentMemoryIssues(parsed.value.memories);
+    if (conflicts.length > 0 || missing.length > 0) return { definition: null, issues: [...conflicts, ...missing], warnings: [], yaml: null };
     return {
       definition: parsed.value,
       issues: [],
@@ -631,7 +633,8 @@ export class AgentService {
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const conflicts = await this.channelConflicts(projectRoot, definition);
-      if (conflicts.length > 0) throw new AgentError("agent.invalid", "Agent definition is invalid", conflicts);
+      const missing = agentMemoryIssues(definition.memories);
+      if (conflicts.length > 0 || missing.length > 0) throw new AgentError("agent.invalid", "Agent definition is invalid", [...conflicts, ...missing]);
       const existing = this.store.getDefinition(agentProjectKey(projectRoot), definition.id);
       const onDisk = await access(this.file(projectRoot, definition.id)).then(
         () => true,
@@ -672,7 +675,8 @@ export class AgentService {
       const { row, revision } = this.currentRevision(projectRoot, agentId);
       if (row.currentRevision !== input.baseRevision) throw new AgentError("agent.conflict");
       const conflicts = await this.channelConflicts(projectRoot, definition);
-      if (conflicts.length > 0) throw new AgentError("agent.invalid", "Agent definition is invalid", conflicts);
+      const missing = agentMemoryIssues(definition.memories);
+      if (conflicts.length > 0 || missing.length > 0) throw new AgentError("agent.invalid", "Agent definition is invalid", [...conflicts, ...missing]);
       if (sameDefinition(revision.definition, definition)) return;
       await this.writeRevision(projectRoot, definition, actor, input.summary?.trim() || null);
     });
@@ -683,8 +687,9 @@ export class AgentService {
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const { row, revision } = this.currentRevision(projectRoot, agentId);
-      if (row.issues.length > 0 && enabled) {
-        throw new AgentError("agent.invalid", "Fix the agent file before enabling it", row.issues);
+      const missing = enabled ? agentMemoryIssues(revision.definition.memories) : [];
+      if (enabled && (row.issues.length > 0 || missing.length > 0)) {
+        throw new AgentError("agent.invalid", "Fix the agent file before enabling it", [...row.issues, ...missing]);
       }
       if (revision.definition.enabled === enabled) return;
       await this.writeRevision(projectRoot, { ...revision.definition, enabled }, actor, enabled ? "Enabled" : "Disabled");

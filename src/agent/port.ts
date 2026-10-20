@@ -9,6 +9,7 @@ import type { ResolvedMcpServers } from "../config/resolveStageMcpServers.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import type { StageEmail } from "../email/host.js";
 import type { StageChannels } from "../channels/host.js";
+import type { StageMemory } from "../memory/access.js";
 import type { QaExchange } from "../hitl/qaTrail.js";
 import type { StageUsage } from "../types/usage.js";
 
@@ -77,6 +78,8 @@ export type StageRunInput = {
   skillFilePath?: string;
   email?: StageEmail;
   channels?: StageChannels;
+  /** Memories attached to this stage. The host reads and replaces the page. */
+  memory?: StageMemory;
   /** Bundled browser skill; set by the runtime when the stage has `browser`. */
   browserSkillFilePath?: string;
   forkEmitContext?: ForkEmitContext;

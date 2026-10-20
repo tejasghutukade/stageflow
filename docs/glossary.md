@@ -18,6 +18,7 @@ Terms that are easy to mix up.
 | **Inbox** | The console's "Needs you" page: gates and agent approvals | Email |
 | **Connection** | A named external service for channels (AgentMail, Slack, Telegram, iMessage, WhatsApp) in `connections.yaml`. Agents answer on one; stages send on one | An email account, an MCP server |
 | **Channel** | The use of a connection by a stage (`channels:`) or an agent (`channel:`) | A connection |
+| **Memory** | A named page in the data directory (`memories/<id>/`) that a pipeline or an agent can read and replace | A run artifact, a session transcript |
 | **Email account** | An IMAP/SMTP mailbox in `email.yaml`, used by email triggers | An AgentMail connection |
 | **Web chat** | The public `/chat/<slug>` page for an agent | The Workshop chat |
 | **Workshop** | The console's pipeline-authoring chat | Web chat |

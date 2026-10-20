@@ -135,6 +135,7 @@ describe("ClaudeAgentAdapter — preflight", () => {
   it.each([
     { name: "a stage that declares a skill", stage: { skill: "reviewer" }, reason: /skill/ },
     { name: "a stage that declares channels", stage: { channels: [{ connection: "ops", to: "C0123ABCD", operations: ["send"] }] }, reason: /channels/ },
+    { name: "a stage whose pipeline lists memories", stage: { memories: ["candidate-pool"] }, reason: /memories/ },
     { name: "a non-anthropic model", stage: { model: "openai/gpt-5" }, reason: /anthropic/ },
     {
       name: "a malformed model string with no provider prefix",

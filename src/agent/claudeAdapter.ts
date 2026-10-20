@@ -122,6 +122,12 @@ function preflight(input: StageRunInput): Preflight {
       reason: "stage declares channels; the claude agent backend does not provide send_message yet, so the stage would run without it",
     };
   }
+  if (input.stage.memories?.length) {
+    return {
+      ok: false,
+      reason: "stage pipeline declares memories; the claude agent backend does not provide read_memory and replace_memory yet, so the stage would run without them",
+    };
+  }
   return resolveClaudeModel(input.stage.model);
 }
 
