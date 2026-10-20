@@ -119,9 +119,9 @@ A message from a sender who matches nothing is ignored. The earlier `channels: [
 |-------|------|---------|-------|
 | `memories` | list of ids | none | Each id is `[a-z][a-z0-9_-]{0,63}` and must already exist under `$STAGEFLOW_HOME/memories/`. Duplicates are rejected. An empty list is omitted when the file is written. |
 
-Every session of this agent can call `read_memory` and `replace_memory` for those ids. The prompt lists the ids and descriptions. The page is not pasted in, and the session never receives a file path. A missing, unreadable, or mismatched id is `agent.memory_unavailable`: create, save, and enable all fail. Enable checks the data directory again even when the agent file has not changed. Sub-agents do not inherit the list.
+Every session of this agent can call `read_memory` and `replace_memory` for the cover, and `add_memory_card`, `update_memory_card`, `read_memory_card`, and `search_memory_cards` for cards on those ids. The prompt lists the memory ids and descriptions. It does not include the cover or any card body, and the session never receives a file path. `add_memory_card` refuses an existing key. `update_memory_card` refuses a missing key. `read_memory_card` returns the current body. `search_memory_cards` is a case-insensitive word scan of the current keys and bodies, at most 20 hits, snippet only. A session cannot delete a card and cannot read the previous copy. A missing, unreadable, or mismatched id is `agent.memory_unavailable`: create, save, and enable all fail. Enable checks the data directory again even when the agent file has not changed. Sub-agents do not inherit the list.
 
-Create the memory in the console (**Memories**) before attaching it. See [YAML catalog — Memories](yaml-catalog.md#memories).
+Create the memory in the console (**Memories**) before attaching it. The operator can edit the cover there, and can delete a card (the current card and the previous copy; that cannot be undone). A session adds cards. See [YAML catalog — Memories](yaml-catalog.md#memories).
 
 ### `web_chat`
 
