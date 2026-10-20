@@ -92,6 +92,10 @@ The image does **not** ship the repo `examples/` tree. Workshop saves and the de
 
 A task with `repository` + `ref` (or `sf run --repository` / `--ref`) materializes a Host worktree under `/data/worktrees/<runId>` (`$STAGEFLOW_HOME/worktrees/…`). On **`succeeded`**, Stageflow **reclaims** that worktree immediately (keeps `run_branch`; `checkout_root` may still be recorded after the directory is gone). Failed/cancelled runs keep their worktrees until retention SLIM — see [Post-mortem debug bundle](#debug-bundle).
 
+### Eval engine in the container {#eval-engine}
+
+The image installs the pinned eval engine (promptfoo `0.124.0`, build arg `PROMPTFOO_VERSION`) at build time into `/data/eval-engine/0.124.0` (`$STAGEFLOW_HOME/eval-engine/<version>`). It adds about **1.2 GB** to the image. A new named volume is seeded from the image on first mount. An existing volume or a bind mount over `/data` hides the baked-in copy; run `sf eval engine install` inside the container to install it there. The engine is only used by evals and never contacts promptfoo servers (a network guard blocks `*.promptfoo.app` and `*.promptfoo.dev`).
+
 ### Named volume
 
 Compose mounts the named volume `stageflow-data` at `/data`. That volume holds the durable store (`state.db`, credentials, settings). Deleting the volume **wipes** irreplaceable state — use `sf backup` before destructive resets. See [Precious vs disposable](#precious-vs-disposable).
