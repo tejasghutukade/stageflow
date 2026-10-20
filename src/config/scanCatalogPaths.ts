@@ -2,7 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { LoadedManifest } from "../types/stageflowManifest.js";
 
-export type CatalogPathKind = "pipeline" | "task" | "trigger";
+export type CatalogPathKind = "pipeline" | "task" | "trigger" | "eval" | "dataset";
 
 function normalizeRepoRel(repoRelPath: string): string {
   return repoRelPath.replace(/\\/g, "/").replace(/^\.\/+/, "");
@@ -51,8 +51,7 @@ async function walkDirectory(absDir: string): Promise<string[]> {
 async function expandCatalogEntry(
   projectRoot: string,
   entry: string,
-  kind: CatalogPathKind,
-  pattern: string,
+  patterns: string[],
 ): Promise<string[]> {
   const absPath = path.join(projectRoot, entry);
   let entryStat;
@@ -71,7 +70,9 @@ async function expandCatalogEntry(
   }
 
   const files = await walkDirectory(absPath);
-  return files.filter((filePath) => matchesPattern(path.basename(filePath), pattern));
+  return files.filter((filePath) =>
+    patterns.some((pattern) => matchesPattern(path.basename(filePath), pattern)),
+  );
 }
 
 export async function scanCatalogPaths(
@@ -84,16 +85,28 @@ export async function scanCatalogPaths(
       ? doc.catalog.pipelines
       : kind === "task"
         ? doc.catalog.tasks
-        : (doc.catalog.triggers ?? []);
-  const pattern =
-    kind === "pipeline" ? patterns.pipeline : kind === "task" ? patterns.task : patterns.trigger;
+        : kind === "trigger"
+          ? (doc.catalog.triggers ?? [])
+          : kind === "eval"
+            ? (doc.catalog.evals ?? ["evals"])
+            : (doc.catalog.datasets ?? ["datasets"]);
+  const matchPatterns =
+    kind === "pipeline"
+      ? [patterns.pipeline]
+      : kind === "task"
+        ? [patterns.task]
+        : kind === "trigger"
+          ? [patterns.trigger]
+          : kind === "eval"
+            ? [patterns.eval]
+            : patterns.dataset;
   const exclude = doc.catalog.exclude;
 
   const seen = new Set<string>();
   const resolved: string[] = [];
 
   for (const entry of entries) {
-    const absPaths = await expandCatalogEntry(projectRoot, entry, kind, pattern);
+    const absPaths = await expandCatalogEntry(projectRoot, entry, matchPatterns);
     for (const absPath of absPaths) {
       const normalized = path.resolve(absPath);
       if (seen.has(normalized)) continue;

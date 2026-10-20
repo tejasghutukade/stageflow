@@ -4,10 +4,14 @@ export type StageflowManifestCatalog = {
   pipelines: string[];
   tasks: string[];
   triggers?: string[];
+  evals?: string[];
+  datasets?: string[];
   patterns?: {
     pipeline?: string;
     task?: string;
     trigger?: string;
+    eval?: string;
+    dataset?: string | string[];
   };
   exclude?: string[];
 };
@@ -29,5 +33,7 @@ export type LoadedManifest = {
     pipeline: string;
     task: string;
     trigger: string;
+    eval: string;
+    dataset: string[];
   };
 };
