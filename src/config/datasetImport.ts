@@ -20,7 +20,7 @@ function trimReason(message: string): string {
   return flat.length > REASON_MAX ? flat.slice(0, REASON_MAX) : flat;
 }
 
-function nextIdNumber(existingIds: Iterable<string>): number {
+export function nextIdNumber(existingIds: Iterable<string>): number {
   let max = 0;
   for (const id of existingIds) {
     const m = ID_NUMBER_RE.exec(id);
@@ -29,7 +29,7 @@ function nextIdNumber(existingIds: Iterable<string>): number {
   return max + 1;
 }
 
-function formatId(n: number): string {
+export function formatId(n: number): string {
   return `c${String(n).padStart(3, "0")}`;
 }
 
