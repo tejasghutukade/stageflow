@@ -1,0 +1,33 @@
+id: eval-sample
+stages:
+  - id: critique
+    system_prompt: >-
+      You review a short draft specification and report concrete problems.
+      Report verdict ok with an empty issues list when the draft has no real problem.
+      Do not invent problems.
+    io:
+      input:
+        schema:
+          type: object
+          required: [draft]
+          properties:
+            draft:
+              type: string
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required: [verdict, issues]
+          properties:
+            verdict:
+              enum: [ok, needs_work]
+            issues:
+              type: array
+              items:
+                type: object
+                required: [severity, text]
+                properties:
+                  severity:
+                    enum: [high, medium, low]
+                  text:
+                    type: string
