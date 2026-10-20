@@ -30,13 +30,21 @@ function describeIssues(issues: LoadIssue[]): string {
   return issues.map((issue) => issue.message).join("; ");
 }
 
+/** The exact object the stage version hash is computed from. */
+export function stageDefinition(
+  stage: LoadedStageConfig,
+  completion: CompletionContract | undefined,
+): Record<string, unknown> {
+  const { model_tier: _tier, ...config } = stage;
+  return { ...config, ...(completion !== undefined ? { completion } : {}) };
+}
+
 /** sha256 of the canonical JSON of the materialized stage config plus its after-phase verify contract. */
 export function stageVersionHash(
   stage: LoadedStageConfig,
   completion: CompletionContract | undefined,
 ): string {
-  const { model_tier: _tier, ...config } = stage;
-  return sha256Hex(canonicalJson({ ...config, ...(completion !== undefined ? { completion } : {}) }));
+  return sha256Hex(canonicalJson(stageDefinition(stage, completion)));
 }
 
 export async function resolveEvalTarget(
