@@ -18,9 +18,9 @@ import { createPiAgentSession, createSealedResourceLoader } from "../../agent/pi
 import { bindCursorApiKey, isCursorModelRef } from "../../agent/cursorProvider.js";
 import { findProviderSupport } from "../../agent/providerSupport.js";
 import { grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
-import { bindStageMemory, formatMemoryPrompt, type StageMemory } from "../../memory/access.js";
+import { bindStageMemory, type StageMemory } from "../../memory/access.js";
 import { MemoryError, memoryHostFor } from "../../memory/host.js";
-import { createAttachedMemoryTools } from "../../tools/memoryTools.js";
+import { memorySession } from "../../tools/memoryTools.js";
 import { resolveSkillByName } from "../../config/listSkills.js";
 import { resolveStageMcpServers } from "../../config/resolveStageMcpServers.js";
 import { globalStageflowHome } from "../../project/globalHome.js";
@@ -215,7 +215,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
     }
 
     if (input.memory) {
-      for (const definition of createAttachedMemoryTools(input.memory)) {
+      for (const definition of memorySession(input.memory).tools) {
         customTools.push(defineTool(definition));
         toolNames.push(definition.name);
       }
@@ -356,7 +356,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         throw new AgentError("agent.invalid", `Memory could not be opened (${code})`);
       }
     }
-    const systemPrompt = `${definition.instructions}${context}${memory ? `\n\n${formatMemoryPrompt(memory.attachments)}` : ""}`;
+    const systemPrompt = `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}`;
     state.opened = await open({
       projectRoot,
       definition,

@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { MEMORY_KEY_MAX, MEMORY_PAGE_CAP } from "../memory/ids.js";
 import { MemoryError, type MemoryErrorCode } from "../memory/host.js";
-import type { StageMemory } from "../memory/access.js";
+import { formatMemoryPrompt, type StageMemory } from "../memory/access.js";
 
 type ToolResult = { content: { type: "text"; text: string }[]; details: unknown; isError?: boolean };
 
@@ -151,6 +151,14 @@ export function createSearchMemoryCardsTool(memory: StageMemory) {
         return refused(error);
       }
     },
+  };
+}
+
+/** Prompt text and tools for one attached-memory session. */
+export function memorySession(memory: StageMemory) {
+  return {
+    prompt: formatMemoryPrompt(memory.attachments),
+    tools: createAttachedMemoryTools(memory),
   };
 }
 

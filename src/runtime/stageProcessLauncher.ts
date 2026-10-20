@@ -34,6 +34,7 @@ import { emailHostFor, emailWorkerEnvironment, stageEmail, validateStageEmailAcc
 import { ChannelError } from "../channels/errors.js";
 import { channelFault, channelHostFor, channelsWorkerEnvironment, stageChannels, validateStageChannelConnections, type ChannelSendInput } from "../channels/host.js";
 import { MemoryError, memoryHostFor } from "../memory/host.js";
+import { isMemoryVerb, runMemoryRequest } from "../memory/access.js";
 import { EmailError, type SendEmailInput, type ReplyToEmailInput, type SearchEmailsInput, type EmailMessageRef, type DownloadEmailAttachmentInput } from "../email/port.js";
 import type { StageConfig } from "../types/stage.js";
 import {
@@ -168,20 +169,6 @@ function attachStreamLineLogger(
 
 function activeKey(runId: string, stageId: string): string {
   return `${runId}\0${stageId}`;
-}
-
-const MEMORY_REQUESTS = new Set([
-  "memory.read",
-  "memory.replace",
-  "memory.meta",
-  "memory.addCard",
-  "memory.updateCard",
-  "memory.readCard",
-  "memory.searchCards",
-]);
-
-function isMemoryRequest(type: string | undefined): boolean {
-  return type !== undefined && MEMORY_REQUESTS.has(type);
 }
 
 function isStageWorkerResult(value: unknown): value is StageWorkerResult {
@@ -586,36 +573,15 @@ export class StageProcessLauncher {
           })();
           return;
         }
-        if (!settled && isMemoryRequest(request?.type)) {
+        const memoryVerb = request?.type;
+        if (!settled && isMemoryVerb(memoryVerb)) {
           void (async () => {
             if (typeof request.requestId !== "string" || request.requestId.length > 100) return;
             let response: object;
             try {
               const stage = input.stage;
-              const args = request.input as { memory?: unknown; content?: unknown; key?: unknown; query?: unknown };
-              const id = args?.memory;
-              if (!stage || settled || typeof id !== "string" || !stage.memories?.includes(id)) {
-                throw new MemoryError("MEMORY_NOT_ATTACHED");
-              }
-              const host = memoryHostFor();
-              if (request.type === "memory.read") response = { body: await host.read(id) };
-              else if (request.type === "memory.replace") {
-                if (typeof args.content !== "string") throw new MemoryError("MEMORY_TOO_LARGE");
-                await host.replace(id, args.content);
-                response = {};
-              } else if (request.type === "memory.addCard" || request.type === "memory.updateCard") {
-                if (typeof args.key !== "string") throw new MemoryError("MEMORY_INVALID_KEY");
-                if (typeof args.content !== "string") throw new MemoryError("MEMORY_TOO_LARGE");
-                if (request.type === "memory.addCard") await host.addCard(id, args.key, args.content);
-                else await host.updateCard(id, args.key, args.content);
-                response = {};
-              } else if (request.type === "memory.readCard") {
-                if (typeof args.key !== "string") throw new MemoryError("MEMORY_INVALID_KEY");
-                response = { body: await host.readCard(id, args.key) };
-              } else if (request.type === "memory.searchCards") {
-                if (typeof args.query !== "string") throw new MemoryError("MEMORY_UNREADABLE");
-                response = { hits: await host.searchCards(id, args.query) };
-              } else response = { meta: await host.readMeta(id) };
+              if (!stage || settled) throw new MemoryError("MEMORY_NOT_ATTACHED");
+              response = await runMemoryRequest(memoryHostFor(), stage.memories ?? [], memoryVerb, request.input);
             } catch (error) {
               const code = error instanceof MemoryError ? error.code : "MEMORY_UNREADABLE";
               response = { error: { code } };

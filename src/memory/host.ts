@@ -169,14 +169,19 @@ function decodeCard(text: string): CardFile {
   return { key, body };
 }
 
-async function readCardFile(file: string): Promise<CardFile | undefined> {
-  let text: string;
+/** A kept copy is either the text or absent. Cover and card files share this. */
+async function readKept(file: string): Promise<string | null> {
   try {
-    text = await readFile(file, "utf8");
+    return await readFile(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw new MemoryError("MEMORY_UNREADABLE");
   }
+}
+
+async function readCardFile(file: string): Promise<CardFile | undefined> {
+  const text = await readKept(file);
+  if (text === null) return undefined;
   return decodeCard(text);
 }
 
@@ -317,12 +322,9 @@ export function createMemoryHost(home: string): MemoryHost {
 
     async readPreviousCover(id) {
       await readMetaAt(home, id);
-      try {
-        return await readFile(path.join(memoryDir(home, id), COVER_PREVIOUS), "utf8");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new MemoryError("MEMORY_NOT_FOUND");
-        throw new MemoryError("MEMORY_UNREADABLE");
-      }
+      const text = await readKept(path.join(memoryDir(home, id), COVER_PREVIOUS));
+      if (text === null) throw new MemoryError("MEMORY_NOT_FOUND");
+      return text;
     },
 
     async addCard(id, key, body) {

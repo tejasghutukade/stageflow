@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { MemoryError, type MemoryCardHit, type MemoryErrorCode, type MemoryMeta } from "./host.js";
-import type { StageMemory } from "./access.js";
+import { attachMemory, type MemoryPort } from "./access.js";
 
 const TIMEOUT_MS = 30_000;
 
@@ -51,49 +51,11 @@ function request(type: MemoryVerb, input: unknown): Promise<MemoryResponse> {
   });
 }
 
-export async function workerMemoryForStage(ids: readonly string[]): Promise<StageMemory> {
-  const ipc = workerStageMemory();
-  const attachments: MemoryMeta[] = [];
-  for (const id of ids) attachments.push(await ipc.meta(id));
-  const allowed = new Set(ids);
-  return {
-    attachments,
-    async read(id) {
-      if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
-      return ipc.read(id);
-    },
-    async replace(id, content) {
-      if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
-      await ipc.replace(id, content);
-    },
-    async addCard(id, key, body) {
-      if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
-      await ipc.addCard(id, key, body);
-    },
-    async updateCard(id, key, body) {
-      if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
-      await ipc.updateCard(id, key, body);
-    },
-    async readCard(id, key) {
-      if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
-      return ipc.readCard(id, key);
-    },
-    async searchCards(id, query) {
-      if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
-      return ipc.searchCards(id, query);
-    },
-  };
+export function workerMemoryForStage(ids: readonly string[]) {
+  return attachMemory(ids, workerStageMemory());
 }
 
-function workerStageMemory(): {
-  read(id: string): Promise<string>;
-  replace(id: string, content: string): Promise<void>;
-  meta(id: string): Promise<MemoryMeta>;
-  addCard(id: string, key: string, body: string): Promise<void>;
-  updateCard(id: string, key: string, body: string): Promise<void>;
-  readCard(id: string, key: string): Promise<string>;
-  searchCards(id: string, query: string): Promise<MemoryCardHit[]>;
-} {
+function workerStageMemory(): MemoryPort {
   return {
     async read(id) {
       const response = await request("memory.read", { memory: id });

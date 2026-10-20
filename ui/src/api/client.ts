@@ -2314,8 +2314,19 @@ export function fetchMemoryCard(id: string, key: string): Promise<MemoryCardBody
   return memoryRequest(memoryCardReadPath(id, key));
 }
 
-export function fetchPreviousMemoryCard(id: string, key: string): Promise<MemoryCardBody> {
-  return memoryRequest(memoryCardReadPath(id, key, true));
+async function optionalMemoryBody(path: string): Promise<string | null> {
+  try {
+    const body = await memoryRequest<MemoryCardBody>(path);
+    return body.body;
+  } catch (error) {
+    const code = (error as MemoryRequestError).code;
+    if (code === "MEMORY_NOT_FOUND" || code === "MEMORY_CARD_NOT_FOUND") return null;
+    throw error;
+  }
+}
+
+export function fetchPreviousMemoryCard(id: string, key: string): Promise<string | null> {
+  return optionalMemoryBody(memoryCardReadPath(id, key, true));
 }
 
 export function updateMemoryCard(id: string, key: string, body: string): Promise<MemoryCardBody> {
@@ -2339,6 +2350,6 @@ export function replaceMemoryCover(id: string, body: string): Promise<MemoryDeta
   });
 }
 
-export function fetchPreviousMemoryCover(id: string): Promise<MemoryCardBody> {
-  return memoryRequest(`/api/memories/${encodeURIComponent(id)}/previous`);
+export function fetchPreviousMemoryCover(id: string): Promise<string | null> {
+  return optionalMemoryBody(`/api/memories/${encodeURIComponent(id)}/previous`);
 }

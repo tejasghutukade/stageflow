@@ -139,11 +139,9 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
       }
       try {
         const previous = await fetchPreviousMemoryCover(memoryId);
-        if (live) setPreviousCover(previous.body);
-      } catch (caught) {
-        if (!live) return;
-        if (failureCode(caught) === "MEMORY_NOT_FOUND") setPreviousCover(null);
-        else setError(`Memory "${memoryId}" could not be opened.`);
+        if (live) setPreviousCover(previous);
+      } catch {
+        if (live) setError(`Memory "${memoryId}" could not be opened.`);
       }
     })();
     return () => { live = false; };
@@ -219,11 +217,10 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
     try {
       const previous = await fetchPreviousMemoryCard(memoryId, key);
       if (openCardKey.current !== key) return;
-      setPreviousCard(previous.body);
-    } catch (caught) {
+      setPreviousCard(previous);
+    } catch {
       if (openCardKey.current !== key) return;
-      if (failureCode(caught) === "MEMORY_CARD_NOT_FOUND") setPreviousCard(null);
-      else setError("That card could not be opened.");
+      setError("That card could not be opened.");
     }
   }
 
