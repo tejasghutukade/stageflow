@@ -1,0 +1,103 @@
+[
+  {
+    "id": "c001",
+    "title": "null dereference in auth.ts",
+    "input": {
+      "diff": "--- a/auth.ts\n+++ b/auth.ts\n@@ user.name",
+      "plan": "Fix null check",
+      "files": [
+        "auth.ts",
+        "login.ts"
+      ]
+    },
+    "expected": {
+      "verdict": "reject",
+      "findings": [
+        "null-deref"
+      ]
+    },
+    "tags": [
+      "bug",
+      "auth"
+    ]
+  },
+  {
+    "id": "c002",
+    "title": "clean rename",
+    "input": {
+      "diff": "rename foo -> bar, with \"quotes\", and commas",
+      "plan": "Rename helper",
+      "files": [
+        "util.ts"
+      ]
+    },
+    "expected": {
+      "verdict": "approve",
+      "findings": []
+    },
+    "tags": [
+      "refactor"
+    ]
+  },
+  {
+    "id": "c003",
+    "input": {
+      "diff": "line one\nline two\nline three",
+      "plan": "Multi-line diff"
+    },
+    "expected": {
+      "verdict": "approve",
+      "findings": []
+    },
+    "tags": [
+      "refactor",
+      "docs"
+    ]
+  },
+  {
+    "id": "c004",
+    "title": "missing test",
+    "input": {
+      "diff": "+function add(a,b){return a+b}",
+      "plan": "Add helper",
+      "files": []
+    },
+    "expected": {
+      "verdict": "reject",
+      "findings": [
+        "no-tests"
+      ]
+    }
+  },
+  {
+    "id": "c005",
+    "input": {
+      "diff": "+SELECT * FROM users WHERE id = ' + id",
+      "plan": "Add query"
+    },
+    "expected": {
+      "verdict": "reject",
+      "findings": [
+        "sql-injection"
+      ]
+    },
+    "tags": [
+      "security"
+    ]
+  },
+  {
+    "id": "c006",
+    "title": "comment typo",
+    "input": {
+      "diff": "- // teh\n+ // the",
+      "plan": "Fix typo"
+    },
+    "expected": {
+      "verdict": "approve",
+      "findings": []
+    },
+    "tags": [
+      "docs"
+    ]
+  }
+]
