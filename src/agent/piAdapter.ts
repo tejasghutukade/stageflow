@@ -81,7 +81,7 @@ import {
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
 import { createSendEmailTool } from "../tools/sendEmail.js";
 import { createSendMessageTool } from "../tools/sendMessage.js";
-import { createReadMemoryTool, createReplaceMemoryTool } from "../tools/memoryTools.js";
+import { createAttachedMemoryTools } from "../tools/memoryTools.js";
 import { formatMemoryPrompt } from "../memory/access.js";
 import { createReplyEmailTool } from "../tools/replyEmail.js";
 import { createGetEmailTool, createSearchEmailTool, createDownloadEmailAttachmentTool } from "../tools/readEmail.js";
@@ -1344,7 +1344,7 @@ async function prepareStageSessionWiring(
       tools.push(definition.name);
     }
     if (input.memory) {
-      for (const definition of [createReadMemoryTool(input.memory), createReplaceMemoryTool(input.memory)]) {
+      for (const definition of createAttachedMemoryTools(input.memory)) {
         customTools.push(defineTool(definition));
         tools.push(definition.name);
       }

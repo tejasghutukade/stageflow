@@ -1,18 +1,28 @@
 import { randomUUID } from "node:crypto";
-import { MemoryError, type MemoryErrorCode, type MemoryMeta } from "./host.js";
+import { MemoryError, type MemoryCardHit, type MemoryErrorCode, type MemoryMeta } from "./host.js";
 import type { StageMemory } from "./access.js";
 
 const TIMEOUT_MS = 30_000;
+
+type MemoryVerb =
+  | "memory.read"
+  | "memory.replace"
+  | "memory.meta"
+  | "memory.addCard"
+  | "memory.updateCard"
+  | "memory.readCard"
+  | "memory.searchCards";
 
 type MemoryResponse = {
   type?: string;
   requestId?: string;
   body?: string;
   meta?: MemoryMeta;
+  hits?: MemoryCardHit[];
   error?: { code: MemoryErrorCode };
 };
 
-function request(type: "memory.read" | "memory.replace" | "memory.meta", input: unknown): Promise<MemoryResponse> {
+function request(type: MemoryVerb, input: unknown): Promise<MemoryResponse> {
   return new Promise((resolve, reject) => {
     if (!process.connected || !process.send) {
       reject(new MemoryError("MEMORY_NOT_ATTACHED"));
@@ -56,6 +66,22 @@ export async function workerMemoryForStage(ids: readonly string[]): Promise<Stag
       if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
       await ipc.replace(id, content);
     },
+    async addCard(id, key, body) {
+      if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
+      await ipc.addCard(id, key, body);
+    },
+    async updateCard(id, key, body) {
+      if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
+      await ipc.updateCard(id, key, body);
+    },
+    async readCard(id, key) {
+      if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
+      return ipc.readCard(id, key);
+    },
+    async searchCards(id, query) {
+      if (!allowed.has(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
+      return ipc.searchCards(id, query);
+    },
   };
 }
 
@@ -63,6 +89,10 @@ function workerStageMemory(): {
   read(id: string): Promise<string>;
   replace(id: string, content: string): Promise<void>;
   meta(id: string): Promise<MemoryMeta>;
+  addCard(id: string, key: string, body: string): Promise<void>;
+  updateCard(id: string, key: string, body: string): Promise<void>;
+  readCard(id: string, key: string): Promise<string>;
+  searchCards(id: string, query: string): Promise<MemoryCardHit[]>;
 } {
   return {
     async read(id) {
@@ -78,6 +108,25 @@ function workerStageMemory(): {
       const response = await request("memory.meta", { memory: id });
       if (response.error || !response.meta) throw new MemoryError(response.error?.code ?? "MEMORY_UNREADABLE");
       return response.meta;
+    },
+    async addCard(id, key, body) {
+      const response = await request("memory.addCard", { memory: id, key, content: body });
+      if (response.error) throw new MemoryError(response.error.code);
+    },
+    async updateCard(id, key, body) {
+      const response = await request("memory.updateCard", { memory: id, key, content: body });
+      if (response.error) throw new MemoryError(response.error.code);
+    },
+    async readCard(id, key) {
+      const response = await request("memory.readCard", { memory: id, key });
+      if (response.error) throw new MemoryError(response.error.code);
+      return response.body ?? "";
+    },
+    async searchCards(id, query) {
+      const response = await request("memory.searchCards", { memory: id, query });
+      if (response.error) throw new MemoryError(response.error.code);
+      if (!response.hits) throw new MemoryError("MEMORY_UNREADABLE");
+      return response.hits;
     },
   };
 }

@@ -125,7 +125,7 @@ function preflight(input: StageRunInput): Preflight {
   if (input.stage.memories?.length) {
     return {
       ok: false,
-      reason: "stage pipeline declares memories; the claude agent backend does not provide read_memory and replace_memory yet, so the stage would run without them",
+      reason: "stage pipeline declares memories; the claude agent backend does not provide read_memory, replace_memory, add_memory_card, update_memory_card, read_memory_card, and search_memory_cards yet, so the stage would run without them",
     };
   }
   return resolveClaudeModel(input.stage.model);

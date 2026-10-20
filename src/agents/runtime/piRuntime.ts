@@ -20,7 +20,7 @@ import { findProviderSupport } from "../../agent/providerSupport.js";
 import { grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
 import { bindStageMemory, formatMemoryPrompt, type StageMemory } from "../../memory/access.js";
 import { MemoryError, memoryHostFor } from "../../memory/host.js";
-import { createReadMemoryTool, createReplaceMemoryTool } from "../../tools/memoryTools.js";
+import { createAttachedMemoryTools } from "../../tools/memoryTools.js";
 import { resolveSkillByName } from "../../config/listSkills.js";
 import { resolveStageMcpServers } from "../../config/resolveStageMcpServers.js";
 import { globalStageflowHome } from "../../project/globalHome.js";
@@ -215,7 +215,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
     }
 
     if (input.memory) {
-      for (const definition of [createReadMemoryTool(input.memory), createReplaceMemoryTool(input.memory)]) {
+      for (const definition of createAttachedMemoryTools(input.memory)) {
         customTools.push(defineTool(definition));
         toolNames.push(definition.name);
       }
