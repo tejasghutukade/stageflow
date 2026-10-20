@@ -872,7 +872,7 @@ export class RunManager {
     Array<{ runId: string; stageId: string }>
   > {
     const found: Array<{ runId: string; stageId: string }> = [];
-    const runs = await this.options.store.listRuns();
+    const runs = await this.options.store.listRuns({ origin: "any" });
     for (const summary of runs) {
       if (summary.status !== "running") continue;
       let detail;
@@ -991,7 +991,7 @@ export class RunManager {
       stageId: string;
       reason: string;
     }> = [];
-    const runs = await this.options.store.listRuns();
+    const runs = await this.options.store.listRuns({ origin: "any" });
 
     for (const summary of runs) {
       let meta;
@@ -1223,7 +1223,7 @@ export class RunManager {
 
   async resumeStalledSchedules(): Promise<Array<{ runId: string }>> {
     const resumed: Array<{ runId: string }> = [];
-    const runs = await this.options.store.listRuns();
+    const runs = await this.options.store.listRuns({ origin: "any" });
     for (const summary of runs) {
       if (summary.status !== "running") continue;
       const runId = summary.run_id;
@@ -1248,7 +1248,7 @@ export class RunManager {
 
   /** Rebuild in-memory admission queue from persisted `queued` rows (R27). */
   async reenqueuePersistedQueuedRuns(): Promise<void> {
-    const queued = await this.options.store.listRuns({ status: "queued" });
+    const queued = await this.options.store.listRuns({ status: "queued", origin: "any" });
     const ordered = [...queued].sort((a, b) =>
       a.created_at.localeCompare(b.created_at),
     );

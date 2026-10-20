@@ -618,6 +618,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (since !== null) filter.since = since;
           if (pipeline !== null) filter.pipeline = pipeline;
           if (callerId !== null) filter.caller_id = callerId;
+          const origin = url.searchParams.get("origin");
+          if (origin === "eval" || origin === "any") filter.origin = origin;
           json(res, 200, {
             runs: await store.listRuns(
               Object.keys(filter).length > 0 ? filter : undefined,
