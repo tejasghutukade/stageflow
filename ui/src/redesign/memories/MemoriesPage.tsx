@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
+import { LuArchive, LuBookOpen, LuInfo, LuPlus, LuSearch, LuX } from "react-icons/lu";
 import {
   createMemory,
   deleteMemoryCard,
@@ -15,11 +17,9 @@ import {
   type MemorySummary,
 } from "../../api";
 import { navigate } from "../../routes";
-import { PageHeader } from "../shell/PageHeader";
+import { CardsSection, CoverPanel, DeleteCardDialog } from "./MemoryDetailParts";
 
-const MONO = "font-['Geist_Mono',monospace]";
-const FIELD = "rounded-lg border border-[#ffffff1a] bg-[#1a1c21] text-[#ecedee]";
-const ACTION = "h-8 rounded-lg bg-[#ecedee] px-3 text-xs font-medium text-[#101114] disabled:opacity-40";
+const MONO = "sf-mono";
 
 export type MemoryPageLoaded = {
   detail: MemoryDetail;
@@ -52,6 +52,15 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
   const [previousCard, setPreviousCard] = useState<string | null>(loaded?.card?.previous ?? null);
   const [cardDraft, setCardDraft] = useState(loaded?.card?.body ?? "");
   const [savingCard, setSavingCard] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [createOpen, setCreateOpen] = useState(false);
+  const [coverEditing, setCoverEditing] = useState(false);
+  const [coverPrevious, setCoverPrevious] = useState(false);
+  const [cardEditing, setCardEditing] = useState(false);
+  const [cardPrevious, setCardPrevious] = useState(false);
+  const [cardFilter, setCardFilter] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const memoryIdRef = useRef(memoryId);
   const openCardKey = useRef<string | null>(loaded?.card?.key ?? null);
   memoryIdRef.current = memoryId;
@@ -64,6 +73,29 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
     );
     return () => { live = false; };
   }, []);
+
+  useEffect(() => {
+    if (!memories || memories.length === 0) return;
+    let live = true;
+    void Promise.all(
+      memories.map(async (item) => {
+        try {
+          const cards = await fetchMemoryCards(item.id);
+          return [item.id, cards.keys.length] as const;
+        } catch {
+          return [item.id, null] as const;
+        }
+      }),
+    ).then((pairs) => {
+      if (!live) return;
+      const next: Record<string, number> = {};
+      for (const [id, count] of pairs) {
+        if (count !== null) next[id] = count;
+      }
+      setCounts(next);
+    });
+    return () => { live = false; };
+  }, [memories]);
 
   useEffect(() => {
     if (loaded) return;
@@ -79,6 +111,12 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
       return;
     }
     let live = true;
+    setCoverEditing(false);
+    setCoverPrevious(false);
+    setCardEditing(false);
+    setCardPrevious(false);
+    setCardFilter("");
+    setDeleteOpen(false);
     setDetail(null);
     setCoverDraft("");
     setPreviousCover(null);
@@ -124,6 +162,7 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
       });
       setId("");
       setDescription("");
+      setCreateOpen(false);
       navigate(`#/memories/${encodeURIComponent(created.id)}`);
     } catch {
       setError("That memory could not be created. Check the id and description.");
@@ -146,6 +185,8 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
       setPreviousCover(previous);
       setDetail(updated);
       setCoverDraft(updated.body);
+      setCoverEditing(false);
+      setCoverPrevious(false);
     } catch (caught) {
       setError(failureCode(caught) === "MEMORY_TOO_LARGE" ? "That text is too long." : "That cover could not be saved.");
     } finally {
@@ -156,6 +197,8 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
   async function openCard(key: string) {
     if (!memoryId) return;
     setSelectedKey(key);
+    setCardEditing(false);
+    setCardPrevious(false);
     openCardKey.current = key;
     setCardDraft("");
     setCardBody(null);
@@ -199,8 +242,32 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
       setPreviousCard(previous);
       setCardBody(updated.body);
       setCardDraft(updated.body);
+      setCardEditing(false);
+      setCardPrevious(false);
     } catch (caught) {
       setError(failureCode(caught) === "MEMORY_TOO_LARGE" ? "That text is too long." : "That card could not be saved.");
+    } finally {
+      setSavingCard(false);
+    }
+  }
+
+  async function onRestore() {
+    if (!memoryId || !selectedKey || previousCard === null) return;
+    const savedId = memoryId;
+    const key = selectedKey;
+    const restored = previousCard;
+    const current = cardBody;
+    setSavingCard(true);
+    setError(null);
+    try {
+      const updated = await updateMemoryCard(savedId, key, restored);
+      if (memoryIdRef.current !== savedId || openCardKey.current !== key) return;
+      setPreviousCard(current);
+      setCardBody(updated.body);
+      setCardDraft(updated.body);
+      setCardPrevious(false);
+    } catch (caught) {
+      setError(failureCode(caught) === "MEMORY_TOO_LARGE" ? "That text is too long." : "That card could not be restored.");
     } finally {
       setSavingCard(false);
     }
@@ -219,157 +286,381 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
       setCardBody(null);
       setPreviousCard(null);
       setCardDraft("");
+      setCardEditing(false);
+      setCardPrevious(false);
+      setDeleteOpen(false);
     } catch {
+      setDeleteOpen(false);
       setError("That card could not be deleted.");
     } finally {
       setSavingCard(false);
     }
   }
 
+  const visible = useMemo(() => {
+    const query = filter.trim().toLowerCase();
+    return (memories ?? []).filter((item) => {
+      if (!query) return true;
+      return item.id.toLowerCase().includes(query) || item.description.toLowerCase().includes(query);
+    });
+  }, [filter, memories]);
+  const empty = memories !== null && memories.length === 0;
+  const cardTotal = memories?.every((item) => counts[item.id] !== undefined)
+    ? memories.reduce((sum, item) => sum + (item.id === memoryId && detail ? keys.length : counts[item.id] ?? 0), 0)
+    : null;
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
+      }
+      if (!memories || memories.length === 0 || visible.length === 0) return;
+      const index = visible.findIndex((item) => item.id === memoryId);
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const nextIndex = event.key === "ArrowDown"
+          ? Math.min(visible.length - 1, index < 0 ? 0 : index + 1)
+          : Math.max(0, index < 0 ? 0 : index - 1);
+        const next = visible[nextIndex];
+        if (next && next.id !== memoryId) navigate(`#/memories/${encodeURIComponent(next.id)}`);
+      }
+      if (event.key === "Enter" && index < 0) {
+        const next = visible[0];
+        if (next) navigate(`#/memories/${encodeURIComponent(next.id)}`);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [filter, memories, memoryId, visible]);
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-[#101114] text-[#ecedee]" data-testid="memories-page">
-      <PageHeader
-        title="Memories"
-        crumbs={memoryId ? [{ label: "Memories", onClick: () => navigate("#/memories") }] : undefined}
-        subtitle={memoryId ? memoryId : "A page a pipeline or an agent can keep reading."}
-      />
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr]">
-        <div className="flex min-h-0 flex-col gap-4 overflow-auto border-r border-[#ffffff14] p-4">
-          <form className="flex flex-col gap-2" onSubmit={(event) => void onCreate(event)}>
-            <label className="flex flex-col gap-1 text-xs text-[#a7aab2]">
-              Id
-              <input
-                value={id}
-                onChange={(event) => setId(event.target.value)}
-                className={`h-8 px-2 ${FIELD} ${MONO}`}
-                placeholder="candidate-pool"
-                data-testid="memory-id"
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-[var(--sf-ground)] text-[var(--sf-text-1)]" data-testid="memories-page">
+      <header className="flex flex-col gap-3 border-b border-b-[var(--sf-hairline)] px-7 pb-4 pt-5">
+        <p className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">Connect</p>
+        <div className="flex items-center justify-between gap-6">
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <h1 className="text-2xl font-semibold leading-[1.33] tracking-[-0.5px] text-[var(--sf-text-1)]">Memories</h1>
+            <p className="text-[13px] leading-normal text-[var(--sf-text-2)]">
+              A filing cabinet your pipelines and agents keep reading — a cover page for the gist, cards for the details.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setCreateOpen(true)}
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[var(--sf-text-1)] px-3 text-[13px] font-medium text-[var(--sf-ground)]"
+          >
+            <LuPlus className="size-3.5" aria-hidden />
+            New memory
+          </button>
+        </div>
+      </header>
+      <div className="flex min-h-0 flex-1">
+        <MemoryRail
+          items={visible}
+          selectedId={memoryId}
+          counts={counts}
+          openCount={detail && memoryId ? keys.length : null}
+          filter={filter}
+          disabled={empty}
+          empty={empty}
+          onFilter={setFilter}
+        />
+        {empty ? (
+          <MemoryEmpty onCreate={() => setCreateOpen(true)} />
+        ) : (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-auto px-7 py-6" data-testid="memory-page">
+          {error ? <p className="text-xs text-[var(--sf-fail)]">{error}</p> : null}
+          {detail ? (
+            <>
+              <div className="flex items-start justify-between gap-6">
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  <div className="flex items-center gap-2.5">
+                    <h2 className={`${MONO} text-xl font-semibold leading-[1.4] tracking-[-0.3px]`}>{detail.id}</h2>
+                    <span className={`${MONO} rounded-full border border-[var(--sf-hairline-strong)] px-2 py-px text-[11px] leading-normal text-[var(--sf-text-3)]`}>v1</span>
+                  </div>
+                  <p className="text-[13px] leading-normal text-[var(--sf-text-2)]">{detail.description}</p>
+                </div>
+              </div>
+              <CoverPanel
+                body={detail.body}
+                draft={coverDraft}
+                previous={previousCover}
+                editing={coverEditing}
+                showPrevious={coverPrevious}
+                saving={savingCover}
+                onDraft={setCoverDraft}
+                onEdit={() => { setCoverDraft(detail.body); setCoverEditing(true); }}
+                onCancel={() => { setCoverDraft(detail.body); setCoverEditing(false); }}
+                onShowPrevious={setCoverPrevious}
+                onSubmit={(event) => void onSaveCover(event)}
               />
-            </label>
-            <label className="flex flex-col gap-1 text-xs text-[#a7aab2]">
-              Description
-              <input
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                className={`h-8 px-2 ${FIELD}`}
-                placeholder="People this pipeline has already sourced."
-                data-testid="memory-description"
+              <CardsSection
+                keys={keys}
+                filter={cardFilter}
+                selectedKey={selectedKey}
+                body={cardBody}
+                previous={previousCard}
+                draft={cardDraft}
+                editing={cardEditing}
+                showPrevious={cardPrevious}
+                saving={savingCard}
+                onFilter={setCardFilter}
+                onOpen={(key) => void openCard(key)}
+                onDraft={setCardDraft}
+                onEdit={() => { setCardDraft(cardBody ?? ""); setCardEditing(true); }}
+                onCancel={() => { setCardDraft(cardBody ?? ""); setCardEditing(false); }}
+                onShowPrevious={setCardPrevious}
+                onSubmit={(event) => void onCorrect(event)}
+                onRestore={() => void onRestore()}
+                onDelete={() => setDeleteOpen(true)}
               />
-            </label>
-            <button
-              type="submit"
-              disabled={creating || id.trim().length === 0 || description.trim().length === 0}
-              className="h-8 rounded-lg bg-[#ecedee] text-xs font-medium text-[#101114] disabled:opacity-40"
-            >
-              Create memory
-            </button>
-          </form>
-          {error ? <p className="text-xs text-[#e8a0a0]">{error}</p> : null}
-          <ul className="flex flex-col gap-1" data-testid="memory-list">
-            {(memories ?? []).map((item) => (
+            </>
+          ) : (
+            <p className="text-sm text-[var(--sf-text-3)]">Open a memory to read its page.</p>
+          )}
+        </div>
+        )}
+      </div>
+      <footer className="flex h-11 shrink-0 items-center justify-between border-t border-t-[var(--sf-hairline)] px-7">
+        <p className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">
+          {memories === null
+            ? ""
+            : `${countPhrase(memories.length, "memory", "memories")}${cardTotal === null ? "" : ` · ${countPhrase(cardTotal, "card", "cards")}`}`}
+        </p>
+        <p className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">↑ ↓ to move · ↵ to open · E edit</p>
+      </footer>
+      {deleteOpen && memoryId && selectedKey ? (
+        <DeleteCardDialog
+          memoryId={memoryId}
+          cardKey={selectedKey}
+          busy={savingCard}
+          onKeep={() => setDeleteOpen(false)}
+          onDelete={() => void onDelete()}
+        />
+      ) : null}
+      {createOpen ? (
+        <NewMemoryDialog
+          id={id}
+          description={description}
+          creating={creating}
+          error={error}
+          onId={setId}
+          onDescription={setDescription}
+          onClose={() => setCreateOpen(false)}
+          onSubmit={(event) => void onCreate(event)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function countPhrase(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+function MemoryRail({
+  items,
+  selectedId,
+  counts,
+  openCount,
+  filter,
+  disabled,
+  empty,
+  onFilter,
+}: {
+  items: MemorySummary[];
+  selectedId?: string;
+  counts: Record<string, number>;
+  openCount: number | null;
+  filter: string;
+  disabled: boolean;
+  empty: boolean;
+  onFilter: (value: string) => void;
+}) {
+  return (
+    <aside className="flex w-[272px] shrink-0 flex-col gap-3 border-r border-r-[var(--sf-hairline)] p-4">
+      <label className="flex h-8 items-center gap-2 rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-panel)] px-2.5">
+        <LuSearch className="size-3.5 shrink-0 text-[var(--sf-text-3)]" aria-hidden />
+        <input
+          value={filter}
+          disabled={disabled}
+          onChange={(event) => onFilter(event.target.value)}
+          placeholder="Filter memories…"
+          className="min-w-0 flex-1 bg-transparent text-[13px] leading-normal text-[var(--sf-text-1)] outline-none placeholder:text-[var(--sf-text-3)] disabled:cursor-default"
+        />
+      </label>
+      {empty ? (
+        <div className="flex flex-col gap-1 rounded-lg border border-dashed border-[var(--sf-hairline-strong)] px-3 py-4">
+          <p className="text-[13px] font-medium leading-normal text-[var(--sf-text-2)]">Nothing filed yet</p>
+          <p className="text-xs leading-[1.4] text-[var(--sf-text-3)]">Memories you create will list here with their card counts.</p>
+        </div>
+      ) : (
+        <ul className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto" data-testid="memory-list">
+          {items.map((item) => {
+            const selected = item.id === selectedId;
+            const count = selected && openCount !== null ? openCount : counts[item.id];
+            return (
               <li key={item.id}>
                 <a
                   href={`#/memories/${encodeURIComponent(item.id)}`}
-                  className={`flex flex-col rounded-lg px-2 py-1.5 hover:bg-[#ffffff0a] ${item.id === memoryId ? "bg-[#ffffff0f]" : ""}`}
+                  className={`flex flex-col gap-1.5 rounded-lg p-3 ${selected ? "border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)]" : "border border-transparent"}`}
                 >
-                  <span className={`${MONO} text-[13px]`}>{item.id}</span>
-                  <span className="text-xs text-[#8b8f98]">{item.description}</span>
+                  <span className="flex items-center gap-2">
+                    <span className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-[var(--sf-needs)]" : "bg-[#3a3d44]"}`} />
+                    <span className={`${MONO} min-w-0 flex-1 truncate text-[13px] leading-normal ${selected ? "font-medium text-[var(--sf-text-1)]" : "text-[var(--sf-text-2)]"}`}>{item.id}</span>
+                    {count !== undefined ? <span className={`${MONO} text-xs leading-[1.33333] text-[var(--sf-text-3)]`}>{count}</span> : null}
+                  </span>
+                  <span className="text-xs leading-[1.4] text-[var(--sf-text-3)]">{item.description}</span>
                 </a>
               </li>
-            ))}
-          </ul>
+            );
+          })}
+        </ul>
+      )}
+    </aside>
+  );
+}
+
+function MemoryEmpty({ onCreate }: { onCreate: () => void }) {
+  return (
+    <div className="flex min-w-0 flex-1 items-center justify-center px-7 py-10">
+      <div className="flex w-[560px] max-w-full flex-col items-center gap-6">
+        <div className="flex size-14 items-center justify-center rounded-xl border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)]">
+          <LuArchive className="size-6 text-[var(--sf-text-2)]" aria-hidden />
         </div>
-        <div className="min-h-0 overflow-auto p-6" data-testid="memory-page">
-          {detail ? (
-            <>
-              <h2 className="text-lg font-medium">{detail.id}</h2>
-              <p className="mt-1 text-sm text-[#a7aab2]">{detail.description}</p>
-              <div className="mt-6 grid items-start gap-4 lg:grid-cols-2">
-                <form className="flex flex-col gap-2" onSubmit={(event) => void onSaveCover(event)}>
-                  <label className="flex flex-col gap-1 text-xs text-[#a7aab2]">
-                    Cover
-                    <textarea
-                      value={coverDraft}
-                      onChange={(event) => setCoverDraft(event.target.value)}
-                      className={`min-h-40 p-3 text-sm leading-relaxed ${FIELD} ${MONO}`}
-                      data-testid="memory-cover"
-                    />
-                  </label>
-                  <button type="submit" disabled={savingCover} className={`w-fit ${ACTION}`}>
-                    Save cover
-                  </button>
-                </form>
-                {previousCover !== null ? (
-                  <div data-testid="memory-previous-cover">
-                    <p className="text-xs text-[#a7aab2]">Previous cover</p>
-                    <pre className={`mt-1 whitespace-pre-wrap text-sm leading-relaxed text-[#8b8f98] ${MONO}`}>{previousCover}</pre>
-                  </div>
-                ) : null}
-              </div>
-              <div className="mt-8">
-                <p className="text-xs text-[#a7aab2]">Cards</p>
-                {keys.length === 0 ? <p className="mt-2 text-sm text-[#8b8f98]">No cards yet.</p> : null}
-                <ul className="mt-2 flex flex-col gap-1" data-testid="memory-card-list">
-                  {keys.map((key) => (
-                    <li key={key}>
-                      <button
-                        type="button"
-                        onClick={() => void openCard(key)}
-                        className={`flex w-full rounded-lg px-2 py-1.5 text-left text-[13px] hover:bg-[#ffffff0a] ${key === selectedKey ? "bg-[#ffffff0f]" : ""} ${MONO}`}
-                        data-testid="memory-card-key"
-                      >
-                        {key}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-                {selectedKey ? (
-                  <div className="mt-4 grid items-start gap-4 lg:grid-cols-2" data-testid="memory-open-card">
-                    <div>
-                      <p className="text-xs text-[#a7aab2]">Card</p>
-                      <pre className={`mt-1 whitespace-pre-wrap text-sm leading-relaxed ${MONO}`} data-testid="memory-card-body">
-                        {cardBody ?? ""}
-                      </pre>
-                      <form className="mt-3 flex flex-col gap-2" onSubmit={(event) => void onCorrect(event)}>
-                        <label className="flex flex-col gap-1 text-xs text-[#a7aab2]">
-                          Correct
-                          <textarea
-                            value={cardDraft}
-                            onChange={(event) => setCardDraft(event.target.value)}
-                            className={`min-h-28 p-3 text-sm leading-relaxed ${FIELD} ${MONO}`}
-                            data-testid="memory-card-draft"
-                          />
-                        </label>
-                        <div className="flex gap-2">
-                          <button type="submit" disabled={savingCard} className={ACTION}>
-                            Save card
-                          </button>
-                          <button
-                            type="button"
-                            disabled={savingCard}
-                            onClick={() => void onDelete()}
-                            className="h-8 rounded-lg border border-[#ffffff1a] px-3 text-xs text-[#ecedee] disabled:opacity-40"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </form>
-                    </div>
-                    {previousCard !== null ? (
-                      <div data-testid="memory-previous-card">
-                        <p className="text-xs text-[#a7aab2]">Previous card</p>
-                        <pre className={`mt-1 whitespace-pre-wrap text-sm leading-relaxed text-[#8b8f98] ${MONO}`}>{previousCard}</pre>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <p className="text-sm text-[#8b8f98]">Open a memory to read its page.</p>
-          )}
+        <div className="flex flex-col items-center gap-2">
+          <h2 className="text-xl font-semibold leading-[1.4] tracking-[-0.3px] text-[var(--sf-text-1)]">No memories yet</h2>
+          <p className="max-w-[440px] text-center text-[13px] leading-[1.55] text-[var(--sf-text-2)]">
+            A memory is a page your pipelines and agents can keep reading, plus cards for the details. Create one, then attach it to a pipeline.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onCreate}
+            className="flex h-8 items-center gap-1.5 rounded-lg bg-[var(--sf-text-1)] px-3 text-[13px] font-medium text-[var(--sf-ground)]"
+          >
+            <LuPlus className="size-3.5" aria-hidden />
+            Create your first memory
+          </button>
+          <button
+            type="button"
+            className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] font-medium text-[var(--sf-text-2)]"
+          >
+            <LuBookOpen className="size-3.5" aria-hidden />
+            How memory works
+          </button>
+        </div>
+        <div className="grid w-full grid-cols-3 gap-3 pt-2">
+          <HowTile title="Cover page" text="One short page of what matters most. Every stage reads it." />
+          <HowTile title="Cards" text="Details filed by key — a ticket, an order, a release." />
+          <HowTile title="Attach" text="Point a pipeline at the memory and its stages can use it." />
         </div>
       </div>
     </div>
+  );
+}
+
+function HowTile({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-panel)] p-3.5">
+      <p className="text-[13px] font-medium leading-normal text-[var(--sf-text-1)]">{title}</p>
+      <p className="text-xs leading-[1.45] text-[var(--sf-text-3)]">{text}</p>
+    </div>
+  );
+}
+
+function NewMemoryDialog({
+  id,
+  description,
+  creating,
+  error,
+  onId,
+  onDescription,
+  onClose,
+  onSubmit,
+}: {
+  id: string;
+  description: string;
+  creating: boolean;
+  error: string | null;
+  onId: (value: string) => void;
+  onDescription: (value: string) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-[#000000a6]"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <form
+        onSubmit={onSubmit}
+        className="flex w-[480px] max-w-[calc(100%-32px)] flex-col overflow-hidden rounded-xl border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)] shadow-[0px_24px_64px_rgba(0,0,0,0.55)]"
+      >
+        <div className="flex items-start gap-3 border-b border-b-[var(--sf-hairline)] px-5 py-4">
+          <div className="flex flex-1 flex-col gap-1">
+            <h2 className="text-base font-semibold leading-normal text-[var(--sf-text-1)]">New memory</h2>
+            <p className="text-[13px] leading-normal text-[var(--sf-text-2)]">Give it an id pipelines can refer to, and say what it is for.</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-[var(--sf-text-3)]" aria-label="Close">
+            <LuX className="size-4" />
+          </button>
+        </div>
+        <div className="flex flex-col gap-4 p-5">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Id</span>
+            <input
+              value={id}
+              onChange={(event) => onId(event.target.value)}
+              data-testid="memory-id"
+              className={`${MONO} h-9 rounded-lg border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)] px-3 text-[13px] leading-normal text-[var(--sf-text-1)] outline-none`}
+            />
+            <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">Lowercase letters, numbers and dashes. Can&apos;t be changed later.</span>
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Description</span>
+            <input
+              value={description}
+              onChange={(event) => onDescription(event.target.value)}
+              placeholder="People this pipeline has already sourced."
+              data-testid="memory-description"
+              className="h-9 rounded-lg border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)] px-3 text-[13px] leading-normal text-[var(--sf-text-1)] outline-none placeholder:text-[var(--sf-text-3)]"
+            />
+          </label>
+          <div className="flex items-start gap-2 rounded-lg bg-[var(--sf-running-bg)] px-3 py-2.5">
+            <LuInfo className="mt-px size-3.5 shrink-0 text-[var(--sf-running)]" aria-hidden />
+            <p className="text-xs leading-[1.45] text-[var(--sf-text-2)]">The memory starts empty. Write its cover page after you create it, then attach it to a pipeline.</p>
+          </div>
+          {error ? <p className="text-xs text-[var(--sf-fail)]">{error}</p> : null}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-t-[var(--sf-hairline)] bg-[var(--sf-ground)] px-5 py-3">
+          <button type="button" onClick={onClose} className="flex h-8 items-center rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] font-medium text-[var(--sf-text-2)]">
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={creating || id.trim().length === 0 || description.trim().length === 0}
+            className="flex h-8 items-center rounded-lg bg-[var(--sf-text-1)] px-3 text-[13px] font-medium text-[var(--sf-ground)] disabled:opacity-40"
+          >
+            Create memory
+          </button>
+        </div>
+      </form>
+    </div>,
+    document.body,
   );
 }

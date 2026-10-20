@@ -21,7 +21,7 @@ describe("pipeline memories", () => {
   it("lists memories and shows an empty page", () => {
     const html = renderToStaticMarkup(createElement(MemoriesPage, { memoryId: "candidate-pool" }));
     expect(html).toContain("Memories");
-    expect(html).toContain("Create memory");
+    expect(html).toContain("New memory");
     expect(html).toContain("Open a memory to read its page.");
     expect(html).toContain('data-testid="memories-page"');
   });

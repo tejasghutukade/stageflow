@@ -1,6 +1,4 @@
 id: remember
-memories:
-  - notebook
 stages:
   - id: record
     entry: true
@@ -56,3 +54,5 @@ stages:
             page:
               type: string
           additionalProperties: false
+memories:
+  - new-notebook

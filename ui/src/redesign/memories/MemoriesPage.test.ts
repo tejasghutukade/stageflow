@@ -18,7 +18,7 @@ describe("memories page cards", () => {
     expect(previousUrl.searchParams.get("key")).toBe(KEY);
   });
 
-  it("renders the key list, open card, previous copies, and cover editor", () => {
+  it("renders the key list, open card, previous toggle, and cover panel", () => {
     const html = renderToStaticMarkup(createElement(MemoriesPage, {
       memoryId: "pool",
       loaded: {
@@ -32,19 +32,20 @@ describe("memories page cards", () => {
     expect(html).toContain(KEY);
     expect(html).toContain("ada@example.com");
     expect(html).toContain('data-testid="memory-open-card"');
+    expect(html).toContain('data-testid="memory-card-body"');
     expect(html).toContain("shortlisted");
-    expect(html).toContain('data-testid="memory-previous-card"');
-    expect(html).toContain("sourced");
-    expect(html).toContain('data-testid="memory-previous-cover"');
-    expect(html).toContain("old cover");
     expect(html).toContain('data-testid="memory-cover"');
     expect(html).toContain("new cover");
-    expect(html).toContain("Save cover");
-    expect(html).toContain("Save card");
+    expect(html).toContain("Cover page");
+    expect(html).toContain("Edit cover");
+    expect(html).toContain("Current");
+    expect(html).toContain("Previous");
     expect(html).toContain("Delete");
+    expect(html).toContain("2 of 200");
+    expect(html).not.toContain('data-testid="memory-previous-card"');
   });
 
-  it("hides previous cover and previous card when there is no earlier copy", () => {
+  it("hides the previous toggle when there is no earlier copy", () => {
     const html = renderToStaticMarkup(createElement(MemoriesPage, {
       memoryId: "pool",
       loaded: {
@@ -54,8 +55,8 @@ describe("memories page cards", () => {
         card: { key: "ada@example.com", body: "sourced", previous: null },
       },
     }));
+    expect(html).not.toContain("Previous");
     expect(html).not.toContain('data-testid="memory-previous-cover"');
-    expect(html).not.toContain('data-testid="memory-previous-card"');
     expect(html).toContain('data-testid="memory-cover"');
     expect(html).toContain("sourced");
   });

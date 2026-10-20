@@ -1,0 +1,11 @@
+id: desk-revisit-outage
+goal: Change the release card again and leave the ticket and the pager owner alone
+context: desk-outage has already filed TICKET-1904, releases/2.4.1, and ada@example.com. This run only replaces the release card.
+constraints: Do not add a card. Do not replace the cover. Do not update TICKET-1904 or ada@example.com.
+input:
+  focus: releases/2.4.1
+  decision: Rollback finished at 16:40 UTC. Checkout 502s stopped after the payments migration was reverted.
+  query: "502"
+  neighbors:
+    - TICKET-1904
+    - ada@example.com

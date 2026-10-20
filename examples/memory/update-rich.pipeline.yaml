@@ -1,0 +1,44 @@
+id: update-rich
+memories:
+  - new-notebook
+stages:
+  - id: revise
+    entry: true
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      The task input has "key" and "note".
+      The note is the full new card body. Copy it unchanged, including tables and lists.
+      Do these steps in order, then stop:
+      1. Call read_memory_card with memory "new-notebook" and that key.
+      2. Call update_memory_card with memory "new-notebook", that key, and content set to the note exactly.
+      3. Call read_memory_card again with memory "new-notebook" and that key.
+      4. Call emit_stage_envelope once with status success, a one-line summary, artifacts [], and payload {"key":"<the key>","before":"<the first read>","note":"<the second read>"}.
+      Do not call add_memory_card or replace_memory. Do not call any memory id other than new-notebook. Do not write files. If the card is missing, emit status failure.
+    io:
+      input:
+        schema:
+          type: object
+          required:
+            - key
+            - note
+          properties:
+            key:
+              type: string
+            note:
+              type: string
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required:
+            - key
+            - before
+            - note
+          properties:
+            key:
+              type: string
+            before:
+              type: string
+            note:
+              type: string
+          additionalProperties: false
