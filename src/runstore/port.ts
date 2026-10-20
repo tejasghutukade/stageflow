@@ -13,6 +13,21 @@ import type { CompletionCheck } from "../types/completion.js";
 import type { StageGateKind } from "../types/stage.js";
 import type { StageUsage } from "../types/usage.js";
 import type { OverviewRunRow } from "./overviewSummary.js";
+import type {
+  CreateEvalRunInput,
+  EvalCaseInput,
+  EvalCaseRow,
+  EvalGraderVersionInput,
+  EvalResultInput,
+  EvalResultWithGrades,
+  EvalReviewPatch,
+  EvalReviewRow,
+  EvalRunPage,
+  EvalRunProgress,
+  EvalRunRow,
+  FinishEvalRunInput,
+  ListEvalRunsQuery,
+} from "../evals/storeTypes.js";
 
 export type { ConfigOriginRecord };
 
@@ -65,6 +80,8 @@ export type PipelineTrackProjection = {
   edges: PipelineTrackEdge[];
 };
 
+export type RunOrigin = "eval";
+
 export type RunMeta = {
   run_id: string;
   pipeline_id: string;
@@ -94,6 +111,8 @@ export type RunMeta = {
   config_origins?: ConfigOriginRecord[];
   pipeline_source?: "inline" | "path";
   caller_id?: string;
+  /** `eval` for stage runs started by an eval run; absent for normal runs. */
+  origin?: RunOrigin;
   run_manifest?: unknown;
   skip_gates?: boolean;
   /**
@@ -483,6 +502,7 @@ export type CreateRunInput = {
    */
   inlinePipeline?: InlinePipelineDefinition;
   callerId?: string;
+  origin?: RunOrigin;
   runManifest?: unknown;
   skipGates?: boolean;
 };
@@ -494,6 +514,8 @@ export type ListRunsFilter = {
   /** Match pipeline_id or pipeline_path */
   pipeline?: string;
   caller_id?: string;
+  /** Default (undefined) hides eval stage runs; `"any"` includes them; `"eval"` returns only them. */
+  origin?: RunOrigin | "any";
 };
 
 /**
@@ -628,6 +650,31 @@ export interface RunStore {
   listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
   /** One light row per run created at or after `since` (ISO), newest first, with summed stage cost. No stages are loaded. */
   listRunOverviewRows(since: string): Promise<OverviewRunRow[]>;
+  createEvalRun(input: CreateEvalRunInput): Promise<EvalRunRow>;
+  insertEvalCases(evalRunId: string, cases: EvalCaseInput[]): Promise<void>;
+  /** Result row and its grade rows in one transaction; replaces any earlier grades for the same result. */
+  upsertEvalResult(result: EvalResultInput): Promise<void>;
+  updateEvalRunProgress(evalRunId: string, progress: EvalRunProgress): Promise<void>;
+  finishEvalRun(evalRunId: string, input: FinishEvalRunInput): Promise<void>;
+  getEvalRun(evalRunId: string): Promise<EvalRunRow | null>;
+  getEvalRunByNumber(projectRoot: string, evalId: string, runNumber: number): Promise<EvalRunRow | null>;
+  listEvalRuns(query: ListEvalRunsQuery): Promise<EvalRunPage>;
+  listEvalResults(evalRunId: string): Promise<EvalResultWithGrades[]>;
+  getEvalResultsForCase(evalRunId: string, caseId: string): Promise<EvalResultWithGrades[]>;
+  getEvalCases(evalRunId: string): Promise<EvalCaseRow[]>;
+  /** `tags` replaces the tag set and is accepted only for results with `passed = 0`. */
+  putEvalReview(evalRunId: string, caseId: string, repeatIndex: number, patch: EvalReviewPatch): Promise<EvalReviewRow>;
+  getEvalReviews(evalRunId: string): Promise<EvalReviewRow[]>;
+  /** The eval's failure-type vocabulary, most recently used first. */
+  listFailureTypes(projectRoot: string, evalId: string): Promise<string[]>;
+  /** Inserts unseen grader hashes with the next ordinal per grader id; returns grader id to ordinal. */
+  recordGraderVersions(
+    projectRoot: string,
+    evalId: string,
+    graders: EvalGraderVersionInput[],
+  ): Promise<Record<string, number>>;
+  /** Deletes the eval run and its rows; returns the stage run ids it started so the caller can delete those runs. */
+  deleteEvalRun(evalRunId: string): Promise<string[]>;
   /** Idempotent upsert; returns the realpath/resolve-normalized absolute key. */
   ensureProject(absPath: string): Promise<string>;
   /** Absolute roots from the durable projects registry. */
