@@ -8,7 +8,7 @@ import {
   type ValidationFinding,
 } from "../config/validateCatalog.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
-import type { RunStore } from "../runstore/port.js";
+import type { RunOrigin, RunStore } from "../runstore/port.js";
 import {
   resolveAndValidateCheckout,
   resolveEffectiveGitIdentity,
@@ -197,6 +197,7 @@ async function preparePipeline(options: {
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
   callerId?: string | null;
+  origin?: RunOrigin;
   skills?: SkillsPayload;
 }): Promise<PreparedPipeline> {
   const loadResult = await loadPipelineValidated(options.pipeline, {
@@ -381,6 +382,7 @@ async function preparePipeline(options: {
         ? { pipelineBody: persistence.fields.pipelineBody }
         : {}),
       ...(callerId !== null ? { callerId } : {}),
+      ...(options.origin !== undefined ? { origin: options.origin } : {}),
       runManifest,
       skipGates: options.skipGates,
     });
@@ -531,6 +533,7 @@ export async function startPipeline(options: {
   skipGates?: boolean;
   schedulingHalt?: { halted: boolean };
   callerId?: string | null;
+  origin?: RunOrigin;
   skills?: SkillsPayload;
 }): Promise<StartedPipeline> {
   const cwd = options.cwd ?? process.cwd();
@@ -563,6 +566,7 @@ export async function startPipeline(options: {
     operatorCatalog: options.operatorCatalog,
     skipGates: options.skipGates,
     callerId: options.callerId,
+    ...(options.origin !== undefined ? { origin: options.origin } : {}),
     ...(options.skills !== undefined ? { skills: options.skills } : {}),
   });
   if (prepared.run.created === false) {

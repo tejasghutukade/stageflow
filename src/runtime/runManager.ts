@@ -31,6 +31,7 @@ import {
   deriveStatusFromStages,
   findUnhandledFailedStage,
   type RunMeta,
+  type RunOrigin,
   type RunStore,
   type RunPipelineDagSnapshot,
 } from "../runstore/port.js";
@@ -1725,6 +1726,7 @@ export class RunManager {
       projectRoot?: string;
       /** Attribution from auth only — never from request body/query. */
       callerId?: string | null;
+      origin?: RunOrigin;
       skills?: SkillsPayload;
     },
     submission?: RunSubmission,
@@ -1810,6 +1812,7 @@ export class RunManager {
       input.callerId,
       input.skills,
       input.dispatchKey,
+      input.origin,
     );
   }
 
@@ -2990,6 +2993,7 @@ export class RunManager {
     callerId?: string | null,
     skills?: SkillsPayload,
     dispatchKey?: string,
+    origin?: RunOrigin,
   ): Promise<StartRunResult> {
     const persistence = pipelinePersistenceForStart(pipeline);
     if (!persistence.ok) {
@@ -3215,6 +3219,7 @@ export class RunManager {
         ...(callerId !== undefined && callerId !== null
           ? { callerId }
           : {}),
+        ...(origin !== undefined ? { origin } : {}),
         runManifest,
         skipGates,
       });
@@ -3305,6 +3310,7 @@ export class RunManager {
         skipGates,
         schedulingHalt,
         callerId,
+        ...(origin !== undefined ? { origin } : {}),
         ...(hasSkills ? { skills: validatedSkills } : {}),
       });
       if (started.created === false) this.clearReservation(admitted.provisionalId);
