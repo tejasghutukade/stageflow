@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
@@ -189,22 +189,36 @@ function cardPaths(dir: string, key: string): { current: string; previous: strin
   };
 }
 
-async function writeAtomic(dir: string, name: string, content: string): Promise<void> {
-  const tmp = path.join(dir, `.${name}.${process.pid}.${Date.now()}.tmp`);
+function tempPath(dir: string, name: string): string {
+  return path.join(dir, `.${name}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+}
+
+async function commitNew(dir: string, name: string, content: string): Promise<void> {
+  const tmp = tempPath(dir, name);
   try {
     await writeFile(tmp, content, "utf8");
-    await rename(tmp, path.join(dir, name));
-  } catch {
+    await link(tmp, path.join(dir, name));
     await rm(tmp, { force: true });
+  } catch (error) {
+    await rm(tmp, { force: true });
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new MemoryError("MEMORY_CARD_EXISTS");
     throw new MemoryError("MEMORY_UNREADABLE");
   }
 }
 
-async function keepPrevious(current: string, previous: string): Promise<void> {
+async function commitReplacing(dir: string, name: string, previousName: string, content: string): Promise<void> {
+  const tmp = tempPath(dir, name);
   try {
-    await rename(current, previous);
+    await writeFile(tmp, content, "utf8");
+    try {
+      await copyFile(path.join(dir, name), path.join(dir, previousName));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await rename(tmp, path.join(dir, name));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    await rm(tmp, { force: true });
+    if (error instanceof MemoryError) throw error;
     throw new MemoryError("MEMORY_UNREADABLE");
   }
 }
@@ -298,8 +312,7 @@ export function createMemoryHost(home: string): MemoryHost {
       await readMetaAt(home, id);
       checkBody(body);
       const dir = memoryDir(home, id);
-      await keepPrevious(path.join(dir, "body.md"), path.join(dir, COVER_PREVIOUS));
-      await writeAtomic(dir, "body.md", body);
+      await commitReplacing(dir, "body.md", COVER_PREVIOUS, body);
     },
 
     async readPreviousCover(id) {
@@ -320,7 +333,7 @@ export function createMemoryHost(home: string): MemoryHost {
       const paths = cardPaths(dir, trimmed);
       if (await readCardFile(paths.current)) throw new MemoryError("MEMORY_CARD_EXISTS");
       if ((await currentCards(dir)).length >= MEMORY_CARD_MAX) throw new MemoryError("MEMORY_TOO_MANY_CARDS");
-      await writeAtomic(dir, paths.name, encodeCard(trimmed, body));
+      await commitNew(dir, paths.name, encodeCard(trimmed, body));
     },
 
     async updateCard(id, key, body) {
@@ -330,8 +343,7 @@ export function createMemoryHost(home: string): MemoryHost {
       checkBody(body);
       const paths = cardPaths(dir, trimmed);
       if (!(await readCardFile(paths.current))) throw new MemoryError("MEMORY_CARD_NOT_FOUND");
-      await keepPrevious(paths.current, paths.previous);
-      await writeAtomic(dir, paths.name, encodeCard(trimmed, body));
+      await commitReplacing(dir, paths.name, `.${paths.name}.prev`, encodeCard(trimmed, body));
     },
 
     async readCard(id, key) {

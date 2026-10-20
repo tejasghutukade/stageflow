@@ -91,6 +91,20 @@ describe("memory host", () => {
     expect(await host.readCard("pool", "ada@example.com")).toBe("sourced");
   });
 
+  it("lets one of two overlapping adds win and keeps that body", async () => {
+    const host = createMemoryHost(await home());
+    await host.create({ id: "pool", description: "People already sourced." });
+    const results = await Promise.allSettled([
+      host.addCard("pool", "ada@example.com", "sourced"),
+      host.addCard("pool", "ada@example.com", "shortlisted"),
+    ]);
+    const rejected = results.filter((result) => result.status === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ code: "MEMORY_CARD_EXISTS" });
+    const body = await host.readCard("pool", "ada@example.com");
+    expect(body === "sourced" || body === "shortlisted").toBe(true);
+  });
+
   it("refuses an update of a missing key and writes no card file", async () => {
     const dir = await home();
     const host = createMemoryHost(dir);

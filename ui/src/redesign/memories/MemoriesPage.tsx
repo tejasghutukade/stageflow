@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   createMemory,
   deleteMemoryCard,
@@ -52,6 +52,9 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
   const [previousCard, setPreviousCard] = useState<string | null>(loaded?.card?.previous ?? null);
   const [cardDraft, setCardDraft] = useState(loaded?.card?.body ?? "");
   const [savingCard, setSavingCard] = useState(false);
+  const memoryIdRef = useRef(memoryId);
+  const openCardKey = useRef<string | null>(loaded?.card?.key ?? null);
+  memoryIdRef.current = memoryId;
 
   useEffect(() => {
     let live = true;
@@ -76,7 +79,12 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
       return;
     }
     let live = true;
+    setDetail(null);
+    setCoverDraft("");
+    setPreviousCover(null);
+    setKeys([]);
     setSelectedKey(null);
+    openCardKey.current = null;
     setCardBody(null);
     setPreviousCard(null);
     setCardDraft("");
@@ -126,12 +134,16 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
 
   async function onSaveCover(event: FormEvent) {
     event.preventDefault();
-    if (!memoryId || !detail) return;
+    if (!memoryId || !detail || detail.id !== memoryId) return;
+    const savedId = memoryId;
+    const body = coverDraft;
+    const previous = detail.body;
     setSavingCover(true);
     setError(null);
     try {
-      const updated = await replaceMemoryCover(memoryId, coverDraft);
-      setPreviousCover(detail.body);
+      const updated = await replaceMemoryCover(savedId, body);
+      if (memoryIdRef.current !== savedId) return;
+      setPreviousCover(previous);
       setDetail(updated);
       setCoverDraft(updated.body);
     } catch (caught) {
@@ -144,12 +156,18 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
   async function openCard(key: string) {
     if (!memoryId) return;
     setSelectedKey(key);
+    openCardKey.current = key;
+    setCardDraft("");
+    setCardBody(null);
+    setPreviousCard(null);
     setError(null);
     try {
       const card = await fetchMemoryCard(memoryId, key);
+      if (openCardKey.current !== key) return;
       setCardBody(card.body);
       setCardDraft(card.body);
     } catch {
+      if (openCardKey.current !== key) return;
       setCardBody(null);
       setPreviousCard(null);
       setError("That card could not be opened.");
@@ -157,8 +175,10 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
     }
     try {
       const previous = await fetchPreviousMemoryCard(memoryId, key);
+      if (openCardKey.current !== key) return;
       setPreviousCard(previous.body);
     } catch (caught) {
+      if (openCardKey.current !== key) return;
       if (failureCode(caught) === "MEMORY_CARD_NOT_FOUND") setPreviousCard(null);
       else setError("That card could not be opened.");
     }
@@ -167,11 +187,16 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
   async function onCorrect(event: FormEvent) {
     event.preventDefault();
     if (!memoryId || !selectedKey) return;
+    const savedId = memoryId;
+    const key = selectedKey;
+    const draft = cardDraft;
+    const previous = cardBody;
     setSavingCard(true);
     setError(null);
     try {
-      const updated = await updateMemoryCard(memoryId, selectedKey, cardDraft);
-      setPreviousCard(cardBody);
+      const updated = await updateMemoryCard(savedId, key, draft);
+      if (memoryIdRef.current !== savedId || openCardKey.current !== key) return;
+      setPreviousCard(previous);
       setCardBody(updated.body);
       setCardDraft(updated.body);
     } catch (caught) {
@@ -189,6 +214,7 @@ export function MemoriesPage({ memoryId, loaded }: { memoryId?: string; loaded?:
     try {
       await deleteMemoryCard(memoryId, key);
       setKeys((current) => current.filter((item) => item !== key));
+      openCardKey.current = null;
       setSelectedKey(null);
       setCardBody(null);
       setPreviousCard(null);
