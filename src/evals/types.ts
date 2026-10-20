@@ -145,3 +145,77 @@ export type EvalPlan = {
   modelOverride?: string;
   budget?: { latencyMs?: number; costUsd?: number };
 };
+
+export type CaseOutput = {
+  kind: "envelope";
+  status: "success" | "failure";
+  summary: string;
+  payload?: Record<string, unknown>;
+  artifacts: string[];
+};
+
+export type RunCaseRequest = { evalRunId: string; caseId: string; repeatIndex: number };
+
+export type RunCaseFailureCode =
+  | "EVAL_STAGE_FAILED"
+  | "EVAL_STAGE_NEEDS_INPUT"
+  | "EVAL_STAGE_TIMEOUT"
+  | "EVAL_BUDGET_EXCEEDED"
+  | "EVAL_CANCELLED"
+  | "EVAL_ENGINE_ERROR";
+
+export type RunCaseResult =
+  | {
+      ok: true;
+      stageRunId: string;
+      output: CaseOutput;
+      latencyMs: number;
+      costUsd: number;
+      tokensIn: number;
+      tokensOut: number;
+    }
+  | {
+      ok: false;
+      code: RunCaseFailureCode;
+      message: string;
+      stageRunId?: string;
+      latencyMs?: number;
+      costUsd?: number;
+    };
+
+export type NormalizedGrade = {
+  graderId: string;
+  graderType: string;
+  status: "graded" | "error";
+  passed?: boolean;
+  score?: number;
+  rawValue?: number;
+  reason?: string;
+  errorCode?: string;
+  details?: unknown;
+  judgeModel?: string;
+  judgeCostUsd?: number;
+  judgeTokensIn?: number;
+  judgeTokensOut?: number;
+};
+
+export type NormalizedResult = {
+  caseId: string;
+  repeatIndex: number;
+  run: RunCaseResult;
+  grades: NormalizedGrade[];
+};
+
+export interface EngineIo {
+  runCase(req: RunCaseRequest): Promise<RunCaseResult>;
+  onResult(result: NormalizedResult): void;
+  reportJudgeCost(usd: number): void;
+  onPhase(caseId: string, repeatIndex: number, phase: "stage_running" | "grading" | "done"): void;
+  log(level: "info" | "warn" | "error", message: string): void;
+}
+
+export interface EvalEngine {
+  readonly name: string;
+  version(): Promise<string>;
+  run(plan: EvalPlan, io: EngineIo, signal: AbortSignal): Promise<void>;
+}
