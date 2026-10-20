@@ -37,7 +37,7 @@ import type { AnyChannelProvider } from "../channels/types.js";
 
 export type ValidationSeverity = "error" | "warning";
 
-export type ValidationCategory = "pipeline" | "stage" | "catalog" | "task" | "trigger" | "eval";
+export type ValidationCategory = "pipeline" | "stage" | "catalog" | "task" | "trigger" | "eval" | "dataset";
 
 export type ValidationFindingCode =
   | "pipeline.invalid_shape"

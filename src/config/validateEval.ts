@@ -1,6 +1,6 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
+import { checkDatasetAgainstStage } from "./datasetStageCheck.js";
 import { EVAL_DEFAULT_REPEATS, resolveEvalPaths, type LoadedEval } from "./loadEval.js";
 import type { LoadIssue } from "./loadOutcome.js";
 import { resolveEvalTarget, type ResolvedEvalTarget } from "./resolveEvalTarget.js";
@@ -91,23 +91,6 @@ async function datasetFileFinding(
 
 function stageNeedsCheckout(target: ResolvedEvalTarget): boolean {
   return target.completion?.checks.some((check) => check.type === "checkout_changes") === true;
-}
-
-function inputMismatches(
-  report: DatasetReport,
-  inputSchema: unknown,
-): Array<{ caseId: string; message: string }> {
-  if (inputSchema === undefined) return [];
-  const out: Array<{ caseId: string; message: string }> = [];
-  for (const testCase of report.cases) {
-    try {
-      const message = payloadInstanceMismatch(testCase.input, inputSchema);
-      if (message !== undefined) out.push({ caseId: testCase.id, message });
-    } catch {
-      return [];
-    }
-  }
-  return out;
 }
 
 export async function validateEval(
@@ -212,8 +195,19 @@ export async function validateEval(
     );
   }
 
-  const mismatches = resolved ? inputMismatches(report, resolved.inputSchema) : [];
+  const mismatches = resolved
+    ? checkDatasetAgainstStage(report.cases, resolved.inputSchema).filter((r) => !r.valid)
+    : [];
   const skipped = new Set(mismatches.map((m) => m.caseId));
+  for (const mismatch of mismatches) {
+    findings.push({
+      severity: "warning",
+      code: "dataset.input_mismatch",
+      path: report.relPath,
+      message: `case ${mismatch.caseId}: input does not match the stage's io.input.schema: ${mismatch.message}`,
+      category: "dataset",
+    });
+  }
   if (mismatches.length > 0) {
     add(
       "warning",

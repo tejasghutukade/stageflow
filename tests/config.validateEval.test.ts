@@ -45,7 +45,7 @@ async function copyProject(root: string): Promise<void> {
   await mkdir(path.join(root, "datasets"), { recursive: true });
   await writeFile(
     path.join(root, "datasets", "review-diffs.dataset.jsonl"),
-    `${DATASET_LINE("c001")}\n${DATASET_LINE("c002")}\n`,
+    ["c001", "c002", "c003", "c004", "c005"].map((id) => DATASET_LINE(id)).join("\n") + "\n",
   );
   await writeFile(
     path.join(root, "stageflow.yaml"),

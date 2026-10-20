@@ -1,7 +1,9 @@
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { LoadedManifest } from "../types/stageflowManifest.js";
 import { getModelCatalog } from "../models/catalog.js";
-import { loadEvalOutcome, type LoadedEval } from "./loadEval.js";
+import { loadDatasetFile } from "./loadDataset.js";
+import { loadEvalOutcome, resolveEvalPaths, type LoadedEval } from "./loadEval.js";
 import type { LoadOutcome } from "./loadOutcome.js";
 import { scanCatalogPaths, type CatalogPathKind } from "./scanCatalogPaths.js";
 import type { ValidationFinding } from "./validateCatalog.js";
@@ -61,6 +63,18 @@ export async function loadEvalCatalog(
       }
     });
 
+  const datasetReportFor =
+    options.datasetReportFor ??
+    (async (evalFile: LoadedEval): Promise<DatasetReport | undefined> => {
+      const { datasetPath } = resolveEvalPaths(evalFile.file, evalFile.path);
+      try {
+        await stat(datasetPath);
+      } catch {
+        return undefined;
+      }
+      return loadDatasetFile(datasetPath, { root: projectRoot });
+    });
+
   const loaded = await Promise.all(
     refs.map(async (ref) => ({ ref, outcome: await loadEvalOutcome(ref.absPath, projectRoot) })),
   );
@@ -72,13 +86,14 @@ export async function loadEvalCatalog(
   for (const { ref, outcome } of loaded) {
     let findings: ValidationFinding[];
     if (outcome.ok) {
-      const datasetReport = await options.datasetReportFor?.(outcome.value);
+      const datasetReport = await datasetReportFor(outcome.value);
       findings = await validateEval(outcome.value, {
         projectRoot,
         evals,
         isKnownModel,
         ...(datasetReport !== undefined ? { datasetReport } : {}),
       });
+      if (datasetReport !== undefined) findings.push(...datasetReport.findings);
     } else {
       findings = evalFindingsFromIssues(ref.relPath, outcome.issues);
     }

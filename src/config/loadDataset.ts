@@ -9,7 +9,7 @@ import type {
   DatasetLoadResult,
   ParseDatasetResult,
 } from "./datasetTypes.js";
-import type { ValidationCategory, ValidationFinding } from "./validateCatalog.js";
+import type { ValidationFinding } from "./validateCatalog.js";
 
 export const DATASET_LIMITS: DatasetLimits = {
   maxCases: 5000,
@@ -24,7 +24,6 @@ const TAG_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const MAX_TAGS = 10;
 const MAX_TITLE = 120;
 const CASE_KEYS = new Set(["id", "input", "title", "expected", "tags", "goal", "metadata"]);
-const DATASET_CATEGORY = "dataset" as ValidationCategory;
 
 export type ParseDatasetOptions = {
   limits?: Partial<DatasetLimits>;
@@ -58,7 +57,7 @@ function finding(
     code,
     path: filePath,
     message: pos ? `${pos.label}: ${message}` : message,
-    category: DATASET_CATEGORY,
+    category: "dataset",
   };
   if (pos && pos.line > 0) out.line = pos.line;
   return out;
