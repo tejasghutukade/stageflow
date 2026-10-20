@@ -763,7 +763,7 @@ With `--json`, errors print `{ "error", "code" }` on stdout with the same exit c
 
 ## `sf validate`
 
-Validate catalog YAML (pipelines, their stages, and tasks).
+Validate catalog YAML (pipelines, their stages, tasks, and eval files).
 
 ```bash
 sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]

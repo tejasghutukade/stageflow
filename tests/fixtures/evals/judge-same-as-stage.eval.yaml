@@ -1,0 +1,13 @@
+version: 1
+id: judge-same-as-stage
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+defaults:
+  judge: anthropic/claude-haiku-4-5
+graders:
+  - id: clear
+    type: rubric
+    rubric: Is it clear?

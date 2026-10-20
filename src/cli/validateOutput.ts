@@ -2,10 +2,10 @@ import type { ValidationFinding, ValidationResult } from "../config/validateCata
 import { effectiveSeverity } from "../config/validateCatalog.js";
 
 export const VALIDATION_SCOPE_LINE =
-  "Scope: catalog YAML (pipelines, stages, and tasks as selected by flags). Provider auth and checkout paths are not checked.";
+  "Scope: catalog YAML (pipelines, stages, tasks, and evals as selected by flags). Provider auth and checkout paths are not checked.";
 
 export const VALIDATION_CHECKS =
-  "catalog YAML (pipelines, stages, tasks as selected by flags)";
+  "catalog YAML (pipelines, stages, tasks, evals as selected by flags)";
 
 function effectiveSeverityRank(finding: ValidationFinding, strict: boolean): number {
   return effectiveSeverity(finding, strict) === "error" ? 0 : 1;

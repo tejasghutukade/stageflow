@@ -1,0 +1,12 @@
+version: 1
+id: invalid-field
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+defaults:
+  repeats: 99
+graders:
+  - id: output-schema
+    type: schema

@@ -1,0 +1,28 @@
+id: review
+system_prompt: Review the change and list defects.
+model: anthropic/claude-haiku-4-5
+io:
+  input:
+    schema:
+      type: object
+      properties:
+        diff:
+          type: string
+      required: [diff]
+  output:
+    schema:
+      type: object
+      properties:
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              file:
+                type: string
+              line:
+                type: integer
+              issue:
+                type: string
+            required: [file, line, issue]
+      required: [findings]
