@@ -1,0 +1,13 @@
+version: 1
+id: judge-unknown-model
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+defaults:
+  judge: nowhere/no-such-model
+graders:
+  - id: clear
+    type: rubric
+    rubric: Is it clear?

@@ -1,0 +1,12 @@
+version: 1
+id: grader-duplicate-id
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+graders:
+  - id: output-schema
+    type: schema
+  - id: output-schema
+    type: schema

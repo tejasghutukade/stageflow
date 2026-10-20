@@ -1,0 +1,57 @@
+version: 1
+id: valid
+name: Review findings
+description: Review flags real defects
+type: capability
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+task:
+  goal: Review the change and list defects.
+defaults:
+  repeats: 3
+  judge: anthropic/claude-sonnet-4-5
+  pass_threshold: 0.8
+  max_cost_usd: 2
+  concurrency: 4
+graders:
+  - id: output-schema
+    type: schema
+    must_pass: true
+  - id: findings-cite-lines
+    type: field
+    description: Every item in findings has a file and a line number
+    checks:
+      - { path: "payload.findings[*].file", op: not_empty }
+      - { path: "payload.findings[*].line", op: exists }
+  - id: finds-expected-issues
+    type: reference
+    weight: 3
+    description: Findings mention each issue listed in the case's expected.findings
+    mode: each_mentioned
+    path: payload.findings
+    expected: expected.findings
+  - id: no-invented-files
+    type: rubric
+    weight: 2
+    rubric: |
+      Pass if every file named in the review exists in the diff and every quoted line appears in it.
+      Fail if the review cites a file, function or line the diff does not contain.
+    scale: pass_fail
+    examples:
+      - verdict: pass
+        output: "auth.ts line 42 dereferences session.user without a null check"
+        reason: file and line are in the diff
+      - verdict: fail
+        output: "utils/retry.ts is missing a timeout"
+        reason: the diff does not touch utils/retry.ts
+  - id: clear-and-actionable
+    type: rubric
+    rubric: A developer could act on each finding without asking questions.
+    scale: 1_to_5
+    pass_at: 4
+budget:
+  latency_ms: 300000
+  cost_usd: 0.3
