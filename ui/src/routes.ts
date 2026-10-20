@@ -8,6 +8,7 @@ export type DetailView =
 
 export type Route =
   | { name: "today" }
+  | { name: "overview" }
   | { name: "inbox"; tab?: InboxTabId }
   | { name: "runs" }
   | { name: "new"; pipelineId?: string; taskPath?: string; projectRoot?: string }
@@ -225,6 +226,7 @@ function firstSegment(rest: string): string {
 export function parseHash(hash = window.location.hash): Route {
   const { path, params } = splitHash(hash);
   if (!path || path === "today") return { name: "inbox" };
+  if (path === "overview") return { name: "overview" };
   if (path === "inbox") {
     const tabRaw = params.get("tab");
     const tab: InboxTabId | undefined =

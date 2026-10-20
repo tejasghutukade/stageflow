@@ -1,3 +1,9 @@
+import {
+  OVERVIEW_RANGES,
+  buildOverview,
+  isOverviewRange,
+  overviewWindowMs,
+} from "../runstore/overviewSummary.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFile, access } from "node:fs/promises";
 import { createReadStream, statSync } from "node:fs";
@@ -3524,6 +3530,21 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
 
         if (method === "GET" && pathname === "/api/health") {
           await handleApiHealth(req, res, boot);
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/overview") {
+          const rangeParam = url.searchParams.get("range") ?? "7d";
+          if (!isOverviewRange(rangeParam)) {
+            json(res, 400, {
+              error: `range must be one of ${OVERVIEW_RANGES.join(", ")}`,
+              code: "invalid_range",
+            });
+            return true;
+          }
+          const now = new Date();
+          const since = new Date(now.getTime() - 2 * overviewWindowMs(rangeParam)).toISOString();
+          json(res, 200, buildOverview(await store.listRunOverviewRows(since), rangeParam, now));
           return true;
         }
 
