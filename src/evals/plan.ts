@@ -9,6 +9,7 @@ import {
   EVAL_DEFAULT_REPEATS,
   graderHash,
   loadEvalOutcome,
+  parseEvalOutcome,
   resolveEvalPaths,
   type LoadedEval,
 } from "../config/loadEval.js";
@@ -51,6 +52,8 @@ export type EvalOverrides = {
 export type BuildEvalPlanInput = {
   projectRoot: string;
   evalPath: string;
+  /** Eval file text to use instead of reading `evalPath`; the path still sets where relative paths resolve. */
+  evalText?: string;
   overrides?: EvalOverrides;
   evalRunId: string;
   /** Case ids with at least one failed executed result in the given eval run; undefined when the run is unknown. */
@@ -202,7 +205,15 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
     findings,
   });
 
-  const outcome = await loadEvalOutcome(evalAbs, projectRoot);
+  let outcome;
+  if (input.evalText !== undefined) {
+    const parsed = parseEvalOutcome(input.evalText, evalAbs, projectRoot);
+    outcome = parsed.ok
+      ? { ...parsed, value: { ...parsed.value, fileHash: sha256Hex(input.evalText) } }
+      : parsed;
+  } else {
+    outcome = await loadEvalOutcome(evalAbs, projectRoot);
+  }
   if (!outcome.ok) return fail(evalFindingsFromIssues(evalRel, outcome.issues));
   const base = outcome.value;
 

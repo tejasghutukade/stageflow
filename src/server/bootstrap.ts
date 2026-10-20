@@ -28,6 +28,9 @@ import {
 import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { consoleStageBrowserSupport } from "../browser/stageBrowserEnv.js";
 import { RunManager } from "../runtime/runManager.js";
+import { EvalRunManager } from "../evals/manager.js";
+import { createStageCaseRunner } from "../evals/runner/stageCaseRunner.js";
+import { PACKAGE_VERSION } from "../package-meta.js";
 import { PI_CODING_AGENT_DIR_ENV } from "../runtime/stageRoots.js";
 import {
   ScheduleSource,
@@ -104,6 +107,8 @@ export type StageflowHostBootstrap = {
   store?: RunStore;
   /** Absent when `serveBlocked` — no RunManager lifecycle/resume. */
   manager?: RunManager;
+  /** Eval runs: shared with HTTP routes and MCP. Absent when `manager` is. */
+  evalRunManager?: EvalRunManager;
   runChangeBus: RunChangeBus;
   mcpStateless: boolean;
   providerAuthContext: ProviderAuthContext | undefined;
@@ -397,6 +402,21 @@ export async function bootstrapStageflowHost(
   await manager.autoResumeInterruptedStages();
   await manager.resumeStalledSchedules();
   await manager.reenqueuePersistedQueuedRuns();
+  const evalLog = rootLogger.child({ component: "evals" });
+  const evalRunManager = new EvalRunManager({
+    store,
+    stageRunner: createStageCaseRunner({ manager, store }),
+    stageflowVersion: PACKAGE_VERSION,
+    workDirRoot: path.join(ctx.globalHome, "eval-runs"),
+    logger: {
+      info: (event, msg) => evalLog.info(event, msg),
+      warn: (event, msg) => evalLog.warn(event, msg),
+      error: (event, msg) => evalLog.error(event, msg),
+    },
+  });
+  await evalRunManager.recoverOnBoot().catch((err: unknown) =>
+    evalLog.warn("eval.recover_failed", err instanceof Error ? err.message : String(err)),
+  );
   await warnDurableRootDiskIfNeeded(ctx.globalHome, { env });
   const gcInterval = startPeriodicRunGc(manager, gcIntervalMsFromEnv(env));
   const stopGcInterval = () => {
@@ -519,6 +539,7 @@ export async function bootstrapStageflowHost(
       runChangeBus,
       providerAuthContext: options.providerAuthContext,
       projectRoot: rootDir,
+      evalRunManager,
       ...(agentHost
         ? {
             agentService: agentHost.service,
@@ -547,6 +568,7 @@ export async function bootstrapStageflowHost(
     isGitProject,
     store,
     manager,
+    evalRunManager,
     runChangeBus,
     mcpStateless,
     providerAuthContext: options.providerAuthContext,

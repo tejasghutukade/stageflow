@@ -18,6 +18,7 @@ import {
 import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
+import type { EvalRunManager } from "../evals/manager.js";
 import { handleTriggerRoutes } from "./triggerRoutes.js";
 import {
   readCatalogFileForHttp,
@@ -427,6 +428,7 @@ export type OperatorRouteDeps = {
   agentConversationBackend?: ConversationBackend;
   /** Shared with MCP when set by bootstrap. */
   agentHost?: AgentHostContext;
+  evalRunManager?: EvalRunManager;
 };
 
 /**
@@ -3702,6 +3704,7 @@ export async function startUiServer(
             ? { workshopOperatorHost: options.workshopOperatorHost }
             : {}),
           ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
+          ...(boot.evalRunManager ? { evalRunManager: boot.evalRunManager } : {}),
           ...(options.agentConversationBackend
             ? { agentConversationBackend: options.agentConversationBackend }
             : {}),
