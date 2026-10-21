@@ -22,6 +22,7 @@ import {
   tryCaseLabel,
   tryCaseOf,
   tryDisabledReason,
+  type GradersDraft,
   type WizardDraft,
   type WriteDirs,
 } from "./wizardModel";
@@ -42,7 +43,9 @@ const TYPES_PANEL: Array<[string, string]> = [
   ["Custom code", "JavaScript, returns a score"],
 ];
 
-function BudgetChip({ draft, field, setDraft }: { draft: WizardDraft; field: "latency_ms" | "cost_usd"; setDraft: Props["setDraft"] }) {
+type SetDraft<T> = (next: T | ((d: T) => T)) => void;
+
+function BudgetChip<T extends GradersDraft>({ draft, field, setDraft }: { draft: T; field: "latency_ms" | "cost_usd"; setDraft: SetDraft<T> }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -53,13 +56,13 @@ function BudgetChip({ draft, field, setDraft }: { draft: WizardDraft; field: "la
         type="button"
         className={`${MONO} rounded border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)] px-2 py-1 text-xs text-[var(--sf-text-1)]`}
         onClick={() => {
-          const v = draft.budget[field];
+          const v = draft.budget?.[field];
           setText(v === undefined ? "" : String(field === "latency_ms" ? v / 1000 : v));
           setError(null);
           setEditing(true);
         }}
       >
-        {budgetLabel(field, draft.budget[field])}
+        {budgetLabel(field, draft.budget?.[field])}
       </button>
     );
   }
@@ -172,7 +175,7 @@ function TryPanel({ draft, dirs, findings }: { draft: WizardDraft; dirs: WriteDi
   );
 }
 
-export function GradersStep({ draft, setDraft, dirs, findings, judgeModels }: Props) {
+export function GradersList<T extends GradersDraft>({ draft, setDraft, judgeModels, judgeDefault }: { draft: T; setDraft: SetDraft<T>; judgeModels: string[]; judgeDefault: string | null }) {
   const [open, setOpen] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
@@ -189,69 +192,75 @@ export function GradersStep({ draft, setDraft, dirs, findings, judgeModels }: Pr
   }
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px] gap-6 overflow-y-auto px-7 py-5">
-      <div className="flex min-w-0 flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-[17px] font-semibold text-[var(--sf-text-1)]">
-            Graders <span className="text-[13px] font-normal text-[var(--sf-text-3)]">{draft.graders.length}</span>
-          </h2>
-          <div className="relative">
-            <button type="button" disabled={draft.graders.length >= MAX_GRADERS} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)} className="flex h-8 items-center gap-2 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] font-medium text-[var(--sf-text-1)] disabled:opacity-50">
-              <LuPlus className="size-3.5" aria-hidden /> Add grader <LuChevronDown className="size-3.5" aria-hidden />
-            </button>
-            {menu ? (
-              <div role="menu" className={`${CARD} absolute right-0 top-9 z-10 flex w-72 flex-col p-1 shadow-lg`}>
-                {GRADER_TYPES.map((t) => (
-                  <button key={t.type} type="button" role="menuitem" onClick={() => add(t.type)} className="flex flex-col rounded-md px-3 py-2 text-left hover:bg-[var(--sf-raised)]">
-                    <span className="text-[13px] text-[var(--sf-text-1)]">{t.label}</span>
-                    <span className="text-xs text-[var(--sf-text-3)]">{t.summary}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {draft.graders.length === 0 ? (
-          <div className={`${CARD} p-6 text-center text-[13px] text-[var(--sf-text-2)]`}>No graders yet. Add at least one to decide what a good result looks like.</div>
-        ) : null}
-
-        {draft.graders.map((g, i) => (
-          <GraderCard
-            key={g.id}
-            grader={g}
-            otherIds={ids.filter((_, j) => j !== i)}
-            judgeModels={judgeModels}
-            judgeDefault={draft.defaults.judge}
-            expanded={open === g.id}
-            dragging={dragFrom === i}
-            onToggle={() => setOpen(open === g.id ? null : g.id)}
-            onChange={(next) => setDraft((d) => replaceGrader(d, i, next))}
-            onRename={(id) => {
-              setDraft((d) => renameGrader(d, i, id));
-              setOpen(id);
-            }}
-            onRemove={() => setDraft((d) => removeGrader(d, i))}
-            onMove={(delta) => setDraft((d) => moveGrader(d, i, i + delta))}
-            dragHandlers={{
-              onDragStart: () => setDragFrom(i),
-              onDragOver: (e) => e.preventDefault(),
-              onDrop: () => {
-                if (dragFrom !== null) setDraft((d) => moveGrader(d, dragFrom, i));
-                setDragFrom(null);
-              },
-              onDragEnd: () => setDragFrom(null),
-            }}
-          />
-        ))}
-
-        <div className={`${CARD} flex flex-wrap items-center gap-3 px-3.5 py-3`}>
-          <span className="text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]">Budget</span>
-          <BudgetChip draft={draft} field="latency_ms" setDraft={setDraft} />
-          <BudgetChip draft={draft} field="cost_usd" setDraft={setDraft} />
-          <span className="ml-auto text-xs text-[var(--sf-text-3)]">Reported as warnings, they do not fail a case</span>
+    <div className="flex min-w-0 flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-[17px] font-semibold text-[var(--sf-text-1)]">
+          Graders <span className="text-[13px] font-normal text-[var(--sf-text-3)]">{draft.graders.length}</span>
+        </h2>
+        <div className="relative">
+          <button type="button" disabled={draft.graders.length >= MAX_GRADERS} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)} className="flex h-8 items-center gap-2 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] font-medium text-[var(--sf-text-1)] disabled:opacity-50">
+            <LuPlus className="size-3.5" aria-hidden /> Add grader <LuChevronDown className="size-3.5" aria-hidden />
+          </button>
+          {menu ? (
+            <div role="menu" className={`${CARD} absolute right-0 top-9 z-10 flex w-72 flex-col p-1 shadow-lg`}>
+              {GRADER_TYPES.map((t) => (
+                <button key={t.type} type="button" role="menuitem" onClick={() => add(t.type)} className="flex flex-col rounded-md px-3 py-2 text-left hover:bg-[var(--sf-raised)]">
+                  <span className="text-[13px] text-[var(--sf-text-1)]">{t.label}</span>
+                  <span className="text-xs text-[var(--sf-text-3)]">{t.summary}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
+
+      {draft.graders.length === 0 ? (
+        <div className={`${CARD} p-6 text-center text-[13px] text-[var(--sf-text-2)]`}>No graders yet. Add at least one to decide what a good result looks like.</div>
+      ) : null}
+
+      {draft.graders.map((g, i) => (
+        <GraderCard
+          key={g.id}
+          grader={g}
+          otherIds={ids.filter((_, j) => j !== i)}
+          judgeModels={judgeModels}
+          judgeDefault={judgeDefault}
+          expanded={open === g.id}
+          dragging={dragFrom === i}
+          onToggle={() => setOpen(open === g.id ? null : g.id)}
+          onChange={(next) => setDraft((d) => replaceGrader(d, i, next))}
+          onRename={(id) => {
+            setDraft((d) => renameGrader(d, i, id));
+            setOpen(id);
+          }}
+          onRemove={() => setDraft((d) => removeGrader(d, i))}
+          onMove={(delta) => setDraft((d) => moveGrader(d, i, i + delta))}
+          dragHandlers={{
+            onDragStart: () => setDragFrom(i),
+            onDragOver: (e) => e.preventDefault(),
+            onDrop: () => {
+              if (dragFrom !== null) setDraft((d) => moveGrader(d, dragFrom, i));
+              setDragFrom(null);
+            },
+            onDragEnd: () => setDragFrom(null),
+          }}
+        />
+      ))}
+
+      <div className={`${CARD} flex flex-wrap items-center gap-3 px-3.5 py-3`}>
+        <span className="text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]">Budget</span>
+        <BudgetChip draft={draft} field="latency_ms" setDraft={setDraft} />
+        <BudgetChip draft={draft} field="cost_usd" setDraft={setDraft} />
+        <span className="ml-auto text-xs text-[var(--sf-text-3)]">Reported as warnings, they do not fail a case</span>
+      </div>
+    </div>
+  );
+}
+
+export function GradersStep({ draft, setDraft, dirs, findings, judgeModels }: Props) {
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px] gap-6 overflow-y-auto px-7 py-5">
+      <GradersList draft={draft} setDraft={setDraft} judgeModels={judgeModels} judgeDefault={draft.defaults.judge} />
 
       <aside className="flex min-w-0 flex-col gap-3">
         <TryPanel draft={draft} dirs={dirs} findings={findings} />

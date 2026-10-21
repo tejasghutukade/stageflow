@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { LuClipboardList, LuFileText, LuFlaskConical, LuHistory, LuSearch, LuUpload } from "react-icons/lu";
+import { useMemo, useState } from "react";
+import { LuClipboardList, LuFileText, LuFlaskConical, LuHistory, LuUpload } from "react-icons/lu";
 import { CandidatesDialog, UploadDialog, type UploadConfirm } from "../datasets";
-import { INPUT } from "../datasets/DialogShell";
 import { formatCost } from "../format";
-import { CARD, CheckList, Chip, Field, MONO, SELECT, Section, YamlBlock } from "./parts";
+import { CARD, CheckList, Chip, Field, MONO, NumberField, SELECT, Section, YamlBlock } from "./parts";
+import { StagePicker } from "./StagePicker";
 import type { StageInputField } from "./stageInput";
 import type { WizardData } from "./useWizardData";
 import type { WizardPreview } from "./useWizardPreview";
@@ -17,9 +17,7 @@ import {
   datasetSummary,
   datasetTarget,
   defaultsErrors,
-  evalCountFor,
   evalFilePath,
-  filterStageRows,
   judgeSameAsStage,
   parsePercent,
   percentText,
@@ -48,33 +46,9 @@ type Dialog = null | { kind: "upload"; mode: "file" | "paste" } | { kind: "runs"
 
 const TILE = "flex flex-col gap-1 rounded-lg border p-3 text-left disabled:cursor-not-allowed disabled:opacity-50";
 
-function NumberField({ value, parse, show, onCommit, error, prefix }: { value: number; parse: (t: string) => number | null; show: (n: number) => string; onCommit: (n: number) => void; error?: string | undefined; prefix?: string }) {
-  const [text, setText] = useState<string | null>(null);
-  const shown = text ?? show(value);
-  return (
-    <div className="relative">
-      {prefix ? <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[13px] text-[var(--sf-text-3)]">{prefix}</span> : null}
-      <input
-        className={`${INPUT} ${prefix ? "pl-6" : ""} ${error ? "border-[var(--sf-fail)]" : ""}`}
-        value={shown}
-        inputMode="decimal"
-        onChange={(e) => {
-          setText(e.target.value);
-          const n = parse(e.target.value);
-          if (n !== null) onCommit(n);
-          else onCommit(Number.NaN);
-        }}
-        onBlur={() => setText(null)}
-      />
-    </div>
-  );
-}
-
 export function SetupStep({ data, draft, setDraft, fields, preview, dirs }: Props) {
-  const [query, setQuery] = useState("");
   const [dialog, setDialog] = useState<Dialog>(null);
   const taken = useMemo(() => ({ evals: data.evals.map((e) => e.id), datasets: data.datasets.map((d) => d.id) }), [data]);
-  const rows = useMemo(() => filterStageRows(data.rows, query), [data.rows, query]);
   const errors = defaultsErrors(draft.defaults);
   const t = draft.target;
   const selectedRow = data.rows.find((r) => sameTarget(r, t)) ?? null;
@@ -84,12 +58,6 @@ export function SetupStep({ data, draft, setDraft, fields, preview, dirs }: Prop
   const stageId = t?.stageId ?? "stage";
   const judgeModels = data.models.filter((m) => m.judge_capable !== false);
   const hint = judgeSameAsStage(draft);
-
-  const targetKey = `${t?.projectRoot ?? ""}|${t?.pipelinePath ?? t?.file ?? ""}|${t?.stageId ?? ""}`;
-  const listRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    listRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.scrollIntoView?.({ block: "nearest" });
-  }, [targetKey, data.loading]);
 
   function pick(row: StageRow, pipelinePath?: string) {
     if (row.readOnly) return;
@@ -120,48 +88,7 @@ export function SetupStep({ data, draft, setDraft, fields, preview, dirs }: Prop
             </span>
           }
         >
-          <div className="relative">
-            <LuSearch className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--sf-text-3)]" aria-hidden />
-            <input className={`${INPUT} pl-8`} placeholder="Search stages by id, model or pipeline" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search stages" />
-          </div>
-          {data.error ? <p role="alert" className="text-xs text-[var(--sf-fail)]">{data.error}</p> : null}
-          <div ref={listRef} className="max-h-[260px] overflow-y-auto rounded-lg border border-[var(--sf-hairline)]" role="radiogroup" aria-label="Stages">
-            {data.loading ? <p className="p-3 text-xs text-[var(--sf-text-3)]">Loading stages…</p> : null}
-            {!data.loading && rows.length === 0 ? <p className="p-3 text-xs text-[var(--sf-text-3)]">No stages match.</p> : null}
-            {rows.map((row) => {
-              const active = sameTarget(row, t);
-              const count = evalCountFor(row, data.evals);
-              return (
-                <div key={row.key} className={`border-b border-b-[var(--sf-hairline)] last:border-b-0 ${active ? "bg-[var(--sf-raised)]" : ""}`}>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    disabled={row.readOnly}
-                    title={row.readOnly ? "Read-only catalog. Copy the pipeline into your project to evaluate it." : undefined}
-                    onClick={() => pick(row)}
-                    className="grid w-full grid-cols-[18px_150px_minmax(0,1fr)_minmax(0,1fr)_70px] items-center gap-3 px-3 py-2.5 text-left text-[13px] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <span className={`size-3.5 rounded-full border ${active ? "border-[var(--sf-text-1)] bg-[var(--sf-text-1)]" : "border-[var(--sf-hairline-strong)]"}`} />
-                    <span className={`${MONO} truncate text-[var(--sf-text-1)]`}>{row.stageId}</span>
-                    <span className={`${MONO} truncate text-xs text-[var(--sf-text-2)]`}>{row.model ?? ""}</span>
-                    <span className={`${MONO} truncate text-xs text-[var(--sf-text-3)]`}>{row.pipelines.map((p) => p.id).join(", ")}</span>
-                    <span className="text-right text-xs text-[var(--sf-text-3)]">{count} {count === 1 ? "eval" : "evals"}</span>
-                  </button>
-                  {active && row.pipelines.length > 1 && t?.kind === "pipeline" ? (
-                    <div className="flex items-center gap-2 px-10 pb-2.5 text-xs text-[var(--sf-text-3)]">
-                      Evaluate it as part of
-                      <select className={`${SELECT} h-7 w-auto`} value={t.pipelinePath} onChange={(e) => pick(row, e.target.value)} aria-label="Pipeline">
-                        {row.pipelines.map((p) => (
-                          <option key={p.path} value={p.path}>{p.id}</option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
+          <StagePicker rows={data.rows} evals={data.evals} loading={data.loading} error={data.error} target={t} onPick={pick} />
           {t ? (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--sf-hairline)] px-3 py-2.5">
               <span className={`${MONO} text-xs text-[var(--sf-text-3)]`}>io.input</span>

@@ -279,16 +279,18 @@ export function withId(draft: WizardDraft, id: string): WizardDraft {
   return { ...draft, id, idEdited: true };
 }
 
-export function addGrader(draft: WizardDraft, type: GraderType): WizardDraft {
+export type GradersDraft = { graders: GraderConfig[]; budget?: { latency_ms?: number; cost_usd?: number } | undefined };
+
+export function addGrader<T extends GradersDraft>(draft: T, type: GraderType): T {
   if (draft.graders.length >= MAX_GRADERS) return draft;
   return { ...draft, graders: [...draft.graders, newGrader(type, draft.graders.map((g) => g.id))] };
 }
 
-export function removeGrader(draft: WizardDraft, index: number): WizardDraft {
+export function removeGrader<T extends GradersDraft>(draft: T, index: number): T {
   return { ...draft, graders: draft.graders.filter((_, i) => i !== index) };
 }
 
-export function moveGrader(draft: WizardDraft, from: number, to: number): WizardDraft {
+export function moveGrader<T extends GradersDraft>(draft: T, from: number, to: number): T {
   if (from === to || from < 0 || to < 0 || from >= draft.graders.length || to >= draft.graders.length) return draft;
   const next = [...draft.graders];
   const [item] = next.splice(from, 1);
@@ -296,17 +298,17 @@ export function moveGrader(draft: WizardDraft, from: number, to: number): Wizard
   return { ...draft, graders: next };
 }
 
-export function replaceGrader(draft: WizardDraft, index: number, grader: GraderConfig): WizardDraft {
+export function replaceGrader<T extends GradersDraft>(draft: T, index: number, grader: GraderConfig): T {
   return { ...draft, graders: draft.graders.map((g, i) => (i === index ? grader : g)) };
 }
 
-export function renameGrader(draft: WizardDraft, index: number, id: string): WizardDraft {
+export function renameGrader<T extends GradersDraft>(draft: T, index: number, id: string): T {
   const current = draft.graders[index];
   return current ? replaceGrader(draft, index, { ...current, id }) : draft;
 }
 
-export function setBudget(draft: WizardDraft, key: "latency_ms" | "cost_usd", value: number | null): WizardDraft {
-  const { [key]: _drop, ...rest } = draft.budget;
+export function setBudget<T extends GradersDraft>(draft: T, key: "latency_ms" | "cost_usd", value: number | null): T {
+  const { [key]: _drop, ...rest } = draft.budget ?? {};
   void _drop;
   return { ...draft, budget: value === null ? rest : { ...rest, [key]: value } };
 }
