@@ -125,6 +125,7 @@ export type EvalRowModel = {
   costText: string;
   status: { label: string; tone: EvalTone };
   href: string;
+  canRun: boolean;
 };
 
 function plural(count: number, one: string, many: string): string {
@@ -165,6 +166,7 @@ export function evalRowModel(item: EvalListItem): EvalRowModel {
     costText: last === null ? "—" : formatCost(last.cost_total),
     status: statusOf(item),
     href: item.valid ? evalPath(item.id) : evalEditPath(item.id),
+    canRun: item.valid,
   };
 }
 

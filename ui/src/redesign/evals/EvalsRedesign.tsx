@@ -13,6 +13,7 @@ import { showToast } from "../../toast";
 import { useHotkeys } from "../keys";
 import { PageHeader } from "../shell/PageHeader";
 import { EvalRow, COLUMN } from "./EvalRow";
+import { openRunDialog } from "./run/runDialogStore";
 import { EngineBanner, RegressionBanner } from "./EvalsBanners";
 import { EvalsEmptyState } from "./EvalsEmptyState";
 import {
@@ -106,10 +107,10 @@ export function EvalsRedesign({ stage }: { stage?: string }) {
     setSampleBusy(true);
     try {
       const result = await installEvalSample();
-      navigate(evalPath(result.eval_id));
+      navigate(evalPath(result.eval_id, { openRun: true }));
     } catch (err) {
       if (err instanceof EvalApiError && err.code === "SAMPLE_EXISTS") {
-        navigate(evalPath(EVAL_SAMPLE_ID));
+        navigate(evalPath(EVAL_SAMPLE_ID, { openRun: true }));
       } else {
         showToast(err instanceof Error ? err.message : String(err));
       }
@@ -298,6 +299,7 @@ export function EvalsRedesign({ stage }: { stage?: string }) {
                 <span role="columnheader" className={`${HEAD} ${COLUMN.trend} shrink-0`}>Trend</span>
                 <span role="columnheader" className={`${HEAD} ${COLUMN.cost} shrink-0`}>Cost / run</span>
                 <span role="columnheader" className={`${HEAD} ${COLUMN.status} shrink-0`}>Status</span>
+                <span className="block w-[52px] shrink-0" />
                 <span className="block w-3.5 shrink-0" />
               </div>
               {rows.map((row) => (
@@ -307,6 +309,7 @@ export function EvalsRedesign({ stage }: { stage?: string }) {
                   selected={selectedId === row.id}
                   onSelect={() => setSelectedId(row.id)}
                   onOpen={() => navigate(row.href)}
+                  onRun={() => openRunDialog(row.id)}
                 />
               ))}
             </div>

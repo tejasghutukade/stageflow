@@ -6,6 +6,7 @@ import {
   type StartRunCloseReason,
 } from "./startRun/StartRunDialog";
 import { navigate, type Route } from "../routes";
+import { RunDialogRouteHost } from "./evals/run/RunDialogRouteHost";
 
 export type ConsoleOverlaysProps = {
   route: Route;
@@ -156,6 +157,7 @@ export function ConsoleOverlays({
         initialPipelinePath={initialPipelinePath}
         initialProjectRoot={initialProjectRoot}
       />
+      <RunDialogRouteHost route={route} />
     </>
   );
 }
