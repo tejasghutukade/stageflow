@@ -212,13 +212,16 @@ function ConsoleRoot() {
   } else if (route.name === "evalDetail") {
     content = <EvalDetailRedirect evalId={route.evalId} />;
   } else if (route.name === "evalRun") {
-    content = <EvalRunPage evalId={route.evalId} runNumber={route.runNumber} />;
+    content = <EvalRunPage evalId={route.evalId} runNumber={route.runNumber} tab={route.tab} />;
+  } else if (route.name === "evalCase") {
+    content = (
+      <EvalRunPage evalId={route.evalId} runNumber={route.runNumber} caseId={route.caseId} repeat={route.repeat} />
+    );
   } else if (route.name === "evalCompare") {
     content = <ComparePage evalId={route.evalId} a={route.a} b={route.b} />;
   } else if (
     route.name === "evalNew" ||
-    route.name === "evalEdit" ||
-    route.name === "evalCase"
+    route.name === "evalEdit"
   ) {
     content = <EvalsComingSoon title="Evals" />;
   } else if (route.name === "datasets") {

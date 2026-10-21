@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cancelEvalRun, fetchEvalResults, fetchEvalRunByNumber } from "../../../api";
 import type { EvalResultRow, EvalRunDetail, EvalRunStatus } from "../../../api/evalTypes";
-import { evalComparePath, evalsPath, navigate } from "../../../routes";
+import { evalComparePath, evalsPath, navigate, type EvalRunTab } from "../../../routes";
 import { MODAL_SCRIM_PT, OVERLAY_SCRIM_CLASS } from "../../overlay/overlayScrimClasses";
 import { useOverlayChrome } from "../../overlay/useOverlayChrome";
 import { PageHeader } from "../../shell/PageHeader";
 import { LiveProgress, StopButton } from "./LiveProgress";
-import { RunResultsPlaceholder } from "./RunResultsPlaceholder";
+import { RunResultsPage } from "../results/RunResultsPage";
 import {
   POLL_INTERVAL_MS,
   STOP_CONFIRM_TEXT,
@@ -148,7 +148,19 @@ function StatusChip({ status }: { status: EvalRunStatus }) {
   );
 }
 
-export function EvalRunPage({ evalId, runNumber }: { evalId: string; runNumber: number }) {
+export function EvalRunPage({
+  evalId,
+  runNumber,
+  tab,
+  caseId,
+  repeat,
+}: {
+  evalId: string;
+  runNumber: number;
+  tab?: EvalRunTab;
+  caseId?: string;
+  repeat?: number;
+}) {
   const { run, results, error, refresh } = useEvalRunPolling(evalId, runNumber);
   const cases = useCases(run);
   const [now, setNow] = useState(() => Date.now());
@@ -213,7 +225,7 @@ export function EvalRunPage({ evalId, runNumber }: { evalId: string; runNumber: 
     );
   }
 
-  if (!active || !model) return <RunResultsPlaceholder run={run} />;
+  if (!active || !model) return <RunResultsPage run={run} tab={tab} caseId={caseId} repeat={repeat} />;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--sf-ground)]">
