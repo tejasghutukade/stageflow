@@ -20,6 +20,7 @@ stages:
           required: [verdict, issues]
           properties:
             verdict:
+              type: string
               enum: [ok, needs_work]
             issues:
               type: array
@@ -28,6 +29,7 @@ stages:
                 required: [severity, text]
                 properties:
                   severity:
+                    type: string
                     enum: [high, medium, low]
                   text:
                     type: string

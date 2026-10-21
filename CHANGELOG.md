@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Evals: measure whether a stage still works.** An eval is a YAML file (`*.eval.yaml`) that points at one pipeline stage and a dataset of cases (JSONL or JSON), runs every case several times (`repeats`) in a fresh stage session, grades each output, and reports a pass rate with a confidence interval, reliability across repeats, flaky cases, latency, cost and failure tags. The console has an Evals page (list, results, case drawer with review and tags, Edit with a dataset editor, and a new-eval wizard), an installable sample (`POST /api/evals/sample`, `examples/evals/`), and `GET`/`POST` routes under `/api/evals`, `/api/eval-runs`, `/api/eval-compare` and `/api/datasets`. Results live in `state.db`; eval stage runs do not appear in Runs or Inbox. See [Evals](docs/evals.md) and [Console: Evals](docs/console-evals.md).
+- **Graders: five kinds, three need no model.** `schema`, `field`, `reference` and `code` graders are deterministic and free; `rubric` graders ask a judge model and are scored on a pass/fail or 1-to-5 scale. A weighted score is compared with `pass_threshold`, and `must_pass` graders fail the result on their own.
+- **Compare two runs.** Compare shows the paired difference with a confidence interval and a verdict (improved, regressed, no clear difference or insufficient data), per-case and per-grader changes, a line diff of the changed system prompt, and warnings when datasets or graders differ. A run stores a snapshot of the stage, dataset, graders and settings it used.
+- **`sf eval` and MCP.** `sf eval validate`, `sf eval run` (`--json`, exit `0` when the run passed, `1` below the threshold or failed), `sf eval engine status|install`, and MCP tools `list_evals`, `get_eval`, `validate_eval`, `run_eval` (with `wait: true`), `get_eval_run`, `list_eval_runs`, `get_eval_results`, `get_eval_result`, `compare_eval_runs` and `cancel_eval_run`. `sf validate` also checks evals and datasets. See [CLI reference](docs/cli-reference.md), [CI](docs/ci.md) and [MCP](docs/mcp.md).
+- **On-demand engine install, Node 22.22 or newer for evals.** Evals run on a pinned promptfoo (`0.124.0`) that is not bundled: install it once with `sf eval engine install` (about 1.2 GB, network needed). Evals need Node 22.22 or newer; the rest of Stageflow still runs on Node 20 and up. The Docker image bakes the engine in at `/data/eval-engine/0.124.0`. Run costs are capped by `max_cost_usd`, and Stop run keeps the results so far.
+- **Privacy: rubric graders send data to the judge's provider.** A rubric grader sends the rubric, the case input, any `expected` value and the stage output to the judge model's provider (`anthropic/`, `openai/` or `openrouter/`); the stage model's provider receives each case input too. Evals that use only deterministic graders send nothing beyond the stage's own model calls. The engine never contacts promptfoo servers.
+
 ## [0.38.0] - 2026-10-20
 
 ### Added
