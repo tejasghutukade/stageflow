@@ -6,6 +6,10 @@ export type DetailView =
   | { kind: "envelope"; stageId: string }
   | { kind: "artifact"; path: string };
 
+export type EvalRunTab = "overview" | "cases" | "graders" | "config";
+
+const EVAL_RUN_TABS: readonly EvalRunTab[] = ["overview", "cases", "graders", "config"];
+
 export type Route =
   | { name: "today" }
   | { name: "overview" }
@@ -36,6 +40,15 @@ export type Route =
     }
   | { name: "stage"; path: string; projectRoot?: string }
   | { name: "extensions" }
+  | { name: "evals"; stage?: string }
+  | { name: "evalNew"; pipeline?: string; stage?: string; file?: string }
+  | { name: "evalDetail"; evalId: string }
+  | { name: "evalEdit"; evalId: string }
+  | { name: "evalRun"; evalId: string; runNumber: number; tab?: EvalRunTab }
+  | { name: "evalCase"; evalId: string; runNumber: number; caseId: string; repeat?: number }
+  | { name: "evalCompare"; evalId: string; a?: number; b?: number }
+  | { name: "datasets" }
+  | { name: "datasetDetail"; datasetId: string; evalId?: string }
   | {
       name: "extensionPackage";
       scope: "user" | "project";
@@ -186,6 +199,67 @@ export function agentRunPath(agentId: string, sessionId: string, runId: string):
   return `${agentSessionPath(agentId, sessionId)}/runs/${encodeURIComponent(runId)}`;
 }
 
+function withQuery(base: string, params: URLSearchParams): string {
+  const query = params.toString();
+  return query ? `${base}?${query}` : base;
+}
+
+export function evalsPath(opts?: { stage?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.stage) params.set("stage", opts.stage);
+  return withQuery("/evals", params);
+}
+
+export function evalNewPath(opts?: { pipeline?: string; stage?: string; file?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.pipeline) params.set("pipeline", opts.pipeline);
+  if (opts?.stage) params.set("stage", opts.stage);
+  if (opts?.file) params.set("file", opts.file);
+  return withQuery("/evals/new", params);
+}
+
+export function evalPath(evalId: string): string {
+  return `/evals/${encodeURIComponent(evalId)}`;
+}
+
+export function evalEditPath(evalId: string): string {
+  return `${evalPath(evalId)}/edit`;
+}
+
+export function evalRunPath(evalId: string, runNumber: number, opts?: { tab?: EvalRunTab }): string {
+  const params = new URLSearchParams();
+  if (opts?.tab) params.set("tab", opts.tab);
+  return withQuery(`${evalPath(evalId)}/runs/${runNumber}`, params);
+}
+
+export function evalCasePath(
+  evalId: string,
+  runNumber: number,
+  caseId: string,
+  opts?: { repeat?: number },
+): string {
+  const params = new URLSearchParams();
+  if (opts?.repeat !== undefined) params.set("repeat", String(opts.repeat));
+  return withQuery(`${evalRunPath(evalId, runNumber)}/case/${encodeURIComponent(caseId)}`, params);
+}
+
+export function evalComparePath(evalId: string, opts?: { a?: number; b?: number }): string {
+  const params = new URLSearchParams();
+  if (opts?.a !== undefined) params.set("a", String(opts.a));
+  if (opts?.b !== undefined) params.set("b", String(opts.b));
+  return withQuery(`${evalPath(evalId)}/compare`, params);
+}
+
+export function datasetsPath(): string {
+  return "/datasets";
+}
+
+export function datasetPath(datasetId: string, opts?: { eval?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.eval) params.set("eval", opts.eval);
+  return withQuery(`/datasets/${encodeURIComponent(datasetId)}`, params);
+}
+
 export function connectPath(): string {
   return "/connect";
 }
@@ -223,6 +297,76 @@ function firstSegment(rest: string): string {
   return raw ? decodeURIComponent(raw) : "";
 }
 
+function positiveInt(raw: string | null | undefined): number | undefined {
+  if (raw === null || raw === undefined || !/^\d+$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return n >= 1 ? n : undefined;
+}
+
+function parseEvalRoute(path: string, params: URLSearchParams): Route | null {
+  if (path === "evals") {
+    const stage = params.get("stage") ?? undefined;
+    return { name: "evals", ...(stage ? { stage } : {}) };
+  }
+  if (path === "evals/new") {
+    const pipeline = params.get("pipeline") ?? undefined;
+    const stage = params.get("stage") ?? undefined;
+    const file = params.get("file") ?? undefined;
+    return {
+      name: "evalNew",
+      ...(pipeline ? { pipeline } : {}),
+      ...(stage ? { stage } : {}),
+      ...(file ? { file } : {}),
+    };
+  }
+  if (path.startsWith("evals/")) {
+    const parts = path.slice("evals/".length).split("/");
+    const evalId = decodeURIComponent(parts[0] ?? "");
+    if (!evalId) return null;
+    if (parts.length === 1) return { name: "evalDetail", evalId };
+    if (parts.length === 2 && parts[1] === "edit") return { name: "evalEdit", evalId };
+    if (parts.length === 2 && parts[1] === "compare") {
+      const a = positiveInt(params.get("a"));
+      const b = positiveInt(params.get("b"));
+      return {
+        name: "evalCompare",
+        evalId,
+        ...(a !== undefined ? { a } : {}),
+        ...(b !== undefined ? { b } : {}),
+      };
+    }
+    if (parts[1] === "runs") {
+      const runNumber = positiveInt(parts[2]);
+      if (runNumber === undefined) return null;
+      if (parts.length === 3) {
+        const tabRaw = params.get("tab");
+        const tab = EVAL_RUN_TABS.find((t) => t === tabRaw);
+        return { name: "evalRun", evalId, runNumber, ...(tab ? { tab } : {}) };
+      }
+      if (parts.length === 5 && parts[3] === "case" && parts[4]) {
+        const repeatRaw = params.get("repeat");
+        const repeat = repeatRaw !== null && /^\d+$/.test(repeatRaw) ? Number(repeatRaw) : undefined;
+        return {
+          name: "evalCase",
+          evalId,
+          runNumber,
+          caseId: decodeURIComponent(parts[4]),
+          ...(repeat !== undefined ? { repeat } : {}),
+        };
+      }
+    }
+    return null;
+  }
+  if (path === "datasets") return { name: "datasets" };
+  if (path.startsWith("datasets/")) {
+    const datasetId = firstSegment(path.slice("datasets/".length));
+    if (!datasetId) return null;
+    const evalId = params.get("eval") ?? undefined;
+    return { name: "datasetDetail", datasetId, ...(evalId ? { evalId } : {}) };
+  }
+  return null;
+}
+
 export function parseHash(hash = window.location.hash): Route {
   const { path, params } = splitHash(hash);
   if (!path || path === "today") return { name: "inbox" };
@@ -234,6 +378,10 @@ export function parseHash(hash = window.location.hash): Route {
     return tab ? { name: "inbox", tab } : { name: "inbox" };
   }
   if (path === "runs") return { name: "runs" };
+  if (path === "evals" || path.startsWith("evals/") || path === "datasets" || path.startsWith("datasets/")) {
+    const evalRoute = parseEvalRoute(path, params);
+    if (evalRoute) return evalRoute;
+  }
   if (path === "new") {
     const pipelineId = params.get("pipeline") ?? undefined;
     const taskPath = params.get("task") ?? undefined;

@@ -60,4 +60,12 @@ describe("buildPaletteIndex", () => {
     expect(items.some((i) => i.id === "action-start-run")).toBe(true);
     expect(items.some((i) => i.group === "navigation")).toBe(true);
   });
+
+  it("finds the eval commands by name", () => {
+    const find = (query: string) =>
+      buildPaletteIndex({ snapshot: emptySnapshot, tasks: [], pipelines: [], query, ctx });
+    expect(find("new eval").find((i) => i.id === "nav-evals-new")?.context).toBe("/evals/new");
+    expect(find("datasets").find((i) => i.id === "nav-datasets")?.context).toBe("/datasets");
+    expect(find("evals").some((i) => i.id === "nav-evals")).toBe(true);
+  });
 });
