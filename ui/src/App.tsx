@@ -18,6 +18,7 @@ import { EvalsComingSoon } from "./redesign/evals/EvalsComingSoon";
 import { EvalsRedesign } from "./redesign/evals/EvalsRedesign";
 import { EvalDetailRedirect } from "./redesign/evals/run/EvalDetailRedirect";
 import { EvalRunPage } from "./redesign/evals/run/EvalRunPage";
+import { DatasetsPage } from "./redesign/evals/datasets";
 import { OverviewRedesign } from "./redesign/overview/OverviewRedesign";
 import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
@@ -215,11 +216,13 @@ function ConsoleRoot() {
     route.name === "evalNew" ||
     route.name === "evalEdit" ||
     route.name === "evalCase" ||
-    route.name === "evalCompare" ||
-    route.name === "datasets" ||
-    route.name === "datasetDetail"
+    route.name === "evalCompare"
   ) {
-    content = <EvalsComingSoon title={route.name === "datasets" || route.name === "datasetDetail" ? "Datasets" : "Evals"} />;
+    content = <EvalsComingSoon title="Evals" />;
+  } else if (route.name === "datasets") {
+    content = <DatasetsPage />;
+  } else if (route.name === "datasetDetail") {
+    content = <DatasetsPage datasetId={route.datasetId} evalId={route.evalId} />;
   } else if (route.name === "connections") {
     content = <ConnectionsPage />;
   } else if (route.name === "connection") {

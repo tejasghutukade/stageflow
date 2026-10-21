@@ -1,0 +1,271 @@
+import type {
+  EvalCaseInput,
+  EvalCreateDatasetInput,
+  EvalDatasetFormat,
+  EvalDatasetPreview,
+  EvalDatasetPreviewInput,
+  EvalDatasetTarget,
+  EvalUploadMapping,
+} from "../../../api/evalTypes";
+
+export type UploadFieldRole = "input" | "expected";
+export type UploadFieldKind = "required" | "optional" | "reference";
+
+export type UploadField = {
+  /** Mapping key, `input.<name>` or `expected.<name>`. */
+  key: string;
+  name: string;
+  role: UploadFieldRole;
+  kind: UploadFieldKind;
+};
+
+export type FieldChoice = { column: string | null; split?: string };
+export type MappingState = Record<string, FieldChoice>;
+
+export const SPLIT_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "", label: "no split" },
+  { value: ";", label: "split on ;" },
+  { value: ",", label: "split on ," },
+  { value: "|", label: "split on |" },
+];
+
+export const DELIMITERS: Array<{ value: string; label: string }> = [
+  { value: ",", label: "Comma" },
+  { value: ";", label: "Semicolon" },
+  { value: "\t", label: "Tab" },
+  { value: "|", label: "Pipe" },
+];
+
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+export const PREVIEW_ROWS = 5;
+
+export function normalizeName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/^(?:input|expected)\./, "")
+    .replace(/[\s_-]+/g, "_");
+}
+
+export function stageFields(
+  inputFields: ReadonlyArray<{ name: string; required: boolean }>,
+  expectedFields: readonly string[] = [],
+): UploadField[] {
+  const fields: UploadField[] = inputFields.map((f) => ({
+    key: `input.${f.name}`,
+    name: f.name,
+    role: "input",
+    kind: f.required ? "required" : "optional",
+  }));
+  for (const name of expectedFields) {
+    fields.push({ key: `expected.${name}`, name: `expected.${name}`, role: "expected", kind: "reference" });
+  }
+  return fields;
+}
+
+/** Without a stage: one optional input field per column ("Pick fields to import"). */
+export function freeFields(columns: readonly string[]): UploadField[] {
+  return columns.map((c) => ({ key: `input.${c}`, name: c, role: "input", kind: "optional" }));
+}
+
+function fieldBaseName(field: UploadField): string {
+  return field.role === "expected" ? field.name.replace(/^expected\./, "") : field.name;
+}
+
+/** Same-named columns only: `diff_text` does not match `diff`. A column serves one field. */
+export function autoMatch(fields: readonly UploadField[], columns: readonly string[]): MappingState {
+  const used = new Set<string>();
+  const state: MappingState = {};
+  for (const field of fields) {
+    const want = normalizeName(fieldBaseName(field));
+    const column = columns.find((c) => !used.has(c) && normalizeName(c) === want) ?? null;
+    if (column !== null) used.add(column);
+    state[field.key] = { column };
+  }
+  return state;
+}
+
+export function setColumn(state: MappingState, key: string, column: string | null): MappingState {
+  const prev = state[key];
+  return { ...state, [key]: { column, ...(prev?.split ? { split: prev.split } : {}) } };
+}
+
+export function setSplit(state: MappingState, key: string, split: string): MappingState {
+  const prev = state[key] ?? { column: null };
+  const next: FieldChoice = { column: prev.column };
+  if (split !== "") next.split = split;
+  return { ...state, [key]: next };
+}
+
+export function buildMapping(fields: readonly UploadField[], state: MappingState): EvalUploadMapping {
+  const mapping: EvalUploadMapping = {};
+  for (const field of fields) {
+    const choice = state[field.key];
+    if (!choice || choice.column === null) {
+      mapping[field.key] = null;
+    } else {
+      mapping[field.key] = {
+        column: choice.column,
+        ...(field.role === "expected" && choice.split ? { split: choice.split } : {}),
+      };
+    }
+  }
+  return mapping;
+}
+
+export function missingRequired(fields: readonly UploadField[], state: MappingState): string[] {
+  return fields.filter((f) => f.kind === "required" && !state[f.key]?.column).map((f) => f.name);
+}
+
+export function formatFromFileName(name: string): EvalDatasetFormat | null {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".jsonl") || lower.endsWith(".ndjson")) return "jsonl";
+  if (lower.endsWith(".json")) return "json";
+  if (lower.endsWith(".csv") || lower.endsWith(".tsv")) return "csv";
+  return null;
+}
+
+export function defaultDelimiter(name: string): string {
+  return name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+}
+
+/** Pasted text: JSONL if every non-blank line starts with `{`, else CSV. */
+export function detectPastedFormat(text: string): EvalDatasetFormat | null {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
+  if (lines.length === 0) return null;
+  return lines.every((l) => l.trimStart().startsWith("{")) ? "jsonl" : "csv";
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function rowsFoundText(n: number): string {
+  return `${n} ${n === 1 ? "row" : "rows"} found`;
+}
+
+export function buildPreviewRequest(opts: {
+  format: EvalDatasetFormat;
+  content: string;
+  delimiter?: string;
+  mapping?: EvalUploadMapping;
+  target?: EvalDatasetTarget;
+  projectRoot?: string | undefined;
+}): EvalDatasetPreviewInput {
+  return {
+    format: opts.format,
+    content: opts.content,
+    ...(opts.format === "csv" && opts.delimiter && opts.delimiter !== "," ? { delimiter: opts.delimiter } : {}),
+    ...(opts.mapping ? { mapping: opts.mapping } : {}),
+    ...(opts.target ? { target: opts.target } : {}),
+    ...(opts.projectRoot ? { project_root: opts.projectRoot } : {}),
+  };
+}
+
+export function hasTarget(target: EvalDatasetTarget | undefined): boolean {
+  return !!target && (!!target.stage_id || !!target.file);
+}
+
+export function summarize(preview: Pick<EvalDatasetPreview, "rows" | "counts"> | null): string {
+  if (!preview) return "";
+  const { ready, skipped } = preview.counts;
+  const head = ready === 0 ? "No cases ready" : `${ready} ${ready === 1 ? "case" : "cases"} ready`;
+  if (skipped === 0) return head;
+  const reasons: string[] = [];
+  for (const row of preview.rows) {
+    if (row.status === "skipped" && row.reason && !reasons.includes(row.reason)) reasons.push(row.reason);
+  }
+  const why = reasons.length === 1 ? ` because ${reasons[0]}` : reasons.length > 1 ? ` (${reasons.join(", ")})` : "";
+  return `${head} · ${skipped} skipped${why}`;
+}
+
+export type PreviewRowView = { index: number; text: string; secondary: string; status: "ready" | "skipped"; reason?: string };
+
+function oneLine(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  return (typeof value === "string" ? value : JSON.stringify(value)).replace(/\s+/g, " ").trim();
+}
+
+export function previewRows(
+  preview: Pick<EvalDatasetPreview, "rows"> | null,
+  inputNames: readonly string[],
+  limit = PREVIEW_ROWS,
+): PreviewRowView[] {
+  if (!preview) return [];
+  return preview.rows.slice(0, limit).map((row) => {
+    const input = row.case.input ?? {};
+    const names = inputNames.length > 0 ? inputNames : Object.keys(input);
+    const first = names[0];
+    const second = names[1];
+    const text = first ? oneLine(input[first]) : "";
+    const secondary = second ? oneLine(input[second]) : oneLine(row.case.title);
+    return {
+      index: row.index,
+      text,
+      secondary: row.status === "skipped" && secondary === "" ? "(empty)" : secondary,
+      status: row.status,
+      ...(row.reason ? { reason: row.reason } : {}),
+    };
+  });
+}
+
+export type UploadMode = "append" | "replace";
+
+/** What the dialog hands to `onConfirm`. The caller decides which endpoint to use. */
+export type UploadConfirm = {
+  mode: UploadMode;
+  /** Ready rows only. Ids are kept only when they cannot collide (see `casesForImport`). */
+  cases: EvalCaseInput[];
+  ready: number;
+  skipped: number;
+  fileName: string;
+  format: EvalDatasetFormat;
+};
+
+export function readyCases(preview: Pick<EvalDatasetPreview, "rows">): Array<EvalCaseInput & { id: string }> {
+  return preview.rows.filter((r) => r.status === "ready").map((r) => r.case);
+}
+
+/** CSV and pasted-CSV rows carry preview ids that only mean "position": the server numbers them. */
+export function casesForImport(
+  cases: ReadonlyArray<EvalCaseInput & { id: string }>,
+  opts: { format: EvalDatasetFormat; mode: UploadMode; existingIds: readonly string[] },
+): EvalCaseInput[] {
+  const taken = new Set(opts.mode === "append" ? opts.existingIds : []);
+  return cases.map((c) => {
+    if (opts.format === "csv" || taken.has(c.id)) {
+      const { id: _id, ...rest } = c;
+      void _id;
+      return rest;
+    }
+    return c;
+  });
+}
+
+export function confirmLabel(ready: number, mode: UploadMode, existing: number): string {
+  if (ready === 0) return "Nothing to add";
+  if (mode === "replace" && existing > 0) return `Replace with ${ready} ${ready === 1 ? "case" : "cases"}`;
+  return `Add ${ready} ${ready === 1 ? "case" : "cases"}`;
+}
+
+export function modeLabels(existing: number): { append: string; replace: string } {
+  return { append: `Add to the ${existing} cases already here`, replace: "Replace all cases" };
+}
+
+export function toCreateDatasetInput(
+  req: UploadConfirm,
+  dest: { name: string; projectRoot?: string } | { datasetId: string; baseHash: string; projectRoot?: string },
+): EvalCreateDatasetInput {
+  const root = dest.projectRoot ? { project_root: dest.projectRoot } : {};
+  if ("name" in dest) return { ...root, name: dest.name, cases: req.cases };
+  return { ...root, dataset_id: dest.datasetId, mode: req.mode, cases: req.cases, base_hash: dest.baseHash };
+}
+
+export function canConfirm(preview: Pick<EvalDatasetPreview, "counts"> | null, busy: boolean): boolean {
+  return !busy && preview !== null && preview.counts.ready > 0;
+}
+
+export const FREE_MODE_HINT = "Pick fields to import";
+export const FREE_MODE_NOTE = "Without a stage, each column you pick becomes an input field.";
