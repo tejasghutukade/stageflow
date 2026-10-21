@@ -14,6 +14,7 @@ import {
   LuExternalLink,
   LuFileCode,
   LuFileText,
+  LuFlaskConical,
   LuFolder,
   LuHand,
   LuInfo,
@@ -65,7 +66,8 @@ import {
   type NewStageInitial,
   type StageYamlInfo,
 } from "./catalogStageModel";
-import { stagesFromPipelines, type StageRowFromPipelines } from "./stagesFromPipelines";
+import { StageEvalsSection, stageEvaluateTarget, useStageEvals } from "./StageEvalsSection";
+import { stagesFromPipelines,type StageRowFromPipelines } from "./stagesFromPipelines";
 
 const MONO = "[font-family:'Geist_Mono',_monospace]";
 const COLUMN_LABEL =
@@ -323,6 +325,7 @@ export function CatalogStagesTab({ query, onNewStage }: CatalogStagesTabProps) {
           editorHref={editorHref}
           yamlState={yamlState}
           runs={runs}
+          pipelines={pipelines}
           onClose={() => setSelectedKey(null)}
           onDuplicate={duplicate}
         />
@@ -645,6 +648,7 @@ function StageInspector({
   editorHref,
   yamlState,
   runs,
+  pipelines,
   onClose,
   onDuplicate,
 }: {
@@ -653,10 +657,12 @@ function StageInspector({
   editorHref: string | null;
   yamlState: YamlState | null;
   runs: RunSummary[];
+  pipelines: PipelineListing[];
   onClose: () => void;
   onDuplicate: () => void;
 }) {
   const now = useNow(60_000);
+  const evalsState = useStageEvals(row, pipelines);
   const recent = useMemo(
     () =>
       row ? recentStageStats(runs, row.id, row.used_by_pipeline_ids, now) : null,
@@ -861,6 +867,7 @@ function StageInspector({
             <span className="font-sans text-xs text-[#8b8f98]">No pipeline uses this stage.</span>
           )}
         </div>
+        <StageEvalsSection row={row} state={evalsState} />
         <div className="flex flex-col gap-1.5">
           <span className={COLUMN_LABEL}>Last 30 days</span>
           <div className="flex rounded-[10px] border border-[#ffffff12] bg-[#0c0d0f]">
@@ -886,7 +893,7 @@ function StageInspector({
         </div>
       </div>
       <div className="flex w-full flex-col gap-2 border-t border-t-[#ffffff12] px-3.5 py-3">
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             disabled={!editorHref}
@@ -904,6 +911,16 @@ function StageInspector({
               className={`rounded-sm border border-[#0c0d0f2e] px-[5px] py-0 ${MONO} text-[11px] leading-normal text-[#5a5d66]`}
             >
               E
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(stageEvaluateTarget(row, evalsState))}
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-2.5 py-0"
+          >
+            <LuFlaskConical className="size-3.5 text-[#a7aab2]" aria-hidden />
+            <span className="font-sans text-[13px] font-medium leading-normal text-[#ecedee]">
+              Evaluate
             </span>
           </button>
           <button

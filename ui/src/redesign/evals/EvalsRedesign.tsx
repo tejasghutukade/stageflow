@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LuPlus, LuSearch } from "react-icons/lu";
+import { LuPlus, LuSearch, LuX } from "react-icons/lu";
 import {
   EvalApiError,
   fetchEvalEngine,
@@ -58,14 +58,14 @@ export function EvalsRedesign({ stage }: { stage?: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setData(await fetchEvals());
+      setData(await fetchEvals(stage ? { target_stage: stage } : {}));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [stage]);
 
   useEffect(() => {
     void load();
@@ -158,8 +158,8 @@ export function EvalsRedesign({ stage }: { stage?: string }) {
     "evals",
   );
 
-  const isEmpty = !loading && !error && items.length === 0;
-  const noMatches = !loading && !error && items.length > 0 && rows.length === 0;
+  const isEmpty = !loading && !error && items.length === 0 && !stage;
+  const noMatches = !loading && !error && rows.length === 0;
   const showTable = !loading && !error && rows.length > 0;
 
   return (
@@ -255,16 +255,19 @@ export function EvalsRedesign({ stage }: { stage?: string }) {
           ) : null}
 
           {stage ? (
-            <p className="flex items-center gap-2 text-xs text-[var(--sf-text-3)]">
-              Showing evals for stage <span className={`${MONO} text-[var(--sf-text-2)]`}>{stage}</span>
-              <button
-                type="button"
-                onClick={() => navigate(evalsPath())}
-                className="text-[var(--sf-text-1)] underline"
-              >
-                Show all
-              </button>
-            </p>
+            <div className="flex">
+              <span className="flex h-6 items-center gap-1.5 rounded-md border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)] pl-2 pr-1 text-xs text-[var(--sf-text-2)]">
+                Showing evals for stage <span className={`${MONO} text-[var(--sf-text-1)]`}>{stage}</span>
+                <button
+                  type="button"
+                  aria-label="Show all evals"
+                  onClick={() => navigate(evalsPath())}
+                  className="flex size-4 items-center justify-center rounded-sm text-[var(--sf-text-3)] hover:text-[var(--sf-text-1)]"
+                >
+                  <LuX className="size-3" aria-hidden />
+                </button>
+              </span>
+            </div>
           ) : null}
 
           {loading ? <p className="text-xs text-[var(--sf-text-3)]">Loading evals…</p> : null}
