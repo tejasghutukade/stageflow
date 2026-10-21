@@ -74,6 +74,7 @@ describe("GET /api/models", () => {
     expect(body.models).toEqual(expect.arrayContaining(["openrouter/nvidia/nemotron-3.5-lightning:free", "openrouter/openai/gpt-oss"]));
     expect(body.providers[0].models.map((model: { id: string }) => model.id)).toEqual(["openrouter/nvidia/nemotron-3.5-lightning:free", "openrouter/openai/gpt-oss"]);
     expect(body.providers).toHaveLength(1);
+    expect(body.providers[0].models.map((model: { judge_capable: boolean }) => model.judge_capable)).toEqual([true, true]);
     expect(body.providers[0]).toMatchObject({ id: "openrouter", name: "OpenRouter", source: "live" });
     expect(body.default).toBe("openrouter/nvidia/nemotron-3.5-lightning:free");
     expect(body.unlisted).not.toContain("openrouter/openai/gpt-oss");

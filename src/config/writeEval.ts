@@ -169,6 +169,10 @@ function fillCreateDefaults(definition: EvalFile): EvalFile {
   };
 }
 
+export function renderEvalCreateYaml(definition: EvalFile): string {
+  return renderEvalYaml(fillCreateDefaults(definition));
+}
+
 function isOmittableDefault(keys: string[], value: unknown, parent: Record<string, unknown>): boolean {
   const key = keys[keys.length - 1];
   if (keys.length === 1) return key === "type" && value === "capability";

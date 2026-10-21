@@ -102,6 +102,7 @@ export type ListEvalRunsQuery = {
   projectRoot?: string;
   evalId?: string;
   status?: EvalRunStatus;
+  stageRunId?: string;
   limit: number;
   cursor?: string;
 };

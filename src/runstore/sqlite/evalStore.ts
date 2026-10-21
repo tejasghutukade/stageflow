@@ -411,6 +411,10 @@ export function listEvalRuns(db: Database.Database, query: ListEvalRunsQuery): E
     clauses.push("status = ?");
     params.push(query.status);
   }
+  if (query.stageRunId !== undefined) {
+    clauses.push("eval_run_id IN (SELECT eval_run_id FROM eval_results WHERE stage_run_id = ?)");
+    params.push(query.stageRunId);
+  }
   if (query.cursor !== undefined) {
     const [createdAt, id] = JSON.parse(Buffer.from(query.cursor, "base64url").toString("utf8")) as [string, string];
     clauses.push("(created_at < ? OR (created_at = ? AND eval_run_id < ?))");

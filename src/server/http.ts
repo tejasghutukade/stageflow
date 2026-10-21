@@ -20,6 +20,8 @@ import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import type { EvalRunManager } from "../evals/manager.js";
 import { handleTriggerRoutes } from "./triggerRoutes.js";
+import { handleEvalRoutes } from "./evalRoutes.js";
+import { engineStatus as promptfooEngineStatus } from "../evals/engine/promptfoo/status.js";
 import {
   readCatalogFileForHttp,
   writeCatalogFileForHttp,
@@ -3395,6 +3397,21 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             projectRoot: rootDir,
             readJsonBody,
             json,
+          })
+        ) {
+          return true;
+        }
+
+        if (
+          await handleEvalRoutes(req, res, {
+            cwd,
+            store,
+            manager,
+            evalRunManager: deps.evalRunManager,
+            json,
+            readJsonBody,
+            auditLog,
+            engineStatus: () => promptfooEngineStatus({ home: globalStageflowHome() }),
           })
         ) {
           return true;
