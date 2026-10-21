@@ -1,0 +1,7 @@
+id: file-ticket-1842
+goal: File one ticket card in the shared notebook
+context: First card for this ticket. The cover page is separate.
+constraints: One card. Do not change the cover.
+input:
+  key: TICKET-1842
+  note: Refund approved for order 4412. Customer asked for store credit.

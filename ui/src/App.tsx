@@ -19,6 +19,7 @@ import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TriggersPage } from "./pages/TriggersPage";
 import { ConnectionsPage } from "./pages/ConnectionsPage";
+import { MemoriesPage } from "./redesign/memories/MemoriesPage";
 import { ConnectionDetailPage } from "./redesign/connections/ConnectionDetailPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
@@ -203,6 +204,10 @@ function ConsoleRoot() {
     content = <TriggersPage />;
   } else if (route.name === "connections") {
     content = <ConnectionsPage />;
+  } else if (route.name === "memories") {
+    content = <MemoriesPage />;
+  } else if (route.name === "memory") {
+    content = <MemoriesPage memoryId={route.memoryId} />;
   } else if (route.name === "connection") {
     content = <ConnectionDetailPage connectionId={route.connectionId} />;
   } else if (route.name === "agentSessions") {

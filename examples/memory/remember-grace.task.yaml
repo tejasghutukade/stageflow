@@ -1,0 +1,6 @@
+id: remember-grace
+goal: Add Grace to the shared notebook
+context: The notebook already has earlier lines. Keep them.
+constraints: One new line only. Do not drop earlier lines.
+input:
+  note: Grace was shortlisted.

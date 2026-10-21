@@ -30,6 +30,7 @@ On start, Stageflow prints the console URL and MCP endpoint, then opens your def
 | Pipelines, editor, Tasks, Catalog, Triggers, Workshop | [Pipelines, tasks and catalog](console-pipelines-catalog.md) |
 | Agents, Agent sessions, run inspector | [Agents in the console](console-agents.md) |
 | Connections: channels, email accounts, tool servers | [Connections](console-connections.md) |
+| Memories: a cover and cards a pipeline or an agent can keep | [YAML catalog — Memories](yaml-catalog.md#memories) |
 | Settings: Providers, Concurrency, MCP, Project MCP, Notifications | [Settings](console-settings.md) |
 
 ## The shell
@@ -50,6 +51,7 @@ On start, Stageflow prints the console URL and MCP endpoint, then opens your def
 | Build | **Catalog** | `#/catalog?tab=stages` | Stages, skills and extensions |
 | Connect | **Triggers** | `#/triggers` | Catalog triggers |
 | Connect | **Connections** | `#/connections` | Channels, email accounts, tool servers |
+| Connect | **Memories** | `#/memories` | List and create memories. Edit the cover. List card keys, open a card, correct it, or delete it. A session adds cards. The pipeline editor and the agent editor attach memory ids from this list |
 | (footer) | **Settings** | `#/settings` | General, Providers, Concurrency, MCP server, Project MCP, Notifications |
 
 Below the groups, **Pinned pipelines** lists pipelines you pinned. The Workshop has no rail item of its own: reach it from a pipeline row (**Open in Workshop**, `W`), from **New pipeline** (`N`) or from the command palette. The rail footer can also show active run count vs soft max, the same data as MCP `get_health`.
@@ -112,6 +114,7 @@ Hash-based routing (`ui/src/routes.ts`). A hash that matches no route falls back
 | `#/catalog?tab=stages` or `?tab=skills` | Catalog. `#/skills` and `#/skills/<name>` open the Skills tab; `#/extensions` opens the Stages tab |
 | `#/extensions/packages/<scope>/<source>`, `#/extensions/files/<path>` | Extension package and file viewers |
 | `#/connections`, `#/connections/<id>` | [Connections](console-connections.md) |
+| `#/memories`, `#/memories/<id>` | Memory list and one memory. Create from the list. The operator can edit the cover. The page shows the previous cover text when it exists. List keys, open a card, and correct it. The page shows the previous card copy when it exists. Delete removes the current card and the previous copy and cannot be undone. There is one previous copy, not a full history, and no restore action. A session adds cards; the console does not. Attach memory ids in the pipeline inspector or the agent editor |
 | `#/agents` | Agent directory |
 | `#/agents/new` | Create an agent |
 | `#/agents/<id>` | Agent detail (Sessions, Configuration) |

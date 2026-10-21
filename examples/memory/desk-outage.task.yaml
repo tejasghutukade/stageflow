@@ -1,0 +1,15 @@
+id: desk-outage
+goal: File three notes for one incident, then record the rollback decision on the release card only
+context: The memory new-notebook already exists. None of these card keys exist yet. The cover page is a separate instruction and must stay as it is.
+constraints: Do not delete a card. Do not replace the cover. Update only the focus key.
+input:
+  focus: releases/2.4.1
+  decision: Rollback is the plan. Hold the deploy until payments confirms the migration.
+  query: pager
+  cards:
+    - key: TICKET-1904
+      note: Checkout returns 502 for EU customers since 14:10 UTC.
+    - key: releases/2.4.1
+      note: Rollback is blocked on the payments migration.
+    - key: ada@example.com
+      note: On-call pager owner for the checkout outage.

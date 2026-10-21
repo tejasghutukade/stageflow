@@ -1,0 +1,46 @@
+id: find-card
+stages:
+  - id: find
+    entry: true
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      The task input has "key" and "query".
+      Do these steps in order, then stop:
+      1. Call read_memory_card with memory "notebook" and that key.
+      2. Call search_memory_cards with memory "notebook" and that query.
+      3. Call read_memory with memory "notebook".
+      4. Call emit_stage_envelope once with status success, a one-line summary, artifacts [], and payload {"key":"<the key>","note":"<the exact card body>","hits":"<the search result as JSON text>","page":"<the exact cover>"}.
+      Do not call add_memory_card, update_memory_card, or replace_memory. Do not call any memory id other than notebook. Do not write files.
+    io:
+      input:
+        schema:
+          type: object
+          required:
+            - key
+            - query
+          properties:
+            key:
+              type: string
+            query:
+              type: string
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required:
+            - key
+            - note
+            - hits
+            - page
+          properties:
+            key:
+              type: string
+            note:
+              type: string
+            hits:
+              type: string
+            page:
+              type: string
+          additionalProperties: false
+memories:
+  - notebook

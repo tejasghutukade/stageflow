@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-10-21
+
+### Added
+
+- **Memories.** A memory is a host folder (`$STAGEFLOW_HOME/memories/<id>/`): a cover page and cards beside it, each card filed by a key. Create it in the console first, then list its id under `memories` on a pipeline or an agent. Every stage in that pipeline, and every session of that agent, can read and replace the cover and add, update, read, and search cards. The prompt lists the ids and descriptions only. A stage or session cannot delete a card or open the previous copy. One previous copy is kept for the cover and for each card. In **Memories** the operator can edit the cover, open a card, correct it, restore the previous copy, or delete the card. See [YAML catalog — Memories](docs/yaml-catalog.md#memories).
+
 ## [0.38.0] - 2026-10-20
 
 ### Added

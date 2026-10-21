@@ -18,6 +18,7 @@ import {
 } from "react-icons/lu";
 import { contactLines } from "../model/channelContact";
 import { agentsApi, type AgentDefinition, type ChannelContact, type AgentIssue, type AgentRevisionMeta, type BuiltinToolGroup, type ChannelListenerState } from "../../../api/agents";
+import { fetchMemories, type MemorySummary } from "../../../api";
 import { MONO, NOWRAP } from "../agentsTokens";
 import {
   addedLineCount,
@@ -404,6 +405,7 @@ export function AgentDefinitionForm({
               : "Can't write anywhere. Tick a write tool to change files. Stageflow sets the project root; the agent can never choose a path."}
           </span>
         </div>
+        <AgentMemoriesField definition={def} onChange={update} />
 
         <div className="flex flex-col gap-2">
           <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">MCP servers</span>
@@ -1155,6 +1157,55 @@ export function AgentDefinitionForm({
           </ListGroup>
         </Section>
       ) : null}
+    </div>
+  );
+}
+
+function AgentMemoriesField({
+  definition,
+  onChange,
+}: {
+  definition: AgentDefinition;
+  onChange?: (next: AgentDefinition) => void;
+}) {
+  const [available, setAvailable] = useState<MemorySummary[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    void fetchMemories().then(
+      (body) => { if (live) setAvailable(body.memories); },
+      () => { if (live) setAvailable([]); },
+    );
+    return () => { live = false; };
+  }, []);
+  const selected = definition.memories ?? [];
+  function toggle(id: string) {
+    if (!onChange) return;
+    const next = selected.includes(id) ? selected.filter((item) => item !== id) : [...selected, id];
+    onChange({ ...definition, memories: next.length > 0 ? next : undefined });
+  }
+  return (
+    <div className="flex flex-col gap-2" data-testid="agent-memories">
+      <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Memories</span>
+      <Note>Every session of this agent can read and replace these pages.</Note>
+      {available && available.length === 0 ? (
+        <Note>
+          No memories yet.{" "}
+          <a href="#/memories" className="text-[var(--sf-text-1)] underline-offset-2 hover:underline">Create one from Memories</a>.
+        </Note>
+      ) : null}
+      <ul className="flex flex-col gap-1">
+        {(available ?? []).map((item) => (
+          <li key={item.id}>
+            <label className="flex items-start gap-2 text-xs text-[var(--sf-text-1)]">
+              <input type="checkbox" checked={selected.includes(item.id)} disabled={!onChange} onChange={() => toggle(item.id)} />
+              <span>
+                <span className={MONO}>{item.id}</span>
+                <span className="mt-0.5 block text-[var(--sf-text-3)]">{item.description}</span>
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

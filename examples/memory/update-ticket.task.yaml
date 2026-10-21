@@ -1,0 +1,7 @@
+id: update-ticket-1842
+goal: Replace the ticket card with a later decision
+context: The card TICKET-1842 already exists. This run changes that card only.
+constraints: Do not add a second card. Do not change the cover.
+input:
+  key: TICKET-1842
+  note: Refund paid out for order 4412. Store credit was declined.

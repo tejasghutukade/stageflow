@@ -1,0 +1,24 @@
+id: recall
+memories:
+  - notebook
+stages:
+  - id: read-page
+    entry: true
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      Call read_memory with memory "notebook". Do not call replace_memory.
+      Then call emit_stage_envelope once with status success, a one-line summary, artifacts [], and payload {"page":"<the exact text read_memory returned>"}.
+      Do not change the page. Do not write files.
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required:
+            - page
+          properties:
+            page:
+              type: string
+          additionalProperties: false

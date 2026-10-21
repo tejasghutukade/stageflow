@@ -37,6 +37,7 @@ export type AgentDefinition = {
   evals: { groundedness: boolean };
   observability: { capture: CaptureMode; otlp: boolean };
   channel?: { connection_id: string; allow_from: string[] };
+  memories?: string[];
   schedule?: { cron: string; timezone?: string; message?: string };
   web_chat: WebChatConfig;
   limits: {
