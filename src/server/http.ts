@@ -196,6 +196,7 @@ import type { ConversationBackend } from "../agents/sessions.js";
 import { handleAgentAuthorRoutes } from "./agentAuthorRoutes.js";
 import { handleAgentRoutes } from "./agentRoutes.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
+import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
 import { EmailTriggers } from "../email/triggers.js";
 import {
   bootstrapStageflowHost,
@@ -427,6 +428,8 @@ export type OperatorRouteDeps = {
   agentConversationBackend?: ConversationBackend;
   /** Shared with MCP when set by bootstrap. */
   agentHost?: AgentHostContext;
+  /** Wired by the eval manager; until then the internal eval callback answers 404. */
+  evalServices?: EvalServices;
 };
 
 /**
@@ -453,6 +456,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
     workshopOperatorHost,
     agentConversationBackend,
     agentHost: injectedHost,
+    evalServices,
   } = deps;
   const agentConnection = injectedHost ? undefined : sqliteConnectionFromStore(store);
   const agentHost =
@@ -533,6 +537,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
       async function handleOperatorRequest(): Promise<boolean> {
       try {
         if (await liveView.handle(req, res)) return true;
+        if (isEvalInternalPath(pathname) && (await handleEvalInternalRoutes(req, method, pathname, evalServices, res, json))) return true;
 
         if (pathname === "/api/agent-author/chat" || pathname === "/api/agent-author/undo") {
           if (await handleAgentAuthorRoutes(req, method, pathname, cwd, operatorHost, res, json)) return true;
