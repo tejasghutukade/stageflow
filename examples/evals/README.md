@@ -8,7 +8,7 @@ A small eval that checks whether a `critique` stage finds planted problems in sh
 - `critique-sample.dataset.jsonl`: 8 cases. Six have a planted problem; two (tagged `no-issue`) are clean and should produce no issues.
 - `critique-sample.eval.yaml`: four graders.
   - `output-schema` (schema, must pass): the output matches the stage's output schema.
-  - `issues-have-severity` (field): every issue has a valid severity. An empty list passes.
+  - `issues-have-severity` (field): every issue has a valid severity. On a clean draft the issues list is empty, there is nothing to check, and this grader reports a failure (a field check over `[*]` fails when the list is empty); the two clean cases still pass because their other graders carry more weight.
   - `finds-expected-issues` (reference): each expected keyword appears in the reported issues.
   - `no-false-alarms` (code): clean drafts get no issues. Runs JavaScript on your machine with your permissions.
 - `critique-sample.task.yaml`: a normal task, so `sf run` works on the pipeline too.
@@ -25,7 +25,7 @@ sf eval run critique-sample
 
 Or open the operator console (`sf ui`) and use "Try the sample eval", which copies the pipeline, eval and dataset into your project.
 
-Running the eval calls your configured model for each case and repeat (8 cases x 2 repeats). `max_cost_usd: 1` caps the spend.
+The sample stage has no `model:`, so set a default `model` in your project's `stageflow.yaml` first, or the pipeline does not load (`eval.target_unresolved`). Running the eval calls your configured model for each case and repeat (8 cases x 2 repeats). `max_cost_usd: 1` caps the spend.
 
 ## What to expect
 

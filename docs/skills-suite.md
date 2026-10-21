@@ -24,6 +24,10 @@ Jobs share one MCP-vs-CLI rule: [`skills/stageflow/references/control-surface.md
 
 This suite is for **operator harnesses** (Cursor, Claude Code, Codex, Pi CLI, OpenCode). It is a different channel from Pi stage `skill:` binding. `sf skills list` and `sf skills install` provision those bindings under `.pi/skills/` — see [YAML catalog — skill binding](yaml-catalog.md#skill-binding) and [`sf skills`](cli-reference.md#sf-skills).
 
+### Evals
+
+Evals are not a sixth job. The router and the author and run jobs point to one shared reference, [`skills/stageflow/references/evals.md`](../skills/stageflow/references/evals.md): when to use `sf eval validate` (free) and `sf eval run --json` (calls models, costs money, so the agent confirms first), how to read the `outcome`, and the limits to state. Writing eval and dataset files is `stageflow-author`; starting and reading an eval run is `stageflow-run`. See [Evals](evals.md).
+
 ### Native question UI (`stageflow-run`)
 
 The run job presents a waiting gate on the host picker when one is already in the tool list (`AskQuestion`, `AskUserQuestion`, `ask_user`). Representable gates go on the picker. Open-ended `free_text` and hosts without a picker stay in chat. A representable `multi_question` is one picker call, not sequential cards. Submit with MCP `answer_gate` when the host is up, or `sf runs answer --json` when it is down. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).

@@ -24,13 +24,14 @@ Stageflow is a runtime for **configurable multi-stage agent workflows**, with a 
 | `examples/` | Runnable walkthroughs with READMEs |
 | `docs/` | Public reference (YAML, CLI, CI, MCP, etc.) |
 | `skills/` | Harness Agent Skills suite — router, shared MCP-vs-CLI reference, job skills |
+| `examples/evals/` | Sample eval (pipeline, dataset, eval, task) installed by the console's "Try the sample eval" |
 
 ### `src/` map (high level)
 
 | Directory | Responsibility |
 |-----------|----------------|
-| `cli/` | `sf run`, `sf runs`, `sf validate`, `sf ui`, `sf providers` |
-| `config/` | YAML load/validate, pipeline DAG resolution |
+| `cli/` | `sf run`, `sf runs`, `sf validate`, `sf eval`, `sf ui`, `sf providers` |
+| `config/` | YAML load/validate, pipeline DAG resolution; eval and dataset loaders, write path and sample install |
 | `runtime/` | Pipeline runner, stage worker, HITL, scheduling |
 | `runstore/` | SQLite run state under `$STAGEFLOW_HOME` (default `~/.stageflow/`) |
 | `agent/` | Pi coding agent adapter |
@@ -38,6 +39,7 @@ Stageflow is a runtime for **configurable multi-stage agent workflows**, with a 
 | `server/` | HTTP routes for the operator console API |
 | `browser/` | Browser sessions: profile store, lock, host, login check, teardown (see `docs/browser.md`) |
 | `tools/` | Pi tools (`ask_operator`, `emit_stage_envelope`, …) |
+| `evals/` | Evals: stats, scoring, compare, plan and snapshot, run manager, graders, stage case runner, `EvalEngine` interface with `FakeEngine` and the promptfoo engine (`engine/promptfoo/`), read models for the API (see Evals below) |
 | `envelope/` | Envelope schema and validation |
 
 Entry point: `src/cli.ts`. Library exports: `src/index.ts`.
@@ -77,7 +79,7 @@ When changing pipeline/stage/task schema, validation, or doc examples:
 - Treat **`tests/fixtures/`** as canonical YAML; keep `examples/` in sync when behavior changes
 - Runnable walkthroughs: **[examples/README.md](examples/README.md)**
 
-Related docs: [envelopes.md](docs/envelopes.md), [hitl.md](docs/hitl.md), [cli-reference.md](docs/cli-reference.md), [ci.md](docs/ci.md), [mcp.md](docs/mcp.md).
+Related docs: [evals.md](docs/evals.md), [envelopes.md](docs/envelopes.md), [hitl.md](docs/hitl.md), [cli-reference.md](docs/cli-reference.md), [ci.md](docs/ci.md), [mcp.md](docs/mcp.md).
 
 ## Making changes
 
@@ -129,6 +131,27 @@ Rules every change must keep:
 - A provider is one file: its adapter, its `meta` (form fields, recipient shape, examples; the console renders from `GET /api/connections/meta`) and its tests. Every `ChannelErrorCode` is explained once in `src/channels/errorInfo.ts` (a `Record`, so a missing entry is a compile error). After changing either, run `npx tsx scripts/generate-channel-meta-fixture.ts` so the console fixture matches; `tests/channels.metaFixture.test.ts` fails if it does not.
 - Connection edits (create, replace key, enable, remove) go through `ConnectionEdits.apply`, which changes secrets and file together and undoes both on failure. Do not write the secret store or `connections.yaml` anywhere else.
 - Provider tests use the local HTTP fixture or a fake SDK importer, never the network. Real-account smoke tests are opt-in env-gated files.
+
+### Evals
+
+Evals check a stage over a dataset of cases, grade every output, repeat each case and compare runs. Code: `src/evals/`, loaders and write path in `src/config/` (`loadEval.ts`, `validateEval.ts`, `loadDataset.ts`, `writeEval.ts`, `writeDataset.ts`, `installEvalSample.ts`), `src/cli/evalCommand.ts`, `src/server/evalRoutes.ts`, `src/mcp/evalTools.ts`, console `ui/src/redesign/evals/`. User docs: **[docs/evals.md](docs/evals.md)** and [docs/console-evals.md](docs/console-evals.md). Read `docs/specs/evals.md` (the epic with every decision) and the `docs/specs/evals-*.md` contracts before changing evals; they may exist only in a maintainer's local checkout, so ask for them if they are missing. Where merged code differs from a spec, the code and the user docs win.
+
+Rules every change must keep:
+
+- **Numbers are computed in three files only:** `src/evals/stats.ts`, `scoring.ts` and `compare.ts`. The UI formats what the API returns and never computes a statistic. A change to a formula needs a hand-computed test.
+- **Nothing outside `src/evals/engine/promptfoo/` imports or names promptfoo types.** The engine sits behind the `EvalEngine` interface; `FakeEngine` is what tests use.
+- **The engine never touches the store.** It reports results through callbacks; `EvalRunManager` persists them, owns the cost limit, cancel and one-run-at-a-time.
+- **Graders read a normalized subject** (`src/evals/graders/subject.ts`), never the stage envelope directly, so agent targets can be added.
+- **The target is a tagged reference** (`kind`). Result tables are target-neutral: no stage-only columns; stage details live in JSON columns and the config snapshot.
+- **A config snapshot is written once and never edited.** The fingerprint covers what changes results and excludes the cost cap and concurrency.
+- **Bump `RUBRIC_PROMPT_VERSION`** (`src/evals/constants.ts`) whenever the judge prompt text changes; it is part of the snapshot and the fingerprint.
+- **The run token** that authorizes the engine's callback to the Host is never logged, put in an error, a config file or a response.
+- **No secret in generated engine config or results.** The judge key goes through the child process environment only. A grader error stores a code, never the provider's response body.
+- **Telemetry stays off.** The engine child gets the `PROMPTFOO_DISABLE_*` flags and the network guard; do not remove either.
+- **No test calls a real model or the network.** Tests use `FakeEngine`, fake runners and the local HTTP fixtures. The real-engine smoke test is opt-in (`STAGEFLOW_EVALS_SMOKE=1 npx vitest run tests/evals.promptfoo.smoke.test.ts`).
+- **All eval and dataset writes go through the write path** (`src/config/writeEval.ts`, `writeDataset.ts`, atomic with a base hash and `FILE_CHANGED`). Do not write those files anywhere else.
+- **Judge-capable providers** are the rows of `JUDGE_PROVIDERS` (`anthropic`, `openai`, `openrouter`). Add one only after verifying its mapping against the engine.
+- **Finding codes are public.** Keep `docs/yaml-catalog.md` (eval and dataset tables) in sync when you add or rename one. Update `docs/evals.md` when behavior changes, and keep `examples/evals/` and `tests/fixtures/evals/` in sync.
 
 ## Documentation
 

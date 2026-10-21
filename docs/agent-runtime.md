@@ -59,6 +59,8 @@ An agent can be given Stageflow's own tools (the ones in [MCP tools](mcp.md#tool
 | `agents.manage` | `create_agent`, `save_agent`, `enable_agent`, `disable_agent`, `restore_agent_revision` | Write. |
 | `agents.cleanup` | `archive_agent` | Destructive. |
 | `agents.converse` | `agent_chat` (external), `stop_agent_session` (write) | |
+| `evals.read` | `list_evals`, `get_eval`, `validate_eval`, `get_eval_run`, `list_eval_runs`, `get_eval_results`, `get_eval_result`, `compare_eval_runs` | Read, free. See [Evals](evals.md). |
+| `evals.run` | `run_eval` (external), `cancel_eval_run` (write) | `run_eval` calls models and costs money, bounded by the eval's cost limit. |
 | `pipelines.author` | `read_pipeline` (read), `create_pipeline`, `edit_pipeline`, `create_stage`, `edit_stage`, `create_task`, `edit_task` (write) | |
 
 Rules:

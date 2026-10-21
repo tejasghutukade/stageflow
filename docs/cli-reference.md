@@ -790,6 +790,99 @@ Example:
 sf validate --strict --json
 ```
 
+## `sf eval` {#sf-eval}
+
+Validate, run and inspect [evals](evals.md). Like `sf run` and `sf runs`, `sf eval` is an HTTP client of the shared global Stageflow service (auto-started if nothing is listening), except `validate` and `engine`, which run locally.
+
+```bash
+sf eval list [--json]
+sf eval show <id|path> [--json]
+sf eval validate [<id|path>] [--json] [--strict]
+sf eval run <id|path> [--repeats <n>] [--judge <model>] [--model <id>] [--max-cost <usd>] [--case <id> ...] [--tag <tag> ...] [--label <text>] [--no-wait] [--json]
+sf eval runs [<evalId>] [--json]
+sf eval runs show <evalRunId> [--json]
+sf eval runs cancel <evalRunId>
+sf eval runs delete <evalRunId>
+sf eval compare <evalRunIdA> <evalRunIdB> [--json]
+sf eval datasets [--json]
+sf eval engine status [--json]
+sf eval engine install
+```
+
+`<id|path>` is an eval id (the filename stem of `*.eval.yaml`) or a path to the file (anything containing `/` or `\` or ending in `.yaml`). Every subcommand also accepts `--project-root <id-or-path>` to pick the catalog project (default: the current directory). `--help` prints the usage and exits `0`; a usage error prints it and exits `1`.
+
+| Subcommand | Role |
+|------------|------|
+| `list` | One line per eval: `id`, status, valid or invalid, last pass rate, target |
+| `show` | The eval's YAML (`--json`: the full eval detail with findings) |
+| `validate` | Runs the eval and dataset checks locally. No Host, no model calls, free. See [YAML catalog: Evals](yaml-catalog.md#eval-validation-findings) |
+| `run` | Starts an eval run and, unless `--no-wait`, waits for it and prints the outcome |
+| `runs` | Lists eval runs (newest first), shows one, cancels one or deletes one |
+| `compare` | Compares two runs of the same eval; `a` is the baseline, `b` the candidate |
+| `datasets` | One line per dataset: `id`, format, cases, path |
+| `engine status` | Whether the eval engine is installed, its version, the pinned version and the Node check |
+| `engine install` | Installs the pinned engine (needs Node 22.22.0 or newer and network). Not available with `--json` |
+
+### `sf eval validate`
+
+With no argument, validates every eval in the catalog (`catalog.evals`, default `evals/`), including its dataset and target. With one argument, validates that eval. It uses the same output as `sf validate`: findings with `severity`, `code`, `file`, `message` and `category`, or `--json` for the machine-readable result.
+
+**Exit codes:** `0` no errors, `1` errors (or, with `--strict`, warnings that `--strict` promotes) or an eval that cannot be found.
+
+### `sf eval run`
+
+| Flag | Description |
+|------|-------------|
+| `--repeats <n>` | Executions per case (a positive integer; the allowed range is 1 to 10) |
+| `--judge <model>` | Judge model for rubric graders |
+| `--model <id>` | Replace the stage's model for this run |
+| `--max-cost <usd>` | Cost limit in USD (a positive number) |
+| `--case <id>` | Run only this case. Repeat the flag for several |
+| `--tag <tag>` | Run only cases with this tag. Repeat the flag for several. Cannot be combined with `--case` |
+| `--label <text>` | Free-text label (up to 80 characters) |
+| `--no-wait` | Print the run id and return at once. The run continues on the Host |
+| `--json` | Machine-readable output |
+
+Overrides are recorded in the run's config snapshot. A run costs real money (stage calls plus judge calls), bounded by the cost limit. Only one eval run is active per Host.
+
+While waiting, a terminal prints progress (`n/N results, $cost`) to stderr. **Ctrl+C cancels the run** on the Host (completed results are kept) and prints the final outcome.
+
+The outcome is one of `passed`, `below_threshold`, `failed`, `cancelled` or `budget_stopped`. With `--json` the document is:
+
+```json
+{
+  "outcome": "below_threshold",
+  "eval_run_id": "er_4f1c9a02b7d3",
+  "eval_id": "critique-sample",
+  "pass_rate": 0.75,
+  "pass_rate_ci": { "low": 0.52, "high": 0.98 },
+  "threshold": 0.8,
+  "results": { "executed": 16, "passed": 12, "errored": 0 },
+  "reliability": 0.625,
+  "cost_total": 0.2312,
+  "fingerprint": "9b41c0aa",
+  "url": "http://127.0.0.1:3847/#/evals/critique-sample/runs/3"
+}
+```
+
+`pass_rate`, `pass_rate_ci`, `threshold` and `reliability` are `null` when not available (for example no executed results, fewer than two cases, or one repeat). With `--no-wait --json` the document is `{ "eval_run_id", "status" }`. An invalid eval prints the same findings as `sf eval validate` (human or `--json`) and exits `1`.
+
+**Exit codes:** `0` the run completed and passed (pass rate at or above the threshold); `1` anything else: below threshold, failed, cancelled, stopped by the cost limit, an invalid eval, a missing engine or a Host error. `sf eval run` never exits `2`.
+
+Errors with `--json` are `{ "error", "code"?, "status"? }` on stdout, with exit `1`. Without `--json`, errors go to stderr as `CODE: message`. See [Evals: Troubleshooting](evals.md#troubleshooting) and [CI: evals](ci.md#evals-in-ci).
+
+### `sf eval runs`, `compare`, `datasets`
+
+`sf eval runs` prints one tab-separated line per run: eval id, `#run_number`, status, pass rate, cost, `eval_run_id`. Filter by eval id. `sf eval runs show` prints the run's id and status, the reason when it stopped early, pass rate, progress, cost and fingerprint; with `--json` it is the full run detail (status, progress, stats, config snapshot, per-grader summary). `cancel` and `delete` print one line and have no `--json`. `sf eval compare --json` and the default output are the comparison document (verdict, per-grader and per-case changes, stage diff, warnings). `sf eval datasets` lists dataset files with their case counts.
+
+### `sf eval engine status`
+
+```json
+{ "installed": true, "version": "0.124.0", "pinned": "0.124.0", "node": "22.22.0", "node_ok": true, "install_command": "sf eval engine install" }
+```
+
+Exit `0` whether or not the engine is installed. `sf eval engine install` exits `0` on success (`Installed promptfoo 0.124.0`, or "already installed") and `1` with `EVAL_NODE_TOO_OLD` or an install error.
+
 ## `sf doctor`
 
 ```bash
