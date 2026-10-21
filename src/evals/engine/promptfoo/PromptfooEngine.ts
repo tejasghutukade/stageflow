@@ -171,6 +171,10 @@ export class PromptfooEngine implements EvalEngine {
     return PINNED_PROMPTFOO_VERSION;
   }
 
+  validatePlan(plan: EvalPlan): void {
+    assertJudgesSupported(plan.graders);
+  }
+
   async run(plan: EvalPlan, io: EngineIo, signal: AbortSignal): Promise<void> {
     const opts = this.options;
     assertNode(opts.nodeVersion);

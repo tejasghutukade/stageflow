@@ -217,5 +217,7 @@ export interface EngineIo {
 export interface EvalEngine {
   readonly name: string;
   version(): Promise<string>;
+  /** Throws an Error with a `code` when the plan can never run on this engine (checked before a run row exists). */
+  validatePlan?(plan: EvalPlan): void;
   run(plan: EvalPlan, io: EngineIo, signal: AbortSignal): Promise<void>;
 }

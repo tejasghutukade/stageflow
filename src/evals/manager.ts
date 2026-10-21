@@ -293,6 +293,11 @@ export class EvalRunManager {
       const built = await buildEvalPlan({ ...base, graderOrdinals: ordinals });
       if (!built.ok) throw new EvalRunError("EVAL_INVALID", "Eval is invalid", built.findings);
       const { plan: draft, snapshot, fingerprint, components } = built;
+      try {
+        engine.validatePlan?.(draft);
+      } catch (err) {
+        throw new EvalRunError("EVAL_INVALID", err instanceof Error ? err.message : String(err));
+      }
 
       const row = await this.store.createEvalRun({
         projectRoot: input.projectRoot,
