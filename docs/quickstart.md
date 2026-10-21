@@ -5,9 +5,43 @@ title: Quickstart
 
 # Quick start
 
-This guide walks through a minimal Stageflow project: one pipeline, one stage, one task. The example is **domain-neutral** — you define what each stage does via `system_prompt` and YAML; Stageflow does not ship built-in stage types.
+Docker is the recommended way to run Stageflow: pull the published image and open the console. Install Node when you want the `sf` command on the machine. Either way you author the stages yourself: Stageflow does not ship built-in stage types.
 
-## Prerequisites
+## Docker (recommended)
+
+The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.39` is the current minor tag (`0.39.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
+
+```bash
+docker run --rm --name stageflow \
+  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
+  -p 127.0.0.1:3847:3847 \
+  -v stageflow-data:/data \
+  ghcr.io/tejasghutukade/stageflow:0.39 \
+  sf ui
+```
+
+Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Go to **Settings → Providers** and connect a model, then **New pipeline** on the Pipelines page. Pipelines you save in the console live on the `stageflow-data` volume, under `/data`.
+
+The process inside the container binds `0.0.0.0`, which is what Docker port publish needs. The `-p` address keeps the port on this machine, and `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` lets it start without a bearer. Do not publish the port on `0.0.0.0` with that flag set. Pass `sf ui` because the image command is `sf mcp`.
+
+To browse a project that is already on the machine, mount it and register that path:
+
+```bash
+docker run --rm --name stageflow \
+  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
+  -e STAGEFLOW_ENSURE_PROJECT_ROOTS=/project \
+  -p 127.0.0.1:3847:3847 \
+  -v stageflow-data:/data \
+  -v "$PWD":/project \
+  ghcr.io/tejasghutukade/stageflow:0.39 \
+  sf ui
+```
+
+That project needs the same files as the Node scaffold below (`stageflow.yaml`, a pipeline, a task), or you create them from the console. Building the image from a git checkout, instead of pulling it, is [Docker — Local try](docker.md#local-try-compose).
+
+## Node
+
+Use this when you want `sf` in the shell on the machine.
 
 - **Node.js ≥ 20**
 - A Pi-compatible model provider (connect after install)
@@ -180,7 +214,7 @@ Exit codes: `0` success, `1` failure, `2` waiting on HITL. Details in [CI / head
 - [CLI reference](cli-reference.md) — all `sf` commands and selected env vars
 - [Operator console](operator-console.md) — console navigation and settings
 - [MCP](mcp.md) — Streamable HTTP tools (`sf ui` or `sf mcp`)
-- [Docker and self-hosting](docker.md#local-try-compose) — Compose first-run (`.env.example`, control token, `STAGEFLOW_PROVIDER_*`); stage sandbox on by default in Compose
+- [Docker and self-hosting](docker.md#pull-and-run-ghcr) — published image, Compose from a checkout, stage sandbox in Compose
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — attach project `.mcp.json` servers to a stage
 - [Envelopes](envelopes.md) — what stages must emit to advance
 

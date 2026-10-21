@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-10-21
+
 ### Added
 
-- **Compose runs stage file tools in a sandbox.** `docker-compose.yml` sets `STAGEFLOW_STAGE_CONTAINER_IMAGE` and mounts the Docker socket, so `read`, `write`, `edit`, and `bash` run in `stageflow-bash`. A plain `docker run` leaves the variable unset. Delete the variable and the socket mount to keep those tools in the Stageflow container.
+- **Stage file tools can run in a sandbox container.** Set `STAGEFLOW_STAGE_CONTAINER_IMAGE` and `read`, `write`, `edit`, and `bash` run in a per-attempt container at `/workspace`. The stage process, memory tools, and credentials stay on the host. A stage can use the memories it was granted and cannot list the rest of `$STAGEFLOW_HOME` from bash. Leave the variable unset and those tools stay on the host.
+- **Compose turns that sandbox on.** `docker-compose.yml` builds `stageflow-bash`, sets the image variable, and mounts the Docker socket. The entrypoint joins the socket's group, then drops to the `stageflow` user. Delete the variable and the socket mount to keep the tools in the Stageflow container.
+- **A checkout object creates the worktree.** `checkout: { branch?, base? }` creates or reuses a git worktree. A string path still selects a checkout you already have.
+- **Getting started recommends the published image.** `docker run` of `ghcr.io/tejasghutukade/stageflow:0.39` opens the console. The Node install remains available when you want `sf` on the machine.
 
 ## [0.39.0] - 2026-10-21
 

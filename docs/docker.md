@@ -5,7 +5,7 @@ title: Docker and self-hosting
 
 # Docker and self-hosting
 
-This page describes Stageflow’s data-safety and ops contracts for self-hosted Hosts (including containers). A multi-stage `Dockerfile` at the repo root builds the image. On each unpublished `package.json` version published from `main`, `.github/workflows/publish.yml` pushes a multi-arch image to **`ghcr.io/tejasghutukade/stageflow`** (amd64 + arm64), then cosign-signs the digest keylessly. Local try still works with Compose or `docker build`.
+Docker is the recommended way to run Stageflow. Pull **`ghcr.io/tejasghutukade/stageflow`** and start the console with the command in [Pull and run](#pull-and-run-ghcr). The same page covers data-safety and ops for a self-hosted Host. A multi-stage `Dockerfile` at the repo root builds the image. On each unpublished `package.json` version published from `main`, `.github/workflows/publish.yml` pushes a multi-arch image to that registry (amd64 + arm64), then cosign-signs the digest keylessly. Building from a checkout still works with Compose or `docker build`.
 
 See also [Data directory](data-directory.md), [CLI reference](cli-reference.md), and [MCP](mcp.md) (including [CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [docker exec commands](#cli-via-docker-exec) below).
 
@@ -111,9 +111,24 @@ Automated gate that the image boots and becomes live — **not** `sf doctor`. Fr
 
 Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--check-build-sha` (asserts `/api/health` `build_sha` matches the baked SHA when the control token is sent). CI runs the same script from the `docker-smoke` job in `.github/workflows/ci.yml` when packaging-related paths change on a PR (always on `main`).
 
-## Pull and run (GHCR)
+## Pull and run (GHCR) {#pull-and-run-ghcr}
 
-Published image: **`ghcr.io/tejasghutukade/stageflow`**. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). Prefer a digest pin for production:
+Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.39`.
+
+This starts the console on this machine. The `stageflow-data` volume keeps providers and pipelines you save in the console. Pass `sf ui` because the image command is `sf mcp`. This command does not mount the Docker socket, so stage file tools run in the Stageflow container. [Compose from a checkout](#local-try-compose) is what turns the stage sandbox on.
+
+```bash
+docker run --rm --name stageflow \
+  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
+  -p 127.0.0.1:3847:3847 \
+  -v stageflow-data:/data \
+  ghcr.io/tejasghutukade/stageflow:0.39 \
+  sf ui
+```
+
+Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Keep the published port on `127.0.0.1`. The allow flag is only for that localhost publish: the process inside the container binds `0.0.0.0`.
+
+Prefer a digest pin and a control token when the port is not limited to this machine:
 
 ```bash
 export STAGEFLOW_CONTROL_TOKEN="$(openssl rand -hex 32)"
