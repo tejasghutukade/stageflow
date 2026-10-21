@@ -96,4 +96,6 @@ After `desk-revisit-outage`, the release card should be the rollback-finished no
 
 The operator, in **Memories**, can list keys, open the `TICKET-1842` card, correct it, and delete it. Delete removes the current card and the previous copy and cannot be undone. The page shows the previous card copy and the previous cover text when they exist. The operator can edit the cover. The operator does not create cards; a session adds them. There is one previous copy, not a full history, and no restore action.
 
+`sandbox-memory-bash` is the sandbox probe. It attaches `shared-notes` and its `probe` stage runs one bash command, then reports whether that command printed a `body.md` path. The task is `probe-bash`. Create `shared-notes` before running it. Edit the `probe` stage prompt in the pipeline file.
+
 This directory is excluded from the repo-root catalog scan, because those commands fail until `notebook` exists.

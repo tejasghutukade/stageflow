@@ -9,11 +9,13 @@ This page describes Stageflow’s data-safety and ops contracts for self-hosted 
 
 See also [Data directory](data-directory.md), [CLI reference](cli-reference.md), and [MCP](mcp.md) (including [CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [docker exec commands](#cli-via-docker-exec) below).
 
-## Never mount the Docker socket
+## Stage sandbox in Compose
 
-**Never mount `/var/run/docker.sock` (or any Docker API socket) into a Stageflow container.** Mounting the socket is a host-root escape: the process inside the container can control the Docker daemon as root on the host. Stageflow does not need Docker-in-Docker; do not use `--privileged` or grant extra capabilities for that purpose either.
+The shipped [`docker-compose.yml`](../docker-compose.yml) sets `STAGEFLOW_STAGE_CONTAINER_IMAGE=stageflow-bash:local` and mounts `/var/run/docker.sock`. `read`, `write`, `edit`, and `bash` then run in a sibling container built from [`docker/Dockerfile.bash-sandbox`](../docker/Dockerfile.bash-sandbox). The Stageflow process still runs as the `stageflow` user. Compose starts that service as root only so [`docker/stageflow-entry.sh`](../docker/stageflow-entry.sh) can join the socket's group, then drops to `stageflow`. There is no `privileged` and no extra capabilities.
 
-The shipped root [`docker-compose.yml`](../docker-compose.yml) has no socket mount, no `privileged`, and no extra caps. The [hardened egress reference](#hardened-egress-reference-compose) below is documentation only — it is not a second product compose file.
+That mount lets this container create and remove those sandbox containers on the host daemon. A plain `docker run` of the published image does not set the variable and does not mount the socket, so sandboxing stays off. To run Compose the same way, delete `STAGEFLOW_STAGE_CONTAINER_IMAGE` and the socket mount.
+
+The [hardened egress reference](#hardened-egress-reference-compose) below is documentation only. It does not mount the socket.
 
 ## Local try (Compose)
 
@@ -190,7 +192,7 @@ Notes:
 - **Permission prompts.** The Host also adds `--deny-permission-prompts` ahead of `launch_args` (see [browser.md](browser.md#permission-requests-are-denied-by-default)); do not list it yourself. A headed browser with no screen would otherwise leave location or notification requests pending.
 - **`--no-sandbox`.** Chromium's own sandbox needs privileges a default non-root container lacks. The container is the sandbox: do not add `--privileged` or capabilities to get Chromium's sandbox back. Keep `--no-sandbox` out of Hosts that run outside a container.
 - **No screen needed.** With Xvfb on `PATH` and no `DISPLAY`, agent-browser starts its own virtual display and runs the browser headed, so a human login stage opens its page and shows it to the operator through the [live view](browser.md#live-view) in the console. Run `sf ui` (or `sf mcp`) so the Host serves the live view; a CLI-only run still fails with the no-screen error.
-- **Never mount a container runtime socket.** The rule [above](#never-mount-the-docker-socket) applies unchanged. The browser runs inside the Stageflow container; nothing needs the daemon.
+- **The browser does not need its own socket.** It runs inside the Stageflow container. The Compose socket mount is only for the [stage sandbox](#stage-sandbox-in-compose).
 - **Resources.** Spikes measured about 230 to 420 MB of memory for an idle browser, more on heavy pages. Budget at least 1 GB per concurrent browser run and set a container memory limit. Chromium also needs shared memory: add `--shm-size=1g` to `docker run` (or `shm_size` in Compose) if pages crash.
 - **Limits.** Passkeys, hardware keys and native OS prompts cannot be driven through the live view. See [Browser sessions](browser.md).
 
@@ -238,7 +240,7 @@ browser:
 
 Constraints:
 
-- **Never mount the Docker socket into a Stageflow container.** The development orchestrator shells out to the local `docker` CLI, so the Host must run directly on a machine with a Docker daemon, not inside a Stageflow container. A production deployment uses a different orchestrator behind the same port (not built; see below).
+- **Container browser host uses the Docker CLI.** On a machine, that is the local daemon. In Compose, that is the socket mounted for the [stage sandbox](#stage-sandbox-in-compose). A production deployment uses a different orchestrator behind the same port (not built; see below).
 - The orchestrator starts each container read-only with a tmpfs `/tmp`, `--cap-drop ALL`, `no-new-privileges`, process and memory limits, and publishes the debugging port on `127.0.0.1` only. Users never reach that port.
 - The profile is a named Docker volume (`sf-profile-<scope>-<profile>`), mounted at `/profile`. The Host closes the browser over the debugging protocol before removing the container so the newest cookies are flushed.
 - Containers carry labels for scope, run, stage and profile. At Host start, containers of runs that are gone are removed. The sweep is per Docker daemon: run one Host per daemon.

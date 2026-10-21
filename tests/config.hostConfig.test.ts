@@ -111,6 +111,7 @@ describe("loadHostConfig", () => {
           STAGEFLOW_NO_AUTOSTART: "1",
           STAGEFLOW_NO_OPEN: "1",
           STAGEFLOW_BUILD_SHA: "abc123def456",
+          STAGEFLOW_STAGE_CONTAINER_IMAGE: "stageflow-bash:v1",
         },
       }),
     ).not.toThrow();

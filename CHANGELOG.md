@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Compose runs stage file tools in a sandbox.** `docker-compose.yml` sets `STAGEFLOW_STAGE_CONTAINER_IMAGE` and mounts the Docker socket, so `read`, `write`, `edit`, and `bash` run in `stageflow-bash`. A plain `docker run` leaves the variable unset. Delete the variable and the socket mount to keep those tools in the Stageflow container.
+
 ## [0.39.0] - 2026-10-21
 
 ### Added

@@ -15,6 +15,12 @@
 #
 # command is `sf ui` intentionally (console + MCP on the same Host).
 # Image CMD remains `sf mcp`; override only for a UI-less Host.
+#
+# Stage file tools (read, write, edit, bash) run in stageflow-bash by default.
+# The socket mount is what lets this container start those sandbox containers.
+# The service user is root only so the entrypoint can join the socket's group;
+# it then drops to the stageflow user. Remove STAGEFLOW_STAGE_CONTAINER_IMAGE
+# and the socket mount to keep those tools in this container.
 
 # Optional browser stages: build the recipe in docker/Dockerfile.browser on top
 # of this image and bind-mount docker/browser.config.example.yaml at
@@ -26,7 +32,11 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ghcr.io/tejasghutukade/stageflow:local
+    user: "0:0"
     command: ["sf", "ui"]
+    depends_on:
+      stageflow-bash:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:3847:3847"
     environment:
@@ -43,6 +53,7 @@ services:
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
       EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
       STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness,/catalog/memory
+      STAGEFLOW_STAGE_CONTAINER_IMAGE: stageflow-bash:local
       # Agents (all safe when empty). Not passed on purpose: STAGEFLOW_AGENT_SESSION_IDLE_MINUTES and
       # STAGEFLOW_AGENT_STALL_SECONDS, because an empty value parses as 0 and turns them off.
       STAGEFLOW_MCP_ENV_ALLOW: ${STAGEFLOW_MCP_ENV_ALLOW:-}
@@ -53,7 +64,16 @@ services:
     volumes:
       - stageflow-data:/data
       - ./examples/memory:/catalog/memory:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
+
+  stageflow-bash:
+    image: stageflow-bash:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.bash-sandbox
+    command: ["true"]
+    restart: "no"
 
 volumes:
   stageflow-data:
