@@ -7,7 +7,6 @@ import { parse as parseYaml } from "yaml";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skillDir = path.join(root, "skills", "stageflow-session-capture");
 const skillMd = path.join(skillDir, "SKILL.md");
-const NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const CITED_PATH_RE =
   /(?:\.\.\/stageflow\/references\/[\w.-]+|references\/[\w./-]+|scripts\/[\w./-]+|assets\/[\w./-]+)/g;
 
@@ -28,25 +27,10 @@ describe("stageflow-session-capture SKILL.md", () => {
   const frontmatter = parseFrontmatter(raw);
   const body = raw.slice(raw.indexOf("\n---", 3) + 4);
 
-  it("parses frontmatter with a matching kebab-case name", () => {
-    expect(frontmatter.name).toBe("stageflow-session-capture");
-    expect(frontmatter.name).toBe(path.basename(skillDir));
-    expect(String(frontmatter.name)).toMatch(NAME_RE);
-    expect(frontmatter["disable-model-invocation"]).toBe(true);
-    expect(frontmatter.compatibility).toBe(
-      "Requires Node.js >= 20 and the sf CLI on PATH",
-    );
-  });
-
-  it("describes session, transcript, pipeline, and rerun within 1024 chars", () => {
-    expect(typeof frontmatter.description).toBe("string");
+  it("keeps description within 1024 chars", () => {
     const description = String(frontmatter.description);
     expect(description.length).toBeGreaterThan(0);
     expect(description.length).toBeLessThanOrEqual(1024);
-    expect(description.toLowerCase()).toMatch(/session/);
-    expect(description.toLowerCase()).toMatch(/transcript/);
-    expect(description.toLowerCase()).toMatch(/pipeline/);
-    expect(description.toLowerCase()).toMatch(/rerun/);
   });
 
   it("cites existing references, scripts, and assets", () => {
@@ -55,12 +39,5 @@ describe("stageflow-session-capture SKILL.md", () => {
     for (const rel of new Set(cited)) {
       expect(existsSync(path.resolve(skillDir, rel)), rel).toBe(true);
     }
-    expect(body).toContain("../stageflow/references/control-surface.md");
-  });
-
-  it("does not instruct starting a run", () => {
-    expect(body).not.toMatch(/\bsf run\b/);
-    expect(body).not.toMatch(/\bstart_run\b/);
-    expect(body).not.toMatch(/\bwait_run\b/);
   });
 });

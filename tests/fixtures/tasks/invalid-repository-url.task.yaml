@@ -1,0 +1,4 @@
+id: invalid-repository-url
+goal: Full git URLs must fail
+repository: https://github.com/acme/api
+ref: main

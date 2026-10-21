@@ -1,0 +1,6 @@
+id: hello-email-reply
+stages:
+  - id: reply-hello-email
+    entry: true
+    uses: ./reply-hello-email.yaml
+    replay_safe: false

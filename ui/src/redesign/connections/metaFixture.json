@@ -1,0 +1,306 @@
+{
+  "providers": [
+    {
+      "id": "agentmail",
+      "label": "AgentMail",
+      "blurb": "Not connected · send email from an inbox",
+      "icon": "mail",
+      "fields": [
+        {
+          "key": "inbox",
+          "label": "Inbox address",
+          "hint": "An existing AgentMail inbox. Stageflow does not create one.",
+          "target": "config",
+          "input": "text",
+          "required": true,
+          "placeholder": "research@agentmail.to"
+        },
+        {
+          "key": "region",
+          "label": "Region",
+          "target": "config",
+          "input": "select",
+          "required": false,
+          "defaultValue": "us",
+          "options": [
+            {
+              "value": "us",
+              "label": "United States"
+            },
+            {
+              "value": "eu",
+              "label": "Europe"
+            }
+          ]
+        },
+        {
+          "key": "apiKey",
+          "label": "API key",
+          "hint": "Needs to read the inbox and send messages.",
+          "target": "secret",
+          "input": "password",
+          "required": true,
+          "placeholder": "am_..."
+        },
+        {
+          "key": "inboundSecret",
+          "label": "Webhook secret (optional)",
+          "hint": "Lets agents receive mail for this inbox. Sign webhooks to /api/agent-inbound/<connection id> with this secret (HMAC-SHA256 of the body in the x-agentmail-signature header).",
+          "target": "secret",
+          "input": "password",
+          "required": false
+        }
+      ],
+      "recipient": {
+        "label": "To",
+        "placeholder": "oncall@acme.com, lead@acme.com",
+        "multiple": true,
+        "cc": true,
+        "template": false
+      },
+      "envNames": [
+        "AGENTMAIL_API_KEY"
+      ],
+      "yamlExample": "connections:\n  - id: support-inbox\n    provider: agentmail\n    config:\n      inbox: support@agentmail.to\n    secrets:\n      apiKey: env:AGENTMAIL_API_KEY\n",
+      "stageExample": "    to: [oncall@acme.com]"
+    },
+    {
+      "id": "slack",
+      "label": "Slack",
+      "blurb": "Not connected · post as a bot",
+      "icon": "hash",
+      "fields": [
+        {
+          "key": "botToken",
+          "label": "Bot token",
+          "hint": "xoxb-… from your Slack app (OAuth & Permissions). Needs chat:write.",
+          "target": "secret",
+          "input": "password",
+          "required": true,
+          "placeholder": "xoxb-..."
+        },
+        {
+          "key": "teamId",
+          "label": "Workspace ID (optional)",
+          "hint": "Pins the connection to one workspace, such as T0123ABCD.",
+          "target": "config",
+          "input": "text",
+          "required": false,
+          "placeholder": "T0123ABCD"
+        },
+        {
+          "key": "inboundSecret",
+          "label": "Signing secret (optional)",
+          "hint": "Lets agents receive messages from this workspace. From your Slack app (Basic Information). Point Event Subscriptions at /api/agent-inbound/<connection id>.",
+          "target": "secret",
+          "input": "password",
+          "required": false
+        }
+      ],
+      "recipient": {
+        "label": "Channel id",
+        "placeholder": "C0123ABCD (channel, group, DM or user id)",
+        "multiple": false,
+        "cc": false,
+        "template": false
+      },
+      "envNames": [
+        "SLACK_BOT_TOKEN"
+      ],
+      "yamlExample": "connections:\n  - id: ops-slack\n    provider: slack\n    secrets:\n      botToken: env:SLACK_BOT_TOKEN\n",
+      "stageExample": "    to: C0123ABCD"
+    },
+    {
+      "id": "telegram",
+      "label": "Telegram",
+      "blurb": "Not connected · bot token",
+      "icon": "send",
+      "fields": [
+        {
+          "key": "botToken",
+          "label": "Bot token",
+          "hint": "From @BotFather. People must start the bot before it can message them.",
+          "target": "secret",
+          "input": "password",
+          "required": true,
+          "placeholder": "123456:ABC..."
+        },
+        {
+          "key": "botUsername",
+          "label": "Bot username (optional)",
+          "hint": "Fails the check if the token belongs to another bot.",
+          "target": "config",
+          "input": "text",
+          "required": false,
+          "placeholder": "acme_alerts_bot"
+        },
+        {
+          "key": "inboundSecret",
+          "label": "Webhook secret (optional)",
+          "hint": "Lets agents receive messages from this bot. Use it as secret_token in setWebhook with the URL /api/agent-inbound/<connection id>.",
+          "target": "secret",
+          "input": "password",
+          "required": false
+        }
+      ],
+      "recipient": {
+        "label": "Chat id",
+        "placeholder": "123456789 or @channelname",
+        "multiple": false,
+        "cc": false,
+        "template": false
+      },
+      "envNames": [
+        "TELEGRAM_BOT_TOKEN"
+      ],
+      "yamlExample": "connections:\n  - id: alerts-telegram\n    provider: telegram\n    secrets:\n      botToken: env:TELEGRAM_BOT_TOKEN\n",
+      "stageExample": "    to: \"123456789\""
+    },
+    {
+      "id": "imessage",
+      "label": "iMessage",
+      "blurb": "Not connected · via Photon",
+      "icon": "message-circle",
+      "via": "Photon",
+      "note": "Sending iMessage uses the Spectrum SDK packages (optional dependencies). On a Free or Pro Photon project, each recipient must be a project user and must text their assigned line once before Stageflow can message them.",
+      "fields": [
+        {
+          "key": "projectId",
+          "label": "Photon project ID",
+          "hint": "Project settings in app.photon.codes",
+          "target": "credential",
+          "input": "password",
+          "required": true,
+          "placeholder": "3f9c21aa-..."
+        },
+        {
+          "key": "projectSecret",
+          "label": "Photon project secret",
+          "hint": "Stored on this host. Never written to connections.yaml.",
+          "target": "credential",
+          "input": "password",
+          "required": true
+        }
+      ],
+      "recipient": {
+        "label": "Recipient",
+        "placeholder": "+14155550123 or an Apple ID email",
+        "multiple": false,
+        "cc": false,
+        "template": false
+      },
+      "envNames": [
+        "PHOTON_PROJECT_ID",
+        "PHOTON_PROJECT_SECRET"
+      ],
+      "yamlExample": "credentials:\n  - id: photon-main\n    provider: photon\n    secrets:\n      projectId: env:PHOTON_PROJECT_ID\n      projectSecret: env:PHOTON_PROJECT_SECRET\nconnections:\n  - id: alerts-imessage\n    provider: imessage\n    credential: photon-main\n",
+      "stageExample": "    to: \"+14155550123\""
+    },
+    {
+      "id": "whatsapp",
+      "label": "WhatsApp Business",
+      "blurb": "Not connected · via Photon",
+      "icon": "phone",
+      "via": "Photon",
+      "note": "Enable WhatsApp for the project in the Photon dashboard first. Uses the Spectrum SDK packages (optional dependencies). Stages pin an approved template per recipient.",
+      "fields": [
+        {
+          "key": "projectId",
+          "label": "Photon project ID",
+          "hint": "Project settings in app.photon.codes",
+          "target": "credential",
+          "input": "password",
+          "required": true,
+          "placeholder": "3f9c21aa-..."
+        },
+        {
+          "key": "projectSecret",
+          "label": "Photon project secret",
+          "hint": "Stored on this host. Never written to connections.yaml.",
+          "target": "credential",
+          "input": "password",
+          "required": true
+        }
+      ],
+      "recipient": {
+        "label": "Recipient",
+        "placeholder": "+14155550123",
+        "multiple": false,
+        "cc": false,
+        "template": true
+      },
+      "envNames": [
+        "PHOTON_PROJECT_ID",
+        "PHOTON_PROJECT_SECRET"
+      ],
+      "yamlExample": "credentials:\n  - id: photon-main\n    provider: photon\n    secrets:\n      projectId: env:PHOTON_PROJECT_ID\n      projectSecret: env:PHOTON_PROJECT_SECRET\nconnections:\n  - id: orders-whatsapp\n    provider: whatsapp\n    credential: photon-main\n",
+      "stageExample": "    to: \"+14155550123\"\n    template:\n      name: order_update\n      languageCode: en_US\n      bodyParams: [\"{{message}}\"]"
+    }
+  ],
+  "errors": {
+    "CHANNEL_INVALID_INPUT": {
+      "reason": "The settings are not valid for this provider account",
+      "hint": "Check the values (for example an unknown inbox or a different workspace) and try again. If the file is hand-edited, fix the entry and restart."
+    },
+    "CHANNEL_NOT_FOUND": {
+      "reason": "The connection is not defined"
+    },
+    "CHANNEL_DISABLED": {
+      "reason": "The connection is disabled",
+      "hint": "Enable it, or remove it from the stage."
+    },
+    "CHANNEL_PROVIDER_UNSUPPORTED": {
+      "reason": "This provider is not supported here, or its SDK is not installed",
+      "hint": "iMessage and WhatsApp need the Spectrum SDK packages, which are optional dependencies."
+    },
+    "CHANNEL_SECRET_UNAVAILABLE": {
+      "reason": "A secret for this connection is not set on the host",
+      "hint": "Set the environment variable each secret names (or its _FILE form) on the host, or use Replace to store one, then check again."
+    },
+    "CHANNEL_RESOURCE_LIMIT": {
+      "reason": "The request or connections.yaml is too large"
+    },
+    "CHANNEL_STORAGE_FAILED": {
+      "reason": "Stageflow could not read or write connections.yaml or the secret store on this host",
+      "hint": "Check that the data directory is writable."
+    },
+    "CHANNEL_UNAUTHORIZED": {
+      "reason": "Credentials were rejected or lack a required permission",
+      "hint": "The provider refused the credential: it is invalid, or it lacks a permission this provider needs (for AgentMail, reading the inbox and sending). Check the key and its permissions, then try again."
+    },
+    "CHANNEL_AUTH_FAILED": {
+      "reason": "Credentials were rejected",
+      "hint": "Replace the secret with a valid one, then check again."
+    },
+    "CHANNEL_CONNECTION_FAILED": {
+      "reason": "Could not reach the provider",
+      "hint": "This is usually temporary. Check the network and try again."
+    },
+    "CHANNEL_TIMEOUT": {
+      "reason": "The provider did not answer in time",
+      "hint": "Try again."
+    },
+    "CHANNEL_RATE_LIMIT": {
+      "reason": "The provider is rate limiting this account",
+      "hint": "Wait and try again."
+    },
+    "CHANNEL_WINDOW_CLOSED": {
+      "reason": "WhatsApp's 24-hour reply window is closed",
+      "hint": "Pin an approved template on the stage so it can message first."
+    },
+    "CHANNEL_TARGET_INVALID": {
+      "reason": "The pinned recipient is not valid for this provider"
+    },
+    "CHANNEL_RECIPIENT_REJECTED": {
+      "reason": "The provider will not message this recipient",
+      "hint": "For iMessage on a Free or Pro Photon project, add them as a project user and have them text their assigned line (the \"Texts on\" number) once."
+    },
+    "CHANNEL_SEND_OUTCOME_UNKNOWN": {
+      "reason": "The message may or may not have been sent",
+      "hint": "Check the provider before sending again. Stageflow never resends it automatically."
+    },
+    "CHANNEL_OPERATION_CONFLICT": {
+      "reason": "That already exists, or the key was reused with different content"
+    }
+  }
+}

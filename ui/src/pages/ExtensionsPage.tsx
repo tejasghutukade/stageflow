@@ -7,10 +7,12 @@ import {
 import { extensionFilePath, extensionPackagePath } from "../routes";
 
 export function ExtensionsPage({
+  embedded,
   packageScope,
   packageSource,
   filePath,
 }: {
+  embedded?: boolean;
   packageScope?: "user" | "project";
   packageSource?: string;
   filePath?: string;
@@ -69,16 +71,18 @@ export function ExtensionsPage({
   const empty = !loading && packages.length === 0 && extensions.length === 0;
 
   return (
-    <div className="main__inner main__inner--wide">
-      <div className="page-head">
-        <div>
-          <h1>Extensions</h1>
-          <p>
-            Extensions the Pi SDK can discover on this machine. Factory stages
-            do not load them.
-          </p>
+    <div className={embedded ? "sf-extensions-embedded" : "main__inner main__inner--wide"}>
+      {!embedded ? (
+        <div className="page-head">
+          <div>
+            <h1>Extensions</h1>
+            <p>
+              Extensions the Pi SDK can discover on this machine. Factory stages
+              do not load them.
+            </p>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {error ? (
         <p style={{ color: "var(--color-text-red)" }}>{error}</p>
@@ -94,7 +98,7 @@ export function ExtensionsPage({
       {!loading && packages.length > 0 ? (
         <>
           <h3>Packages</h3>
-          <table className="table">
+          <table className="data-table">
             <thead>
               <tr>
                 <th>Source</th>
@@ -126,7 +130,7 @@ export function ExtensionsPage({
       {!loading && extensions.length > 0 ? (
         <>
           <h3>Files</h3>
-          <table className="table">
+          <table className="data-table">
             <thead>
               <tr>
                 <th>Name</th>

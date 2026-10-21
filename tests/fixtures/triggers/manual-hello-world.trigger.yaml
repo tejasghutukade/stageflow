@@ -1,0 +1,5 @@
+id: manual-hello-world
+pipeline: hello
+task: my-task
+kind: manual
+enabled: true

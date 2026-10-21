@@ -21,6 +21,7 @@ type StageEnvelope = {
   payload?: Record<string, unknown>;
   fork_choice?: string[];
   feedback_loop?: FeedbackLoopAction;
+  checklist_attestations?: Array<{ check_id: string; items: string[] }>;
   stage_id?: string;
   notes?: string;
 };
@@ -38,12 +39,15 @@ type FeedbackLoopAction =
 | `payload` | no | Structured data for downstream stages; required on success (`io.output.schema` is required on every stage body) |
 | `fork_choice` | no* | Immediate successor ids to run; required on success when the stage has a `fork` field |
 | `feedback_loop` | no† | Continue or send-back decision; required on success when the stage declares a `{ type: loop }` route entry |
+| `checklist_attestations` | no‡ | Array of `{ check_id, items }`; one entry per stage `verify` item of `type: checklist` the agent is attesting to |
 | `stage_id` | no | Optional stage id echo |
 | `notes` | no | Optional free-form notes |
 
 \* Required for fork stages on success (`fork_choice`). On failure, `fork_choice` is not required or validated. `clone_forks` is rejected on every envelope — see [Rejected clone fields](yaml-catalog.md#rejected-clone-fields).
 
 † Required on success for stages that declare a `{ type: loop }` route entry. Forbidden on failure and on stages that do not declare a `{ type: loop }` route entry. See [Feedback loops](#feedback-loops).
+
+‡ Optional structurally (the tool accepts it being absent), but a stage with an after-phase `type: checklist` verify item fails that check unless the matching attestation is present at emit time — see [Checklist attestations](#checklist-attestations).
 
 ## Emitting an envelope
 
@@ -66,6 +70,18 @@ Example success emit (conceptual):
 On `status: "failure"`, the envelope is accepted. Catalog wiring is `route` on the source, not inbound `needs`. Single-parent successors whose `on` does not include `failed` are skip-cascaded. Including `failed` in `on:` opts that edge out of cascade; it does not launch that successor — launch still requires a succeeded parent. A [generic fan-in](yaml-catalog.md#generic-fan-in) Join stays pending if any parent failed, even when that parent's `on` includes `failed`; the run fails. Skipped siblings do not block a Join that has a succeeded parent. `fork_choice` is not required or validated on failure.
 
 Every stage body declares `io.output.schema`. On success, `payload` is validated against that JSON Schema subset — see [io schemas](#io-schemas).
+
+### When the agent stops without emitting {#emit-reminders}
+
+An invalid emit returns an error to the agent and the session continues, so the agent can fix the envelope and call the tool again. If the agent ends its turn with no accepted envelope (it replied with text, or gave up after a rejected emit), Stageflow sends up to two short reminder turns asking it to finish and emit, quoting the last rejection when there was one. Both agent backends do this: Pi continues the same session; the Claude backend resumes the same Claude session (`resume: <session_id>`) for each reminder. The stage fails as `missing emit_stage_envelope` only after those reminders go unanswered.
+
+No reminder is sent when:
+
+- the turn ended on a provider error. Both backends already retry transient errors (rate limits, overloads, server errors); what is left is usually setup (an invalid or missing key, an unavailable model). The stage fails with `provider error: <message>` instead of `missing emit_stage_envelope`. On the Claude backend this is a `result` message with `is_error` (the API error text and HTTP status) or an error subtype with its `errors`.
+- the turn was aborted (stage timeout or cancel), or the stage is closing or parked on `ask_operator`.
+- the agent emitted `status: "failure"`. That is the agent's decision and ends the stage.
+
+On Pi, reminders run inside the stage attempt's `timeout_ms` budget; on the Claude backend each reminder is its own `query()` turn with the same per-turn budget as an operator-answer resume. Reminders are recorded in the transcript as user messages.
 
 ### Fork stages
 
@@ -126,11 +142,11 @@ On replay, agents see a **Feedback Loop Context** section (JSON) with loop/repla
 
 After `max_replays`, behavior follows `on_max_replays` (`require_continue` or `wait_for_human`). Human decisions: [CLI](cli-reference.md#sf-runs-feedback-decide), [MCP `decide_feedback_loop`](mcp.md#decide_feedback_loop), or `POST /api/runs/:runId/stages/:stageId/feedback-decision`.
 
-Walkthrough: [`examples/feedback-loop/`](../examples/feedback-loop/). Fixture: [`feedback-loop.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop.pipeline.yaml).
+Walkthroughs: [`examples/feedback-loop/`](../examples/feedback-loop/), [`examples/mcp-hitl-tour/`](../examples/mcp-hitl-tour/). Fixture: [`feedback-loop.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop.pipeline.yaml).
 
 ### io schemas {#io-schemas}
 
-Every stage body must declare both `io.input.schema` and `io.output.schema`. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). Success `payload` is required and checked against `io.output.schema` using a JSON Schema subset (`src/envelope/payloadSchema.ts`). `io.input.schema` is the same subset, used for predecessor success payloads on normal edges, and matching optional task `input` on entry stages (omitted `input` is `{}`; mismatch is an error). Sequential and fan-in edges: the child's `io.input` must be a structural subset of each parent's `io.output`; pipeline load and `sf validate` report a mismatch as `pipeline.io_incompatible`. The root must be `type: object` and cannot be `nullable`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `enum` (string and integer), `minimum`, `maximum`. String nodes also accept `pattern` (a JavaScript RegExp string, unicode semantics), `minLength`, and `maxLength` (non-negative integers). Nested nodes may set `nullable: true`, compiling to a union of that type with `null`. Unknown keywords are ignored. Pipeline-file `schemas:` is the `$ref` root (`#/schemas/<name>`); see [YAML catalog — Pipeline schemas](yaml-catalog.md#pipeline-schemas).
+Every stage body must declare both `io.input.schema` and `io.output.schema`. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). Success `payload` is required and checked against `io.output.schema` using a JSON Schema subset (`src/envelope/payloadSchema.ts`). `io.input.schema` is the same subset, used for predecessor success payloads on normal edges, and matching optional task `input` on entry stages (omitted `input` is `{}`; mismatch is an error). Sequential and fan-in edges: the child's `io.input` must be a structural subset of each parent's `io.output`; pipeline load and `sf validate` report a mismatch as `pipeline.io_incompatible`. The root must be `type: object` and cannot be `nullable`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `maxItems` (both non-negative integers), `enum` (string and integer), `minimum`, `maximum`. String nodes also accept `pattern` (a JavaScript RegExp string, unicode semantics), `minLength`, and `maxLength` (non-negative integers). Nested nodes may set `nullable: true`, compiling to a union of that type with `null`. Unknown keywords are ignored. Pipeline-file `schemas:` is the `$ref` root (`#/schemas/<name>`); see [YAML catalog — Pipeline schemas](yaml-catalog.md#pipeline-schemas).
 
 Fixture: [`tests/fixtures/stages/name-selection.yaml`](../tests/fixtures/stages/name-selection.yaml).
 
@@ -162,6 +178,33 @@ model: anthropic/claude-sonnet-4-5
 A failing emit-phase check rejects the emit (`isError: true`, no `terminate`) so the agent can retry in the same turn; it never fails the stage outright. Checks run in declaration order and stop at the first failure. Emit-phase `verify` is skipped entirely on `status: "failure"` emits, and omitted/empty `verify` is a no-op — existing stages are unaffected.
 
 **Not the same as after-phase `verify`.** After-phase items (`when` includes `after`) run **after** a candidate envelope has already been captured (via repair/manual recovery), and `gate`/`artifact` there are disk- and history-aware (after-phase `gate` accepts *any* accepted decision over the run so far; after-phase `artifact` does a real on-disk `lstat`/`sha256` check). See [Verified Stage Execution](verified-stage-execution.md). Emit and after may look at overlapping facts (defense in depth) as items on the same `verify` list.
+
+### Checklist attestations {#checklist-attestations}
+
+A stage body `verify` item with `type: checklist` (default `when: [after]` — see [YAML catalog — Verify](yaml-catalog.md#verify)) is scored against the success envelope's `checklist_attestations` field, not against free text in the agent's reply:
+
+```json
+{
+  "status": "success",
+  "summary": "Implemented the change and reviewed it against the plan.",
+  "artifacts": [],
+  "payload": { "changed_files": ["src/foo.ts"] },
+  "checklist_attestations": [
+    {
+      "check_id": "self-review",
+      "items": [
+        "Implementation matches the approved plan",
+        "Unrelated files were not changed"
+      ]
+    }
+  ]
+}
+```
+
+- One `checklist_attestations` entry per checklist check the agent is attesting to, keyed by `check_id` matching the `verify` item's `id`.
+- `items` is compared as a set against that check's declared `items` (order-independent, but every declared item must be present and no extra items). A missing check id, a missing item, or an extra item fails the check.
+- Omitting `checklist_attestations` entirely still passes emit-phase validation (the field is optional on the tool schema), but the after-phase `checklist` check then fails with every declared item reported missing.
+- This is an attestation, not independent verification — pair it with a `command` or `checkout_changes` check for anything consequential.
 
 ## Artifacts
 

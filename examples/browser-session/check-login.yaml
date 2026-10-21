@@ -1,0 +1,22 @@
+id: check-login
+system_prompt: |
+  The Host already opened the check page with this stage's browser profile and
+  computed the login result. It is in the prompt below. Do not use the browser.
+
+  Call emit_stage_envelope exactly once with status success, a one-line
+  summary, artifacts: [], and payload { "logged_in": <boolean>, "url": "<url>" }
+  copied exactly from the Host result. Do not call ask_operator.
+model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
+      required: [logged_in, url]
+      properties:
+        logged_in:
+          type: boolean
+        url:
+          type: string

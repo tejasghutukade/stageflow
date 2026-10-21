@@ -1,25 +1,46 @@
+import path from "node:path";
 import {
   type EventBus,
   type ExtensionFactory,
   type InlineExtension,
   createEventBus,
 } from "@earendil-works/pi-coding-agent";
+import { prepareMcpOAuth } from "../config/mcpOAuth.js";
 import {
   StageMcpError,
   type ResolvedMcpServers,
 } from "../config/resolveStageMcpServers.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import { TOOL_OUTPUT_HARD_CEILING_BYTES } from "./toolOutputBudget.js";
 
 export const STAGEFLOW_PI_MCP_EXTENSION_NAME = "stageflow-mcp";
 
 const MCP_STATUS_EVENT = "pi-mcp-adapter/status/v1";
-const DEFAULT_ISOLATED_MCP_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_ISOLATED_MCP_CONNECT_TIMEOUT_MS = 30_000;
 const STATUS_POLL_MS = 50;
 const PI_MCP_ADAPTER_SPEC: string = "pi-mcp-adapter";
 
+export function jitiFsCacheDir(): string {
+  return path.join(globalStageflowHome(), "cache", "jiti");
+}
+
+export function resetCreateMcpAdapterCacheForTests(): void {
+  cachedCreateMcpAdapter = undefined;
+}
+
 type IsolatedMcpSettings = {
+  /** Host-keyed file store for OAuth tokens; set only when a URL server is attached. */
+  oauthCredentialStore?: "encrypted-file";
   directTools: true;
   elicitation: false;
   hostConfigDiscovery: "off";
+  scriptMode: false;
+  disableProxyTool: true;
+  outputGuard: {
+    maxBytes: number;
+    maxLines: number;
+    detailsMaxBytes: number;
+  };
 };
 
 type IsolatedMcpServerEntry = Record<string, unknown> & {
@@ -75,11 +96,26 @@ export type IsolatedMcpAttach = {
   cancel?: () => void;
 };
 
+// Stages get only the declared servers' direct tools: no mcpScript sandbox and
+// no `mcp` gateway. The adapter's output guard is a backstop; the stage budget
+// lives in toolOutputBudgetExtension.
 const ISOLATED_MCP_SETTINGS: IsolatedMcpSettings = {
   directTools: true,
   elicitation: false,
   hostConfigDiscovery: "off",
+  scriptMode: false,
+  disableProxyTool: true,
+  outputGuard: {
+    maxBytes: TOOL_OUTPUT_HARD_CEILING_BYTES,
+    maxLines: Number.MAX_SAFE_INTEGER,
+    detailsMaxBytes: 16 * 1024,
+  },
 };
+
+export const UNREQUESTED_MCP_ADAPTER_TOOLS: ReadonlySet<string> = new Set([
+  "mcpScript",
+  "mcp",
+]);
 
 const SUCCESS_STATUSES = new Set<IsolatedMcpServerRuntimeStatus>([
   "connected",
@@ -103,6 +139,7 @@ let cachedCreateMcpAdapter: CreateMcpAdapter | undefined;
 function toIsolatedMcpConfig(
   snapshot: ResolvedMcpServers,
   lifecycle: IsolatedMcpServerEntry["lifecycle"] = "lazy",
+  oauth = false,
 ): IsolatedMcpConfig {
   const mcpServers: Record<string, IsolatedMcpServerEntry> = {};
   for (const [name, entry] of Object.entries(snapshot)) {
@@ -118,7 +155,11 @@ function toIsolatedMcpConfig(
   }
   return {
     mcpServers,
-    settings: { ...ISOLATED_MCP_SETTINGS },
+    settings: {
+      ...ISOLATED_MCP_SETTINGS,
+      ...(oauth ? { oauthCredentialStore: "encrypted-file" as const } : {}),
+      outputGuard: { ...ISOLATED_MCP_SETTINGS.outputGuard },
+    },
   };
 }
 
@@ -138,7 +179,7 @@ async function loadCreateMcpAdapter(): Promise<CreateMcpAdapter> {
     // Node does not type-strip .ts under node_modules.
   }
   const { createJiti } = await import("jiti/static");
-  const jiti = createJiti(import.meta.url);
+  const jiti = createJiti(import.meta.url, { fsCache: jitiFsCacheDir() });
   const mod = (await jiti.import(PI_MCP_ADAPTER_SPEC)) as {
     createMcpAdapter: CreateMcpAdapter;
   };
@@ -320,11 +361,20 @@ export async function attachIsolatedMcp(
     return EMPTY_ATTACH;
   }
   const createMcpAdapter = await loadCreateMcpAdapter();
+  let oauth = false;
+  if (Object.values(snapshot).some((entry) => typeof entry.url === "string")) {
+    try {
+      prepareMcpOAuth();
+      oauth = true;
+    } catch {
+      // Sign-in is optional; a store that cannot be prepared must not stop servers that need none.
+    }
+  }
   const extensionFactories: InlineExtension[] = [
     {
       name: STAGEFLOW_PI_MCP_EXTENSION_NAME,
       factory: createMcpAdapter({
-        config: toIsolatedMcpConfig(snapshot, options?.lifecycle ?? "lazy"),
+        config: toIsolatedMcpConfig(snapshot, options?.lifecycle ?? "lazy", oauth),
       }),
     },
   ];

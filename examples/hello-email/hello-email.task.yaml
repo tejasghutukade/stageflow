@@ -1,0 +1,6 @@
+id: hello-email-task
+goal: Send one hello email to the recipient in input.
+constraints: Send only one email. Do not resend an uncertain submission.
+input:
+  # Fill in the destination before you run this task.
+  recipient: ""

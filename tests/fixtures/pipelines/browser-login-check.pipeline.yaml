@@ -1,0 +1,73 @@
+id: browser-login-check
+stages:
+  - id: check
+    entry: true
+    system_prompt: Report the Host login check result.
+    model: test/model
+    browser:
+      profile: acct
+      headed: false
+      check:
+        url: https://app.example.test/home
+        logged_in_url: https://app.example.test/home*
+        logged_out_url: [https://app.example.test/login*, https://sso.example.test/*]
+    route:
+      - to: login
+        if:
+          field: logged_in
+          op: eq
+          value: false
+      - to: work
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [logged_in, url]
+          properties:
+            logged_in:
+              type: boolean
+            url:
+              type: string
+  - id: login
+    system_prompt: Ask the operator to log in.
+    model: test/model
+    route:
+      - to: work
+    io:
+      input:
+        schema:
+          type: object
+          required: [logged_in, url]
+          properties:
+            logged_in:
+              type: boolean
+            url:
+              type: string
+      output:
+        schema:
+          type: object
+          required: [logged_in, url]
+          properties:
+            logged_in:
+              type: boolean
+            url:
+              type: string
+  - id: work
+    system_prompt: Do the work.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+          required: [logged_in, url]
+          properties:
+            logged_in:
+              type: boolean
+            url:
+              type: string
+      output:
+        schema:
+          type: object

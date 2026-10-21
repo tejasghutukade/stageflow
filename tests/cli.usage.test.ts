@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -12,6 +12,7 @@ import { RunManager } from "../src/runtime/runManager.js";
 import type { StartRunResult } from "../src/runtime/runManager.js";
 import type { PipelineRunResult } from "../src/runtime/pipelineRunner.js";
 import { SAMPLE_TASK, SINGLE_PIPELINE, pipelinePath } from "./helpers/fixturePaths.js";
+import { spawnTestGlobalService } from "./helpers/testGlobalService.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
@@ -58,7 +59,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.stdout).toMatch(/sf run[^\n]*--json/);
     expect(result.stdout).toMatch(/sf validate/);
     expect(result.stdout).toMatch(/sf init/);
-    expect(result.stdout).not.toMatch(/name-or-path/);
+    expect(result.stdout).toMatch(/sf graph/);
     expect(result.stdout).toMatch(/--pipeline <path>/);
     expect(result.stdout).toMatch(/--strict/);
     expect(result.stdout).toMatch(/--json/);
@@ -79,6 +80,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.stdout).toMatch(/sf runs wait/);
     expect(result.stdout).toMatch(/sf runs answer/);
     expect(result.stdout).toMatch(/sf runs retry/);
+    expect(result.stdout).toMatch(/sf runs resume/);
     expect(result.stdout).toMatch(/sf runs abandon/);
     expect(result.stdout).toMatch(/sf runs rerun/);
     expect(result.stdout).not.toMatch(/\.software-factory/);
@@ -111,6 +113,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(out).toMatch(/sf runs wait/);
     expect(out).toMatch(/sf runs answer/);
     expect(out).toMatch(/sf runs retry/);
+    expect(out).toMatch(/sf runs resume/);
     expect(out).toMatch(/sf runs abandon/);
     expect(out).toMatch(/sf runs rerun/);
   });
@@ -151,6 +154,14 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(out).toMatch(/--json/);
   });
 
+  it("graph --help prints graph usage and exits zero", () => {
+    const result = runCli(["graph", "--help"]);
+    expect(result.status).toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/sf graph --pipeline/);
+    expect(out).toMatch(/--json/);
+  });
+
   it("validate --pipeline without value exits non-zero", () => {
     const result = runCli(["validate", "--pipeline"]);
     expect(result.status).not.toBe(0);
@@ -174,6 +185,8 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     const out = result.stdout + result.stderr;
     expect(out).toMatch(/sf run[^\n]*--json/);
     expect(out).toMatch(/--pipeline <path>/);
+    expect(out).toMatch(/--repository/);
+    expect(out).toMatch(/--ref/);
     expect(out).not.toMatch(/name-or-path/);
   });
 
@@ -312,14 +325,27 @@ describe("CLI stub", { timeout: 15_000 }, () => {
   });
 
   it("AE1: bare pipeline name fails with actionable error", async () => {
+    // `sf run` now talks to the global service over HTTP, so this needs a
+    // real (isolated, ephemeral-port) service already up as its own OS
+    // process — auto-start against the real machine's ~/.stageflow:3847
+    // would be both slow and unsafe here, and an in-process test server
+    // would deadlock against this test's own spawnSync call below.
     const emptyDir = await mkdtemp(path.join(tmpdir(), "sf-cli-bare-pipeline-"));
-    const result = spawnSync(process.execPath, [tsxCli, cli, "run", "--task", sampleTask, "--pipeline", "single"], {
-      cwd: emptyDir,
-      encoding: "utf8",
-    });
-    expect(result.status).not.toBe(0);
-    const out = result.stdout + result.stderr;
-    expect(out).toMatch(/not found|filesystem path/i);
-    expect(out).not.toMatch(/Pipeline succeeded/);
+    const isolatedHome = await mkdtemp(path.join(tmpdir(), "sf-cli-bare-pipeline-home-"));
+    const service = await spawnTestGlobalService({ cwd: emptyDir, home: isolatedHome });
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cli, "run", "--task", sampleTask, "--pipeline", "single"],
+        { cwd: emptyDir, encoding: "utf8", env: service.env },
+      );
+      expect(result.status).not.toBe(0);
+      const out = result.stdout + result.stderr;
+      expect(out).toMatch(/not found|filesystem path/i);
+      expect(out).not.toMatch(/Pipeline succeeded/);
+    } finally {
+      await service.stop();
+      await rm(isolatedHome, { recursive: true, force: true });
+    }
   });
 });

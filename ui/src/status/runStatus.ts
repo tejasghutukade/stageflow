@@ -18,6 +18,17 @@ export type RunDisplayStatus = RunStatus | "waiting_for_input";
 export type StageDisplayStatus = StageSnapshot["status"];
 export type DisplayStatus = RunDisplayStatus | StageDisplayStatus;
 
+export function cancelledDisplayCopy(cancelReason?: string): string {
+  if (cancelReason !== undefined && cancelReason.trim() !== "") {
+    return `cancelled: ${cancelReason}`;
+  }
+  return "cancelled";
+}
+
+export function isCancelledDisplay(status: DisplayStatus): boolean {
+  return status === "cancelled";
+}
+
 export type CssStatusToken = "waiting" | "running" | "succeeded" | "failed";
 export type RingStatus = "pending" | "running" | "waiting" | "succeeded" | "failed" | "skipped";
 
@@ -29,14 +40,17 @@ export function runDisplayStatus(run: RunSummary): RunDisplayStatus {
 export function cssStatusToken(status: DisplayStatus): CssStatusToken | undefined {
   switch (status) {
     case "waiting_for_input":
+    case "interrupted":
       return "waiting";
     case "created":
+    case "queued":
       return undefined;
     case "running":
       return "running";
     case "succeeded":
       return "succeeded";
     case "failed":
+    case "cancelled":
       return "failed";
     case "pending":
     case "skipped":
@@ -50,10 +64,13 @@ export function statusCopy(status: DisplayStatus): string {
       return "waiting on you";
     case "created":
       return "not started";
+    case "queued":
     case "pending":
     case "running":
+    case "interrupted":
     case "succeeded":
     case "failed":
+    case "cancelled":
     case "skipped":
       return status;
   }
@@ -67,6 +84,7 @@ export function waitingOnYouTitle(): string {
 export function ringStatus(status: StageDisplayStatus): RingStatus {
   switch (status) {
     case "waiting_for_input":
+    case "interrupted":
       return "waiting";
     case "pending":
     case "running":
@@ -80,6 +98,7 @@ export function ringStatus(status: StageDisplayStatus): RingStatus {
 export function ringGlyph(status: StageDisplayStatus | RingStatus): string {
   switch (status) {
     case "waiting_for_input":
+    case "interrupted":
     case "waiting":
       return "?";
     case "pending":
@@ -107,16 +126,19 @@ export function statusDotVariant(
 ): "success" | "warning" | "error" | "accent" | "neutral" {
   switch (status) {
     case "created":
+    case "queued":
     case "pending":
     case "skipped":
       return "neutral";
     case "running":
       return "accent";
     case "waiting_for_input":
+    case "interrupted":
       return "warning";
     case "succeeded":
       return "success";
     case "failed":
+    case "cancelled":
       return "error";
   }
 }

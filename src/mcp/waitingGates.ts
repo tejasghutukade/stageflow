@@ -105,7 +105,7 @@ function projectGatesForRun(
 
 export async function projectWaitingGates(
   store: RunStore,
-  opts?: { runId?: string },
+  opts?: { runId?: string; projectRoot?: string },
 ): Promise<Array<Record<string, unknown>>> {
   if (opts?.runId !== undefined) {
     let detail;
@@ -120,8 +120,9 @@ export async function projectWaitingGates(
   const summaries = await store.listRuns();
   const waiting = summaries.filter(
     (r) =>
-      (r.waiting_stage_ids !== undefined && r.waiting_stage_ids.length > 0) ||
-      r.waiting_stage_id !== undefined,
+      (opts?.projectRoot === undefined || r.project_root === opts.projectRoot) &&
+      ((r.waiting_stage_ids !== undefined && r.waiting_stage_ids.length > 0) ||
+        r.waiting_stage_id !== undefined),
   );
 
   const perRun = await Promise.all(

@@ -1,0 +1,6 @@
+id: readiness-task
+goal: Acknowledge a triggers-readiness smoke run
+context: Fired from the triggers-readiness catalog bundle (Docker or examples/)
+constraints: One stage only; emit a success envelope
+input:
+  source: triggers-readiness

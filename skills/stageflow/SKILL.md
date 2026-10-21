@@ -1,11 +1,11 @@
 ---
 name: stageflow
 description: >-
-  Routes Stageflow work to one job: setup (install, catalog, or provider),
-  session-capture (reuse this chat or a past session), author (a loop the human
-  can explain), run (start, watch, or answer a pipeline), or delegate (a
-  repeating pattern). Use when the user mentions Stageflow, sf, a pipeline,
-  HITL, or a repeating Stageflow workflow.
+  Routes Stageflow work to one job: setup (install, catalog, provider, or
+  optional Docker Compose local try), session-capture (reuse this chat or a past
+  session), author (a loop the human can explain), run (start, watch, or answer
+  a pipeline), or delegate (a repeating pattern). Use when the user mentions
+  Stageflow, sf, a pipeline, HITL, or a repeating Stageflow workflow.
 compatibility: Requires the Stageflow CLI (sf). An MCP host (sf ui or sf mcp) is optional.
 ---
 
@@ -17,7 +17,7 @@ Read the matching job `SKILL.md` and follow it. Do not invent job behavior in th
 
 | Reach this job when | Read |
 |---|---|
-| Install is missing, there is no catalog, or a provider is not logged in | [../stageflow-setup/SKILL.md](../stageflow-setup/SKILL.md) |
+| Install is missing, there is no catalog, a provider is not logged in, or the operator wants Docker Compose local try | [../stageflow-setup/SKILL.md](../stageflow-setup/SKILL.md) |
 | The request should reuse a past session or this chat | [../stageflow-session-capture/SKILL.md](../stageflow-session-capture/SKILL.md) |
 | The request describes a loop the human can explain | [../stageflow-author/SKILL.md](../stageflow-author/SKILL.md) |
 | The request needs to start, watch, or answer a run | [../stageflow-run/SKILL.md](../stageflow-run/SKILL.md) |

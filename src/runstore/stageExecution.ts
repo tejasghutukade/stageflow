@@ -34,6 +34,8 @@ export function deriveExecutionPatchFromEvent(
     if (!current.started_at) patch.started_at = at;
   } else if (eventName === "waiting_for_input") {
     patch.status = "waiting_for_input";
+  } else if (eventName === "interrupted") {
+    patch.status = "interrupted";
   } else if (event.event === "succeeded" || event.event === "failed") {
     patch.status = event.event;
     patch.finished_at = at;

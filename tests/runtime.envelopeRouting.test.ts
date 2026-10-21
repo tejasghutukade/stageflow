@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FIXTURES_ROOT, pipelinePath, catalogLocators, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { pipelinePath, catalogLocators, LINEAR_EXPLICIT_PIPELINE } from "./helpers/fixturePaths.js";
 import { access, mkdtemp, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -33,39 +33,20 @@ const fixtures = path.resolve(
 );
 
 describe("readMaxActiveStagesPerRun (U1)", () => {
+  const ENV = "STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN";
+
   it("defaults to unlimited when env unset", () => {
     expect(readMaxActiveStagesPerRun({})).toBe(DEFAULT_MAX_ACTIVE_STAGES_PER_RUN);
     expect(Number.isFinite(readMaxActiveStagesPerRun({}))).toBe(false);
   });
 
-  it("reads valid env value", () => {
-    expect(
-      readMaxActiveStagesPerRun({
-        STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN: "5",
-      }),
-    ).toBe(5);
-  });
-
-  it("falls back to unlimited for invalid env", () => {
-    expect(
-      readMaxActiveStagesPerRun({
-        STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN: "0",
-      }),
-    ).toBe(DEFAULT_MAX_ACTIVE_STAGES_PER_RUN);
-    expect(
-      readMaxActiveStagesPerRun({
-        STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN: "abc",
-      }),
-    ).toBe(DEFAULT_MAX_ACTIVE_STAGES_PER_RUN);
-  });
-
-  it("constructor override wins over env", () => {
-    expect(
-      readMaxActiveStagesPerRun(
-        { STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN: "5" },
-        2,
-      ),
-    ).toBe(2);
+  it.each([
+    { name: "valid env value", env: { [ENV]: "5" }, override: undefined, expected: 5 },
+    { name: "zero falls back to unlimited", env: { [ENV]: "0" }, override: undefined, expected: DEFAULT_MAX_ACTIVE_STAGES_PER_RUN },
+    { name: "non-numeric falls back to unlimited", env: { [ENV]: "abc" }, override: undefined, expected: DEFAULT_MAX_ACTIVE_STAGES_PER_RUN },
+    { name: "constructor override wins over env", env: { [ENV]: "5" }, override: 2, expected: 2 },
+  ])("$name", ({ env, override, expected }) => {
+    expect(readMaxActiveStagesPerRun(env, override)).toBe(expected);
   });
 });
 
@@ -394,25 +375,42 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
     expect(result.priorEnvelopesByStage?.research).toEqual(research);
   });
 
-  it("failed parent is omitted from priorEnvelopesByStage", async () => {
+  it.each([
+    {
+      name: "failed parent with emitted failure envelope",
+      state: "failed" as const,
+      seed: { envelope: { status: "failure", summary: "emitted-fail", artifacts: [] } as StageEnvelope, reason: "persisted-reason" },
+      completed: undefined,
+    },
+    {
+      name: "failed parent without envelope",
+      state: "failed" as const,
+      seed: { reason: "validation crashed" },
+      completed: undefined,
+    },
+    {
+      name: "skipped parent with envelope on disk and in memory",
+      state: "skipped" as const,
+      seed: { envelope: okEnvelope("should-not-win") },
+      completed: okEnvelope("should-not-win"),
+    },
+    {
+      name: "failed parent's stale emitted success envelope",
+      state: "failed" as const,
+      seed: { envelope: okEnvelope("stale-success"), reason: "agent crashed" },
+      completed: okEnvelope("stale-success"),
+    },
+  ])("$name is omitted from priorEnvelopesByStage", async ({ state, seed, completed }) => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,
     });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-env-fail-emit-"));
+    const root = await mkdtemp(path.join(tmpdir(), "sf-env-omit-"));
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
       ...catalogLocators("diamond-fan-in"),
       taskYaml: "id: t\ngoal: g\n",
     });
-    const emitted: StageEnvelope = {
-      status: "failure",
-      summary: "emitted-fail",
-      artifacts: [],
-    };
-    await seedStageTerminal(store, run.runId, "research", "failed", {
-      envelope: emitted,
-      reason: "persisted-reason",
-    });
+    await seedStageTerminal(store, run.runId, "research", state, seed);
     await seedStageTerminal(store, run.runId, "validation", "succeeded", {
       envelope: okEnvelope("from-validation"),
     });
@@ -420,121 +418,14 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
     const result = await resolvePriorEnvelope({
       dag: loaded.dag,
       stageId: "synthesize",
-      completedEnvelopes: new Map(),
+      completedEnvelopes: completed ? new Map([["research", completed]]) : new Map(),
       store,
       runId: run.runId,
     });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
-    expect(result.priorEnvelopesByStage?.validation).toEqual(
-      okEnvelope("from-validation"),
-    );
-  });
-
-  it("failed parent without envelope is omitted from priorEnvelopesByStage", async () => {
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
-      cwd: fixtures,
-    });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-env-fail-synth-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      ...catalogLocators("diamond-fan-in"),
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    await seedStageTerminal(store, run.runId, "research", "failed", {
-      reason: "validation crashed",
-    });
-    await seedStageTerminal(store, run.runId, "validation", "succeeded", {
-      envelope: okEnvelope("from-validation"),
-    });
-
-    const result = await resolvePriorEnvelope({
-      dag: loaded.dag,
-      stageId: "synthesize",
-      completedEnvelopes: new Map(),
-      store,
-      runId: run.runId,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
-    expect(result.priorEnvelopesByStage?.validation).toEqual(
-      okEnvelope("from-validation"),
-    );
-  });
-
-  it("skipped parent is omitted from priorEnvelopesByStage", async () => {
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
-      cwd: fixtures,
-    });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-env-skip-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      ...catalogLocators("diamond-fan-in"),
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    await seedStageTerminal(store, run.runId, "research", "skipped", {
-      envelope: okEnvelope("should-not-win"),
-    });
-    await seedStageTerminal(store, run.runId, "validation", "succeeded", {
-      envelope: okEnvelope("from-validation"),
-    });
-
-    const result = await resolvePriorEnvelope({
-      dag: loaded.dag,
-      stageId: "synthesize",
-      completedEnvelopes: new Map([
-        ["research", okEnvelope("should-not-win")],
-      ]),
-      store,
-      runId: run.runId,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
-    expect(Object.keys(result.priorEnvelopesByStage ?? {})).toEqual([
-      "validation",
-    ]);
-    expect(result.priorEnvelopesByStage?.validation).toEqual(
-      okEnvelope("from-validation"),
-    );
-  });
-
-  it("does not merge a failed parent's emitted success envelope", async () => {
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
-      cwd: fixtures,
-    });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-env-fail-status-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      ...catalogLocators("diamond-fan-in"),
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    await seedStageTerminal(store, run.runId, "research", "failed", {
-      envelope: okEnvelope("stale-success"),
-      reason: "agent crashed",
-    });
-    await seedStageTerminal(store, run.runId, "validation", "succeeded", {
-      envelope: okEnvelope("from-validation"),
-    });
-
-    const result = await resolvePriorEnvelope({
-      dag: loaded.dag,
-      stageId: "synthesize",
-      completedEnvelopes: new Map([
-        ["research", okEnvelope("stale-success")],
-      ]),
-      store,
-      runId: run.runId,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
+    expect(Object.keys(result.priorEnvelopesByStage ?? {})).toEqual(["validation"]);
     expect(result.priorEnvelopesByStage?.validation).toEqual(
       okEnvelope("from-validation"),
     );

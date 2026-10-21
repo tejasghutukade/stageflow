@@ -1,0 +1,31 @@
+id: gather
+system_prompt: |
+  You are the Clone Chain join. Summarize each clone instance's angle.md into
+  one note. Do not invent angles that were not cloned.
+
+  1. Call write_stage_artifact with path angles-brief.md.
+  2. Emit success with artifacts [angles-brief.md] and payload
+     { "kind": "angles" }.
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+verify:
+  - id: angles-brief-declared
+    type: artifact
+    basename: angles-brief.md
+    when:
+      - emit
+  - id: angles-brief-on-disk
+    type: artifact
+    path: angles-brief.md
+    nonempty: true
+    when:
+      - after

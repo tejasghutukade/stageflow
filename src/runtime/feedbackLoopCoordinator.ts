@@ -4,6 +4,7 @@ import type {
   DeferredFeedbackSendBack,
   FeedbackLoopRecord,
   FeedbackReplayRecord,
+  FeedbackReplayStagePassStatus,
   RunPipelineDagSnapshot,
   RunStore,
 } from "../runstore/port.js";
@@ -82,6 +83,59 @@ export async function terminalizeCurrentFeedbackReplay(
 ): Promise<void> {
   if (loop.current_replay_id === undefined) return;
   await store.updateFeedbackReplay(runId, loop.current_replay_id, { status });
+}
+
+export async function updateFeedbackReplaySourcePass(options: {
+  store: RunStore;
+  runId: string;
+  loop: FeedbackLoopRecord;
+  sourceStageId: string;
+  status: Extract<
+    FeedbackReplayStagePassStatus,
+    "waiting" | "succeeded" | "failed"
+  >;
+  envelope?: StageEnvelope;
+}): Promise<void> {
+  const { store, runId, loop, sourceStageId, status, envelope } = options;
+  if (loop.current_replay_id === undefined) return;
+  const passes = await store.listFeedbackReplayStagePasses(
+    runId,
+    loop.current_replay_id,
+  );
+  const sourcePass = passes.find((pass) => pass.stage_id === sourceStageId);
+  if (sourcePass === undefined) return;
+  if (sourcePass.status === "succeeded") return;
+  if (status === "waiting") {
+    await store.updateFeedbackReplayStagePass(
+      runId,
+      loop.current_replay_id,
+      sourceStageId,
+      { status: "waiting" },
+    );
+    return;
+  }
+  if (status === "succeeded") {
+    await store.updateFeedbackReplayStagePass(
+      runId,
+      loop.current_replay_id,
+      sourceStageId,
+      {
+        status: "succeeded",
+        finished_at: new Date().toISOString(),
+        ...(envelope !== undefined ? { emitted_envelope: envelope } : {}),
+      },
+    );
+    return;
+  }
+  await store.updateFeedbackReplayStagePass(
+    runId,
+    loop.current_replay_id,
+    sourceStageId,
+    {
+      status: "failed",
+      finished_at: new Date().toISOString(),
+    },
+  );
 }
 
 async function resolveResumeSessionAttempt(
@@ -327,6 +381,13 @@ export async function acceptFeedbackSendBack(options: {
         loop,
         "waiting_for_human",
       );
+      await updateFeedbackReplaySourcePass({
+        store,
+        runId,
+        loop,
+        sourceStageId: sourceNode.id,
+        status: "waiting",
+      });
       await store.updateFeedbackLoop(runId, loop.loop_id, {
         state: "waiting_for_human",
         deferred_send_back: deferred,
@@ -351,23 +412,14 @@ export async function acceptFeedbackSendBack(options: {
   }
 
   if (loop.current_replay_id !== undefined) {
-    const currentPasses = await store.listFeedbackReplayStagePasses(
+    await updateFeedbackReplaySourcePass({
+      store,
       runId,
-      loop.current_replay_id,
-    );
-    const sourcePass = currentPasses.find((p) => p.stage_id === sourceNode.id);
-    if (sourcePass !== undefined && sourcePass.status !== "succeeded") {
-      await store.updateFeedbackReplayStagePass(
-        runId,
-        loop.current_replay_id,
-        sourceNode.id,
-        {
-          status: "succeeded",
-          finished_at: new Date().toISOString(),
-          emitted_envelope: envelope,
-        },
-      );
-    }
+      loop,
+      sourceStageId: sourceNode.id,
+      status: "succeeded",
+      envelope,
+    });
     await store.updateFeedbackReplay(runId, loop.current_replay_id, {
       status: "completed",
     });
@@ -481,25 +533,14 @@ export async function markFeedbackLoopContinued(options: {
   );
   if (loop === undefined) return;
 
-  if (loop.current_replay_id !== undefined) {
-    const passes = await store.listFeedbackReplayStagePasses(
-      runId,
-      loop.current_replay_id,
-    );
-    const sourcePass = passes.find((p) => p.stage_id === sourceStageId);
-    if (sourcePass !== undefined && sourcePass.status !== "succeeded") {
-      await store.updateFeedbackReplayStagePass(
-        runId,
-        loop.current_replay_id,
-        sourceStageId,
-        {
-          status: "succeeded",
-          finished_at: new Date().toISOString(),
-          emitted_envelope: envelope,
-        },
-      );
-    }
-  }
+  await updateFeedbackReplaySourcePass({
+    store,
+    runId,
+    loop,
+    sourceStageId,
+    status: "succeeded",
+    envelope,
+  });
   await terminalizeCurrentFeedbackReplay(store, runId, loop, "completed");
 
   await store.updateFeedbackLoop(runId, loop.loop_id, {

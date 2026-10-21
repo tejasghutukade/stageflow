@@ -1,15 +1,38 @@
-import type { LoadedStageConfig, StageGateKind, StageIoYaml } from "./stage.js";
+import type {
+  LoadedStageConfig,
+  StageChannel,
+  StageBrowserConfig,
+  StageGateKind,
+  StageIoYaml,
+} from "./stage.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
+import type { StageSecretDecl } from "../runtime/stageSecretDecl.js";
+import type { ToolRequirement } from "../config/toolRequires.js";
 
 export type PipelineConfig = {
   id: string;
   stages: string[];
-  /** Selects the AgentPort backend for every stage in this pipeline; overrides the global default. */
+  /** Selects the StagePort backend for every stage in this pipeline; overrides the global default. */
   agent?: string;
   /** Default LLM model id for every stage in this pipeline; overrides the global default. */
   model?: string;
   /** Pipeline-file `$ref` root (`#/schemas/<name>`). */
   schemas?: Record<string, unknown>;
+  /** Declared toolchain binaries this pipeline needs (Slot 9). */
+  requires?: ToolRequirement[];
+  /** Default channels inherited by every stage that does not override them. */
+  channels?: StageChannel[];
+};
+
+/** An inline pipeline definition authored directly in a `start_run` call, with no backing file. */
+export type InlinePipelineDefinition = {
+  id: string;
+  stages: Array<Record<string, unknown>>;
+  agent?: unknown;
+  model?: unknown;
+  schemas?: unknown;
+  requires?: unknown;
+  channels?: unknown;
 };
 
 export type PipelineForkConfig = {
@@ -152,6 +175,7 @@ export type PipelineStageYamlEntry = {
   timeout_ms?: number;
   skill?: string;
   mcp?: string[];
+  browser?: StageBrowserConfig;
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
   entry?: boolean;
@@ -181,6 +205,9 @@ export type NormalizedPipelineStageEntry = {
   entry?: boolean;
   skill?: string;
   mcp?: string[];
+  secrets?: StageSecretDecl[];
+  requires?: ToolRequirement[];
+  browser?: StageBrowserConfig;
   clone_cap?: number;
   clone_mode?: CloneMode;
   body:

@@ -17,6 +17,7 @@ export type CreateStageInput = {
   system_prompt: string;
   model?: string;
   gate_kinds?: StageGateKind[];
+  skill?: string;
 };
 
 export type CreatedStageListing = {
@@ -75,8 +76,12 @@ export function parseCreateStageBody(
   if ("payload_schema" in body) {
     return { ok: false, status: 400, error: "payload_schema is not supported" };
   }
-  if ("skill" in body) {
-    return { ok: false, status: 400, error: "skill is not supported" };
+  let skill: string | undefined;
+  if (body.skill !== undefined) {
+    if (typeof body.skill !== "string" || body.skill.trim() === "") {
+      return { ok: false, status: 400, error: "skill must be a non-empty string" };
+    }
+    skill = body.skill.trim();
   }
 
   if (typeof body.pipeline_directory !== "string" || !body.pipeline_directory.trim()) {
@@ -124,6 +129,7 @@ export function parseCreateStageBody(
     system_prompt: body.system_prompt,
     ...(model !== undefined ? { model } : {}),
     ...(gateKinds !== undefined ? { gate_kinds: gateKinds } : {}),
+    ...(skill !== undefined ? { skill } : {}),
   };
 }
 
@@ -163,6 +169,9 @@ export function stageConfigToYaml(stage: Omit<CreateStageInput, "pipeline_direct
   }
   if (stage.model !== undefined && stage.model.length > 0) {
     lines.push(`model: ${formatInlineYamlScalar(stage.model)}`);
+  }
+  if (stage.skill !== undefined && stage.skill.length > 0) {
+    lines.push(`skill: ${formatInlineYamlScalar(stage.skill)}`);
   }
   lines.push("io:");
   lines.push("  input:");
@@ -268,6 +277,7 @@ export async function createStage(
         system_prompt: input.system_prompt,
         ...(input.model !== undefined && input.model.length > 0 ? { model: input.model } : {}),
         ...(input.gate_kinds !== undefined ? { gate_kinds: input.gate_kinds } : {}),
+        ...(input.skill !== undefined && input.skill.length > 0 ? { skill: input.skill } : {}),
       }),
       "utf8",
     );

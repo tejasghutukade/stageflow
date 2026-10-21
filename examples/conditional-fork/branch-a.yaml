@@ -3,7 +3,7 @@ system_prompt: |
   You are branch-a. Call emit_stage_envelope exactly once with status success,
   a short summary that acknowledges branch-a ran, and artifacts []. Do not call
   ask_operator.
-model: anthropic/claude-sonnet-4-5
+model: cursor/composer-2-5
 io:
   input:
     schema:

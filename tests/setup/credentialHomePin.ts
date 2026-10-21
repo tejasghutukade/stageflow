@@ -1,0 +1,51 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+const realEnv = process.env;
+
+// Without a pinned home, host-level files such as connections.yaml would be read from the
+// developer's real ~/.stageflow. Each test file gets its own empty one.
+if (!realEnv.STAGEFLOW_HOME?.trim()) {
+  realEnv.STAGEFLOW_HOME = mkdtempSync(path.join(tmpdir(), "sf-test-home-"));
+}
+
+if (realEnv.STAGEFLOW_HOME?.trim() && !realEnv.STAGEFLOW_CREDENTIAL_HOME?.trim()) {
+  realEnv.STAGEFLOW_CREDENTIAL_HOME = realEnv.STAGEFLOW_HOME;
+}
+
+// Attaching a URL MCP server links an OAuth store into the Pi agent dir; keep that off the real ~/.pi.
+if (!realEnv.PI_CODING_AGENT_DIR?.trim()) {
+  realEnv.PI_CODING_AGENT_DIR = path.join(realEnv.STAGEFLOW_HOME!, "agent");
+}
+
+process.env = new Proxy(realEnv, {
+  set(target, prop, value) {
+    const key = typeof prop === "string" ? prop : undefined;
+    const next = typeof value === "string" ? value : String(value);
+    if (key === "STAGEFLOW_HOME") {
+      const prev = target.STAGEFLOW_HOME;
+      target.STAGEFLOW_HOME = next;
+      // globalStageflowHome writes the resolved path back. The same path must
+      // not replace an explicit credential directory.
+      if (prev !== next) {
+        target.STAGEFLOW_CREDENTIAL_HOME = next;
+      }
+      return true;
+    }
+    if (key === undefined) return false;
+    target[key] = next;
+    return true;
+  },
+  deleteProperty(target, prop) {
+    const key = typeof prop === "string" ? prop : undefined;
+    if (key === undefined) return false;
+    if (key === "STAGEFLOW_HOME") {
+      delete target.STAGEFLOW_HOME;
+      delete target.STAGEFLOW_CREDENTIAL_HOME;
+      return true;
+    }
+    delete target[key];
+    return true;
+  },
+});

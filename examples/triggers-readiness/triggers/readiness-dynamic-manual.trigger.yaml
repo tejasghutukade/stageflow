@@ -1,0 +1,4 @@
+id: readiness-dynamic-manual
+pipeline: readiness
+kind: manual
+enabled: false

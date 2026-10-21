@@ -1,0 +1,32 @@
+id: send-email
+# cursor/auto needs CURSOR_API_KEY on the host. Use another model if you prefer.
+model: cursor/auto
+# A stage uses one channel. Pin the recipient here: the agent can only send to it and cannot change it.
+# `connection` is the id shown on the Connections page.
+channels:
+  - connection: agentmail
+    to: [change-me@example.invalid]
+    operations: [send]
+io:
+  input:
+    schema:
+      type: object
+      additionalProperties: true
+  output:
+    schema:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, enum: [sent, failed] }
+      additionalProperties: false
+system_prompt: |
+  Send one test email, then report the result.
+  Call send_message once with operationKey "smoke-email", subject "Stageflow channels test"
+  and text "Hello! This email was sent by a Stageflow test pipeline."
+  The recipient is fixed by configuration; never try to choose or change it.
+  If the call is repeated, use the same operationKey and the same content.
+  Never resend an uncertain submission (code CHANNEL_SEND_OUTCOME_UNKNOWN) with a different key.
+  Do not send messages through shell commands or any other tool.
+  Write a short receipt via write_stage_artifact. Do not include secrets.
+  When finished, call emit_stage_envelope exactly once with payload.email set to "sent" or "failed".
+  If the send failed, use status failure.

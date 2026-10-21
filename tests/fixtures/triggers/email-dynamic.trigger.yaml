@@ -1,0 +1,11 @@
+id: email-dynamic
+pipeline: hello
+kind: event
+enabled: true
+event:
+  source: email.message
+  config:
+    host: imap.example.com
+    port: 993
+    user: notifications@example.com
+    secretRef: EMAIL_PASSWORD

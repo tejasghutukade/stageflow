@@ -13,6 +13,9 @@ import type {
 } from "../types/pipeline.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import { parseStageMcp } from "./loadStage.js";
+import { parseStageSecrets } from "../runtime/stageSecretDecl.js";
+import { parseStageBrowser } from "./stageBrowser.js";
+import { parseToolRequires } from "./toolRequires.js";
 import { legacyAuthoringRejected, presentLegacyKeys } from "./legacyYaml.js";
 import {
   compileTargetContract,
@@ -57,7 +60,12 @@ function extractBodyRaw(raw: Record<string, unknown>): Record<string, unknown> {
 
 function hasBodyKey(raw: Record<string, unknown>): boolean {
   return Object.keys(raw).some(
-    (key) => BODY_KEYS.has(key) && key !== "skill" && key !== "mcp",
+    (key) =>
+      BODY_KEYS.has(key) &&
+      key !== "mcp" &&
+      key !== "secrets" &&
+      key !== "requires" &&
+      key !== "browser",
   );
 }
 
@@ -142,12 +150,45 @@ export function normalizePipelineStageEntries(
       return skillOutcome;
     }
     const skill = skillOutcome?.ok ? skillOutcome.value : undefined;
+    if (uses && skill !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.stage_wrapper_skill_rejected",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage entry at index ${index} sets skill: on a uses: wrapper; put skill: on the stage file (${uses}) instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
     const mcpOutcome = parseStageMcp(
       raw.mcp,
       `entry at index ${index} in ${declaringPath}`,
     );
     if (!mcpOutcome.ok) return mcpOutcome;
     const mcp = mcpOutcome.value;
+    const secretsOutcome = parseStageSecrets(
+      raw.secrets,
+      `entry at index ${index} in ${declaringPath}`,
+    );
+    if (!secretsOutcome.ok) return secretsOutcome;
+    const secrets = secretsOutcome.value;
+    const requiresOutcome = parseToolRequires(
+      raw.requires,
+      `stage entry at index ${index} in ${declaringPath}`,
+      {
+        code: "stage.invalid_requires",
+        category: "stage",
+      },
+    );
+    if (!requiresOutcome.ok) return requiresOutcome;
+    const requires = requiresOutcome.value;
+    const browserOutcome = parseStageBrowser(
+      raw.browser,
+      `entry at index ${index} in ${declaringPath}`,
+      typeof raw.id === "string" ? raw.id : undefined,
+    );
+    if (!browserOutcome.ok) return browserOutcome;
+    const browser = browserOutcome.value;
 
     if (uses && hasBody) {
       return loadFailure([
@@ -386,6 +427,9 @@ export function normalizePipelineStageEntries(
       ...(entryFlag !== undefined ? { entry: entryFlag } : {}),
       ...(skill !== undefined ? { skill } : {}),
       ...(mcp !== undefined ? { mcp } : {}),
+      ...(secrets !== undefined ? { secrets } : {}),
+      ...(requires !== undefined ? { requires } : {}),
+      ...(browser !== undefined ? { browser } : {}),
       ...(cloneCap !== undefined ? { clone_cap: cloneCap } : {}),
       ...(cloneMode !== undefined ? { clone_mode: cloneMode } : {}),
     };

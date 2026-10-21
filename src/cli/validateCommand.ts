@@ -7,13 +7,15 @@ import {
   formatValidationHuman,
   formatValidationJson,
 } from "./validateOutput.js";
+import { resolveCliProjectRootLocal } from "./resolveCliProjectRoot.js";
 
 export const VALIDATE_USAGE = `Usage:
-  sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
+  sf validate [--project-root <id-or-path>] [--pipeline <path>] [--task <path>] [--trigger <path>] [--strict] [--json]
 
   With no flags, validates all pipelines and tasks declared in stageflow.yaml (manifest-all).
   --pipeline validates one pipeline file (includes uses:/include: transitively).
-  --task validates one task file.`;
+  --task validates one task file.
+  --trigger validates one trigger file, including its pipeline/task refs.`;
 
 export type ValidateCommandIo = {
   log: (line: string) => void;
@@ -27,8 +29,10 @@ const defaultIo: ValidateCommandIo = {
 
 type ParsedValidateArgs = {
   help: boolean;
+  projectRoot?: string;
   pipeline?: string;
   task?: string;
+  trigger?: string;
   strict: boolean;
   json: boolean;
 };
@@ -41,8 +45,10 @@ function parseValidateArgs(args: string[]): ParsedValidateArgs {
     return { help: true, strict: false, json: false };
   }
 
+  let projectRoot: string | undefined;
   let pipeline: string | undefined;
   let task: string | undefined;
+  let trigger: string | undefined;
   let strict = false;
   let json = false;
   let help = false;
@@ -51,6 +57,12 @@ function parseValidateArgs(args: string[]): ParsedValidateArgs {
     const arg = args[i];
     if (arg === "--help" || arg === "-h") {
       help = true;
+    } else if (arg === "--project-root") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --project-root");
+      }
+      projectRoot = value;
     } else if (arg === "--pipeline") {
       const value = args[++i];
       if (value === undefined || value.length === 0) {
@@ -63,6 +75,12 @@ function parseValidateArgs(args: string[]): ParsedValidateArgs {
         throw new Error("Missing value for --task");
       }
       task = value;
+    } else if (arg === "--trigger") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --trigger");
+      }
+      trigger = value;
     } else if (arg === "--strict") {
       strict = true;
     } else if (arg === "--json") {
@@ -74,11 +92,12 @@ function parseValidateArgs(args: string[]): ParsedValidateArgs {
     }
   }
 
-  if (pipeline !== undefined && task !== undefined) {
-    throw new Error("Use at most one of --pipeline or --task");
+  const scopedFlagCount = [pipeline, task, trigger].filter((v) => v !== undefined).length;
+  if (scopedFlagCount > 1) {
+    throw new Error("Use at most one of --pipeline, --task, or --trigger");
   }
 
-  return { help, pipeline, task, strict, json };
+  return { help, projectRoot, pipeline, task, trigger, strict, json };
 }
 
 export async function runValidateCommand(
@@ -92,8 +111,7 @@ export async function runValidateCommand(
     ) => Promise<ValidationResult>;
   } = {},
 ): Promise<number> {
-  const cwd = options.cwd ?? process.cwd();
-  const projectRoot = options.projectRoot ?? cwd;
+  const shellCwd = options.cwd ?? process.cwd();
   const out: ValidateCommandIo = { ...defaultIo, ...options.io };
   const validateCatalogFn = options.validateCatalog ?? defaultValidateCatalog;
 
@@ -104,7 +122,24 @@ export async function runValidateCommand(
       return 0;
     }
 
-    const scope = parsed.pipeline ? "pipeline" : parsed.task ? "task" : "full";
+    let cwd = shellCwd;
+    let projectRoot = options.projectRoot ?? shellCwd;
+    if (parsed.projectRoot !== undefined) {
+      const resolved = resolveCliProjectRootLocal(parsed.projectRoot);
+      if (!resolved) {
+        throw new Error(`Unknown project_root: ${parsed.projectRoot.trim()}`);
+      }
+      cwd = resolved.rootPath;
+      projectRoot = resolved.rootPath;
+    }
+
+    const scope = parsed.pipeline
+      ? "pipeline"
+      : parsed.task
+        ? "task"
+        : parsed.trigger
+          ? "trigger"
+          : "full";
 
     const result = await validateCatalogFn({
       scope,
@@ -112,6 +147,7 @@ export async function runValidateCommand(
       projectRoot,
       pipeline: parsed.pipeline,
       task: parsed.task,
+      trigger: parsed.trigger,
       strict: parsed.strict,
     });
 

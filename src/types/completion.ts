@@ -25,7 +25,8 @@ export type CompletionCheck =
   | { id: string; type: "checklist"; items: string[] }
   | { id: string; type: "payload_schema" }
   | { id: string; type: "gate"; kind: StageGateKind }
-  | { id: string; type: "checkout_changes"; path_fields?: string[] };
+  | { id: string; type: "checkout_changes"; path_fields?: string[] }
+  | { id: string; type: "browser_login" };
 
 export type CompletionContract = {
   mode: "all";

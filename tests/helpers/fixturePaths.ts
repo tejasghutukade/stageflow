@@ -19,6 +19,18 @@ export function taskPath(name: string): string {
   return path.join(TASKS_DIR, `${stem}.task.yaml`);
 }
 
+/** Catalog-relative pipeline path for network surfaces (HTTP/MCP). */
+export function netPipeline(name: string): string {
+  const stem = name.replace(/\.(pipeline\.)?yaml$/, "");
+  return `pipelines/${stem}.pipeline.yaml`;
+}
+
+/** Catalog-relative task path for network surfaces (HTTP/MCP). */
+export function netTask(name: string): string {
+  const stem = name.replace(/\.(task\.)?yaml$/, "");
+  return `tasks/${stem}.task.yaml`;
+}
+
 export const SAMPLE_TASK = taskPath("sample");
 export const SINGLE_PIPELINE = pipelinePath("single");
 export const DOCS_ONLY_PIPELINE = pipelinePath("docs-only");

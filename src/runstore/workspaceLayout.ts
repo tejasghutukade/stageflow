@@ -1,5 +1,8 @@
 import { access, lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import { globalCredentialRoot } from "../project/globalHome.js";
+import { STAGEFLOW_AGENT_AUTH_PATH_ENV } from "../runtime/credentialBinding.js";
+import { SF_STAGE_WORKER } from "../runtime/stageWorkerProtocol.js";
 
 export { stageDir } from "./paths.js";
 
@@ -41,6 +44,14 @@ export function attemptLogPath(
   attempt: number,
 ): string {
   return path.join(attemptWorkspaceDir(workspaceDir, stageId, attempt), "log.jsonl");
+}
+
+export function attemptStreamLogPath(
+  workspaceDir: string,
+  stageId: string,
+  attempt: number,
+): string {
+  return path.join(attemptWorkspaceDir(workspaceDir, stageId, attempt), "stream.log");
 }
 
 export function attemptEnvelopePath(
@@ -120,6 +131,124 @@ export function isInsideDir(child: string, parent: string): boolean {
       relative !== ".." &&
       !path.isAbsolute(relative))
   );
+}
+
+export const STAGEFLOW_PATH_DENIED = "stageflow_path_denied";
+
+export type RealPathContainment =
+  | { status: "inside"; realPath: string }
+  | { status: "outside"; realPath: string }
+  | { status: "missing" };
+
+export async function classifyRealPathContainment(
+  candidatePath: string,
+  containerDir: string,
+): Promise<RealPathContainment> {
+  const containerReal = await realpath(containerDir);
+  let fileReal: string;
+  try {
+    fileReal = await realpath(candidatePath);
+  } catch {
+    return { status: "missing" };
+  }
+  if (isInsideDir(fileReal, containerReal)) {
+    return { status: "inside", realPath: fileReal };
+  }
+  return { status: "outside", realPath: fileReal };
+}
+
+export async function resolveEffectiveRealPath(
+  candidatePath: string,
+): Promise<string | undefined> {
+  try {
+    return await realpath(candidatePath);
+  } catch {
+    const missing: string[] = [];
+    let current = candidatePath;
+    while (true) {
+      missing.unshift(path.basename(current));
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return undefined;
+      }
+      try {
+        const realParent = await realpath(parent);
+        return path.join(realParent, ...missing);
+      } catch {
+        current = parent;
+      }
+    }
+  }
+}
+
+function credentialRootForFileToolDenial(): string | undefined {
+  if (process.env[SF_STAGE_WORKER] === "1") {
+    const stamped = process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV]?.trim();
+    if (!stamped) return undefined;
+    return path.resolve(path.dirname(stamped), "..");
+  }
+  return globalCredentialRoot();
+}
+
+export async function durableRootFileToolDenial(
+  candidatePath: string,
+  runWorkspaceDir: string,
+  durableRoot: string,
+  allowlistedRoots?: readonly string[],
+): Promise<typeof STAGEFLOW_PATH_DENIED | undefined> {
+  const fileReal = await resolveEffectiveRealPath(candidatePath);
+  if (fileReal === undefined) {
+    return undefined;
+  }
+
+  let workspaceReal: string;
+  try {
+    workspaceReal = await realpath(runWorkspaceDir);
+  } catch {
+    return undefined;
+  }
+  if (isInsideDir(fileReal, workspaceReal)) {
+    return undefined;
+  }
+
+  for (const root of allowlistedRoots ?? []) {
+    try {
+      const allowReal = await realpath(root);
+      if (isInsideDir(fileReal, allowReal)) {
+        return undefined;
+      }
+    } catch {
+      // skip roots that cannot be resolved
+    }
+  }
+
+  let durableReal: string;
+  try {
+    durableReal = await realpath(durableRoot);
+  } catch {
+    durableReal = path.resolve(durableRoot);
+  }
+  if (isInsideDir(fileReal, durableReal)) {
+    return STAGEFLOW_PATH_DENIED;
+  }
+
+  const credentialRoot = credentialRootForFileToolDenial();
+  if (credentialRoot !== undefined) {
+    let credentialReal: string;
+    try {
+      credentialReal = await realpath(credentialRoot);
+    } catch {
+      credentialReal = path.resolve(credentialRoot);
+    }
+    if (
+      credentialReal !== durableReal &&
+      !isInsideDir(credentialReal, durableReal) &&
+      isInsideDir(fileReal, credentialReal)
+    ) {
+      return STAGEFLOW_PATH_DENIED;
+    }
+  }
+  return undefined;
 }
 
 export function resolveArtifactTarget(

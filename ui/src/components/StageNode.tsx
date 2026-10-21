@@ -9,6 +9,7 @@ export type StageNodeProps = {
   index?: number;
   meta?: string;
   selected?: boolean;
+  proposed?: boolean;
   onClick?: () => void;
 };
 
@@ -18,6 +19,7 @@ export function StageNode({
   index,
   meta,
   selected,
+  proposed,
   onClick,
 }: StageNodeProps) {
   const glyph = ringGlyph(status) || (index != null ? String(index + 1) : "");
@@ -28,6 +30,7 @@ export function StageNode({
       className="node"
       data-s={status}
       data-selected={selected ? "true" : undefined}
+      data-proposed={proposed ? "true" : undefined}
       onClick={onClick}
       aria-disabled={!onClick}
       style={{ cursor: onClick ? "pointer" : "default" }}

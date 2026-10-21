@@ -1,0 +1,7 @@
+id: schedule-disabled
+pipeline: hello
+task: my-task
+kind: schedule
+schedule:
+  cron: "* * * * *"
+enabled: false

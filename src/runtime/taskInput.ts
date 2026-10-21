@@ -1,6 +1,6 @@
 import path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
-import { parseTaskFile } from "../config/loadTask.js";
+import { coerceTaskFile } from "../config/loadTask.js";
 import { relPath, type ValidationFinding } from "../config/validateCatalog.js";
 import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
@@ -17,7 +17,7 @@ export type ResolvedTaskInput =
   | { kind: "yaml"; taskYaml: string };
 
 export function isTaskFile(value: unknown): value is TaskFile {
-  return parseTaskFile(value, "task").ok;
+  return coerceTaskFile(value) !== undefined;
 }
 
 export function taskFileToYaml(task: TaskFile): string {
@@ -28,6 +28,12 @@ export function taskFileToYaml(task: TaskFile): string {
   if (task.context !== undefined) doc.context = task.context;
   if (task.constraints !== undefined) doc.constraints = task.constraints;
   if (task.checkout !== undefined) doc.checkout = task.checkout;
+  if (task.repository !== undefined) doc.repository = task.repository;
+  if (task.ref !== undefined) doc.ref = task.ref;
+  if (task.run_branch_template !== undefined) {
+    doc.run_branch_template = task.run_branch_template;
+  }
+  if (task.git_identity !== undefined) doc.git_identity = task.git_identity;
   if (task.input !== undefined) doc.input = task.input;
   return stringifyYaml(doc);
 }
@@ -97,9 +103,9 @@ export function resolveStartTaskInput(
     return { kind: "path", taskPath: resolveTaskPath(input.task, cwd) };
   }
 
-  const parsed = parseTaskFile(input.task, "task");
-  if (parsed.ok) {
-    return { kind: "yaml", taskYaml: taskFileToYaml(parsed.value) };
+  const coerced = coerceTaskFile(input.task);
+  if (coerced !== undefined) {
+    return { kind: "yaml", taskYaml: taskFileToYaml(coerced) };
   }
 
   throw new Error("task path, task object, or taskYaml is required");

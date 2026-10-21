@@ -28,6 +28,7 @@ import {
 import type { StageEnvelope } from "../types/envelope.js";
 import type { FeedbackLoopConfig } from "../types/pipeline.js";
 import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
+import { prepareEmitStageEnvelopeArguments } from "./prepareToolArguments.js";
 
 export type EmitCapture = {
   envelope?: StageEnvelope;
@@ -138,6 +139,9 @@ export function createEmitStageEnvelopeTool(
       stage_id: Type.Optional(Type.String()),
       notes: Type.Optional(Type.String()),
     }),
+    prepareArguments: prepareEmitStageEnvelopeArguments as (
+      args: unknown,
+    ) => never,
     execute: async (_toolCallId: string, params: unknown) => {
       if (capture.envelope) {
         return toolResult(
@@ -147,7 +151,9 @@ export function createEmitStageEnvelopeTool(
         );
       }
       try {
-        const envelope = assertRequiredEnvelope(params);
+        const envelope = assertRequiredEnvelope(
+          prepareEmitStageEnvelopeArguments(params),
+        );
         assertFeedbackLoopAction(envelope, feedbackLoopEmitContext);
         const isSendBack = envelope.feedback_loop?.action === "send_back";
         if (

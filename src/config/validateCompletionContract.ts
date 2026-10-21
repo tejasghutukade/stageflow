@@ -58,6 +58,20 @@ export function validateCompletionContractForStage(
         `gate check "${check.id}" requires gate_kinds to include "${check.kind}"`,
       );
     }
+    if (check.type === "browser_login") {
+      if (stage.browser?.check === undefined) {
+        return failure(
+          stage.id,
+          `check "${check.id}" requires the stage to declare browser.check`,
+        );
+      }
+      if (stage.browser.headed === false) {
+        return failure(
+          stage.id,
+          `check "${check.id}" is a human login check and needs a visible browser (browser.headed must not be false)`,
+        );
+      }
+    }
     if (check.type === "checkout_changes") {
       for (const field of check.path_fields ?? []) {
         if (!isRequiredStringArrayField(stage.payload_schema, field)) {

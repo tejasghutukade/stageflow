@@ -1,3 +1,4 @@
+import { parseHostGateContext } from "../browser/gateHandoff.js";
 import type { OpaqueAnswer, OpaqueWaitRequest, StageHandle } from "../agent/port.js";
 import {
   appendOperatorAnswer,
@@ -17,7 +18,7 @@ import {
 } from "../tools/askOperator.js";
 
 export type DeliverAnswerResult =
-  | { ok: true }
+  | { ok: true; verification?: "failed_retrying" }
   | { ok: false; reason: string; status: 404 | 409 | 400 | 500 };
 
 export type DeliverAnswerPrefixResult =
@@ -68,7 +69,10 @@ export function tryParsePendingPrompt(
     return undefined;
   }
   try {
-    return normalizePromptIds(parseAskOperatorParams(pendingRequest));
+    return {
+      ...normalizePromptIds(parseAskOperatorParams(pendingRequest)),
+      ...parseHostGateContext(pendingRequest),
+    };
   } catch {
     return undefined;
   }

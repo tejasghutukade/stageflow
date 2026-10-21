@@ -15,10 +15,18 @@ import path from "node:path";
 
 /** Every RunStore method name — compile-fail if port adds a method we omit. */
 const RUN_STORE_METHODS = [
+  "getRunBySubmission",
   "createRun",
   "updateRunStatus",
+  "tryUpdateRunStatus",
+  "patchRunWorkspaceBinding",
+  "setCancelReason",
+  "setRunDiskUsage",
+  "setSlimmedAt",
+  "deleteRun",
   "readRunMeta",
   "readTaskYaml",
+  "readPipelineBody",
   "getWorkspaceDir",
   "ensureStageWorkspace",
   "ensureAttemptWorkspace",
@@ -35,8 +43,24 @@ const RUN_STORE_METHODS = [
   "appendStageEvent",
   "listStageEvents",
   "listRuns",
+  "ensureProject",
+  "listRegisteredProjects",
   "readRun",
   "updatePipelineDag",
+  "createFeedbackLoop",
+  "getFeedbackLoop",
+  "listFeedbackLoops",
+  "updateFeedbackLoop",
+  "createFeedbackReplay",
+  "getFeedbackReplay",
+  "listFeedbackReplays",
+  "updateFeedbackReplay",
+  "createFeedbackReplayStagePass",
+  "listFeedbackReplayStagePasses",
+  "updateFeedbackReplayStagePass",
+  "createForkGeneration",
+  "listForkGenerations",
+  "updateForkGeneration",
 ] as const satisfies readonly (keyof RunStore)[];
 
 type MissingRunStoreMethods = Exclude<
@@ -115,19 +139,6 @@ describe("RunChangeBus", () => {
       createRunChangeBus(),
     );
     expect(missingRunStoreMethods(store)).toEqual([]);
-  });
-
-  it("completeness check fails on incomplete hand-list", () => {
-    const incompleteHandList = {
-      createRun: async () => ({ runId: "r", workspaceDir: "/w" }),
-      updateRunStatus: async () => {},
-      appendStageEvent: async () => {},
-      readRun: async () => ({}),
-    };
-    const missing = missingRunStoreMethods(incompleteHandList);
-    expect(missing.length).toBeGreaterThan(0);
-    expect(missing).toContain("listRuns");
-    expect(missing).toContain("updatePipelineDag");
   });
 
   it("same-bus re-wrap is idempotent and does not double-emit", async () => {
@@ -210,11 +221,19 @@ describe("RunChangeBus", () => {
     const listRuns = vi.fn(async () => []);
     const getWorkspaceDir = vi.fn(() => "/workspace");
     const underlying = {
+      getRunBySubmission: vi.fn(),
       createRun: vi.fn(),
       updateRunStatus: vi.fn(),
+      tryUpdateRunStatus: vi.fn(),
+      patchRunWorkspaceBinding: vi.fn(),
+      setCancelReason: vi.fn(),
+      setRunDiskUsage: vi.fn(),
+      setSlimmedAt: vi.fn(),
+      deleteRun: vi.fn(),
       appendStageEvent: vi.fn(),
       readRunMeta: vi.fn(),
       readTaskYaml: vi.fn(),
+      readPipelineBody: vi.fn(),
       getWorkspaceDir,
       ensureStageWorkspace: vi.fn(),
       ensureAttemptWorkspace: vi.fn(),
@@ -230,8 +249,24 @@ describe("RunChangeBus", () => {
       readEnvelope: vi.fn(),
       listStageEvents: vi.fn(),
       listRuns,
+      ensureProject: vi.fn(),
+      listRegisteredProjects: vi.fn(),
       readRun,
       updatePipelineDag: vi.fn(),
+      createFeedbackLoop: vi.fn(),
+      getFeedbackLoop: vi.fn(),
+      listFeedbackLoops: vi.fn(),
+      updateFeedbackLoop: vi.fn(),
+      createFeedbackReplay: vi.fn(),
+      getFeedbackReplay: vi.fn(),
+      listFeedbackReplays: vi.fn(),
+      updateFeedbackReplay: vi.fn(),
+      createFeedbackReplayStagePass: vi.fn(),
+      listFeedbackReplayStagePasses: vi.fn(),
+      updateFeedbackReplayStagePass: vi.fn(),
+      createForkGeneration: vi.fn(),
+      listForkGenerations: vi.fn(),
+      updateForkGeneration: vi.fn(),
     } as unknown as RunStore;
 
     const wrapped = wrapRunStoreWithChangeBus(

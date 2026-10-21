@@ -1,17 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { runExportRunCommand } from "../src/cli/exportRunCommand.js";
 import { RUNS_USAGE, runRunsCommand } from "../src/cli/runsCommand.js";
 import { operatorPromptEvent } from "../src/hitl/qaTrail.js";
 import { projectRun } from "../src/projection/projectRun.js";
 import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { globalStageflowHome } from "../src/project/globalHome.js";
 import type { RunStatus, RunStore } from "../src/runstore/port.js";
 import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
+import { alreadyUp, startTestService } from "./helpers/testInProcessService.js";
 
 function captureIo() {
   const stdout: string[] = [];
@@ -42,7 +45,7 @@ async function seedRun(
     completeStages?: boolean;
   } = {},
 ): Promise<{ runId: string; store: RunStore }> {
-  const store = createRunStore({ rootDir: projectRoot });
+  const store = createRunStore({ rootDir: globalStageflowHome() });
   const stageIds = options.stageIds ?? ["stage-a", "stage-b"];
   const completeStages = options.completeStages ?? true;
   const created = await store.createRun({
@@ -77,6 +80,20 @@ async function seedRun(
 }
 
 describe("runRunsCommand inspect/wait", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-runs-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
   it("list --json seeded ids match listRuns", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-list-"));
     const { runId, store } = await seedRun(projectRoot);
@@ -223,23 +240,28 @@ describe("runRunsCommand inspect/wait", () => {
     });
     await store.updateRunStatus(created.runId, "failed");
 
-    const cap = captureIo();
-    const code = await runRunsCommand(
-      ["recover", "--run", created.runId, "--stage", "verify", "--stop", "--json"],
-      {
-        projectRoot,
-        store,
-        io: cap.io,
-        probeHost: async () => "down",
-      },
-    );
+    const service = await startTestService(store, scriptedFakeAgent([]), projectRoot);
+    try {
+      const cap = captureIo();
+      const code = await runRunsCommand(
+        ["recover", "--run", created.runId, "--stage", "verify", "--stop", "--json"],
+        {
+          store,
+          io: cap.io,
+          hostBaseUrl: service.baseUrl,
+          ensureService: alreadyUp,
+        },
+      );
 
-    expect(code).toBe(0);
-    expect(JSON.parse(cap.stdout.join("\n"))).toEqual({
-      ok: true,
-      runId: created.runId,
-      stageId: "verify",
-    });
+      expect(code).toBe(0);
+      expect(JSON.parse(cap.stdout.join("\n"))).toEqual({
+        ok: true,
+        runId: created.runId,
+        stageId: "verify",
+      });
+    } finally {
+      await service.stop();
+    }
   });
 
   it("waiting --json includes pending_prompt for a parked stage", async () => {
@@ -412,7 +434,7 @@ describe("runRunsCommand inspect/wait", () => {
     expect(after.status).toBe(before.status);
   });
 
-  it("export-run still rejects the in-progress id that show accepts", async () => {
+  it("export-run accepts the in-progress id that show accepts", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-export-"));
     const { runId, store } = await seedRun(projectRoot, {
       completeStages: false,
@@ -433,8 +455,14 @@ describe("runRunsCommand inspect/wait", () => {
       projectRoot,
       io: exportCap.io,
     });
-    expect(exportCode).toBe(1);
-    expect(exportCap.stderr.join("\n")).toMatch(/run is not complete/);
+    expect(exportCode).toBe(0);
+    expect(exportCap.stderr.join("\n")).not.toMatch(/run is not complete/);
+    const exported = JSON.parse(exportCap.stdout.join("\n")) as {
+      status: string;
+      run_manifest: unknown;
+    };
+    expect(exported.status).toBe("running");
+    expect(exported).toHaveProperty("run_manifest");
   });
 
   it("unknown subcommand prints USAGE and exits 1", async () => {

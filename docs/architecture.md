@@ -5,7 +5,7 @@ title: Architecture
 
 # Architecture
 
-Stageflow is a local-first runtime for configurable multi-stage agent workflows. It separates **workflow orchestration** from **agent execution**: Stageflow owns the pipeline graph, scheduling, persisted state, handoff contracts, retries, human gates, and operator interfaces; agent execution runs behind `AgentPort`, with two selectable backends today — Pi (`@earendil-works/pi-coding-agent`, the default) and Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, opt-in per pipeline via an `agent:` field). Pipelines that don't opt in behave exactly as before; the two are additive, not a migration.
+Stageflow is a local-first runtime for configurable multi-stage agent workflows. It separates **workflow orchestration** from **agent execution**: Stageflow owns the pipeline graph, scheduling, persisted state, handoff contracts, retries, human gates, and operator interfaces; agent execution runs behind `StagePort`, with two selectable backends today — Pi (`@earendil-works/pi-coding-agent`, the default) and Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, opt-in per pipeline via an `agent:` field). Pipelines that don't opt in behave exactly as before; the two are additive, not a migration.
 
 ## System boundaries
 
@@ -18,9 +18,11 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 | DAG scheduler | Readiness, bounded parallelism, routing, fan-out/join, Clone Chain instances, failure propagation | `src/runtime/pipelineScheduler.ts` |
 | Stage runtime | Build attempt context, open the agent, validate handoff and optional after-phase `verify`, record activity, coordinate gates | `src/runtime/stageRunner.ts`, `src/runtime/verifiedStageExecution.ts`, `src/runtime/stageAttemptBootstrap.ts` |
 | Agent boundary | Stable stage input/result and live wait-or-complete session contract | `src/agent/port.ts` |
-| Backend selection | Resolves which adapter a stage runs on (stage > pipeline > global > Pi). **Model** (LLM id) resolves separately with the same tier order but no `"pi"` fallback — see [YAML catalog — Model defaults](yaml-catalog.md#model-defaults-and-precedence) | `src/agent/resolveAgentPort.ts`, `src/agent/agentBackend.ts`, `src/config/resolveModel.ts` |
+| Backend selection | Resolves which adapter a stage runs on (stage > pipeline > global > Pi). **Model** (LLM id) resolves separately with the same tier order but no `"pi"` fallback — see [YAML catalog — Model defaults](yaml-catalog.md#model-defaults-and-precedence) | `src/agent/resolveStagePort.ts`, `src/agent/agentBackend.ts`, `src/config/resolveModel.ts` |
 | Pi adapter | Translate Stageflow stage execution into Pi coding-agent sessions and tools | `src/agent/piAdapter.ts` |
 | Claude adapter | Translate Stageflow stage execution into Claude Agent SDK sessions and tools | `src/agent/claudeAdapter.ts`, `claudeTools.ts`, `claudeActivity.ts`, `claudeSession.ts` |
+| Agent service | Agent definitions, revisions, sessions, turns, approvals, channels and schedules; one turn-lifecycle module owns every transition | `src/agents/` |
+| MCP resolver | Merges the project `.mcp.json` with servers and secrets saved from the console; fills `${VAR}` by caller scope (stage, agent, probe, validate) | `src/config/resolveStageMcpServers.ts`, `src/config/mcpHostCatalog.ts` |
 | Persistence | Store run metadata, DAG snapshots, attempts, events, envelopes, artifacts, and projections | `src/runstore/` |
 | Operator surfaces | Drive and inspect the same runtime through CLI, browser console, or MCP | `src/cli/`, `src/server/`, `src/mcp/`, `ui/` |
 
@@ -56,7 +58,7 @@ The envelope is the control-plane handoff; artifacts are the data-plane handoff.
 
 ## Persistence and recovery
 
-SQLite is the active `RunStore` adapter. State lives under `<git-root>/.stageflow/`, with per-run and per-attempt workspaces under `.stageflow/runs/`.
+SQLite is the active `RunStore` adapter. Run state is **global**, not per-project: it lives under the durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`), with per-run and per-attempt workspaces under `runs/`. One `RunStore` instance backs every project on the machine; each run still records the `project_root` it came from, so views can be scoped back to one project. The same store holds a durable **projects registry**: catalog membership is seeded roots ∪ registered absolute folders. `sf ui` registers the directory it was started in. `sf mcp` does not. Local CLI ensure-then-starts against its resolved cwd; remotes may only target registered or seeded roots (unknown absolute `project_root` is refused). Per-project settings remain at `<git-root>/.stageflow/settings.json`. Pipeline/task files stay project-local under each registered (or seeded) root. See [Data directory](data-directory.md) and [MCP — catalog roots](mcp.md#catalog-roots-and-project_root).
 
 Stageflow persists:
 
@@ -71,11 +73,15 @@ Persisted state lets the runtime reconstruct scheduler state for HITL resume and
 
 ## Human-in-the-loop lifecycle
 
-`AgentPort.openStage()` returns a live `StageHandle`. The runtime pulls either a completion or a `waiting_for_input` event. A waiting attempt is parked without converting the prompt into an unstructured failure. When the operator answers, Stageflow reconstructs the run context, delivers the opaque answer to the adapter, and continues the remaining DAG.
+`StagePort.openStage()` returns a live `StageHandle`. The runtime pulls either a completion or a `waiting_for_input` event. A waiting attempt is parked without converting the prompt into an unstructured failure. When the operator answers, Stageflow reconstructs the run context, delivers the opaque answer to the adapter, and continues the remaining DAG.
 
 How an adapter actually survives that park is adapter-internal and deliberately allowed to differ: Pi reopens its own on-disk session and splices the answer directly into the pending tool call, then resumes mid-thought. The Claude adapter never lets a tool call go dangling in the first place — `ask_operator` returns an immediate placeholder and the turn ends cleanly (via an `interrupt()` backstop), so parking has nothing to repair; answering resumes the same session as a new turn with the real prior conversation reloaded, not mid-thought. Both satisfy the same `StageHandle` contract from the runtime's point of view.
 
 This same lifecycle supports interactive console use and headless automation: CI exits with code `2` when a run requires input, while MCP clients can discover waiting gates and answer them programmatically.
+
+## Agents
+
+Agents are a second, conversational way to run work beside pipelines. Each lives in `agents/<id>.agent.yaml` in the project (git-tracked), is synced into revisions in the run store, and runs on a Pi session sealed to the tools and approvals its definition grants. One turn-lifecycle module owns every change of a turn, its session and its approval, so a stopped turn cannot leave an approval pending. Channels, schedules, the console, CLI, MCP and the public web chat all enter through the same session and turn path. See [Agents](agents.md).
 
 ## Design decisions
 
@@ -93,7 +99,7 @@ Workflow topology and stage configuration live with the consuming project, where
 
 ### Orchestration behind ports
 
-`AgentPort` keeps scheduling and persistence code independent of any one adapter's session mechanics — proven out by a second production implementation (Claude Agent SDK) alongside Pi, chosen via `resolveAgentPort()` and never affecting a stage that doesn't opt in. Model resolution (`resolveModel`) picks the LLM id string on a separate path from that backend choice. `RunStore` similarly keeps runtime call sites behind a persistence contract, even though SQLite is currently the only live adapter. These boundaries are extension seams, not promises that additional backends already exist — `AgentPort` already redeemed that promise once.
+`StagePort` keeps scheduling and persistence code independent of any one adapter's session mechanics — proven out by a second production implementation (Claude Agent SDK) alongside Pi, chosen via `resolveStagePort()` and never affecting a stage that doesn't opt in. Model resolution (`resolveModel`) picks the LLM id string on a separate path from that backend choice. `RunStore` similarly keeps runtime call sites behind a persistence contract, even though SQLite is currently the only live adapter. These boundaries are extension seams, not promises that additional backends already exist — `StagePort` already redeemed that promise once.
 
 ### Two backends, one contract
 
@@ -102,6 +108,14 @@ Pi and the Claude adapter satisfy `StageHandle.next()`/`deliverAnswer()`/`close(
 ### Local-first operator control
 
 The CLI, local console, and MCP server operate on the same run model. This keeps local and CI behavior aligned and makes stage state inspectable without introducing a hosted control plane. Stageflow is not currently a multi-tenant distributed orchestrator.
+
+### Trigger seam: schedule, GitHub poll, and email adapters
+
+A `TriggerDefinition` (catalog `*.trigger.yaml`, see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)) binds an addressable `id` to an existing `pipeline` + `task`. Firing one (`sf trigger fire`, `POST /api/triggers/:id/fire`) resolves those refs and starts a run through the same `start_run` path the CLI/MCP/console already use — no separate execution logic. `TriggerSourcePort` (`src/runtime/triggerPort.ts`) is the abstract seam anything that decides "fire trigger X now" would implement. `schedule`-kind triggers have a real adapter, `ScheduleSource` (`src/runtime/scheduleSource.ts`): croner-backed, ticking on a Host-owned interval, persisting each trigger's `next_run_at` so a restart doesn't lose or double-fire it, and catching up at most once for anything still due at boot rather than backfilling every missed interval. `event`-kind triggers watching `github.*` sources have a second real adapter, `GithubPollSource` (`src/runtime/githubPollSource.ts`): it ticks on its own Host-owned interval, groups triggers by distinct `event.config.repo` to bound API calls, and diffs each repo's PR list (conditioned on a persisted ETag) against a persisted cursor in the generic `trigger_adapter_state` table — a missed poll during a Host outage isn't lost, since the next tick's diff naturally catches up from the cursor, so unlike `ScheduleSource` it needs no boot catch-up tick. `event`-kind triggers watching `email.*` sources have a third real adapter, `EmailSource` (`src/runtime/emailSource.ts`) — architecturally different from the other two, since it's push-based rather than ticking on an interval: it opens a real IMAP connection per distinct mailbox (`host`+`port`+`user`) and holds it in IDLE, reacting to the server's own new-message notification, evaluating every trigger registered against that mailbox on each new message, and persisting a UID watermark in the same `trigger_adapter_state` table so a reconnect resumes from where it left off instead of re-firing already-seen mail. A dropped IMAP connection reconnects with bounded exponential backoff rather than going dark, and `stop()` tears down every open connection and pending reconnect timer so a Host shutdown stays clean.
+
+### Single global auto-starting service
+
+There is one Stageflow background service per machine, not one per project. Where the Host process was started does not define the project set. `sf ui` and `sf mcp` start it explicitly; `sf run` and mutating `sf runs` verbs (`answer`, `retry`, `resume`, `abandon`, `rerun`, `recover`) are HTTP clients that probe the well-known local port and auto-start the service headlessly (`<entry> mcp`, detached) the first time anything needs it. Before `start_run`, `sf run` registers its resolved project folder with the Host (`POST /api/projects` on trusted loopback). This replaced an earlier one-process-per-project model that collided on port binding whenever more than one project or git worktree tried to run `sf ui`/`sf mcp` at once. Read-only `sf runs` verbs (`list`, `show`, `verify`, `waiting`) read the global store directly and don't require the service to be running.
 
 ## Runtime invariants
 
@@ -113,6 +127,10 @@ The CLI, local console, and MCP server operate on the same run model. This keeps
 - Retries create new attempts and recompute affected downstream execution rather than rewriting prior history.
 - The CLI, console, and MCP host drive the same runtime contracts.
 
+## Stage process in development
+
+A published `sf` binary runs each stage as compiled `dist/cli.js`. `npm run dev` runs TypeScript, so the stage worker loads `src/cli.ts` through the tsx loader. If that process exits before it records a failure, the stage is marked failed.
+
 ## Related documentation
 
 - [YAML catalog](yaml-catalog.md) — pipeline, stage, task, route, join, loop, and Clone Chain configuration
@@ -121,5 +139,8 @@ The CLI, local console, and MCP server operate on the same run model. This keeps
 - [Human-in-the-loop](hitl.md) — gate kinds, waiting behavior, and resume paths
 - [CI / headless](ci.md) — JSON output, exit codes, and GitHub Actions
 - [MCP](mcp.md) — tools and run resources
+- [Operator console](operator-console.md) and [Agents](agents.md)
+- [MCP servers](mcp-servers.md)
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — stage agents consuming project MCP servers
 - [Operator console](operator-console.md) — runtime inspection and gate handling
+- [Workshop Author](workshop.md) — chat-draft a pipeline and save it into the catalog

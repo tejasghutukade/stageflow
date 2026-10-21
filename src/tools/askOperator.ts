@@ -9,6 +9,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
+import type { HostGateContext } from "../browser/gateHandoff.js";
+import { prepareAskOperatorArguments } from "./prepareToolArguments.js";
 
 export class AskOperatorError extends Error {
   constructor(message: string) {
@@ -71,7 +73,7 @@ export type MultiQuestionItem = {
   id: string;
 };
 
-export type AskOperatorPrompt =
+export type AskOperatorPrompt = (
   | { kind: "free_text"; message: string; id: string }
   | { kind: "confirm"; message: string; id: string }
   | {
@@ -84,7 +86,9 @@ export type AskOperatorPrompt =
       message: string;
       artifacts: string[];
       id: string;
-    };
+    }
+) &
+  HostGateContext;
 
 export type Decision = "accept" | "reject";
 
@@ -298,11 +302,12 @@ function parseSubQuestion(
 }
 
 export function parseAskOperatorParams(value: unknown): AskOperatorParams {
-  if (!isRecord(value)) {
+  const prepared = prepareAskOperatorArguments(value);
+  if (!isRecord(prepared)) {
     throw new AskOperatorError("ask_operator params must be an object");
   }
 
-  const kind = value.kind;
+  const kind = prepared.kind;
   if (typeof kind !== "string") {
     throw new AskOperatorError("kind is required");
   }
@@ -317,41 +322,41 @@ export function parseAskOperatorParams(value: unknown): AskOperatorParams {
     );
   }
 
-  const id = optionalId(value.id, "id");
+  const id = optionalId(prepared.id, "id");
 
   if (kind === "free_text" || kind === "confirm") {
     return {
       kind,
-      message: requireNonEmptyString(value.message, "message"),
+      message: requireNonEmptyString(prepared.message, "message"),
       ...(id !== undefined ? { id } : {}),
     };
   }
 
   if (kind === "artifact_backed") {
-    if (!Array.isArray(value.artifacts)) {
+    if (!Array.isArray(prepared.artifacts)) {
       throw new AskOperatorError("artifacts must be an array");
     }
-    if (value.artifacts.length < 1) {
+    if (prepared.artifacts.length < 1) {
       throw new AskOperatorError("artifacts must contain at least one path");
     }
-    const artifacts = value.artifacts.map((item, index) =>
+    const artifacts = prepared.artifacts.map((item, index) =>
       requireNonEmptyString(item, `artifacts[${index}]`),
     );
     return {
       kind,
-      message: requireNonEmptyString(value.message, "message"),
+      message: requireNonEmptyString(prepared.message, "message"),
       artifacts,
       ...(id !== undefined ? { id } : {}),
     };
   }
 
-  if (!Array.isArray(value.questions)) {
+  if (!Array.isArray(prepared.questions)) {
     throw new AskOperatorError("questions must be an array");
   }
-  if (value.questions.length < 1) {
+  if (prepared.questions.length < 1) {
     throw new AskOperatorError("questions must contain at least one item");
   }
-  const questions = value.questions.map((item, index) =>
+  const questions = prepared.questions.map((item, index) =>
     parseSubQuestion(item, `questions[${index}]`),
   );
   return {
@@ -629,6 +634,9 @@ export function createAskOperatorTool(options: AskOperatorToolOptions) {
     description:
       `Ask the operator a question and wait for their answer. Supports ${kindList} prompts. Does not complete the stage — call emit_stage_envelope when finished.`,
     parameters: askOperatorParamsSchemaFor(allowedKinds),
+    prepareArguments: prepareAskOperatorArguments as (
+      args: unknown,
+    ) => never,
     execute: async (_toolCallId: string, params: unknown) => {
       let prompt: AskOperatorPrompt;
       try {

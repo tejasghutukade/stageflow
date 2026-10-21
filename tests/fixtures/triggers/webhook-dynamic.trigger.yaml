@@ -1,0 +1,11 @@
+id: webhook-dynamic
+pipeline: hello
+kind: event
+enabled: true
+event:
+  source: webhook
+  match:
+    action: opened
+  config:
+    secretRef: WEBHOOK_SECRET
+    header: x-signature

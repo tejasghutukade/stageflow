@@ -48,7 +48,7 @@ describe("StageRoots session seam", () => {
     expect(roots.agentDir).not.toContain("checkout");
   });
 
-  it("FakeAgent records StageRoots from AgentPort input", async () => {
+  it("FakeAgent records StageRoots from StagePort input", async () => {
     const agent = new FakeAgent({
       type: "emit",
       envelope: { status: "success", summary: "ok", artifacts: [] },

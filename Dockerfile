@@ -1,31 +1,70 @@
-# Sandbox image for Bash-in-a-Box (docs/specs/stage-container-sandbox.md, V2).
-#
-# This container's own process never runs Stageflow code — it only ever
-# receives `docker exec bash -c "<command>"` calls from the host-side stage
-# worker, which routes the agent's `Bash` tool calls here via the Claude
-# Agent SDK's `toolAliases`. So no Stageflow `dist/`/`node_modules` is
-# baked in, no build stage, no ANTHROPIC_API_KEY ever reaches this image —
-# just the tools a target repo's own shell commands are likely to need:
-# git, gh, and common language runtimes (node, python3).
-#
-# Started long-lived per stage attempt (`docker run -d ... sleep infinity`)
-# and `exec`'d into repeatedly, then removed when the attempt ends. The
-# project root is mounted at the *same absolute path* inside the container
-# as on the host (not a fixed /workspace) — see the launcher/worker code
-# that starts this container for why.
+# syntax=docker/dockerfile:1
 
-FROM node:22-bookworm-slim
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates gnupg python3 make g++ \
-    && mkdir -p -m 755 /etc/apt/keyrings \
-    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-      > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
+FROM ${NODE_IMAGE} AS build
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY package.json package-lock.json .npmrc ./
+COPY ui/package.json ./ui/
+RUN npm ci
+COPY tsconfig.json ./
+COPY src ./src
+COPY ui ./ui
+COPY scripts ./scripts
+COPY skills ./skills
+COPY builtin-skills ./builtin-skills
+COPY examples/triggers-readiness ./examples/triggers-readiness
+COPY README.md LICENSE ./
+RUN npm run build \
+  && npm run ui:build \
+  && npm prune --omit=dev \
+  && npm cache clean --force
 
-# No WORKDIR: the worker always passes -w <rootDir> at `docker run` time,
-# matching the mount, which overrides any default.
+FROM ${NODE_IMAGE} AS runtime
+ARG STAGEFLOW_BUILD_SHA=unknown
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git bash tini ca-certificates curl \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --gid 10001 stageflow \
+  && useradd --uid 10001 --gid 10001 --home-dir /data --create-home --shell /usr/sbin/nologin stageflow \
+  && mkdir -p /data/tmp /etc/stageflow /opt/stageflow \
+  && chown stageflow:stageflow /data /data/tmp
+
+WORKDIR /opt/stageflow
+COPY --from=build --chown=stageflow:stageflow /src/package.json /src/package-lock.json ./
+COPY --from=build --chown=stageflow:stageflow /src/node_modules ./node_modules
+COPY --from=build --chown=stageflow:stageflow /src/dist ./dist
+COPY --from=build --chown=stageflow:stageflow /src/skills ./skills
+COPY --from=build --chown=stageflow:stageflow /src/builtin-skills ./builtin-skills
+COPY --from=build --chown=stageflow:stageflow /src/examples/triggers-readiness ./catalog/triggers-readiness
+COPY --from=build --chown=stageflow:stageflow /src/README.md /src/LICENSE ./
+COPY --from=build /src/scripts/generate-toolchain-manifest.mjs ./scripts/generate-toolchain-manifest.mjs
+RUN node ./scripts/generate-toolchain-manifest.mjs /etc/stageflow/toolchain.json \
+  && rm -rf ./scripts \
+  && ln -sf /opt/stageflow/dist/cli.js /usr/local/bin/sf \
+  && ln -sf /opt/stageflow/dist/cli.js /usr/local/bin/stageflow \
+  && chmod 755 /opt/stageflow/dist/cli.js
+
+ENV STAGEFLOW_HOME=/data \
+  STAGEFLOW_CREDENTIAL_HOME=/data \
+  STAGEFLOW_BIND=0.0.0.0 \
+  STAGEFLOW_NO_AUTOSTART=1 \
+  STAGEFLOW_NO_OPEN=1 \
+  TMPDIR=/data/tmp \
+  SQLITE_TMPDIR=/data/tmp \
+  STAGEFLOW_BUILD_SHA=${STAGEFLOW_BUILD_SHA} \
+  NODE_ENV=production
+
+VOLUME ["/data"]
+EXPOSE 3847
+
+USER stageflow:stageflow
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:3847/livez || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sf", "mcp"]

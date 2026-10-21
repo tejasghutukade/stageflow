@@ -41,6 +41,24 @@ export function waitingView(snapshot: CatalogSnapshot): RunSummary[] {
   return bucketViews(snapshot).waiting;
 }
 
+export function inboxWaitingView(snapshot: CatalogSnapshot): RunSummary[] {
+  const waiting = bucketViews(snapshot).waiting;
+  return waiting.slice().sort((a, b) => {
+    const aAt = a.updated_at ?? a.created_at;
+    const bAt = b.updated_at ?? b.created_at;
+    return aAt.localeCompare(bAt);
+  });
+}
+
+export function heldWaitingCount(
+  snapshot: CatalogSnapshot,
+  health: CapacityHealth | null,
+): number {
+  if (!health?.activeRunIds?.length) return 0;
+  const active = new Set(health.activeRunIds);
+  return inboxWaitingView(snapshot).filter((run) => active.has(run.run_id)).length;
+}
+
 export function inFlightView(snapshot: CatalogSnapshot): RunSummary[] {
   return bucketViews(snapshot).inFlight;
 }

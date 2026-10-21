@@ -1,0 +1,14 @@
+id: home-path-absolute-prompt
+stages:
+  - id: home-path-prompt
+    entry: true
+    system_prompt: |
+      Edit /tmp/sf-u7-home-lint/worktrees/run1/src/main.ts and emit success.
+    model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

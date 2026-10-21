@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { RunSummary } from "./api";
+import { agentsApi } from "./api/agents";
 import { useRunCatalog } from "./catalog/useRunCatalog";
 import { waitingView } from "./catalog/views";
 
@@ -81,4 +82,45 @@ export function useWaitingNotifications(enabled: boolean): void {
       }
     }
   }, [snapshot, loading, enabled]);
+}
+
+/** Ids that are new since `seen`. The first poll (`seen === null`) only records, so a page load never notifies. */
+export function diffNewIds<T extends { id: string }>(
+  items: readonly T[],
+  seen: Set<string> | null,
+): { emit: T[]; nextSeen: Set<string> } {
+  const current = new Set(items.map((item) => item.id));
+  if (seen === null) return { emit: [], nextSeen: current };
+  return { emit: items.filter((item) => !seen.has(item.id)), nextSeen: current };
+}
+
+const APPROVAL_POLL_MS = 15_000;
+
+/** Same switch as stages waiting on you: a desktop notification when an agent asks for approval. */
+export function useAgentApprovalNotifications(enabled: boolean): void {
+  const seenRef = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const approvals = await agentsApi.pendingApprovals();
+        if (stopped) return;
+        const { emit, nextSeen } = diffNewIds(approvals, seenRef.current);
+        seenRef.current = nextSeen;
+        if (!enabled || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+        for (const approval of emit) {
+          new Notification("Agent waiting on you", { body: `${approval.agentId} wants to use ${approval.tool}` });
+        }
+      } catch {
+        /* the Inbox shows load errors; a failed poll just tries again */
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), APPROVAL_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [enabled]);
 }

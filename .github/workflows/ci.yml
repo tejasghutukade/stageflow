@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      TMPDIR: /tmp
+      SQLITE_TMPDIR: /tmp
     steps:
       - uses: actions/checkout@v4
 
@@ -28,3 +31,30 @@ jobs:
       - run: npm run ui:test
 
       - run: npm run typecheck
+
+  # Image smoke (Slot 10 / U5): build → run → /livez. Path-filtered on PRs;
+  # always on main so packaging regressions still fail the default branch.
+  docker-smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect packaging path changes
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            packaging:
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'docker-compose.yml'
+              - 'scripts/docker-smoke.sh'
+
+      - name: Image smoke (/livez)
+        if: github.event_name != 'pull_request' || steps.filter.outputs.packaging == 'true'
+        run: bash scripts/docker-smoke.sh
+        env:
+          STAGEFLOW_BUILD_SHA: ${{ github.sha }}

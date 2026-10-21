@@ -5,31 +5,6 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-
-const runManagerCapture = vi.hoisted(() => ({
-  catalogs: [] as Array<{ operatorCatalog?: { cwd?: string; agentDir?: string } }>,
-}));
-
-vi.mock("../src/runtime/runManager.js", async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import("../src/runtime/runManager.js")
-  >();
-  class MockRunManager {
-    constructor(opts: ConstructorParameters<typeof actual.RunManager>[0]) {
-      runManagerCapture.catalogs.push({ operatorCatalog: opts.operatorCatalog });
-    }
-    startRun = vi.fn().mockResolvedValue({
-      ok: false,
-      code: "busy_capacity",
-      reason: "busy",
-    });
-  }
-  return {
-    ...actual,
-    RunManager: MockRunManager as unknown as typeof actual.RunManager,
-  };
-});
-
 import { parseRunStageArgs } from "../src/cli.js";
 import { resolveOperatorCatalog } from "../src/cli/operatorCatalog.js";
 import { runRunCommand } from "../src/cli/runCommand.js";
@@ -123,11 +98,6 @@ describe("resolveOperatorCatalog", () => {
 });
 
 describe("sf run operator catalog", () => {
-  afterEach(() => {
-    runManagerCapture.catalogs.length = 0;
-    vi.clearAllMocks();
-  });
-
   it("unknown --operator-nope exits 1", async () => {
     const cap = captureIo();
     const code = await runRunCommand(
@@ -138,9 +108,19 @@ describe("sf run operator catalog", () => {
     expect(cap.stderr.join("\n")).toMatch(/Unknown flag: --operator-nope/);
   });
 
-  it("runRunCommand passes resolved operator catalog to RunManager", async () => {
+  // `sf run` no longer constructs its own RunManager (it's an HTTP client
+  // of the shared global service now), so --operator-cwd/--operator-agent-dir
+  // can't be threaded into a per-invocation RunManager any more — the
+  // service's operator catalog is fixed once, at daemon start. The flags
+  // stay recognized (not "Unknown flag") but are now no-ops with a warning.
+  it("--operator-cwd/--operator-agent-dir are accepted but warn that they're no-ops, and startRun still runs", async () => {
     const cap = captureIo();
-    await runRunCommand(
+    const startRun = vi.fn(async () => ({
+      ok: false as const,
+      code: "busy_capacity" as const,
+      reason: "busy",
+    }));
+    const code = await runRunCommand(
       [
         "--task",
         sampleTask,
@@ -151,31 +131,30 @@ describe("sf run operator catalog", () => {
         "--operator-agent-dir",
         "/catalog-agent",
       ],
-      { cwd: fixtures, io: cap.io },
+      { cwd: fixtures, io: cap.io, startRun },
     );
 
-    expect(runManagerCapture.catalogs.length).toBeGreaterThan(0);
-    expect(runManagerCapture.catalogs[0]?.operatorCatalog).toEqual({
-      cwd: "/catalog-cwd",
-      agentDir: "/catalog-agent",
-    });
+    expect(cap.combined()).not.toMatch(/Unknown flag/);
+    expect(cap.combined()).toMatch(
+      /--operator-cwd\/--operator-agent-dir have no effect/,
+    );
+    expect(startRun).toHaveBeenCalled();
+    expect(code).toBe(1);
   });
 
-  it("runRunCommand uses env fallback for operator catalog", async () => {
+  it("no warning when --operator-cwd/--operator-agent-dir are omitted", async () => {
     const cap = captureIo();
+    const startRun = vi.fn(async () => ({
+      ok: false as const,
+      code: "busy_capacity" as const,
+      reason: "busy",
+    }));
     await runRunCommand(["--task", sampleTask, "--pipeline", singlePipeline], {
       cwd: fixtures,
       io: cap.io,
-      env: {
-        STAGEFLOW_OPERATOR_CWD: "/env-catalog",
-        STAGEFLOW_OPERATOR_AGENT_DIR: "/env-agent",
-      },
+      startRun,
     });
-
-    expect(runManagerCapture.catalogs[0]?.operatorCatalog).toEqual({
-      cwd: "/env-catalog",
-      agentDir: "/env-agent",
-    });
+    expect(cap.combined()).not.toMatch(/have no effect/);
   });
 
   it("sf run --help mentions operator catalog flags", () => {

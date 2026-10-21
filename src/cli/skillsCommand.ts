@@ -363,18 +363,46 @@ async function findSkillRootBySkillMd(dir: string): Promise<string | undefined> 
   return undefined;
 }
 
+export type InstallProjectSkillInput = {
+  projectRoot: string;
+  fromPath?: string;
+  fromZip?: string;
+  zipBytes?: Uint8Array;
+  skillName?: string;
+  checksum?: string;
+  io?: Partial<SkillsCommandIo>;
+};
+
+export type InstallProjectSkillResult =
+  | { ok: true; skillName: string; destPath: string; message: string }
+  | { ok: false; error: string; doctorFailed?: boolean };
+
+type InstallSourceInput = {
+  fromPath?: string;
+  fromZip?: string;
+  zipBytes?: Uint8Array;
+  skillName?: string;
+  checksum?: string;
+};
+
 async function resolveInstallSource(
-  parsed: ParsedSkillsArgs,
+  input: InstallSourceInput,
   io: SkillsCommandIo,
 ): Promise<{ sourceRoot: string; skillName: string; cleanup?: () => Promise<void> }> {
-  const hasPath = parsed.fromPath !== undefined;
-  const hasZip = parsed.fromZip !== undefined;
-  if (hasPath === hasZip) {
-    throw new Error("specify exactly one of --from-path or --from-zip");
+  const hasPath = input.fromPath !== undefined;
+  const hasZip = input.fromZip !== undefined;
+  const hasZipBytes = input.zipBytes !== undefined;
+  const sourceCount = Number(hasPath) + Number(hasZip) + Number(hasZipBytes);
+  if (sourceCount !== 1) {
+    throw new Error(
+      hasZipBytes
+        ? "specify exactly one of fromPath, fromZip, or zipBytes"
+        : "specify exactly one of --from-path or --from-zip",
+    );
   }
 
-  if (parsed.fromPath !== undefined) {
-    const sourceRoot = path.resolve(parsed.fromPath);
+  if (input.fromPath !== undefined) {
+    const sourceRoot = path.resolve(input.fromPath);
     try {
       const sourceStat = await stat(sourceRoot);
       if (!sourceStat.isDirectory()) {
@@ -383,14 +411,22 @@ async function resolveInstallSource(
     } catch {
       throw new Error("source path not found");
     }
-    const skillName = parsed.skillName ?? inferSkillNameFromPath(parsed.fromPath);
+    const skillName = input.skillName ?? inferSkillNameFromPath(input.fromPath);
     return { sourceRoot, skillName };
   }
 
-  const zipRef = parsed.fromZip!;
-  const zipBytes = await resolveZipBytes(zipRef, io);
-  if (parsed.checksum !== undefined) {
-    const expected = parseChecksum(parsed.checksum);
+  let zipBytes: Buffer;
+  let inferredZipName: string | undefined;
+  if (input.zipBytes !== undefined) {
+    zipBytes = Buffer.from(input.zipBytes);
+  } else {
+    const zipRef = input.fromZip!;
+    zipBytes = await resolveZipBytes(zipRef, io);
+    inferredZipName = inferSkillNameFromZipRef(zipRef);
+  }
+
+  if (input.checksum !== undefined) {
+    const expected = parseChecksum(input.checksum);
     const actual = sha256Hex(zipBytes);
     if (actual !== expected) {
       throw new Error("checksum mismatch");
@@ -399,8 +435,9 @@ async function resolveInstallSource(
 
   const extractDir = await mkdtemp(path.join(tmpdir(), "sf-skill-zip-"));
   await extractZipBuffer(zipBytes, extractDir);
-  const skillName = parsed.skillName ?? inferSkillNameFromZipRef(zipRef);
-  const sourceRoot = await findSkillRoot(extractDir, skillName);
+  const lookupName = input.skillName ?? inferredZipName ?? "skill";
+  const sourceRoot = await findSkillRoot(extractDir, lookupName);
+  const skillName = input.skillName ?? inferredZipName ?? path.basename(sourceRoot);
   return {
     sourceRoot,
     skillName,
@@ -444,29 +481,51 @@ async function listSkills(projectRoot: string, io: SkillsCommandIo): Promise<voi
   }
 }
 
-async function installSkill(
-  projectRoot: string,
-  parsed: ParsedSkillsArgs,
-  io: SkillsCommandIo,
-): Promise<number> {
-  const resolved = await resolveInstallSource(parsed, io);
+export async function installProjectSkill(
+  input: InstallProjectSkillInput,
+): Promise<InstallProjectSkillResult> {
+  const io: SkillsCommandIo = { ...defaultIo, ...input.io };
   try {
-    const destRoot = path.join(skillsDirForRoot(projectRoot), resolved.skillName);
-    await copySkillTree(resolved.sourceRoot, destRoot);
+    const resolved = await resolveInstallSource(
+      {
+        fromPath: input.fromPath,
+        fromZip: input.fromZip,
+        zipBytes: input.zipBytes,
+        skillName: input.skillName,
+        checksum: input.checksum,
+      },
+      io,
+    );
+    try {
+      const destRoot = path.join(skillsDirForRoot(input.projectRoot), resolved.skillName);
+      await copySkillTree(resolved.sourceRoot, destRoot);
 
-    const doctorScript = path.join(destRoot, "bin", `${resolved.skillName}.mjs`);
-    const doctorCode = io.runDoctor(doctorScript, projectRoot);
-    if (doctorCode !== 0) {
-      io.error("skill doctor failed");
-      return 1;
-    }
+      const doctorScript = path.join(destRoot, "bin", `${resolved.skillName}.mjs`);
+      if (await pathExists(doctorScript)) {
+        const doctorCode = io.runDoctor(doctorScript, input.projectRoot);
+        if (doctorCode !== 0) {
+          io.error("skill doctor failed");
+          return { ok: false, error: "skill doctor failed", doctorFailed: true };
+        }
+      }
 
-    io.log(`Installed skill ${resolved.skillName} to ${destRoot}`);
-    return 0;
-  } finally {
-    if (resolved.cleanup) {
-      await resolved.cleanup();
+      const message = `Installed skill ${resolved.skillName} to ${destRoot}`;
+      io.log(message);
+      return {
+        ok: true,
+        skillName: resolved.skillName,
+        destPath: destRoot,
+        message,
+      };
+    } finally {
+      if (resolved.cleanup) {
+        await resolved.cleanup();
+      }
     }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    io.error(error);
+    return { ok: false, error };
   }
 }
 
@@ -495,7 +554,15 @@ export async function runSkillsCommand(
       return 0;
     }
 
-    return await installSkill(projectRoot, parsed, io);
+    const result = await installProjectSkill({
+      projectRoot,
+      fromPath: parsed.fromPath,
+      fromZip: parsed.fromZip,
+      skillName: parsed.skillName,
+      checksum: parsed.checksum,
+      io,
+    });
+    return result.ok ? 0 : 1;
   } catch (err) {
     io.error(err instanceof Error ? err.message : String(err));
     return 1;

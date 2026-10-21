@@ -1,5 +1,5 @@
 /**
- * Claude Agent SDK implementation of AgentPort.
+ * Claude Agent SDK implementation of StagePort.
  *
  * One turn = one streaming-input `query()` call, spawned as a subprocess by
  * the SDK. The session is sealed the same way Pi's sealed stage session is:
@@ -58,6 +58,7 @@ import {
   type AskOperatorCapture,
 } from "./claudeTools.js";
 import { createClaudeActivityMapper } from "./claudeActivity.js";
+import { DEFAULT_EMIT_REMINDERS, emitReminderPrompt, formatProviderError } from "./stageTurnDriver.js";
 import { readActivityVerbose } from "./activity.js";
 import { composeStageUserPrompt } from "./piAdapter.js";
 import {
@@ -70,7 +71,7 @@ import {
   DEFAULT_STAGE_TIMEOUT_MS,
   runStageViaOpen,
   runtimeStageId,
-  type AgentPort,
+  type StagePort,
   type OpaqueAnswer,
   type StageHandle,
   type StageHandleCloseOptions,
@@ -78,6 +79,10 @@ import {
   type StageRunInput,
   type StageRunResult,
 } from "./port.js";
+import {
+  composeTimeoutResumePrompt,
+  stageTimeoutReason,
+} from "./stageTimeout.js";
 import { StageMcpError } from "../config/resolveStageMcpServers.js";
 import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
 
@@ -112,10 +117,19 @@ function preflight(input: StageRunInput): Preflight {
       reason: `stage declares skill "${input.stage.skill}"; the claude agent backend does not support skills yet`,
     };
   }
+  if (input.stage.channels?.length) {
+    return {
+      ok: false,
+      reason: "stage declares channels; the claude agent backend does not provide send_message yet, so the stage would run without it",
+    };
+  }
   return resolveClaudeModel(input.stage.model);
 }
 
-function resultFromCapture(capture: EmitCapture): StageRunResult {
+function resultFromCapture(capture: EmitCapture, providerError?: string): StageRunResult {
+  if (providerError !== undefined && !capture.envelope) {
+    return { ok: false, reason: `provider error: ${providerError}` };
+  }
   if (capture.error && !capture.envelope) {
     return { ok: false, reason: capture.error };
   }
@@ -147,9 +161,34 @@ function failedPassedMcpConnect(
   return undefined;
 }
 
+/**
+ * Provider error carried by a query() `result` message: an API error on a "success" result
+ * (`is_error` with the error text in `result`) or an error subtype with `errors`.
+ */
+export function claudeResultError(message: {
+  subtype?: unknown;
+  is_error?: unknown;
+  result?: unknown;
+  errors?: unknown;
+  api_error_status?: unknown;
+}): string | undefined {
+  if (message.subtype === "success") {
+    if (message.is_error !== true) return undefined;
+    const status = typeof message.api_error_status === "number" ? ` (HTTP ${message.api_error_status})` : "";
+    return formatProviderError(`${typeof message.result === "string" ? message.result : ""}${status}`);
+  }
+  const errors = Array.isArray(message.errors) ? message.errors.filter((e) => typeof e === "string") : [];
+  return formatProviderError(errors.length > 0 ? errors.join("; ") : String(message.subtype ?? "error"));
+}
+
 type ClaudeTurnOutcome =
   | { kind: "waiting"; sessionId: string; request: AskOperatorPrompt }
-  | { kind: "completed"; result: StageRunResult };
+  | {
+      kind: "completed";
+      result: StageRunResult;
+      /** The turn ended on its own with no envelope: a reminder turn may resume this session. */
+      remind?: { sessionId: string; rejectedEmit?: string };
+    };
 
 /** Merge one query() call's per-model totals (this call's own turns only) into the stage-level accumulator. */
 function mergeClaudeModelUsage(usage: StageUsage, modelUsage: Record<string, ModelUsage> | undefined): void {
@@ -248,12 +287,13 @@ async function runTurn(
   const askCapture: AskOperatorCapture = {};
 
   const gateKinds = input.stage.gate_kinds;
-  const hitlAllowed = gateKinds === undefined || gateKinds.length > 0;
+  const hitlAllowed = Array.isArray(gateKinds) && gateKinds.length > 0;
 
   input.onActivity?.({ event: "agent_start" });
   input.onActivity?.({ event: "turn_start" });
 
   let sessionId = resumeSessionId;
+  let providerError: string | undefined;
 
   const containerName = input.roots.containerName;
 
@@ -276,7 +316,7 @@ async function runTurn(
         ? {
             askOperator: {
               capture: askCapture,
-              ...(gateKinds !== undefined ? { allowedKinds: gateKinds } : {}),
+              allowedKinds: gateKinds,
             },
           }
         : {}),
@@ -357,6 +397,7 @@ async function runTurn(
           );
         }
         mergeClaudeModelUsage(usage, message.modelUsage);
+        providerError = claudeResultError(message);
         break;
       }
     }
@@ -378,7 +419,15 @@ async function runTurn(
     }
 
     await clearClaudeSessionMarker(markerPath);
-    return { kind: "completed", result: { ...resultFromCapture(emitCapture), usage } };
+    const remind =
+      emitCapture.envelope === undefined && providerError === undefined && sessionId !== undefined
+        ? { sessionId, ...(emitCapture.error !== undefined ? { rejectedEmit: emitCapture.error } : {}) }
+        : undefined;
+    return {
+      kind: "completed",
+      result: { ...resultFromCapture(emitCapture, providerError), usage },
+      ...(remind !== undefined ? { remind } : {}),
+    };
   } catch (err) {
     if (askCapture.prompt !== undefined && sessionId !== undefined) {
       await writeClaudeSessionMarker(markerPath, { sessionId, prompt: askCapture.prompt, usage });
@@ -387,6 +436,29 @@ async function runTurn(
     if (emitCapture.envelope && isAdvancingEnvelope(emitCapture.envelope)) {
       await clearClaudeSessionMarker(markerPath);
       return { kind: "completed", result: { ok: true, envelope: emitCapture.envelope, usage } };
+    }
+    if (controller.signal.aborted && sessionId !== undefined) {
+      await writeClaudeSessionMarker(markerPath, { sessionId, usage });
+      return {
+        kind: "completed",
+        result: {
+          ok: false,
+          reason: stageTimeoutReason(timeoutMs),
+          envelope: emitCapture.envelope,
+          usage,
+        },
+      };
+    }
+    if (controller.signal.aborted) {
+      return {
+        kind: "completed",
+        result: {
+          ok: false,
+          reason: stageTimeoutReason(timeoutMs),
+          envelope: emitCapture.envelope,
+          usage,
+        },
+      };
     }
     return {
       kind: "completed",
@@ -411,7 +483,7 @@ function resumePromptText(answer: AskOperatorAnswer): string {
   ].join("\n");
 }
 
-export class ClaudeAgentAdapter implements AgentPort {
+export class ClaudeAgentAdapter implements StagePort {
   openStage(input: StageRunInput): StageHandle {
     const stageId = runtimeStageId(input);
     const markerPath = claudeSessionMarkerPath(input);
@@ -421,6 +493,31 @@ export class ClaudeAgentAdapter implements AgentPort {
     let waiting: { sessionId: string; prompt: AskOperatorPrompt } | undefined;
     let pendingAnswer: OpaqueAnswer | undefined;
     const usage: StageUsage = emptyStageUsage();
+
+    /**
+     * While a turn ends on its own without an envelope, resume the same session with a short
+     * reminder turn, up to DEFAULT_EMIT_REMINDERS times. A reminder turn may itself park on
+     * ask_operator; a closed handle stops the loop.
+     */
+    const withEmitReminders = async (
+      first: ClaudeTurnOutcome,
+      model: string,
+    ): Promise<ClaudeTurnOutcome> => {
+      let outcome = first;
+      for (let attempt = 1; attempt <= DEFAULT_EMIT_REMINDERS; attempt++) {
+        if (closed || outcome.kind !== "completed" || outcome.remind === undefined) break;
+        const reminder = emitReminderPrompt(
+          EMIT_STAGE_ENVELOPE_TOOL_NAME,
+          attempt,
+          DEFAULT_EMIT_REMINDERS,
+          outcome.remind.rejectedEmit,
+        );
+        // The Claude activity mapper does not echo prompts; show the reminder like Pi does.
+        input.onActivity?.({ event: "message", role: "user", text: reminder });
+        outcome = await runTurn(input, model, markerPath, reminder, outcome.remind.sessionId, usage);
+      }
+      return outcome;
+    };
 
     const applyOutcome = (outcome: ClaudeTurnOutcome): StageHandleEvent => {
       if (outcome.kind === "waiting") {
@@ -486,12 +583,33 @@ export class ClaudeAgentAdapter implements AgentPort {
             sessionId,
             usage,
           );
-          return applyOutcome(outcome);
+          return applyOutcome(await withEmitReminders(outcome, pre.model));
         }
 
         const pre = preflight(input);
         if (!pre.ok) {
           return { status: "completed", result: { ok: false, reason: pre.reason } };
+        }
+        if (input.sessionMode === "timeout_resume") {
+          const marker = await readClaudeSessionMarker(markerPath);
+          if (marker?.sessionId === undefined) {
+            return {
+              status: "completed",
+              result: {
+                ok: false,
+                reason: "missing Claude session to resume; use retry to start a new attempt",
+              },
+            };
+          }
+          const outcome = await runTurn(
+            input,
+            pre.model,
+            markerPath,
+            composeTimeoutResumePrompt(),
+            marker.sessionId,
+            usage,
+          );
+          return applyOutcome(await withEmitReminders(outcome, pre.model));
         }
         const outcome = await runTurn(
           input,
@@ -506,7 +624,7 @@ export class ClaudeAgentAdapter implements AgentPort {
           undefined,
           usage,
         );
-        return applyOutcome(outcome);
+        return applyOutcome(await withEmitReminders(outcome, pre.model));
       },
       deliverAnswer(answer: OpaqueAnswer) {
         pendingAnswer = answer;

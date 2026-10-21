@@ -1,0 +1,7 @@
+id: schedule-every-minute
+pipeline: hello
+task: my-task
+kind: schedule
+schedule:
+  cron: "* * * * *"
+enabled: true

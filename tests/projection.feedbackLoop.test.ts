@@ -50,6 +50,7 @@ function detail(overrides: Partial<RunDetail> = {}): RunDetail {
     pipeline_id: "feedback-loop-wait-human",
     status: "running",
     created_at: "2026-01-01T00:00:00.000Z",
+    binding: { kind: "unbound" },
     task_yaml: "id: t\ngoal: g\n",
     stages: [
       stage({ stage_id: "review", status: "waiting_for_input" }),

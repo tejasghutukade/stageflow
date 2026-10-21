@@ -1,26 +1,44 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { resolveGlobalOnlyAgentPort } from "../agent/resolveAgentPort.js";
 import { projectRun } from "../projection/projectRun.js";
 import { waitRun, type WaitUntil } from "../mcp/waitRun.js";
 import { projectWaitingGates } from "../mcp/waitingGates.js";
-import { resolveOperatorCatalog } from "./operatorCatalog.js";
 import { completeCliRun } from "./runCommand.js";
-import { reportCliRun, type CliRunReportIo } from "./runOutput.js";
-import { createRunStore } from "../runstore/createStore.js";
+import { reportCliRun, writeQueuedAdmissionLine, type CliRunReportIo } from "./runOutput.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  createRunStore,
+  createRunStoreAfterHostEnsure,
+  storeNeedsHostMigration,
+} from "../runstore/createStore.js";
 import type { ListRunsFilter, RunStatus, RunStore } from "../runstore/port.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
-import { RunManager } from "../runtime/runManager.js";
-import { readStageExecutionMode } from "../runtime/stageConcurrency.js";
-import { DEFAULT_PORT } from "../server/createHttpHost.js";
+import {
+  ensureGlobalService,
+  hostBaseUrl,
+  type EnsureGlobalServiceResult,
+} from "../server/ensureGlobalService.js";
 import { mapRetryStageFailure } from "../server/operatorResults.js";
+import {
+  httpAbandonStage,
+  httpCancelRun,
+  httpDecideFeedbackLoop,
+  httpDeleteRun,
+  httpDeliverAnswer,
+  httpGcRuns,
+  httpRecoverManualStageUntilStop,
+  httpRerun,
+  httpResumeTimedOutStage,
+  httpRetryStageUntilStop,
+  httpStopManualRecovery,
+} from "./hostClient.js";
 import {
   AskOperatorError,
   parseAskOperatorAnswer,
 } from "../tools/askOperator.js";
 
 export const RUNS_USAGE = `Usage:
-  sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
+  sf runs list [--status created|queued|running|succeeded|failed|cancelled] [--since <iso>] [--pipeline <id-or-path>] [--json]
   sf runs show --run <runId> [--from <sf-run.json>] [--json]
   sf runs verify --run <runId> --stage <stageId> [--json]
   sf runs recover --run <runId> --stage <stageId> [--guidance <text>] [--stop] [--json]
@@ -29,15 +47,17 @@ export const RUNS_USAGE = `Usage:
   sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
   sf runs feedback-decide --run <runId> --stage <sourceStageId> [--loop <loopId>] --decision extend|continue|abandon [--reason <text>] [--json]
   sf runs retry --run <runId> --stage <stageId> [--json]
+  sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
-  sf runs rerun --run <runId> [--json]`;
+  sf runs cancel --run <runId> --reason <text> [--json]
+  sf runs delete --run <runId> [--force] [--json]
+  sf runs gc [--dry-run] [--json]
+  sf runs rerun --run <runId> [--pinned] [--json]`;
 
 export type RunsCommandIo = {
   log: (line: string) => void;
   error: (line: string) => void;
 };
-
-export type HostProbeResult = "up" | "down";
 
 const defaultIo: RunsCommandIo = {
   log: (line) => console.log(line),
@@ -46,9 +66,11 @@ const defaultIo: RunsCommandIo = {
 
 const RUN_STATUSES: readonly RunStatus[] = [
   "created",
+  "queued",
   "running",
   "succeeded",
   "failed",
+  "cancelled",
 ];
 
 const LIST_FLAGS = new Set([
@@ -101,7 +123,10 @@ const FEEDBACK_DECIDE_FLAGS = new Set([
 ]);
 const RETRY_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
 const ABANDON_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
-const RERUN_FLAGS = new Set(["--run", "--json", "--help", "-h"]);
+const CANCEL_FLAGS = new Set(["--run", "--reason", "--json", "--help", "-h"]);
+const DELETE_FLAGS = new Set(["--run", "--force", "--json", "--help", "-h"]);
+const GC_FLAGS = new Set(["--dry-run", "--json", "--help", "-h"]);
+const RERUN_FLAGS = new Set(["--run", "--pinned", "--json", "--help", "-h"]);
 
 const VALUE_FLAGS = new Set([
   "--status",
@@ -134,6 +159,9 @@ type ParsedRunsArgs = {
   answer?: string;
   guidance?: string;
   stop?: boolean;
+  pinned?: boolean;
+  force?: boolean;
+  dryRun?: boolean;
   loopId?: string;
   decision?: string;
   reason?: string;
@@ -159,8 +187,16 @@ function flagsFor(subcommand: string): Set<string> | undefined {
       return FEEDBACK_DECIDE_FLAGS;
     case "retry":
       return RETRY_FLAGS;
+    case "resume":
+      return RETRY_FLAGS;
     case "abandon":
       return ABANDON_FLAGS;
+    case "cancel":
+      return CANCEL_FLAGS;
+    case "delete":
+      return DELETE_FLAGS;
+    case "gc":
+      return GC_FLAGS;
     case "rerun":
       return RERUN_FLAGS;
     default:
@@ -195,6 +231,9 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
   let answer: string | undefined;
   let guidance: string | undefined;
   let stop = false;
+  let pinned = false;
+  let force = false;
+  let dryRun = false;
   let loopId: string | undefined;
   let decision: string | undefined;
   let reason: string | undefined;
@@ -208,6 +247,15 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
     } else if (arg === "--stop") {
       if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
       stop = true;
+    } else if (arg === "--pinned") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      pinned = true;
+    } else if (arg === "--force") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      force = true;
+    } else if (arg === "--dry-run") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      dryRun = true;
     } else if (VALUE_FLAGS.has(arg)) {
       if (!allowed.has(arg)) {
         throw new Error(`Unknown flag: ${arg}`);
@@ -251,6 +299,9 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
     answer,
     guidance,
     stop,
+    pinned,
+    force,
+    dryRun,
     loopId,
     decision,
     reason,
@@ -274,27 +325,6 @@ function resolveRunIdFromFile(fromPath: string, cwd: string): string {
     throw new Error("--from file must contain a JSON object with runId");
   }
   return runId;
-}
-
-function hostBaseUrl(): string {
-  return `http://127.0.0.1:${DEFAULT_PORT}`;
-}
-
-export async function defaultProbeHost(): Promise<HostProbeResult> {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 1500);
-  try {
-    const res = await fetch(`${hostBaseUrl()}/api/health`, {
-      signal: ac.signal,
-    });
-    if (res.status !== 200) return "down";
-    JSON.parse(await res.text());
-    return "up";
-  } catch {
-    return "down";
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 function printJson(io: RunsCommandIo, payload: unknown): void {
@@ -331,31 +361,48 @@ async function resolveShowWaitRunId(
   return parsed.runId;
 }
 
+const MUTATING_SUBCOMMANDS = new Set([
+  "answer",
+  "feedback-decide",
+  "retry",
+  "resume",
+  "recover",
+  "abandon",
+  "cancel",
+  "delete",
+  "gc",
+  "rerun",
+]);
+
+const READ_ONLY_SUBCOMMANDS = new Set([
+  "list",
+  "show",
+  "verify",
+  "waiting",
+  "wait",
+]);
+
 export async function runRunsCommand(
   args: string[],
   options: {
     cwd?: string;
-    projectRoot?: string;
-    isGitProject?: boolean;
     io?: Partial<RunsCommandIo>;
     store?: RunStore;
-    probeHost?: () => Promise<HostProbeResult>;
     stdinIsTTY?: boolean;
     readStdin?: () => string;
     waitSignal?: AbortSignal;
     env?: NodeJS.ProcessEnv;
-    createManager?: (store: RunStore) => RunManager;
+    hostBaseUrl?: string;
+    ensureService?: () => Promise<EnsureGlobalServiceResult>;
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
-  const projectRoot = options.projectRoot ?? cwd;
-  const isGitProject = options.isGitProject ?? false;
   const out: RunsCommandIo = { ...defaultIo, ...options.io };
-  const env = options.env ?? process.env;
   const stdinIsTTY = options.stdinIsTTY ?? process.stdin.isTTY === true;
   const readStdin =
     options.readStdin ?? (() => readFileSync(0, "utf8"));
-  const probeHost = options.probeHost ?? defaultProbeHost;
+  const base = options.hostBaseUrl ?? hostBaseUrl();
+  const ensureService = options.ensureService ?? (() => ensureGlobalService());
 
   let parsed: ParsedRunsArgs;
   try {
@@ -377,44 +424,41 @@ export async function runRunsCommand(
   let resolvedStore: RunStore | undefined = options.store;
   const getStore = (): RunStore => {
     if (resolvedStore === undefined) {
-      resolvedStore = createRunStore({ rootDir: projectRoot });
+      resolvedStore = createRunStore({ rootDir: globalStageflowHome() });
     }
     return resolvedStore;
   };
 
   const mutatingIo: CliRunReportIo = out;
 
-  const agent = await resolveGlobalOnlyAgentPort(projectRoot);
-
-  const buildManager = (): RunManager => {
-    const store = getStore();
-    if (options.createManager) return options.createManager(store);
-    const operatorCatalog = resolveOperatorCatalog({
-      flags: {},
-      env,
-      defaultCwd: cwd,
-    });
-    return new RunManager({
-      agent,
-      store,
-      cwd,
-      projectRoot,
-      isGitProject,
-      operatorCatalog,
-      executionMode: readStageExecutionMode(env, "process"),
-    });
-  };
-
-  const guardHost = async (): Promise<number | undefined> => {
-    const status = await probeHost();
-    if (status === "up") {
-      out.error(
-        `A Stageflow host is already running at ${hostBaseUrl()}. Use the operator console or MCP instead of mutating the store from the CLI.`,
-      );
+  if (MUTATING_SUBCOMMANDS.has(parsed.subcommand)) {
+    const ensured = await ensureService();
+    if (!ensured.ok) {
+      if (parsed.json) {
+        printJson(out, { error: ensured.message, reason: ensured.reason });
+      } else {
+        out.error(ensured.message);
+      }
       return 1;
     }
-    return undefined;
-  };
+  }
+
+  if (
+    READ_ONLY_SUBCOMMANDS.has(parsed.subcommand) &&
+    resolvedStore === undefined
+  ) {
+    if (storeNeedsHostMigration(globalStageflowHome())) {
+      const ensured = await ensureService();
+      if (!ensured.ok) {
+        if (parsed.json) {
+          printJson(out, { error: ensured.message, reason: ensured.reason });
+        } else {
+          out.error(ensured.message);
+        }
+        return 1;
+      }
+    }
+  }
 
   switch (parsed.subcommand) {
     case "list": {
@@ -426,7 +470,7 @@ export async function runRunsCommand(
       }
       if (parsed.status !== undefined && !isRunStatus(parsed.status)) {
         out.error(
-          "--status must be created, running, succeeded, or failed",
+          "--status must be created, queued, running, succeeded, failed, or cancelled",
         );
         return 1;
       }
@@ -583,8 +627,6 @@ export async function runRunsCommand(
     }
 
     case "answer": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId) {
         return usageError(out, "Missing --run");
       }
@@ -635,11 +677,11 @@ export async function runRunsCommand(
         out.error(message);
         return 1;
       }
-      const manager = buildManager();
-      const result = await manager.deliverAnswer(
+      const result = await httpDeliverAnswer(
+        base,
         parsed.runId,
         parsed.stageId,
-        answer,
+        parsedJson,
       );
       if (!result.ok) {
         const payload: Record<string, unknown> = { error: result.reason };
@@ -652,16 +694,23 @@ export async function runRunsCommand(
         return 1;
       }
       if (parsed.json) {
-        printJson(out, { ok: true });
+        printJson(
+          out,
+          result.verification !== undefined
+            ? { ok: true, verification: result.verification }
+            : { ok: true },
+        );
       } else {
-        out.log("ok");
+        out.log(
+          result.verification !== undefined
+            ? `ok (${result.verification})`
+            : "ok",
+        );
       }
       return 0;
     }
 
     case "feedback-decide": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId) {
         return usageError(out, "Missing --run");
       }
@@ -685,8 +734,8 @@ export async function runRunsCommand(
         }
         return 1;
       }
-      const manager = buildManager();
-      const result = await manager.decideFeedbackLoop(
+      const result = await httpDecideFeedbackLoop(
+        base,
         parsed.runId,
         parsed.stageId,
         {
@@ -718,13 +767,11 @@ export async function runRunsCommand(
     }
 
     case "retry": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId || !parsed.stageId) {
         return usageError(out, "Missing --run and/or --stage");
       }
-      const manager = buildManager();
-      const result = await manager.retryStageUntilStop(
+      const result = await httpRetryStageUntilStop(
+        base,
         parsed.runId,
         parsed.stageId,
       );
@@ -745,18 +792,49 @@ export async function runRunsCommand(
       );
     }
 
-    case "recover": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
+    case "resume": {
       if (!parsed.runId || !parsed.stageId) {
         return usageError(out, "Missing --run and/or --stage");
       }
-      const manager = buildManager();
+      const result = await httpResumeTimedOutStage(
+        base,
+        parsed.runId,
+        parsed.stageId,
+      );
+      if (!result.ok) {
+        if (parsed.json) {
+          printJson(out, {
+            ...mapRetryStageFailure(result),
+            status: result.status,
+          });
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          runId: result.runId,
+          stageId: result.stageId,
+          attemptIndex: result.attemptIndex,
+        });
+      } else {
+        out.log(`ok\t${result.runId}\t${result.stageId}\t${result.attemptIndex}`);
+      }
+      return 0;
+    }
+
+    case "recover": {
+      if (!parsed.runId || !parsed.stageId) {
+        return usageError(out, "Missing --run and/or --stage");
+      }
       if (parsed.stop) {
         if (parsed.guidance !== undefined) {
           return usageError(out, "--guidance cannot be used with --stop");
         }
-        const result = await manager.stopManualRecovery(
+        const result = await httpStopManualRecovery(
+          base,
           parsed.runId,
           parsed.stageId,
         );
@@ -775,7 +853,8 @@ export async function runRunsCommand(
         }
         return 0;
       }
-      const result = await manager.recoverManualStageUntilStop(
+      const result = await httpRecoverManualStageUntilStop(
+        base,
         parsed.runId,
         parsed.stageId,
         parsed.guidance,
@@ -795,13 +874,10 @@ export async function runRunsCommand(
     }
 
     case "abandon": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId || !parsed.stageId) {
         return usageError(out, "Missing --run and/or --stage");
       }
-      const manager = buildManager();
-      const result = await manager.abandonStage(parsed.runId, parsed.stageId);
+      const result = await httpAbandonStage(base, parsed.runId, parsed.stageId);
       if (!result.ok) {
         const payload: Record<string, unknown> = { error: result.reason };
         if (result.status !== undefined) payload.status = result.status;
@@ -824,20 +900,111 @@ export async function runRunsCommand(
       return 0;
     }
 
-    case "rerun": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
+    case "cancel": {
+      if (!parsed.runId || !parsed.reason) {
+        return usageError(out, "Missing --run and/or --reason");
+      }
+      const result = await httpCancelRun(base, parsed.runId, parsed.reason);
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          runId: result.runId,
+        });
+      } else {
+        out.log(result.runId);
+      }
+      return 0;
+    }
+
+    case "delete": {
       if (!parsed.runId) {
         return usageError(out, "Missing --run");
       }
-      const manager = buildManager();
-      const started = await manager.rerun(parsed.runId);
+      const result = await httpDeleteRun(base, parsed.runId, {
+        force: parsed.force === true,
+      });
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          runId: result.runId,
+        });
+      } else {
+        out.log(result.runId);
+      }
+      return 0;
+    }
+
+    case "gc": {
+      const execute = parsed.dryRun !== true;
+      const result = await httpGcRuns(base, { execute });
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      const report = {
+        slimmed: result.slimmed,
+        purged: result.purged,
+        bareCachesEvicted: result.bareCachesEvicted,
+      };
+      if (parsed.json) {
+        printJson(out, report);
+      } else {
+        out.log(
+          [
+            `slimmed:\t${report.slimmed.length}`,
+            ...report.slimmed.map((id) => `\t${id}`),
+            `purged:\t${report.purged.length}`,
+            ...report.purged.map((id) => `\t${id}`),
+            `bareCachesEvicted:\t${report.bareCachesEvicted.length}`,
+            ...report.bareCachesEvicted.map((id) => `\t${id}`),
+          ].join("\n"),
+        );
+      }
+      return 0;
+    }
+
+    case "rerun": {
+      if (!parsed.runId) {
+        return usageError(out, "Missing --run");
+      }
+      const started = await httpRerun(
+        base,
+        parsed.runId,
+        parsed.pinned ? { pinned: true } : undefined,
+      );
       if (!started.ok) {
         return reportCliRun(
           { kind: "start-failure", started },
           { json: parsed.json, io: mutatingIo },
         );
       }
+      writeQueuedAdmissionLine(started, mutatingIo);
       return completeCliRun(started, mutatingIo, {
         json: parsed.json,
         store: getStore(),

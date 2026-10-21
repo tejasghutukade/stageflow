@@ -1,3 +1,8 @@
+export type TaskGitIdentity = {
+  name?: string;
+  email?: string;
+};
+
 /**
  * A string points at a pre-made checkout directory (validated, never
  * created — today's behavior). An object asks Stageflow to create/reuse a
@@ -12,5 +17,9 @@ export type TaskFile = {
   context?: string;
   constraints?: string;
   checkout?: CheckoutDescriptor;
+  repository?: string;
+  ref?: string;
+  run_branch_template?: string;
+  git_identity?: TaskGitIdentity;
   input?: Record<string, unknown>;
 };

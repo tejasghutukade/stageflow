@@ -1,4 +1,10 @@
-export type RunStatus = "created" | "running" | "succeeded" | "failed";
+export type RunStatus =
+  | "created"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
 
 export type StageLogEvent = {
   event: string;
@@ -33,6 +39,7 @@ export type StageReadiness =
   | "ready"
   | "running"
   | "waiting"
+  | "interrupted"
   | "succeeded"
   | "failed"
   | "skipped";
@@ -175,6 +182,18 @@ export type FeedbackDecisionResult =
     }
   | { ok: false; error: string; status?: number };
 
+export type RunBindingCompact = {
+  kind: "repository" | "checkout" | "unbound";
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+};
+
+export type RunBindingDetail = RunBindingCompact & {
+  run_branch?: string;
+  checkout_root?: string;
+};
+
 export type RunSummary = {
   run_id: string;
   pipeline_id: string;
@@ -185,6 +204,7 @@ export type RunSummary = {
   status: RunStatus;
   created_at: string;
   updated_at?: string;
+  binding?: RunBindingCompact;
   stages: CompactStage[];
   waiting_stage_id?: string;
   waiting_stage_ids?: string[];
@@ -197,6 +217,11 @@ export type RunSummary = {
   failed_reason?: string;
   active_feedback_loop?: FeedbackLoopRecord;
   total_cost_usd?: number;
+  cancel_reason?: string;
+  finished_at?: string;
+  slimmed_at?: string;
+  disk_bytes?: number;
+  disk_measured_at?: string;
 };
 
 export type StageEnvelopeView = {
@@ -222,7 +247,12 @@ export type MultiQuestionItem = {
   id: string;
 };
 
-export type PendingPrompt =
+/** `live_view.url` is an http(s) URL or a root-relative path such as `/api/runs/<id>/stages/<id>/live-view`. */
+export type GateHandoff =
+  | { kind: "local_window" }
+  | { kind: "live_view"; url: string };
+
+export type PendingPrompt = (
   | { kind: "free_text"; message: string; id: string }
   | { kind: "confirm"; message: string; id: string }
   | {
@@ -235,7 +265,13 @@ export type PendingPrompt =
       message: string;
       artifacts: string[];
       id: string;
-    };
+    }
+) & {
+  /** Set by the Host for stages with a browser; older gates omit these. */
+  handoff?: GateHandoff;
+  site?: string;
+  profile?: string;
+};
 
 export type FreeTextOrConfirmPayload =
   | { kind: "free_text"; text: string }
@@ -267,6 +303,7 @@ export type StageSnapshot = {
     | "pending"
     | "running"
     | "waiting_for_input"
+    | "interrupted"
     | "succeeded"
     | "failed"
     | "skipped";
@@ -277,6 +314,19 @@ export type StageSnapshot = {
   pending_prompt?: PendingPrompt;
   attempt_count: number;
   cost_usd?: number;
+  usage?: {
+    costUsd: number;
+    models: Record<
+      string,
+      {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadInputTokens: number;
+        cacheCreationInputTokens: number;
+        costUsd: number;
+      }
+    >;
+  };
 };
 
 export type VerificationCheckStatus =
@@ -292,7 +342,8 @@ export type CompletionCheckType =
   | "checklist"
   | "payload_schema"
   | "gate"
-  | "checkout_changes";
+  | "checkout_changes"
+  | "browser_login";
 
 export type VerificationCheckResult = {
   run_id: string;
@@ -325,30 +376,89 @@ export type StageVerificationHistory = {
   };
 };
 
-export type RunDetail = Omit<RunSummary, "stages"> & {
+export type RunDetail = Omit<RunSummary, "stages" | "binding"> & {
+  binding?: RunBindingDetail;
   task_yaml: string;
   stages: StageSnapshot[];
   pipeline_track: PipelineTrackProjection;
   feedback_loops: FeedbackLoopHistory[];
+  config_origins?: Array<{
+    name: string;
+    origin: "catalog" | "inline" | "workspace" | "seeded";
+    path?: string;
+  }>;
 };
 
 export type TaskListing = {
   path: string;
   id: string;
   goal: string;
+  project_root?: string;
 };
+
+export type TaskDetailFile = {
+  path: string;
+  id: string;
+  goal: string;
+  context?: string;
+  constraints?: string;
+  checkout?: string;
+  repository?: string;
+  ref?: string;
+  run_branch_template?: string;
+  git_identity?: { name?: string; email?: string };
+  input?: Record<string, unknown>;
+};
+
+export type CreateTaskInput = {
+  directory: string;
+  id: string;
+  goal: string;
+  context?: string;
+  constraints?: string;
+  checkout?: string;
+  repository?: string;
+  ref?: string;
+  project_root?: string;
+};
+
+export type UpdateTaskBody = {
+  goal: string;
+  context?: string | null;
+  constraints?: string | null;
+  checkout?: string | null;
+  repository?: string | null;
+  ref?: string | null;
+  directory?: string;
+  id?: string;
+  project_root?: string;
+};
+
+export type ImportTaskFromIssueInput = {
+  repo: string;
+  number: number;
+  directory: string;
+  project_root?: string;
+};
+
+export type TaskWriteResult =
+  | { ok: true; task: TaskDetailFile }
+  | { ok: false; status: number; error: string };
 
 export type PipelineStageListing = {
   id: string;
   gate_kinds?: StageGateKind[];
   uses_path?: string;
   inline?: boolean;
+  model?: string;
+  skill?: string;
 };
 
 export type PipelineListing = {
   path: string;
   id: string;
   stages: PipelineStageListing[];
+  project_root?: string;
 };
 
 export type ValidStageListing = {
@@ -413,6 +523,7 @@ export type CreateStageInput = {
   system_prompt: string;
   model?: string;
   gate_kinds?: StageGateKind[];
+  skill?: string;
 };
 
 export type CreatedStageListing = {
@@ -425,26 +536,414 @@ export type CreateStageResult =
   | { ok: true; stage: CreatedStageListing }
   | { ok: false; status: number; error: string };
 
-export type CreatePipelineStageRef = {
-  id: string;
-  needs?: string;
-  uses?: string;
-  inline?: {
-    system_prompt: string;
-    model?: string;
-    gate_kinds?: StageGateKind[];
+export type SkillInstallInput = {
+  command: string;
+};
+
+export type SkillInstallOk = {
+  skillName: string;
+  destPath: string;
+  message: string;
+};
+
+export type SkillInstallResult =
+  | ({ ok: true } & SkillInstallOk)
+  | { ok: false; status?: number; error: string };
+
+export type ValidationFinding = {
+  severity: "error" | "warning";
+  code: string;
+  path: string;
+  message: string;
+  category: string;
+  pipelineId?: string;
+  stageId?: string;
+  line?: number;
+  column?: number;
+};
+
+export type DraftValidationResult = {
+  scope: "full" | "pipeline" | "task" | "stage";
+  ok: boolean;
+  summary: { errors: number; warnings: number };
+  findings: ValidationFinding[];
+};
+
+export type CatalogValidationResult = DraftValidationResult;
+
+export type CatalogRootKind = "registered" | "seeded" | "workspace";
+
+export type CatalogRoot = {
+  project_root: string;
+  kind: CatalogRootKind;
+  label: string;
+  read_only: boolean;
+  available: boolean;
+  unavailable_reason?: string;
+};
+
+export type CatalogRootsResult = {
+  roots: CatalogRoot[];
+};
+
+export type CatalogFileResult = {
+  path: string;
+  content: string;
+};
+
+export type DraftPackagePayload = {
+  pipeline: {
+    id: string;
+    stages: Array<Record<string, unknown>>;
+    agent?: unknown;
+    model?: unknown;
+    schemas?: unknown;
+    requires?: unknown;
+    channels?: unknown;
   };
+  stages?: Array<{ path: string; body: Record<string, unknown> }>;
+  task?: { filename: string; body: Record<string, unknown> };
 };
 
-export type CreatePipelineInput = {
+export type CreateDraftPackageInput = {
   directory: string;
-  id: string;
-  stages: CreatePipelineStageRef[];
+  draft: DraftPackagePayload;
+  pipelineFilename?: string;
+  project_root?: string;
+  allowInvalid?: boolean;
 };
 
-export type CreatePipelineResult =
-  | { ok: true; pipeline: PipelineListing }
+export type CreateDraftPackageResult =
+  | {
+      ok: true;
+      pipeline: PipelineListing;
+      pipelinePath: string;
+      stagePaths: string[];
+      project_root?: string;
+      catalog_root_path?: string;
+      root_kind?: CatalogRootKind;
+      read_only?: boolean;
+      taskPath?: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      findings?: ValidationFinding[];
+    };
+
+export type OverwriteDraftPackageInput = CreateDraftPackageInput;
+export type OverwriteDraftPackageResult = CreateDraftPackageResult;
+
+export type PlanDraftPackageInput = {
+  directory: string;
+  draft: DraftPackagePayload;
+  pipelineFilename?: string;
+  project_root?: string;
+  mode?: "create" | "overwrite";
+};
+
+export type DraftPlanFile = {
+  path: string;
+  kind: "pipeline" | "stage" | "task";
+  action: "new" | "overwrite" | "unchanged";
+  added: number;
+  removed: number;
+};
+
+export type DraftPlanResult = {
+  pipelinePath: string;
+  directory: string;
+  files: DraftPlanFile[];
+  pipelineIdTaken: boolean;
+};
+
+export type PlanDraftPackageResult =
+  | ({ ok: true } & DraftPlanResult)
   | { ok: false; status: number; error: string };
+
+export type OpenDraftPackageInput = {
+  path: string;
+  task?: string;
+  project_root?: string;
+};
+
+export type OpenDraftPackageResult =
+  | {
+      ok: true;
+      draft: DraftPackagePayload;
+      destination: { directory: string; pipelineFilename: string };
+      pipelinePath: string;
+      project_root?: string;
+      root_kind?: CatalogRootKind;
+      read_only?: boolean;
+      taskPath?: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+    };
+
+export type AttachTaskInput = {
+  task: string;
+  project_root?: string;
+};
+
+export type AttachTaskResult =
+  | {
+      ok: true;
+      task: { filename: string; body: Record<string, unknown> };
+      taskPath: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+    };
+
+export type WorkshopAutosavePayload = {
+  version: 1;
+  key: string;
+  updatedAt: string;
+  draft: DraftPackagePayload;
+  messages: Array<{
+    id: string;
+    role: "assistant" | "user" | "system";
+    text: string;
+    artifacts?: unknown;
+  }>;
+  autoApply: boolean;
+  sessionModelOverride?: string | null;
+  destination?: {
+    directory: string;
+    pipelineFilename?: string;
+  } | null;
+  savedPath?: string | null;
+  savedTaskPath?: string | null;
+  diskFingerprints?: Record<string, string>;
+  projectRoot?: string | null;
+};
+
+export type GetWorkshopAutosaveResult =
+  | { ok: true; key: string; autosave: WorkshopAutosavePayload | null }
+  | { ok: false; status: number; error: string };
+
+export type PutWorkshopAutosaveResult =
+  | { ok: true; autosave: WorkshopAutosavePayload }
+  | { ok: false; status: number; error: string };
+
+export type ClearWorkshopAutosaveResult =
+  | { ok: true; key: string; cleared: boolean }
+  | { ok: false; status: number; error: string };
+
+export type WorkshopDiskChangeInput = {
+  pipelinePath: string;
+  draft: DraftPackagePayload;
+  taskPath?: string | null;
+  baseline?: Record<string, string> | null;
+  project_root?: string;
+};
+
+export type WorkshopDiskChangeResult =
+  | {
+      ok: true;
+      fingerprints: Record<string, string>;
+      changed: boolean;
+      changedPaths: string[];
+    }
+  | { ok: false; status: number; error: string };
+
+export type WorkshopChatProposalPayload = {
+  id: string;
+  summary: string;
+  nextDraft: DraftPackagePayload;
+  baseDraft: DraftPackagePayload;
+  baseFingerprint: string;
+  artifacts: Array<{
+    path: string;
+    kind: "added" | "removed" | "modified";
+    before?: string;
+    after?: string;
+  }>;
+  affectedStageIds: string[];
+};
+
+export type WorkshopChatWireEvent =
+  | { type: "message"; role: "assistant" | "user" | "system"; text: string }
+  /** Mutation receipt for Accept/Reject UX (draft already mutated). */
+  | {
+      type: "proposal";
+      proposal: WorkshopChatProposalPayload;
+    }
+  | { type: "tool_result"; name: string; result: unknown }
+  | { type: "validation"; result: unknown }
+  | { type: "error"; message: string };
+
+export type WorkshopChatTurnPayload = {
+  sessionId: string;
+  events: WorkshopChatWireEvent[];
+  draft: DraftPackagePayload;
+  pending: WorkshopChatProposalPayload | null;
+  autoApply: boolean;
+  model: string;
+  buildId?: string | null;
+};
+
+export type WorkshopChatAttachment = {
+  name: string;
+  mediaType: string;
+  size: number;
+  content: string;
+};
+
+export type WorkshopChatTurnInput = {
+  sessionId: string;
+  message: string;
+  draft: DraftPackagePayload;
+  autoApply?: boolean;
+  model?: string | null;
+  stream?: boolean;
+  attachments?: WorkshopChatAttachment[];
+  context?: { docs?: boolean };
+  project_root?: string;
+};
+
+export type WorkshopChatTurnResult =
+  | ({ ok: true } & WorkshopChatTurnPayload)
+  | { ok: false; status: number; error: string };
+
+export type WorkshopToolCallUpdate = {
+  id: string;
+  name: string;
+  status: "running" | "complete" | "error";
+  target?: string;
+  errorMessage?: string;
+  draft?: DraftPackagePayload;
+  buildId?: string;
+};
+
+export type WorkshopPointerChangeFrame = {
+  type: "pointer-change";
+  buildId: string;
+  draft: DraftPackagePayload;
+};
+
+export type WorkshopChatStreamFrame =
+  | { type: "delta"; text: string }
+  | ({ type: "activity" } & WorkshopToolCallUpdate)
+  | WorkshopPointerChangeFrame
+  | { type: "event"; event: WorkshopChatWireEvent }
+  | ({ type: "done" } & WorkshopChatTurnPayload);
+
+export type WorkshopSessionAttachment = {
+  name: string;
+  size: number;
+  mediaType: string;
+};
+
+export type WorkshopSessionMutationSnapshot = {
+  id: string;
+  summary: string;
+  affectedStageIds: string[];
+  artifacts: WorkshopChatProposalPayload["artifacts"];
+  status: "accepted" | "rejected";
+  autoApplied?: boolean;
+  baseDraft?: DraftPackagePayload;
+  nextDraft?: DraftPackagePayload;
+  baseFingerprint?: string;
+};
+
+export type WorkshopSessionMessage = {
+  id: string;
+  role: "assistant" | "user" | "system";
+  text: string;
+  createdAt: string;
+  attachments?: WorkshopSessionAttachment[];
+  mutations?: WorkshopSessionMutationSnapshot[];
+};
+
+export type WorkshopSessionRecord = {
+  version: 1;
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  transcript: WorkshopSessionMessage[];
+  piSessionId: string | null;
+  activeBuildId?: string;
+};
+
+export type WorkshopSessionSummary = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  activeBuildId?: string;
+};
+
+export type WorkshopBuildRecord = {
+  version: 1;
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  draft: DraftPackagePayload;
+  projectRoot: string | null;
+  relativePath: string | null;
+};
+
+export type WorkshopPickerRow = {
+  id: string | null;
+  name: string;
+  projectRoot: string | null;
+  relativePath: string | null;
+};
+
+export type ListWorkshopPickerResult =
+  | { ok: true; rows: WorkshopPickerRow[] }
+  | { ok: false; status: number; error: string };
+
+export type GetWorkshopBuildResult =
+  | { ok: true; build: WorkshopBuildRecord }
+  | { ok: false; status: number; error: string };
+
+export type FocusWorkshopBuildResult =
+  | { ok: true; build: WorkshopBuildRecord }
+  | { ok: false; status: number; error: string };
+
+export type UpdateWorkshopSessionActiveBuildResult =
+  | { ok: true; session: WorkshopSessionRecord }
+  | { ok: false; status: number; error: string };
+
+export type ListWorkshopSessionsResult =
+  | { ok: true; sessions: WorkshopSessionSummary[] }
+  | { ok: false; status: number; error: string };
+
+export type CreateWorkshopSessionResult =
+  | { ok: true; session: WorkshopSessionRecord }
+  | { ok: false; status: number; error: string };
+
+export type GetWorkshopSessionResult =
+  | { ok: true; session: WorkshopSessionRecord }
+  | { ok: false; status: number; error: string; code?: string };
+
+export type WorkshopSessionMutationResult =
+  | {
+      ok: true;
+      sessionId: string;
+      draft: DraftPackagePayload;
+      pending: WorkshopChatProposalPayload | null;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      reason?: "none" | "id_mismatch" | "conflict";
+      notice?: string;
+      draft?: DraftPackagePayload;
+      pending?: WorkshopChatProposalPayload | null;
+      sessionId?: string;
+    };
 
 export type CapacityHealth = {
   ok: true;
@@ -452,9 +951,19 @@ export type CapacityHealth = {
   activeCount: number;
   maxConcurrent: number;
   slotsAvailable: number;
+  activeStageProcesses?: number;
+  maxActiveStageProcesses?: number | null;
+  disk?: {
+    runs_bytes: number;
+    worktrees_bytes: number;
+    repos_bytes: number;
+    state_db_bytes: number;
+    a2a_artifacts_bytes: number;
+    free_bytes: number;
+  };
 };
 
-export type CredentialSource = "pi_home" | "sf_owned";
+export type CredentialSource = "sf_owned";
 
 export type ProviderSummary = {
   id: string;
@@ -477,11 +986,13 @@ export type ProvidersListResult = {
   providers: ProviderSummary[];
 };
 
-export type PiHomeDetectResult = {
-  piHomeUsable: boolean;
+export type ProvidersDetectResult = {
   credentialSource?: CredentialSource;
   provisional: boolean;
   source: CredentialSource;
+  authConfigured?: boolean;
+  cursorSdkReady?: boolean;
+  cursorApiKeyConfigured?: boolean;
 };
 
 export type CredentialBindingView = {
@@ -493,6 +1004,9 @@ export type SettingsSnapshot = {
   maxConcurrent: number;
   credentialSource?: CredentialSource;
   binding: CredentialBindingView;
+  workshopModel?: string;
+  /** Model selected when Workshop opens. From stageflow.yaml `model`. */
+  defaultModel?: string;
 };
 
 export type ProviderAuthMutationResult =
@@ -576,9 +1090,42 @@ export type RetryStageResult =
 
 export type ProjectMcpCatalogTransport = "stdio" | "http";
 
+/** `console` = saved from the UI under the Host's data dir; `project` = the project's .mcp.json. */
+export type ProjectMcpOrigin = "project" | "console";
+
 export type ProjectMcpCatalogEntry = {
   name: string;
   transport: ProjectMcpCatalogTransport;
+  origin: ProjectMcpOrigin;
+};
+
+/** A server config as stored in .mcp.json. Secrets appear only as `${NAME}` placeholders. */
+export type ProjectMcpServerConfig = {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  /** Only `sse` is ever stored; streamable HTTP is the default and falls back to SSE by itself. */
+  httpTransport?: "sse";
+  cwd?: string;
+};
+
+export type McpOAuthStatus = "authenticated" | "expired" | "not_authenticated";
+
+export type ProjectMcpSaveResult = { name: string; secretsStored: string[] };
+
+export type ProjectMcpImportResult = {
+  added: string[];
+  secretsStored: string[];
+  errors: Array<{ name: string; error: string }>;
+};
+
+export type McpSecretsList = {
+  /** Secrets with a stored value (values are never returned). */
+  secrets: Array<{ name: string; usedBy: string[] }>;
+  /** Every `${VAR}` a server references and whether a value is available. */
+  needed: Array<{ name: string; usedBy: string[]; set: boolean }>;
 };
 
 export type ProjectMcpCatalogListStatus = "ok" | "missing_catalog" | "invalid_config";
@@ -597,13 +1144,200 @@ export type ProjectMcpProbeStatus =
   | "missing_catalog"
   | "cancelled";
 
+export type McpToolInfo = { name: string; description?: string };
+
 export type ProjectMcpProbeResult = {
   name: string;
   status: ProjectMcpProbeStatus;
   error?: string;
+  /** Tools the server lists, set when the probe connected. */
+  tools?: McpToolInfo[];
 };
 
 export type ProjectMcpRowStatus =
   | "not-yet-probed"
   | "probing"
   | ProjectMcpProbeStatus;
+
+export type TriggerSchedule = {
+  cron: string;
+  timezone?: string;
+};
+
+export type EmailTriggerRule = {
+  triggerId: string;
+  version: number;
+  activeAfter: string;
+  enabled: boolean;
+  accountId: string;
+  folder: string;
+  from?: string;
+  subjectContains?: string;
+  pipeline: string;
+  task: { id: string; goal: string; context?: string; constraints?: string };
+  includeBody: boolean;
+  bodyLimit: number;
+};
+
+export type ConnectionListing = {
+  id: string;
+  channel: "Email";
+  displayName: string;
+  address: string;
+  enabled: boolean;
+  folders: string[];
+};
+
+export type ChannelHealth = {
+  state: "ok" | "failed";
+  checkedAt: string;
+  error?: { code: string; retryable: boolean };
+};
+
+export type ChannelConnectionListing = {
+  id: string;
+  provider: string;
+  displayName: string;
+  enabled: boolean;
+  identity?: string;
+  credential?: string;
+  secrets?: Record<string, "env" | "store">;
+  health?: ChannelHealth;
+};
+
+export type ChannelProviderField = {
+  key: string;
+  label: string;
+  hint?: string;
+  placeholder?: string;
+  target: "config" | "secret" | "credential";
+  input: "text" | "password" | "select";
+  required: boolean;
+  options?: Array<{ value: string; label: string }>;
+  defaultValue?: string;
+};
+
+export type ChannelProviderMeta = {
+  id: string;
+  label: string;
+  blurb: string;
+  icon: string;
+  via?: string;
+  note?: string;
+  fields: ChannelProviderField[];
+  recipient: { label: string; placeholder: string; multiple: boolean; cc: boolean; template: boolean };
+  envNames: string[];
+  yamlExample: string;
+  stageExample: string;
+};
+
+export type ChannelMeta = {
+  providers: ChannelProviderMeta[];
+  errors: Record<string, { reason: string; hint?: string }>;
+};
+
+export type ChannelConnectionsResult = {
+  connections: ChannelConnectionListing[];
+  error?: string;
+  limits: { channelsPerStage: number };
+};
+
+export type TriggerEvent = {
+  source: string;
+  match?: Record<string, unknown>;
+  config?: Record<string, unknown>;
+};
+
+export type TriggerAdapterStatus = {
+  adapter: string;
+  state: string;
+  detail?: string;
+  last_poll_at?: string;
+  last_seen_at?: string;
+  last_error?: string;
+};
+
+export type TriggerListItem = {
+  id: string;
+  project_root?: string;
+  pipeline: string;
+  task?: string;
+  kind: "manual" | "schedule" | "event";
+  schedule?: TriggerSchedule;
+  event?: TriggerEvent;
+  enabled: boolean;
+  definition_ref: string;
+  last_fired_at?: string;
+  last_run_id?: string;
+  next_run_at?: string;
+  adapter_status?: TriggerAdapterStatus;
+};
+
+export type TriggerFireRecord = { fired_at: string; run_id: string };
+
+export type SkillUsageEntry = {
+  stage_ids: string[];
+  pipeline_ids: string[];
+};
+
+export type SkillUsageIndex = {
+  usages: Record<string, SkillUsageEntry>;
+};
+
+export type CreateTriggerInput = {
+  directory: string;
+  id: string;
+  pipeline: string;
+  task?: string;
+  kind: "manual" | "schedule" | "event";
+  schedule?: TriggerSchedule;
+  event?: TriggerEvent;
+  enabled?: boolean;
+  project_root?: string;
+};
+
+export type CreateTriggerResult =
+  | { ok: true; trigger: TriggerListItem }
+  | { ok: false; status: number; error: string };
+
+export type OverviewRange = "24h" | "7d" | "30d";
+
+export type OverviewTotals = {
+  runs: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  in_flight: number;
+  finished: number;
+  success_rate: number | null;
+  cost_usd: number;
+};
+
+export type OverviewBucket = {
+  start: string;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+};
+
+export type OverviewPipeline = {
+  pipeline_id: string;
+  runs: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  success_rate: number | null;
+  median_duration_ms: number | null;
+  cost_usd: number;
+  last_run_at: string;
+};
+
+export type OverviewSummary = {
+  range: OverviewRange;
+  generated_at: string;
+  since: string;
+  totals: OverviewTotals;
+  previous: OverviewTotals;
+  buckets: OverviewBucket[];
+  pipelines: OverviewPipeline[];
+};

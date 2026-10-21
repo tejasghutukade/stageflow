@@ -3,6 +3,9 @@ node_modules/
 dist/
 ui/dist/
 .stageflow/
+.stageflow-home/
+.stageflow-control-token
+.env
 .software-factory/
 *.log
 .DS_Store
@@ -39,6 +42,7 @@ examples/prototyping/
 docs/*
 !docs/_config.yml
 !docs/*.md
+!docs/*.html
 !docs/img/
 !docs/img/**
 !docs/providers/
@@ -48,12 +52,22 @@ docs/providers/*
 docs/specs/*
 !docs/specs/*.md
 docs/specs/deterministic-route-if.md
+docs/specs/container-ready*.md
+docs/container-ready-plan.html
+docs/specs/pre-container-work.md
+docs/specs/host-owned-worktrees.md
+docs/specs/run-scoped-skills.md
+docs/specs/agent-email-connector.md
+docs/specs/connections-spec.md
+docs/specs/connections-provider-reference.md
+docs/specs/connections-design-handoff.md
 !docs/tickets/
 docs/tickets/*
 !docs/tickets/**/
 !docs/tickets/**/*.md
 docs/compare-conductor.md
 docs/migrate-real-oss-issue-pipeline.md
+docs/manual-qa-*.md
 CONTEXT.md
 .cursor/
 .pi/
@@ -70,4 +84,10 @@ software-factory-usecases-pitch-targets.md
 .stageflow-backup-test/
 .stageflow-ci-test/
 benchmarks/
-runs/
+# Local run output. Do not hide source trees whose path contains /runs/.
+/runs/
+**/.stageflow*/runs/
+/email.yaml
+
+# Demo video project lives in the main checkout only
+/demo-video/

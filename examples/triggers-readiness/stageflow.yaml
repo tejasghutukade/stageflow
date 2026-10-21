@@ -1,0 +1,13 @@
+version: 1
+model: cursor/auto
+catalog:
+  pipelines:
+    - .
+  tasks:
+    - .
+  triggers:
+    - triggers
+  patterns:
+    pipeline: "*.pipeline.yaml"
+    task: "*.task.yaml"
+    trigger: "*.trigger.yaml"

@@ -9,37 +9,53 @@ Stageflow runs stages on **Pi** (`@earendil-works/pi-coding-agent`). Model provi
 
 Provider management is via `sf providers` and the console **Settings → Providers** page.
 
-## Credential storage: `pi_home` vs `sf_owned`
+## Credential storage
 
-| Mode | Where credentials live |
-|------|------------------------|
-| `pi_home` | Pi's standard auth file under your Pi home directory (`~/.pi/agent/auth.json`) |
-| `sf_owned` | Stageflow global auth at `~/.stageflow/agent/auth.json` |
+Provider credentials live in the operator auth file:
 
-Check current binding:
+`<credential-root>/agent/auth.json`
+
+`STAGEFLOW_CREDENTIAL_HOME` sets that root to a directory. When it is unset, the root is the host user's `~/.stageflow`, and the file is `~/.stageflow/agent/auth.json`. `models.json` sits beside the auth file. The Cursor key file is `<credential-root>/agent/cursor-api-key`.
+
+A job-local or Docker data directory is its own operator when `STAGEFLOW_CREDENTIAL_HOME` is set to that directory. The image, Compose, `scripts/docker-smoke.sh`, and the release and publish workflows already set the override. [`scripts/start-ui-local.sh`](../scripts/start-ui-local.sh) sets `STAGEFLOW_HOME` to the repo's `.stageflow-dev` and leaves the override unset, so that server shares the machine operator store.
+
+When an existing login lives under a non-default data directory, set `STAGEFLOW_CREDENTIAL_HOME` to that directory.
+
+**Cursor models** use the **`pi-cursor-sdk`** npm package shipped as a Stageflow dependency (`npm i stageflow` / `npm ci` in the repo). You can still install a copy under `$STAGEFLOW_HOME/agent/npm/` via `pi install npm:pi-cursor-sdk` if you override the default. Stage workers receive the auth path through `STAGEFLOW_AGENT_AUTH_PATH` (Host passes the operator auth file).
+
+Check binding:
 
 ```bash
 sf providers source get
 sf providers detect
 ```
 
-`detect` prints `piHomeUsable`, `credentialSource`, `provisional`, and `bindingSource`.
+`detect` prints `authConfigured`, `credentialSource`, `provisional`, and `bindingSource`. Until you connect at least one provider (console **Connect** or `sf providers login`), `credentialSource` may be unset and binding is **provisional**.
 
-If the credential source is unset, the binding is **provisional** — `pi_home` when that auth file is usable, otherwise `sf_owned`. Project `<git-root>/.stageflow/` settings can persist or override the source versus global `~/.stageflow`.
-
-Set explicitly:
+Persist the store choice (always Stageflow-owned):
 
 ```bash
-sf providers source set pi_home
 sf providers source set sf_owned
 ```
 
-**When to use which:**
+Legacy `pi_home` in `settings.json` is treated as `sf_owned` on read.
 
-- **`pi_home`** — you already use Pi CLI elsewhere; one login for Pi and Stageflow
-- **`sf_owned`** — isolate Stageflow credentials in `~/.stageflow/` without touching Pi home
+## Non-interactive Host boot credentials
 
-Project run state and settings live under **`<git-root>/.stageflow/`** — separate from global auth.
+At Host boot (`sf ui` / `sf mcp`), Stageflow configures providers from:
+
+- `STAGEFLOW_PROVIDER_<ID>_API_KEY`
+- `STAGEFLOW_PROVIDER_<ID>_API_KEY_FILE` (trims one trailing newline)
+
+Do not set both. Unreadable files soft-fail by default (Host still starts). `STAGEFLOW_REQUIRE_PROVIDERS=id1,id2` makes missing providers fatal. OAuth remains interactive via `sf providers login … --type oauth`.
+
+The run store and Host Pi agent directory live under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`). Project settings (`<git-root>/.stageflow/settings.json`) are separate from global auth and are not the run store. See [Data directory](data-directory.md).
+
+Provider API keys are **not** passed into stage process environments. Model auth continues via `authPath` (file binding). Claude backend refuses to start as root (`euid=0`) because the SDK requires `bypassPermissions`. See [migration-stage-environment.md](migration-stage-environment.md).
+
+**Docker Compose:** set `STAGEFLOW_PROVIDER_OPENROUTER_API_KEY` / `STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY` (or `_FILE`) in `.env` — bare `OPENROUTER_API_KEY` alone does not configure Host boot. See [Docker — Local try](docker.md#local-try-compose) and [`.env.example`](../.env.example).
+
+**Health fields:** `GET /api/health` and MCP `get_health` expose `boot_providers` (Host boot env snapshot) and `providers_live` (live summary + note). The legacy `providers` key matches `boot_providers`. Empty boot configured does **not** imply CLI is unconfigured — compare `stageflow_home` and use `list_providers` / `sf providers status` for live auth. See [MCP — get_health](mcp.md#get_health).
 
 The console **Connect** flow (`#/connect`) mirrors CLI login for browser-based setup.
 
@@ -49,7 +65,7 @@ The console **Connect** flow (`#/connect`) mirrors CLI login for browser-based s
 sf providers list
 sf providers status [--provider <id>]
 sf providers detect
-sf providers source [get | set <pi_home|sf_owned>]
+sf providers source [get | set sf_owned]
 sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
 sf providers logout <providerId>
 ```
@@ -102,7 +118,19 @@ Or omit it when a pipeline or manifest default fills the value. The provider mus
 
 Stageflow is a thin orchestration layer on Pi. You do **not** need Pi CLI `/login` as a hard prerequisite if you configure providers via `sf providers` or the console.
 
-Optional: Cursor provider extension via `STAGEFLOW_CURSOR_EXTENSION` env var — see `src/agent/cursorProvider.ts`.
+**Cursor API key:** set `CURSOR_API_KEY` on the Host before `sf ui` / `sf mcp` starts, or put the key in `<credential-root>/agent/cursor-api-key` (mode `0600`, no trailing newline). You can also use `CURSOR_API_KEY_FILE`. A key in `.zshrc` alone does not reach the Host if you start Stageflow from the IDE or another environment that never loads your shell profile.
+
+## Models
+
+One catalog supplies every model list and the default model: the stage, pipeline, Workshop, Settings and agent pickers, `GET /api/models` and MCP `list_models`.
+
+- **Connected providers only.** A provider appears once it has credentials (stored, or from `STAGEFLOW_PROVIDER_<ID>_API_KEY` at boot). Cursor models appear only when Cursor is connected.
+- **Live, with a fallback.** The Host asks each connected provider for its current model list through Pi's model registry (OpenRouter's free models, for example), caches it for 30 seconds and in Pi's `models-store.json`, and falls back to Pi's built-in list when a provider is unreachable (that provider shows "built-in list"). `POST /api/models/refresh`, or the refresh button in a picker, forces Pi to refetch.
+- **Ids are `provider/model`**, the form Pi resolves and stage, pipeline and agent files store.
+- **Custom ids still work.** A picker accepts any `provider/model` you type. An id no connected provider lists is saved and runs as written; the picker and agent validation warn "not in connected providers". Hand-written YAML with such ids still loads.
+- **Default model.** `stageflow.yaml` `model`, then the Settings Workshop model, then the catalog's pick: `openrouter/nvidia/nemotron-3.5-lightning:free` when connected, else the first free model, else the first model, never a Cursor model while another exists. Hosts resolve it at boot.
+
+`GET /api/models` returns `models` (catalog plus ids pipelines use), `providers` (grouped, with `source`, `free`, `contextWindow`, `nativeTools`), `default`, `fetchedAt` and `unlisted`.
 
 ## Console
 

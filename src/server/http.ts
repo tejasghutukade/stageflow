@@ -1,57 +1,262 @@
+import {
+  OVERVIEW_RANGES,
+  buildOverview,
+  isOverviewRange,
+  overviewWindowMs,
+} from "../runstore/overviewSummary.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFile, access } from "node:fs/promises";
+import { createReadStream, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
 import {
   getCredentialSourceSettings,
   setCredentialSource,
   type ProviderAuthContext,
 } from "../agent/providerAuth.js";
-import {
-  handleProviderRoutes,
-  providerAuthErrorBody,
-} from "./providerRoutes.js";
+import { mapProviderAuthError } from "../agent/providerInspect.js";
+import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
+import { handleTriggerRoutes } from "./triggerRoutes.js";
+import {
+  readCatalogFileForHttp,
+  writeCatalogFileForHttp,
+} from "./readCatalogFile.js";
+import {
+  applyLiveViewHeaders,
+  createLiveViewRoutes,
+  isLiveViewDialogPath,
+  isLiveViewInputPath,
+  isLiveViewPath,
+  isLiveViewReopenTabPath,
+  type LiveViewRoutesOptions,
+} from "./liveViewRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
-import { browseCatalog } from "../config/browseCatalog.js";
+import { createTask, parseCreateTaskBody } from "../config/createTask.js";
+import { importTaskFromIssue, parseImportTaskBody } from "../config/importTask.js";
+import { parseUpdateTaskBody, updateTask } from "../config/updateTask.js";
+import {
+  loadDraftPackage,
+  loadTaskArtifact,
+  parseAttachTaskBody,
+  parseCreateDraftPackageBody,
+  parseDraftPackageBody,
+  parseOpenDraftPackageBody,
+  parseOverwriteDraftPackageBody,
+  parsePlanDraftPackageBody,
+  planDraftPackage,
+  validateDraftPackage,
+  type DraftPackage,
+} from "../config/draftPackage.js";
+import { publishDraftPackage } from "../config/publishDraftPackage.js";
+import {
+  clearWorkshopAutosave,
+  detectDiskChange,
+  draftPackageDiskRelativePaths,
+  fingerprintPackageFiles,
+  parseWorkshopAutosaveRecord,
+  readWorkshopAutosave,
+  resolveWorkshopAutosaveStoreRoot,
+  workshopAutosaveSlotKey,
+  writeWorkshopAutosave,
+  type WorkshopAutosaveRecord,
+} from "../workshop/autosave.js";
+import {
+  acceptWorkshopSessionMutation,
+  iterateWorkshopChatStreamFrames,
+  runWorkshopChatTurn,
+  stopWorkshopChatTurn,
+  undoWorkshopSessionMutation,
+  WorkshopChatSessionRegistry,
+  WorkshopSessionStoreError,
+} from "../workshop/chatTurn.js";
+import {
+  parseWorkshopChatAttachments,
+  parseWorkshopChatContext,
+} from "../workshop/chatAttachments.js";
+import {
+  readWorkshopOpenModel,
+  resolveWorkshopModel,
+} from "../workshop/modelSettings.js";
+import {
+  createWorkshopSession,
+  getWorkshopSession,
+  listWorkshopSessions,
+  resolveWorkshopSessionStoreRoot,
+  updateWorkshopSessionActiveBuildId,
+} from "../workshop/sessionStore.js";
+import {
+  createWorkshopBuild,
+  focusUnboundWorkshopBuild,
+  getWorkshopBuild,
+  listWorkshopBuilds,
+  listWorkshopPickerRows,
+  resolvePickerCatalogPipelines,
+  resolveWorkshopBuildStoreRoot,
+  updateWorkshopBuild,
+  WorkshopBuildStoreError,
+} from "../workshop/buildStore.js";
+import { resolveAgentPort, type AgentPort } from "../operatorAgent/index.js";
+import { browseCatalog, listPipelinesForContext } from "../config/browseCatalog.js";
+import { catalogContextFromStageflow } from "../config/resolveCatalogContext.js";
+import {
+  listPipelinesMultiProject,
+  listTasksMultiProject,
+} from "../config/multiProjectCatalog.js";
+import {
+  catalogPathErrorBody,
+  CatalogPathError,
+  resolveCatalogRelativePath,
+  resolveCatalogStartInput,
+  resolveDefaultWriteRoot,
+  resolveWritableCatalogRoot,
+} from "../config/catalogRelativePath.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
+import { findTaskInCatalogMulti } from "../config/findTaskInCatalog.js";
+import { buildSkillUsageIndex } from "../config/skillUsageIndex.js";
+import {
+  installSkillFromCommand,
+  parseInstallSkillBody,
+} from "../config/installSkillRequest.js";
+import { validateCatalog } from "../config/validateCatalog.js";
+import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import {
   artifactMediaType,
+  classifyArtifactContent,
   readRunArtifact,
   readRunArtifactBytes,
 } from "../mcp/readArtifact.js";
+import {
+  getRunDiff,
+  listCheckoutChanges,
+  readCheckoutFileBytes,
+} from "../mcp/checkoutTools.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
-import type { RunStoreKind } from "../runstore/createStore.js";
+import { sqliteConnectionFromStore, type RunStoreKind } from "../runstore/createStore.js";
+import {
+  BackupError,
+  createBackup,
+  resolveBackupDownloadPath,
+} from "../runstore/backup.js";
+import {
+  RestoreError,
+  resolveBackupNameForRestore,
+  stageRestoreForBoot,
+} from "../runstore/restore.js";
+import { iterateExportNdjson } from "../cli/exportAllCommand.js";
+import {
+  buildRunExportPayload,
+  runDetailWithRedactedManifest,
+} from "../runstore/exportRunPayload.js";
+import { buildDebugBundle } from "../runstore/debugBundle.js";
+import { parseShutdownGraceMs } from "./shutdown.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
+import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
+import { PipelinePreflightError } from "../runtime/pipelineRunner.js";
 import type {
   AbandonStageResult,
+  CancelRunResult,
+  DeleteRunResult,
+  GcRunsResult,
+  RunManager,
 } from "../runtime/runManager.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
+  INVALID_WORKSHOP_MODEL_MESSAGE,
   parseSlotCount,
+  parseWorkshopModelSetting,
+  readFactorySettings,
+  writeFactorySettings,
 } from "../runtime/settingsFile.js";
 import { isTaskFile } from "../runtime/taskInput.js";
+import {
+  findTokenShapedField,
+  tokenRejectedPayload,
+} from "../runtime/startPayload.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { TaskFile } from "../types/task.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
+import { emailHostFor, releaseEmailHost } from "../email/host.js";
+import { handleEmailRoutes } from "./emailRoutes.js";
+import { defaultAgentProjectRoot } from "../agents/projectRoot.js";
+import { PublicWebChat } from "../agents/webChat/publicChat.js";
+import { buildModelsResponse } from "../models/response.js";
+import { createAgentHostContext, type AgentHostContext } from "../agents/hostContext.js";
+import {
+  AgentScheduleSource,
+  agentScheduleTickIntervalMsFromEnv,
+} from "../agents/scheduleSource.js";
+import type { ConversationBackend } from "../agents/sessions.js";
+import { handleAgentAuthorRoutes } from "./agentAuthorRoutes.js";
+import { handleAgentRoutes } from "./agentRoutes.js";
+import { handleChannelRoutes } from "./channelRoutes.js";
+import { EmailTriggers } from "../email/triggers.js";
 import {
   bootstrapStageflowHost,
   type StageflowHostOptions,
 } from "./bootstrap.js";
 import {
+  assertAllowedHttpAccess,
+  isTrustedLocalHttpRequest,
+  resolveAllowedHosts,
+  type AllowedHosts,
+} from "./allowedHosts.js";
+import {
+  enforceBearerAuth,
+  loadControlTokens,
+  requiredScopeFor,
+  type ControlTokens,
+} from "./controlToken.js";
+import {
   createHttpHost,
   DEFAULT_PORT,
   json,
   type HttpHostEnvelope,
+  type HttpHostRouteContext,
 } from "./createHttpHost.js";
-import { mapRetryStageFailure, mapStartFailure } from "./operatorResults.js";
+import { handleApiHealth, listCatalogRootsForApi } from "./healthSurfaces.js";
+import {
+  mapRetryStageFailure,
+  mapStartFailure,
+  mapStoreLookupError,
+} from "./operatorResults.js";
+import {
+  installShutdownController,
+  makeDrainableHostFromOptional,
+  type ShutdownController,
+} from "./shutdown.js";
+import { writeAudit } from "../logging/audit.js";
+import { logger as rootLogger } from "../logging/logger.js";
+import {
+  callerIdFromRequestAuth,
+  getRequestAuth,
+  requestAuthFromBearer,
+  runWithRequestAuth,
+} from "./requestAuthContext.js";
+import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
+
+const auditLog = rootLogger.child({ component: "audit" });
+
+function draftCatalogRootWire(root: CatalogRoot): {
+  project_root: string;
+  root_kind: CatalogRoot["kind"];
+  read_only: boolean;
+} {
+  return {
+    project_root: root.project_root,
+    root_kind: root.kind,
+    read_only: root.read_only,
+  };
+}
 
 export type UiServerOptions = {
-  agent: AgentPort;
+  agent: StagePort;
   cwd?: string;
   agentDir?: string;
   rootDir?: string;
@@ -61,9 +266,16 @@ export type UiServerOptions = {
   host?: string;
   uiDistDir?: string;
   maxConcurrent?: number;
+  emailTriggerQueue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"];
   providerAuthContext?: ProviderAuthContext;
   mcpStateless?: boolean;
   runChangeBus?: RunChangeBus;
+  allowedHosts?: AllowedHosts;
+  controlTokens?: ControlTokens;
+  browser?: StageBrowserSupport;
+  /** Optional AgentPort. Workshop is the caller today; tests inject a fake. */
+  workshopOperatorHost?: AgentPort;
+  agentConversationBackend?: ConversationBackend;
 };
 
 function textPlain(res: ServerResponse, status: number, body: string): void {
@@ -81,6 +293,35 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readBuildTieField(
+  body: Record<string, unknown>,
+  field: "projectRoot" | "relativePath",
+):
+  | { ok: true; present: false }
+  | { ok: true; present: true; value: string | null }
+  | { ok: false; error: string } {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) {
+    return { ok: true, present: false };
+  }
+  const value = body[field];
+  if (value === null) return { ok: true, present: true, value: null };
+  if (typeof value === "string") return { ok: true, present: true, value };
+  return { ok: false, error: `${field} must be a string or null` };
+}
+
+/** Raw bytes, unparsed — for callers (webhook signature verification) that need the exact wire body. */
+async function readRawBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 function contentTypeFor(filePath: string): string {
@@ -135,106 +376,17 @@ async function serveStatic(
   return true;
 }
 
-function isMutatingApi(method: string, pathname: string): boolean {
-  if (method !== "POST") return false;
-  return (
-    pathname === "/api/runs" ||
-    pathname === "/api/settings" ||
-    pathname === "/api/stages" ||
-    pathname === "/api/pipelines" ||
-    /^\/api\/runs\/[^/]+\/rerun$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/answer$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/feedback-decision$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/retry$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery\/stop$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/abandon$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/login$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/login\/[^/]+\/answer$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/login\/[^/]+\/cancel$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/logout$/.test(pathname) ||
-    /^\/api\/project-mcp\/[^/]+\/probe$/.test(pathname)
-  );
-}
-
 function isCredentialMutatingApi(method: string, pathname: string): boolean {
   if (method !== "POST") return false;
   return (
+    isLiveViewInputPath(method, pathname) ||
+    isLiveViewDialogPath(method, pathname) ||
+    isLiveViewReopenTabPath(method, pathname) ||
     /^\/api\/providers\/[^/]+\/login$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/answer$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/cancel$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/logout$/.test(pathname)
   );
-}
-
-/** Login/logout require a non-empty loopback Origin (stricter than other mutating APIs). */
-function assertCredentialMutatingOrigin(
-  req: IncomingMessage,
-  res: ServerResponse,
-): boolean {
-  const origin = req.headers.origin;
-  if (typeof origin !== "string" || origin.length === 0) {
-    json(res, 403, { error: "Origin required" });
-    return false;
-  }
-  try {
-    const originHost = new URL(origin).hostname;
-    if (!isLoopbackHostname(originHost)) {
-      json(res, 403, { error: "Forbidden origin" });
-      return false;
-    }
-  } catch {
-    json(res, 403, { error: "Forbidden origin" });
-    return false;
-  }
-  return true;
-}
-
-function hostnameFromHostHeader(hostHeader: string): string {
-  if (hostHeader.startsWith("[")) {
-    const end = hostHeader.indexOf("]");
-    return end === -1 ? hostHeader : hostHeader.slice(1, end);
-  }
-  const colon = hostHeader.lastIndexOf(":");
-  if (colon > 0 && /^\d+$/.test(hostHeader.slice(colon + 1))) {
-    return hostHeader.slice(0, colon);
-  }
-  return hostHeader;
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  return h === "localhost" || h === "127.0.0.1" || h === "::1";
-}
-
-/** REST-friendly Host/Origin gate (plain JSON 403). Absent Origin is allowed. */
-function assertLoopbackHttpAccess(
-  req: IncomingMessage,
-  res: ServerResponse,
-): boolean {
-  const hostHeader = req.headers.host;
-  if (typeof hostHeader !== "string" || hostHeader.length === 0) {
-    json(res, 403, { error: "Forbidden host" });
-    return false;
-  }
-  if (!isLoopbackHostname(hostnameFromHostHeader(hostHeader))) {
-    json(res, 403, { error: "Forbidden host" });
-    return false;
-  }
-  const origin = req.headers.origin;
-  if (typeof origin === "string" && origin.length > 0) {
-    try {
-      const originHost = new URL(origin).hostname;
-      if (!isLoopbackHostname(originHost)) {
-        json(res, 403, { error: "Forbidden origin" });
-        return false;
-      }
-    } catch {
-      json(res, 403, { error: "Forbidden origin" });
-      return false;
-    }
-  }
-  return true;
 }
 
 export function defaultUiDistDir(): string {
@@ -245,36 +397,408 @@ export function defaultUiDistDir(): string {
   return path.resolve(here, "../ui");
 }
 
-export async function startUiServer(
-  options: UiServerOptions,
-): Promise<HttpHostEnvelope> {
-  const host = options.host ?? "127.0.0.1";
-  const port = options.port ?? DEFAULT_PORT;
-  const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
-  const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
-  const { manager, store, cwd, agentDir } = boot;
-  const providerAuthContext = boot.providerAuthContext;
+export type OperatorRouteDeps = {
+  manager: RunManager;
+  store: RunStore;
+  cwd: string;
+  agentDir: string;
+  rootDir: string;
+  providerAuthContext: ProviderAuthContext | undefined;
+  /** Omit for a headless service (e.g. `sf mcp`) — GETs outside the API surface just 404. */
+  uiDistDir?: string;
+  allowedHosts?: AllowedHosts;
+  controlTokens?: ControlTokens;
+  /** Test seams for live view (fake relay, clock, audit sink); production builds everything from persisted state. */
+  liveView?: Omit<LiveViewRoutesOptions, "store" | "controlTokens">;
+  /** Live shutdown controller; set after listen so restore can beginDrain. */
+  getShutdown?: () => import("./shutdown.js").ShutdownController | undefined;
+  /**
+   * Optional AgentPort (tests inject the fake host).
+   * Distinct from StagePort. Defaults to resolveAgentPort (Pi).
+   * The fake host remains available via createWorkshopOperatorHost.
+   */
+  workshopOperatorHost?: AgentPort;
+  /**
+   * Optional durable Workshop chat registry (host sessions keyed by session id).
+   * Defaults to a registry owned by this route surface.
+   */
+  workshopChatRegistry?: WorkshopChatSessionRegistry;
+  /** Injectable agent chat backend (tests). Defaults to Pi conversation host. */
+  agentConversationBackend?: ConversationBackend;
+  /** Shared with MCP when set by bootstrap. */
+  agentHost?: AgentHostContext;
+};
 
-  return createHttpHost({
-    boot,
-    host,
-    port,
-    routes: async ({ req, res, url, pathname, method }) => {
-      if (isMutatingApi(method, pathname)) {
-        if (!assertLoopbackHttpAccess(req, res)) {
-          return true;
-        }
+/**
+ * The full operator-console route surface: REST API (runs, stages,
+ * catalog, settings, providers) plus, when `uiDistDir` is given, static
+ * console UI file serving. Shared by `startUiServer` (browser-facing) and
+ * `startMcpServer` (headless global-service daemon) — both need the REST
+ * API; only the former needs the UI files.
+ */
+export type OperatorRoutes = ((ctx: HttpHostRouteContext) => Promise<boolean | void>) & {
+  /** Ends live view streams, credentials and relay sessions. Browsers are not torn down. */
+  dispose(): Promise<void>;
+};
+
+export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
+  const {
+    manager,
+    store,
+    cwd,
+    agentDir,
+    rootDir,
+    providerAuthContext,
+    uiDistDir,
+    workshopOperatorHost,
+    agentConversationBackend,
+    agentHost: injectedHost,
+  } = deps;
+  const agentConnection = injectedHost ? undefined : sqliteConnectionFromStore(store);
+  const agentHost =
+    injectedHost ??
+    (agentConnection
+      ? createAgentHostContext({
+          cwd,
+          agentDir,
+          connection: agentConnection,
+          ...(agentConversationBackend ? { backend: agentConversationBackend } : {}),
+        })
+      : undefined);
+  const agentScheduleSource = agentHost
+    ? new AgentScheduleSource({
+        service: agentHost.service,
+        projectRoot: defaultAgentProjectRoot(cwd),
+        intervalMs: agentScheduleTickIntervalMsFromEnv(),
+      })
+    : undefined;
+  void agentScheduleSource?.start(async (event) => {
+    await agentHost!.chat.send({
+      projectRoot: defaultAgentProjectRoot(cwd),
+      agentId: event.agentId,
+      text: event.message,
+      source: "schedule",
+    });
+  });
+  const operatorHost =
+    workshopOperatorHost ??
+    resolveAgentPort({
+      cwd,
+      projectRoot: cwd,
+    });
+  const workshopChatRegistry =
+    deps.workshopChatRegistry ?? new WorkshopChatSessionRegistry(operatorHost);
+  const workshopSessionStoreRoot = (): string =>
+    resolveWorkshopSessionStoreRoot();
+  const workshopBuildStoreRoot = (): string => resolveWorkshopBuildStoreRoot();
+  const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
+  const controlTokens = deps.controlTokens ?? loadControlTokens();
+  const liveView = createLiveViewRoutes({ ...deps.liveView, store, controlTokens });
+  liveView.attach(manager);
+  const handler = async ({ req, res, url, pathname, method, boot }: HttpHostRouteContext) => {
+      if (isLiveViewPath(pathname)) applyLiveViewHeaders(res);
+      if (boot.serveBlocked !== undefined && pathname.startsWith("/api/")) {
+        json(res, 503, {
+          error: boot.serveBlocked.reason,
+          code: boot.serveBlocked.code,
+        });
+        return true;
+      }
+      if (pathname.startsWith("/api/")) {
         if (
-          isCredentialMutatingApi(method, pathname) &&
-          !assertCredentialMutatingOrigin(req, res)
+          !assertAllowedHttpAccess(allowedHosts, req, res, {
+            requireOrigin: isCredentialMutatingApi(method, pathname),
+          })
         ) {
           return true;
         }
+        const scope = requiredScopeFor(method, pathname);
+        if (scope !== null) {
+          const authResult = enforceBearerAuth(
+            controlTokens,
+            req,
+            res,
+            scope,
+          );
+          if (!authResult.ok) return true;
+          return runWithRequestAuth(
+            requestAuthFromBearer(authResult.auth, "rest"),
+            () => handleOperatorRequest(),
+          );
+        }
       }
 
+      return handleOperatorRequest();
+
+      async function handleOperatorRequest(): Promise<boolean> {
       try {
+        if (await liveView.handle(req, res)) return true;
+
+        if (pathname === "/api/agent-author/chat" || pathname === "/api/agent-author/undo") {
+          if (await handleAgentAuthorRoutes(req, method, pathname, cwd, operatorHost, res, json)) return true;
+        }
+        if (PublicWebChat.owns(pathname)) {
+          if (!agentHost) { json(res, 503, { code: "web_chat.unavailable" }); return true; }
+          return await agentHost.publicChat.handle(req, res, method, pathname);
+        }
+        if (method === "GET" && uiDistDir !== undefined && /^\/chat\/[^/]+$/.test(pathname)) {
+          const page = path.join(uiDistDir, "chat.html");
+          try {
+            const html = await readFile(page);
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex" });
+            res.end(html);
+            return true;
+          } catch {
+            json(res, 404, { error: "Chat page not built. Run npm run ui:build." });
+            return true;
+          }
+        }
+        const agentInbound = method === "POST" ? pathname.match(/^\/api\/agent-inbound\/([^/]+)$/) : null;
+        if (agentInbound) {
+          if (!agentHost) { json(res, 503, { code: "agent.store_unavailable" }); return true; }
+          const declared = Number(req.headers["content-length"] ?? 0);
+          if (declared > 1024 * 1024) { json(res, 413, {}); return true; }
+          const chunks: Buffer[] = [];
+          let received = 0;
+          for await (const chunk of req) {
+            const buffer = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
+            received += buffer.length;
+            if (received > 1024 * 1024) { json(res, 413, {}); req.destroy(); return true; }
+            chunks.push(buffer);
+          }
+          const raw = Buffer.concat(chunks);
+          const headers: Record<string, string | undefined> = {};
+          for (const [name, value] of Object.entries(req.headers)) headers[name] = Array.isArray(value) ? value[0] : value;
+          const outcome = await agentHost.inbound.handle(decodeURIComponent(agentInbound[1]!), headers, raw.toString("utf8"));
+          json(res, outcome.status, outcome.body ?? {});
+          return true;
+        }
+        if (pathname === "/api/agents" || pathname.startsWith("/api/agents/")) {
+          if (!agentHost) { json(res, 503, { code: "agent.store_unavailable" }); return true; }
+          // Default: the Host's own project. An explicit project_root must be a known catalog root
+          // (writable for writes); its filesystem path, not its wire id, is where agents/ lives.
+          let agentProjectRoot = defaultAgentProjectRoot(cwd);
+          const requestedRoot = url.searchParams.get("project_root");
+          if (requestedRoot !== null && path.resolve(requestedRoot) !== path.resolve(agentProjectRoot)) {
+            try {
+              const resolved =
+                method === "GET"
+                  ? await resolveCatalogStartInput({ store, bootCwd: cwd }, requestedRoot)
+                  : await resolveWritableCatalogRoot({ store, bootCwd: cwd }, requestedRoot);
+              agentProjectRoot = resolved.wireRoot.path;
+            } catch (err) {
+              if (err instanceof CatalogPathError) {
+                json(res, 400, catalogPathErrorBody(err));
+                return true;
+              }
+              throw err;
+            }
+          }
+          if (await handleAgentRoutes(req, method, pathname, agentHost, agentProjectRoot, res, json)) return true;
+        }
+        if (pathname === "/api/connections" || pathname.startsWith("/api/connections/")) {
+          if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
+          if (!boot.channels) { json(res, 503, { code: "CHANNEL_CONNECTION_FAILED" }); return true; }
+          if (await handleChannelRoutes(req, method, pathname, boot.channels, res, json)) return true;
+        }
+        if (pathname.startsWith("/api/email/")) {
+          if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: ["POST", "PATCH", "DELETE"].includes(method) })) return true;
+          const email = boot.email;
+          if (!email) { json(res, 503, { code: "EMAIL_CONNECTION_FAILED" }); return true; }
+          await handleEmailRoutes(req, res, pathname, email.accounts, email.mailbox, email.triggers);
+          return true;
+        }
         if (method === "GET" && pathname === "/api/runs") {
-          json(res, 200, { runs: await store.listRuns() });
+          const filter: ListRunsFilter = {};
+          const status = url.searchParams.get("status");
+          const since = url.searchParams.get("since");
+          const pipeline = url.searchParams.get("pipeline");
+          const callerId = url.searchParams.get("caller_id");
+          if (status !== null) filter.status = status as RunStatus;
+          if (since !== null) filter.since = since;
+          if (pipeline !== null) filter.pipeline = pipeline;
+          if (callerId !== null) filter.caller_id = callerId;
+          json(res, 200, {
+            runs: await store.listRuns(
+              Object.keys(filter).length > 0 ? filter : undefined,
+            ),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/backup") {
+          const body = (await readJsonBody(req)) as {
+            out?: unknown;
+            db_only?: unknown;
+            no_credentials?: unknown;
+            include_a2a_artifacts?: unknown;
+          };
+          const callerId = callerIdFromRequestAuth();
+          try {
+            const result = await createBackup({
+              store,
+              homeDir: globalStageflowHome(),
+              outPath: typeof body.out === "string" ? body.out : undefined,
+              dbOnly: body.db_only === true,
+              noCredentials: body.no_credentials === true,
+              includeA2aArtifacts: body.include_a2a_artifacts === true,
+            });
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "backup",
+              outcome: "ok",
+            });
+            json(res, 200, result);
+          } catch (err) {
+            if (err instanceof BackupError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "backup",
+                outcome: "error",
+                error_code: err.code,
+              });
+              const status =
+                err.code === "backup_insufficient_disk" ? 507 : 400;
+              json(res, status, { error: err.message, code: err.code });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        const backupGetMatch = pathname.match(/^\/api\/backup\/([^/]+)$/);
+        if (method === "GET" && backupGetMatch) {
+          const name = decodeURIComponent(backupGetMatch[1] ?? "");
+          try {
+            const filePath = await resolveBackupDownloadPath(
+              name,
+              globalStageflowHome(),
+            );
+            const st = statSync(filePath);
+            res.writeHead(200, {
+              "Content-Type": "application/octet-stream",
+              "Content-Length": st.size,
+              "Content-Disposition": `attachment; filename="${name}"`,
+            });
+            createReadStream(filePath).pipe(res);
+          } catch (err) {
+            if (err instanceof BackupError) {
+              json(res, 400, { error: err.message, code: err.code });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/restore") {
+          const body = (await readJsonBody(req)) as {
+            backup?: unknown;
+            path?: unknown;
+          };
+          const backupName =
+            typeof body.backup === "string"
+              ? body.backup
+              : typeof body.path === "string"
+                ? body.path
+                : undefined;
+          if (backupName === undefined) {
+            json(res, 400, {
+              error: "body.backup (backup name under backups/) is required",
+              code: "restore_not_found",
+            });
+            return true;
+          }
+          const callerId = callerIdFromRequestAuth();
+          try {
+            const archivePath = await resolveBackupNameForRestore(
+              path.basename(backupName),
+              globalStageflowHome(),
+            );
+            const graceMs = parseShutdownGraceMs();
+            const staged = await stageRestoreForBoot({
+              archivePath,
+              homeDir: globalStageflowHome(),
+              graceMs,
+            });
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "restore",
+              outcome: "ok",
+            });
+            json(res, 202, {
+              ok: true,
+              staged: staged.stagedPath,
+              drain_deadline: staged.marker.drain_deadline,
+            });
+            const shutdown = deps.getShutdown?.();
+            if (shutdown !== undefined) {
+              void shutdown.beginDrain();
+            }
+          } catch (err) {
+            if (err instanceof RestoreError || err instanceof BackupError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "restore",
+                outcome: "error",
+                error_code: err.code,
+              });
+              json(res, 400, {
+                error: err.message,
+                code: err.code,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/export") {
+          const filter: {
+            status?: import("../runstore/port.js").RunStatus;
+            since?: string;
+            pipeline?: string;
+            caller_id?: string;
+          } = {};
+          const status = url.searchParams.get("status");
+          const since = url.searchParams.get("since");
+          const pipeline = url.searchParams.get("pipeline");
+          const callerId = url.searchParams.get("caller_id");
+          if (status) filter.status = status as import("../runstore/port.js").RunStatus;
+          if (since) filter.since = since;
+          if (pipeline) filter.pipeline = pipeline;
+          if (callerId) filter.caller_id = callerId;
+          res.writeHead(200, {
+            "Content-Type": "application/x-ndjson; charset=utf-8",
+          });
+          try {
+            for await (const line of iterateExportNdjson({
+              store,
+              filter: Object.keys(filter).length > 0 ? filter : undefined,
+            })) {
+              if (req.aborted || res.writableEnded || res.destroyed) {
+                break;
+              }
+              if (!res.write(line)) {
+                await new Promise<void>((resolve) => res.once("drain", resolve));
+              }
+            }
+            if (!res.writableEnded && !res.destroyed) {
+              res.end();
+            }
+          } catch (err) {
+            if (res.headersSent) {
+              res.destroy(err instanceof Error ? err : new Error(String(err)));
+            } else {
+              throw err;
+            }
+          }
           return true;
         }
 
@@ -300,16 +824,119 @@ export async function startUiServer(
               textPlain(res, 200, content);
             }
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            if (message === "Artifact path denied") {
-              json(res, 403, { error: message });
+            const mapped = mapStoreLookupError(err, { policy: "artifact" });
+            const status = mapped.kind === "denied" ? 403 : mapped.status;
+            json(res, status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const changesMatch = pathname.match(/^\/api\/runs\/([^/]+)\/changes$/);
+        if (method === "GET" && changesMatch) {
+          const runId = decodeURIComponent(changesMatch[1] ?? "");
+          try {
+            const result = await listCheckoutChanges(store, runId);
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+              });
               return true;
             }
-            const notFound =
-              message.startsWith("Run not found") ||
-              message.startsWith("Artifact not found") ||
-              /no such|not found/i.test(message);
-            json(res, notFound ? 404 : 400, { error: message });
+            json(res, 200, {
+              runId,
+              changes: result.changes,
+              truncated: result.truncated,
+            });
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const diffMatch = pathname.match(/^\/api\/runs\/([^/]+)\/diff$/);
+        if (method === "GET" && diffMatch) {
+          const runId = decodeURIComponent(diffMatch[1] ?? "");
+          const modeParam = url.searchParams.get("mode");
+          const mode =
+            modeParam === "patch" || modeParam === "stat" ? modeParam : undefined;
+          const filterPath = url.searchParams.get("path") ?? undefined;
+          const maxBytesRaw = url.searchParams.get("maxBytes");
+          const maxBytes =
+            maxBytesRaw !== null && maxBytesRaw.trim() !== ""
+              ? Number(maxBytesRaw)
+              : undefined;
+          try {
+            const result = await getRunDiff(store, runId, {
+              mode,
+              path: filterPath ?? undefined,
+              maxBytes:
+                maxBytes !== undefined && Number.isFinite(maxBytes)
+                  ? maxBytes
+                  : undefined,
+            });
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+              });
+              return true;
+            }
+            json(res, 200, {
+              runId,
+              mode: result.mode,
+              base_sha: result.base_sha,
+              base_source: result.base_source,
+              content: result.content,
+              truncated: result.truncated,
+              untracked: result.untracked,
+            });
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const checkoutFileMatch = pathname.match(/^\/api\/runs\/([^/]+)\/file$/);
+        if (method === "GET" && checkoutFileMatch) {
+          const runId = decodeURIComponent(checkoutFileMatch[1] ?? "");
+          const filePath = url.searchParams.get("path");
+          if (filePath === null || filePath.trim().length === 0) {
+            json(res, 400, { error: "path query parameter is required" });
+            return true;
+          }
+          try {
+            const result = await readCheckoutFileBytes(store, runId, filePath);
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+              });
+              return true;
+            }
+            const mediaType = artifactMediaType(filePath);
+            if (mediaType !== undefined) {
+              res.writeHead(200, {
+                "Content-Type": mediaType,
+                "Content-Length": result.bytes.length,
+              });
+              res.end(result.bytes);
+            } else {
+              const classified = classifyArtifactContent(filePath, result.bytes);
+              if (classified.kind !== "utf8") {
+                json(res, 400, {
+                  error: "Checkout file is not valid UTF-8 text",
+                });
+                return true;
+              }
+              textPlain(res, 200, result.bytes.toString("utf8"));
+            }
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "artifact" });
+            const status = mapped.kind === "denied" ? 403 : mapped.status;
+            json(res, status, { error: mapped.error });
           }
           return true;
         }
@@ -323,9 +950,35 @@ export async function startUiServer(
           try {
             json(res, 200, await readStageVerificationHistory(store, runId, stageId));
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            const notFound = /not found|no such/i.test(message);
-            json(res, notFound ? 404 : 500, { error: message });
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const exportMatch = pathname.match(/^\/api\/runs\/([^/]+)\/export$/);
+        if (method === "GET" && exportMatch) {
+          const runId = decodeURIComponent(exportMatch[1] ?? "");
+          try {
+            const detail = await store.readRun(runId);
+            json(res, 200, buildRunExportPayload(detail));
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const debugBundleMatch = pathname.match(
+          /^\/api\/runs\/([^/]+)\/debug-bundle$/,
+        );
+        if (method === "GET" && debugBundleMatch) {
+          const runId = decodeURIComponent(debugBundleMatch[1] ?? "");
+          try {
+            json(res, 200, await buildDebugBundle(store, runId));
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
           }
           return true;
         }
@@ -334,55 +987,271 @@ export async function startUiServer(
           const rest = pathname.slice("/api/runs/".length);
           if (rest && !rest.includes("/")) {
             try {
-              json(res, 200, await store.readRun(decodeURIComponent(rest)));
+              const detail = await store.readRun(decodeURIComponent(rest));
+              json(res, 200, runDetailWithRedactedManifest(detail));
             } catch (err) {
-              json(res, 404, {
-                error: err instanceof Error ? err.message : String(err),
-              });
+              const mapped = mapStoreLookupError(err, { policy: "run" });
+              json(res, 404, { error: mapped.error });
             }
             return true;
           }
         }
 
+        if (method === "POST" && pathname === "/api/projects") {
+          if (!isTrustedLocalHttpRequest(req)) {
+            json(res, 403, {
+              error:
+                "ensure_project is only allowed from trusted local clients (loopback peer and Host)",
+              code: "ensure_project_not_allowed",
+            });
+            return true;
+          }
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const projectRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root.trim()
+              : "";
+          if (!projectRoot) {
+            json(res, 400, { error: "project_root is required" });
+            return true;
+          }
+          if (!path.isAbsolute(projectRoot)) {
+            json(res, 400, {
+              error: "project_root must be an absolute path",
+            });
+            return true;
+          }
+          try {
+            const registered = await store.ensureProject(projectRoot);
+            json(res, 200, { project_root: registered });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            json(res, 400, {
+              error: message,
+              code: "invalid_project_root",
+            });
+          }
+          return true;
+        }
+
         if (method === "POST" && pathname === "/api/runs") {
-          const body = (await readJsonBody(req)) as {
+          const body = (await readJsonBody(req)) as Record<string, unknown>;
+          const tokenField = findTokenShapedField(body);
+          if (tokenField !== undefined) {
+            json(res, 400, tokenRejectedPayload(tokenField));
+            return true;
+          }
+          const typed = body as {
             task?: string | TaskFile;
             pipeline?: string;
+            project_root?: string;
+            checkoutOverride?: string;
+            skipGates?: boolean;
+            gitSha?: string;
+            ciPrUrl?: string;
+            ciJobUrl?: string;
+            skills?: Record<string, Record<string, string>>;
           };
           if (
-            typeof body.pipeline !== "string" ||
-            !body.pipeline.trim() ||
-            body.task === undefined
+            typeof typed.pipeline !== "string" ||
+            !typed.pipeline.trim() ||
+            typed.task === undefined
           ) {
             json(res, 400, { error: "task and pipeline are required" });
             return true;
           }
-          if (typeof body.task !== "string" && !isTaskFile(body.task)) {
+          if (typeof typed.task !== "string" && !isTaskFile(typed.task)) {
             json(res, 400, {
               error:
                 "task must be a path string or TaskFile object (id and goal required)",
             });
             return true;
           }
-          const result = await manager.startRun({
-            task: body.task,
-            pipeline: body.pipeline.trim(),
-          });
+          if (
+            typed.checkoutOverride !== undefined &&
+            typeof typed.checkoutOverride !== "string"
+          ) {
+            json(res, 400, { error: "checkoutOverride must be a string" });
+            return true;
+          }
+          if (typed.skipGates !== undefined && typeof typed.skipGates !== "boolean") {
+            json(res, 400, { error: "skipGates must be a boolean" });
+            return true;
+          }
+          for (const field of ["gitSha", "ciPrUrl", "ciJobUrl"] as const) {
+            if (typed[field] !== undefined && typeof typed[field] !== "string") {
+              json(res, 400, { error: `${field} must be a string` });
+              return true;
+            }
+          }
+          let wireRoot;
+          let roots;
+          try {
+            ({ wireRoot, roots } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              typed.project_root,
+            ));
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const wireProjectRoot = wireRoot.project_root;
+          let pipelinePath = typed.pipeline.trim();
+          let taskInput: string | TaskFile = typed.task;
+          let checkoutOverride: string | undefined;
+          try {
+            pipelinePath = resolveCatalogRelativePath({
+              inputPath: pipelinePath,
+              projectRoot: wireProjectRoot,
+              roots,
+              fieldName: "pipeline",
+            }).absolutePath;
+            if (typeof typed.task === "string") {
+              taskInput = resolveCatalogRelativePath({
+                inputPath: typed.task,
+                projectRoot: wireProjectRoot,
+                roots,
+                fieldName: "task",
+              }).absolutePath;
+            }
+            if (typed.checkoutOverride !== undefined) {
+              checkoutOverride = resolveCatalogRelativePath({
+                inputPath: typed.checkoutOverride,
+                projectRoot: wireProjectRoot,
+                roots,
+                fieldName: "checkout",
+              }).absolutePath;
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          let result: Awaited<ReturnType<typeof manager.startRun>>;
+          const callerId = callerIdFromRequestAuth();
+          try {
+            result = await manager.startRun({
+              task: taskInput,
+              pipeline: pipelinePath,
+              projectRoot: wireRoot.path,
+              ...(checkoutOverride !== undefined
+                ? { checkoutOverride }
+                : {}),
+              ...(typed.skipGates !== undefined ? { skipGates: typed.skipGates } : {}),
+              ...(typed.gitSha !== undefined ? { gitSha: typed.gitSha } : {}),
+              ...(typed.ciPrUrl !== undefined ? { ciPrUrl: typed.ciPrUrl } : {}),
+              ...(typed.ciJobUrl !== undefined ? { ciJobUrl: typed.ciJobUrl } : {}),
+              ...(typed.skills !== undefined ? { skills: typed.skills } : {}),
+              callerId,
+            });
+          } catch (err) {
+            if (err instanceof PipelineValidationError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "start_run",
+                outcome: "error",
+                error_code: "pipeline_validation",
+              });
+              json(res, 400, {
+                error: "Pipeline validation failed",
+                validation: err.result,
+              });
+              return true;
+            }
+            if (err instanceof PipelinePreflightError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "start_run",
+                outcome: "error",
+                error_code: err.code,
+              });
+              json(res, 400, err.toNetworkBody());
+              return true;
+            }
+            throw err;
+          }
           if (!result.ok) {
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "start_run",
+              outcome: "error",
+              error_code: result.code,
+            });
             json(res, result.status ?? 500, mapStartFailure(result));
             return true;
           }
-          json(res, 202, { runId: result.runId });
+          writeAudit(auditLog, {
+            caller_id: callerId,
+            surface: getRequestAuth()?.surface ?? "rest",
+            action: "start_run",
+            target_run_id: result.runId,
+            outcome: "ok",
+          });
+          json(res, 202, {
+            runId: result.runId,
+            ...(result.queued === true
+              ? {
+                  queued: true,
+                  queuePosition: result.queuePosition,
+                  ...(result.queuedCode !== undefined
+                    ? { queuedCode: result.queuedCode }
+                    : {}),
+                }
+              : {}),
+          });
           return true;
         }
 
         if (method === "POST" && pathname.match(/^\/api\/runs\/[^/]+\/rerun$/)) {
           const runId = decodeURIComponent(pathname.split("/")[3] ?? "");
-          const result = await manager.rerun(runId);
+          const body = (await readJsonBody(req)) as {
+            pinned?: boolean;
+          };
+          if (body.pinned !== undefined && typeof body.pinned !== "boolean") {
+            json(res, 400, { error: "pinned must be a boolean" });
+            return true;
+          }
+          const callerId = callerIdFromRequestAuth();
+          const result = await manager.rerun(runId, {
+            ...(body.pinned !== undefined ? { pinned: body.pinned } : {}),
+            callerId,
+          });
           if (!result.ok) {
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "rerun",
+              target_run_id: runId,
+              outcome: "error",
+              error_code: result.code,
+            });
             json(res, result.status ?? 500, mapStartFailure(result));
             return true;
           }
+          writeAudit(auditLog, {
+            caller_id: callerId,
+            surface: getRequestAuth()?.surface ?? "rest",
+            action: "rerun",
+            target_run_id: result.runId,
+            outcome: "ok",
+          });
           json(res, 202, { runId: result.runId });
           return true;
         }
@@ -408,7 +1277,12 @@ export async function startUiServer(
             json(res, result.status, { error: result.reason });
             return true;
           }
-          json(res, 202, { ok: true });
+          json(res, 202, {
+            ok: true,
+            ...(result.verification !== undefined
+              ? { verification: result.verification }
+              : {}),
+          });
           return true;
         }
 
@@ -477,6 +1351,26 @@ export async function startUiServer(
           const runId = decodeURIComponent(retryMatch[1] ?? "");
           const stageId = decodeURIComponent(retryMatch[2] ?? "");
           const result = await manager.retryStage(runId, stageId);
+          if (!result.ok) {
+            json(res, result.status ?? 500, mapRetryStageFailure(result));
+            return true;
+          }
+          json(res, 202, {
+            runId: result.runId,
+            stageId: result.stageId,
+            attemptIndex: result.attemptIndex,
+          });
+          return true;
+        }
+
+        const resumeMatch = pathname.match(
+          /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/resume$/,
+        );
+        if (method === "POST" && resumeMatch) {
+          await readJsonBody(req);
+          const runId = decodeURIComponent(resumeMatch[1] ?? "");
+          const stageId = decodeURIComponent(resumeMatch[2] ?? "");
+          const result = await manager.resumeTimedOutStage(runId, stageId);
           if (!result.ok) {
             json(res, result.status ?? 500, mapRetryStageFailure(result));
             return true;
@@ -561,15 +1455,493 @@ export async function startUiServer(
           return true;
         }
 
+        const cancelMatch = pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+        if (method === "POST" && cancelMatch) {
+          const body = (await readJsonBody(req)) as { reason?: unknown };
+          const runId = decodeURIComponent(cancelMatch[1] ?? "");
+          if (typeof body.reason !== "string" || body.reason.trim().length === 0) {
+            json(res, 400, { error: "Cancel reason is required" });
+            return true;
+          }
+          const result = await manager.cancelRun(runId, body.reason);
+          if (!result.ok) {
+            json(res, result.status ?? 500, {
+              error: (result as Extract<CancelRunResult, { ok: false }>).reason,
+            });
+            return true;
+          }
+          json(res, 202, {
+            ok: true,
+            runId: result.runId,
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/runs/gc") {
+          const body = (await readJsonBody(req)) as { execute?: unknown };
+          const execute = body.execute === true;
+          const result = await manager.gcRuns({ execute, channel: "rest" });
+          if (!result.ok) {
+            json(res, result.status ?? 500, {
+              error: (result as Extract<GcRunsResult, { ok: false }>).reason,
+            });
+            return true;
+          }
+          json(res, 200, {
+            slimmed: result.slimmed,
+            purged: result.purged,
+            bareCachesEvicted: result.bareCachesEvicted,
+          });
+          return true;
+        }
+
+        const deleteMatch = pathname.match(/^\/api\/runs\/([^/]+)$/);
+        if (method === "DELETE" && deleteMatch) {
+          const runId = decodeURIComponent(deleteMatch[1] ?? "");
+          const forceParam = url.searchParams.get("force");
+          const force = forceParam === "true" || forceParam === "1";
+          const result = await manager.deleteRun(runId, {
+            force,
+            channel: "rest",
+          });
+          if (!result.ok) {
+            json(res, result.status ?? 500, {
+              error: (result as Extract<DeleteRunResult, { ok: false }>).reason,
+            });
+            return true;
+          }
+          json(res, 200, {
+            ok: true,
+            runId: result.runId,
+          });
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/catalog/roots") {
+          const roots = await listCatalogRootsForApi({ store, bootCwd: cwd });
+          json(res, 200, { roots });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/catalog/validate") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+            const record = body as Record<string, unknown>;
+            let pipeline =
+              typeof record.pipeline === "string" ? record.pipeline : undefined;
+            let task = typeof record.task === "string" ? record.task : undefined;
+            let stage =
+              typeof record.stage === "string" ? record.stage : undefined;
+            const strict = record.strict === true;
+            const projectRoot =
+              typeof record.project_root === "string" && record.project_root.trim()
+                ? record.project_root.trim()
+                : undefined;
+            const scopedCount = [pipeline, task, stage].filter(
+              (v) => v !== undefined,
+            ).length;
+            if (scopedCount > 1) {
+              json(res, 400, {
+                error: "Use at most one of pipeline, task, or stage",
+              });
+              return true;
+            }
+            let validateCwd = cwd;
+            if (pipeline !== undefined || task !== undefined || stage !== undefined) {
+              try {
+                const { wireRoot, roots } = await resolveCatalogStartInput(
+                  { store, bootCwd: cwd },
+                  projectRoot,
+                );
+                validateCwd = wireRoot.path;
+                if (pipeline !== undefined) {
+                  pipeline = resolveCatalogRelativePath({
+                    inputPath: pipeline.trim(),
+                    projectRoot: wireRoot.project_root,
+                    roots,
+                    fieldName: "pipeline",
+                  }).absolutePath;
+                }
+                if (task !== undefined) {
+                  task = resolveCatalogRelativePath({
+                    inputPath: task.trim(),
+                    projectRoot: wireRoot.project_root,
+                    roots,
+                    fieldName: "task",
+                  }).absolutePath;
+                }
+                if (stage !== undefined) {
+                  stage = resolveCatalogRelativePath({
+                    inputPath: stage.trim(),
+                    projectRoot: wireRoot.project_root,
+                    roots,
+                    fieldName: "stage",
+                  }).absolutePath;
+                }
+              } catch (err) {
+                if (err instanceof CatalogPathError) {
+                  json(res, 400, catalogPathErrorBody(err));
+                  return true;
+                }
+                throw err;
+              }
+            }
+            const scope = pipeline
+              ? "pipeline"
+              : task
+                ? "task"
+                : stage
+                  ? "stage"
+                  : "full";
+            const stageContent =
+              typeof record.content === "string" ? record.content : undefined;
+            if (stageContent !== undefined && stage === undefined) {
+              json(res, 400, {
+                error: "content is only supported with stage",
+              });
+              return true;
+            }
+            const result = await validateCatalog({
+              scope,
+              cwd: validateCwd,
+              ...(pipeline !== undefined ||
+              task !== undefined ||
+              stage !== undefined
+                ? { projectRoot: validateCwd }
+                : {}),
+              pipeline,
+              task,
+              stage,
+              ...(stageContent !== undefined ? { stageContent } : {}),
+              strict,
+            });
+            json(res, 200, result);
+            return true;
+          }
+          json(res, 400, { error: "Request body must be an object" });
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/catalog/file") {
+          const relPath = url.searchParams.get("path");
+          if (relPath === null || relPath.length === 0) {
+            json(res, 400, { error: "path query parameter is required" });
+            return true;
+          }
+          const projectRoot = url.searchParams.get("project_root") ?? undefined;
+          try {
+            const { roots } = await resolveCatalogStartInput({ store, bootCwd: cwd }, projectRoot);
+            const result = await readCatalogFileForHttp({
+              inputPath: relPath,
+              projectRoot,
+              roots,
+              fieldName: "path",
+            });
+            if (!result.ok) {
+              json(res, result.status, { error: result.error, code: result.code });
+              return true;
+            }
+            json(res, 200, { path: result.path, content: result.content });
+            return true;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+        }
+
+        if (method === "PUT" && pathname === "/api/catalog/file") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (body === null || typeof body !== "object" || Array.isArray(body)) {
+            json(res, 400, { error: "Request body must be an object" });
+            return true;
+          }
+          const record = body as Record<string, unknown>;
+          const relPath =
+            typeof record.path === "string" ? record.path.trim() : "";
+          if (!relPath) {
+            json(res, 400, { error: "path is required" });
+            return true;
+          }
+          if (typeof record.content !== "string") {
+            json(res, 400, { error: "content must be a string" });
+            return true;
+          }
+          const writeRoot =
+            typeof record.project_root === "string"
+              ? record.project_root
+              : undefined;
+          try {
+            const { wireRoot, roots } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            const result = await writeCatalogFileForHttp({
+              inputPath: relPath,
+              content: record.content,
+              projectRoot: wireRoot.project_root,
+              roots,
+              fieldName: "path",
+            });
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+                ...(result.findings !== undefined
+                  ? { findings: result.findings }
+                  : {}),
+              });
+              return true;
+            }
+            json(res, 200, { path: result.path, content: result.content });
+            return true;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+        }
+
+        if (method === "POST" && pathname === "/api/tasks/import") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseImportTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let taskWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            taskWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const stageflowCtx = await resolveStageflowContext(taskWriteRoot);
+          if (stageflowCtx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const result = await importTaskFromIssue(stageflowCtx.projectRoot, parsed);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 201, { task: result.task });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/tasks") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let taskWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            taskWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parseCreateTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const stageflowCtx = await resolveStageflowContext(taskWriteRoot);
+          if (stageflowCtx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const result = await createTask(stageflowCtx.projectRoot, parsed);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 201, { task: result.task });
+          return true;
+        }
+
+        const taskDetailMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+        if (method === "GET" && taskDetailMatch) {
+          const taskId = decodeURIComponent(taskDetailMatch[1] ?? "");
+          const projectRootFilter =
+            url.searchParams.get("project_root") ?? undefined;
+          const lookup = await findTaskInCatalogMulti({
+            store,
+            bootCwd: cwd,
+            taskId,
+            projectRootFilter,
+          });
+          if (!lookup.ok) {
+            if (lookup.status === 409) {
+              json(res, 409, {
+                error: lookup.error,
+                code: lookup.code,
+                project_roots: lookup.project_roots,
+              });
+              return true;
+            }
+            if (lookup.status === 400) {
+              json(res, 400, {
+                error: lookup.error,
+                code: lookup.code,
+              });
+              return true;
+            }
+            json(res, 404, { error: lookup.error });
+            return true;
+          }
+          json(res, 200, { task: lookup.task });
+          return true;
+        }
+
+        if (method === "PUT" && taskDetailMatch) {
+          const taskId = decodeURIComponent(taskDetailMatch[1] ?? "");
+          const projectRootFilter =
+            url.searchParams.get("project_root") ?? undefined;
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseUpdateTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const result = await updateTask({
+            store,
+            bootCwd: cwd,
+            taskId,
+            input: parsed,
+            projectRootFilter,
+          });
+          if (!result.ok) {
+            json(res, result.status, {
+              error: result.error,
+              ...(result.code !== undefined ? { code: result.code } : {}),
+              ...(result.project_roots !== undefined
+                ? { project_roots: result.project_roots }
+                : {}),
+            });
+            return true;
+          }
+          json(res, 200, { task: result.task });
+          return true;
+        }
+
         if (method === "GET" && pathname === "/api/tasks") {
-          const catalog = await browseCatalog(cwd);
-          json(res, 200, { tasks: catalog.tasks });
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listTasksMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            tasks: result.items,
+            root_errors: result.root_errors,
+            ...(result.tip !== undefined ? { tip: result.tip } : {}),
+          });
           return true;
         }
 
         if (method === "GET" && pathname === "/api/pipelines") {
-          const catalog = await browseCatalog(cwd);
-          json(res, 200, { pipelines: catalog.pipelines });
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listPipelinesMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            pipelines: result.items,
+            root_errors: result.root_errors,
+            ...(result.tip !== undefined ? { tip: result.tip } : {}),
+          });
           return true;
         }
 
@@ -588,16 +1960,36 @@ export async function startUiServer(
             json(res, 400, { error: "Invalid JSON body" });
             return true;
           }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let stageWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            stageWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
           const parsed = parseCreateStageBody(body);
           if ("ok" in parsed) {
             json(res, parsed.status, { error: parsed.error });
             return true;
           }
-          const ctx = await resolveStageflowContext(cwd);
-          if (!ctx.isGitProject) {
+          const ctx = await resolveStageflowContext(stageWriteRoot);
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }
@@ -618,16 +2010,36 @@ export async function startUiServer(
             json(res, 400, { error: "Invalid JSON body" });
             return true;
           }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let pipelineWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            pipelineWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
           const parsed = parseCreatePipelineBody(body);
           if ("ok" in parsed) {
             json(res, parsed.status, { error: parsed.error });
             return true;
           }
-          const ctx = await resolveStageflowContext(cwd);
-          if (!ctx.isGitProject) {
+          const ctx = await resolveStageflowContext(pipelineWriteRoot);
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }
@@ -640,9 +2052,1321 @@ export async function startUiServer(
           return true;
         }
 
-        if (method === "GET" && pathname === "/api/models") {
-          const catalog = await browseCatalog(cwd);
-          json(res, 200, { models: catalog.models });
+        if (method === "POST" && pathname === "/api/drafts/validate") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let validateRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveDefaultWriteRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            validateRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const ctx = await resolveStageflowContext(validateRoot);
+          const result = await validateDraftPackage(draftParsed, {
+            cwd: ctx.projectRoot,
+            projectRoot: ctx.projectRoot,
+            strict: true,
+          });
+          json(res, 200, result);
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/create") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let draftWriteRoot: string;
+          let draftWriteWireRoot: CatalogRoot;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            draftWriteRoot = selected.path;
+            draftWriteWireRoot = selected;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parseCreateDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const ctx = await resolveStageflowContext(draftWriteRoot);
+          if (ctx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const result = (
+            await publishDraftPackage(ctx.projectRoot, parsed, "create", {
+              catalogRootKind: draftWriteWireRoot.kind,
+            })
+          ).write;
+          if (!result.ok) {
+            json(res, result.status, {
+              error: result.error,
+              ...(result.findings ? { findings: result.findings } : {}),
+            });
+            return true;
+          }
+          json(res, 201, {
+            pipeline: result.pipeline,
+            pipelinePath: result.pipelinePath,
+            stagePaths: result.stagePaths,
+            catalog_root_path: ctx.projectRoot,
+            ...draftCatalogRootWire(draftWriteWireRoot),
+            ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/overwrite") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let draftWriteRoot: string;
+          let draftWriteWireRoot: CatalogRoot;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            draftWriteRoot = selected.path;
+            draftWriteWireRoot = selected;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parseOverwriteDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const ctx = await resolveStageflowContext(draftWriteRoot);
+          if (ctx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const result = (
+            await publishDraftPackage(ctx.projectRoot, parsed, "overwrite", {
+              catalogRootKind: draftWriteWireRoot.kind,
+            })
+          ).write;
+          if (!result.ok) {
+            json(res, result.status, {
+              error: result.error,
+              ...(result.findings ? { findings: result.findings } : {}),
+            });
+            return true;
+          }
+          json(res, 200, {
+            pipeline: result.pipeline,
+            pipelinePath: result.pipelinePath,
+            stagePaths: result.stagePaths,
+            catalog_root_path: ctx.projectRoot,
+            ...draftCatalogRootWire(draftWriteWireRoot),
+            ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/plan") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let draftWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            draftWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parsePlanDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const ctx = await resolveStageflowContext(draftWriteRoot);
+          if (ctx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const catalogPipelines =
+            parsed.mode === "create"
+              ? await listPipelinesForContext(catalogContextFromStageflow(ctx))
+              : [];
+          const plan = await planDraftPackage(ctx.projectRoot, parsed, {
+            mode: parsed.mode,
+            catalogPipelines,
+          });
+          if (!plan.ok) {
+            json(res, plan.status, { error: plan.error });
+            return true;
+          }
+          json(res, 200, {
+            pipelinePath: plan.pipelinePath,
+            directory: plan.directory,
+            files: plan.files,
+            pipelineIdTaken: plan.pipelineIdTaken,
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/open") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseOpenDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let wireRoot;
+          let roots;
+          try {
+            ({ wireRoot, roots } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              writeRoot,
+            ));
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          let pipelineRel: string;
+          let taskRel: string | undefined;
+          try {
+            pipelineRel = resolveCatalogRelativePath({
+              inputPath: parsed.path,
+              projectRoot: writeRoot,
+              roots,
+              fieldName: "path",
+            }).relativePath;
+            if (parsed.taskPath) {
+              taskRel = resolveCatalogRelativePath({
+                inputPath: parsed.taskPath,
+                projectRoot: writeRoot,
+                roots,
+                fieldName: "task",
+              }).relativePath;
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const ctx = await resolveStageflowContext(wireRoot.path);
+          const result = await loadDraftPackage(ctx.projectRoot, pipelineRel, {
+            ...(taskRel !== undefined ? { taskPath: taskRel } : {}),
+          });
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 200, {
+            draft: result.draft,
+            destination: result.destination,
+            pipelinePath: result.pipelinePath,
+            ...draftCatalogRootWire(wireRoot),
+            ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/attach-task") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseAttachTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let wireRoot;
+          let roots;
+          try {
+            ({ wireRoot, roots } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              writeRoot,
+            ));
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          let taskRel: string;
+          try {
+            taskRel = resolveCatalogRelativePath({
+              inputPath: parsed.taskPath,
+              projectRoot: writeRoot,
+              roots,
+              fieldName: "task",
+            }).relativePath;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const ctx = await resolveStageflowContext(wireRoot.path);
+          const result = await loadTaskArtifact(ctx.projectRoot, taskRel);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 200, {
+            task: result.task,
+            taskPath: result.taskPath,
+          });
+          return true;
+        }
+
+        if (
+          method === "GET" &&
+          pathname === "/api/workshop/autosave"
+        ) {
+          const keyParam = url.searchParams.get("key");
+          const key = workshopAutosaveSlotKey(keyParam);
+          const writeRoot =
+            url.searchParams.get("project_root") ?? undefined;
+          try {
+            await resolveDefaultWriteRoot({ store, bootCwd: cwd }, writeRoot);
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const storeRoot = resolveWorkshopAutosaveStoreRoot();
+          const record = readWorkshopAutosave(storeRoot, key);
+          json(res, 200, { key, autosave: record });
+          return true;
+        }
+
+        if (
+          method === "PUT" &&
+          pathname === "/api/workshop/autosave"
+        ) {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const key = workshopAutosaveSlotKey(
+            typeof body.key === "string" ? body.key : undefined,
+          );
+          const writeRoot =
+            typeof body.project_root === "string"
+              ? body.project_root
+              : undefined;
+          try {
+            await resolveDefaultWriteRoot({ store, bootCwd: cwd }, writeRoot);
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const storeRoot = resolveWorkshopAutosaveStoreRoot();
+          const candidate: WorkshopAutosaveRecord = {
+            version: 1,
+            key,
+            updatedAt:
+              typeof body.updatedAt === "string" && body.updatedAt
+                ? body.updatedAt
+                : new Date().toISOString(),
+            draft: body.draft as WorkshopAutosaveRecord["draft"],
+            messages:
+              body.messages as WorkshopAutosaveRecord["messages"],
+            autoApply: Boolean(body.autoApply),
+            ...(body.sessionModelOverride === null ||
+            typeof body.sessionModelOverride === "string"
+              ? { sessionModelOverride: body.sessionModelOverride }
+              : {}),
+            ...(body.destination !== undefined
+              ? {
+                  destination:
+                    body.destination as WorkshopAutosaveRecord["destination"],
+                }
+              : {}),
+            ...(body.savedPath === null || typeof body.savedPath === "string"
+              ? { savedPath: body.savedPath }
+              : {}),
+            ...(body.savedTaskPath === null ||
+            typeof body.savedTaskPath === "string"
+              ? { savedTaskPath: body.savedTaskPath }
+              : {}),
+            ...(isPlainObject(body.diskFingerprints)
+              ? {
+                  diskFingerprints:
+                    body.diskFingerprints as Record<string, string>,
+                }
+              : {}),
+            ...(body.projectRoot === null || typeof body.projectRoot === "string"
+              ? { projectRoot: body.projectRoot }
+              : {}),
+          };
+          const parsed = parseWorkshopAutosaveRecord(candidate);
+          if (!parsed) {
+            json(res, 400, { error: "Invalid workshop autosave payload" });
+            return true;
+          }
+          const written = writeWorkshopAutosave(storeRoot, parsed);
+          json(res, 200, { autosave: written });
+          return true;
+        }
+
+        if (
+          method === "DELETE" &&
+          pathname === "/api/workshop/autosave"
+        ) {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const key = workshopAutosaveSlotKey(
+            typeof body.key === "string" ? body.key : undefined,
+          );
+          const writeRoot =
+            typeof body.project_root === "string"
+              ? body.project_root
+              : undefined;
+          try {
+            await resolveDefaultWriteRoot({ store, bootCwd: cwd }, writeRoot);
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const storeRoot = resolveWorkshopAutosaveStoreRoot();
+          const cleared = clearWorkshopAutosave(storeRoot, key);
+          json(res, 200, { key, cleared });
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/workshop/picker") {
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listPipelinesMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            rows: listWorkshopPickerRows(
+              workshopBuildStoreRoot(),
+              resolvePickerCatalogPipelines(result.items, result.roots),
+              result.roots,
+            ),
+            root_errors: result.root_errors,
+            ...(result.tip !== undefined ? { tip: result.tip } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/workshop/focus") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (
+            typeof body.projectRoot !== "string" ||
+            typeof body.relativePath !== "string"
+          ) {
+            json(res, 400, { error: "project root and path are required" });
+            return true;
+          }
+          let projectRoot = body.projectRoot;
+          try {
+            const { wireRoot } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              body.projectRoot,
+            );
+            projectRoot = wireRoot.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, { error: err.message });
+              return true;
+            }
+            throw err;
+          }
+          const focused = await focusUnboundWorkshopBuild(
+            workshopBuildStoreRoot(),
+            {
+              projectRoot,
+              relativePath: body.relativePath,
+            },
+          );
+          if (!focused.ok) {
+            json(res, focused.status, { error: focused.error });
+            return true;
+          }
+          json(res, focused.created ? 201 : 200, { build: focused.build });
+          return true;
+        }
+
+        if (
+          method === "GET" &&
+          pathname === "/api/workshop/builds"
+        ) {
+          json(res, 200, {
+            builds: listWorkshopBuilds(workshopBuildStoreRoot()),
+          });
+          return true;
+        }
+
+        if (
+          method === "POST" &&
+          pathname === "/api/workshop/builds"
+        ) {
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const projectRoot = readBuildTieField(body, "projectRoot");
+          if (!projectRoot.ok) {
+            json(res, 400, { error: projectRoot.error });
+            return true;
+          }
+          const relativePath = readBuildTieField(body, "relativePath");
+          if (!relativePath.ok) {
+            json(res, 400, { error: relativePath.error });
+            return true;
+          }
+          const build = createWorkshopBuild(workshopBuildStoreRoot(), {
+            draft: draftParsed,
+            ...(typeof body.id === "string" ? { id: body.id } : {}),
+            ...(projectRoot.present ? { projectRoot: projectRoot.value } : {}),
+            ...(relativePath.present
+              ? { relativePath: relativePath.value }
+              : {}),
+          });
+          json(res, 201, { build });
+          return true;
+        }
+
+        const workshopBuildMatch = pathname.match(
+          /^\/api\/workshop\/builds\/([^/]+)$/,
+        );
+        if (method === "GET" && workshopBuildMatch) {
+          const buildId = decodeURIComponent(workshopBuildMatch[1] ?? "");
+          try {
+            const build = getWorkshopBuild(workshopBuildStoreRoot(), buildId);
+            json(res, 200, { build });
+          } catch (err) {
+            if (
+              err instanceof WorkshopBuildStoreError &&
+              err.code === "workshop_build_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                buildId: err.buildId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (method === "PUT" && workshopBuildMatch) {
+          const buildId = decodeURIComponent(workshopBuildMatch[1] ?? "");
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          let draft: DraftPackage | undefined;
+          if (body.draft !== undefined) {
+            const draftParsed = parseDraftPackageBody({ draft: body.draft });
+            if ("ok" in draftParsed) {
+              json(res, draftParsed.status, { error: draftParsed.error });
+              return true;
+            }
+            draft = draftParsed;
+          }
+          const projectRoot = readBuildTieField(body, "projectRoot");
+          if (!projectRoot.ok) {
+            json(res, 400, { error: projectRoot.error });
+            return true;
+          }
+          const relativePath = readBuildTieField(body, "relativePath");
+          if (!relativePath.ok) {
+            json(res, 400, { error: relativePath.error });
+            return true;
+          }
+          try {
+            const build = updateWorkshopBuild(workshopBuildStoreRoot(), buildId, {
+              ...(draft ? { draft } : {}),
+              ...(projectRoot.present
+                ? { projectRoot: projectRoot.value }
+                : {}),
+              ...(relativePath.present
+                ? { relativePath: relativePath.value }
+                : {}),
+            });
+            json(res, 200, { build });
+          } catch (err) {
+            if (
+              err instanceof WorkshopBuildStoreError &&
+              err.code === "workshop_build_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                buildId: err.buildId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (
+          method === "GET" &&
+          pathname === "/api/workshop/sessions"
+        ) {
+          const sessions = listWorkshopSessions(workshopSessionStoreRoot());
+          json(res, 200, { sessions });
+          return true;
+        }
+
+        if (
+          method === "POST" &&
+          pathname === "/api/workshop/sessions"
+        ) {
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const record = createWorkshopSession(workshopSessionStoreRoot(), {
+            ...(typeof body.id === "string" ? { id: body.id } : {}),
+          });
+          json(res, 201, { session: record });
+          return true;
+        }
+
+        const workshopSessionGetMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)$/,
+        );
+        if (method === "GET" && workshopSessionGetMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionGetMatch[1] ?? "",
+          );
+          try {
+            const session = getWorkshopSession(
+              workshopSessionStoreRoot(),
+              sessionId,
+            );
+            json(res, 200, { session });
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        const workshopSessionPatchMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)$/,
+        );
+        if (method === "PATCH" && workshopSessionPatchMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionPatchMatch[1] ?? "",
+          );
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!Object.prototype.hasOwnProperty.call(body, "activeBuildId")) {
+            json(res, 400, { error: "activeBuildId is required" });
+            return true;
+          }
+          const activeBuildId = body.activeBuildId;
+          if (activeBuildId !== null && typeof activeBuildId !== "string") {
+            json(res, 400, { error: "activeBuildId must be a string or null" });
+            return true;
+          }
+          try {
+            const session = updateWorkshopSessionActiveBuildId(
+              workshopSessionStoreRoot(),
+              sessionId,
+              activeBuildId,
+            );
+            json(res, 200, { session });
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        const workshopSessionUndoMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)\/undo$/,
+        );
+        if (method === "POST" && workshopSessionUndoMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionUndoMatch[1] ?? "",
+          );
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          try {
+            const result = await undoWorkshopSessionMutation({
+              sessionId,
+              draft: draftParsed,
+              ...(typeof body.mutationId === "string"
+                ? { mutationId: body.mutationId }
+                : {}),
+              registry: workshopChatRegistry,
+              storeRoot: workshopSessionStoreRoot(),
+            });
+            json(res, result.ok ? 200 : 409, result);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            json(res, 400, {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return true;
+        }
+
+        const workshopSessionAcceptMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)\/accept$/,
+        );
+        if (method === "POST" && workshopSessionAcceptMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionAcceptMatch[1] ?? "",
+          );
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          try {
+            const result = await acceptWorkshopSessionMutation({
+              sessionId,
+              draft: draftParsed,
+              ...(typeof body.mutationId === "string"
+                ? { mutationId: body.mutationId }
+                : {}),
+              registry: workshopChatRegistry,
+              storeRoot: workshopSessionStoreRoot(),
+            });
+            json(res, result.ok ? 200 : 409, result);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            json(res, 400, {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/workshop/chat/stop") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (typeof body.sessionId !== "string" || !body.sessionId.trim()) {
+            json(res, 400, { error: "sessionId is required" });
+            return true;
+          }
+          const stopped = await stopWorkshopChatTurn(
+            workshopChatRegistry,
+            body.sessionId,
+          );
+          json(res, 200, { ok: true, ...stopped });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/workshop/chat") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (typeof body.sessionId !== "string" || !body.sessionId.trim()) {
+            json(res, 400, { error: "sessionId is required" });
+            return true;
+          }
+          if (typeof body.message !== "string" || !body.message.trim()) {
+            json(res, 400, { error: "message is required" });
+            return true;
+          }
+          const sessionId = body.sessionId;
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const attachmentsParsed = parseWorkshopChatAttachments(body.attachments);
+          if (!attachmentsParsed.ok) {
+            json(res, 400, {
+              error: attachmentsParsed.error,
+              code: "workshop_attachment_invalid",
+            });
+            return true;
+          }
+          const settingsDefault = await readWorkshopOpenModel(cwd);
+          const accept = String(req.headers.accept ?? "");
+          const wantsStream =
+            body.stream === true ||
+            accept.includes("application/x-ndjson") ||
+            accept.includes("text/event-stream");
+          const projectRootWire =
+            typeof body.project_root === "string"
+              ? body.project_root.trim()
+              : typeof body.projectRoot === "string"
+                ? body.projectRoot.trim()
+                : "";
+          let chatProjectRoot: string | undefined;
+          if (projectRootWire) {
+            try {
+              const { wireRoot } = await resolveWritableCatalogRoot(
+                { store, bootCwd: cwd },
+                projectRootWire,
+              );
+              chatProjectRoot = wireRoot.path;
+            } catch (err) {
+              if (err instanceof CatalogPathError) {
+                json(
+                  res,
+                  err.code === "catalog_root_read_only" ? 403 : 400,
+                  catalogPathErrorBody(err),
+                );
+                return true;
+              }
+              throw err;
+            }
+          }
+          const chatTurnBase = {
+            sessionId: body.sessionId,
+            draft: draftParsed,
+            message: body.message,
+            autoApply: body.autoApply === true,
+            attachments: attachmentsParsed.attachments,
+            context: parseWorkshopChatContext(body.context),
+            model:
+              typeof body.model === "string" || body.model === null
+                ? body.model
+                : undefined,
+            settingsDefault: settingsDefault ?? null,
+            registry: workshopChatRegistry,
+            storeRoot: workshopSessionStoreRoot(),
+            ...(chatProjectRoot ? { projectRoot: chatProjectRoot } : {}),
+          };
+
+          // Fail closed on missing sessions before opening an NDJSON body.
+          try {
+            getWorkshopSession(workshopSessionStoreRoot(), body.sessionId);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            throw err;
+          }
+
+          if (wantsStream) {
+            res.writeHead(200, {
+              "Content-Type": "application/x-ndjson; charset=utf-8",
+              "Cache-Control": "no-store",
+            });
+            const resolvedModel = resolveWorkshopModel({
+              sessionOverride:
+                typeof body.model === "string" || body.model === null
+                  ? body.model
+                  : undefined,
+              settingsDefault: settingsDefault ?? null,
+            });
+            const writeFrame = async (frame: unknown): Promise<void> => {
+              if (req.aborted || res.writableEnded || res.destroyed) return;
+              const line = `${JSON.stringify(frame)}\n`;
+              if (!res.write(line)) {
+                await new Promise<void>((resolve) => {
+                  const onDrain = () => {
+                    cleanup();
+                    resolve();
+                  };
+                  const onAbort = () => {
+                    cleanup();
+                    if (!res.writableEnded && !res.destroyed) {
+                      res.destroy();
+                    }
+                    resolve();
+                  };
+                  const cleanup = () => {
+                    res.off("drain", onDrain);
+                    req.off("aborted", onAbort);
+                    req.off("close", onAbort);
+                    res.off("close", onAbort);
+                    res.off("error", onAbort);
+                  };
+                  res.once("drain", onDrain);
+                  req.once("aborted", onAbort);
+                  req.once("close", onAbort);
+                  res.once("close", onAbort);
+                  res.once("error", onAbort);
+                  if (req.aborted || res.writableEnded || res.destroyed) {
+                    onAbort();
+                  }
+                });
+              }
+            };
+            let streamedDelta = false;
+            let writeChain: Promise<void> = Promise.resolve();
+            let turnFinished = false;
+            const enqueueFrame = (frame: unknown): void => {
+              writeChain = writeChain.then(() => writeFrame(frame));
+            };
+            const stopIfClientLeft = () => {
+              if (turnFinished || res.writableEnded) return;
+              void workshopChatRegistry.abortTurn(sessionId);
+            };
+            res.once("close", stopIfClientLeft);
+            try {
+              const turn = await runWorkshopChatTurn({
+                ...chatTurnBase,
+                onDelta: (text) => {
+                  streamedDelta = true;
+                  enqueueFrame({ type: "delta", text });
+                },
+                onActivity: (update) => {
+                  enqueueFrame({ type: "activity", ...update });
+                },
+                onPointerChange: (frame) => {
+                  enqueueFrame({
+                    type: "pointer-change",
+                    buildId: frame.buildId,
+                    draft: frame.draft,
+                  });
+                },
+              });
+              turnFinished = true;
+              await writeChain;
+              for (const frame of iterateWorkshopChatStreamFrames(turn, {
+                chunkAssistantText: !streamedDelta,
+              })) {
+                await writeFrame(frame);
+              }
+              if (!res.writableEnded && !res.destroyed) {
+                res.end();
+              }
+            } catch (err) {
+              turnFinished = true;
+              await writeChain.catch(() => undefined);
+              const message = err instanceof Error ? err.message : String(err);
+              const errorEvent = { type: "error" as const, message };
+              await writeFrame({
+                type: "event",
+                event: errorEvent,
+              });
+              await writeFrame({
+                type: "done",
+                sessionId: body.sessionId,
+                events: [errorEvent],
+                draft: draftParsed,
+                pending: null,
+                autoApply: chatTurnBase.autoApply,
+                model: resolvedModel,
+                buildId: workshopChatRegistry.getPinnedBuildId(body.sessionId),
+              });
+              if (!res.writableEnded && !res.destroyed) {
+                res.end();
+              }
+            }
+            return true;
+          }
+
+          let turn;
+          try {
+            turn = await runWorkshopChatTurn(chatTurnBase);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            json(res, 400, {
+              error: err instanceof Error ? err.message : String(err),
+            });
+            return true;
+          }
+
+          json(res, 200, turn);
+          return true;
+        }
+
+        if (
+          method === "POST" &&
+          pathname === "/api/workshop/disk-change"
+        ) {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (typeof body.pipelinePath !== "string" || !body.pipelinePath.trim()) {
+            json(res, 400, { error: "pipelinePath is required" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const writeRoot =
+            typeof body.project_root === "string"
+              ? body.project_root
+              : undefined;
+          let projectRoot: string;
+          try {
+            const { wireRoot } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            const ctx = await resolveStageflowContext(wireRoot.path);
+            projectRoot = ctx.projectRoot;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const relativePaths = draftPackageDiskRelativePaths({
+            pipelinePath: body.pipelinePath,
+            draft: draftParsed,
+            taskPath:
+              typeof body.taskPath === "string" ? body.taskPath : null,
+          });
+          const current = fingerprintPackageFiles(projectRoot, relativePaths);
+          const baseline =
+            isPlainObject(body.baseline) &&
+            Object.values(body.baseline).every((v) => typeof v === "string")
+              ? (body.baseline as Record<string, string>)
+              : null;
+          const detection = detectDiskChange({ baseline, current });
+          json(res, 200, {
+            fingerprints: current,
+            changed: detection.changed,
+            changedPaths: detection.changedPaths,
+          });
+          return true;
+        }
+
+        if ((method === "GET" && pathname === "/api/models") || (method === "POST" && pathname === "/api/models/refresh")) {
+          if (method === "POST" && !assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: true })) return true;
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const { response, used } = await buildModelsResponse({
+            store,
+            cwd,
+            projectRootFilter: filter,
+            refresh: method === "POST",
+          });
+          if (
+            used.root_errors.some((e) => e.code === "unknown_project_root") &&
+            used.items.length === 0
+          ) {
+            json(res, 400, {
+              error: used.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: used.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, response);
           return true;
         }
 
@@ -659,15 +3383,143 @@ export async function startUiServer(
 
         if (
           await handleProjectMcpRoutes(req, res, {
-            projectRoot: boot.rootDir,
+            projectRoot: rootDir,
+            readJsonBody,
             json,
           })
         ) {
           return true;
         }
 
+        if (
+          await handleTriggerRoutes(req, res, {
+            cwd,
+            manager,
+            store,
+            json,
+            readJsonBody,
+            readRawBody,
+            auditLog,
+          })
+        ) {
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/skills/usage") {
+          const projectRoot = url.searchParams.get("project_root") ?? undefined;
+          let usageRoot: string;
+          try {
+            const { wireRoot } =
+              projectRoot === undefined
+                ? await resolveWritableCatalogRoot(
+                    { store, bootCwd: cwd },
+                    undefined,
+                  )
+                : await resolveCatalogStartInput(
+                    { store, bootCwd: cwd },
+                    projectRoot,
+                  );
+            usageRoot = wireRoot.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const usages = await buildSkillUsageIndex(usageRoot);
+          if (usages === null) {
+            json(res, 404, { error: "No Stageflow catalog found" });
+            return true;
+          }
+          json(res, 200, { usages });
+          return true;
+        }
+
         if (method === "GET" && pathname === "/api/skills") {
-          json(res, 200, await listSkills({ cwd, agentDir }));
+          const projectRoot = url.searchParams.get("project_root") ?? undefined;
+          try {
+            const { wireRoot } =
+              projectRoot === undefined
+                ? await resolveWritableCatalogRoot(
+                    { store, bootCwd: cwd },
+                    undefined,
+                  )
+                : await resolveCatalogStartInput(
+                    { store, bootCwd: cwd },
+                    projectRoot,
+                  );
+            json(res, 200, await listSkills({ cwd: wireRoot.path, agentDir }));
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/skills/install") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseInstallSkillBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          let skillWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              undefined,
+            );
+            skillWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const stageflowCtx = await resolveStageflowContext(skillWriteRoot);
+          if (stageflowCtx.manifestStatus !== "ok") {
+            json(res, 400, {
+              error: "Project root not found; initialize stageflow.yaml",
+            });
+            return true;
+          }
+          const result = await installSkillFromCommand({
+            projectRoot: stageflowCtx.projectRoot,
+            command: parsed.command,
+          });
+          if (!result.ok) {
+            json(res, result.status ?? 400, { error: result.error });
+            return true;
+          }
+          json(res, 201, {
+            ok: true,
+            skill_name: result.skill_name,
+            dest_path: result.dest_path,
+            project_root: result.project_root,
+          });
           return true;
         }
 
@@ -677,16 +3529,37 @@ export async function startUiServer(
         }
 
         if (method === "GET" && pathname === "/api/health") {
-          json(res, 200, manager.getHealth());
+          await handleApiHealth(req, res, boot);
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/overview") {
+          const rangeParam = url.searchParams.get("range") ?? "7d";
+          if (!isOverviewRange(rangeParam)) {
+            json(res, 400, {
+              error: `range must be one of ${OVERVIEW_RANGES.join(", ")}`,
+              code: "invalid_range",
+            });
+            return true;
+          }
+          const now = new Date();
+          const since = new Date(now.getTime() - 2 * overviewWindowMs(rangeParam)).toISOString();
+          json(res, 200, buildOverview(await store.listRunOverviewRows(since), rangeParam, now));
           return true;
         }
 
         if (method === "GET" && pathname === "/api/settings") {
           const health = manager.getHealth();
           const credential = getCredentialSourceSettings(cwd);
+          const factory = readFactorySettings(cwd);
+          const defaultModel = await readWorkshopOpenModel(cwd);
           json(res, 200, {
             maxConcurrent: health.maxConcurrent,
             ...credential,
+            ...(factory.workshopModel !== undefined
+              ? { workshopModel: factory.workshopModel }
+              : {}),
+            defaultModel,
           });
           return true;
         }
@@ -711,9 +3584,14 @@ export async function startUiServer(
             record,
             "credentialSource",
           );
-          if (!hasMax && !hasCredentialSource) {
+          const hasWorkshopModel = Object.prototype.hasOwnProperty.call(
+            record,
+            "workshopModel",
+          );
+          if (!hasMax && !hasCredentialSource && !hasWorkshopModel) {
             json(res, 400, {
-              error: "maxConcurrent or credentialSource is required",
+              error:
+                "maxConcurrent, credentialSource, or workshopModel is required",
             });
             return true;
           }
@@ -733,20 +3611,33 @@ export async function startUiServer(
             try {
               credential = setCredentialSource(cwd, record.credentialSource);
             } catch (err) {
-              const mapped = providerAuthErrorBody(err);
+              const mapped = mapProviderAuthError(err);
               json(res, mapped.status, mapped.body);
               return true;
             }
           }
 
+          let workshopModel = readFactorySettings(cwd).workshopModel;
+          if (hasWorkshopModel) {
+            const parsed = parseWorkshopModelSetting(record.workshopModel);
+            if (parsed === undefined) {
+              json(res, 400, { error: INVALID_WORKSHOP_MODEL_MESSAGE });
+              return true;
+            }
+            writeFactorySettings(cwd, { workshopModel: parsed });
+            workshopModel = parsed;
+          }
+
           json(res, 200, {
             ...health,
             ...credential,
+            ...(workshopModel !== undefined ? { workshopModel } : {}),
+            defaultModel: await readWorkshopOpenModel(cwd),
           });
           return true;
         }
 
-        if (method === "GET") {
+        if (method === "GET" && uiDistDir !== undefined) {
           const served = await serveStatic(res, uiDistDir, pathname);
           if (served) return true;
           json(res, 404, {
@@ -765,8 +3656,75 @@ export async function startUiServer(
         }
         return true;
       }
+      }
+  };
+  return Object.assign(handler, {
+    dispose: async () => {
+      await agentScheduleSource?.stop();
+      if (!injectedHost) await agentHost?.stop();
+      await liveView.dispose();
     },
   });
+}
+
+export async function startUiServer(
+  options: UiServerOptions,
+): Promise<HttpHostEnvelope & { shutdown: ShutdownController }> {
+  const host = options.host ?? "127.0.0.1";
+  const port = options.port ?? DEFAULT_PORT;
+  const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
+  const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
+  const { cwd, agentDir, rootDir } = boot;
+  const providerAuthContext = boot.providerAuthContext;
+  const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
+  const controlTokens = options.controlTokens ?? loadControlTokens();
+
+  let shutdown: ShutdownController | undefined;
+  const routes: OperatorRoutes | ((ctx: HttpHostRouteContext) => Promise<boolean>) =
+    boot.serveBlocked !== undefined ||
+    boot.manager === undefined ||
+    boot.store === undefined
+      ? async () => false
+      : createOperatorRoutes({
+          manager: boot.manager,
+          store: boot.store,
+          cwd,
+          agentDir,
+          rootDir,
+          providerAuthContext,
+          uiDistDir,
+          allowedHosts,
+          controlTokens,
+          getShutdown: () => shutdown,
+          ...(options.workshopOperatorHost
+            ? { workshopOperatorHost: options.workshopOperatorHost }
+            : {}),
+          ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
+          ...(options.agentConversationBackend
+            ? { agentConversationBackend: options.agentConversationBackend }
+            : {}),
+        });
+  const envelope = await createHttpHost({
+    boot,
+    host,
+    port,
+    allowedHosts,
+    controlTokens,
+    routes,
+  });
+  const closeServer = envelope.server.close.bind(envelope.server);
+  envelope.server.close = ((callback?: (error?: Error) => void) => closeServer(error => {
+    void (boot.email?.stop() ?? Promise.resolve()).then(() => callback?.(error), () => callback?.(error ?? new Error("Email host shutdown failed")));
+  })) as typeof envelope.server.close;
+  shutdown = installShutdownController({
+    server: envelope.server,
+    host: makeDrainableHostFromOptional(envelope.manager, envelope.store),
+  });
+  envelope.server.on("close", () => {
+    shutdown?.uninstall();
+    if ("dispose" in routes) void routes.dispose();
+  });
+  return { ...envelope, shutdown };
 }
 
 export { DEFAULT_PORT };

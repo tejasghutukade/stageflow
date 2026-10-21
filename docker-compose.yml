@@ -1,0 +1,60 @@
+# Local try Host — see docs/docker.md.
+#
+# Published on 127.0.0.1 only. STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND skips the
+# control token so this machine can open the console without a bearer. The
+# process still binds 0.0.0.0 inside the container; that is what Docker port
+# publish needs. Remove the opt-in and set STAGEFLOW_CONTROL_TOKEN before
+# publishing this port beyond localhost.
+#
+# Shell environment overrides values from `.env`. Empty exported GITHUB_TOKEN /
+# GH_TOKEN blanks the container token — prefer:
+#   env -u GITHUB_TOKEN -u GH_TOKEN docker compose up --build -d
+#
+# GITHUB_TOKEN feeds Host askpass (clone/fetch). GH_TOKEN falls back to
+# GITHUB_TOKEN when unset so either name works for Host + stage grants.
+#
+# command is `sf ui` intentionally (console + MCP on the same Host).
+# Image CMD remains `sf mcp`; override only for a UI-less Host.
+
+# Optional browser stages: build the recipe in docker/Dockerfile.browser on top
+# of this image and bind-mount docker/browser.config.example.yaml at
+# /data/config.yaml. See docs/docker.md#browser-stages.
+
+services:
+  stageflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/tejasghutukade/stageflow:local
+    command: ["sf", "ui"]
+    ports:
+      - "127.0.0.1:3847:3847"
+    environment:
+      STAGEFLOW_HOME: /data
+      STAGEFLOW_CREDENTIAL_HOME: /data
+      TMPDIR: /data/tmp
+      STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND: "1"
+      STAGEFLOW_MIN_FREE_DISK_BYTES: "1073741824"
+      STAGEFLOW_PROVIDER_OPENROUTER_API_KEY: ${STAGEFLOW_PROVIDER_OPENROUTER_API_KEY:-${OPENROUTER_API_KEY:-}}
+      STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY: ${STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY:-}
+      CURSOR_API_KEY: ${CURSOR_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness
+      # Agents (all safe when empty). Not passed on purpose: STAGEFLOW_AGENT_SESSION_IDLE_MINUTES and
+      # STAGEFLOW_AGENT_STALL_SECONDS, because an empty value parses as 0 and turns them off.
+      STAGEFLOW_MCP_ENV_ALLOW: ${STAGEFLOW_MCP_ENV_ALLOW:-}
+      STAGEFLOW_PUBLIC_CHAT_ORIGINS: ${STAGEFLOW_PUBLIC_CHAT_ORIGINS:-}
+      STAGEFLOW_AGENT_CHANNEL_LISTENERS: ${STAGEFLOW_AGENT_CHANNEL_LISTENERS:-}
+      STAGEFLOW_AGENT_SCHEDULE_TICK_INTERVAL_MS: ${STAGEFLOW_AGENT_SCHEDULE_TICK_INTERVAL_MS:-}
+      STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS: ${STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS:-}
+    volumes:
+      - stageflow-data:/data
+      # Optional: bind-mount an extra catalog root (comma-separate in STAGEFLOW_ENSURE_PROJECT_ROOTS)
+      # - ./my-catalog:/catalog
+    restart: unless-stopped
+
+volumes:
+  stageflow-data:

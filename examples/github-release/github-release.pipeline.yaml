@@ -7,3 +7,5 @@ stages:
     uses: ./draft-release-notes.yaml
   - id: publish-github-release
     uses: ./publish-github-release.yaml
+    secrets:
+      - GITHUB_TOKEN

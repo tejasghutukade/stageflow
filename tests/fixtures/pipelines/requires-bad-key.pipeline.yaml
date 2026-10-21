@@ -1,0 +1,15 @@
+id: requires-bad-key
+stages:
+  - id: clarify
+    system_prompt: hi
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+    requires:
+      - tool: node
+        version: ">=20"
+        extra: nope

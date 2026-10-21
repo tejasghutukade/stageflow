@@ -11,6 +11,21 @@ export type ModelSelection = {
   stage?: string;
 };
 
+export type ModelAuthoredTier = "stage" | "pipeline" | "global";
+
+export type ResolvedModelSelection = {
+  model: string;
+  tier: ModelAuthoredTier;
+};
+
+export function modelAuthoredTier(
+  selection: ModelSelection,
+): ModelAuthoredTier {
+  if (selection.stage !== undefined) return "stage";
+  if (selection.pipeline !== undefined) return "pipeline";
+  return "global";
+}
+
 /**
  * stage > pipeline > global. No silent hardcoded fallback — unset is a load error.
  * Present-but-empty / whitespace follows parseModelField (load failure, not "").
@@ -18,7 +33,7 @@ export type ModelSelection = {
 export function resolveModelOutcome(
   selection: ModelSelection,
   ctx: { stageId: string; pipelineId: string },
-): LoadOutcome<string> {
+): LoadOutcome<ResolvedModelSelection> {
   const effective = selection.stage ?? selection.pipeline ?? selection.global;
   const parsed = parseModelField(effective);
   if (!parsed.ok) {
@@ -41,7 +56,10 @@ export function resolveModelOutcome(
       },
     ]);
   }
-  return loadSuccess(parsed.value);
+  return loadSuccess({
+    model: parsed.value,
+    tier: modelAuthoredTier(selection),
+  });
 }
 
 /** The global tier's model id from an already-loaded manifest, or undefined when missing/unset. */

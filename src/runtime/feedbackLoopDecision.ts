@@ -8,7 +8,10 @@ import type {
   ResolvedPipelineDag,
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
-import { terminalizeCurrentFeedbackReplay } from "./feedbackLoopCoordinator.js";
+import {
+  terminalizeCurrentFeedbackReplay,
+  updateFeedbackReplaySourcePass,
+} from "./feedbackLoopCoordinator.js";
 import type { FeedbackScheduleState } from "./feedbackLoopSchedule.js";
 import { createFeedbackScheduleState } from "./feedbackLoopSchedule.js";
 import {
@@ -62,6 +65,30 @@ export type ResolveFeedbackLoopDecisionResult =
 
 const DECISION_CONFLICT =
   "feedback loop decision conflict: no longer waiting_for_human";
+
+async function appendFeedbackLoopDecided(
+  store: RunStore,
+  runId: string,
+  loop: FeedbackLoopRecord,
+  decision: FeedbackLoopDecisionKind,
+  reason?: string,
+): Promise<void> {
+  const latest = await store.getLatestStageExecution(runId, loop.source_stage_id);
+  const attempt = latest?.attempt;
+  const eventOptions = attempt !== undefined ? { attempt } : undefined;
+  const trimmed = reason?.trim();
+  await store.appendStageEvent(
+    runId,
+    loop.source_stage_id,
+    {
+      event: "feedback_loop_decided",
+      decision,
+      loopId: loop.loop_id,
+      ...(trimmed ? { reason: trimmed } : {}),
+    },
+    eventOptions,
+  );
+}
 
 async function clearSourceWaiting(
   store: RunStore,
@@ -203,6 +230,13 @@ export async function resolveFeedbackLoopDecision(options: {
         reason: `${DECISION_CONFLICT} (loop=${loop.loop_id})`,
       };
     }
+    await appendFeedbackLoopDecided(
+      store,
+      runId,
+      loop,
+      "extend",
+      options.reason,
+    );
     await clearSourceWaiting(store, runId, loop.source_stage_id, "succeeded");
 
     if (schedule === undefined) {
@@ -284,8 +318,25 @@ export async function resolveFeedbackLoopDecision(options: {
         reason: `${DECISION_CONFLICT} (loop=${loop.loop_id})`,
       };
     }
+    await appendFeedbackLoopDecided(
+      store,
+      runId,
+      loop,
+      "continue",
+      options.reason,
+    );
     await terminalizeCurrentFeedbackReplay(store, runId, loop, "completed");
     await clearSourceWaiting(store, runId, loop.source_stage_id, "succeeded");
+    await updateFeedbackReplaySourcePass({
+      store,
+      runId,
+      loop,
+      sourceStageId: loop.source_stage_id,
+      status: "succeeded",
+      ...(deferred !== undefined
+        ? { envelope: deferred.feedback_envelope }
+        : {}),
+    });
     if (schedule !== undefined) {
       schedule.states.set(loop.source_stage_id, "succeeded");
       if (
@@ -318,6 +369,13 @@ export async function resolveFeedbackLoopDecision(options: {
       reason: `${DECISION_CONFLICT} (loop=${loop.loop_id})`,
     };
   }
+  await appendFeedbackLoopDecided(
+    store,
+    runId,
+    loop,
+    "abandon",
+    abandonReason,
+  );
   await terminalizeCurrentFeedbackReplay(store, runId, loop, "failed");
   await clearSourceWaiting(
     store,
@@ -326,6 +384,13 @@ export async function resolveFeedbackLoopDecision(options: {
     "failed",
     abandonReason,
   );
+  await updateFeedbackReplaySourcePass({
+    store,
+    runId,
+    loop,
+    sourceStageId: loop.source_stage_id,
+    status: "failed",
+  });
   if (schedule !== undefined) {
     schedule.states.set(loop.source_stage_id, "failed");
     releaseHold({ feedback: schedule.feedback });

@@ -1,6 +1,7 @@
 import type {
   FeedbackLoopHistory,
   FeedbackLoopRecord,
+  RunBindingDetail,
   RunDetail,
   StageSnapshot,
 } from "../runstore/port.js";
@@ -25,6 +26,8 @@ export type StageProjection = {
   artifacts: string[];
   last_at?: string;
   pending_prompt?: AskOperatorPrompt;
+  definition_id?: string;
+  cost_usd?: number;
 };
 
 export type RunProjection = {
@@ -37,6 +40,7 @@ export type RunProjection = {
   status: RunDetail["status"];
   created_at: string;
   updated_at?: string;
+  binding: RunBindingDetail;
   stages: StageProjection[];
   pipeline_track: PipelineTrackProjection;
   waiting_stage_id?: RunSummary["waiting_stage_id"];
@@ -50,6 +54,7 @@ export type RunProjection = {
   failed_reason?: RunSummary["failed_reason"];
   active_feedback_loop?: FeedbackLoopRecord;
   feedback_loops: FeedbackLoopHistory[];
+  total_cost_usd?: number;
 };
 
 export function projectRun(detail: RunDetail): RunProjection {
@@ -67,6 +72,7 @@ export function projectRun(detail: RunDetail): RunProjection {
     status: detail.status,
     created_at: detail.created_at,
     updated_at: detail.updated_at,
+    binding: detail.binding,
     pipeline_track: detail.pipeline_track,
     ...(detail.waiting_stage_id !== undefined
       ? { waiting_stage_id: detail.waiting_stage_id }
@@ -98,6 +104,9 @@ export function projectRun(detail: RunDetail): RunProjection {
     ...(detail.active_feedback_loop !== undefined
       ? { active_feedback_loop: detail.active_feedback_loop }
       : {}),
+    ...(detail.total_cost_usd !== undefined
+      ? { total_cost_usd: detail.total_cost_usd }
+      : {}),
     feedback_loops: detail.feedback_loops ?? [],
     stages: detail.stages.map((stage) => ({
       stage_id: stage.stage_id,
@@ -123,8 +132,10 @@ export function projectRun(detail: RunDetail): RunProjection {
       ...(stage.pending_prompt
         ? { pending_prompt: stage.pending_prompt }
         : {}),
+      ...(stage.definition_id !== undefined
+        ? { definition_id: stage.definition_id }
+        : {}),
+      ...(stage.cost_usd !== undefined ? { cost_usd: stage.cost_usd } : {}),
     })),
   };
 }
-
-export { projectRun as projectRunForMcp };

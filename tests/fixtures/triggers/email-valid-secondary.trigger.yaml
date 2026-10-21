@@ -1,0 +1,11 @@
+id: email-valid-secondary
+pipeline: hello
+kind: event
+enabled: true
+event:
+  source: email.message
+  config:
+    host: imap.valid.com
+    port: 993
+    user: bot@valid.com
+    secretRef: EMAIL_PASSWORD_2

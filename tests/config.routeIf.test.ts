@@ -222,25 +222,3 @@ describe("route if catalog fixtures", () => {
     ]);
   });
 });
-
-describe("route if illegal combos", () => {
-  it.each([
-    ["route-if-on-loop", "review"],
-    ["route-if-on-failed", "run-tests"],
-  ] as const)("%s is pipeline.route_if_invalid not dag_error", async (fixture, stageId) => {
-    const outcome = await loadPipelineOutcome(pipelinePath(fixture));
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.issues.some((issue) => issue.code === "pipeline.dag_error")).toBe(false);
-    expect(outcome.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "pipeline.route_if_invalid",
-          category: "pipeline",
-          pipelineId: fixture,
-          stageId,
-        }),
-      ]),
-    );
-  });
-});

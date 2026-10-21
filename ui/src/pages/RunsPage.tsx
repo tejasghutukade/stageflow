@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useRunCatalog } from "../catalog/useRunCatalog";
-import { runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
+import { bindingListCompactText, runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
 import {
   bucketViews,
   runsFilterCounts,
@@ -9,6 +9,8 @@ import {
 import { miniTrackLabel, relativeTime } from "../catalogJoin";
 import { MiniTrack } from "../components/MiniTrack";
 import { CostBadge } from "../components/CostBadge";
+import { useRedesign } from "../redesign/flag";
+import { RunsPageRedesign } from "./runs/RunsPageRedesign";
 import { cssStatusToken, runDisplayStatus } from "../status/runStatus";
 
 type StatusFilter = "all" | "waiting" | "running" | "failed" | "finished";
@@ -21,7 +23,17 @@ const FILTER_LABEL: Record<StatusFilter, (c: RunsFilterCounts) => string> = {
   finished: (c) => `Finished ${c.finished}`,
 };
 
-export function RunsPage({
+function formatDiskBytes(bytes: number | undefined): string | null {
+  if (bytes === undefined) return null;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
+function RunsPageLegacy({
   onOpen,
   onNew,
 }: {
@@ -74,7 +86,9 @@ export function RunsPage({
       ) : null}
 
       {visible.map(run => {
-        const token = cssStatusToken(runDisplayStatus(run));
+        const displayStatus = runDisplayStatus(run);
+        const token = cssStatusToken(displayStatus);
+        const diskLabel = formatDiskBytes(run.disk_bytes);
         return (
           <a
             key={run.run_id}
@@ -85,9 +99,15 @@ export function RunsPage({
           >
             <span className="rrow__id">
               <span className="rrow__task">{runTaskLabel(run)}</span>
-              <span className="rrow__pipe">{runLocatorSubtitle(run)} · {run.run_id.slice(0, 8)}</span>
+              <span className="rrow__pipe">
+                {runLocatorSubtitle(run)}
+                {run.binding ? ` · ${bindingListCompactText(run.binding)}` : ""}
+                {" · "}
+                {run.run_id.slice(0, 8)}
+              </span>
             </span>
             <span className="rrow__right">
+              {diskLabel ? <span className="rrow__disk" title="Cached disk usage">{diskLabel}</span> : null}
               <CostBadge costUsd={run.total_cost_usd} />
               <span className={`status${token && token !== "running" ? ` status--${token}` : ""}`}>
                 <span className={`dot${token ? ` dot--${token}` : ""}`}></span> {relativeTime(run.updated_at ?? run.created_at)}
@@ -103,4 +123,18 @@ export function RunsPage({
       {loading ? <p className="muted" style={{ padding: "var(--spacing-4)" }}>Loading runs…</p> : null}
     </div>
   );
+}
+
+export function RunsPage({
+  onOpen,
+  onNew,
+}: {
+  onOpen: (runId: string) => void;
+  onNew: () => void;
+}) {
+  const redesign = useRedesign();
+  if (redesign) {
+    return <RunsPageRedesign onOpen={onOpen} onNew={onNew} />;
+  }
+  return <RunsPageLegacy onOpen={onOpen} onNew={onNew} />;
 }

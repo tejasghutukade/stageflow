@@ -1,4 +1,6 @@
 import type { PreEmitCheck } from "./preEmitCheck.js";
+import type { StageSecretDecl } from "../runtime/stageSecretDecl.js";
+import type { ToolRequirement } from "../config/toolRequires.js";
 
 /** Typed emit/schema fields from `compileTargetContract`. Not catalog YAML keys. */
 export type CompiledStageEmitBody = {
@@ -28,6 +30,32 @@ export type StageIoYaml = {
  * in `src/config/yamlDialect.ts`. Do not add new catalog keys here — add them on
  * the YAML dialect and map them in compileTargetContract.
  */
+export type StageBrowserConfig = {
+  profile?: string;
+  headed?: boolean;
+  allow_domains?: string[];
+  /** Page the Host opens for a human login stage; defaults to `check.url`. */
+  login_url?: string;
+  check?: {
+    url: string;
+    logged_in_url?: string;
+    logged_out_url?: string | string[];
+  };
+};
+
+export type StageChannelOperation = "send";
+
+/** A pinned communication target for a stage. Targets are validated per provider. */
+export type StageChannel = {
+  alias?: string;
+  connection: string;
+  operations: StageChannelOperation[];
+  to: string | string[];
+  cc?: string[];
+  /** Provider-specific message template, such as a pinned WhatsApp template. Validated by the provider. */
+  template?: Record<string, unknown>;
+};
+
 export type StageConfig = {
   id: string;
   system_prompt: string;
@@ -43,12 +71,25 @@ export type StageConfig = {
   /** Optional stage wall-clock timeout in milliseconds (default 60 minutes). */
   timeout_ms?: number;
   skill?: string;
+  email?: { accountId: string; operations: ("send" | "reply" | "getMessage" | "search" | "downloadAttachment")[] }[];
   mcp?: string[];
+  /** Communication channels this stage may send on. Inherits pipeline `channels` defaults. */
+  channels?: StageChannel[];
+  /** Declared Host secret names this stage may receive (Slot 6). */
+  secrets?: StageSecretDecl[];
+  /** Declared toolchain binaries this stage needs (Slot 9). */
+  requires?: ToolRequirement[];
+  /** Browser session settings for this stage; adds the agent-browser requirement. */
+  browser?: StageBrowserConfig;
   /**
-   * Selects the AgentPort backend for this stage, overriding pipeline/global.
+   * Selects the StagePort backend for this stage, overriding pipeline/global.
    * Parsed but not yet consulted — see STAGE_LEVEL_AGENT_OVERRIDE_ENABLED.
    */
   agent?: string;
 };
 
-export type LoadedStageConfig = StageConfig & { model: string };
+export type LoadedStageConfig = StageConfig & {
+  model: string;
+  /** Which catalog tier supplied `model` (stage > pipeline > global). */
+  model_tier?: "stage" | "pipeline" | "global";
+};

@@ -1,0 +1,13 @@
+id: mcp-hitl-tour-exhaust
+goal: |
+  Same walkthrough as mcp-hitl-tour: send the brief back until the loop parks
+  for a human decision after intake HITL.
+context: |
+  Pair with mcp-hitl-tour.pipeline.yaml. Answer intake with exactly operators
+  or executives. Every review success MUST emit send_back target polish —
+  never continue — until waiting_kind is feedback_loop_decision.
+constraints: |
+  Docs only. First review: send_back polish. After the polish replay, second
+  review: send_back polish again so MCP can call decide_feedback_loop.
+input:
+  topic: Local-first notes apps for small teams

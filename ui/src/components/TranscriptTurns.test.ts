@@ -203,6 +203,32 @@ describe("buildTranscriptTurns", () => {
     ]);
   });
 
+  it("labels feedback_loop_decided as a system turn with decision and reason", () => {
+    const event = {
+      event: "feedback_loop_decided",
+      decision: "continue",
+      loopId: "loop-1",
+      reason: "ship the brief",
+    };
+    expect(formatActivityLabel(event)).toBe("Feedback loop decided");
+    expect(formatActivityDescription(event)).toBe("continue — ship the brief");
+    expect(buildTranscriptTurns([event])).toEqual([
+      { kind: "system", event },
+    ]);
+  });
+
+  it("describes feedback_loop_decided with the decision only when reason is omitted", () => {
+    const event = {
+      event: "feedback_loop_decided",
+      decision: "continue",
+      loopId: "loop-1",
+    };
+    expect(formatActivityDescription(event)).toBe("continue");
+    expect(buildTranscriptTurns([event])).toEqual([
+      { kind: "system", event },
+    ]);
+  });
+
   it("omits turn_start when there is no description", () => {
     expect(buildTranscriptTurns([{ event: "turn_start" }])).toEqual([]);
   });

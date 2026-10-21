@@ -1,0 +1,34 @@
+import { agentCreatePath, navigate } from "../../routes";
+import { AgentsDirectoryPage } from "./AgentsDirectoryPage";
+import { AgentCreatePage } from "./create/AgentCreatePage";
+import { AgentDetailPage } from "./detail/AgentDetailPage";
+import { AgentEditPage } from "./edit/AgentEditPage";
+import { AgentRunPage } from "./run/AgentRunPage";
+import { AgentSessionPage } from "./session/AgentSessionPage";
+
+export type AgentsScreen = "directory" | "create" | "detail" | "edit" | "session" | "run";
+
+export function AgentsRedesign({
+  agentId,
+  sessionId,
+  runId,
+  screen,
+}: {
+  agentId?: string;
+  sessionId?: string;
+  runId?: string;
+  screen: AgentsScreen;
+}) {
+  if (screen === "create") return <AgentCreatePage />;
+  if (!agentId || screen === "directory") {
+    return <AgentsDirectoryPage onNewAgent={() => navigate(agentCreatePath())} />;
+  }
+  if (screen === "edit") return <AgentEditPage key={agentId} agentId={agentId} />;
+  if (screen === "session" && sessionId) {
+    return <AgentSessionPage key={`${agentId}:${sessionId}`} agentId={agentId} sessionId={sessionId} />;
+  }
+  if (screen === "run" && sessionId && runId) {
+    return <AgentRunPage key={`${agentId}:${sessionId}:${runId}`} agentId={agentId} sessionId={sessionId} runId={runId} />;
+  }
+  return <AgentDetailPage key={agentId} agentId={agentId} />;
+}

@@ -1,0 +1,31 @@
+id: human-login
+gate_kinds:
+  - confirm
+system_prompt: |
+  The Host opened the fixture login page in a visible browser window. A person
+  must log in there. Do not type into the page yourself and do not close the browser.
+
+  1. Call ask_operator with kind confirm. Ask the operator to log in to the
+     fixture site in the open window (press the Log in button) and confirm when done.
+  2. Wait for the answer. Do not emit before the operator confirms.
+  3. Call emit_stage_envelope exactly once with status success, a one-line
+     summary, artifacts: [], and payload { "logged_in": true, "url": "<the page url the Host reports>" }.
+
+  The Host checks the login again after you emit. If it fails you will be asked again.
+model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
+      required: [logged_in, url]
+      properties:
+        logged_in:
+          type: boolean
+        url:
+          type: string
+verify:
+  - id: logged-in
+    type: browser_login

@@ -1,0 +1,19 @@
+id: oss-quick-fix-template
+goal: >
+  Deliver a verified minimal local fix for <issue URL / short description>,
+  applied as source and test edits in the checkout working tree, plus a pull
+  request opened against your own fork (never the upstream repository).
+context: |
+  Issue: <issue URL>
+  Title: <copy the current issue title>
+  Upstream repo: <owner/repo>
+  Fork (PR target): <your-username>/<repo>
+  Reported behavior: <copy or summarize the concrete failure>
+  Expected behavior: <copy or summarize the acceptance criterion>
+constraints: |
+  Respect the target repository's AGENTS.md / CONTRIBUTING.md and test
+  conventions.
+  publish_repo in the final stage must be exactly the fork named above —
+  never the upstream owner/repo.
+  Keep the change limited to the reported issue and its regression test.
+checkout: /absolute/path/to/checkout

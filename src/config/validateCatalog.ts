@@ -1,9 +1,19 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import type { LoadedPipeline } from "../types/pipeline.js";
-import { loadPipelineOutcome, resolvePipelinePath } from "./loadPipeline.js";
+import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
+import type { TriggerFile } from "../types/trigger.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  INLINE_PIPELINE_PATH,
+  loadPipelineFromObjectOutcome,
+  loadPipelineOutcome,
+  resolvePipelinePath,
+} from "./loadPipeline.js";
 import type { LoadIssue } from "./loadOutcome.js";
 import { loadStageOutcome } from "./loadStage.js";
 import { loadTaskOutcome } from "./loadTask.js";
+import { loadTriggerOutcome } from "./loadTrigger.js";
 import { readYamlObject } from "./readYamlObject.js";
 import { resolveCatalogContext } from "./resolveCatalogContext.js";
 import { getCatalogScanPaths } from "./browseCatalog.js";
@@ -15,10 +25,17 @@ import {
   loadMcpCatalog,
   mcpCatalogPath,
 } from "./resolveStageMcpServers.js";
+import { loadSecretRegistry } from "../runtime/stageSecrets.js";
+import { isForeverDeniedSecret } from "../runtime/stageEnvironment.js";
+import { findMissingMcpCommands } from "../preflight/mcpCommands.js";
+import { ChannelError } from "../channels/errors.js";
+import { ChannelRegistry } from "../channels/registry.js";
+import { validateStageChannels } from "../channels/stageChannels.js";
+import type { AnyChannelProvider } from "../channels/types.js";
 
 export type ValidationSeverity = "error" | "warning";
 
-export type ValidationCategory = "pipeline" | "stage" | "catalog" | "task";
+export type ValidationCategory = "pipeline" | "stage" | "catalog" | "task" | "trigger";
 
 export type ValidationFindingCode =
   | "pipeline.invalid_shape"
@@ -29,7 +46,9 @@ export type ValidationFindingCode =
   | "pipeline.stage_uses_inline_conflict"
   | "pipeline.stage_missing_body"
   | "pipeline.stage_id_mismatch"
+  | "pipeline.stage_wrapper_skill_rejected"
   | "pipeline.invalid_completion"
+  | "catalog.path_case_mismatch"
   | "pipeline.invalid_recovery"
   | "pipeline.include_cycle"
   | "pipeline.include_invalid"
@@ -41,6 +60,9 @@ export type ValidationFindingCode =
   | "pipeline.model_applies"
   | "pipeline.route_if_invalid"
   | "pipeline.route_all_gated"
+  | "pipeline.invalid_requires"
+  | "pipeline.requires_conflict"
+  | "pipeline.invalid_channels"
   | "stage.invalid_shape"
   | "stage.invalid_model"
   | "stage.missing_model"
@@ -53,6 +75,13 @@ export type ValidationFindingCode =
   | "stage.invalid_timeout_ms"
   | "stage.invalid_skill"
   | "stage.invalid_mcp"
+  | "stage.invalid_channels"
+  | "stage.channel_unavailable"
+  | "stage.invalid_browser"
+  | "stage.invalid_secrets"
+  | "stage.unknown_secret"
+  | "stage.denied_secret"
+  | "stage.invalid_requires"
   | "stage.invalid_agent"
   | "stage.invalid_io"
   | "stage.load_error"
@@ -60,14 +89,24 @@ export type ValidationFindingCode =
   | "task.invalid_shape"
   | "task.load_error"
   | "task.entry_input_unmet"
+  | "task.binding_conflict"
+  | "task.repository_ref_required"
+  | "task.ref_without_repository"
+  | "task.repository_invalid"
+  | "trigger.invalid_shape"
+  | "trigger.load_error"
+  | "trigger.unknown_pipeline"
+  | "trigger.unknown_task"
   | "catalog.duplicate_pipeline_id"
   | "catalog.manifest_missing"
   | "catalog.manifest_invalid"
   | "catalog.empty_catalog"
   | "catalog.manifest_load_error"
   | "catalog.invalid_mcp"
+  | "catalog.mcp_command_missing"
   | "catalog.mixed_yaml_dialect"
-  | "catalog.legacy_yaml";
+  | "catalog.legacy_yaml"
+  | "catalog.stageflow_home_absolute_path";
 
 export type ValidationFinding = {
   severity: ValidationSeverity;
@@ -77,9 +116,11 @@ export type ValidationFinding = {
   category: ValidationCategory;
   pipelineId?: string;
   stageId?: string;
+  line?: number;
+  column?: number;
 };
 
-export type ValidationScope = "full" | "pipeline" | "task";
+export type ValidationScope = "full" | "pipeline" | "task" | "trigger" | "stage";
 
 export type ValidateCatalogOptions = {
   cwd?: string;
@@ -87,6 +128,9 @@ export type ValidateCatalogOptions = {
   scope: ValidationScope;
   pipeline?: string;
   task?: string;
+  trigger?: string;
+  stage?: string;
+  stageContent?: string;
   strict?: boolean;
 };
 
@@ -245,6 +289,24 @@ function findingTaskError(
   );
 }
 
+function findingTriggerError(
+  cwd: string,
+  absPath: string,
+  message: string,
+  code: ValidationFindingCode,
+): ValidationFinding {
+  return baseFinding(
+    {
+      cwd,
+      absPath,
+      message,
+      code,
+      category: "trigger",
+    },
+    "error",
+  );
+}
+
 function findingCatalog(
   cwd: string,
   absPath: string,
@@ -264,6 +326,15 @@ function findingCatalog(
   );
 }
 
+function withIssueLocation(finding: ValidationFinding, issue: LoadIssue): ValidationFinding {
+  if (issue.line === undefined && issue.column === undefined) return finding;
+  return {
+    ...finding,
+    ...(issue.line !== undefined ? { line: issue.line } : {}),
+    ...(issue.column !== undefined ? { column: issue.column } : {}),
+  };
+}
+
 export function findingsFromLoadIssues(
   cwd: string,
   absPath: string,
@@ -273,49 +344,74 @@ export function findingsFromLoadIssues(
     if (issue.category === "pipeline") {
       if (issue.code === "pipeline.model_applies" || issue.code === "pipeline.route_all_gated") {
         return [
-          baseFinding(
-            {
-              cwd,
-              absPath,
-              message: issue.message,
-              code: issue.code,
-              category: "pipeline",
-              pipelineId: issue.pipelineId,
-              stageId: issue.stageId,
-            },
-            "warning",
+          withIssueLocation(
+            baseFinding(
+              {
+                cwd,
+                absPath,
+                message: issue.message,
+                code: issue.code,
+                category: "pipeline",
+                pipelineId: issue.pipelineId,
+                stageId: issue.stageId,
+              },
+              "warning",
+            ),
+            issue,
           ),
         ];
       }
       return [
-        findingPipelineError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
-          issue.pipelineId,
-          issue.stageId,
+        withIssueLocation(
+          findingPipelineError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+            issue.pipelineId,
+            issue.stageId,
+          ),
+          issue,
         ),
       ];
     }
     if (issue.category === "stage") {
       return [
-        findingStageError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
-          issue.stageId,
+        withIssueLocation(
+          findingStageError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+            issue.stageId,
+          ),
+          issue,
         ),
       ];
     }
     if (issue.category === "task") {
       return [
-        findingTaskError(
-          cwd,
-          absPath,
-          issue.message,
-          issue.code as ValidationFindingCode,
+        withIssueLocation(
+          findingTaskError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+          ),
+          issue,
+        ),
+      ];
+    }
+    if (issue.category === "trigger") {
+      return [
+        withIssueLocation(
+          findingTriggerError(
+            cwd,
+            absPath,
+            issue.message,
+            issue.code as ValidationFindingCode,
+          ),
+          issue,
         ),
       ];
     }
@@ -327,7 +423,7 @@ export function findingsFromLoadIssues(
         code === "catalog.legacy_yaml"
           ? "warning"
           : "error";
-      return [findingCatalog(cwd, absPath, issue.message, code, severity)];
+      return [withIssueLocation(findingCatalog(cwd, absPath, issue.message, code, severity), issue)];
     }
     return [];
   });
@@ -349,6 +445,39 @@ export function findingStageIdFilenameMismatch(
       stageId: declaredId,
     },
     "error",
+  );
+}
+
+/** Parent readdir case check — warn by default; error under --strict. */
+export async function findingPathCaseMismatch(
+  cwd: string,
+  referencedPath: string,
+): Promise<ValidationFinding | null> {
+  const { readdir } = await import("node:fs/promises");
+  const abs = path.isAbsolute(referencedPath)
+    ? referencedPath
+    : path.resolve(cwd, referencedPath);
+  const parent = path.dirname(abs);
+  const base = path.basename(abs);
+  let entries: string[];
+  try {
+    entries = await readdir(parent);
+  } catch {
+    return null;
+  }
+  const exact = entries.includes(base);
+  if (exact) return null;
+  const match = entries.find((e) => e.toLowerCase() === base.toLowerCase());
+  if (match === undefined) return null;
+  return baseFinding(
+    {
+      cwd,
+      absPath: abs,
+      message: `Path casing differs on disk: referenced "${base}" but found "${match}"`,
+      code: "catalog.path_case_mismatch",
+      category: "catalog",
+    },
+    "warning",
   );
 }
 
@@ -406,6 +535,189 @@ function collectMcpAllowlistNames(loaded: LoadedPipeline): string[] {
   return [...names];
 }
 
+function findingsForStageChannels(
+  cwd: string,
+  pipelinePath: string,
+  loaded: LoadedPipeline,
+  projectRoot: string,
+  providers: readonly AnyChannelProvider[] | undefined,
+): ValidationFinding[] {
+  const users = loaded.stages.filter((stage) => (stage.channels?.length ?? 0) > 0);
+  if (users.length === 0) return [];
+  let registry: ChannelRegistry;
+  try {
+    registry = new ChannelRegistry({ cwd: projectRoot, providers });
+  } catch (error) {
+    const code = error instanceof ChannelError ? error.code : "CHANNEL_INVALID_INPUT";
+    const field = error instanceof ChannelError && error.detail?.connectionId
+      ? ` (connection "${error.detail.connectionId}"${error.detail.field ? `, field "${error.detail.field}"` : ""})`
+      : "";
+    return users.map((stage) =>
+      findingStageError(
+        cwd,
+        pipelinePath,
+        `connections.yaml could not be loaded: ${code}${field}`,
+        "stage.channel_unavailable",
+        stage.id,
+      ),
+    );
+  }
+  return users.flatMap((stage) =>
+    validateStageChannels(registry, stage).map((issue) =>
+      findingStageError(cwd, pipelinePath, issue.message, "stage.channel_unavailable", issue.stageId),
+    ),
+  );
+}
+
+function findingsForStageSecrets(
+  cwd: string,
+  pipelinePath: string,
+  loaded: LoadedPipeline,
+): ValidationFinding[] {
+  const registry = loadSecretRegistry(process.env);
+  const findings: ValidationFinding[] = [];
+  for (const stage of loaded.stages) {
+    for (const decl of stage.secrets ?? []) {
+      if (isForeverDeniedSecret(decl.name)) {
+        findings.push(
+          findingStageError(
+            cwd,
+            pipelinePath,
+            `secret "${decl.name}" is permanently denied and cannot be granted`,
+            "stage.denied_secret",
+            stage.id,
+          ),
+        );
+        continue;
+      }
+      if (!registry.has(decl.name)) {
+        findings.push(
+          findingStageError(
+            cwd,
+            pipelinePath,
+            `unknown secret "${decl.name}" is not in the Host secret registry`,
+            "stage.unknown_secret",
+            stage.id,
+          ),
+        );
+      }
+    }
+  }
+  return findings;
+}
+
+const ABSOLUTE_PATH_IN_TEXT_RE =
+  /(?:^|[\s"'`=:(])(\/(?:[^\s"'`;|&<>()]+))/g;
+
+const TRAILING_PATH_PUNCT_RE = /[.,:;!?)\]]+$/;
+
+export function collectAbsolutePathCandidates(text: string): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  ABSOLUTE_PATH_IN_TEXT_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = ABSOLUTE_PATH_IN_TEXT_RE.exec(text)) !== null) {
+    const raw = match[1]?.replace(TRAILING_PATH_PUNCT_RE, "") ?? "";
+    if (!raw || !path.isAbsolute(raw) || seen.has(raw)) continue;
+    seen.add(raw);
+    found.push(raw);
+  }
+  return found;
+}
+
+export function isPathUnderStageflowHome(candidate: string, home: string): boolean {
+  if (!path.isAbsolute(candidate)) return false;
+  const resolved = path.resolve(candidate);
+  const homeResolved = path.resolve(home);
+  return (
+    resolved === homeResolved || resolved.startsWith(`${homeResolved}${path.sep}`)
+  );
+}
+
+function stageSourcePath(loaded: LoadedPipeline, stageId: string): string {
+  const source = loaded.stageSources?.[stageId];
+  if (source?.kind === "file") return source.path;
+  return loaded.pipelinePath;
+}
+
+function stageflowHomeAbsolutePathMessage(
+  stageId: string,
+  location: string,
+  absolutePath: string,
+): string {
+  return (
+    `Stage "${stageId}" ${location} contains absolute path under STAGEFLOW_HOME ` +
+    `("${absolutePath}"). Use STAGEFLOW_CHECKOUT / STAGEFLOW_RUN_WORKSPACE ` +
+    `(and related binding env vars) instead of durable-home paths`
+  );
+}
+
+function findingsForStageflowHomeAbsolutePaths(
+  cwd: string,
+  loaded: LoadedPipeline,
+): ValidationFinding[] {
+  const home = globalStageflowHome();
+  const findings: ValidationFinding[] = [];
+  const seen = new Set<string>();
+
+  const pushFinding = (
+    stageId: string,
+    absPath: string,
+    location: string,
+    absolutePath: string,
+  ): void => {
+    const key = `${stageId}\0${location}\0${absolutePath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    findings.push(
+      baseFinding(
+        {
+          cwd,
+          absPath,
+          message: stageflowHomeAbsolutePathMessage(stageId, location, absolutePath),
+          code: "catalog.stageflow_home_absolute_path",
+          category: "catalog",
+          pipelineId: loaded.pipeline.id,
+          stageId,
+        },
+        "error",
+      ),
+    );
+  };
+
+  const scanText = (
+    stageId: string,
+    absPath: string,
+    location: string,
+    text: string,
+  ): void => {
+    for (const candidate of collectAbsolutePathCandidates(text)) {
+      if (isPathUnderStageflowHome(candidate, home)) {
+        pushFinding(stageId, absPath, location, candidate);
+      }
+    }
+  };
+
+  for (const stage of loaded.stages) {
+    const absPath = stageSourcePath(loaded, stage.id);
+    scanText(stage.id, absPath, "system_prompt", stage.system_prompt);
+  }
+
+  for (const node of loaded.dag.nodes) {
+    const checks = node.completion?.checks ?? [];
+    for (const check of checks) {
+      if (check.type !== "command") continue;
+      const absPath = stageSourcePath(loaded, node.id);
+      scanText(node.id, absPath, `verify command "${check.id}" run`, check.run);
+      if (typeof check.cwd === "string") {
+        scanText(node.id, absPath, `verify command "${check.id}" cwd`, check.cwd);
+      }
+    }
+  }
+
+  return findings;
+}
+
 async function findingsForStageMcpCatalog(
   cwd: string,
   loaded: LoadedPipeline,
@@ -432,7 +744,7 @@ async function findingsForStageMcpCatalog(
 
   let catalog;
   try {
-    catalog = await loadMcpCatalog(projectRoot);
+    catalog = await loadMcpCatalog(projectRoot, { scope: { kind: "validate" } });
   } catch (err) {
     if (!(err instanceof StageMcpError)) throw err;
     if (err.code === "missing_catalog" && allowlist.length === 0) return [];
@@ -452,7 +764,24 @@ async function findingsForStageMcpCatalog(
     throw err;
   }
 
-  return [];
+  const findings: ValidationFinding[] = [];
+  const serversForPath: Record<string, { command?: string }> = {};
+  for (const name of allowlist) {
+    const entry = catalog.servers[name] as { command?: string } | undefined;
+    if (entry) serversForPath[name] = entry;
+  }
+  for (const missing of findMissingMcpCommands(serversForPath, process.env)) {
+    findings.push(
+      findingCatalog(
+        cwd,
+        catalogAbsPath,
+        `MCP server "${missing.serverName}" command "${missing.command}" was not found on PATH`,
+        "catalog.mcp_command_missing",
+        "error",
+      ),
+    );
+  }
+  return findings;
 }
 
 type PipelineValidationCoreResult =
@@ -460,30 +789,40 @@ type PipelineValidationCoreResult =
   | { ok: false; findings: ValidationFinding[] };
 
 async function runPipelineValidation(
-  nameOrPath: string,
-  options: { cwd: string; projectRoot?: string; validateStages: boolean },
+  nameOrPath: string | InlinePipelineDefinition,
+  options: {
+    cwd: string;
+    projectRoot?: string;
+    validateStages: boolean;
+    channelProviders?: readonly AnyChannelProvider[];
+  },
 ): Promise<PipelineValidationCoreResult> {
   const { cwd, validateStages } = options;
   const projectRoot = options.projectRoot ?? cwd;
 
   let pipelinePath: string;
-  try {
-    pipelinePath = await resolvePipelinePath(nameOrPath, cwd);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      findings: findingsFromLoadIssues(cwd, path.resolve(cwd, nameOrPath), [
-        {
-          code: "pipeline.load_error",
-          message,
-          category: "pipeline",
-        },
-      ]),
-    };
+  let outcome: Awaited<ReturnType<typeof loadPipelineOutcome>>;
+  if (typeof nameOrPath === "string") {
+    try {
+      pipelinePath = await resolvePipelinePath(nameOrPath, cwd);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        findings: findingsFromLoadIssues(cwd, path.resolve(cwd, nameOrPath), [
+          {
+            code: "pipeline.load_error",
+            message,
+            category: "pipeline",
+          },
+        ]),
+      };
+    }
+    outcome = await loadPipelineOutcome(pipelinePath, { cwd, projectRoot });
+  } else {
+    pipelinePath = path.resolve(cwd, INLINE_PIPELINE_PATH);
+    outcome = await loadPipelineFromObjectOutcome(nameOrPath, { cwd, projectRoot });
   }
-
-  const outcome = await loadPipelineOutcome(pipelinePath, { cwd, projectRoot });
   const findings: ValidationFinding[] = [];
 
   if (!outcome.ok) {
@@ -496,6 +835,11 @@ async function runPipelineValidation(
   }
 
   findings.push(...(await findingsForStageMcpCatalog(cwd, outcome.value)));
+  findings.push(...findingsForStageSecrets(cwd, pipelinePath, outcome.value));
+  findings.push(
+    ...findingsForStageChannels(cwd, pipelinePath, outcome.value, projectRoot, options.channelProviders),
+  );
+  findings.push(...findingsForStageflowHomeAbsolutePaths(cwd, outcome.value));
 
   if (validateStages && outcome.value.stageSources) {
     for (const source of Object.values(outcome.value.stageSources)) {
@@ -520,6 +864,7 @@ export type ValidatePipelineOptions = {
   projectRoot?: string;
   validateStages?: boolean;
   strict?: boolean;
+  channelProviders?: readonly AnyChannelProvider[];
 };
 
 export async function validatePipeline(
@@ -534,6 +879,7 @@ export async function validatePipeline(
     cwd,
     projectRoot,
     validateStages,
+    channelProviders: options.channelProviders,
   });
   return buildValidationResult("pipeline", core.findings, strict);
 }
@@ -543,8 +889,13 @@ export type LoadPipelineValidatedResult =
   | { ok: false; findings: ValidationFinding[] };
 
 export async function loadPipelineValidated(
-  nameOrPath: string,
-  options: { cwd?: string; projectRoot?: string; validateStages?: boolean } = {},
+  nameOrPath: string | InlinePipelineDefinition,
+  options: {
+    cwd?: string;
+    projectRoot?: string;
+    validateStages?: boolean;
+    channelProviders?: readonly AnyChannelProvider[];
+  } = {},
 ): Promise<LoadPipelineValidatedResult> {
   const cwd = options.cwd ?? process.cwd();
   const projectRoot = options.projectRoot ?? cwd;
@@ -553,6 +904,7 @@ export async function loadPipelineValidated(
     cwd,
     projectRoot,
     validateStages,
+    channelProviders: options.channelProviders,
   });
   if (core.ok) {
     return { ok: true, loaded: core.loaded, findings: core.findings };
@@ -604,7 +956,7 @@ function findingEmptyCatalog(
   );
 }
 
-async function collectPipelineIdsFromPaths(
+export async function collectPipelineIdsFromPaths(
   pipelinePaths: string[],
 ): Promise<Map<string, string[]>> {
   const idToPaths = new Map<string, string[]>();
@@ -622,6 +974,19 @@ async function collectPipelineIdsFromPaths(
   }
 
   return idToPaths;
+}
+
+export async function collectTaskIdsFromPaths(taskPaths: string[]): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const filePath of taskPaths) {
+    try {
+      const raw = await readYamlObject(filePath);
+      if (typeof raw?.id === "string") ids.add(raw.id);
+    } catch {
+      // unreadable files handled by task validation loop
+    }
+  }
+  return ids;
 }
 
 function findingsForDuplicatePipelineIds(
@@ -687,7 +1052,7 @@ async function validateManifestAll(
   if (!scanPaths) {
     return findings;
   }
-  const { pipelinePaths, taskPaths } = scanPaths;
+  const { pipelinePaths, taskPaths, triggerPaths } = scanPaths;
 
   for (const pipelinePath of pipelinePaths) {
     const core = await runPipelineValidation(pipelinePath, {
@@ -709,6 +1074,60 @@ async function validateManifestAll(
   const idToPaths = await collectPipelineIdsFromPaths(pipelinePaths);
   findings.push(...findingsForDuplicatePipelineIds(projectRoot, idToPaths));
 
+  if (triggerPaths.length > 0) {
+    const pipelineIds = new Set(idToPaths.keys());
+    const taskIds = await collectTaskIdsFromPaths(taskPaths);
+    for (const triggerPath of triggerPaths) {
+      const outcome = await loadTriggerOutcome(triggerPath);
+      if (!outcome.ok) {
+        findings.push(...findingsFromLoadIssues(projectRoot, triggerPath, outcome.issues));
+        continue;
+      }
+      findings.push(
+        ...findingsForTriggerRefs(projectRoot, triggerPath, outcome.value, {
+          pipelineIds,
+          taskIds,
+        }),
+      );
+    }
+  }
+
+  return findings;
+}
+
+export type TriggerCatalogRefs = {
+  pipelineIds: ReadonlySet<string>;
+  taskIds: ReadonlySet<string>;
+};
+
+/** Confirms a trigger's `pipeline`/`task` refs resolve against known catalog ids. */
+export function findingsForTriggerRefs(
+  cwd: string,
+  absPath: string,
+  trigger: TriggerFile,
+  refs: TriggerCatalogRefs,
+): ValidationFinding[] {
+  const findings: ValidationFinding[] = [];
+  if (!refs.pipelineIds.has(trigger.pipeline)) {
+    findings.push(
+      findingTriggerError(
+        cwd,
+        absPath,
+        `Trigger "${trigger.id}" references unknown pipeline "${trigger.pipeline}"`,
+        "trigger.unknown_pipeline",
+      ),
+    );
+  }
+  if (trigger.task !== undefined && !refs.taskIds.has(trigger.task)) {
+    findings.push(
+      findingTriggerError(
+        cwd,
+        absPath,
+        `Trigger "${trigger.id}" references unknown task "${trigger.task}"`,
+        "trigger.unknown_task",
+      ),
+    );
+  }
   return findings;
 }
 
@@ -726,6 +1145,62 @@ async function validateSingleTask(
   return [];
 }
 
+async function validateSingleStage(
+  invocationCwd: string,
+  stageArg: string,
+  stageContent?: string,
+): Promise<ValidationFinding[]> {
+  const ctx = await resolveCatalogContext(invocationCwd);
+  const relCwd = ctx.projectRoot ?? invocationCwd;
+  const stagePath = path.resolve(invocationCwd, stageArg);
+  if (stageContent === undefined) {
+    return validateStageFile(relCwd, stagePath);
+  }
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "sf-stage-validate-"));
+  const tmpPath = path.join(tmpDir, path.basename(stagePath));
+  try {
+    await writeFile(tmpPath, stageContent, "utf8");
+    const findings = await validateStageFile(relCwd, tmpPath);
+    const displayPath = relPath(relCwd, stagePath);
+    const tmpRel = relPath(relCwd, tmpPath);
+    return findings.map((finding) =>
+      finding.path === tmpRel ||
+      finding.path === tmpPath ||
+      finding.path.includes(tmpDir)
+        ? { ...finding, path: displayPath }
+        : finding,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function validateSingleTrigger(
+  invocationCwd: string,
+  triggerArg: string,
+): Promise<ValidationFinding[]> {
+  const ctx = await resolveCatalogContext(invocationCwd);
+  const relCwd = ctx.projectRoot ?? invocationCwd;
+  const triggerPath = path.resolve(invocationCwd, triggerArg);
+  const outcome = await loadTriggerOutcome(triggerPath);
+  if (!outcome.ok) {
+    return findingsFromLoadIssues(relCwd, triggerPath, outcome.issues);
+  }
+
+  const scanPaths = await getCatalogScanPaths(ctx);
+  const pipelineIds = scanPaths
+    ? new Set((await collectPipelineIdsFromPaths(scanPaths.pipelinePaths)).keys())
+    : new Set<string>();
+  const taskIds = scanPaths
+    ? await collectTaskIdsFromPaths(scanPaths.taskPaths)
+    : new Set<string>();
+
+  return findingsForTriggerRefs(relCwd, triggerPath, outcome.value, {
+    pipelineIds,
+    taskIds,
+  });
+}
+
 export async function validateCatalog(
   options: ValidateCatalogOptions,
 ): Promise<ValidationResult> {
@@ -737,6 +1212,12 @@ export async function validateCatalog(
   }
   if (options.scope === "task" && !options.task) {
     throw new Error("validateCatalog: task is required when scope is \"task\"");
+  }
+  if (options.scope === "trigger" && !options.trigger) {
+    throw new Error("validateCatalog: trigger is required when scope is \"trigger\"");
+  }
+  if (options.scope === "stage" && !options.stage) {
+    throw new Error("validateCatalog: stage is required when scope is \"stage\"");
   }
 
   const allFindings: ValidationFinding[] = [];
@@ -750,6 +1231,12 @@ export async function validateCatalog(
     });
   } else if (options.scope === "task") {
     allFindings.push(...(await validateSingleTask(cwd, options.task!)));
+  } else if (options.scope === "trigger") {
+    allFindings.push(...(await validateSingleTrigger(cwd, options.trigger!)));
+  } else if (options.scope === "stage") {
+    allFindings.push(
+      ...(await validateSingleStage(cwd, options.stage!, options.stageContent)),
+    );
   } else {
     allFindings.push(...(await validateManifestAll(cwd)));
   }

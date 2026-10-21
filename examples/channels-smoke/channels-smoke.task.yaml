@@ -1,0 +1,3 @@
+id: channels-smoke-task
+goal: Send one test email and one test text message through the connected channels.
+constraints: Send exactly one message per channel. Do not resend an uncertain submission.

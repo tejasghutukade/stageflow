@@ -5,7 +5,13 @@ import {
   isHandoffSkipped,
   type HandoffResult,
 } from "./handoffFormat.js";
-import { createRunStore } from "../runstore/createStore.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  createRunStoreAfterHostEnsure,
+} from "../runstore/createStore.js";
+import {
+  ensureGlobalService,
+} from "../server/ensureGlobalService.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
 
@@ -276,7 +282,6 @@ export async function runEnvelopeCommand(
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
-  const projectRoot = options.projectRoot ?? cwd;
   const out: EnvelopeCommandIo = { ...defaultIo, ...options.io };
 
   let parsed: ParsedEnvelopeArgs;
@@ -306,7 +311,16 @@ export async function runEnvelopeCommand(
     return 1;
   }
 
-  const store = createRunStore({ rootDir: projectRoot });
+  const opened = await createRunStoreAfterHostEnsure(
+    { rootDir: globalStageflowHome() },
+    () => ensureGlobalService(),
+  );
+  if (!opened.ok) {
+    out.error(opened.message);
+    out.error(ENVELOPE_USAGE);
+    return 1;
+  }
+  const store = opened.store;
 
   let runContext: RunContext;
   try {

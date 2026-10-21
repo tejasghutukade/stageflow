@@ -1,15 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { StageGateKind } from "../api/types";
 import { previewGateMeta } from "./NewRunPage";
 
 describe("NewRun preview gate labels", () => {
-  it("does not label omitted gate_kinds as no gate", () => {
-    expect(previewGateMeta(undefined)).toBe("all kinds");
-    expect(previewGateMeta(undefined)).not.toBe("no gate");
-  });
-
-  it("labels empty, omitted, and allowlist distinctly", () => {
-    expect(previewGateMeta([])).toBe("no gate");
-    expect(previewGateMeta(["confirm"])).toBe("will ask you");
-    expect(previewGateMeta(undefined)).toBe("all kinds");
+  it.each<[StageGateKind[] | undefined, string]>([
+    [undefined, "no gate"],
+    [[], "no gate"],
+    [["confirm"], "will ask you"],
+  ])("previewGateMeta(%j) -> %s", (kinds, label) => {
+    expect(previewGateMeta(kinds)).toBe(label);
   });
 });

@@ -24,6 +24,8 @@ Write reviewable or required outputs with `write_stage_artifact`, not checkout `
 
 Omit `gate_kinds`. A human-review checkpoint from the source session stays as prose in the stage approach, not a HITL gate.
 
+When a captured phase pushes, opens a PR, or otherwise needs git/`gh` credentials, declare `secrets:` on that stage (or its pipeline entry) — stages do not inherit Host ambient `GITHUB_TOKEN`. See [`../../stageflow-author/references/catalog-mapping.md`](../../stageflow-author/references/catalog-mapping.md#stage-secrets).
+
 Worked example: `assets/example-pipeline/research.yaml` and `assets/example-pipeline/implement.yaml`.
 
 ## Pipeline file

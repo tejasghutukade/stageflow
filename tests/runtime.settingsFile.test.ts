@@ -5,7 +5,6 @@ import path from "node:path";
 import {
   INVALID_CREDENTIAL_SOURCE_MESSAGE,
   parseCredentialSource,
-  readCredentialSourceFromContext,
   readCredentialSourceFromFile,
   readFactorySettings,
   readMaxConcurrentFromContext,
@@ -18,7 +17,7 @@ import {
 } from "../src/runtime/settingsFile.js";
 import { storeRootFor } from "../src/runstore/paths.js";
 import { resolveProjectContext } from "../src/project/resolveProjectContext.js";
-import { initTempGitRepo, withIsolatedHome } from "./helpers/projectContext.js";
+import { withIsolatedHome } from "./helpers/projectContext.js";
 
 describe("settingsFile credentialSource", () => {
   it("writes sf_owned and reads it back", async () => {
@@ -30,9 +29,21 @@ describe("settingsFile credentialSource", () => {
   it("preserves maxConcurrent when writing credentialSource", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-settings-preserve-mc-"));
     writeMaxConcurrentToFile(root, 4);
-    writeCredentialSourceToFile(root, "pi_home");
+    writeCredentialSourceToFile(root, "sf_owned");
     expect(readMaxConcurrentFromFile(root)).toBe(4);
-    expect(readCredentialSourceFromFile(root)).toBe("pi_home");
+    expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
+  });
+
+  it("maps legacy pi_home on disk to sf_owned when read", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-settings-legacy-pi-"));
+    await mkdir(storeRootFor(root), { recursive: true });
+    await writeFile(
+      path.join(storeRootFor(root), "settings.json"),
+      `${JSON.stringify({ credentialSource: "pi_home", maxConcurrent: 2 }, null, 2)}\n`,
+    );
+    expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
+    expect(readMaxConcurrentFromFile(root)).toBe(2);
+    expect(parseCredentialSource("pi_home")).toBe("sf_owned");
   });
 
   it("preserves credentialSource when writing maxConcurrent", async () => {
@@ -60,7 +71,7 @@ describe("settingsFile credentialSource", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-settings-reject-"));
     expect(() =>
       writeFactorySettings(root, {
-        credentialSource: "ambient_env" as "pi_home",
+        credentialSource: "ambient_env" as "sf_owned",
       }),
     ).toThrow(INVALID_CREDENTIAL_SOURCE_MESSAGE);
   });
@@ -80,24 +91,6 @@ describe("settingsFile credentialSource", () => {
       credentialSource: "sf_owned",
     });
     expect(raw).not.toMatch(/api[_-]?key|sk-|token/i);
-  });
-
-  it("AE5: project credentialSource overrides global in git repo", async () => {
-    await withIsolatedHome(async (home) => {
-      const { root, nested, cleanup } = await initTempGitRepo();
-      try {
-        writeFactorySettingsForContext(resolveProjectContext(home), {
-          credentialSource: "sf_owned",
-        });
-        writeCredentialSourceToContext(resolveProjectContext(nested), "pi_home");
-        expect(readCredentialSourceFromContext(resolveProjectContext(nested))).toBe(
-          "pi_home",
-        );
-        await readFile(path.join(storeRootFor(root), "settings.json"), "utf8");
-      } finally {
-        await cleanup();
-      }
-    });
   });
 
   it("non-git context reads settings from global home only", async () => {

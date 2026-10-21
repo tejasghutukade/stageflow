@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendOperatorPrompt } from "../src/hitl/qaTrail.js";
+import { loadPipeline } from "../src/config/loadPipeline.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import * as pipelineScheduler from "../src/runtime/pipelineScheduler.js";
 import { RunManager } from "../src/runtime/runManager.js";
@@ -83,16 +84,19 @@ describe("runtime HITL deliverAnswer process mode", () => {
 
     const result = await manager.deliverAnswer(run.runId, "clarify", answer);
     expect(result).toEqual({ ok: true });
-    expect(launch).toHaveBeenCalledWith({
-      runId: run.runId,
-      stageId: "clarify",
-      rootDir: fixtures,
-      mode: "resume",
-      resumeAnswer: answer,
-      attempt: 1,
-      sessionFilePath: expect.stringMatching(/stages\/clarify\/attempts\/1\/pi-session\.jsonl$/),
-    });
-    expect(resumeRunSpy).toHaveBeenCalledWith(
+    expect(launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.runId,
+        stageId: "clarify",
+        rootDir: fixtures,
+        mode: "resume",
+        resumeAnswer: answer,
+        attempt: 1,
+        sessionFilePath: expect.stringMatching(
+          /stages\/clarify\/attempts\/1\/pi-session\.jsonl$/,
+        ),
+      }),
+    );    expect(resumeRunSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         resumeFromStageId: "clarify",
         initialPrior: envelope,

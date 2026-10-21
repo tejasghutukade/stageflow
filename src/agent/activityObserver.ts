@@ -4,6 +4,7 @@ import {
 } from "./activity.js";
 
 export const TOOL_PROGRESS_THROTTLE_MS = 300;
+export const STREAM_FLUSH_THROTTLE_MS = 300;
 
 export type StageActivityObserver = {
   onAssistantTextDelta(delta: string): void;
@@ -16,6 +17,8 @@ export type StageActivityObserver = {
 
 export type CreateStageActivityObserverOptions = {
   onActivity?: (event: StageActivityEvent) => void;
+  /** Fired for every non-empty assistant text delta, regardless of writeStderr. */
+  onAssistantTextDelta?: (delta: string) => void;
   writeStderr?: boolean;
   toolProgressThrottleMs?: number;
 };
@@ -163,7 +166,11 @@ export function createStageActivityObserver(
 
   return {
     onAssistantTextDelta(delta: string) {
-      if (!writeStderr || !delta) {
+      if (!delta) {
+        return;
+      }
+      options.onAssistantTextDelta?.(delta);
+      if (!writeStderr) {
         return;
       }
       assistantStreamedForMessage = true;

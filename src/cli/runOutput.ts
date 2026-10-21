@@ -22,7 +22,7 @@ function formatUsd(amount: number): string {
 
 /** Best-effort total cost for a run; undefined (not thrown) on any read failure or when no stage reported usage. */
 async function tryReadTotalCostUsd(
-  store: RunStore | undefined,
+  store: Pick<RunStore, "readRun"> | undefined,
   runId: string,
 ): Promise<number | undefined> {
   if (!store) return undefined;
@@ -36,6 +36,16 @@ async function tryReadTotalCostUsd(
 
 function isBusyCode(code: string | undefined): code is BusyCode {
   return code === "busy_capacity" || code === "busy_checkout";
+}
+
+/** Stderr line when start_run was admitted to the queue (origin transparency rule). */
+export function writeQueuedAdmissionLine(
+  started: Extract<StartRunResult, { ok: true }>,
+  io: Pick<CliRunReportIo, "error">,
+): void {
+  if (started.queued === true && started.queuePosition !== undefined) {
+    io.error(`queued at position ${started.queuePosition}`);
+  }
 }
 
 function formatRunBusyJson(
@@ -72,6 +82,11 @@ function formatRunStartFailedJson(
     reason: started.reason,
   };
   if (started.code !== undefined) payload.code = started.code;
+  if (started.freeBytes !== undefined) payload.freeBytes = started.freeBytes;
+  if (started.minFreeBytes !== undefined) {
+    payload.minFreeBytes = started.minFreeBytes;
+  }
+  if (started.stderr !== undefined) payload.stderr = started.stderr;
   return stringify(payload);
 }
 
@@ -102,13 +117,23 @@ function baseRunCompletionPayload(
             runId: result.runId,
             runDir: result.runDir,
           }
-        : {
-            ok: false,
-            outcome: "failed",
-            runId: result.runId,
-            runDir: result.runDir,
-          };
-  if (result.outcome === "failed" && result.reason !== undefined) {
+        : result.outcome === "cancelled"
+          ? {
+              ok: false,
+              outcome: "cancelled",
+              runId: result.runId,
+              runDir: result.runDir,
+            }
+          : {
+              ok: false,
+              outcome: "failed",
+              runId: result.runId,
+              runDir: result.runDir,
+            };
+  if (
+    (result.outcome === "failed" || result.outcome === "cancelled") &&
+    result.reason !== undefined
+  ) {
     payload.reason = result.reason;
   }
   if (Array.isArray(result.findings) && result.findings.length > 0) {
@@ -125,7 +150,7 @@ function baseRunCompletionPayload(
 
 async function formatRunCompletionJsonWithCost(
   result: PipelineRunResult,
-  store: RunStore | undefined,
+  store: Pick<RunStore, "readRun"> | undefined,
 ): Promise<string> {
   const totalCostUsd = await tryReadTotalCostUsd(store, result.runId);
   return stringify({
@@ -136,7 +161,7 @@ async function formatRunCompletionJsonWithCost(
 
 async function formatRunCompletionJsonWithStages(
   result: PipelineRunResult,
-  store: RunStore,
+  store: Pick<RunStore, "readRun">,
 ): Promise<string> {
   const detail = await store.readRun(result.runId);
   const projection = projectRun(detail);
@@ -176,6 +201,12 @@ function writeCompletionHuman(
       io.error(`Pipeline failed: ${result.reason}`);
       io.error(`Run folder: ${result.runDir}`);
       break;
+    case "cancelled":
+      io.error(
+        `Pipeline cancelled${result.reason ? `: ${result.reason}` : ""}`,
+      );
+      io.error(`Run folder: ${result.runDir}`);
+      break;
     case "succeeded":
       io.log(`Pipeline succeeded. Run folder: ${result.runDir}`);
       break;
@@ -192,6 +223,7 @@ function exitCodeForRunOutcome(outcome: PipelineRunResult["outcome"]): number {
     case "waiting":
       return 2;
     case "failed":
+    case "cancelled":
       return 1;
   }
 }
@@ -201,7 +233,7 @@ export async function reportCliRun(
   options: {
     json?: boolean;
     io: CliRunReportIo;
-    store?: RunStore;
+    store?: Pick<RunStore, "readRun">;
     includeStages?: boolean;
   },
 ): Promise<number> {

@@ -10,6 +10,7 @@
  * why this stays separate from `CompletionCheck`'s `artifact`/`gate` runners.
  */
 import { preEmitGateIssue, type QaExchange } from "../hitl/qaTrail.js";
+import { loginCheckIssue } from "../browser/loginCheck.js";
 import { EnvelopeError, type StageEnvelope } from "../types/envelope.js";
 import type { PreEmitCheck } from "../types/preEmitCheck.js";
 
@@ -43,7 +44,7 @@ export function declaredArtifactIssue(
  * `checks` (or an empty list) is a no-op.
  */
 export async function assertPreEmitChecks(
-  envelope: Pick<StageEnvelope, "artifacts">,
+  envelope: Pick<StageEnvelope, "artifacts" | "payload">,
   options: PreEmitCheckOptions | undefined,
 ): Promise<void> {
   const checks = options?.checks;
@@ -55,6 +56,14 @@ export async function assertPreEmitChecks(
   for (const check of checks) {
     if (check.type === "artifact_declared") {
       const issue = declaredArtifactIssue(envelope.artifacts, check);
+      if (issue !== undefined) {
+        throw new EnvelopeError(issue);
+      }
+      continue;
+    }
+
+    if (check.type === "browser_login_check") {
+      const issue = loginCheckIssue(envelope.payload, check);
       if (issue !== undefined) {
         throw new EnvelopeError(issue);
       }

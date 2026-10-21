@@ -19,6 +19,7 @@ import {
   SAMPLE_TASK,
   SINGLE_PIPELINE,
 } from "./helpers/fixturePaths.js";
+import { alreadyUp, startTestService } from "./helpers/testInProcessService.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -109,40 +110,42 @@ describe("runRunsCommand answer", () => {
       return detail.stages.some((s) => s.status === "waiting_for_input");
     });
 
-    const cap = captureIo();
-    const code = await runRunsCommand(
-      [
-        "answer",
-        "--run",
-        started.runId,
-        "--stage",
-        "clarify",
-        "--answer",
-        JSON.stringify(freeTextAnswer),
-        "--json",
-      ],
-      {
-        cwd: fixtures,
-        projectRoot: root,
-        store,
-        probeHost: async () => "down",
-        createManager: (s) =>
-          new RunManager({
-            agent: scriptedFakeAgent([
-              {
-                type: "wait_then_emit",
-                waitRequests: [freeTextPrompt],
-                envelope: successEnvelope,
-              },
-            ]),
-            store: s,
-            cwd: fixtures,
-          }),
-        io: cap.io,
-      },
+    const service = await startTestService(
+      store,
+      scriptedFakeAgent([
+        {
+          type: "wait_then_emit",
+          waitRequests: [freeTextPrompt],
+          envelope: successEnvelope,
+        },
+      ]),
+      fixtures,
     );
-    expect(code).toBe(0);
-    expect(JSON.parse(cap.stdout.join("\n"))).toEqual({ ok: true });
+    try {
+      const cap = captureIo();
+      const code = await runRunsCommand(
+        [
+          "answer",
+          "--run",
+          started.runId,
+          "--stage",
+          "clarify",
+          "--answer",
+          JSON.stringify(freeTextAnswer),
+          "--json",
+        ],
+        {
+          cwd: fixtures,
+          hostBaseUrl: service.baseUrl,
+          ensureService: alreadyUp,
+          io: cap.io,
+        },
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(cap.stdout.join("\n"))).toEqual({ ok: true });
+    } finally {
+      await service.stop();
+    }
   });
 
   it("parked confirm --answer returns { ok: true } exit 0", async () => {
@@ -168,40 +171,42 @@ describe("runRunsCommand answer", () => {
       return detail.stages.some((s) => s.status === "waiting_for_input");
     });
 
-    const cap = captureIo();
-    const code = await runRunsCommand(
-      [
-        "answer",
-        "--run",
-        started.runId,
-        "--stage",
-        "clarify",
-        "--answer",
-        JSON.stringify(confirmAnswer),
-        "--json",
-      ],
-      {
-        cwd: fixtures,
-        projectRoot: root,
-        store,
-        probeHost: async () => "down",
-        createManager: (s) =>
-          new RunManager({
-            agent: scriptedFakeAgent([
-              {
-                type: "wait_then_emit",
-                waitRequests: [confirmPrompt],
-                envelope: successEnvelope,
-              },
-            ]),
-            store: s,
-            cwd: fixtures,
-          }),
-        io: cap.io,
-      },
+    const service = await startTestService(
+      store,
+      scriptedFakeAgent([
+        {
+          type: "wait_then_emit",
+          waitRequests: [confirmPrompt],
+          envelope: successEnvelope,
+        },
+      ]),
+      fixtures,
     );
-    expect(code).toBe(0);
-    expect(JSON.parse(cap.stdout.join("\n"))).toEqual({ ok: true });
+    try {
+      const cap = captureIo();
+      const code = await runRunsCommand(
+        [
+          "answer",
+          "--run",
+          started.runId,
+          "--stage",
+          "clarify",
+          "--answer",
+          JSON.stringify(confirmAnswer),
+          "--json",
+        ],
+        {
+          cwd: fixtures,
+          hostBaseUrl: service.baseUrl,
+          ensureService: alreadyUp,
+          io: cap.io,
+        },
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(cap.stdout.join("\n"))).toEqual({ ok: true });
+    } finally {
+      await service.stop();
+    }
   });
 
   it("reads stdin JSON when --answer omitted and stdinIsTTY is false", async () => {
@@ -227,45 +232,43 @@ describe("runRunsCommand answer", () => {
       return detail.stages.some((s) => s.status === "waiting_for_input");
     });
 
-    const cap = captureIo();
-    const code = await runRunsCommand(
-      ["answer", "--run", started.runId, "--stage", "clarify", "--json"],
-      {
-        cwd: fixtures,
-        projectRoot: root,
-        store,
-        probeHost: async () => "down",
-        stdinIsTTY: false,
-        readStdin: () => JSON.stringify(freeTextAnswer),
-        createManager: (s) =>
-          new RunManager({
-            agent: scriptedFakeAgent([
-              {
-                type: "wait_then_emit",
-                waitRequests: [freeTextPrompt],
-                envelope: successEnvelope,
-              },
-            ]),
-            store: s,
-            cwd: fixtures,
-          }),
-        io: cap.io,
-      },
+    const service = await startTestService(
+      store,
+      scriptedFakeAgent([
+        {
+          type: "wait_then_emit",
+          waitRequests: [freeTextPrompt],
+          envelope: successEnvelope,
+        },
+      ]),
+      fixtures,
     );
-    expect(code).toBe(0);
-    expect(JSON.parse(cap.stdout.join("\n"))).toEqual({ ok: true });
+    try {
+      const cap = captureIo();
+      const code = await runRunsCommand(
+        ["answer", "--run", started.runId, "--stage", "clarify", "--json"],
+        {
+          cwd: fixtures,
+          hostBaseUrl: service.baseUrl,
+          ensureService: alreadyUp,
+          stdinIsTTY: false,
+          readStdin: () => JSON.stringify(freeTextAnswer),
+          io: cap.io,
+        },
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(cap.stdout.join("\n"))).toEqual({ ok: true });
+    } finally {
+      await service.stop();
+    }
   });
 
   it("--answer omitted + stdinIsTTY true exits 1 missing-answer", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-runs-ans-tty-"));
-    const store = createRunStore({ rootDir: root });
     const cap = captureIo();
     const code = await runRunsCommand(
       ["answer", "--run", "run-x", "--stage", "clarify"],
       {
-        projectRoot: root,
-        store,
-        probeHost: async () => "down",
+        ensureService: alreadyUp,
         stdinIsTTY: true,
         io: cap.io,
       },
@@ -274,7 +277,7 @@ describe("runRunsCommand answer", () => {
     expect(cap.stderr.join("\n")).toMatch(/Missing --answer/);
   });
 
-  it("probeHost up exits 1 and leaves the waiting row unchanged", async () => {
+  it("no service reachable exits 1 and leaves the waiting row unchanged", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-runs-ans-host-"));
     const store = createRunStore({ rootDir: root });
     const agent = scriptedFakeAgent([
@@ -298,7 +301,6 @@ describe("runRunsCommand answer", () => {
     });
     const before = await store.readRun(started.runId);
 
-    let constructed = false;
     const cap = captureIo();
     const code = await runRunsCommand(
       [
@@ -313,19 +315,15 @@ describe("runRunsCommand answer", () => {
       ],
       {
         cwd: fixtures,
-        projectRoot: root,
-        store,
-        probeHost: async () => "up",
-        createManager: () => {
-          constructed = true;
-          throw new Error("must not construct manager when host is up");
-        },
+        ensureService: async () => ({
+          ok: false,
+          reason: "timed_out",
+          message: "Timed out waiting for the global Stageflow service to become healthy.",
+        }),
         io: cap.io,
       },
     );
     expect(code).toBe(1);
-    expect(constructed).toBe(false);
-    expect(cap.stderr.join("\n")).toMatch(/http:\/\/127\.0\.0\.1:3847/);
     const after = await store.readRun(started.runId);
     expect(
       after.stages.find((s) => s.stage_id === "clarify")?.status,
@@ -370,69 +368,72 @@ describe("runRunsCommand answer", () => {
     });
     await store.updateRunStatus(created.runId, "running");
 
-    const capUnknown = captureIo();
-    const unknownCode = await runRunsCommand(
-      [
-        "answer",
-        "--run",
-        created.runId,
-        "--stage",
-        "clarify",
-        "--answer",
-        JSON.stringify({
-          promptId: "no-such-prompt",
-          kind: "free_text",
-          text: "x",
-        }),
-        "--json",
-      ],
-      {
-        cwd: fixtures,
-        projectRoot: root,
-        store,
-        probeHost: async () => "down",
-        io: capUnknown.io,
-      },
-    );
-    expect(unknownCode).toBe(1);
-    const unknownPayload = JSON.parse(capUnknown.stdout.join("\n")) as {
-      error: string;
-      status: number;
-    };
-    expect(unknownPayload.status).toBe(400);
-    expect(unknownPayload.error).toMatch(/prompt/i);
+    const service = await startTestService(store, scriptedFakeAgent([]), fixtures);
+    try {
+      const capUnknown = captureIo();
+      const unknownCode = await runRunsCommand(
+        [
+          "answer",
+          "--run",
+          created.runId,
+          "--stage",
+          "clarify",
+          "--answer",
+          JSON.stringify({
+            promptId: "no-such-prompt",
+            kind: "free_text",
+            text: "x",
+          }),
+          "--json",
+        ],
+        {
+          cwd: fixtures,
+          hostBaseUrl: service.baseUrl,
+          ensureService: alreadyUp,
+          io: capUnknown.io,
+        },
+      );
+      expect(unknownCode).toBe(1);
+      const unknownPayload = JSON.parse(capUnknown.stdout.join("\n")) as {
+        error: string;
+        status: number;
+      };
+      expect(unknownPayload.status).toBe(400);
+      expect(unknownPayload.error).toMatch(/prompt/i);
 
-    const capKind = captureIo();
-    const kindCode = await runRunsCommand(
-      [
-        "answer",
-        "--run",
-        created.runId,
-        "--stage",
-        "clarify",
-        "--answer",
-        JSON.stringify({
-          promptId: "prompt-1",
-          kind: "confirm",
-          decision: "accept",
-        }),
-        "--json",
-      ],
-      {
-        cwd: fixtures,
-        projectRoot: root,
-        store,
-        probeHost: async () => "down",
-        io: capKind.io,
-      },
-    );
-    expect(kindCode).toBe(1);
-    const kindPayload = JSON.parse(capKind.stdout.join("\n")) as {
-      error: string;
-      status: number;
-    };
-    expect(kindPayload.status).toBe(400);
-    expect(kindPayload.error).toMatch(/kind/i);
+      const capKind = captureIo();
+      const kindCode = await runRunsCommand(
+        [
+          "answer",
+          "--run",
+          created.runId,
+          "--stage",
+          "clarify",
+          "--answer",
+          JSON.stringify({
+            promptId: "prompt-1",
+            kind: "confirm",
+            decision: "accept",
+          }),
+          "--json",
+        ],
+        {
+          cwd: fixtures,
+          hostBaseUrl: service.baseUrl,
+          ensureService: alreadyUp,
+          io: capKind.io,
+        },
+      );
+      expect(kindCode).toBe(1);
+      const kindPayload = JSON.parse(capKind.stdout.join("\n")) as {
+        error: string;
+        status: number;
+      };
+      expect(kindPayload.status).toBe(400);
+      expect(kindPayload.error).toMatch(/kind/i);
+    } finally {
+      await service.stop();
+    }
   });
 
   it("missing --stage exits 1 with human error", async () => {
@@ -446,7 +447,7 @@ describe("runRunsCommand answer", () => {
         JSON.stringify(freeTextAnswer),
       ],
       {
-        probeHost: async () => "down",
+        ensureService: alreadyUp,
         io: cap.io,
       },
     );

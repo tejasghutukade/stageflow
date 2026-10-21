@@ -121,46 +121,50 @@ describe("detailListOrder", () => {
 });
 
 describe("isLinearPipelineTrack", () => {
-  it("returns true for a three-node chain", () => {
-    const projection: PipelineTrackProjection = {
-      nodes: [
-        node({ stage_id: "a", layer: 0, layer_order: 0 }),
-        node({ stage_id: "b", layer: 1, layer_order: 0 }),
-        node({ stage_id: "c", layer: 2, layer_order: 0 }),
-      ],
-      edges: [
-        { from: "a", to: "b" },
-        { from: "b", to: "c" },
-      ],
-    };
-    expect(isLinearPipelineTrack(projection)).toBe(true);
-  });
-
-  it("returns true for a single node", () => {
-    expect(
-      isLinearPipelineTrack({
-        nodes: [node({ stage_id: "only" })],
-        edges: [],
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false for a branch tree with fan-out", () => {
-    const projection: PipelineTrackProjection = {
-      nodes: [
-        node({ stage_id: "recon", layer: 0, layer_order: 0 }),
-        node({ stage_id: "improve-a", layer: 1, layer_order: 0 }),
-        node({ stage_id: "improve-b", layer: 1, layer_order: 1 }),
-        node({ stage_id: "report-a", layer: 2, layer_order: 0 }),
-      ],
-      edges: [
-        { from: "recon", to: "improve-a" },
-        { from: "recon", to: "improve-b" },
-        { from: "improve-a", to: "report-a" },
-      ],
-    };
-    expect(isLinearPipelineTrack(projection)).toBe(false);
-  });
+  it.each([
+    {
+      name: "a three-node chain",
+      projection: {
+        nodes: [
+          node({ stage_id: "a", layer: 0, layer_order: 0 }),
+          node({ stage_id: "b", layer: 1, layer_order: 0 }),
+          node({ stage_id: "c", layer: 2, layer_order: 0 }),
+        ],
+        edges: [
+          { from: "a", to: "b" },
+          { from: "b", to: "c" },
+        ],
+      },
+      linear: true,
+    },
+    {
+      name: "a single node",
+      projection: { nodes: [node({ stage_id: "only" })], edges: [] },
+      linear: true,
+    },
+    {
+      name: "a branch tree with fan-out",
+      projection: {
+        nodes: [
+          node({ stage_id: "recon", layer: 0, layer_order: 0 }),
+          node({ stage_id: "improve-a", layer: 1, layer_order: 0 }),
+          node({ stage_id: "improve-b", layer: 1, layer_order: 1 }),
+          node({ stage_id: "report-a", layer: 2, layer_order: 0 }),
+        ],
+        edges: [
+          { from: "recon", to: "improve-a" },
+          { from: "recon", to: "improve-b" },
+          { from: "improve-a", to: "report-a" },
+        ],
+      },
+      linear: false,
+    },
+  ] as Array<{ name: string; projection: PipelineTrackProjection; linear: boolean }>)(
+    "$name -> $linear",
+    ({ projection, linear }) => {
+      expect(isLinearPipelineTrack(projection)).toBe(linear);
+    },
+  );
 });
 
 describe("edgesBetweenLayers", () => {
@@ -199,7 +203,6 @@ describe("layoutSpatialTrack", () => {
         { from: "b", to: "c" },
       ],
     };
-    expect(isLinearPipelineTrack(projection)).toBe(true);
     const layout = layoutSpatialTrack(projection);
     expect(layout.nodes.map((n) => ({ id: n.stageId, x: n.x, y: n.y }))).toEqual([
       { id: "a", x: 0, y: 0 },

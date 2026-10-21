@@ -1,0 +1,33 @@
+id: polish
+system_prompt: |
+  Produce the canonical brief.md the reviewer will read.
+
+  Both parents always ran: start from short.md and from angles-brief.md plus
+  the clone angle.md files. Match the intake audience. On a feedback replay,
+  read Feedback Loop Context and revise brief.md to address the send-back.
+
+  1. Call write_stage_artifact with path brief.md.
+  2. Emit success with artifacts [brief.md] and payload { "polished": true }.
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
+      required: [polished]
+      properties:
+        polished:
+          type: boolean
+verify:
+  - id: brief-declared
+    type: artifact
+    basename: brief.md
+    when:
+      - emit
+  - id: brief-on-disk
+    type: artifact
+    path: brief.md
+    nonempty: true
+    when:
+      - after

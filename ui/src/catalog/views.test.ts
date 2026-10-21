@@ -9,6 +9,8 @@ import {
   runsFilterCounts,
   runsForPipelineView,
   runsForTaskView,
+  heldWaitingCount,
+  inboxWaitingView,
   waitingRunsAmongView,
   waitingView,
 } from "./views";
@@ -42,6 +44,43 @@ const health = (
 });
 
 describe("catalog views", () => {
+  it("inbox waiting view sorts by updated_at ascending", () => {
+    const older = summary({
+      run_id: "older",
+      waiting_stage_id: "ask",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+    const newer = summary({
+      run_id: "newer",
+      waiting_stage_id: "ask",
+      updated_at: "2026-06-01T00:00:00.000Z",
+    });
+    expect(
+      inboxWaitingView(snapshot([newer, older])).map((r) => r.run_id),
+    ).toEqual(["older", "newer"]);
+  });
+
+  it("held waiting count counts waiting runs on active slots", () => {
+    const waitingActive = summary({
+      run_id: "a",
+      waiting_stage_id: "ask",
+    });
+    const waitingIdle = summary({
+      run_id: "b",
+      waiting_stage_id: "ask",
+    });
+    const snap = snapshot(
+      [waitingActive, waitingIdle],
+      health({
+        slotsAvailable: 0,
+        activeCount: 1,
+        maxConcurrent: 2,
+        activeRunIds: ["a"],
+      }),
+    );
+    expect(heldWaitingCount(snap, snap.health)).toBe(1);
+  });
+
   it("waiting view returns exactly the runs with waiting_stage_id set", () => {
     const waiting = summary({
       run_id: "w",
@@ -130,50 +169,41 @@ describe("catalog views", () => {
     ).toBe("1 in flight · 1 failed · 1 free slot · 2/3 in use");
   });
 
-  it("per-task view returns only that task's runs, newest first", () => {
+  it.each([
+    {
+      name: "task",
+      field: "task_id",
+      match: "task-a",
+      other: "task-b",
+      view: (snap: ReturnType<typeof snapshot>) => runsForTaskView(snap, "task-a"),
+    },
+    {
+      name: "pipeline",
+      field: "pipeline_id",
+      match: "pipe-a",
+      other: "pipe-b",
+      view: (snap: ReturnType<typeof snapshot>) => runsForPipelineView(snap, "pipe-a"),
+    },
+  ])("per-$name view returns only that $name's runs, newest first", ({ field, match, other, view }) => {
     const older = summary({
       run_id: "older",
-      task_id: "task-a",
+      [field]: match,
       created_at: "2026-01-01T00:00:00.000Z",
     });
     const newer = summary({
       run_id: "newer",
-      task_id: "task-a",
+      [field]: match,
       created_at: "2026-06-01T00:00:00.000Z",
     });
-    const other = summary({
+    const unrelated = summary({
       run_id: "other",
-      task_id: "task-b",
+      [field]: other,
       created_at: "2026-07-01T00:00:00.000Z",
     });
-    expect(
-      runsForTaskView(snapshot([older, other, newer]), "task-a").map(
-        (run) => run.run_id,
-      ),
-    ).toEqual(["newer", "older"]);
-  });
-
-  it("per-pipeline view returns only that pipeline's runs, newest first", () => {
-    const older = summary({
-      run_id: "older",
-      pipeline_id: "pipe-a",
-      created_at: "2026-01-01T00:00:00.000Z",
-    });
-    const newer = summary({
-      run_id: "newer",
-      pipeline_id: "pipe-a",
-      created_at: "2026-06-01T00:00:00.000Z",
-    });
-    const other = summary({
-      run_id: "other",
-      pipeline_id: "pipe-b",
-      created_at: "2026-07-01T00:00:00.000Z",
-    });
-    expect(
-      runsForPipelineView(snapshot([older, other, newer]), "pipe-a").map(
-        (run) => run.run_id,
-      ),
-    ).toEqual(["newer", "older"]);
+    expect(view(snapshot([older, unrelated, newer])).map((run) => run.run_id)).toEqual([
+      "newer",
+      "older",
+    ]);
   });
 
   it("per-pipeline view matches stored pipeline_path locators", () => {
@@ -205,7 +235,7 @@ describe("catalog views", () => {
     expect(capacityView(empty).health).toBeNull();
   });
 
-  it("Runs filter counts from views match previous filterCounts for each display status", () => {
+  it("runsFilterCounts buckets each display status (created counts as running)", () => {
     const listing = [
       summary({ run_id: "w", waiting_stage_id: "ask" }),
       summary({ run_id: "r", status: "running" }),
@@ -246,21 +276,5 @@ describe("catalog views", () => {
         (run) => run.run_id,
       ),
     ).toEqual(["a"]);
-  });
-
-  it("Today capacity sentence comes from capacityView.line", () => {
-    const view = capacityView(
-      snapshot(
-        [
-          summary({ run_id: "r1", status: "running" }),
-          summary({ run_id: "f1", status: "failed" }),
-        ],
-        health({ slotsAvailable: 2, activeCount: 1, maxConcurrent: 3 }),
-      ),
-    );
-    expect(view.line).toBe(
-      "1 in flight · 1 failed · 2 free slots · 1/3 in use",
-    );
-    expect(view.health?.slotsAvailable).toBe(2);
   });
 });

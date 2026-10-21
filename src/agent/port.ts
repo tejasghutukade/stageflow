@@ -7,6 +7,8 @@ import type { TaskFile } from "../types/task.js";
 import type { StageActivityEvent } from "./activity.js";
 import type { ResolvedMcpServers } from "../config/resolveStageMcpServers.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
+import type { StageEmail } from "../email/host.js";
+import type { StageChannels } from "../channels/host.js";
 import type { QaExchange } from "../hitl/qaTrail.js";
 import type { StageUsage } from "../types/usage.js";
 
@@ -17,6 +19,7 @@ export type StageSessionMode =
   | "fresh"
   | "waiting_resume"
   | "feedback_resume"
+  | "timeout_resume"
   | "new_session";
 
 export type StageRepairContext = {
@@ -69,7 +72,13 @@ export type StageRunInput = {
   sessionMode?: StageSessionMode;
   /** Optional observe hook; HITL wait/answer uses openStage beside this. */
   onActivity?: (event: StageActivityEvent) => void;
+  /** Optional raw assistant-text-delta sink, fired alongside onActivity, not instead of it. */
+  onAssistantTextDelta?: (delta: string) => void;
   skillFilePath?: string;
+  email?: StageEmail;
+  channels?: StageChannels;
+  /** Bundled browser skill; set by the runtime when the stage has `browser`. */
+  browserSkillFilePath?: string;
   forkEmitContext?: ForkEmitContext;
   cloneEmitContext?: CloneEmitContext;
   /** Declared source policy; successful emits must continue or send work back. */
@@ -82,6 +91,12 @@ export type StageRunInput = {
   repairContext?: StageRepairContext;
   /** Live attempt-scoped QA trail; read at emit execute time, not bootstrap time. */
   readQaTrail?: () => QaExchange[] | Promise<QaExchange[]>;
+  /** Optional: record the provider-resolved model after resolveCliModel. */
+  onResolvedModel?: (info: {
+    stageId: string;
+    model: string;
+    thinkingLevel?: string;
+  }) => void | Promise<void>;
 };
 
 export function runtimeStageId(input: Pick<StageRunInput, "stage" | "stageId">): string {
@@ -118,14 +133,14 @@ export interface StageHandle {
   close(options?: StageHandleCloseOptions): Promise<void>;
 }
 
-export interface AgentPort {
+export interface StagePort {
   openStage(input: StageRunInput): StageHandle;
   runStage(input: StageRunInput): Promise<StageRunResult>;
 }
 
 /** Thin non-HITL wrapper: open → next; unexpected wait fails closed. */
 export async function runStageViaOpen(
-  port: Pick<AgentPort, "openStage">,
+  port: Pick<StagePort, "openStage">,
   input: StageRunInput,
 ): Promise<StageRunResult> {
   const handle = port.openStage(input);

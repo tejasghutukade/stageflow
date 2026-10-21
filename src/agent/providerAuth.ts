@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { mkdir, writeFile, chmod, access } from "node:fs/promises";
+import path from "node:path";
 import {
   CredentialSynchronizationError,
   ModelRuntime,
@@ -8,14 +11,15 @@ import type {
   AuthPrompt,
   Provider,
 } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import {
-  isUsableAuthFile,
   parseCredentialSource,
-  piHomeAuthPath,
   readCredentialSourceFromContext,
   resolveCredentialBinding,
   writeCredentialSourceToContext,
+  isUsableAuthFile,
 } from "../runtime/credentialBinding.js";
+import { getCursorHostStatus } from "./cursorProvider.js";
 import {
   readPersistedCredentialSourceFromContext,
 } from "../runtime/settingsFile.js";
@@ -51,12 +55,17 @@ export type ProvidersListResult = {
   providers: ProviderSummary[];
 };
 
-export type PiHomeDetectResult = {
-  piHomeUsable: boolean;
+export type ProvidersDetectResult = {
   credentialSource?: CredentialSource;
   provisional: boolean;
   source: CredentialSource;
+  authConfigured: boolean;
+  cursorSdkReady: boolean;
+  cursorApiKeyConfigured: boolean;
 };
+
+/** @deprecated Use ProvidersDetectResult */
+export type PiHomeDetectResult = ProvidersDetectResult;
 
 export type ProviderAuthRuntime = {
   getProviders(): readonly Provider[];
@@ -118,7 +127,29 @@ export class ProviderAuthError extends Error {
 }
 
 const defaultCreateRuntime: CreateProviderAuthRuntime = async (authPath) =>
-  ModelRuntime.create({ authPath, refreshOnCreate: false });
+  ModelRuntime.create({
+    authPath,
+    // ModelRuntime otherwise reads models.json from PI_CODING_AGENT_DIR,
+    // which stays on the process data directory.
+    modelsPath: path.join(path.dirname(authPath), "models.json"),
+    refreshOnCreate: false,
+  });
+
+async function ensurePiAuthFile(authPath: string): Promise<string> {
+  const resolved = path.resolve(authPath);
+  await mkdir(path.dirname(resolved), { recursive: true });
+  try {
+    await access(resolved);
+  } catch {
+    await writeFile(resolved, "{}\n", { encoding: "utf8", mode: 0o600 });
+  }
+  try {
+    await chmod(resolved, 0o600);
+  } catch {
+    // best-effort on non-POSIX
+  }
+  return resolved;
+}
 
 export const defaultContext: ProviderAuthContext = {
   createRuntime: defaultCreateRuntime,
@@ -130,6 +161,38 @@ export async function openRuntime(
   ctx: ProviderAuthContext = defaultContext,
 ): Promise<ProviderAuthRuntime> {
   const binding = resolveCredentialBinding(cwd);
+  return ctx.createRuntime(binding.authPath);
+}
+
+function catalogRuntime(): ProviderAuthRuntime {
+  const providers = builtinProviders();
+  return {
+    getProviders: () => providers,
+    getProvider: (id) => providers.find((provider) => provider.id === id),
+    getProviderAuthStatus: () => ({ configured: false }),
+    listCredentials: async () => [],
+    checkAuth: async () => undefined,
+    login: async () => {
+      throw new ProviderAuthError("Provider login failed", 500);
+    },
+    logout: async () => {
+      throw new ProviderAuthError("Provider logout failed", 500);
+    },
+  };
+}
+
+async function openReadRuntime(
+  cwd: string,
+  ctx: ProviderAuthContext,
+): Promise<ProviderAuthRuntime> {
+  const binding = resolveCredentialBinding(cwd);
+  // ModelRuntime.create writes auth.json when that file is missing.
+  if (
+    ctx.createRuntime === defaultCreateRuntime &&
+    !existsSync(binding.authPath)
+  ) {
+    return catalogRuntime();
+  }
   return ctx.createRuntime(binding.authPath);
 }
 
@@ -241,7 +304,7 @@ export async function listProviders(
   cwd: string,
   ctx: ProviderAuthContext = defaultContext,
 ): Promise<ProvidersListResult> {
-  const runtime = await openRuntime(cwd, ctx);
+  const runtime = await openReadRuntime(cwd, ctx);
   return {
     authShell: "pi",
     via: "pi",
@@ -257,7 +320,7 @@ export async function getAuthStatus(
   providerId?: string,
   ctx: ProviderAuthContext = defaultContext,
 ): Promise<ProviderAuthStatus | ProviderAuthStatus[]> {
-  const runtime = await openRuntime(cwd, ctx);
+  const runtime = await openReadRuntime(cwd, ctx);
   if (providerId !== undefined) {
     if (!runtime.getProvider(providerId)) {
       throw new ProviderAuthError("Provider not found", 404);
@@ -300,6 +363,32 @@ function mapLoginError(err: unknown, providerId: string): never {
   throw new ProviderAuthError("Provider login failed", 500);
 }
 
+async function loginApiKeyOnRuntime(
+  runtime: ProviderAuthRuntime,
+  providerId: string,
+  apiKey: string,
+): Promise<ProviderAuthStatus> {
+  if (typeof apiKey !== "string" || apiKey.trim().length === 0) {
+    throw new ProviderAuthError("apiKey is required", 400);
+  }
+  const provider = runtime.getProvider(providerId);
+  if (!provider) {
+    throw new ProviderAuthError("Provider not found", 404);
+  }
+  if (typeof provider.auth.apiKey?.login !== "function") {
+    throw new ProviderAuthError(
+      "Provider does not support api_key login",
+      400,
+    );
+  }
+  try {
+    await runtime.login(providerId, "api_key", apiKeyInteraction(apiKey));
+  } catch (err) {
+    mapLoginError(err, providerId);
+  }
+  return statusForProvider(runtime, providerId);
+}
+
 export async function loginWithApiKey(
   cwd: string,
   providerId: string,
@@ -311,22 +400,26 @@ export async function loginWithApiKey(
   }
   return ctx.lock.withMutationLock(async () => {
     const runtime = await openRuntime(cwd, ctx);
-    const provider = runtime.getProvider(providerId);
-    if (!provider) {
-      throw new ProviderAuthError("Provider not found", 404);
-    }
-    if (typeof provider.auth.apiKey?.login !== "function") {
-      throw new ProviderAuthError(
-        "Provider does not support api_key login",
-        400,
-      );
-    }
-    try {
-      await runtime.login(providerId, "api_key", apiKeyInteraction(apiKey));
-    } catch (err) {
-      mapLoginError(err, providerId);
-    }
-    return statusForProvider(runtime, providerId);
+    return loginApiKeyOnRuntime(runtime, providerId, apiKey);
+  });
+}
+
+/** Write a provider API key into an existing Pi auth file. Does not create the operator home. */
+export async function configurePiProviderApiKey(
+  options: {
+    authPath: string;
+    providerId: string;
+    apiKey: string;
+  },
+  ctx: ProviderAuthContext = defaultContext,
+): Promise<void> {
+  if (typeof options.authPath !== "string" || options.authPath.trim() === "") {
+    throw new ProviderAuthError("authPath is required", 400);
+  }
+  const authPath = await ensurePiAuthFile(options.authPath);
+  await ctx.lock.withMutationLock(async () => {
+    const runtime = await ctx.createRuntime(authPath);
+    await loginApiKeyOnRuntime(runtime, options.providerId, options.apiKey);
   });
 }
 
@@ -413,15 +506,16 @@ export async function logoutProvider(
   });
 }
 
-export function detectPiHome(cwd: string): PiHomeDetectResult {
+export function detectPiHome(cwd: string): ProvidersDetectResult {
   const projectCtx = resolveProjectContext(cwd);
   const binding = resolveCredentialBinding(projectCtx);
   const persisted = readPersistedCredentialSourceFromContext(projectCtx);
   return {
-    piHomeUsable: isUsableAuthFile(piHomeAuthPath()),
     ...(persisted !== undefined ? { credentialSource: persisted } : {}),
     provisional: binding.provisional,
     source: binding.source,
+    authConfigured: isUsableAuthFile(binding.authPath),
+    ...getCursorHostStatus(),
   };
 }
 
@@ -451,7 +545,7 @@ export function setCredentialSource(
   const parsed = parseCredentialSource(credentialSource);
   if (parsed === undefined) {
     throw new ProviderAuthError(
-      'credentialSource must be "pi_home" or "sf_owned"',
+      'credentialSource must be "sf_owned"',
       400,
     );
   }

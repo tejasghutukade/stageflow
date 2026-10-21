@@ -1,4 +1,5 @@
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type { RunStoreKind } from "../runstore/createStore.js";
 import type { RunStore } from "../runstore/port.js";
@@ -7,14 +8,25 @@ import {
   bootstrapStageflowHost,
   type StageflowHostOptions,
 } from "./bootstrap.js";
+import type { AllowedHosts } from "./allowedHosts.js";
+import { resolveAllowedHosts } from "./allowedHosts.js";
+import type { ControlTokens } from "./controlToken.js";
+import { loadControlTokens } from "./controlToken.js";
 import {
   createHttpHost,
   DEFAULT_PORT,
   type HttpHostEnvelope,
+  type HttpHostRouteContext,
 } from "./createHttpHost.js";
+import { createOperatorRoutes, type OperatorRoutes } from "./http.js";
+import {
+  installShutdownController,
+  makeDrainableHostFromOptional,
+  type ShutdownController,
+} from "./shutdown.js";
 
 export type McpServerOptions = {
-  agent: AgentPort;
+  agent: StagePort;
   cwd?: string;
   agentDir?: string;
   rootDir?: string;
@@ -26,28 +38,61 @@ export type McpServerOptions = {
   providerAuthContext?: ProviderAuthContext;
   mcpStateless?: boolean;
   runChangeBus?: RunChangeBus;
+  allowedHosts?: AllowedHosts;
+  controlTokens?: ControlTokens;
+  requestTimeoutMs?: number;
+  maxConnections?: number;
+  browser?: StageBrowserSupport;
 };
 
 export async function startMcpServer(
   options: McpServerOptions,
-): Promise<HttpHostEnvelope> {
+): Promise<HttpHostEnvelope & { shutdown: ShutdownController }> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
+  const { cwd, agentDir, rootDir } = boot;
+  const providerAuthContext = boot.providerAuthContext;
+  const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
+  const controlTokens = options.controlTokens ?? loadControlTokens();
 
-  return createHttpHost({
+  let shutdown: ShutdownController | undefined;
+  const routes: OperatorRoutes | ((ctx: HttpHostRouteContext) => Promise<boolean>) =
+    boot.serveBlocked !== undefined ||
+    boot.manager === undefined ||
+    boot.store === undefined
+      ? async () => false
+      : createOperatorRoutes({
+          manager: boot.manager,
+          store: boot.store,
+          cwd,
+          agentDir,
+          rootDir,
+          providerAuthContext,
+          allowedHosts,
+          controlTokens,
+          getShutdown: () => shutdown,
+          ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
+        });
+  const envelope = await createHttpHost({
     boot,
     host,
     port,
-    routes: async ({ method, pathname, res, json, boot: b }) => {
-      if (method === "GET" && pathname === "/api/health") {
-        json(res, 200, b.manager.getHealth());
-        return true;
-      }
-      json(res, 404, { error: "Not found" });
-      return true;
-    },
+    allowedHosts,
+    controlTokens,
+    requestTimeoutMs: options.requestTimeoutMs,
+    maxConnections: options.maxConnections,
+    routes,
   });
+  shutdown = installShutdownController({
+    server: envelope.server,
+    host: makeDrainableHostFromOptional(envelope.manager, envelope.store),
+  });
+  envelope.server.on("close", () => {
+    shutdown?.uninstall();
+    if ("dispose" in routes) void routes.dispose();
+  });
+  return { ...envelope, shutdown };
 }
 
 export { DEFAULT_PORT };

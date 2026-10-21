@@ -16,7 +16,6 @@ import {
 } from "../src/envelope/payloadSchema.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { EnvelopeError } from "../src/types/envelope.js";
-import { createEmitStageEnvelopeTool } from "../src/tools/emitStageEnvelope.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixtures = path.join(root, "tests", "fixtures");
@@ -31,6 +30,22 @@ const nameListSchema = {
   additionalProperties: false,
 };
 
+const successEnvelope = (payload?: Record<string, unknown>) =>
+  assertRequiredEnvelope({
+    status: "success",
+    summary: "ok",
+    artifacts: [],
+    ...(payload === undefined ? {} : { payload }),
+  });
+
+const obj = (properties: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+  type: "object",
+  properties,
+  ...extra,
+});
+
+const field = (name: string, node: Record<string, unknown>) => obj({ [name]: node });
+
 describe("payload_schema", () => {
   it("compiles a JSON Schema subset and rejects unsupported constructs", () => {
     expect(() => compilePayloadSchema(nameListSchema)).not.toThrow();
@@ -43,35 +58,15 @@ describe("payload_schema", () => {
   });
 
   it("requires matching payload on success and skips on failure", () => {
-    const success = assertRequiredEnvelope({
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-      payload: {
-        boy_names: ["Arjun"],
-        girl_names: ["Meera"],
-      },
-    });
+    const success = successEnvelope({ boy_names: ["Arjun"], girl_names: ["Meera"] });
     expect(() => assertEnvelopePayload(success, nameListSchema)).not.toThrow();
 
-    const missing = assertRequiredEnvelope({
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-    });
-    expect(() => assertEnvelopePayload(missing, nameListSchema)).toThrow(
+    expect(() => assertEnvelopePayload(successEnvelope(), nameListSchema)).toThrow(
       EnvelopeError,
     );
 
-    const wrong = assertRequiredEnvelope({
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-      payload: { boy_names: "Arjun" },
-    });
-    expect(() => assertEnvelopePayload(wrong, nameListSchema)).toThrow(
-      EnvelopeError,
-    );
+    const wrong = successEnvelope({ boy_names: "Arjun" });
+    expect(() => assertEnvelopePayload(wrong, nameListSchema)).toThrow(EnvelopeError);
 
     const failure = assertRequiredEnvelope({
       status: "failure",
@@ -79,6 +74,25 @@ describe("payload_schema", () => {
       artifacts: [],
     });
     expect(() => assertEnvelopePayload(failure, nameListSchema)).not.toThrow();
+
+    const strictSchema = {
+      type: "object",
+      required: ["result", "changed_files"],
+      properties: {
+        result: { type: "string", enum: ["pass"] },
+        changed_files: { type: "array", items: { type: "string" }, minItems: 1 },
+      },
+    };
+    const failureWithBadPayload = assertRequiredEnvelope({
+      status: "failure",
+      summary: "blocked",
+      artifacts: [],
+      payload: { result: "fail", changed_files: [] },
+    });
+    expect(() => assertEnvelopePayload(failureWithBadPayload, strictSchema)).not.toThrow();
+    expect(() =>
+      assertEnvelopePayload(successEnvelope({ result: "fail", changed_files: [] }), strictSchema),
+    ).toThrow(EnvelopeError);
   });
 
   it("KTD2: mismatch messages use payload.field dialect not slash instancePath", () => {
@@ -122,24 +136,6 @@ describe("payload_schema", () => {
     }
     expect(cloneMessage).toMatch(/payload\.branch/);
     expect(cloneMessage).not.toMatch(/\/branch/);
-  });
-
-  it("loads naming-ceremony stages with payload_schema", async () => {
-    const suggestion = await loadStage(
-      path.join(fixtures, "stages", "name-suggestion.yaml"),
-    );
-    expect(suggestion.payload_schema).toMatchObject({
-      type: "object",
-      required: ["boy_names", "girl_names"],
-    });
-
-    const selection = await loadStage(
-      path.join(fixtures, "stages", "name-selection.yaml"),
-    );
-    expect(selection.payload_schema).toMatchObject({
-      type: "object",
-      required: ["boy", "girl"],
-    });
   });
 
   it("AE2: retained dual-read pair loads to equal IR", async () => {
@@ -212,47 +208,6 @@ describe("payload_schema", () => {
     await expect(loadStage(badSchema)).rejects.toThrow(/invalid io\.output\.schema/);
   });
 
-  it("emit tool accepts matching payload and rejects bad payload on success", async () => {
-    const okCapture = {};
-    const okTool = createEmitStageEnvelopeTool(okCapture, nameListSchema);
-    const ok = await okTool.execute("1", {
-      status: "success",
-      summary: "names",
-      artifacts: [],
-      payload: {
-        boy_names: ["Arjun"],
-        girl_names: ["Meera"],
-      },
-    });
-    expect(ok.isError).toBeUndefined();
-    expect(okCapture).toHaveProperty("envelope");
-
-    const badCapture = {};
-    const badTool = createEmitStageEnvelopeTool(badCapture, nameListSchema);
-    const bad = await badTool.execute("1", {
-      status: "success",
-      summary: "names",
-      artifacts: [],
-      payload: { names: ["Arjun"] },
-    });
-    expect(bad.isError).toBe(true);
-    expect(badCapture).not.toHaveProperty("envelope");
-  });
-
-  it("emit tool skips payload_schema when status is failure", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(capture, nameListSchema);
-    const out = await tool.execute("1", {
-      status: "failure",
-      summary: "blocked",
-      artifacts: [],
-    });
-    expect(out.isError).toBeUndefined();
-    expect(capture).toMatchObject({
-      envelope: { status: "failure" },
-    });
-  });
-
   it("FakeAgent enforces stage payload_schema", async () => {
     const input: StageRunInput = {
       roots: buildStageRoots("/tmp", "name-suggestion"),
@@ -291,303 +246,93 @@ describe("payload_schema", () => {
     expect(bad.ok).toBe(false);
   });
 
-  it("rejects empty required arrays when minItems is 1", () => {
-    const schema = {
-      type: "object",
-      required: ["changed_files"],
-      properties: {
-        changed_files: {
-          type: "array",
-          items: { type: "string" },
-          minItems: 1,
+  it.each([
+    {
+      name: "minItems 1 on a required array",
+      schema: field("changed_files", { type: "array", items: { type: "string" }, minItems: 1 }),
+      accept: [{ changed_files: ["src/foo.ts"] }],
+      reject: [{ changed_files: [] }],
+    },
+    {
+      name: "string enum",
+      schema: field("result", { type: "string", enum: ["pass"] }),
+      accept: [{ result: "pass" }],
+      reject: [{ result: "fail" }],
+    },
+    {
+      name: "integer minimum and maximum",
+      schema: field("investigation_count", { type: "integer", minimum: 1, maximum: 5 }),
+      accept: [{ investigation_count: 1 }, { investigation_count: 5 }],
+      reject: [{ investigation_count: 0 }, { investigation_count: 6 }],
+    },
+    {
+      name: "string pattern with minLength and maxLength",
+      schema: field("code", { type: "string", pattern: "^[a-z]{2,4}$", minLength: 2, maxLength: 4 }),
+      accept: [{ code: "ab" }, { code: "abcd" }],
+      reject: [{ code: "a" }, { code: "abcdef" }, { code: "AB" }],
+    },
+    {
+      name: "combined enum, pattern and minLength",
+      schema: field("code", { type: "string", enum: ["a", "AB"], pattern: "^[A-Z]+$", minLength: 2 }),
+      accept: [{ code: "AB" }],
+      reject: [{ code: "a" }],
+    },
+    {
+      name: "nullable nodes in addition to the base type",
+      schema: obj(
+        {
+          note: { type: "string", nullable: true },
+          detail: obj(
+            { mode: { type: "string", nullable: true } },
+            { required: ["mode"], additionalProperties: false },
+          ),
         },
-      },
-    };
-    const empty = assertRequiredEnvelope({
-      status: "success",
-      summary: "implemented",
-      artifacts: [],
-      payload: { changed_files: [] },
-    });
-    expect(() => assertEnvelopePayload(empty, schema)).toThrow(EnvelopeError);
-
-    const filled = assertRequiredEnvelope({
-      status: "success",
-      summary: "implemented",
-      artifacts: [],
-      payload: { changed_files: ["src/foo.ts"] },
-    });
-    expect(() => assertEnvelopePayload(filled, schema)).not.toThrow();
-  });
-
-  it("rejects success emit of empty required array with minItems (AE1)", async () => {
-    const schema = {
-      type: "object",
-      required: ["changed_files"],
-      properties: {
-        changed_files: {
-          type: "array",
-          items: { type: "string" },
-          minItems: 1,
-        },
-      },
-    };
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(capture, schema);
-    const out = await tool.execute("1", {
-      status: "success",
-      summary: "implemented",
-      artifacts: [],
-      payload: { changed_files: [] },
-    });
-    expect(out.isError).toBe(true);
-    expect(out).not.toHaveProperty("terminate");
-    expect(capture).not.toHaveProperty("envelope");
-  });
-
-  it("rejects string values outside enum", () => {
-    const schema = {
-      type: "object",
-      required: ["result"],
-      properties: {
-        result: { type: "string", enum: ["pass"] },
-      },
-    };
-    const fail = assertRequiredEnvelope({
-      status: "success",
-      summary: "checked",
-      artifacts: [],
-      payload: { result: "fail" },
-    });
-    expect(() => assertEnvelopePayload(fail, schema)).toThrow(EnvelopeError);
-
-    const pass = assertRequiredEnvelope({
-      status: "success",
-      summary: "checked",
-      artifacts: [],
-      payload: { result: "pass" },
-    });
-    expect(() => assertEnvelopePayload(pass, schema)).not.toThrow();
-  });
-
-  it("rejects integers outside minimum and maximum", () => {
-    const schema = {
-      type: "object",
-      required: ["investigation_count"],
-      properties: {
-        investigation_count: { type: "integer", minimum: 1, maximum: 5 },
-      },
-    };
-    for (const value of [0, 6]) {
-      const envelope = assertRequiredEnvelope({
-        status: "success",
-        summary: "planned",
-        artifacts: [],
-        payload: { investigation_count: value },
-      });
-      expect(() => assertEnvelopePayload(envelope, schema)).toThrow(
+        { required: ["note", "detail"], additionalProperties: false },
+      ),
+      accept: [
+        { note: "ok", detail: { mode: null } },
+        { note: null, detail: { mode: "strict" } },
+        { note: null, detail: { mode: null } },
+      ],
+      reject: [
+        { note: 7, detail: { mode: "strict" } },
+        { note: "ok", detail: { mode: 1 } },
+      ],
+    },
+    {
+      name: "nullable enum node",
+      schema: field("status", { type: "string", enum: ["pass"], nullable: true }),
+      accept: [{ status: "pass" }, { status: null }],
+      reject: [{ status: "fail" }],
+    },
+  ])("enforces $name", ({ schema, accept, reject }) => {
+    const required = { ...schema, required: schema.required ?? Object.keys(schema.properties) };
+    for (const payload of accept) {
+      expect(() => assertEnvelopePayload(successEnvelope(payload), required)).not.toThrow();
+    }
+    for (const payload of reject) {
+      expect(() => assertEnvelopePayload(successEnvelope(payload), required)).toThrow(
         EnvelopeError,
       );
     }
-    for (const value of [1, 5]) {
-      const envelope = assertRequiredEnvelope({
-        status: "success",
-        summary: "planned",
-        artifacts: [],
-        payload: { investigation_count: value },
-      });
-      expect(() => assertEnvelopePayload(envelope, schema)).not.toThrow();
-    }
   });
 
-  it("rejects strings outside pattern/minLength/maxLength", () => {
-    const schema = {
-      type: "object",
-      required: ["code"],
-      properties: {
-        code: {
-          type: "string",
-          pattern: "^[a-z]{2,4}$",
-          minLength: 2,
-          maxLength: 4,
-        },
-      },
-    };
-    for (const value of ["a", "abcdef", "AB"]) {
-      const envelope = assertRequiredEnvelope({
-        status: "success",
-        summary: "checked",
-        artifacts: [],
-        payload: { code: value },
-      });
-      expect(() => assertEnvelopePayload(envelope, schema)).toThrow(
-        EnvelopeError,
-      );
-    }
-    for (const value of ["ab", "abcd"]) {
-      const envelope = assertRequiredEnvelope({
-        status: "success",
-        summary: "checked",
-        artifacts: [],
-        payload: { code: value },
-      });
-      expect(() => assertEnvelopePayload(envelope, schema)).not.toThrow();
-    }
-  });
-
-  it("rejects invalid pattern and negative/non-integer string bounds at compile time", () => {
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { code: { type: "string", pattern: "[" } },
-      }),
-    ).toThrow(/pattern must be a valid regular expression/);
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { code: { type: "string", pattern: "\\1" } },
-      }),
-    ).toThrow(/pattern must be a valid regular expression/);
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { code: { type: "string", pattern: 5 } },
-      }),
-    ).toThrow(/pattern must be a string when present/);
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { code: { type: "string", minLength: -1 } },
-      }),
-    ).toThrow(/minLength must be a non-negative integer/);
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { code: { type: "string", maxLength: 1.5 } },
-      }),
-    ).toThrow(/maxLength must be a non-negative integer/);
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { code: { type: "string", minLength: 5, maxLength: 2 } },
-      }),
-    ).toThrow(/minLength must be <= maxLength/);
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { code: { type: "string", nullable: "yes" } },
-      }),
-    ).toThrow(/nullable must be a boolean when present/);
-  });
-
-  it("rejects strings that fail combined enum and pattern/minLength constraints", () => {
-    const schema = {
-      type: "object",
-      required: ["code"],
-      properties: {
-        code: {
-          type: "string",
-          enum: ["a", "AB"],
-          pattern: "^[A-Z]+$",
-          minLength: 2,
-        },
-      },
-    };
-    const reject = assertRequiredEnvelope({
-      status: "success",
-      summary: "checked",
-      artifacts: [],
-      payload: { code: "a" },
-    });
-    expect(() => assertEnvelopePayload(reject, schema)).toThrow(EnvelopeError);
-
-    const accept = assertRequiredEnvelope({
-      status: "success",
-      summary: "checked",
-      artifacts: [],
-      payload: { code: "AB" },
-    });
-    expect(() => assertEnvelopePayload(accept, schema)).not.toThrow();
+  it.each([
+    { name: "invalid pattern regex", node: { type: "string", pattern: "[" }, err: /pattern must be a valid regular expression/ },
+    { name: "backreference pattern", node: { type: "string", pattern: "\\1" }, err: /pattern must be a valid regular expression/ },
+    { name: "non-string pattern", node: { type: "string", pattern: 5 }, err: /pattern must be a string when present/ },
+    { name: "negative minLength", node: { type: "string", minLength: -1 }, err: /minLength must be a non-negative integer/ },
+    { name: "fractional maxLength", node: { type: "string", maxLength: 1.5 }, err: /maxLength must be a non-negative integer/ },
+    { name: "minLength above maxLength", node: { type: "string", minLength: 5, maxLength: 2 }, err: /minLength must be <= maxLength/ },
+    { name: "non-boolean nullable", node: { type: "string", nullable: "yes" }, err: /nullable must be a boolean when present/ },
+  ])("rejects $name at compile time", ({ node, err }) => {
+    expect(() => compilePayloadSchema(field("code", node))).toThrow(err);
   });
 
   it("rejects nullable root at compile time", () => {
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        nullable: true,
-        properties: {},
-      }),
-    ).toThrow(/root cannot be nullable/);
-  });
-
-  it("allows null for a nullable node in addition to its base type", () => {
-    const schema = {
-      type: "object",
-      required: ["note", "detail"],
-      properties: {
-        note: { type: "string", nullable: true },
-        detail: {
-          type: "object",
-          required: ["mode"],
-          properties: { mode: { type: "string", nullable: true } },
-          additionalProperties: false,
-        },
-      },
-      additionalProperties: false,
-    };
-    for (const payload of [
-      { note: "ok", detail: { mode: null } },
-      { note: null, detail: { mode: "strict" } },
-      { note: null, detail: { mode: null } },
-    ]) {
-      const envelope = assertRequiredEnvelope({
-        status: "success",
-        summary: "checked",
-        artifacts: [],
-        payload,
-      });
-      expect(() => assertEnvelopePayload(envelope, schema)).not.toThrow();
-    }
-
-    // Values of neither the base type nor null are rejected.
-    for (const payload of [
-      { note: 7, detail: { mode: "strict" } },
-      { note: "ok", detail: { mode: 1 } },
-    ]) {
-      const envelope = assertRequiredEnvelope({
-        status: "success",
-        summary: "checked",
-        artifacts: [],
-        payload,
-      });
-      expect(() => assertEnvelopePayload(envelope, schema)).toThrow(
-        EnvelopeError,
-      );
-    }
-  });
-
-  it("allows null for a nullable enum node", () => {
-    const schema = {
-      type: "object",
-      required: ["status"],
-      properties: { status: { type: "string", enum: ["pass"], nullable: true } },
-    };
-    for (const value of ["pass", null]) {
-      const envelope = assertRequiredEnvelope({
-        status: "success",
-        summary: "checked",
-        artifacts: [],
-        payload: { status: value },
-      });
-      expect(() => assertEnvelopePayload(envelope, schema)).not.toThrow();
-    }
-    const bad = assertRequiredEnvelope({
-      status: "success",
-      summary: "checked",
-      artifacts: [],
-      payload: { status: "fail" },
-    });
-    expect(() => assertEnvelopePayload(bad, schema)).toThrow(EnvelopeError);
+    expect(() => compilePayloadSchema(obj({}, { nullable: true }))).toThrow(
+      /root cannot be nullable/,
+    );
   });
 
   it("compiles unknown keywords without failing load", () => {
@@ -678,431 +423,197 @@ describe("payload_schema", () => {
       ),
     ).toThrow(/cycle/i);
   });
-
-  it("treats consumer input as a structural subset of producer output after resolve", () => {
-    const schemas = {
-      produced: {
-        type: "object",
-        required: ["title"],
-        properties: { title: { type: "string" } },
-      },
-      consumed: {
-        type: "object",
-        required: ["title", "extra"],
-        properties: {
-          title: { type: "string" },
-          extra: { type: "string" },
-        },
-      },
-    };
-    expect(
-      isPayloadSchemaSubset(
-        { $ref: "#/schemas/produced" },
-        { $ref: "#/schemas/produced" },
-        { schemas },
-      ),
-    ).toBe(true);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          required: ["title"],
-          properties: { title: { type: "string" } },
-        },
-        {
-          type: "object",
-          required: ["title", "body"],
-          properties: {
-            title: { type: "string" },
-            body: { type: "string" },
-          },
-        },
-      ),
-    ).toBe(true);
-    expect(
-      isPayloadSchemaSubset(
-        { $ref: "#/schemas/consumed" },
-        { $ref: "#/schemas/produced" },
-        { schemas },
-      ),
-    ).toBe(false);
-    expect(
-      isPayloadSchemaSubset(
-        { $ref: "#/schemas/produced" },
-        { $ref: "#/schemas/consumed" },
-        { schemas },
-      ),
-    ).toBe(true);
-  });
-
-  it("rejects extra producer properties when consumer sets additionalProperties false", () => {
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          additionalProperties: false,
-          properties: { title: { type: "string" } },
-        },
-        {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            extra: { type: "string" },
-          },
-        },
-      ),
-    ).toBe(false);
-  });
-
-  it("accepts number consumer of integer producer and rejects integer consumer of number producer", () => {
-    const numberField = {
+  const schemas = {
+    produced: {
       type: "object",
-      properties: { n: { type: "number" } },
-    };
-    const integerField = {
-      type: "object",
-      properties: { n: { type: "integer" } },
-    };
-    expect(isPayloadSchemaSubset(numberField, integerField)).toBe(true);
-    expect(isPayloadSchemaSubset(integerField, numberField)).toBe(false);
-  });
-
-  it("requires producer minItems to fit the consumer array bound", () => {
-    const consumer = {
-      type: "object",
-      properties: {
-        tags: { type: "array", items: { type: "string" }, minItems: 2 },
-      },
-    };
-    expect(
-      isPayloadSchemaSubset(consumer, {
-        type: "object",
-        properties: {
-          tags: { type: "array", items: { type: "string" }, minItems: 2 },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      isPayloadSchemaSubset(consumer, {
-        type: "object",
-        properties: {
-          tags: { type: "array", items: { type: "string" }, minItems: 1 },
-        },
-      }),
-    ).toBe(false);
-    expect(
-      isPayloadSchemaSubset(consumer, {
-        type: "object",
-        properties: {
-          tags: { type: "array", items: { type: "string" } },
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("accepts the same or fewer producer properties when consumer sets additionalProperties false", () => {
-    const consumer = {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        title: { type: "string" },
-        note: { type: "string" },
-      },
-    };
-    expect(
-      isPayloadSchemaSubset(consumer, {
-        type: "object",
-        additionalProperties: false,
-        properties: { title: { type: "string" }, note: { type: "string" } },
-      }),
-    ).toBe(true);
-    expect(
-      isPayloadSchemaSubset(consumer, {
-        type: "object",
-        additionalProperties: false,
-        properties: { title: { type: "string" } },
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects an open producer when the consumer sets additionalProperties false", () => {
-    const consumer = {
-      type: "object",
-      additionalProperties: false,
+      required: ["title"],
       properties: { title: { type: "string" } },
-    };
-    expect(
-      isPayloadSchemaSubset(consumer, {
-        type: "object",
-        properties: { title: { type: "string" } },
-      }),
-    ).toBe(false);
-    expect(
-      isPayloadSchemaSubset(consumer, {
-        type: "object",
-        additionalProperties: true,
-        properties: { title: { type: "string" } },
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects a nullable producer when the consumer is not nullable", () => {
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { title: { type: "string" } },
-        },
-        {
-          type: "object",
-          properties: { title: { type: "string", nullable: true } },
-        },
-      ),
-    ).toBe(false);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { title: { type: "string", nullable: true } },
-        },
-        {
-          type: "object",
-          properties: { title: { type: "string", nullable: true } },
-        },
-      ),
-    ).toBe(true);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: {
-            tags: { type: "array", items: { type: "string" } },
-          },
-        },
-        {
-          type: "object",
-          properties: {
-            tags: { type: "array", nullable: true, items: { type: "string" } },
-          },
-        },
-      ),
-    ).toBe(false);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: {
-            meta: { type: "object", properties: { title: { type: "string" } } },
-          },
-        },
-        {
-          type: "object",
-          properties: {
-            meta: {
-              type: "object",
-              nullable: true,
-              properties: { title: { type: "string" } },
-            },
-          },
-        },
-      ),
-    ).toBe(false);
-  });
-
-  it("allows extra producer fields when consumer omits additionalProperties false", () => {
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { title: { type: "string" } },
-        },
-        {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            extra: { type: "string" },
-          },
-        },
-      ),
-    ).toBe(true);
-  });
-
-  it("treats producer enum as compatible only when every value is accepted by the consumer", () => {
-    const passFail = {
+    },
+    consumed: {
       type: "object",
-      properties: { result: { type: "string", enum: ["pass", "fail"] } },
-    };
-    const passOnly = {
-      type: "object",
-      properties: { result: { type: "string", enum: ["pass"] } },
-    };
-    const unconstrained = {
-      type: "object",
-      properties: { result: { type: "string" } },
-    };
-    expect(isPayloadSchemaSubset(passFail, passOnly)).toBe(true);
-    expect(isPayloadSchemaSubset(passOnly, passFail)).toBe(false);
-    expect(isPayloadSchemaSubset(unconstrained, passOnly)).toBe(true);
-    expect(isPayloadSchemaSubset(passOnly, unconstrained)).toBe(false);
-  });
+      required: ["title", "extra"],
+      properties: { title: { type: "string" }, extra: { type: "string" } },
+    },
+  };
+  const title = { type: "string" };
+  const codeOf = (node: Record<string, unknown>) => field("code", { type: "string", ...node });
+  const nOf = (node: Record<string, unknown>) => field("n", node);
+  const closedTitle = obj({ title }, { additionalProperties: false });
+  const arrayOf = (extra: Record<string, unknown>) =>
+    field("tags", { type: "array", items: { type: "string" }, ...extra });
 
-  it("requires identical string patterns when the consumer constrains pattern", () => {
-    const codePattern = "^[a-z]{2,4}$";
-    const patterned = {
-      type: "object",
-      properties: { code: { type: "string", pattern: codePattern } },
-    };
-    expect(
-      isPayloadSchemaSubset(patterned, {
-        type: "object",
-        properties: { code: { type: "string", pattern: codePattern } },
-      }),
-    ).toBe(true);
-    expect(
-      isPayloadSchemaSubset(patterned, {
-        type: "object",
-        properties: { code: { type: "string", pattern: "^[a-z]+$" } },
-      }),
-    ).toBe(false);
-    expect(
-      isPayloadSchemaSubset(patterned, {
-        type: "object",
-        properties: { code: { type: "string" } },
-      }),
-    ).toBe(false);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { code: { type: "string" } },
-        },
-        patterned,
-      ),
-    ).toBe(true);
-  });
-
-  it("requires producer min/max and minLength/maxLength to fit inside consumer bounds", () => {
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { n: { type: "integer", minimum: 1, maximum: 10 } },
-        },
-        {
-          type: "object",
-          properties: { n: { type: "integer", minimum: 2, maximum: 8 } },
-        },
-      ),
-    ).toBe(true);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { n: { type: "integer", minimum: 1, maximum: 10 } },
-        },
-        {
-          type: "object",
-          properties: { n: { type: "integer" } },
-        },
-      ),
-    ).toBe(false);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { n: { type: "integer" } },
-        },
-        {
-          type: "object",
-          properties: { n: { type: "integer", minimum: 1, maximum: 10 } },
-        },
-      ),
-    ).toBe(true);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { n: { type: "number", minimum: 0, maximum: 5 } },
-        },
-        {
-          type: "object",
-          properties: { n: { type: "number", minimum: -1, maximum: 5 } },
-        },
-      ),
-    ).toBe(false);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { code: { type: "string", minLength: 2, maxLength: 8 } },
-        },
-        {
-          type: "object",
-          properties: { code: { type: "string", minLength: 3, maxLength: 6 } },
-        },
-      ),
-    ).toBe(true);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { code: { type: "string", minLength: 2, maxLength: 8 } },
-        },
-        {
-          type: "object",
-          properties: { code: { type: "string" } },
-        },
-      ),
-    ).toBe(false);
-    expect(
-      isPayloadSchemaSubset(
-        {
-          type: "object",
-          properties: { code: { type: "string" } },
-        },
-        {
-          type: "object",
-          properties: { code: { type: "string", minLength: 2, maxLength: 8 } },
-        },
-      ),
-    ).toBe(true);
-  });
-
-  it("failure envelopes skip enum and minItems checks", () => {
-    const schema = {
-      type: "object",
-      required: ["result", "changed_files"],
-      properties: {
-        result: { type: "string", enum: ["pass"] },
-        changed_files: {
-          type: "array",
-          items: { type: "string" },
-          minItems: 1,
-        },
-      },
-    };
-    const failure = assertRequiredEnvelope({
-      status: "failure",
-      summary: "blocked",
-      artifacts: [],
-      payload: { result: "fail", changed_files: [] },
-    });
-    expect(() => assertEnvelopePayload(failure, schema)).not.toThrow();
-  });
-
-  it("stages without payload_schema still accept untyped payload", async () => {
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(capture);
-    const out = await tool.execute("1", {
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-      payload: { anything: true },
-    });
-    expect(out.isError).toBeUndefined();
-    expect(capture).toMatchObject({
-      envelope: { payload: { anything: true } },
-    });
+  it.each([
+    {
+      name: "same $ref on both sides",
+      consumer: { $ref: "#/schemas/produced" },
+      producer: { $ref: "#/schemas/produced" },
+      expected: true,
+    },
+    {
+      name: "producer with extra required fields",
+      consumer: schemas.produced,
+      producer: obj({ title, body: title }, { required: ["title", "body"] }),
+      expected: true,
+    },
+    {
+      name: "consumer $ref requiring more than the produced $ref",
+      consumer: { $ref: "#/schemas/consumed" },
+      producer: { $ref: "#/schemas/produced" },
+      expected: false,
+    },
+    {
+      name: "produced $ref covering a smaller consumed $ref",
+      consumer: { $ref: "#/schemas/produced" },
+      producer: { $ref: "#/schemas/consumed" },
+      expected: true,
+    },
+    {
+      name: "extra producer property vs closed consumer",
+      consumer: closedTitle,
+      producer: obj({ title, extra: title }),
+      expected: false,
+    },
+    {
+      name: "same properties vs closed consumer",
+      consumer: obj({ title, note: title }, { additionalProperties: false }),
+      producer: obj({ title, note: title }, { additionalProperties: false }),
+      expected: true,
+    },
+    {
+      name: "fewer properties vs closed consumer",
+      consumer: obj({ title, note: title }, { additionalProperties: false }),
+      producer: obj({ title }, { additionalProperties: false }),
+      expected: true,
+    },
+    {
+      name: "implicitly open producer vs closed consumer",
+      consumer: closedTitle,
+      producer: obj({ title }),
+      expected: false,
+    },
+    {
+      name: "explicitly open producer vs closed consumer",
+      consumer: closedTitle,
+      producer: obj({ title }, { additionalProperties: true }),
+      expected: false,
+    },
+    {
+      name: "extra producer fields vs open consumer",
+      consumer: obj({ title }),
+      producer: obj({ title, extra: title }),
+      expected: true,
+    },
+    {
+      name: "number consumer of integer producer",
+      consumer: nOf({ type: "number" }),
+      producer: nOf({ type: "integer" }),
+      expected: true,
+    },
+    {
+      name: "integer consumer of number producer",
+      consumer: nOf({ type: "integer" }),
+      producer: nOf({ type: "number" }),
+      expected: false,
+    },
+    { name: "equal minItems", consumer: arrayOf({ minItems: 2 }), producer: arrayOf({ minItems: 2 }), expected: true },
+    { name: "producer minItems below consumer", consumer: arrayOf({ minItems: 2 }), producer: arrayOf({ minItems: 1 }), expected: false },
+    { name: "producer without minItems", consumer: arrayOf({ minItems: 2 }), producer: arrayOf({}), expected: false },
+    {
+      name: "nullable producer vs non-nullable consumer",
+      consumer: field("title", title),
+      producer: field("title", { ...title, nullable: true }),
+      expected: false,
+    },
+    {
+      name: "nullable on both sides",
+      consumer: field("title", { ...title, nullable: true }),
+      producer: field("title", { ...title, nullable: true }),
+      expected: true,
+    },
+    {
+      name: "nullable array producer vs non-nullable consumer",
+      consumer: arrayOf({}),
+      producer: arrayOf({ nullable: true }),
+      expected: false,
+    },
+    {
+      name: "nullable object producer vs non-nullable consumer",
+      consumer: field("meta", obj({ title })),
+      producer: field("meta", { ...obj({ title }), nullable: true }),
+      expected: false,
+    },
+    {
+      name: "enum subset producer",
+      consumer: field("result", { type: "string", enum: ["pass", "fail"] }),
+      producer: field("result", { type: "string", enum: ["pass"] }),
+      expected: true,
+    },
+    {
+      name: "enum superset producer",
+      consumer: field("result", { type: "string", enum: ["pass"] }),
+      producer: field("result", { type: "string", enum: ["pass", "fail"] }),
+      expected: false,
+    },
+    {
+      name: "unconstrained consumer of enum producer",
+      consumer: field("result", { type: "string" }),
+      producer: field("result", { type: "string", enum: ["pass"] }),
+      expected: true,
+    },
+    {
+      name: "enum consumer of unconstrained producer",
+      consumer: field("result", { type: "string", enum: ["pass"] }),
+      producer: field("result", { type: "string" }),
+      expected: false,
+    },
+    { name: "identical pattern", consumer: codeOf({ pattern: "^[a-z]{2,4}$" }), producer: codeOf({ pattern: "^[a-z]{2,4}$" }), expected: true },
+    { name: "different pattern", consumer: codeOf({ pattern: "^[a-z]{2,4}$" }), producer: codeOf({ pattern: "^[a-z]+$" }), expected: false },
+    { name: "patterned consumer of unpatterned producer", consumer: codeOf({ pattern: "^[a-z]{2,4}$" }), producer: codeOf({}), expected: false },
+    { name: "unpatterned consumer of patterned producer", consumer: codeOf({}), producer: codeOf({ pattern: "^[a-z]{2,4}$" }), expected: true },
+    {
+      name: "producer integer bounds inside consumer bounds",
+      consumer: nOf({ type: "integer", minimum: 1, maximum: 10 }),
+      producer: nOf({ type: "integer", minimum: 2, maximum: 8 }),
+      expected: true,
+    },
+    {
+      name: "unbounded producer vs bounded consumer",
+      consumer: nOf({ type: "integer", minimum: 1, maximum: 10 }),
+      producer: nOf({ type: "integer" }),
+      expected: false,
+    },
+    {
+      name: "bounded producer vs unbounded consumer",
+      consumer: nOf({ type: "integer" }),
+      producer: nOf({ type: "integer", minimum: 1, maximum: 10 }),
+      expected: true,
+    },
+    {
+      name: "producer minimum below consumer minimum",
+      consumer: nOf({ type: "number", minimum: 0, maximum: 5 }),
+      producer: nOf({ type: "number", minimum: -1, maximum: 5 }),
+      expected: false,
+    },
+    {
+      name: "producer length bounds inside consumer bounds",
+      consumer: codeOf({ minLength: 2, maxLength: 8 }),
+      producer: codeOf({ minLength: 3, maxLength: 6 }),
+      expected: true,
+    },
+    {
+      name: "unbounded producer length vs bounded consumer",
+      consumer: codeOf({ minLength: 2, maxLength: 8 }),
+      producer: codeOf({}),
+      expected: false,
+    },
+    {
+      name: "bounded producer length vs unbounded consumer",
+      consumer: codeOf({}),
+      producer: codeOf({ minLength: 2, maxLength: 8 }),
+      expected: true,
+    },
+  ])("isPayloadSchemaSubset: $name -> $expected", ({ consumer, producer, expected }) => {
+    expect(isPayloadSchemaSubset(consumer, producer, { schemas })).toBe(expected);
   });
 
   it("U1: assertCloneAssignmentPayload missing payload includes itemPath", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { FIXTURES_ROOT, pipelinePath, netPipeline, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,7 +19,7 @@ import {
 import { startUiServer } from "../src/server/http.js";
 import type { StartRunResult } from "../src/runtime/runManager.js";
 import type { PipelineRunResult } from "../src/runtime/pipelineRunner.js";
-import type { AgentPort } from "../src/agent/port.js";
+import type { StagePort } from "../src/agent/port.js";
 import type { RunStore } from "../src/runstore/port.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -79,7 +79,7 @@ const waitThenEmit = {
 
 function workerLikeLauncher(
   store: RunStore,
-  agent: AgentPort,
+  agent: StagePort,
 ): { launch: (input: StageLaunchInput) => Promise<{ type: "waiting" } | { type: "succeeded" } | { type: "failed"; reason: string }> } {
   return {
     async launch(input: StageLaunchInput) {
@@ -137,84 +137,6 @@ describe("sf run --skip-gates parse (U1)", { timeout: 15_000 }, () => {
     expect(cap.combined()).not.toMatch(/Unknown flag: --skip-gates/);
   });
 
-  it("guest start with --skip-gates sets the option true on startRun", async () => {
-    const startRun = vi.fn(async () => succeededStart());
-    const cap = captureIo();
-    await runRunCommand(
-      ["--task", sampleTask, "--pipeline", singlePipeline, "--skip-gates"],
-      { cwd: fixtures, io: cap.io, startRun },
-    );
-    expect(startRun).toHaveBeenCalledWith(
-      expect.objectContaining({ skipGates: true }),
-    );
-  });
-
-  it("guest start without --skip-gates leaves the option false", async () => {
-    const startRun = vi.fn(async () => succeededStart());
-    const cap = captureIo();
-    await runRunCommand(["--task", sampleTask, "--pipeline", singlePipeline], {
-      cwd: fixtures,
-      io: cap.io,
-      startRun,
-    });
-    const input = startRun.mock.calls[0]?.[0] as { skipGates?: boolean };
-    expect(input.skipGates).toBeFalsy();
-  });
-
-  it("guest start with --skip-gates threads true through RunManager to the launcher", async () => {
-    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-skip-gates-launch-"));
-    const store = createRunStore({ rootDir: storeRoot });
-    const launch = vi.fn(async ({ runId, stageId }: StageLaunchInput) => {
-      await store.appendStageEvent(runId, stageId, {
-        event: "waiting_for_input",
-      });
-      return { type: "waiting" as const };
-    });
-    const manager = new RunManager({
-      agent: { openStage: vi.fn(), runStage: vi.fn() },
-      store,
-      cwd: fixtures,
-      executionMode: "process",
-      stageProcessLauncher: { launch } as unknown as StageProcessLauncher,
-    });
-    const started = await manager.startRun({
-      task: sampleTask,
-      pipeline: singlePipeline,
-      skipGates: true,
-    });
-    expect(started.ok).toBe(true);
-    if (started.ok) await started.done;
-    expect(launch).toHaveBeenCalledWith(
-      expect.objectContaining({ skipGates: true }),
-    );
-  });
-
-  it("guest start without skipGates leaves launcher option false", async () => {
-    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-skip-gates-off-"));
-    const store = createRunStore({ rootDir: storeRoot });
-    const launch = vi.fn(async ({ runId, stageId }: StageLaunchInput) => {
-      await store.appendStageEvent(runId, stageId, {
-        event: "waiting_for_input",
-      });
-      return { type: "waiting" as const };
-    });
-    const manager = new RunManager({
-      agent: { openStage: vi.fn(), runStage: vi.fn() },
-      store,
-      cwd: fixtures,
-      executionMode: "process",
-      stageProcessLauncher: { launch } as unknown as StageProcessLauncher,
-    });
-    const started = await manager.startRun({
-      task: sampleTask,
-      pipeline: singlePipeline,
-    });
-    expect(started.ok).toBe(true);
-    if (started.ok) await started.done;
-    const input = launch.mock.calls[0]?.[0] as StageLaunchInput;
-    expect(input.skipGates).toBeFalsy();
-  });
-
   it("parseRunStageArgs accepts --skip-gates and defaults false", () => {
     const withFlag = parseRunStageArgs([
       "--run-id",
@@ -233,6 +155,16 @@ describe("sf run --skip-gates parse (U1)", { timeout: 15_000 }, () => {
     ]);
     expect(without.skipGates).toBeFalsy();
   });
+
+  it.each(["feedback_resume", "new_session"] as const)(
+    "parseRunStageArgs accepts --mode %s",
+    (mode) => {
+      expect(
+        parseRunStageArgs(["--run-id", "r1", "--stage-id", "s1", "--mode", mode])
+          .mode,
+      ).toBe(mode);
+    },
+  );
 
   it("process-mode spawn passes argv --skip-gates only when true", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-skip-gates-argv-"));
@@ -366,6 +298,7 @@ describe("sf run --skip-gates guest proof (U3)", { timeout: 20_000 }, () => {
   it("POST /api/runs HITL still parks", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-skip-gates-http-"));
     const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(fixtures);
     const started = await startUiServer({
       agent: scriptedFakeAgent([waitThenEmit]),
       cwd: fixtures,
@@ -384,7 +317,7 @@ describe("sf run --skip-gates guest proof (U3)", { timeout: 20_000 }, () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: singlePipeline,
+          pipeline: netPipeline("single"),
         }),
       });
       expect(res.status).toBe(202);

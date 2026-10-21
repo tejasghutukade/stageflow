@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
 import type { StageUsage } from "../src/types/usage.js";
+import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { SqliteRunStore } from "../src/runstore/sqlite/SqliteRunStore.js";
 import {
   attemptAgentDir,
@@ -138,6 +139,70 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     ).rejects.toThrow(/not found/);
   });
 
+  it("readEnvelope(attempt) returns that execution envelope; omit is latest", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-env-att-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await seedTwoAttempts(store, run.runId, "build");
+
+    await expect(store.readEnvelope(run.runId, "build", 1)).resolves.toEqual({
+      status: "failure",
+      summary: "fail",
+      artifacts: [],
+    });
+    await expect(store.readEnvelope(run.runId, "build")).resolves.toEqual({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+    });
+  });
+
+  it("readEnvelope(attempt) rejects when the execution is missing", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-env-miss-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await seedTwoAttempts(store, run.runId, "build");
+
+    await expect(store.readEnvelope(run.runId, "build", 99)).rejects.toThrow(
+      /not found/,
+    );
+  });
+
+  it("readEnvelope(attempt) rejects a null execution envelope instead of stages fallback", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-env-null-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.writeEnvelope(
+      run.runId,
+      "build",
+      { status: "success", summary: "latest-stages", artifacts: [] },
+      { attempt: 1 },
+    );
+    await store.createStageExecution(run.runId, "build");
+
+    await expect(store.readEnvelope(run.runId, "build", 2)).rejects.toThrow(
+      `Envelope not found: ${run.runId}/build`,
+    );
+    await expect(store.readEnvelope(run.runId, "build")).resolves.toEqual({
+      status: "success",
+      summary: "latest-stages",
+      artifacts: [],
+    });
+  });
+
   it("listStageEvents filters by attempt", async () => {
     const root = await mkdtemp(path.join(tmpdir(), `sf-exec-events-${kind}-`));
     const store = createRunStore({ rootDir: root, kind });
@@ -256,6 +321,9 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     const ws = store.getWorkspaceDir(run.runId);
     await expect(access(attemptArtifactsDir(ws, "build", 1))).resolves.toBeUndefined();
     await expect(access(attemptAgentDir(ws, "build", 1))).resolves.toBeUndefined();
+    await expect(
+      access(path.join(ws, "stages", "build", ".pi-agent")),
+    ).rejects.toThrow();
     expect(attemptLogPath(ws, "build", 1)).toContain(
       path.join("stages", "build", "attempts", "1", "log.jsonl"),
     );
@@ -267,6 +335,21 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     expect(attemptWorkspaceDir(ws, "build", 2)).toContain(
       path.join("stages", "build", "attempts", "2"),
     );
+  });
+
+  it("updatePipelineDag round-trips stage_ids through readRunMeta", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-dag-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const frozen = linearCompatDagSnapshot(["detect", "author-diagrams", "collect"]);
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      pipelineDag: frozen,
+    });
+    const stageIds = ["detect", "author-diagrams~1", "author-diagrams~2", "collect"];
+    await store.updatePipelineDag(run.runId, { ...frozen, stage_ids: stageIds });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.pipeline_dag?.stage_ids).toEqual(stageIds);
   });
 
   it("AE4: readRun for retried stage returns latest-attempt envelope", async () => {
@@ -376,6 +459,58 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     const build = detail.stages.find((s) => s.stage_id === "build");
     expect(build?.cost_usd).toBeCloseTo(0.03, 10);
     expect(detail.total_cost_usd).toBeCloseTo(0.03, 10);
+    expect(build?.usage).toBeUndefined();
+  });
+
+  it("merges usage across retried attempts per model", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-usage-sum-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const breakdown = (input: number, output: number, cost: number) => ({
+      inputTokens: input,
+      outputTokens: output,
+      cacheReadInputTokens: 10,
+      cacheCreationInputTokens: 5,
+      costUsd: cost,
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.appendStageEvent(run.runId, "build", { event: "started" }, { attempt: 1 });
+    await store.appendStageEvent(run.runId, "build", { event: "failed", reason: "x" }, { attempt: 1 });
+    await store.updateStageExecution(run.runId, "build", 1, {
+      status: "failed",
+      cost_usd: 0.01,
+      usage: { costUsd: 0.01, models: { "anthropic/sonnet": breakdown(100, 20, 0.01) } },
+    });
+    await store.createStageExecution(run.runId, "build");
+    await store.appendStageEvent(run.runId, "build", { event: "started" }, { attempt: 2 });
+    await store.appendStageEvent(run.runId, "build", { event: "succeeded" }, { attempt: 2 });
+    await store.updateStageExecution(run.runId, "build", 2, {
+      status: "succeeded",
+      cost_usd: 0.03,
+      usage: {
+        costUsd: 0.03,
+        models: {
+          "anthropic/sonnet": breakdown(200, 40, 0.02),
+          "openai/gpt": breakdown(1, 1, 0.01),
+        },
+      },
+    });
+
+    const detail = await store.readRun(run.runId);
+    const build = detail.stages.find((s) => s.stage_id === "build");
+    expect(build?.usage?.costUsd).toBeCloseTo(0.04, 10);
+    expect(build?.usage?.models["anthropic/sonnet"]).toMatchObject({
+      inputTokens: 300,
+      outputTokens: 60,
+      cacheReadInputTokens: 20,
+      cacheCreationInputTokens: 10,
+    });
+    expect(build?.usage?.models["anthropic/sonnet"]?.costUsd).toBeCloseTo(0.03, 10);
+    expect(build?.usage?.models["openai/gpt"]?.inputTokens).toBe(1);
   });
 
   it("omits cost_usd/total_cost_usd when no attempt reported usage", async () => {

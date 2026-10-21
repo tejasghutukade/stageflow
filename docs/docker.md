@@ -1,0 +1,482 @@
+---
+layout: default
+title: Docker and self-hosting
+---
+
+# Docker and self-hosting
+
+This page describes Stageflow’s data-safety and ops contracts for self-hosted Hosts (including containers). A multi-stage `Dockerfile` at the repo root builds the image. On each unpublished `package.json` version published from `main`, `.github/workflows/publish.yml` pushes a multi-arch image to **`ghcr.io/tejasghutukade/stageflow`** (amd64 + arm64), then cosign-signs the digest keylessly. Local try still works with Compose or `docker build`.
+
+See also [Data directory](data-directory.md), [CLI reference](cli-reference.md), and [MCP](mcp.md) (including [CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [docker exec commands](#cli-via-docker-exec) below).
+
+## Never mount the Docker socket
+
+**Never mount `/var/run/docker.sock` (or any Docker API socket) into a Stageflow container.** Mounting the socket is a host-root escape: the process inside the container can control the Docker daemon as root on the host. Stageflow does not need Docker-in-Docker; do not use `--privileged` or grant extra capabilities for that purpose either.
+
+The shipped root [`docker-compose.yml`](../docker-compose.yml) has no socket mount, no `privileged`, and no extra caps. The [hardened egress reference](#hardened-egress-reference-compose) below is documentation only — it is not a second product compose file.
+
+## Local try (Compose)
+
+First-run checklist for the shipped [`docker-compose.yml`](../docker-compose.yml). The compose file builds the local `Dockerfile`, mounts a named volume at `/data`, publishes port **3847**, and sets `STAGEFLOW_HOME=/data`, `STAGEFLOW_CREDENTIAL_HOME=/data`, and `TMPDIR=/data/tmp` (`STAGEFLOW_BIND=0.0.0.0` is already in the image). The image, Compose, and `scripts/docker-smoke.sh` set `STAGEFLOW_CREDENTIAL_HOME` to that data directory, so the volume is the container's operator store. A data directory is its own operator only when that override is set. This is a **local try** surface — not the hardened egress sandbox.
+
+The compose service runs `command: ["sf", "ui"]` on purpose: operator console **and** MCP on the same Host. The image `CMD` is still `sf mcp` (headless); override to `sf mcp` only when you want a UI-less Host. Do not run both `sf ui` and `sf mcp` at once — they share port **3847**.
+
+### Checklist
+
+1. **No control token for this compose file.** It publishes `127.0.0.1:3847:3847` and sets `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs, and with the opt-in it starts without a bearer. Keep the publish address on `127.0.0.1`. To require a token again, remove the opt-in and set `STAGEFLOW_CONTROL_TOKEN` (≥32 characters, no whitespace).
+
+2. **Create `.env` from [`.env.example`](../.env.example)** at the repo root. Fill provider and GitHub vars as needed (see below). Compose loads `.env` automatically; do not commit `.env`.
+
+3. **Shell env overrides Compose `.env`.** If you have empty `GITHUB_TOKEN` / `GH_TOKEN` (or other keys) exported in your shell, Compose substitutes those empties and **blanks** the container value. Unset them for the compose invocation when the file should win:
+
+   ```bash
+   env -u GITHUB_TOKEN -u GH_TOKEN docker compose up --build -d
+   ```
+
+4. **Start and wait for live:**
+
+   ```bash
+   docker compose up --build -d
+   curl -fsS http://127.0.0.1:3847/livez
+   # → {"ok":true,"status":"live",…}
+   ```
+
+5. **Open the console** at [http://127.0.0.1:3847](http://127.0.0.1:3847). With the shipped compose file, API calls do not need a bearer.
+
+Prefer a file secret when the token must not appear in the process environment on the host:
+
+```bash
+openssl rand -hex 32 > .stageflow-control-token
+chmod 600 .stageflow-control-token
+# Point STAGEFLOW_CONTROL_TOKEN_FILE at that path inside the container
+# (e.g. bind-mount the file and set STAGEFLOW_CONTROL_TOKEN_FILE=/run/secrets/…),
+# or pass STAGEFLOW_CONTROL_TOKEN from `.env` as above.
+```
+
+### Provider boot (Compose)
+
+Host boot configures providers from `STAGEFLOW_PROVIDER_<ID>_API_KEY` / `_FILE` — not bare `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` alone. For Compose local try, set for example:
+
+- `STAGEFLOW_PROVIDER_OPENROUTER_API_KEY`
+- `STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY`
+
+See [Providers — Non-interactive Host boot credentials](providers.md#non-interactive-host-boot-credentials). Optional: put custom OpenRouter models / `maxTokens` in `/data/agent/models.json` on the data volume (the sibling of the operator auth file, because `STAGEFLOW_CREDENTIAL_HOME` is `/data`).
+
+### Host `GITHUB_TOKEN` (clone / fetch)
+
+Repository-bound materialization uses Host askpass. Set `GITHUB_TOKEN` (or `GH_TOKEN`) on the Host even for **public** repos — clone/fetch go through that helper. Stages still need explicit `secrets:` grants for their own git/`gh` use (next subsection).
+
+### Stage secrets vs Host env
+
+Slot 6 stages get a **curated** environment — not a copy of Host `process.env`. Credentials reach a stage only when listed under `secrets:` (stage body or pipeline entry). `GITHUB_TOKEN` / `GH_TOKEN` default to `GIT_ASKPASS` + a materialised token file (no raw env). Use `{ name: GITHUB_TOKEN, as: env }` when `gh` or MCP needs the env var (askpass stays set for plain HTTPS `git`). Full migration and YAML: [migration-stage-environment.md](migration-stage-environment.md), [YAML catalog — Stage secrets](yaml-catalog.md#stage-secrets).
+
+### `gh` is not in the base image
+
+The published image does **not** install the GitHub CLI. Catalogs that `requires:` `gh` need a [derived image](#derived-images) (or an install step in your Dockerfile). Stageflow never installs tools from `requires:` automatically.
+
+### MCP servers in the container
+
+The image has no `.mcp.json`, and you do not need one: add servers in **Settings → Project MCP** (form or Paste JSON). They are saved to `/data/mcp/.mcp.json`, with tokens moved to `/data/secrets/mcp-secrets.json`, both on the data volume. OAuth sign-in works too: after approving in the browser the callback lands on `localhost`, so paste that address back into the sign-in dialog. Signed-in servers work for agents and Check, not pipeline stages (use a bearer token secret there, and list it under the stage's `secrets:`).
+
+Agents and Check fill `${NAME}` from console secrets only. To use a variable that already exists in the container's environment, list its name in `STAGEFLOW_MCP_ENV_ALLOW` (comma-separated, for example `-e STAGEFLOW_MCP_ENV_ALLOW=NOTION_KEY`). Idle agent runtimes are released after 30 minutes; `STAGEFLOW_AGENT_SESSION_IDLE_MINUTES` changes that (`0` keeps them). Full walkthrough, secrets rules and routes: [MCP servers](mcp-servers.md). Back these files up with the table in [Precious vs disposable](#precious-vs-disposable); `sf backup` does not include them.
+
+### Channels in the container
+
+[Communication channels](channels.md) need no extra setup in the image. Connections made in the console are written to `/data/connections.yaml` and the secrets to `/data/channel-secrets.json`, both on the data volume, so they survive restarts and rebuilds (they are lost only if you delete the volume). The image includes the optional Spectrum packages that iMessage and WhatsApp use. For a connection that should come from the environment instead (CI or a secrets manager), use `env:NAME` references in `connections.yaml` and pass the variables to the container. `STAGEFLOW_CONNECTIONS_FILE` can point the file elsewhere.
+
+### Catalog in the container
+
+The image does **not** ship the repo `examples/` tree. Workshop saves and the default writable **workspace** catalog live under `/data` (`$STAGEFLOW_HOME/workspace`). For an external catalog, bind-mount it into the container and **register / ensure** that absolute path with the Host (`STAGEFLOW_ENSURE_PROJECT_ROOTS`, `POST /api/projects`, or local `sf run` ensure-then-start). Remotes cannot invent unknown absolute `project_root` values. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root). Compose has a commented volume-mount pattern in [`docker-compose.yml`](../docker-compose.yml).
+
+### Repo-bound run (brief) {#repo-bound-run}
+
+A task with `repository` + `ref` (or `sf run --repository` / `--ref`) materializes a Host worktree under `/data/worktrees/<runId>` (`$STAGEFLOW_HOME/worktrees/…`). On **`succeeded`**, Stageflow **reclaims** that worktree immediately (keeps `run_branch`; `checkout_root` may still be recorded after the directory is gone). Failed/cancelled runs keep their worktrees until retention SLIM — see [Post-mortem debug bundle](#debug-bundle).
+
+### Named volume
+
+Compose mounts the named volume `stageflow-data` at `/data`. That volume holds the durable store (`state.db`, credentials, settings). Deleting the volume **wipes** irreplaceable state — use `sf backup` before destructive resets. See [Precious vs disposable](#precious-vs-disposable).
+
+## Image smoke (CI / local)
+
+Automated gate that the image boots and becomes live — **not** `sf doctor`. From the repo root (Docker daemon required):
+
+```bash
+./scripts/docker-smoke.sh
+# → builds with STAGEFLOW_BUILD_SHA from git, runs with a temp volume +
+#   32+ char control token, polls http://127.0.0.1:<port>/livez until 200,
+#   tears down container/volume, exits 0
+```
+
+Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--check-build-sha` (asserts `/api/health` `build_sha` matches the baked SHA when the control token is sent). CI runs the same script from the `docker-smoke` job in `.github/workflows/ci.yml` when packaging-related paths change on a PR (always on `main`).
+
+## Pull and run (GHCR)
+
+Published image: **`ghcr.io/tejasghutukade/stageflow`**. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). Prefer a digest pin for production:
+
+```bash
+export STAGEFLOW_CONTROL_TOKEN="$(openssl rand -hex 32)"
+# Prefer digest after pull, or pin directly:
+#   docker pull ghcr.io/tejasghutukade/stageflow@sha256:<digest>
+docker pull ghcr.io/tejasghutukade/stageflow:x.y.z
+DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/tejasghutukade/stageflow:x.y.z)"
+# DIGEST looks like ghcr.io/tejasghutukade/stageflow@sha256:…
+docker run --rm \
+  -e STAGEFLOW_HOME=/data \
+  -e STAGEFLOW_CREDENTIAL_HOME=/data \
+  -e TMPDIR=/data/tmp \
+  -e STAGEFLOW_CONTROL_TOKEN \
+  -v stageflow-data:/data \
+  -p 3847:3847 \
+  "${DIGEST}"
+```
+
+The published image already sets `STAGEFLOW_HOME` and `STAGEFLOW_CREDENTIAL_HOME` to `/data`. Keep the credential override on that directory when the volume should be the operator store. When an existing login lives under another data directory, set `STAGEFLOW_CREDENTIAL_HOME` to that directory.
+
+Verify cosign attestations with the [snippet below](#provenance). Prefer digest pins (`@sha256:…`) over floating tags for production.
+
+To use a published image with the shipped compose file instead of a local build, set `image: ghcr.io/tejasghutukade/stageflow:x.y.z` (or a digest) and omit or skip `build:`.
+
+## Derived images
+
+The base image does **not** install `gh` or other pipeline-specific CLIs. When a catalog’s `requires:` needs extra tools, derive:
+
+```dockerfile
+FROM ghcr.io/tejasghutukade/stageflow:x.y.z
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends <your-tools> \
+  && rm -rf /var/lib/apt/lists/*
+USER stageflow:stageflow
+```
+
+Stageflow does not build derived images from `requires:` automatically — `requires` tells operators (and `sf doctor` / preflight) what the image must provide.
+
+## Browser stages in the container {#browser-stages}
+
+The published image has **no browser**: no Chromium, no Xvfb, no `agent-browser`. Stages with a `browser:` field need them, and a human login stage needs a browser the operator can see. Keeping them out keeps the default image small. [`docker/Dockerfile.browser`](../docker/Dockerfile.browser) is a recipe that extends the runtime image with `chromium`, `xvfb`, `xauth`, fonts, and `agent-browser` 0.38.2 (the version the browser feature was verified against). It runs as the same non-root `stageflow` user and bakes in no secrets.
+
+Build the local runtime image:
+
+```bash
+docker build --target runtime -t stageflow:local .
+```
+
+Build the browser image on top of it:
+
+```bash
+docker build -f docker/Dockerfile.browser --build-arg BASE_IMAGE=stageflow:local -t stageflow:browser .
+```
+
+To extend a published release instead, pass `--build-arg BASE_IMAGE=ghcr.io/tejasghutukade/stageflow@sha256:<digest>`. Override `--build-arg AGENT_BROWSER_VERSION=...` only if you have verified another version.
+
+Put the Host launch options in the Host config, not in pipeline YAML and not in env (the Host rejects unknown `STAGEFLOW_*` vars and ignores `AGENT_BROWSER_*`). Copy [`docker/browser.config.example.yaml`](../docker/browser.config.example.yaml) to `/data/config.yaml`:
+
+```yaml
+browser:
+  executable_path: /usr/bin/chromium
+  launch_args:
+    - --no-sandbox
+```
+
+Run it with the config bind-mounted next to the data volume:
+
+```bash
+docker run --rm -e STAGEFLOW_CONTROL_TOKEN -v stageflow-data:/data -v "$PWD/docker/browser.config.example.yaml:/data/config.yaml:ro" -p 3847:3847 stageflow:browser sf ui
+```
+
+Notes:
+
+- **Distribution Chromium.** `executable_path` points at Debian's Chromium. Chrome for Testing, which `agent-browser install` downloads, has no Linux ARM64 build, so on ARM64 (Apple Silicon Docker, Graviton) the distribution Chromium is the only option. Use it on amd64 too.
+- **Permission prompts.** The Host also adds `--deny-permission-prompts` ahead of `launch_args` (see [browser.md](browser.md#permission-requests-are-denied-by-default)); do not list it yourself. A headed browser with no screen would otherwise leave location or notification requests pending.
+- **`--no-sandbox`.** Chromium's own sandbox needs privileges a default non-root container lacks. The container is the sandbox: do not add `--privileged` or capabilities to get Chromium's sandbox back. Keep `--no-sandbox` out of Hosts that run outside a container.
+- **No screen needed.** With Xvfb on `PATH` and no `DISPLAY`, agent-browser starts its own virtual display and runs the browser headed, so a human login stage opens its page and shows it to the operator through the [live view](browser.md#live-view) in the console. Run `sf ui` (or `sf mcp`) so the Host serves the live view; a CLI-only run still fails with the no-screen error.
+- **Never mount a container runtime socket.** The rule [above](#never-mount-the-docker-socket) applies unchanged. The browser runs inside the Stageflow container; nothing needs the daemon.
+- **Resources.** Spikes measured about 230 to 420 MB of memory for an idle browser, more on heavy pages. Budget at least 1 GB per concurrent browser run and set a container memory limit. Chromium also needs shared memory: add `--shm-size=1g` to `docker run` (or `shm_size` in Compose) if pages crash.
+- **Limits.** Passkeys, hardware keys and native OS prompts cannot be driven through the live view. See [Browser sessions](browser.md).
+
+An opt-in smoke test builds this recipe and checks it with real Chromium (`tests/docker.browserRecipe.smoke.test.ts`; needs Docker and several minutes):
+
+```bash
+STAGEFLOW_DOCKER_SMOKE=1 npx vitest run tests/docker.browserRecipe.smoke.test.ts
+```
+
+## Container browser host (development) {#container-browser-host}
+
+A second recipe, [`docker/Dockerfile.browser-sandbox`](../docker/Dockerfile.browser-sandbox), is not an image for Stageflow itself. It is the per-run browser sandbox used by `browser.host: container` (see [Browser sessions](browser.md#container-browser-host)). It holds Chromium, Xvfb, a TCP forwarder (`socat`), `tini` and the profile volume mount, and nothing else: no agent-browser, no Node, no Stageflow code, no tokens. It runs as uid 1000 and clears stale Chromium profile locks at start. [`docker/browser-sandbox-entrypoint.sh`](../docker/browser-sandbox-entrypoint.sh) is its entry point.
+
+How it differs from `Dockerfile.browser`:
+
+| | `docker/Dockerfile.browser` | `docker/Dockerfile.browser-sandbox` |
+|---|---|---|
+| Base | The Stageflow runtime image | `debian:bookworm-slim` |
+| Contains | Stageflow, Chromium, Xvfb, agent-browser | Chromium, Xvfb, socat, tini only |
+| Runs | The whole Host, browsers on the Host's own virtual display | One container per (owner scope, profile, run); the Host stays outside |
+| Selected by | Running this image as the Host, plus Host config `executable_path` and `launch_args` | Host config `browser.host: container` |
+
+Build it (the build context is the `docker` folder):
+
+```bash
+docker build -f docker/Dockerfile.browser-sandbox -t stageflow-browser-sandbox:local docker
+```
+
+Host config keys involved (all in `$STAGEFLOW_HOME/config.yaml`, never in YAML pipelines or env):
+
+```yaml
+browser:
+  host: container            # local (default) or container
+  owner_hosts:               # optional, per owner scope; unlisted scopes use browser.host
+    local: container
+  container:
+    image: stageflow-browser-sandbox:local   # default
+    shm_size: 1g
+    memory: 1g               # orchestrator default 1g
+    pids_limit: 512          # orchestrator default 512
+```
+
+- `browser.host` and `browser.owner_hosts` choose where shared profile browsers run. Today there is one owner scope, `local`, so `owner_hosts` can only restate or override it for that scope.
+- `browser.launch_args` and `browser.executable_path` (set separately, as in the example above) apply to browsers the Host launches itself (see [Browser stages in the container](#browser-stages)). The sandbox image sets its own Chromium flags (`--no-sandbox`, `--deny-permission-prompts`, software GL) in `CHROME_FLAGS` inside the image.
+
+Constraints:
+
+- **Never mount the Docker socket into a Stageflow container.** The development orchestrator shells out to the local `docker` CLI, so the Host must run directly on a machine with a Docker daemon, not inside a Stageflow container. A production deployment uses a different orchestrator behind the same port (not built; see below).
+- The orchestrator starts each container read-only with a tmpfs `/tmp`, `--cap-drop ALL`, `no-new-privileges`, process and memory limits, and publishes the debugging port on `127.0.0.1` only. Users never reach that port.
+- The profile is a named Docker volume (`sf-profile-<scope>-<profile>`), mounted at `/profile`. The Host closes the browser over the debugging protocol before removing the container so the newest cookies are flushed.
+- Containers carry labels for scope, run, stage and profile. At Host start, containers of runs that are gone are removed. The sweep is per Docker daemon: run one Host per daemon.
+- Egress is open. There is no internal network or filtering proxy, so `allow_domains` stays soft for profile stages.
+- Not built: a production orchestrator (cluster, job runner or pool), volume encryption, quotas and backup, and any managed cloud browser provider adapter. Not run against real sites.
+
+Opt-in smoke (needs a Docker daemon and several minutes):
+
+```bash
+STAGEFLOW_DOCKER_SMOKE=1 npx vitest run tests/docker.containerBrowserHost.smoke.test.ts
+```
+
+## Precious vs disposable
+
+| Path under `$STAGEFLOW_HOME` | Verdict | Why |
+|---|---|---|
+| `state.db` (+ `-wal`, `-shm`) | **Irreplaceable** | Every run, stage, envelope, event, verification record, and A2A rows. Only ever copy via `sf backup`. |
+| `agent/auth.json` | **Irreplaceable** | Operator auth file. The image sets `STAGEFLOW_CREDENTIAL_HOME` to this data directory. |
+| `settings.json` | **Irreplaceable** | Concurrency and credential-source choice. |
+| `connections.yaml`, `channel-secrets.json` | **Irreplaceable** | [Channel](channels.md) connections and the secrets typed into the console. Not covered by `sf backup`; copy them yourself and keep the secrets file private (`0600`). |
+| `mcp/.mcp.json`, `secrets/mcp-secrets.json` | **Irreplaceable** | Servers and tokens added in Settings → Project MCP. Not covered by `sf backup`; copy them yourself and keep the secrets file private (`0600`). |
+| `secrets/mcp-oauth.key`, `agent/mcp-oauth-encrypted` | **Irreplaceable** | OAuth sign-ins for MCP servers. Keep the key and the store **together**; one without the other is useless. Not covered by `sf backup`. |
+| `agent/mcp-cache.json` | Disposable | Tool lists cached from the last successful connect; rebuilt by Check. |
+| `agents/pi-sessions/` | Situational | Agent session transcripts; history lives in `state.db`. |
+| `runs/<runId>/` | Situational | Artifact bytes; records live in `state.db`. |
+| `a2a-artifacts/` | Situational | Opt in with `sf backup --include-a2a-artifacts`. |
+| `repos/`, `worktrees/`, `cache/` (includes `cache/jiti`) | Disposable | Re-clonable / rebuildable. |
+| `backups/`, `restore-pending/` | Disposable | Products of backup/restore. |
+
+A volume snapshot of the whole data directory is **not** a substitute for `sf backup` — it is larger, includes disposable trees, and is taken while the WAL is moving.
+
+## Why `cp state.db` corrupts
+
+Stageflow runs SQLite in **WAL mode**. Committed transactions often live in `state.db-wal`, not yet folded into `state.db`. Concurrent Host + stage workers hold their own connections.
+
+- `cp state.db` alone silently drops recent commits.
+- Copying `state.db` + `-wal` + `-shm` as three separate operations tears consistency under multi-writer load.
+- Live `tar` / `rsync` / volume snapshots have the same problem.
+
+Use `sf backup` (`VACUUM INTO` + verified archive) while the Host is up.
+
+## Backup / restore runbook
+
+```bash
+# Live backup (default archive includes credentials at mode 0600 — treat as a secret)
+sf backup --json
+
+# Restore requires Host down (CLI probes GET /livez; never autostarts)
+sf restore "$STAGEFLOW_HOME/backups/stageflow-….tar.gz" --json
+```
+
+HTTP (control token, **drive** scope for backup create/download and restore):
+
+- `POST /api/backup` → metadata `{ path, bytes, sha256, schema_version, stageflow_version, created_at, contents }`
+- `GET /api/backup/<name>` → archive bytes (name resolved under `$STAGEFLOW_HOME/backups`)
+- `POST /api/restore` with `{ "backup": "<name>" }` → verify → stage → **202** → graceful drain; next boot applies before opening the store
+
+Failed apply twice → `restore.failed`; readiness and API/MCP refuse until the marker is cleared. Previous store files are left in place (never silently served as a successful restore).
+
+MCP tools for backup/restore are deferred; agents should use the HTTP path above while a Host is running. See [MCP](mcp.md#backup-export-and-restore).
+
+## Local volume boundary
+
+`$STAGEFLOW_HOME` must sit on a **local** filesystem. Boot refuses `nfs` / `nfs4` / `cifs` / `smbfs` / `fuse.sshfs` (`store_unsupported_filesystem`) unless `STAGEFLOW_ALLOW_NETWORK_STORE=1` (loud warning, unsupported). `9p` / `virtiofs` warn only (Docker Desktop). Detection is Linux `mountinfo` longest-prefix; non-Linux skips. Overlay/bind-over-NFS may report a local fstype — prefer named volumes.
+
+Rich health reports `store_filesystem`.
+
+## Writable paths and `read_only: true`
+
+Supported writable set: `$STAGEFLOW_HOME` and a writable `TMPDIR` (also used as `SQLITE_TMPDIR` when unset). When `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty, Host boot soft-defaults to `$STAGEFLOW_HOME/tmp` (creates it) then asserts writability. Boot still fails with `tmpdir_unusable` if that path (or an explicit `TMPDIR`) is not writable. Compose/images often set `TMPDIR=/data/tmp` explicitly — that remains valid.
+
+## Logging budget
+
+Stdout is lifecycle-oriented. Per-line bytes are capped (`STAGEFLOW_LOG_MAX_LINE_BYTES`, default `8192`) with truncation markers. Transcripts stay in the run store under retention. Prefer a Docker `logging.driver: local` with size rotation in compose.
+
+## Upgrade / rollback
+
+- Patch releases: interchangeable store-wise when schema is unchanged.
+- Minor: upgrade-only for schema advances (Slot 1 downgrade guard).
+- Cross-minor rollback: restore from a backup taken before the upgrade.
+
+## Provenance
+
+| OCI label | Value |
+|---|---|
+| `org.opencontainers.image.source` | `https://github.com/tejasghutukade/stageflow` |
+| `org.opencontainers.image.revision` | `${{ github.sha }}` — **identical to `STAGEFLOW_BUILD_SHA`** |
+| `org.opencontainers.image.version` | `package.json` version |
+| `org.opencontainers.image.created` | RFC 3339 build time |
+| `org.opencontainers.image.licenses` | `MIT` |
+| `org.opencontainers.image.title` | `Stageflow` |
+| `org.opencontainers.image.base.name` / `.base.digest` | pinned base |
+
+`BUILD_SHA` is `process.env.STAGEFLOW_BUILD_SHA ?? "unknown"` and appears on `/api/health`, MCP `get_health`, and `sf --version --json`. Publish sets build-arg `STAGEFLOW_BUILD_SHA=${{ github.sha }}` so `revision`, the baked SHA, and health `build_sha` agree.
+
+Buildx also emits provenance and SBOM (`--provenance=true --sbom=true`). Cosign keyless-signs the **manifest-list digest** after push (not tag-only).
+
+**Labels are hints; attestations are evidence.** Anyone with push access can set labels. Verify the signed digest with cosign (identity is any workflow under this repo’s GitHub Actions OIDC issuer):
+
+```bash
+# Resolve digest from a tag, or paste the sha256 from the Actions log / GHCR UI:
+DIGEST=sha256:<digest>
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/tejasghutukade/stageflow/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "ghcr.io/tejasghutukade/stageflow@${DIGEST}"
+```
+
+## Egress threat model (report-only)
+
+Stages run with shell tools and inherit curated proxy/CA variables. Stageflow does **not** ship an allowlisting egress proxy. Health reports whether proxy vars are set (hostname only, never userinfo) and whether the Node `EnvHttpProxyAgent` dispatcher is installed.
+
+Reference posture: Host on an `internal: true` network behind a domain-allowlisting forward proxy; `NO_PROXY` must include loopback for Host self-probes.
+
+### Hardened egress reference compose {#hardened-egress-reference-compose}
+
+Documentation only — **not** a shipped root file. Do not replace [`docker-compose.yml`](../docker-compose.yml) with this unmarked. Adapt for your proxy image and secrets store; still never mount `docker.sock`.
+
+```yaml
+services:
+  stageflow:
+    image: ghcr.io/tejasghutukade/stageflow@sha256:<digest>
+    networks: [internal]
+    environment:
+      STAGEFLOW_HOME: /data
+      STAGEFLOW_BIND: 0.0.0.0
+      STAGEFLOW_CONTROL_TOKEN_FILE: /run/secrets/control_token
+      STAGEFLOW_BUILD_SHA: "<git sha>"
+      TMPDIR: /data/tmp
+      HTTPS_PROXY: http://egress-proxy:3128
+      HTTP_PROXY: http://egress-proxy:3128
+      NO_PROXY: 127.0.0.1,localhost,egress-proxy
+    volumes:
+      - stageflow-data:/data
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: local
+      options: { max-size: "10m", max-file: "5" }
+    restart: unless-stopped
+  egress-proxy:
+    image: <your-allowlisting-proxy>
+    networks: [internal, egress]
+networks:
+  internal:
+    internal: true
+  egress:
+volumes:
+  stageflow-data:
+```
+
+## CLI via `docker exec` {#cli-via-docker-exec}
+
+A remote harness drives the Host over MCP/REST with a control token. Some CLI commands stay **exec-only** on purpose — see the decision table in [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table). Below are literal commands assuming the container is named `stageflow` (replace with your compose service / container id). Prefer catalog-relative paths the Host already knows; mount or bake catalog into the image as your deployment does.
+
+### Exec-only commands
+
+```bash
+# ASCII pipeline diagram (humans). Harnesses: MCP describe_pipeline / get_run.
+docker exec -it stageflow sf graph --pipeline examples/hello-world/hello.pipeline.yaml
+
+# Rewrite legacy YAML keys in a checkout (authors on a laptop; not a Host API).
+docker exec -it stageflow sf migrate-yaml /workspace/my-catalog --write
+
+# Durable skill install for image bake or a mounted workspace.
+# Harnesses: prefer start_run.skills (Slot 9) instead of install.
+docker exec -it stageflow sf skills install --from-path /workspace/skills/my-skill
+docker exec -it stageflow sf skills install --from-zip "https://example.com/skill.zip" \
+  --skill-name my-skill
+
+# A2A deployment config (boot-read; restart Host after changes).
+# Read whether A2A is enabled without exec: GET /api/a2a/status (read token).
+docker exec -it stageflow sf a2a validate --config /data/a2a.yaml
+docker exec -it stageflow sf a2a list --config /data/a2a.yaml
+docker exec -it stageflow sf a2a add-caller procurement --config /data/a2a.yaml
+
+# Provider OAuth (interactive / browser). API keys: boot env, not exec — see below.
+docker exec -it stageflow sf providers login anthropic --type oauth
+```
+
+### Provider API keys (no exec)
+
+Set at Host boot so the container self-configures without `docker exec`:
+
+```bash
+# compose / k8s env (example)
+STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
+# or STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY=…
+# optional: STAGEFLOW_REQUIRE_PROVIDERS=anthropic
+```
+
+See [Providers — Non-interactive Host boot credentials](providers.md#non-interactive-host-boot-credentials).
+
+### Worktree escape hatch {#worktree-escape-hatch}
+
+When you need a shell inside a run's checkout (diff inspection, one-off git, post-mortem), obtain the path from the run projection, then exec:
+
+1. Call MCP `get_run` with the `runId`, or `GET /api/runs/<runId>` with a **read** token.
+2. Read `binding.checkout_root` (absolute path inside the container). Unbound runs omit it — there is nothing to enter. Repository-bound runs typically use `$STAGEFLOW_HOME/worktrees/<runId>/`. After a run reaches `succeeded`, that worktree may already have been reclaimed even though `checkout_root` remains recorded on the run — if the path is missing, MCP checkout tools soft-fail with `checkout_reclaimed`.
+3. Open a shell (or run a one-shot command) with that path as the working directory:
+
+```bash
+RUN_ID=run_…
+# From the Host REST detail (token required when bind is non-loopback):
+CHECKOUT=$(curl -fsS -H "Authorization: Bearer $STAGEFLOW_READ_TOKEN" \
+  "http://127.0.0.1:3847/api/runs/$RUN_ID" | jq -r '.binding.checkout_root // empty')
+test -n "$CHECKOUT"
+docker exec -it -w "$CHECKOUT" stageflow bash
+# one-shot example:
+docker exec -it -w "$CHECKOUT" stageflow git status
+```
+
+There is no MCP shell/`exec` tool — this is the supported escape hatch.
+
+### Post-mortem debug bundle {#debug-bundle}
+
+Distinguish **succeed reclaim** from **retention SLIM/PURGE**:
+
+- On **`succeeded`**, the Host worktree under `$STAGEFLOW_HOME/worktrees/<runId>/` is reclaimed immediately (`run_branch` kept; `checkout_root` may still be recorded). That is not SLIM and does not set `slimmed_at`.
+- **Failed / cancelled** runs keep their worktrees until retention SLIM (default **30 days**; override `STAGEFLOW_SLIM_FAILED_MS` / `STAGEFLOW_SLIM_CANCELLED_MS`).
+- Separate SLIM/PURGE timers still apply to run workspaces and logs under `$STAGEFLOW_HOME/runs/` (succeeded default SLIM **3 days** via `STAGEFLOW_SLIM_SUCCEEDED_MS`). A succeeded run can therefore have no worktree left while run-dir retention is still ticking.
+
+Pull a capped, Slot-6-redacted attachable bundle (export projection + manifest + stage events + verification evidence + `get_run_diff` + stream-log tails + redacted host config):
+
+```bash
+# Inside the container (or via docker exec):
+docker exec stageflow sf debug-run "$RUN_ID" --out /tmp/debug-$RUN_ID.json
+
+# Remote Host — same shape, read scope (parity with GET …/export):
+curl -fsS -H "Authorization: Bearer $STAGEFLOW_READ_TOKEN" \
+  "http://127.0.0.1:3847/api/runs/$RUN_ID/debug-bundle" \
+  -o "debug-$RUN_ID.json"
+```
+
+For a live shell on the binding path after you have the bundle, use the [worktree escape hatch](#worktree-escape-hatch) above.
+
+## Continuous replication
+
+Litestream (or similar) can replicate `state.db` for disaster recovery; it is **not** a substitute for `sf backup` under live multi-writer WAL. Prefer `sf backup` for operator restore points.

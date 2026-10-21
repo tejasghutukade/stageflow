@@ -3,6 +3,7 @@ import { cp, mkdir, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { clearFindManifestRootCacheForTests } from "../src/project/findManifestRoot.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { resolveCatalogContext } from "../src/config/resolveCatalogContext.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
@@ -72,6 +73,25 @@ describe("resolveCatalogContext", () => {
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
+    }
+  });
+
+  it("returns ok with loaded manifest outside a git repository", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-nogit-manifest-"));
+    try {
+      await seedManifestRepo(dir);
+      clearFindProjectRootCacheForTests();
+      clearFindManifestRootCacheForTests();
+      const ctx = await resolveCatalogContext(path.join(dir, "pipelines"));
+      expect(ctx.manifestStatus).toBe("ok");
+      expect(ctx.projectRoot).toBe(realpathSync(dir));
+      expect(ctx.manifest?.manifest.catalog.pipelines).toContain("pipelines");
+    } finally {
+      clearFindProjectRootCacheForTests();
+      clearFindManifestRootCacheForTests();
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

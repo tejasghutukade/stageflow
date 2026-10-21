@@ -1,9 +1,10 @@
 import Database from "better-sqlite3";
+import { existsSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { StageEnvelope } from "../../types/envelope.js";
 import type { StageUsage } from "../../types/usage.js";
-import type { FeedbackLoopConfig } from "../../types/pipeline.js";
+import type { FeedbackLoopConfig, InlinePipelineDefinition } from "../../types/pipeline.js";
 import type { StageLogLine } from "../../agent/activity.js";
 import { derivePendingPrompt } from "../../hitl/qaTrail.js";
 import {
@@ -35,11 +36,14 @@ import {
   type StageExecutionPatch,
   type StageLogEvent,
   type StageSnapshot,
+  type TriggerRecord,
+  type UpsertTriggerInput,
   type VerificationCheckResult,
   type VerificationCheckResultPatch,
+  type ConfigOriginRecord,
 } from "../port.js";
 import { projectRunDetail, projectRunSummary, orderStageSnapshots } from "../runProjection.js";
-import { normalizeCatalogPath } from "../normalizeCatalogPath.js";
+import { normalizeCatalogPath, normalizeProjectRoot } from "../normalizeCatalogPath.js";
 import { buildStageSnapshotFromStore } from "../stageSnapshot.js";
 import { parsePipelineDagSnapshot } from "../pipelineDagSnapshot.js";
 import { newRunId, runWorkspaceDir } from "../paths.js";
@@ -49,7 +53,16 @@ import {
   stageDir,
 } from "../workspaceLayout.js";
 import { importDiskRunsIfEmpty } from "./migrateFromDisk.js";
-import { SCHEMA_SQL } from "./schema.js";
+import {
+  applyPendingMigrations,
+  assertSchemaVersion,
+} from "./migrations/index.js";
+import { StoreSchemaError } from "./storeSchemaError.js";
+import { applyStorePragmas } from "./applyStorePragmas.js";
+import type { OverviewRunRow } from "../overviewSummary.js";
+import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
+
+type SqliteRunStoreOpenerMode = "assert" | "migrate";
 
 type RunRow = {
   run_id: string;
@@ -67,6 +80,23 @@ type RunRow = {
   pipeline_path: string | null;
   task_path: string | null;
   project_root: string | null;
+  repository: string | null;
+  ref: string | null;
+  resolved_sha: string | null;
+  run_branch: string | null;
+  git_author_name: string | null;
+  git_author_email: string | null;
+  cancel_reason: string | null;
+  finished_at: string | null;
+  slimmed_at: string | null;
+  disk_bytes: number | null;
+  disk_measured_at: string | null;
+  config_origins_json: string | null;
+  pipeline_source: string | null;
+  pipeline_body: string | null;
+  caller_id: string | null;
+  run_manifest: string | null;
+  skip_gates: number | null;
 };
 
 type StageRow = {
@@ -96,7 +126,11 @@ type ExecutionRow = {
   envelope_json: string | null;
   cost_usd: number | null;
   usage_json: string | null;
+  auto_resume_count: number | null;
 };
+
+const EXECUTION_SELECT_COLS =
+  `run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json, auto_resume_count`;
 
 type VerificationCheckResultRow = {
   run_id: string;
@@ -166,203 +200,18 @@ type ForkGenerationRow = {
   updated_at: string;
 };
 
+type TriggerRow = {
+  id: string;
+  definition_ref: string;
+  enabled: number;
+  last_fired_at: string | null;
+  last_run_id: string | null;
+  next_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 const ensuredStageDirs = new Set<string>();
-
-const DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5000;
-
-function readSqliteBusyTimeoutMs(): number {
-  const raw = process.env.STAGEFLOW_SQLITE_BUSY_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "") {
-    return DEFAULT_SQLITE_BUSY_TIMEOUT_MS;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return DEFAULT_SQLITE_BUSY_TIMEOUT_MS;
-  }
-  return parsed;
-}
-
-function ensureCheckoutRootColumn(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === "checkout_root")) {
-    db.exec(`ALTER TABLE runs ADD COLUMN checkout_root TEXT`);
-  }
-}
-
-function ensureCiIdentityColumns(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-  const names = new Set(cols.map((c) => c.name));
-  for (const name of ["git_sha", "ci_pr_url", "ci_job_url"] as const) {
-    if (!names.has(name)) {
-      db.exec(`ALTER TABLE runs ADD COLUMN ${name} TEXT`);
-    }
-  }
-}
-
-function ensurePipelineDagColumn(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === "pipeline_dag_json")) {
-    db.exec(`ALTER TABLE runs ADD COLUMN pipeline_dag_json TEXT`);
-  }
-}
-
-function ensureRunLocatorColumns(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-  const names = new Set(cols.map((c) => c.name));
-  for (const name of ["pipeline_path", "task_path", "project_root"] as const) {
-    if (!names.has(name)) {
-      db.exec(`ALTER TABLE runs ADD COLUMN ${name} TEXT`);
-    }
-  }
-}
-
-function ensureStageExecutionsTable(db: Database.Database): void {
-  db.exec(`
-CREATE TABLE IF NOT EXISTS stage_executions (
-  run_id TEXT NOT NULL,
-  stage_id TEXT NOT NULL,
-  attempt INTEGER NOT NULL,
-  status TEXT NOT NULL,
-  verification_outcome TEXT NOT NULL DEFAULT 'not_run',
-  started_at TEXT,
-  finished_at TEXT,
-  envelope_json TEXT,
-  PRIMARY KEY (run_id, stage_id, attempt),
-  FOREIGN KEY (run_id) REFERENCES runs(run_id)
-);
-CREATE INDEX IF NOT EXISTS idx_stage_executions_run_stage
-  ON stage_executions (run_id, stage_id, attempt);
-`);
-}
-
-function ensureStageExecutionVerificationOutcomeColumn(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(stage_executions)`)
-    .all() as { name: string }[];
-  if (!cols.some((c) => c.name === "verification_outcome")) {
-    db.exec(
-      `ALTER TABLE stage_executions ADD COLUMN verification_outcome TEXT NOT NULL DEFAULT 'not_run'`,
-    );
-  }
-}
-
-function ensureStageExecutionCostColumns(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(stage_executions)`)
-    .all() as { name: string }[];
-  const names = new Set(cols.map((c) => c.name));
-  if (!names.has("cost_usd")) {
-    db.exec(`ALTER TABLE stage_executions ADD COLUMN cost_usd REAL`);
-  }
-  if (!names.has("usage_json")) {
-    db.exec(`ALTER TABLE stage_executions ADD COLUMN usage_json TEXT`);
-  }
-}
-
-function backfillVerificationOutcomes(db: Database.Database): void {
-  db.exec(`
-UPDATE stage_executions
-SET verification_outcome = CASE
-  WHEN status = 'succeeded'
-    AND EXISTS (
-      SELECT 1 FROM verification_check_results AS check_result
-      WHERE check_result.run_id = stage_executions.run_id
-        AND check_result.stage_id = stage_executions.stage_id
-        AND check_result.attempt = stage_executions.attempt
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM verification_check_results AS check_result
-      WHERE check_result.run_id = stage_executions.run_id
-        AND check_result.stage_id = stage_executions.stage_id
-        AND check_result.attempt = stage_executions.attempt
-        AND check_result.status != 'passed'
-    )
-    THEN 'passed'
-  WHEN status = 'failed'
-    AND EXISTS (
-      SELECT 1 FROM verification_check_results AS check_result
-      WHERE check_result.run_id = stage_executions.run_id
-        AND check_result.stage_id = stage_executions.stage_id
-        AND check_result.attempt = stage_executions.attempt
-    )
-    THEN 'failed'
-  ELSE verification_outcome
-END
-WHERE verification_outcome = 'not_run';
-`);
-}
-
-function ensureStageEventsAttemptColumn(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(stage_events)`)
-    .all() as { name: string }[];
-  if (!cols.some((c) => c.name === "attempt")) {
-    db.exec(`ALTER TABLE stage_events ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1`);
-    db.exec(`
-CREATE INDEX IF NOT EXISTS idx_stage_events_run_stage_attempt_at
-  ON stage_events (run_id, stage_id, attempt, at);
-`);
-  }
-}
-
-function ensureVerificationCheckResultsTable(db: Database.Database): void {
-  db.exec(`
-CREATE TABLE IF NOT EXISTS verification_check_results (
-  run_id TEXT NOT NULL,
-  stage_id TEXT NOT NULL,
-  attempt INTEGER NOT NULL,
-  check_id TEXT NOT NULL,
-  check_type TEXT NOT NULL,
-  status TEXT NOT NULL,
-  started_at TEXT,
-  finished_at TEXT,
-  evidence_json TEXT,
-  PRIMARY KEY (run_id, stage_id, attempt, check_id),
-  FOREIGN KEY (run_id, stage_id, attempt)
-    REFERENCES stage_executions(run_id, stage_id, attempt)
-);
-CREATE INDEX IF NOT EXISTS idx_verification_check_results_execution
-  ON verification_check_results (run_id, stage_id, attempt, check_id);
-`);
-}
-
-function ensureFeedbackReplayStagePassEnvelopeColumn(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(feedback_replay_stage_passes)`)
-    .all() as { name: string }[];
-  if (cols.length === 0) return;
-  if (!cols.some((c) => c.name === "emitted_envelope_json")) {
-    db.exec(
-      `ALTER TABLE feedback_replay_stage_passes ADD COLUMN emitted_envelope_json TEXT`,
-    );
-  }
-}
-
-function ensureFeedbackReplayStagePassSessionOriginColumn(
-  db: Database.Database,
-): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(feedback_replay_stage_passes)`)
-    .all() as { name: string }[];
-  if (cols.length === 0) return;
-  if (!cols.some((c) => c.name === "session_origin_attempt")) {
-    db.exec(
-      `ALTER TABLE feedback_replay_stage_passes ADD COLUMN session_origin_attempt INTEGER`,
-    );
-  }
-}
-
-function ensureFeedbackLoopDeferredSendBackColumn(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(feedback_loops)`)
-    .all() as { name: string }[];
-  if (cols.length === 0) return;
-  if (!cols.some((c) => c.name === "deferred_send_back_json")) {
-    db.exec(
-      `ALTER TABLE feedback_loops ADD COLUMN deferred_send_back_json TEXT`,
-    );
-  }
-}
 
 function executionFromRow(row: ExecutionRow): StageExecution {
   return {
@@ -377,7 +226,10 @@ function executionFromRow(row: ExecutionRow): StageExecution {
       ? (JSON.parse(row.envelope_json) as StageExecution["envelope"])
       : null,
     ...(row.cost_usd != null ? { cost_usd: row.cost_usd } : {}),
-    ...(row.usage_json != null ? { usage: JSON.parse(row.usage_json) as StageUsage } : {}),
+    ...(row.usage_json != null
+      ? { usage: JSON.parse(row.usage_json) as StageUsage }
+      : {}),
+    auto_resume_count: row.auto_resume_count ?? 0,
   };
 }
 
@@ -420,6 +272,19 @@ function feedbackLoopFromRow(row: FeedbackLoopRow): FeedbackLoopRecord {
           ) as FeedbackLoopRecord["deferred_send_back"],
         }
       : {}),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function triggerFromRow(row: TriggerRow): TriggerRecord {
+  return {
+    id: row.id,
+    definition_ref: row.definition_ref,
+    enabled: row.enabled !== 0,
+    ...(row.last_fired_at != null ? { last_fired_at: row.last_fired_at } : {}),
+    ...(row.last_run_id != null ? { last_run_id: row.last_run_id } : {}),
+    ...(row.next_run_at != null ? { next_run_at: row.next_run_at } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -487,25 +352,30 @@ export class SqliteRunStore implements RunStore {
   private readonly db: Database.Database;
   private migratePromise: Promise<void>;
 
-  constructor(private readonly storeRoot: string) {
+  constructor(
+    private readonly storeRoot: string,
+    options?: { openerMode?: SqliteRunStoreOpenerMode },
+  ) {
+    const openerMode =
+      options?.openerMode ??
+      (process.env.VITEST === "true" ? "migrate" : "assert");
     const dbPath = path.join(storeRoot, "state.db");
+    if (openerMode === "assert") {
+      if (!existsSync(dbPath)) {
+        throw new StoreSchemaError(
+          "store_schema_migration_required: database file is missing",
+          "store_schema_migration_required",
+        );
+      }
+      this.db = new Database(dbPath);
+      applyStorePragmas(this.db);
+      assertSchemaVersion(this.db);
+      this.migratePromise = Promise.resolve();
+      return;
+    }
     this.db = new Database(dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma(`busy_timeout = ${readSqliteBusyTimeoutMs()}`);
-    this.db.exec(SCHEMA_SQL);
-    ensureCheckoutRootColumn(this.db);
-    ensureCiIdentityColumns(this.db);
-    ensurePipelineDagColumn(this.db);
-    ensureRunLocatorColumns(this.db);
-    ensureStageExecutionsTable(this.db);
-    ensureStageExecutionVerificationOutcomeColumn(this.db);
-    ensureStageExecutionCostColumns(this.db);
-    ensureStageEventsAttemptColumn(this.db);
-    ensureVerificationCheckResultsTable(this.db);
-    ensureFeedbackReplayStagePassEnvelopeColumn(this.db);
-    ensureFeedbackReplayStagePassSessionOriginColumn(this.db);
-    ensureFeedbackLoopDeferredSendBackColumn(this.db);
-    backfillVerificationOutcomes(this.db);
+    applyStorePragmas(this.db);
+    applyPendingMigrations(this.db);
     this.migratePromise = importDiskRunsIfEmpty(this.db, storeRoot).then(() => undefined);
   }
 
@@ -514,15 +384,41 @@ export class SqliteRunStore implements RunStore {
     await this.migratePromise;
   }
 
+  async close(): Promise<void> {
+    await this.ready();
+    this.db.pragma("wal_checkpoint(TRUNCATE)");
+    this.db.close();
+  }
+
+  async snapshotInto(destPath: string): Promise<{ userVersion: number }> {
+    await this.ready();
+    const userVersion = this.db.pragma("user_version", {
+      simple: true,
+    }) as number;
+    const escaped = destPath.replace(/'/g, "''");
+    this.db.exec(`VACUUM INTO '${escaped}'`);
+    return { userVersion };
+  }
+
+  /**
+   * The connection this store owns, for the one caller allowed to share it: the composition root
+   * wiring the A2A tables into the same `state.db` file. Not part of the `RunStore` interface.
+   */
+  get connection(): Database.Database {
+    return this.db;
+  }
+
   getWorkspaceDir(runId: string): string {
     return runWorkspaceDir(this.storeRoot, runId);
   }
 
   async createRun(input: CreateRunInput): Promise<CreatedRun> {
     await this.ready();
-    const runId = newRunId();
+    const existing = input.dispatchKey ? await this.findRunByDispatchKey(input.dispatchKey) : undefined;
+    if (existing) return existing;
+    const runId = input.runId ?? newRunId();
     const workspaceDir = this.getWorkspaceDir(runId);
-    await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
+    if (!input.dispatchKey) await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
 
     const now = new Date().toISOString();
     const pipelinePath = input.pipelinePath
@@ -534,20 +430,35 @@ export class SqliteRunStore implements RunStore {
     const projectRoot = input.projectRoot
       ? normalizeCatalogPath(input.projectRoot)
       : null;
+    const pipelineBody =
+      input.pipelineBody ??
+      (input.inlinePipeline !== undefined
+        ? JSON.stringify(input.inlinePipeline)
+        : null);
+    const pipelineSource =
+      input.pipelineSource ??
+      (pipelineBody != null && pipelinePath == null ? "inline" : null);
 
-    this.db
+    this.db.transaction(() => {
+      if (input.submission) {
+        const existing = this.readSubmission(input.submission.key);
+        if (existing) throw new RunSubmissionExistsError(existing);
+      }
+      const inserted = this.db
       .prepare(
         `INSERT INTO runs
-          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root)
+          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates, dispatch_key)
          VALUES
-          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root)`,
+          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root, @repository, @ref, @resolved_sha, @run_branch, @git_author_name, @git_author_email, @pipeline_source, @pipeline_body, @caller_id, @run_manifest, @skip_gates, @dispatch_key)
+          ON CONFLICT(dispatch_key) DO NOTHING`,
       )
       .run({
         run_id: runId,
+        dispatch_key: input.dispatchKey ?? null,
         pipeline_id: input.pipelineId,
         task_id: input.taskId ?? null,
         task_yaml: input.taskYaml,
-        status: "running",
+        status: input.status ?? "running",
         created_at: now,
         updated_at: now,
         checkout_root: input.checkoutRoot ?? null,
@@ -560,25 +471,289 @@ export class SqliteRunStore implements RunStore {
         pipeline_path: pipelinePath,
         task_path: taskPath,
         project_root: projectRoot,
+        repository: input.repository ?? null,
+        ref: input.ref ?? null,
+        resolved_sha: input.resolvedSha ?? null,
+        run_branch: input.runBranch ?? null,
+        git_author_name: input.gitAuthorName ?? null,
+        git_author_email: input.gitAuthorEmail ?? null,
+        pipeline_source: pipelineSource,
+        pipeline_body: pipelineBody,
+        caller_id: input.callerId ?? null,
+        run_manifest:
+          input.runManifest !== undefined
+            ? JSON.stringify(input.runManifest)
+            : null,
+        skip_gates:
+          input.skipGates === undefined ? null : input.skipGates ? 1 : 0,
       });
+      if (!inserted.changes) return;
+      if (input.submission) {
+        this.db.prepare("INSERT INTO run_submissions (submission_key, request_hash, run_id) VALUES (?, ?, ?)")
+          .run(input.submission.key, input.submission.requestHash, runId);
+      }
+    })();
 
-    return { runId, workspaceDir };
+    if (input.dispatchKey) {
+      const selected = await this.findRunByDispatchKey(input.dispatchKey);
+      if (selected && selected.runId !== runId) return selected;
+      await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
+    }
+    return { runId, workspaceDir, ...(input.dispatchKey ? { created: true } : {}) };
+  }
+
+  async findRunByDispatchKey(dispatchKey: string): Promise<CreatedRun | undefined> {
+    await this.ready();
+    const row = this.db.prepare("SELECT run_id FROM runs WHERE dispatch_key = ?").get(dispatchKey) as { run_id: string } | undefined;
+    return row ? { runId: row.run_id, workspaceDir: this.getWorkspaceDir(row.run_id), created: false } : undefined;
+  }
+
+  private readSubmission(key: string): RunSubmissionRecord | null {
+    const row = this.db.prepare("SELECT submission_key AS key, request_hash AS requestHash, run_id AS runId FROM run_submissions WHERE submission_key = ?")
+      .get(key) as RunSubmissionRecord | undefined;
+    return row ?? null;
+  }
+
+  async getRunBySubmission(key: string): Promise<RunSubmissionRecord | null> {
+    await this.ready();
+    return this.readSubmission(key);
   }
 
   async updateRunStatus(runId: string, status: RunStatus): Promise<void> {
     await this.ready();
+    const now = new Date().toISOString();
+    const isTerminal =
+      status === "succeeded" || status === "failed" || status === "cancelled";
+    const result = isTerminal
+      ? this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at,
+              finished_at = COALESCE(finished_at, @finished_at)
+             WHERE run_id = @run_id`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            updated_at: now,
+            finished_at: now,
+          })
+      : this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at WHERE run_id = @run_id`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            updated_at: now,
+          });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async tryUpdateRunStatus(
+    runId: string,
+    status: RunStatus,
+    expectedStatus: RunStatus,
+  ): Promise<boolean> {
+    await this.ready();
+    const now = new Date().toISOString();
+    const isTerminal =
+      status === "succeeded" || status === "failed" || status === "cancelled";
+    const result = isTerminal
+      ? this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at,
+              finished_at = COALESCE(finished_at, @finished_at)
+             WHERE run_id = @run_id AND status = @expected_status`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            expected_status: expectedStatus,
+            updated_at: now,
+            finished_at: now,
+          })
+      : this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at
+             WHERE run_id = @run_id AND status = @expected_status`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            expected_status: expectedStatus,
+            updated_at: now,
+          });
+    if (result.changes > 0) return true;
+    const exists = this.db
+      .prepare(`SELECT 1 AS ok FROM runs WHERE run_id = ?`)
+      .get(runId);
+    if (exists === undefined) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    return false;
+  }
+
+  async patchRunWorkspaceBinding(
+    runId: string,
+    patch: {
+      checkoutRoot?: string;
+      repository?: string;
+      ref?: string;
+      resolvedSha?: string;
+      runBranch?: string;
+    },
+  ): Promise<void> {
+    await this.ready();
+    const sets: string[] = ["updated_at = @updated_at"];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.checkoutRoot !== undefined) {
+      sets.push("checkout_root = @checkout_root");
+      params.checkout_root = patch.checkoutRoot;
+    }
+    if (patch.repository !== undefined) {
+      sets.push("repository = @repository");
+      params.repository = patch.repository;
+    }
+    if (patch.ref !== undefined) {
+      sets.push("ref = @ref");
+      params.ref = patch.ref;
+    }
+    if (patch.resolvedSha !== undefined) {
+      sets.push("resolved_sha = @resolved_sha");
+      params.resolved_sha = patch.resolvedSha;
+    }
+    if (patch.runBranch !== undefined) {
+      sets.push("run_branch = @run_branch");
+      params.run_branch = patch.runBranch;
+    }
+    if (sets.length === 1) {
+      return;
+    }
+    const result = this.db
+      .prepare(`UPDATE runs SET ${sets.join(", ")} WHERE run_id = @run_id`)
+      .run(params);
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async appendConfigOrigins(
+    runId: string,
+    origins: ConfigOriginRecord[],
+  ): Promise<void> {
+    await this.ready();
+    if (origins.length === 0) return;
+    const row = this.getRunRow(runId);
+    const existing: ConfigOriginRecord[] = row.config_origins_json
+      ? (JSON.parse(row.config_origins_json) as ConfigOriginRecord[])
+      : [];
+    const keyOf = (o: ConfigOriginRecord) =>
+      `${o.name}\0${o.origin}\0${o.path ?? ""}`;
+    const seen = new Set(existing.map(keyOf));
+    const merged = [...existing];
+    for (const origin of origins) {
+      const key = keyOf(origin);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(origin);
+    }
+    if (merged.length === existing.length) return;
     const result = this.db
       .prepare(
-        `UPDATE runs SET status = @status, updated_at = @updated_at WHERE run_id = @run_id`,
+        `UPDATE runs SET config_origins_json = @config_origins_json, updated_at = @updated_at WHERE run_id = @run_id`,
       )
       .run({
         run_id: runId,
-        status,
+        config_origins_json: JSON.stringify(merged),
         updated_at: new Date().toISOString(),
       });
     if (result.changes === 0) {
       throw new Error(`Run not found: ${runId}`);
     }
+  }
+
+  async setCancelReason(runId: string, reason: string): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET cancel_reason = @cancel_reason, updated_at = @updated_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        cancel_reason: reason,
+        updated_at: new Date().toISOString(),
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async setRunDiskUsage(
+    runId: string,
+    diskBytes: number,
+    measuredAt: string,
+  ): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET disk_bytes = @disk_bytes, disk_measured_at = @disk_measured_at
+         WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        disk_bytes: diskBytes,
+        disk_measured_at: measuredAt,
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async setSlimmedAt(runId: string, slimmedAt: string): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET slimmed_at = @slimmed_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        slimmed_at: slimmedAt,
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async deleteRun(runId: string): Promise<void> {
+    await this.ready();
+    const deleteAll = this.db.transaction(() => {
+      const exists = this.db
+        .prepare(`SELECT 1 AS ok FROM runs WHERE run_id = ?`)
+        .get(runId) as { ok: number } | undefined;
+      if (exists === undefined) {
+        throw new Error(`Run not found: ${runId}`);
+      }
+      this.db.prepare(`DELETE FROM stage_events WHERE run_id = ?`).run(runId);
+      this.db
+        .prepare(`DELETE FROM verification_check_results WHERE run_id = ?`)
+        .run(runId);
+      this.db.prepare(`DELETE FROM stage_executions WHERE run_id = ?`).run(runId);
+      this.db
+        .prepare(`DELETE FROM feedback_replay_stage_passes WHERE run_id = ?`)
+        .run(runId);
+      this.db.prepare(`DELETE FROM fork_generations WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM feedback_replays WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM feedback_loops WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM stages WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM run_submissions WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM runs WHERE run_id = ?`).run(runId);
+    });
+    deleteAll();
   }
 
   async updatePipelineDag(
@@ -608,6 +783,30 @@ export class SqliteRunStore implements RunStore {
   async readTaskYaml(runId: string): Promise<string> {
     await this.ready();
     return this.getRunRow(runId).task_yaml;
+  }
+
+  async readPipelineBody(runId: string): Promise<string | null> {
+    await this.ready();
+    return this.getRunRow(runId).pipeline_body;
+  }
+
+  async updateRunManifest(runId: string, manifest: unknown): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET run_manifest = @run_manifest, updated_at = @updated_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        run_manifest:
+          manifest === null || manifest === undefined
+            ? null
+            : JSON.stringify(manifest),
+        updated_at: new Date().toISOString(),
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
   }
 
   async ensureStageWorkspace(runId: string, stageId: string): Promise<void> {
@@ -676,7 +875,7 @@ export class SqliteRunStore implements RunStore {
         });
       const row = this.db
         .prepare(
-          `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
+          `SELECT ${EXECUTION_SELECT_COLS}
            FROM stage_executions
            WHERE run_id = ? AND stage_id = ? AND attempt = ?`,
         )
@@ -692,7 +891,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const rows = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
+        `SELECT ${EXECUTION_SELECT_COLS}
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ?
          ORDER BY attempt ASC`,
@@ -708,7 +907,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const row = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
+        `SELECT ${EXECUTION_SELECT_COLS}
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ?
          ORDER BY attempt DESC
@@ -737,7 +936,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const row = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
+        `SELECT ${EXECUTION_SELECT_COLS}
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ? AND attempt = ?`,
       )
@@ -748,6 +947,24 @@ export class SqliteRunStore implements RunStore {
       );
     }
     return executionFromRow(row);
+  }
+
+  async listInterruptedStageExecutions(): Promise<StageExecution[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(
+        `SELECT ${EXECUTION_SELECT_COLS}
+         FROM stage_executions e
+         WHERE e.status = 'interrupted'
+           AND e.attempt = (
+             SELECT MAX(e2.attempt)
+             FROM stage_executions e2
+             WHERE e2.run_id = e.run_id AND e2.stage_id = e.stage_id
+           )
+         ORDER BY e.run_id ASC, e.stage_id ASC, e.attempt ASC`,
+      )
+      .all() as ExecutionRow[];
+    return rows.map(executionFromRow);
   }
 
   async updateStageExecution(
@@ -791,6 +1008,10 @@ export class SqliteRunStore implements RunStore {
     if (patch.usage !== undefined) {
       sets.push("usage_json = @usage_json");
       params.usage_json = JSON.stringify(patch.usage);
+    }
+    if (patch.auto_resume_count !== undefined) {
+      sets.push("auto_resume_count = @auto_resume_count");
+      params.auto_resume_count = patch.auto_resume_count;
     }
     if (sets.length === 0) return;
     const result = this.db
@@ -897,8 +1118,19 @@ export class SqliteRunStore implements RunStore {
     await this.updateStageExecution(runId, stageId, attempt, { envelope });
   }
 
-  async readEnvelope(runId: string, stageId: string): Promise<StageEnvelope> {
+  async readEnvelope(
+    runId: string,
+    stageId: string,
+    attempt?: number,
+  ): Promise<StageEnvelope> {
     await this.ready();
+    if (attempt !== undefined) {
+      const execution = await this.getStageExecution(runId, stageId, attempt);
+      if (execution.envelope != null) {
+        return execution.envelope;
+      }
+      throw new Error(`Envelope not found: ${runId}/${stageId}`);
+    }
     const execution = await this.getLatestStageExecution(runId, stageId);
     if (execution?.envelope != null) {
       return execution.envelope;
@@ -1026,12 +1258,16 @@ export class SqliteRunStore implements RunStore {
       );
       params.push(pipeline, pipeline, normalized);
     }
+    if (filter?.caller_id !== undefined) {
+      clauses.push("caller_id = ?");
+      params.push(filter.caller_id);
+    }
 
     const where =
       clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
          FROM runs ${where} ORDER BY created_at DESC`,
       )
       .all(...params) as RunRow[];
@@ -1048,6 +1284,198 @@ export class SqliteRunStore implements RunStore {
       );
     }
     return summaries;
+  }
+
+  async listRunOverviewRows(since: string): Promise<OverviewRunRow[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(
+        `SELECT r.run_id, r.pipeline_id, r.status, r.created_at, r.finished_at,
+                (SELECT SUM(e.cost_usd) FROM stage_executions e WHERE e.run_id = r.run_id) AS cost_usd
+         FROM runs r
+         WHERE r.created_at >= ?
+         ORDER BY r.created_at DESC`,
+      )
+      .all(since) as Array<{
+      run_id: string;
+      pipeline_id: string;
+      status: RunStatus;
+      created_at: string;
+      finished_at: string | null;
+      cost_usd: number | null;
+    }>;
+    return rows.map((row) => ({
+      run_id: row.run_id,
+      pipeline_id: row.pipeline_id,
+      status: row.status,
+      created_at: row.created_at,
+      ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
+      ...(row.cost_usd != null ? { cost_usd: row.cost_usd } : {}),
+    }));
+  }
+
+  async ensureProject(absPath: string): Promise<string> {
+    await this.ready();
+    const resolved = path.resolve(absPath);
+    let st;
+    try {
+      st = statSync(resolved);
+    } catch {
+      throw new Error(`project_root does not exist: ${resolved}`);
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`project_root is not a directory: ${resolved}`);
+    }
+    const normalized = normalizeProjectRoot(absPath);
+    if (normalized === path.parse(normalized).root) {
+      throw new Error(`project_root must not be filesystem root: ${normalized}`);
+    }
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO projects (project_root, created_at) VALUES (?, ?)
+         ON CONFLICT(project_root) DO NOTHING`,
+      )
+      .run(normalized, now);
+    return normalized;
+  }
+
+  async listRegisteredProjects(): Promise<string[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(`SELECT project_root FROM projects ORDER BY project_root`)
+      .all() as { project_root: string }[];
+    return rows.map((row) => row.project_root);
+  }
+
+  async upsertTrigger(input: UpsertTriggerInput): Promise<TriggerRecord> {
+    await this.ready();
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO triggers (id, definition_ref, enabled, created_at, updated_at)
+         VALUES (@id, @definition_ref, @enabled, @created_at, @updated_at)
+         ON CONFLICT(id) DO UPDATE SET
+           definition_ref = @definition_ref,
+           enabled = @enabled,
+           updated_at = @updated_at`,
+      )
+      .run({
+        id: input.id,
+        definition_ref: input.definitionRef,
+        enabled: input.enabled ? 1 : 0,
+        created_at: now,
+        updated_at: now,
+      });
+    const record = await this.getTrigger(input.id);
+    if (!record) throw new Error(`Trigger not found after upsert: ${input.id}`);
+    return record;
+  }
+
+  async getTrigger(id: string): Promise<TriggerRecord | null> {
+    await this.ready();
+    const row = this.db
+      .prepare(
+        `SELECT id, definition_ref, enabled, last_fired_at, last_run_id, next_run_at, created_at, updated_at
+         FROM triggers WHERE id = ?`,
+      )
+      .get(id) as TriggerRow | undefined;
+    return row ? triggerFromRow(row) : null;
+  }
+
+  async listTriggers(): Promise<TriggerRecord[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(
+        `SELECT id, definition_ref, enabled, last_fired_at, last_run_id, next_run_at, created_at, updated_at
+         FROM triggers ORDER BY id`,
+      )
+      .all() as TriggerRow[];
+    return rows.map(triggerFromRow);
+  }
+
+  async recordTriggerFired(id: string, runId: string): Promise<void> {
+    await this.ready();
+    const now = new Date().toISOString();
+    const apply = this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          `UPDATE triggers SET last_fired_at = @last_fired_at, last_run_id = @last_run_id, updated_at = @updated_at
+           WHERE id = @id`,
+        )
+        .run({ id, last_fired_at: now, last_run_id: runId, updated_at: now });
+      if (result.changes === 0) {
+        throw new Error(`Trigger not found: ${id}`);
+      }
+      this.db
+        .prepare(
+          `INSERT INTO trigger_fires (trigger_id, run_id, fired_at)
+           VALUES (@trigger_id, @run_id, @fired_at)`,
+        )
+        .run({ trigger_id: id, run_id: runId, fired_at: now });
+    });
+    apply();
+  }
+
+  async listTriggerFires(
+    triggerId: string,
+    limit: number,
+  ): Promise<Array<{ fired_at: string; run_id: string }>> {
+    await this.ready();
+    return this.db
+      .prepare(
+        `SELECT fired_at, run_id FROM trigger_fires
+         WHERE trigger_id = ?
+         ORDER BY fired_at DESC, id DESC
+         LIMIT ?`,
+      )
+      .all(triggerId, limit) as Array<{ fired_at: string; run_id: string }>;
+  }
+
+  async setTriggerNextRun(id: string, nextRunAt: string): Promise<void> {
+    await this.ready();
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE triggers SET next_run_at = @next_run_at, updated_at = @updated_at
+         WHERE id = @id`,
+      )
+      .run({ id, next_run_at: nextRunAt, updated_at: now });
+    if (result.changes === 0) {
+      throw new Error(`Trigger not found: ${id}`);
+    }
+  }
+
+  async getTriggerAdapterState(triggerId: string, key: string): Promise<string | null> {
+    const row = await this.getTriggerAdapterStateMeta(triggerId, key);
+    return row?.value ?? null;
+  }
+
+  async getTriggerAdapterStateMeta(
+    triggerId: string,
+    key: string,
+  ): Promise<{ value: string; updated_at: string } | null> {
+    await this.ready();
+    const row = this.db
+      .prepare(
+        `SELECT value, updated_at FROM trigger_adapter_state WHERE trigger_id = ? AND key = ?`,
+      )
+      .get(triggerId, key) as { value: string; updated_at: string } | undefined;
+    return row ?? null;
+  }
+
+  async setTriggerAdapterState(triggerId: string, key: string, value: string): Promise<void> {
+    await this.ready();
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO trigger_adapter_state (trigger_id, key, value, updated_at)
+         VALUES (@trigger_id, @key, @value, @updated_at)
+         ON CONFLICT(trigger_id, key) DO UPDATE SET
+           value = @value,
+           updated_at = @updated_at`,
+      )
+      .run({ trigger_id: triggerId, key, value, updated_at: now });
   }
 
   async readRun(runId: string): Promise<RunDetail> {
@@ -1567,14 +1995,53 @@ export class SqliteRunStore implements RunStore {
       ...(row.pipeline_path != null ? { pipeline_path: row.pipeline_path } : {}),
       ...(row.task_path != null ? { task_path: row.task_path } : {}),
       ...(row.project_root != null ? { project_root: row.project_root } : {}),
+      ...(row.repository != null ? { repository: row.repository } : {}),
+      ...(row.ref != null ? { ref: row.ref } : {}),
+      ...(row.resolved_sha != null ? { resolved_sha: row.resolved_sha } : {}),
+      ...(row.run_branch != null ? { run_branch: row.run_branch } : {}),
+      ...(row.git_author_name != null
+        ? { git_author_name: row.git_author_name }
+        : {}),
+      ...(row.git_author_email != null
+        ? { git_author_email: row.git_author_email }
+        : {}),
+      ...(row.cancel_reason != null ? { cancel_reason: row.cancel_reason } : {}),
+      ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
+      ...(row.slimmed_at != null ? { slimmed_at: row.slimmed_at } : {}),
+      ...(row.disk_bytes != null ? { disk_bytes: row.disk_bytes } : {}),
+      ...(row.disk_measured_at != null
+        ? { disk_measured_at: row.disk_measured_at }
+        : {}),
+      ...(row.config_origins_json
+        ? {
+            config_origins: JSON.parse(
+              row.config_origins_json,
+            ) as ConfigOriginRecord[],
+          }
+        : {}),
+      ...(row.pipeline_source === "inline" || row.pipeline_source === "path"
+        ? { pipeline_source: row.pipeline_source }
+        : {}),
+      ...(row.caller_id != null ? { caller_id: row.caller_id } : {}),
+      ...(row.run_manifest
+        ? { run_manifest: JSON.parse(row.run_manifest) as unknown }
+        : {}),
+      ...(row.skip_gates != null ? { skip_gates: row.skip_gates !== 0 } : {}),
       ...(pipeline_dag ? { pipeline_dag } : {}),
+      ...(row.pipeline_body
+        ? {
+            inline_pipeline: JSON.parse(
+              row.pipeline_body,
+            ) as InlinePipelineDefinition,
+          }
+        : {}),
     };
   }
 
   private getRunRow(runId: string): RunRow {
     const row = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
          FROM runs WHERE run_id = ?`,
       )
       .get(runId) as RunRow | undefined;

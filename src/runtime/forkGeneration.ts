@@ -377,6 +377,31 @@ export async function selectActiveInput(options: {
   return activeCohortForParent(options.store, options.runId, forkParentId);
 }
 
+export async function forkCohortMapsFromStore(
+  store: Pick<RunStore, "listForkGenerations">,
+  runId: string,
+): Promise<{
+  supersededCloneIds: Set<string>;
+  cohortByForkParent: Map<string, Set<string>>;
+}> {
+  const gens = await store.listForkGenerations(runId);
+  const supersededCloneIds = new Set<string>();
+  const cohortByForkParent = new Map<string, Set<string>>();
+  for (const gen of gens) {
+    if (gen.status === "superseded") {
+      for (const id of gen.clone_stage_ids) {
+        supersededCloneIds.add(id);
+      }
+    } else if (gen.status === "active") {
+      cohortByForkParent.set(
+        gen.fork_parent_stage_id,
+        new Set(gen.clone_stage_ids),
+      );
+    }
+  }
+  return { supersededCloneIds, cohortByForkParent };
+}
+
 export function filterJoinInputs(
   allInstanceIds: readonly string[],
   cohort: ActiveCohort,

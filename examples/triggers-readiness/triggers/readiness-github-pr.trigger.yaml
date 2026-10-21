@@ -1,0 +1,12 @@
+id: readiness-github-pr
+pipeline: readiness
+task: readiness-task
+kind: event
+enabled: false
+event:
+  source: github.pull_request
+  match:
+    action: opened
+  config:
+    repo: tejasghutukade/stageflow
+    secretRef: GITHUB_TOKEN

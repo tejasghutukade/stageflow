@@ -1,32 +1,55 @@
 import type { ValidationFindingCode } from "./validateCatalog.js";
 
-export type TaskLoadCode = "task.invalid_shape" | "task.load_error";
+export type TaskLoadCode =
+  | "task.invalid_shape"
+  | "task.load_error"
+  | "task.binding_conflict"
+  | "task.repository_ref_required"
+  | "task.ref_without_repository"
+  | "task.repository_invalid";
+
+export type TriggerLoadCode =
+  | "trigger.invalid_shape"
+  | "trigger.load_error"
+  | "trigger.unknown_pipeline"
+  | "trigger.unknown_task";
+
+type LoadIssueLocation = {
+  line?: number;
+  column?: number;
+};
 
 export type LoadIssue =
-  | {
+  | ({
       code: ValidationFindingCode;
       message: string;
       category: "pipeline";
       pipelineId?: string;
       stageId?: string;
-    }
-  | {
+    } & LoadIssueLocation)
+  | ({
       code: ValidationFindingCode;
       message: string;
       category: "stage";
       stageId?: string;
-    }
-  | {
+    } & LoadIssueLocation)
+  | ({
       code: TaskLoadCode;
       message: string;
       category: "task";
       taskId?: string;
-    }
-  | {
+    } & LoadIssueLocation)
+  | ({
+      code: TriggerLoadCode;
+      message: string;
+      category: "trigger";
+      triggerId?: string;
+    } & LoadIssueLocation)
+  | ({
       code: ValidationFindingCode | string;
       message: string;
       category: "catalog";
-    };
+    } & LoadIssueLocation);
 
 export type LoadOutcome<T> =
   | { ok: true; value: T; issues?: LoadIssue[] }

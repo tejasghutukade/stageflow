@@ -7,6 +7,7 @@ export const WAIT_WITHOUT_WORKER_DISPATCH =
 export type AnswerResumeAdapterResult = {
   ok: boolean;
   reason?: string;
+  verification?: "failed_retrying";
 };
 
 export async function orchestrateAnswerResume(options: {
@@ -38,5 +39,7 @@ export async function orchestrateAnswerResume(options: {
       status: 500,
     };
   }
-  return { ok: true };
+  return outcome.verification !== undefined
+    ? { ok: true, verification: outcome.verification }
+    : { ok: true };
 }

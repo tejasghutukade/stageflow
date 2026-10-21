@@ -114,6 +114,22 @@ See [YAML catalog — Clone Chain](../../../docs/yaml-catalog.md#clone-chain) an
 
 Do not author `clonable`, `clone_actions`, or envelope `clone_forks`. Do not put `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter.
 
+## Stage secrets
+
+Stages receive a **curated** environment — not Host `process.env`. Credentials reach a stage only via `secrets:` on the stage body or the pipeline `uses:` entry. Do not assume ambient `GITHUB_TOKEN` in the stage.
+
+```yaml
+secrets:
+  - GITHUB_TOKEN                      # GIT_ASKPASS + materialised token file (no raw env)
+  - { name: GITHUB_TOKEN, as: env }   # when gh/MCP need the env var (askpass still set)
+```
+
+`GITHUB_TOKEN` / `GH_TOKEN` default to askpass (no raw env). Prefer `{ name: GITHUB_TOKEN, as: env }` when `gh` or MCP needs the env var — askpass remains set for plain HTTPS `git`. Never put `STAGEFLOW_CONTROL_TOKEN` or read tokens in `secrets:` (never grantable). The Host still needs `GITHUB_TOKEN` / `GH_TOKEN` for clone/fetch materialize even for public repos; that Host token is separate from stage grants.
+
+When a publish stage calls `gh`, add `requires: [{ tool: gh }]`. The base Docker image has no `gh` — operators derive an image. Stageflow never installs tools from `requires:`.
+
+Full reference: [YAML catalog — Stage secrets](../../../docs/yaml-catalog.md#stage-secrets), [migration-stage-environment.md](../../../docs/migration-stage-environment.md). Legacy contract-key catalogs → `sf migrate-yaml` (laptop / `docker exec`, not MCP).
+
 ## Models
 
 Confirm providers before writing. After fan-out, give every sibling the same configured `model` unless the human asks for different ones. Prefer a reliable configured model on side-effecting final stages.

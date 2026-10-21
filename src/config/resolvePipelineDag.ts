@@ -59,7 +59,7 @@ function wrapRawStagesForNormalize(
     const id = typeof raw.id === "string" && raw.id ? raw.id : undefined;
     const hasUses = typeof raw.uses === "string";
     const hasBody = Object.keys(raw).some(
-      (key) => BODY_KEYS.has(key) && key !== "skill" && key !== "mcp",
+      (key) => BODY_KEYS.has(key) && key !== "skill" && key !== "mcp" && key !== "browser",
     );
     if (hasUses || hasBody || !id) {
       return { raw, declaringPath: ctx.path };

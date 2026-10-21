@@ -1,0 +1,5 @@
+id: with-repository
+goal: Fix a flaky test in a GitHub repository
+context: Repository-bound coding pipeline
+repository: acme/api
+ref: main

@@ -86,14 +86,13 @@ async function waitFor(
 }
 
 describe("ask_operator wiring (U3)", () => {
-  it("allowlist includes ask_operator beside emit (and artifact when registered)", () => {
+  it("omitted gate_kinds does not include ask_operator on the sealed-session allowlist", () => {
     expect(resolveStageToolNames("emit_stage_envelope")).toEqual([
       "read",
       "bash",
       "write",
       "edit",
       "emit_stage_envelope",
-      "ask_operator",
     ]);
     expect(
       resolveStageToolNames("emit_stage_envelope", "write_stage_artifact"),
@@ -103,7 +102,6 @@ describe("ask_operator wiring (U3)", () => {
       "write",
       "edit",
       "emit_stage_envelope",
-      "ask_operator",
       "write_stage_artifact",
     ]);
   });
@@ -140,6 +138,22 @@ describe("ask_operator wiring (U3)", () => {
         ["confirm"],
       ),
     ).toContain("ask_operator");
+    expect(
+      resolveStageToolNames(
+        "emit_stage_envelope",
+        "write_stage_artifact",
+        "ask_operator",
+        ["confirm"],
+      ),
+    ).toEqual([
+      "read",
+      "bash",
+      "write",
+      "edit",
+      "emit_stage_envelope",
+      "ask_operator",
+      "write_stage_artifact",
+    ]);
   });
 
   it("non-empty gate_kinds allowlists kinds on the ask tool", async () => {

@@ -1,0 +1,3 @@
+id: missing-ref
+goal: Repository without ref must fail
+repository: acme/api

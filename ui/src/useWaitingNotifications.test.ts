@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunSummary } from "./api";
 import {
+  diffNewIds,
   diffWaitingAppearances,
   readNotifyPreference,
   writeNotifyPreference,
@@ -72,5 +73,15 @@ describe("notify preference key", () => {
     expect(data.get("sf-notify-waiting")).toBe("system");
     expect(data.has("stageflow-notify-waiting")).toBe(false);
     expect(readNotifyPreference()).toBe("system");
+  });
+});
+
+describe("diffNewIds", () => {
+  it("records the first poll silently, then emits only new ids", () => {
+    const first = diffNewIds([{ id: "a" }], null);
+    expect(first.emit).toEqual([]);
+    const next = diffNewIds([{ id: "a" }, { id: "b" }], first.nextSeen);
+    expect(next.emit).toEqual([{ id: "b" }]);
+    expect([...diffNewIds([{ id: "b" }], next.nextSeen).nextSeen]).toEqual(["b"]);
   });
 });

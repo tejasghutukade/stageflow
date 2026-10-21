@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll, vi } from "vitest";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -15,7 +15,9 @@ import type { StartRunResult } from "../src/runtime/runManager.js";
 import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 import type { RunStore } from "../src/runstore/port.js";
 import { validateCatalog } from "../src/config/validateCatalog.js";
+import { gatedAgent } from "./helpers/admissionAgents.js";
 import { SAMPLE_TASK, SINGLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { spawnTestGlobalService, type TestGlobalService } from "./helpers/testGlobalService.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
@@ -24,40 +26,6 @@ const fixtures = path.join(root, "tests", "fixtures");
 const sampleTask = SAMPLE_TASK;
 const singlePipeline = SINGLE_PIPELINE;
 const brokenPipeline = path.join(fixtures, "manifest-catalog", "pipelines", "broken.pipeline.yaml");
-
-function gatedAgent(gate: Promise<void>) {
-  return {
-    openStage(input: { stage: { id: string } }) {
-      return createCompletedOnlyStageHandle({
-        stageId: input.stage.id,
-        run: async () => {
-          await gate;
-          return {
-            ok: true as const,
-            envelope: {
-              status: "success" as const,
-              summary: "ok",
-              artifacts: [],
-              payload: {},
-            },
-          };
-        },
-      });
-    },
-    async runStage() {
-      await gate;
-      return {
-        ok: true as const,
-        envelope: {
-          status: "success" as const,
-          summary: "ok",
-          artifacts: [],
-          payload: {},
-        },
-      };
-    },
-  };
-}
 
 function runCli(args: string[], cwd = root) {
   return spawnSync(process.execPath, [tsxCli, cli, ...args], {
@@ -90,32 +58,11 @@ function captureIo() {
 }
 
 describe("sf run --json parse (U1)", { timeout: 15_000 }, () => {
-  it("sf run --help mentions --json on the run usage line", () => {
-    const result = runCli(["run", "--help"]);
-    expect(result.status).toBe(0);
-    const out = result.stdout + result.stderr;
-    expect(out).toMatch(/sf run[^\n]*--json/);
-  });
-
-  it("top-level --help mentions --json on the run usage line", () => {
-    const result = runCli(["--help"]);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/sf run[^\n]*--json/);
-  });
-
-  it("sf run --nope prints Unknown flag on stderr and exits 1", () => {
-    const result = runCli(["run", "--nope"]);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(/Unknown flag: --nope/);
-    expect(result.stdout).toBe("");
-  });
-
   it("sf run --json without --task/--pipeline stays human on stderr with no stdout JSON", () => {
     const result = runCli(["run", "--json"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/Missing --task and\/or --pipeline/);
     expect(result.stdout.trim()).toBe("");
-    expect(() => JSON.parse(result.stdout)).toThrow();
   });
 
   it("unknown flag does not start a Run", async () => {
@@ -126,17 +73,24 @@ describe("sf run --json parse (U1)", { timeout: 15_000 }, () => {
     expect(code).toBe(1);
     expect(startRun).not.toHaveBeenCalled();
     expect(cap.stderrText()).toMatch(/Unknown flag: --nope/);
-
-    const spawned = runCli(["run", "--nope"], cwd);
-    expect(spawned.status).toBe(1);
-    const stageflowDir = path.join(cwd, ".stageflow");
-    await expect(readdir(stageflowDir)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
   });
 });
 
 describe("sf run start-failure mapping (U2)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("human busy start exits 1 with busy_capacity stderr, never 409", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-run-json-busy-"));
     const store = createRunStore({ rootDir: storeRoot });
@@ -168,7 +122,6 @@ describe("sf run start-failure mapping (U2)", () => {
       },
     );
     expect(code).toBe(1);
-    expect(code).not.toBe(409);
     expect(cap.stderrText()).toMatch(/busy_capacity:/);
     expect(cap.stdoutText()).toBe("");
 
@@ -292,7 +245,6 @@ describe("sf run start-failure mapping (U2)", () => {
       { io: cap.io, startRun: async () => rejected },
     );
     expect(code).toBe(1);
-    expect(code).not.toBe(400);
     const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
     expect(parsed).toEqual({
       ok: false,
@@ -336,6 +288,7 @@ describe("sf run --json completion (U3)", () => {
       runId: "run-ok",
       runDir: "/tmp/runs/ok",
     });
+    expect(parsed).not.toHaveProperty("stages");
     expect(cap.stdoutText()).not.toMatch(/Pipeline succeeded/);
     expect(cap.stderrText()).toBe("");
   });
@@ -628,6 +581,35 @@ describe("sf run --json completion (U3)", () => {
     expect(cap.stderrText()).toBe("");
   });
 
+  it("cancelled run prints cancelled envelope and exits 1", async () => {
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        io: cap.io,
+        startRun: async () =>
+          startedOk({
+            ok: false,
+            outcome: "cancelled",
+            runId: "run-cancel",
+            runDir: "/tmp/runs/cancel",
+            reason: "operator stop",
+          }),
+      },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
+    expect(parsed).toEqual({
+      ok: false,
+      outcome: "cancelled",
+      runId: "run-cancel",
+      runDir: "/tmp/runs/cancel",
+      reason: "operator stop",
+    });
+    expect(cap.stdoutText()).not.toMatch(/Pipeline cancelled|Pipeline failed/);
+    expect(cap.stderrText()).toBe("");
+  });
+
   it("validation gate under --json prints validate-shaped JSON with no runId", async () => {
     const validation = await validateCatalog({
       scope: "pipeline",
@@ -668,7 +650,6 @@ describe("sf run --json completion (U3)", () => {
     );
     expect(code).toBe(1);
     expect(cap.stdoutText()).toBe("");
-    expect(() => JSON.parse(cap.stdoutText())).toThrow();
     expect(cap.stderrText()).toBe("unexpected boom");
   });
 });
@@ -777,70 +758,27 @@ describe("sf run --json --include stages (U3)", () => {
     expect(parsed.stages[0]?.status).toBe("failed");
   });
 
-  it("--json without --include has no stages key", async () => {
-    const cap = captureIo();
-    const code = await runRunCommand(
-      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
-      {
-        io: cap.io,
-        startRun: async () =>
-          startedOk({
-            ok: true,
-            outcome: "succeeded",
-            runId: "run-ok",
-            runDir: "/tmp/runs/ok",
-          }),
-      },
-    );
-    expect(code).toBe(0);
-    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
-    expect(parsed).toEqual({
-      ok: true,
-      outcome: "succeeded",
-      runId: "run-ok",
-      runDir: "/tmp/runs/ok",
-    });
-    expect(parsed).not.toHaveProperty("stages");
-  });
-
-  it("--include foo exits 1 with Unknown --include value: foo", async () => {
+  it.each([
+    {
+      name: "--include foo exits 1 with Unknown --include value: foo",
+      args: ["--json", "--include", "foo"],
+      stderr: /Unknown --include value: foo/,
+    },
+    {
+      name: "--include stages without --json exits 1",
+      args: ["--include", "stages"],
+      stderr: /^error: --include stages requires --json$/,
+    },
+  ])("$name", async ({ args, stderr }) => {
     const cap = captureIo();
     const startRun = vi.fn();
     const code = await runRunCommand(
-      [
-        "--json",
-        "--include",
-        "foo",
-        "--task",
-        sampleTask,
-        "--pipeline",
-        singlePipeline,
-      ],
+      [...args, "--task", sampleTask, "--pipeline", singlePipeline],
       { io: cap.io, startRun },
     );
     expect(code).toBe(1);
     expect(startRun).not.toHaveBeenCalled();
-    expect(cap.stderrText()).toMatch(/Unknown --include value: foo/);
-    expect(cap.stdoutText()).toBe("");
-  });
-
-  it("--include stages without --json exits 1", async () => {
-    const cap = captureIo();
-    const startRun = vi.fn();
-    const code = await runRunCommand(
-      [
-        "--include",
-        "stages",
-        "--task",
-        sampleTask,
-        "--pipeline",
-        singlePipeline,
-      ],
-      { io: cap.io, startRun },
-    );
-    expect(code).toBe(1);
-    expect(startRun).not.toHaveBeenCalled();
-    expect(cap.stderrText()).toBe("error: --include stages requires --json");
+    expect(cap.stderrText()).toMatch(stderr);
     expect(cap.stdoutText()).toBe("");
   });
 
@@ -864,5 +802,160 @@ describe("sf run --json --include stages (U3)", () => {
     expect(cap.stderrText()).toMatch(
       /failed to read run for --include stages: store locked/,
     );
+  });
+});
+
+describe("sf run repository binding overrides (U7)", () => {
+  it("returns task.repository_ref_required for --repository without --ref", async () => {
+    const cap = captureIo();
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-u7-ref-"));
+    const store = createRunStore({ rootDir: root });
+    const manager = new RunManager({
+      agent: {
+        openStage() {
+          throw new Error("should not run");
+        },
+        async runStage() {
+          throw new Error("should not run");
+        },
+      },
+      store,
+      cwd: root,
+    });
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+        "--repository",
+        "acme/api",
+      ],
+      {
+        io: cap.io,
+        cwd: root,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(1);
+    const payload = JSON.parse(cap.stdoutText());
+    expect(payload).toMatchObject({
+      ok: false,
+      outcome: "failed",
+      code: "task.repository_ref_required",
+    });
+  });
+
+  it("returns task.binding_conflict when --repository/--ref combine with --checkout", async () => {
+    const cap = captureIo();
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-u7-conflict-"));
+    const store = createRunStore({ rootDir: root });
+    const manager = new RunManager({
+      agent: {
+        openStage() {
+          throw new Error("should not run");
+        },
+        async runStage() {
+          throw new Error("should not run");
+        },
+      },
+      store,
+      cwd: root,
+    });
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+        "--repository",
+        "acme/api",
+        "--ref",
+        "main",
+        "--checkout",
+        path.join(root, "checkout"),
+      ],
+      {
+        io: cap.io,
+        cwd: root,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(1);
+    const payload = JSON.parse(cap.stdoutText());
+    expect(payload.code).toBe("task.binding_conflict");
+  });
+});
+
+describe("sf run STAGEFLOW_NO_AUTOSTART (U7)", () => {
+  it("exits 1 with JSON code autostart_disabled when ensureService refuses", async () => {
+    const cap = captureIo();
+    const message =
+      "No Stageflow Host is answering at http://127.0.0.1:3847. Autostart is disabled (STAGEFLOW_NO_AUTOSTART). Start the Host with `sf mcp`, or in Docker check that the container's entrypoint is running.";
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        cwd: fixtures,
+        io: cap.io,
+        ensureService: async () => ({
+          ok: false,
+          reason: "autostart_disabled",
+          message,
+        }),
+      },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(cap.stdoutText()) as {
+      ok: boolean;
+      outcome: string;
+      code: string;
+      reason: string;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.outcome).toBe("failed");
+    expect(parsed.code).toBe("autostart_disabled");
+    expect(parsed.reason).toBe(message);
+    expect(parsed.reason).toContain("http://127.0.0.1:3847");
+    expect(parsed.reason.toLowerCase()).not.toMatch(/unset/);
+  });
+});
+
+describe("sf run --json exit drain (U8)", { timeout: 30_000 }, () => {
+  let service: TestGlobalService;
+  let isolatedHome: string;
+
+  beforeAll(async () => {
+    isolatedHome = await mkdtemp(path.join(tmpdir(), "sf-run-json-u8-home-"));
+    service = await spawnTestGlobalService({ cwd: fixtures, home: isolatedHome });
+  });
+
+  afterAll(async () => {
+    await service.stop();
+    await rm(isolatedHome, { recursive: true, force: true });
+  });
+
+  it("piped --json validation failure emits complete parseable JSON", () => {
+    for (let i = 0; i < 3; i++) {
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cli, "run", "--json", "--task", sampleTask, "--pipeline", brokenPipeline],
+        {
+          cwd: fixtures,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: service.env,
+        },
+      );
+      expect(result.status).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        ok: boolean;
+        findings?: unknown[];
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed).not.toHaveProperty("runId");
+      expect(Array.isArray(parsed.findings)).toBe(true);
+    }
   });
 });

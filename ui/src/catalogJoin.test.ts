@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { gateCount, stageLibrary } from "./catalogJoin";
+import { gateCount, stageLibrary, stageMayAsk } from "./catalogJoin";
 import type { PipelineListing } from "./api";
 
 describe("catalogJoin gate_kinds three-state", () => {
-  it("counts omitted and allowlist as gates, not empty lists", () => {
+  it("counts only non-empty allowlists as gates (Option A)", () => {
     const stages: Array<{ id: string; gate_kinds?: string[] }> = [
       { id: "compat" },
       { id: "no-hitl", gate_kinds: [] },
       { id: "allowlist", gate_kinds: ["confirm"] },
     ];
-    expect(gateCount([stages[0]!])).toBe(1);
+    expect(stageMayAsk(undefined)).toBe(false);
+    expect(stageMayAsk([])).toBe(false);
+    expect(stageMayAsk(["confirm"])).toBe(true);
+    expect(gateCount([stages[0]!])).toBe(0);
     expect(gateCount([stages[1]!])).toBe(0);
     expect(gateCount([stages[2]!])).toBe(1);
   });

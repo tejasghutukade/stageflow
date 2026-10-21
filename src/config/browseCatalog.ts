@@ -24,6 +24,8 @@ export type PipelineStageListing = {
   gate_kinds?: StageGateKind[];
   uses_path?: string;
   inline?: boolean;
+  model?: string;
+  skill?: string;
 };
 
 export type PipelineListing = {
@@ -52,20 +54,15 @@ export type CatalogBrowseResult = {
 export type CatalogScanPaths = {
   pipelinePaths: string[];
   taskPaths: string[];
+  triggerPaths: string[];
 };
-
-const BAKED_MODEL_IDS = [
-  "anthropic/claude-sonnet-4-5",
-  "cursor/auto",
-  "cursor/composer-2-5",
-] as const;
 
 function repoRelPath(projectRoot: string, absPath: string): string {
   return path.relative(projectRoot, absPath).replace(/\\/g, "/");
 }
 
 function mapStageListing(
-  stage: { id: string; gate_kinds?: StageGateKind[] },
+  stage: { id: string; gate_kinds?: StageGateKind[]; model?: string; skill?: string },
   source: PipelineStageSource | undefined,
   projectRoot: string,
 ): PipelineStageListing {
@@ -78,17 +75,19 @@ function mapStageListing(
   } else if (source?.kind === "file") {
     listing.uses_path = repoRelPath(projectRoot, source.path);
   }
+  if (typeof stage.model === "string" && stage.model.trim() !== "") {
+    listing.model = stage.model;
+  }
+  if (typeof stage.skill === "string" && stage.skill.trim() !== "") {
+    listing.skill = stage.skill;
+  }
   return listing;
-}
-
-function bakedModels(): string[] {
-  return [...BAKED_MODEL_IDS].sort((a, b) => a.localeCompare(b));
 }
 
 function catalogReadyFromStageflow(
   ctx: StageflowContext,
 ): ctx is StageflowContext & { manifest: LoadedManifest } {
-  return ctx.isGitProject && ctx.manifestStatus === "ok" && ctx.manifest !== null;
+  return ctx.manifestStatus === "ok" && ctx.manifest !== null;
 }
 
 function catalogReady(ctx: CatalogContext): ctx is CatalogContext & {
@@ -104,11 +103,12 @@ export async function getCatalogScanPaths(
   if (!catalogReady(ctx)) {
     return null;
   }
-  const [pipelinePaths, taskPaths] = await Promise.all([
+  const [pipelinePaths, taskPaths, triggerPaths] = await Promise.all([
     scanCatalogPaths(ctx.manifest, "pipeline"),
     scanCatalogPaths(ctx.manifest, "task"),
+    scanCatalogPaths(ctx.manifest, "trigger"),
   ]);
-  return { pipelinePaths, taskPaths };
+  return { pipelinePaths, taskPaths, triggerPaths };
 }
 
 async function listTasksFromManifest(
@@ -179,11 +179,12 @@ async function listPipelinesFromManifest(
   return listings;
 }
 
+/** Model ids the project's pipelines already use. The provider catalog (src/models) owns the choosable list. */
 async function listModelsFromManifest(
   projectRoot: string,
   manifest: LoadedManifest,
 ): Promise<string[]> {
-  const models = new Set<string>(BAKED_MODEL_IDS);
+  const models = new Set<string>();
   const filePaths = await scanCatalogPaths(manifest, "pipeline");
   for (const filePath of filePaths) {
     try {
@@ -208,7 +209,7 @@ export async function browseCatalog(
       ? await resolveStageflowContext(invocationCwd)
       : invocationCwd;
   const base = {
-    projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+    projectRoot: ctx.manifestStatus === "not_git" ? null : ctx.projectRoot,
     manifest: ctx.manifest,
     manifestStatus: ctx.manifestStatus,
     issues: ctx.manifestIssues,
@@ -219,7 +220,7 @@ export async function browseCatalog(
       ...base,
       pipelines: [],
       tasks: [],
-      models: bakedModels(),
+      models: [],
       warnings: [],
     };
   }
@@ -258,7 +259,7 @@ export async function listTasksForContext(ctx: CatalogContext): Promise<TaskList
 
 export async function listModelsForContext(ctx: CatalogContext): Promise<string[]> {
   if (!catalogReady(ctx)) {
-    return bakedModels();
+    return [];
   }
   return listModelsFromManifest(ctx.projectRoot, ctx.manifest);
 }

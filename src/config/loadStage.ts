@@ -1,3 +1,4 @@
+import { parseChannels } from "../channels/stageChannels.js";
 import { parseAgentField } from "../agent/agentBackend.js";
 import { STAGEFLOW_MCP_SERVER_NAME } from "../agent/claudeTools.js";
 import type { CompletionContract } from "../types/completion.js";
@@ -17,6 +18,11 @@ import {
 } from "./legacyYaml.js";
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
+import { yamlParsePosition } from "./yamlParsePosition.js";
+import { z } from "zod";
+import { parseStageSecrets } from "../runtime/stageSecretDecl.js";
+import { parseToolRequires } from "./toolRequires.js";
+import { parseStageBrowser } from "./stageBrowser.js";
 import {
   classifyYamlDocument,
   compileTargetContract,
@@ -178,6 +184,15 @@ function parseStageFields(
     id: entryId,
     system_prompt: raw.system_prompt,
   };
+  if (raw.email !== undefined) {
+    const permissions = z.array(z.object({ accountId: z.string().min(1).max(200),
+      operations: z.array(z.enum(["send", "reply", "getMessage", "search", "downloadAttachment"])).min(1).max(5),
+    }).strict()).max(20).safeParse(raw.email);
+    if (!permissions.success || new Set(permissions.data.map(permission => permission.accountId)).size !== permissions.data.length) {
+      return loadFailure([{ code: "stage.invalid_shape", message: `Invalid stage ${label}: invalid email permissions`, category: "stage", stageId: entryId }]);
+    }
+    stage.email = permissions.data;
+  }
 
   if (raw.clone_actions !== undefined) {
     return loadFailure([
@@ -397,6 +412,43 @@ function parseStageFields(
     stage.mcp = mcpOutcome.value;
   }
 
+  if (raw.channels !== undefined) {
+    const channels = parseChannels(raw.channels);
+    if (!channels.ok) {
+      return loadFailure([
+        {
+          code: "stage.invalid_channels",
+          message: `Invalid stage ${label}: ${channels.message}`,
+          category: "stage",
+          stageId: entryId,
+        },
+      ]);
+    }
+    stage.channels = channels.value;
+  }
+
+  const secretsOutcome = parseStageSecrets(raw.secrets, label, entryId);
+  if (!secretsOutcome.ok) return secretsOutcome;
+  if (secretsOutcome.value !== undefined) {
+    stage.secrets = secretsOutcome.value;
+  }
+
+  const requiresOutcome = parseToolRequires(raw.requires, `stage ${label}`, {
+    code: "stage.invalid_requires",
+    category: "stage",
+    stageId: entryId,
+  });
+  if (!requiresOutcome.ok) return requiresOutcome;
+  if (requiresOutcome.value !== undefined) {
+    stage.requires = requiresOutcome.value;
+  }
+
+  const browserOutcome = parseStageBrowser(raw.browser, label, entryId);
+  if (!browserOutcome.ok) return browserOutcome;
+  if (browserOutcome.value !== undefined) {
+    stage.browser = browserOutcome.value;
+  }
+
   const agentField = parseAgentField(raw.agent);
   if (!agentField.ok) {
     return loadFailure([
@@ -477,6 +529,7 @@ export async function loadStageOutcome(
         code: "stage.load_error",
         message,
         category: "stage",
+        ...yamlParsePosition(err),
       },
     ]);
   }

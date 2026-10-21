@@ -1,0 +1,9 @@
+id: github-valid
+pipeline: hello
+kind: event
+enabled: true
+event:
+  source: github.pull_request
+  config:
+    repo: acme/valid
+    secretRef: GH_TOKEN

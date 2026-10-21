@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiAgentAdapter } from "../src/agent/piAdapter.js";
 import type { StageHandle, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { globalStageflowHome } from "../src/project/globalHome.js";
 import { runStageWorker } from "../src/runtime/stageWorker.js";
 import {
   SANDBOX_CONTAINER_DOCKER_BIN_ENV,
@@ -130,6 +131,11 @@ describe("runStageWorker — sandbox container lifecycle (bash-in-a-box)", () =>
   const previousImage = process.env[SANDBOX_CONTAINER_IMAGE_ENV];
   const previousDockerBin = process.env[SANDBOX_CONTAINER_DOCKER_BIN_ENV];
   const previousLogFile = process.env.FAKE_DOCKER_LOG_FILE;
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-sandbox-worker-home-"));
+  });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -139,6 +145,8 @@ describe("runStageWorker — sandbox container lifecycle (bash-in-a-box)", () =>
     else process.env[SANDBOX_CONTAINER_DOCKER_BIN_ENV] = previousDockerBin;
     if (previousLogFile === undefined) delete process.env.FAKE_DOCKER_LOG_FILE;
     else process.env.FAKE_DOCKER_LOG_FILE = previousLogFile;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
   });
 
   it("starts no container and leaves roots.containerName undefined when no image is configured (default, unchanged behavior)", async () => {
@@ -149,7 +157,7 @@ describe("runStageWorker — sandbox container lifecycle (bash-in-a-box)", () =>
     process.env[SANDBOX_CONTAINER_DOCKER_BIN_ENV] = fakeDockerBin;
 
     const pipelineFile = await writeSingleStagePipeline(root);
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "solo",
       pipelinePath: pipelineFile,
@@ -173,7 +181,7 @@ describe("runStageWorker — sandbox container lifecycle (bash-in-a-box)", () =>
     process.env[SANDBOX_CONTAINER_DOCKER_BIN_ENV] = fakeDockerBin;
 
     const pipelineFile = await writeSingleStagePipeline(root);
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "solo",
       pipelinePath: pipelineFile,
@@ -201,7 +209,7 @@ describe("runStageWorker — sandbox container lifecycle (bash-in-a-box)", () =>
     process.env[SANDBOX_CONTAINER_DOCKER_BIN_ENV] = fakeDockerBin;
 
     const pipelineFile = await writeSingleStagePipeline(root);
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "solo",
       pipelinePath: pipelineFile,
@@ -228,7 +236,7 @@ describe("runStageWorker — sandbox container lifecycle (bash-in-a-box)", () =>
     process.env[SANDBOX_CONTAINER_DOCKER_BIN_ENV] = fakeDockerBin;
 
     const pipelineFile = await writeSingleStagePipeline(root);
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "solo",
       pipelinePath: pipelineFile,
@@ -255,7 +263,7 @@ describe("runStageWorker — sandbox container lifecycle (bash-in-a-box)", () =>
     process.env[SANDBOX_CONTAINER_DOCKER_BIN_ENV] = fakeDockerBin;
 
     const pipelineFile = await writeTwoIndependentStagesPipeline(root);
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "duo",
       pipelinePath: pipelineFile,

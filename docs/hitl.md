@@ -9,9 +9,11 @@ Stages can pause for **operator input** via the `ask_operator` Pi tool. The oper
 
 HITL is optional — pipelines with no `ask_operator` calls run fully headless.
 
+Agents (not pipeline stages) have their own approval gate: a call to an `ask_first` tool, and every `bash` call, pauses the agent until someone decides. Those approvals appear in the Inbox next to pipeline gates and can be decided from the console, CLI, MCP or an allowed channel. See [Agents](agents.md#runtime).
+
 ## Gate kinds
 
-Declared in stage YAML as `gate_kinds` (optional but recommended):
+Declared in stage YAML as `gate_kinds`:
 
 | Kind | Purpose |
 |------|---------|
@@ -19,6 +21,12 @@ Declared in stage YAML as `gate_kinds` (optional but recommended):
 | `confirm` | Accept/reject confirmation (yes/no is a UI label only) |
 | `multi_question` | Batch of sub-questions (each sub-question has its own kind) |
 | `artifact_backed` | Operator reviews one or more artifact paths before accepting |
+
+| `gate_kinds` value | Registers `ask_operator`? |
+|--------------------|---------------------------|
+| omitted | **no** |
+| `[]` | **no** (explicit off) |
+| non-empty list (e.g. `[confirm]`) | **yes** — kinds are the allowlist |
 
 Allowed values are the catalog enum `STAGE_GATE_KINDS` (`src/types/stage.ts`). `gate_kinds` documents intent and catalog membership. Runtime does **not** require each `ask_operator` kind to be a subset of the declared list.
 
@@ -30,9 +38,10 @@ Plan review with artifact gate: [`tests/fixtures/stages/plan-review.yaml`](../te
 
 ## Emit-phase verify
 
-`gate_kinds` alone documents intent — it does not stop a stage from calling
+`gate_kinds` alone does not stop a stage from calling
 `emit_stage_envelope` with `status: "success"` before the operator has actually
-answered. To make a gate load-bearing *this attempt*, declare it on body `verify`
+answered — and omitting `gate_kinds` (or setting `gate_kinds: []`) means
+`ask_operator` is not registered at all. To make a gate load-bearing *this attempt*, declare it on body `verify`
 (`type: gate`; omitted `when` defaults to `[emit]`):
 
 ```yaml
@@ -66,11 +75,23 @@ Params and answers (`src/tools/askOperator.ts`). Optional `id` on the prompt bec
 | `artifact_backed` | `message`, non-empty `artifacts[]`, optional `id` | `{ kind, promptId, decision: "accept" \| "reject", text? }` |
 | `multi_question` | `questions[]` of `free_text` or `confirm` only (nested `multi_question` / `artifact_backed` rejected) | `{ kind, promptId, answers }` — one entry per sub-question |
 
+### Gate handoff {#gate-handoff}
+
+For a stage with a `browser`, the Host adds optional fields to every pending prompt. They are never part of the `ask_operator` params, and the agent cannot set them.
+
+| Field | Meaning |
+|-------|---------|
+| `handoff` | `{ kind: "local_window" }` (the operator uses the browser window on the Host's screen) or `{ kind: "live_view", url }` (the console shows the browser in the gate; `url` is a stable path under `/api/runs/<run>/stages/<stage>/live-view`, never a token). See [Browser sessions: live view](browser.md#live-view). |
+| `site` | Host of `browser.check.url`, else the first `allow_domains` entry, else the host of `browser.login_url` |
+| `profile` | Browser profile name (never a path) |
+
+Prompts from stages without `browser`, and gates stored before this field existed, omit all three and stay valid. See [Human login stage](yaml-catalog.md#browser-human-login).
+
 ## Operator flow
 
 1. Stage agent calls `ask_operator` with a `kind` and message (and `artifacts` for `artifact_backed`)
 2. Run enters **waiting** state
-3. Operator replies in the console (select the stage on the spatial map — or open `#/runs/<runId>/stages/<stageId>` — and use the workspace reply surface), via MCP `answer_gate` while `sf ui` or `sf mcp` is running, or via `sf runs answer` when the host is down. Waiting cards on Today can also accept eligible gates.
+3. Operator replies in the console (select the stage in the run — or open `#/runs/<runId>/stages/<stageId>` — and use the answer panel), via MCP `answer_gate` while `sf ui` or `sf mcp` is running, or via `sf runs answer` when the host is down. The Inbox (**Needs you**) can also answer eligible gates.
 4. Stage agent continues; may call `ask_operator` again or finish with `emit_stage_envelope`
 
 `ask_operator` **does not** complete the stage — only `emit_stage_envelope` does.
@@ -129,21 +150,23 @@ system_prompt: |
 model: anthropic/claude-sonnet-4-5
 ```
 
-`gate_kinds` documents intent and catalog enum membership; runtime enforcement is via actual `ask_operator` calls in the agent session.
+`gate_kinds` declares which HITL kinds the stage may use. Omitting the field or setting `gate_kinds: []` does **not** register `ask_operator`; only a non-empty list does. Runtime enforcement of waits is via actual `ask_operator` calls in the agent session.
 
 ## Console reply
 
-Open `sf ui`, go to **Today** (waiting count badge) or **Runs**, open the run, and select the waiting stage on the spatial map — or open `#/runs/<runId>/stages/<stageId>`. The reply surface lives in that gated workspace. Eligible waiting cards on Today can also Accept. See [Operator console](operator-console.md).
+Open `sf ui`, go to **Inbox** (waiting count badge, **Needs you** tab) or **Pipeline runs**, open the run, and select the waiting stage — or open `#/runs/<runId>/stages/<stageId>`. The answer panel appears in the stage workspace. In the Inbox, press **1** to Accept, **3** to Reject (when the gate allows it) and **N** to write a note. See [Inbox](console-inbox.md) and [Pipeline runs](console-runs.md).
 
-Answers go to the **selected** stage instance id. Today shows the first waiter (`waiting_stage_id`) even when several clones wait — the same as dual named-sibling wait. Open the run and select the other clone to answer it. Waiting-card copy keeps the raw `waiting_stage_id`.
+Answers go to the **selected** stage instance id. The Inbox shows the first waiter (`waiting_stage_id`) even when several clones wait — the same as dual named-sibling wait. Open the run and select the other clone to answer it. Waiting-card copy keeps the raw `waiting_stage_id`.
 
-See [Operator console — Clone tracks](operator-console.md#clone-tracks).
+An `interrupted` stage (Host shutdown or orphan reconcile) is **not** a HITL wait — there is no `ask_operator` prompt. Resume the same attempt with **Resume session** in the console, MCP [`resume_stage`](mcp.md#resume_stage), or `sf runs resume`. Do not use `answer_gate` / `sf runs answer`.
+
+See [Pipeline runs](console-runs.md#run-detail-runsrunid).
 
 ## MCP
 
-Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while `sf ui` or `sf mcp` is running — see [MCP](mcp.md#wait_run) for the compose loop (`wait_run` → `answer_gate` → `wait_run`). Operator replies remain available in the console. Console and MCP stay valid when a host is up; mutating `sf runs` verbs refuse in that case.
+Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while `sf ui` or `sf mcp` is running — see [MCP](mcp.md#wait_run) for the compose loop (`wait_run` → `answer_gate` → `wait_run`). When `waiting_kind` is `feedback_loop_decision`, use [`decide_feedback_loop`](mcp.md#decide_feedback_loop) instead of `answer_gate` (host-down: [`sf runs feedback-decide`](cli-reference.md#sf-runs-feedback-decide)). Operator replies remain available in the console. Console, MCP, and mutating `sf runs` verbs all operate through the same shared global Stageflow service — running one does not block the others.
 
-When no host is up, the same loop is `sf runs waiting` / `answer` / `wait`. After `sf run` exit `2`, list waiting gates, answer, then wait — do not treat `answer` `{ "ok": true }` as terminal. See [CLI reference — `sf runs`](cli-reference.md#sf-runs).
+When no host is up, the same loop is `sf runs waiting` / `answer` / `wait` (or `sf runs feedback-decide` for an exhausted feedback loop). Mutating `sf runs` verbs (`answer`, `retry`, `resume`, `abandon`, `rerun`, `recover`) are HTTP clients of the shared global Stageflow service: they auto-start it if nothing is listening yet and use it as-is if `sf ui`/`sf mcp` is already running — there is no host-up/host-down conflict to avoid. After `sf run` exit `2`, list waiting gates, answer, then wait — do not treat `answer` `{ "ok": true }` as terminal. See [CLI reference — `sf runs`](cli-reference.md#sf-runs).
 
 When a coding-agent host is driving the run (the `stageflow-run` skill), a mappable gate is presented on that host's native question UI when one exists, then submitted with `answer_gate` (host up) or `sf runs answer --json` (host down). Open-ended `free_text` and hosts without a picker stay in chat. A representable `multi_question` is one picker call, not sequential cards. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).
 
@@ -152,4 +175,5 @@ When a coding-agent host is driving the run (the `stageflow-run` skill), a mappa
 - [Envelopes](envelopes.md) — completing a stage after gates; [emit-phase verify](envelopes.md#verify-emit) for making a gate load-bearing
 - [CI / headless](ci.md) — `--skip-gates` in automation
 - [YAML catalog](yaml-catalog.md) — `gate_kinds` and `verify` fields
+- [`examples/mcp-hitl-tour/`](../examples/mcp-hitl-tour/) — MCP-first HITL gates, fan-out/join, and `wait_for_human` decide
 - [`tests/fixtures/pipelines/hitl-four-kinds-proving.pipeline.yaml`](../tests/fixtures/pipelines/hitl-four-kinds-proving.pipeline.yaml)

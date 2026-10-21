@@ -1,0 +1,39 @@
+# Copy this file to connections.yaml in the Stageflow workspace, set the environment
+# variables it names, and restart the host. Secrets are never written here: each value
+# is `env:NAME`, resolved from NAME or NAME_FILE in the host environment.
+# This example is inactive until you rename it. Providers are added one at a time;
+# agentmail, slack, telegram, imessage and whatsapp are implemented so far, and a provider that is not implemented yet is
+# rejected at load, so delete the entries you do not use.
+version: 1
+credentials:
+  - id: photon-main
+    provider: photon
+    secrets:
+      projectId: env:PHOTON_PROJECT_ID
+      projectSecret: env:PHOTON_PROJECT_SECRET
+connections:
+  - id: support-inbox
+    provider: agentmail
+    displayName: Support inbox
+    config:
+      inbox: support@agentmail.to
+    secrets:
+      apiKey: env:AGENTMAIL_API_KEY
+  - id: ops-slack
+    provider: slack
+    config:
+      teamId: T0123ABCD   # optional: fail the check if the token belongs to another workspace
+    secrets:
+      botToken: env:SLACK_BOT_TOKEN
+  - id: alerts-telegram
+    provider: telegram
+    config:
+      botUsername: acme_alerts_bot   # optional: fail the check if the token is another bot
+    secrets:
+      botToken: env:TELEGRAM_BOT_TOKEN
+  - id: alerts-imessage
+    provider: imessage
+    credential: photon-main
+  - id: orders-whatsapp
+    provider: whatsapp
+    credential: photon-main

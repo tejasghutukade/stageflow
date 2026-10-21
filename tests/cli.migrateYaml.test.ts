@@ -270,11 +270,11 @@ describe("sf migrate-yaml", () => {
         io: cap.io,
       });
       expect(code).toBe(1);
-      const parsed = JSON.parse(cap.logs[0] ?? cap.errors[0] ?? "{}") as {
+      const parsed = JSON.parse(cap.logs[0] ?? cap.errors[0]!) as {
         ok?: boolean;
       };
       const out = [...cap.logs, ...cap.errors].join("\n");
-      expect(parsed.ok ?? false).toBe(false);
+      expect(parsed.ok).toBe(false);
       expect(out).toMatch(/uncommitted|dirty|--force/i);
       expect(await readFile(stagePath, "utf8")).toBe(beforeStage);
     } finally {
@@ -321,43 +321,7 @@ describe("sf migrate-yaml", () => {
     }
   });
 
-  it("fails closed when two parents compile different verify lists for the same uses: path", async () => {
-    const { root: catalogRoot, cleanup } = await initTempGitRepo();
-    try {
-      await writeUsesCatalog(catalogRoot);
-      await writeFile(
-        path.join(catalogRoot, "pipelines", "other.pipeline.yaml"),
-        [
-          "id: other-pipe",
-          "stages:",
-          "  - id: work",
-          "    uses: ../stages/work.yaml",
-          "    completion:",
-          "      mode: all",
-          "      checks:",
-          "        - id: lint",
-          "          type: command",
-          "          run: npm run lint",
-          "",
-        ].join("\n"),
-      );
-      await commitAll(catalogRoot, "two parents");
-      const cap = captureIo();
-      const code = await runMigrateYamlCommand(["--json", catalogRoot], {
-        cwd: catalogRoot,
-        io: cap.io,
-      });
-      expect(code).toBe(1);
-      const out = [...cap.logs, ...cap.errors].join("\n");
-      expect(out).toMatch(/work-pipe/);
-      expect(out).toMatch(/other-pipe/);
-      expect(out).toMatch(/work\.yaml/);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("does not poison a sibling parent when migrating one pipeline that shares a uses file", async () => {
+  it("fails closed when two parents compile different verify lists for the same uses: path, without poisoning the sibling", async () => {
     const { root: catalogRoot, cleanup } = await initTempGitRepo();
     try {
       const { pipelinePath, stagePath } = await writeUsesCatalog(catalogRoot);
@@ -379,17 +343,30 @@ describe("sf migrate-yaml", () => {
       );
       await commitAll(catalogRoot, "two parents");
       const beforeStage = await readFile(stagePath, "utf8");
-      const cap = captureIo();
-      const code = await runMigrateYamlCommand(["--write", "--json", pipelinePath], {
-        cwd: catalogRoot,
-        io: cap.io,
-      });
-      expect(code).toBe(1);
+
+      const dry = captureIo();
+      expect(
+        await runMigrateYamlCommand(["--json", catalogRoot], {
+          cwd: catalogRoot,
+          io: dry.io,
+        }),
+      ).toBe(1);
+      const dryOut = [...dry.logs, ...dry.errors].join("\n");
+      expect(dryOut).toMatch(/work-pipe/);
+      expect(dryOut).toMatch(/other-pipe/);
+      expect(dryOut).toMatch(/work\.yaml/);
+
+      const write = captureIo();
+      expect(
+        await runMigrateYamlCommand(["--write", "--json", pipelinePath], {
+          cwd: catalogRoot,
+          io: write.io,
+        }),
+      ).toBe(1);
       expect(await readFile(stagePath, "utf8")).toBe(beforeStage);
-      const out = [...cap.logs, ...cap.errors].join("\n");
-      expect(out).toMatch(/work\.yaml/);
-      expect(out).toMatch(/other-pipe/);
-      expect(out).not.toMatch(/type: command[\s\S]*npm run lint/);
+      const writeOut = [...write.logs, ...write.errors].join("\n");
+      expect(writeOut).toMatch(/work\.yaml/);
+      expect(writeOut).toMatch(/other-pipe/);
     } finally {
       await cleanup();
     }
@@ -596,9 +573,6 @@ describe("sf migrate-yaml CLI wiring", { timeout: 30_000 }, () => {
       const { pipelinePath } = await writeUsesCatalog(catalogRoot);
       await commitAll(catalogRoot, "catalog");
       clearFindProjectRootCacheForTests();
-      const help = runCli(["migrate-yaml", "--help"], catalogRoot);
-      expect(help.status).toBe(0);
-      expect(help.stdout + help.stderr).toMatch(/sf migrate-yaml/);
       const dry = runCli(["migrate-yaml", "--json", pipelinePath], catalogRoot);
       expect(dry.status).toBe(0);
       const parsed = JSON.parse(dry.stdout) as { ok: boolean; write: boolean; planned: string[] };

@@ -1,0 +1,456 @@
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { runRunsCommand } from "../src/cli/runsCommand.js";
+import { createRunStore } from "../src/runstore/createStore.js";
+import { OPERATOR_CANCEL_REASON } from "../src/runtime/stageRecovery.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import { startUiServer } from "../src/server/http.js";
+import { mcpCall } from "./helpers/mcpCall.js";
+import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
+
+const fixtures = FIXTURES_ROOT;
+const temps: string[] = [];
+const savedEnv: Record<string, string | undefined> = {};
+
+function stashEnv(keys: string[]): void {
+  for (const key of keys) {
+    savedEnv[key] = process.env[key];
+  }
+}
+
+function restoreEnv(keys: string[]): void {
+  for (const key of keys) {
+    const value = savedEnv[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+function captureIo() {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  return {
+    stdout,
+    stderr,
+    io: {
+      log: (line: string) => {
+        stdout.push(line);
+      },
+      error: (line: string) => {
+        stderr.push(line);
+      },
+    },
+  };
+}
+
+async function withServer(root: string) {
+  const store = createRunStore({ rootDir: root });
+  const started = await startUiServer({
+    agent: scriptedFakeAgent([]),
+    cwd: fixtures,
+    rootDir: root,
+    store,
+    port: 0,
+    uiDistDir: path.join(root, "missing-ui"),
+    mcpStateless: true,
+  });
+  const address = started.server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP address");
+  }
+  return {
+    store,
+    server: started.server,
+    base: `http://127.0.0.1:${address.port}`,
+  };
+}
+
+beforeEach(async () => {
+  stashEnv(["STAGEFLOW_HOME", "STAGEFLOW_GC_INTERVAL_MS"]);
+  resetGlobalStageflowHomeForTests();
+  const home = await mkdtemp(path.join(tmpdir(), "sf-mcp-lifecycle-home-"));
+  temps.push(home);
+  process.env.STAGEFLOW_HOME = home;
+  process.env.STAGEFLOW_GC_INTERVAL_MS = "0";
+  resetGlobalStageflowHomeForTests();
+});
+
+afterEach(async () => {
+  restoreEnv(["STAGEFLOW_HOME", "STAGEFLOW_GC_INTERVAL_MS"]);
+  resetGlobalStageflowHomeForTests();
+  for (const dir of temps.splice(0)) {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+});
+
+describe("MCP/REST/CLI cancel_run lifecycle", () => {
+  it("MCP cancel_run terminalizes a running stage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-cancel-"));
+    const { store, server, base } = await withServer(root);
+    try {
+      const planted = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.appendStageEvent(planted.runId, "build", {
+        event: "started",
+      });
+      await store.updateRunStatus(planted.runId, "running");
+
+      const cancelled = await mcpCall(base, "cancel_run", {
+        runId: planted.runId,
+        reason: "mcp stop",
+      });
+      expect(cancelled.isError).toBe(false);
+      expect(cancelled.payload).toEqual({
+        ok: true,
+        runId: planted.runId,
+      });
+
+      const detail = await store.readRun(planted.runId);
+      expect(detail.status).toBe("cancelled");
+      expect(detail.cancel_reason).toBe("mcp stop");
+      expect(detail.stages.find((s) => s.stage_id === "build")?.status).toBe(
+        "failed",
+      );
+      const events = await store.listStageEvents(planted.runId, "build");
+      expect(events.find((e) => e.event === "failed")?.reason).toBe(
+        OPERATOR_CANCEL_REASON,
+      );
+
+      const again = await mcpCall(base, "cancel_run", {
+        runId: planted.runId,
+        reason: "again",
+      });
+      expect(again.isError).toBe(false);
+      expect(again.payload).toEqual({ ok: true, runId: planted.runId });
+
+      const succeeded = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(succeeded.runId, "succeeded");
+      const conflict = await mcpCall(base, "cancel_run", {
+        runId: succeeded.runId,
+        reason: "nope",
+      });
+      expect(conflict.isError).toBe(true);
+      expect(conflict.payload.status).toBe(409);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("REST POST /api/runs/:runId/cancel returns 202", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-rest-cancel-"));
+    const { store, server, base } = await withServer(root);
+    try {
+      const planted = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.appendStageEvent(planted.runId, "build", {
+        event: "started",
+      });
+      await store.updateRunStatus(planted.runId, "running");
+
+      const res = await fetch(`${base}/api/runs/${planted.runId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "rest stop" }),
+      });
+      expect(res.status).toBe(202);
+      expect(await res.json()).toEqual({
+        ok: true,
+        runId: planted.runId,
+      });
+
+      const detail = await store.readRun(planted.runId);
+      expect(detail.status).toBe("cancelled");
+      expect(detail.cancel_reason).toBe("rest stop");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("CLI sf runs cancel reaches the same cancelRun", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-cancel-"));
+    const { store, server, base } = await withServer(root);
+    try {
+      const planted = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.appendStageEvent(planted.runId, "build", {
+        event: "started",
+      });
+      await store.updateRunStatus(planted.runId, "running");
+
+      const cap = captureIo();
+      const code = await runRunsCommand(
+        [
+          "cancel",
+          "--run",
+          planted.runId,
+          "--reason",
+          "cli stop",
+          "--json",
+        ],
+        {
+          cwd: fixtures,
+          hostBaseUrl: base,
+          ensureService: async () => ({
+            ok: true as const,
+            alreadyRunning: true as const,
+          }),
+          io: cap.io,
+        },
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(cap.stdout.join("\n"))).toEqual({
+        ok: true,
+        runId: planted.runId,
+      });
+
+      const detail = await store.readRun(planted.runId);
+      expect(detail.status).toBe("cancelled");
+      expect(detail.cancel_reason).toBe("cli stop");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("abandon_stage description no longer denies run-level cancel", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-abandon-desc-"));
+    const { server, base } = await withServer(root);
+    try {
+      const res = await fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/list",
+          params: {},
+        }),
+      });
+      const text = await res.text();
+      const dataLine = text.split("\n").find((line) => line.startsWith("data: "));
+      expect(dataLine).toBeTruthy();
+      const payload = JSON.parse(dataLine!.slice("data: ".length)) as {
+        result?: { tools?: Array<{ name: string; description?: string }> };
+      };
+      const abandon = payload.result?.tools?.find((t) => t.name === "abandon_stage");
+      const cancel = payload.result?.tools?.find((t) => t.name === "cancel_run");
+      expect(abandon?.description).toBeTruthy();
+      expect(abandon!.description).not.toMatch(/no run-level cancel/i);
+      expect(abandon!.description).toMatch(/cancel_run/);
+      expect(cancel?.description).toBeTruthy();
+      expect(cancel!.description).toMatch(/process-group kill/i);
+      expect(cancel!.description).not.toMatch(/process-group kill is not fixed/i);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+
+describe("MCP/REST/CLI delete_run lifecycle", () => {
+  it("MCP delete_run removes a terminal run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-delete-"));
+    const { store, server, base } = await withServer(root);
+    try {
+      const planted = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.appendStageEvent(planted.runId, "build", {
+        event: "started",
+      });
+      await store.updateRunStatus(planted.runId, "succeeded");
+
+      const deleted = await mcpCall(base, "delete_run", {
+        runId: planted.runId,
+      });
+      expect(deleted.isError).toBe(false);
+      expect(deleted.payload).toEqual({
+        ok: true,
+        runId: planted.runId,
+      });
+      await expect(store.readRun(planted.runId)).rejects.toThrow(/Run not found/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("REST DELETE /api/runs/:runId returns 200 and force cancels then deletes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-rest-delete-"));
+    const { store, server, base } = await withServer(root);
+    try {
+      const terminal = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(terminal.runId, "failed");
+      const res = await fetch(`${base}/api/runs/${terminal.runId}`, {
+        method: "DELETE",
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        ok: true,
+        runId: terminal.runId,
+      });
+      await expect(store.readRun(terminal.runId)).rejects.toThrow(/Run not found/);
+
+      const active = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.appendStageEvent(active.runId, "build", { event: "started" });
+      await store.updateRunStatus(active.runId, "running");
+
+      const conflict = await fetch(`${base}/api/runs/${active.runId}`, {
+        method: "DELETE",
+      });
+      expect(conflict.status).toBe(409);
+
+      const forced = await fetch(
+        `${base}/api/runs/${active.runId}?force=true`,
+        { method: "DELETE" },
+      );
+      expect(forced.status).toBe(200);
+      expect(await forced.json()).toEqual({
+        ok: true,
+        runId: active.runId,
+      });
+      await expect(store.readRun(active.runId)).rejects.toThrow(/Run not found/);
+
+      const missing = await fetch(`${base}/api/runs/no-such-run`, {
+        method: "DELETE",
+      });
+      expect(missing.status).toBe(404);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("CLI sf runs delete reaches the same deleteRun", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-delete-"));
+    const { store, server, base } = await withServer(root);
+    try {
+      const planted = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(planted.runId, "succeeded");
+
+      const cap = captureIo();
+      const code = await runRunsCommand(
+        ["delete", "--run", planted.runId, "--json"],
+        {
+          cwd: fixtures,
+          hostBaseUrl: base,
+          ensureService: async () => ({
+            ok: true as const,
+            alreadyRunning: true as const,
+          }),
+          io: cap.io,
+        },
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(cap.stdout.join("\n"))).toEqual({
+        ok: true,
+        runId: planted.runId,
+      });
+      await expect(store.readRun(planted.runId)).rejects.toThrow(/Run not found/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+
+describe("MCP/REST/CLI gc_runs lifecycle", () => {
+  it("MCP gc_runs defaults to dry-run and matches REST/CLI report shape", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-gc-"));
+    const { store, server, base } = await withServer(root);
+    try {
+      const connection = (store as { connection: import("better-sqlite3").Database })
+        .connection;
+      const planted = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(planted.runId, "succeeded");
+      connection
+        .prepare(`UPDATE runs SET finished_at = ? WHERE run_id = ?`)
+        .run(
+          new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+          planted.runId,
+        );
+
+      const dry = await mcpCall(base, "gc_runs", {});
+      expect(dry.isError).toBe(false);
+      expect(dry.payload).toEqual({
+        slimmed: [planted.runId],
+        purged: [],
+        bareCachesEvicted: [],
+      });
+      const metaAfterDry = await store.readRunMeta(planted.runId);
+      expect(metaAfterDry.slimmed_at).toBeUndefined();
+
+      const rest = await fetch(`${base}/api/runs/gc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ execute: false }),
+      });
+      expect(rest.status).toBe(200);
+      expect(await rest.json()).toEqual(dry.payload);
+
+      const cap = captureIo();
+      const code = await runRunsCommand(["gc", "--dry-run", "--json"], {
+        cwd: fixtures,
+        hostBaseUrl: base,
+        ensureService: async () => ({
+          ok: true as const,
+          alreadyRunning: true as const,
+        }),
+        io: cap.io,
+      });
+      expect(code).toBe(0);
+      expect(JSON.parse(cap.stdout.join("\n"))).toEqual(dry.payload);
+
+      const executed = await mcpCall(base, "gc_runs", { execute: true });
+      expect(executed.isError).toBe(false);
+      expect(executed.payload).toEqual({
+        slimmed: [planted.runId],
+        purged: [],
+        bareCachesEvicted: [],
+      });
+      const metaAfter = await store.readRunMeta(planted.runId);
+      expect(metaAfter.slimmed_at).toBeDefined();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});

@@ -1,7 +1,7 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { ensureGlobalHome } from "../project/globalHome.js";
+import { ensureGlobalHome, globalCredentialRoot } from "../project/globalHome.js";
 import {
   resolveProjectContext,
   type ProjectContext,
@@ -26,24 +26,38 @@ export type CredentialBinding = {
 };
 
 export type ResolveCredentialBindingOptions = {
-  piHomeAuthPath?: string;
+  agentAuthPath?: string;
 };
 
 export function sfOwnedAgentDir(): string {
-  return path.join(ensureGlobalHome(), "agent");
+  return path.join(globalCredentialRoot(), "agent");
 }
 
 export function sfOwnedAuthPath(): string {
   return path.join(sfOwnedAgentDir(), "auth.json");
 }
 
-export function piHomeAuthPath(
-  override?: string,
-): string {
-  return (
-    override ??
-    path.join(os.homedir(), ".pi", "agent", "auth.json")
-  );
+export const STAGEFLOW_AGENT_AUTH_PATH_ENV = "STAGEFLOW_AGENT_AUTH_PATH";
+
+/** @deprecated Use STAGEFLOW_AGENT_AUTH_PATH_ENV. */
+export const PI_HOME_AUTH_PATH_ENV = STAGEFLOW_AGENT_AUTH_PATH_ENV;
+
+export function stageflowAgentAuthPath(override?: string): string {
+  if (override !== undefined) {
+    return path.resolve(override);
+  }
+  const fromEnv =
+    process.env[STAGEFLOW_AGENT_AUTH_PATH_ENV]?.trim() ||
+    process.env.STAGEFLOW_PI_HOME_AUTH_PATH?.trim();
+  if (fromEnv) {
+    return path.resolve(fromEnv);
+  }
+  return sfOwnedAuthPath();
+}
+
+/** @deprecated Use stageflowAgentAuthPath */
+export function piHomeAuthPath(override?: string): string {
+  return stageflowAgentAuthPath(override);
 }
 
 export function isUsableAuthFile(authPath: string): boolean {
@@ -58,7 +72,14 @@ export function isUsableAuthFile(authPath: string): boolean {
 
 export function ensureSfOwnedAuthStore(): string {
   ensureGlobalHome();
-  const authPath = sfOwnedAuthPath();
+  const agentDir = sfOwnedAgentDir();
+  mkdirSync(agentDir, { recursive: true });
+  try {
+    chmodSync(agentDir, 0o700);
+  } catch {
+    // best-effort on non-POSIX
+  }
+  const authPath = path.join(agentDir, "auth.json");
   if (!existsSync(authPath)) {
     writeFileSync(authPath, "{}\n", { encoding: "utf8", mode: 0o600 });
   }
@@ -70,42 +91,32 @@ export function ensureSfOwnedAuthStore(): string {
   return authPath;
 }
 
+const explicitAuthPath = new AsyncLocalStorage<string>();
+
+/** Use this auth file for credential binding and do not create the operator home. */
+export function runWithExplicitAuthPath<T>(
+  authPath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return explicitAuthPath.run(path.resolve(authPath), fn);
+}
+
+export function currentExplicitAuthPath(): string | undefined {
+  return explicitAuthPath.getStore();
+}
+
 export function resolveCredentialBinding(
   ctx: ProjectContext | string,
-  options: ResolveCredentialBindingOptions = {},
+  _options: ResolveCredentialBindingOptions = {},
 ): CredentialBinding {
+  const explicit = currentExplicitAuthPath();
   const projectCtx =
     typeof ctx === "string" ? resolveProjectContext(ctx) : ctx;
-  const piHome = piHomeAuthPath(options.piHomeAuthPath);
   const persisted = readCredentialSourceFromContext(projectCtx);
-
-  if (persisted !== undefined) {
-    if (persisted === "sf_owned") {
-      return {
-        source: "sf_owned",
-        authPath: ensureSfOwnedAuthStore(),
-        provisional: false,
-      };
-    }
-    return {
-      source: "pi_home",
-      authPath: piHome,
-      provisional: false,
-    };
-  }
-
-  if (isUsableAuthFile(piHome)) {
-    return {
-      source: "pi_home",
-      authPath: piHome,
-      provisional: true,
-    };
-  }
-
   return {
     source: "sf_owned",
-    authPath: ensureSfOwnedAuthStore(),
-    provisional: true,
+    authPath: explicit ?? sfOwnedAuthPath(),
+    provisional: persisted === undefined,
   };
 }
 

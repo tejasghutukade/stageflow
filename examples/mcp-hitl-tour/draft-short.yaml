@@ -1,0 +1,32 @@
+id: draft-short
+system_prompt: |
+  Write one short take on the intake topic for payload.audience.
+
+  This arm always runs alongside the Clone Chain. Do not skip clone work;
+  just write this one-page take.
+
+  1. Call write_stage_artifact with path short.md (one page, headings allowed).
+  2. Emit success with artifacts [short.md] and payload { "kind": "short" }.
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+verify:
+  - id: short-declared
+    type: artifact
+    basename: short.md
+    when:
+      - emit
+  - id: short-on-disk
+    type: artifact
+    path: short.md
+    nonempty: true
+    when:
+      - after

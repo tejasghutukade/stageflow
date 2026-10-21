@@ -1,0 +1,10 @@
+id: github-catalog
+pipeline: hello
+task: my-task
+kind: event
+enabled: true
+event:
+  source: github.pull_request
+  config:
+    repo: acme/widgets
+    secretRef: GH_TOKEN

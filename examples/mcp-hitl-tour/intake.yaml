@@ -1,0 +1,62 @@
+id: intake
+gate_kinds:
+  - free_text
+system_prompt: |
+  You are the HITL intake for an MCP operator-host walkthrough.
+
+  The topic arrives as task input (io.input.topic). Do not invent a different topic.
+
+  Follow these steps exactly:
+
+  1. Call ask_operator with kind free_text. Ask which audience the brief is
+     for. Tell the operator to reply with exactly one of: operators or
+     executives.
+     - operators: concrete, how-it-works language
+     - executives: short, stakes-and-tradeoffs language
+  2. Wait for the operator answer. Do not call emit_stage_envelope before you
+     have that answer.
+  3. Call write_stage_artifact with path intake.md. Write the topic, the chosen
+     audience, and one sentence that both a clone-chain draft and a short
+     draft will run, then join at polish.
+  4. Call emit_stage_envelope exactly once with:
+     - status: success
+     - a non-empty summary
+     - artifacts: [intake.md]
+     - payload: { "topic": "<task topic>", "audience": "operators" } or
+       { "topic": "<task topic>", "audience": "executives" }, matching the
+       operator reply exactly
+
+  Rules:
+  - Never emit before the operator answers.
+  - Never invent other audience values.
+  - Do not emit fork_choice. Both successor stages always run.
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - topic
+      properties:
+        topic:
+          type: string
+  output:
+    schema:
+      type: object
+      required: [topic, audience]
+      properties:
+        topic:
+          type: string
+        audience:
+          type: string
+verify:
+  - id: intake-declared
+    type: artifact
+    basename: intake.md
+    when:
+      - emit
+  - id: intake-on-disk
+    type: artifact
+    path: intake.md
+    nonempty: true
+    when:
+      - after

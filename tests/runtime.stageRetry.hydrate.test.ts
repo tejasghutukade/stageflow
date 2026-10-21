@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { pipelinePath } from "./helpers/fixturePaths.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -51,19 +51,27 @@ async function seedStageStatus(
   });
 }
 
+async function createPipelineRun(
+  store: ReturnType<typeof createRunStore>,
+  pipelineName: string,
+) {
+  const loaded = await loadPipeline(pipelinePath(pipelineName), { cwd: fixtures });
+  const run = await store.createRun({
+    pipelineId: loaded.pipeline.id,
+    taskYaml: "id: t\ngoal: g\n",
+    pipelineDag: {
+      ...loaded.dag,
+      stage_ids: loaded.dag.nodes.map((n) => n.id),
+    },
+  });
+  return { loaded, run };
+}
+
 describe("hydrateScheduleForRetry", () => {
   it("linear A→B→C: retry B resets B and C to pending, A succeeded", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-linear-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("linear-explicit"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createPipelineRun(store, "linear-explicit");
 
     await seedStageStatus(store, run.runId, "clarify", "succeeded");
     await seedStageStatus(store, run.runId, "design-doc", "failed");
@@ -84,50 +92,50 @@ describe("hydrateScheduleForRetry", () => {
     expect(hydrated.completedEnvelopes.has("design-doc")).toBe(false);
   });
 
-  it("A→(B,C)→D fan-out: retry B resets B and D only, C succeeded", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-fanout-"));
-    const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+  it.each([
+    {
+      fn: "hydrateScheduleForRetry",
+      hydrate: (
+        store: ReturnType<typeof createRunStore>,
+        runId: string,
+        dag: Parameters<typeof hydrateScheduleForRetry>[2],
+      ) => hydrateScheduleForRetry(store, runId, dag, "design-doc"),
+    },
+    {
+      fn: "hydrateScheduleForRetryRoots (single root)",
+      hydrate: (
+        store: ReturnType<typeof createRunStore>,
+        runId: string,
+        dag: Parameters<typeof hydrateScheduleForRetry>[2],
+      ) => hydrateScheduleForRetryRoots(store, runId, dag, ["design-doc"]),
+    },
+  ])(
+    "A→(B,C)→D fan-out via $fn: retry B resets B and D only, C stays succeeded",
+    async ({ hydrate }) => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-fanout-"));
+      const store = createRunStore({ rootDir: root });
+      const { loaded, run } = await createPipelineRun(store, "parallel-retry-fanout");
 
-    await seedStageStatus(store, run.runId, "clarify", "succeeded");
-    await seedStageStatus(store, run.runId, "design-doc", "failed");
-    await seedStageStatus(store, run.runId, "implementation-plan", "succeeded");
-    await store.updateRunStatus(run.runId, "failed");
+      await seedStageStatus(store, run.runId, "clarify", "succeeded");
+      await seedStageStatus(store, run.runId, "design-doc", "failed");
+      await seedStageStatus(store, run.runId, "implementation-plan", "succeeded");
+      await store.updateRunStatus(run.runId, "failed");
 
-    const hydrated = await hydrateScheduleForRetry(
-      store,
-      run.runId,
-      loaded.dag,
-      "design-doc",
-    );
+      const hydrated = await hydrate(store, run.runId, loaded.dag);
 
-    expect(hydrated.states.get("clarify")).toBe("succeeded");
-    expect(hydrated.states.get("design-doc")).toBe("pending");
-    expect(hydrated.states.get("implementation-plan")).toBe("succeeded");
-    expect(hydrated.states.get("join-doc")).toBe("pending");
-    expect(hydrated.completedEnvelopes.has("implementation-plan")).toBe(true);
-  });
+      expect(hydrated.states.get("clarify")).toBe("succeeded");
+      expect(hydrated.states.get("design-doc")).toBe("pending");
+      expect(hydrated.states.get("implementation-plan")).toBe("succeeded");
+      expect(hydrated.states.get("join-doc")).toBe("pending");
+      expect(hydrated.completedEnvelopes.has("implementation-plan")).toBe(true);
+      expect(hydrated.completedEnvelopes.has("design-doc")).toBe(false);
+    },
+  );
 
   it("both branches failed: retry B leaves C failed", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-both-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createPipelineRun(store, "parallel-retry-fanout");
 
     await seedStageStatus(store, run.runId, "clarify", "succeeded");
     await seedStageStatus(store, run.runId, "design-doc", "failed");
@@ -148,51 +156,10 @@ describe("hydrateScheduleForRetry", () => {
 });
 
 describe("hydrateScheduleForRetryRoots", () => {
-  it("AE2 regression: single failed root leaves succeeded sibling sticky", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-multi-ae2-"));
-    const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
-
-    await seedStageStatus(store, run.runId, "clarify", "succeeded");
-    await seedStageStatus(store, run.runId, "design-doc", "failed");
-    await seedStageStatus(store, run.runId, "implementation-plan", "succeeded");
-    await store.updateRunStatus(run.runId, "failed");
-
-    const hydrated = await hydrateScheduleForRetryRoots(
-      store,
-      run.runId,
-      loaded.dag,
-      ["design-doc"],
-    );
-
-    expect(hydrated.states.get("clarify")).toBe("succeeded");
-    expect(hydrated.states.get("design-doc")).toBe("pending");
-    expect(hydrated.states.get("implementation-plan")).toBe("succeeded");
-    expect(hydrated.states.get("join-doc")).toBe("pending");
-    expect(hydrated.completedEnvelopes.has("implementation-plan")).toBe(true);
-    expect(hydrated.completedEnvelopes.has("design-doc")).toBe(false);
-  });
-
   it("two-root union downstream resets both branches and shared join", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-multi-union-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createPipelineRun(store, "parallel-retry-fanout");
 
     await seedStageStatus(store, run.runId, "clarify", "succeeded");
     await seedStageStatus(store, run.runId, "design-doc", "failed");
@@ -245,15 +212,7 @@ describe("applyRetryRootDelta", () => {
   it("Hydrate join AE: mid-loop addRoot resets branch without touching succeeded sibling", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-delta-join-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createPipelineRun(store, "parallel-retry-fanout");
 
     await seedStageStatus(store, run.runId, "clarify", "succeeded");
     await seedStageStatus(store, run.runId, "design-doc", "failed");
@@ -289,15 +248,7 @@ describe("applyRetryRootDelta", () => {
   it("preserves active stage inside delta reset closure", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-delta-active-closure-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("linear-explicit"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createPipelineRun(store, "linear-explicit");
 
     await seedStageStatus(store, run.runId, "clarify", "succeeded");
     await seedStageStatus(store, run.runId, "design-doc", "failed");
@@ -328,66 +279,10 @@ describe("applyRetryRootDelta", () => {
     expect(retryRoots.get("design-doc")).toBe(2);
   });
 
-  it("diamond: retry research resets synthesize only, keeps validation envelope", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-retry-delta-diamond-"));
-    const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
-
-    const validationEnv: StageEnvelope = {
-      status: "success",
-      summary: "validation-kept",
-      artifacts: [],
-    };
-    await seedStageStatus(store, run.runId, "clarify", "succeeded");
-    await seedStageStatus(store, run.runId, "research", "succeeded");
-    await seedStageStatus(store, run.runId, "validation", "succeeded", validationEnv);
-    await seedStageStatus(store, run.runId, "synthesize", "succeeded");
-
-    const hydrated = await hydrateScheduleForRetryRoots(
-      store,
-      run.runId,
-      loaded.dag,
-      ["research"],
-    );
-    const retryRoots = new Map([["research", 2]]);
-    applyRetryRootDelta(
-      loaded.dag,
-      hydrated.states,
-      hydrated.completedEnvelopes,
-      retryRoots,
-      "research",
-      2,
-    );
-
-    expect(hydrated.states.get("validation")).toBe("succeeded");
-    expect(hydrated.states.get("synthesize")).toBe("pending");
-    expect(hydrated.completedEnvelopes.get("validation")?.summary).toBe(
-      "validation-kept",
-    );
-    expect(hydrated.completedEnvelopes.has("synthesize")).toBe(false);
-    expect(hydrated.completedEnvelopes.has("research")).toBe(false);
-  });
-
   it("diamond: addRoot of a succeeded sibling remints it and invalidates the join", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-delta-sibling-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createPipelineRun(store, "diamond-fan-in");
 
     const validationEnv: StageEnvelope = {
       status: "success",
@@ -440,15 +335,7 @@ describe("hydrateScheduleForRetry diamond fan-in", () => {
   it("retry research resets synthesize and keeps the validation envelope", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-diamond-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createPipelineRun(store, "diamond-fan-in");
 
     const validationEnv: StageEnvelope = {
       status: "success",
@@ -492,15 +379,7 @@ describe("hydrateScheduleForRetry diamond fan-in", () => {
   it("retry validation resets synthesize and keeps the research envelope", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-diamond-v-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), { cwd: fixtures });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: {
-        ...loaded.dag,
-        stage_ids: loaded.dag.nodes.map((n) => n.id),
-      },
-    });
+    const { loaded, run } = await createPipelineRun(store, "diamond-fan-in");
 
     await seedStageStatus(store, run.runId, "clarify", "succeeded");
     await seedStageStatus(store, run.runId, "research", "succeeded", {

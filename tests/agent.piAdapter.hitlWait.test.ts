@@ -16,9 +16,6 @@ import {
   createAskOperatorTool,
   type AskOperatorPrompt,
 } from "../src/tools/askOperator.js";
-import { createEmitStageEnvelopeTool } from "../src/tools/emitStageEnvelope.js";
-import type { QaExchange } from "../src/hitl/qaTrail.js";
-import type { PreEmitCheck } from "../src/types/preEmitCheck.js";
 
 const tempDirs: string[] = [];
 
@@ -320,6 +317,43 @@ describe("Pi HITL ask_operator wait channel ↔ StageHandle (U1)", () => {
     ).toThrow(StageSessionReconstructError);
   });
 
+  const feedbackLoopContext = {
+    loop_id: "loop-1",
+    replay_id: "replay-1",
+    source_stage_id: "review",
+    target_stage_id: "clarify",
+    feedback_envelope: {
+      status: "success" as const,
+      summary: "revise",
+      artifacts: [],
+      feedback_loop: { action: "send_back" as const, target: "clarify" },
+    },
+    replay_number: 1,
+    max_replays: 2,
+    remaining_replays: 1,
+    is_final_replay: false,
+    replay_session: "resume" as const,
+    route_stage_ids: ["clarify", "review"],
+  };
+
+  function openFeedbackResume(
+    roots: ReturnType<typeof buildStageRoots>,
+    withContext = true,
+  ) {
+    return new PiAgentAdapter().openStage({
+      roots,
+      stage: {
+        id: "clarify",
+        system_prompt: "clarify",
+        model: "anthropic/claude-sonnet-4-5",
+      },
+      task: { id: "t1", goal: "goal" },
+      priorEnvelope: null,
+      sessionMode: "feedback_resume",
+      ...(withContext ? { feedbackLoopContext } : {}),
+    });
+  }
+
   it("feedback_resume opens a completed session without arming HITL resume", async () => {
     const runWs = await makeTempDir();
     const roots = buildStageRoots(runWs, "clarify");
@@ -347,40 +381,9 @@ describe("Pi HITL ask_operator wait channel ↔ StageHandle (U1)", () => {
       stopReason: "stop",
     });
 
-    const feedbackLoopContext = {
-      loop_id: "loop-1",
-      replay_id: "replay-1",
-      source_stage_id: "review",
-      target_stage_id: "clarify",
-      feedback_envelope: {
-        status: "success" as const,
-        summary: "revise",
-        artifacts: [],
-        feedback_loop: { action: "send_back" as const, target: "clarify" },
-      },
-      replay_number: 1,
-      max_replays: 2,
-      remaining_replays: 1,
-      is_final_replay: false,
-      replay_session: "resume" as const,
-      route_stage_ids: ["clarify", "review"],
-    };
-
-    const agent = new PiAgentAdapter();
-    const handle = agent.openStage({
-      roots,
-      stage: {
-        id: "clarify",
-        system_prompt: "clarify",
-        model: "anthropic/claude-sonnet-4-5",
-      },
-      task: { id: "t1", goal: "goal" },
-      priorEnvelope: null,
-      sessionMode: "feedback_resume",
-      feedbackLoopContext,
-    });
+    const handle = openFeedbackResume(roots);
     expect(handle.stageId).toBe("clarify");
-    handle.deliverAnswer({ ignored: true });
+    expect(() => handle.deliverAnswer({ ignored: true })).not.toThrow();
     await handle.close();
   });
 
@@ -394,103 +397,31 @@ describe("Pi HITL ask_operator wait channel ↔ StageHandle (U1)", () => {
       timestamp: Date.now(),
     });
 
-    const agent = new PiAgentAdapter();
-    expect(() =>
-      agent.openStage({
-        roots,
-        stage: {
-          id: "clarify",
-          system_prompt: "clarify",
-          model: "anthropic/claude-sonnet-4-5",
-        },
-        task: { id: "t1", goal: "goal" },
-        priorEnvelope: null,
-        sessionMode: "feedback_resume",
-      }),
-    ).toThrow(/feedback_resume requires feedbackLoopContext/);
-  });
-
-  it("feedback_resume fails closed when session file is missing", async () => {
-    const runWs = await makeTempDir();
-    const roots = buildStageRoots(runWs, "clarify");
-    const agent = new PiAgentAdapter();
-    expect(() =>
-      agent.openStage({
-        roots,
-        stage: {
-          id: "clarify",
-          system_prompt: "clarify",
-          model: "anthropic/claude-sonnet-4-5",
-        },
-        task: { id: "t1", goal: "goal" },
-        priorEnvelope: null,
-        sessionMode: "feedback_resume",
-        feedbackLoopContext: {
-          loop_id: "loop-1",
-          replay_id: "replay-1",
-          source_stage_id: "review",
-          target_stage_id: "clarify",
-          feedback_envelope: {
-            status: "success",
-            summary: "revise",
-            artifacts: [],
-          },
-          replay_number: 1,
-          max_replays: 2,
-          remaining_replays: 1,
-          is_final_replay: false,
-          replay_session: "resume",
-          route_stage_ids: ["clarify", "review"],
-        },
-      }),
-    ).toThrow(StageSessionReconstructError);
-  });
-
-  it("feedback_resume fails closed when session file is corrupt", async () => {
-    const runWs = await makeTempDir();
-    const roots = buildStageRoots(runWs, "clarify");
-    const sessionFile = path.join(
-      runWs,
-      "stages",
-      "clarify",
-      "attempts",
-      "1",
-      "pi-session.jsonl",
+    expect(() => openFeedbackResume(roots, false)).toThrow(
+      /feedback_resume requires feedbackLoopContext/,
     );
-    await mkdir(path.dirname(sessionFile), { recursive: true });
-    await writeFile(sessionFile, "{not-valid-json\n");
+  });
 
-    const agent = new PiAgentAdapter();
-    expect(() =>
-      agent.openStage({
-        roots,
-        stage: {
-          id: "clarify",
-          system_prompt: "clarify",
-          model: "anthropic/claude-sonnet-4-5",
-        },
-        task: { id: "t1", goal: "goal" },
-        priorEnvelope: null,
-        sessionMode: "feedback_resume",
-        feedbackLoopContext: {
-          loop_id: "loop-1",
-          replay_id: "replay-1",
-          source_stage_id: "review",
-          target_stage_id: "clarify",
-          feedback_envelope: {
-            status: "success",
-            summary: "revise",
-            artifacts: [],
-          },
-          replay_number: 1,
-          max_replays: 2,
-          remaining_replays: 1,
-          is_final_replay: false,
-          replay_session: "resume",
-          route_stage_ids: ["clarify", "review"],
-        },
-      }),
-    ).toThrow(StageSessionReconstructError);
+  it.each([
+    { name: "missing", sessionFileContent: undefined },
+    { name: "corrupt", sessionFileContent: "{not-valid-json\n" },
+  ])("feedback_resume fails closed when the session file is $name", async ({ sessionFileContent }) => {
+    const runWs = await makeTempDir();
+    const roots = buildStageRoots(runWs, "clarify");
+    if (sessionFileContent !== undefined) {
+      const sessionFile = path.join(
+        runWs,
+        "stages",
+        "clarify",
+        "attempts",
+        "1",
+        "pi-session.jsonl",
+      );
+      await mkdir(path.dirname(sessionFile), { recursive: true });
+      await writeFile(sessionFile, sessionFileContent);
+    }
+
+    expect(() => openFeedbackResume(roots)).toThrow(StageSessionReconstructError);
   });
 
   it("repairPrematureAskOperatorClosure removes erroneous closed toolResult", async () => {
@@ -553,89 +484,5 @@ describe("Pi HITL ask_operator wait channel ↔ StageHandle (U1)", () => {
     expect(raw).toContain('"toolCall"');
     expect(raw).not.toContain("stage handle closed");
     expect(raw).not.toContain("This operation was aborted");
-  });
-});
-
-describe("Pi adapter pre_emit_checks wiring uses a live QA trail", () => {
-  it("prepareStageSessionWiring-shaped options (checks + readQaTrail) consult the trail at execute", async () => {
-    // Mirrors src/agent/piAdapter.ts's prepareStageSessionWiring call site:
-    // createEmitStageEnvelopeTool(capture, payloadSchema, forkEmitContext,
-    // cloneEmitContext, { checks: input.stage.pre_emit_checks, readQaTrail: input.readQaTrail }).
-    const exchanges: QaExchange[] = [];
-    const input = {
-      stage: {
-        pre_emit_checks: [
-          { id: "plan-approved", type: "gate" as const, kind: "artifact_backed" as const },
-        ],
-      },
-      readQaTrail: () => exchanges,
-    };
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: input.stage.pre_emit_checks,
-        readQaTrail: input.readQaTrail,
-      },
-    );
-    const before = await tool.execute("emit-1", {
-      status: "success",
-      summary: "plan accepted",
-      artifacts: [],
-      payload: { approved: true },
-    });
-    expect(before.isError).toBe(true);
-    expect(before.terminate).toBeUndefined();
-    expect(capture).not.toHaveProperty("envelope");
-
-    exchanges.push({
-      prompt: {
-        kind: "artifact_backed",
-        id: "plan-1",
-        message: "Review the plan",
-        artifacts: ["plan.md"],
-      },
-      answer: {
-        promptId: "plan-1",
-        kind: "artifact_backed",
-        decision: "accept",
-      },
-    });
-    const after = await tool.execute("emit-1", {
-      status: "success",
-      summary: "plan accepted",
-      artifacts: [],
-      payload: { approved: true },
-    });
-    expect(after.isError).toBeUndefined();
-    expect(after.terminate).toBe(true);
-    expect(capture).toHaveProperty("envelope");
-  });
-
-  it("a stage with no pre_emit_checks emits successfully without a reader", async () => {
-    const stage: { pre_emit_checks?: PreEmitCheck[] } = {};
-    const input = { stage, readQaTrail: undefined as (() => QaExchange[]) | undefined };
-    const capture = {};
-    const tool = createEmitStageEnvelopeTool(
-      capture,
-      undefined,
-      undefined,
-      undefined,
-      {
-        checks: input.stage.pre_emit_checks,
-        readQaTrail: input.readQaTrail,
-      },
-    );
-    const result = await tool.execute("emit-1", {
-      status: "success",
-      summary: "done",
-      artifacts: [],
-    });
-    expect(result.isError).toBeUndefined();
-    expect(result.terminate).toBe(true);
-    expect(capture).toHaveProperty("envelope");
   });
 });

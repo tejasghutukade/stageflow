@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import {
   buildValidationResult,
+  collectAbsolutePathCandidates,
+  isPathUnderStageflowHome,
   loadPipelineValidated,
   validateCatalog,
   validatePipeline,
@@ -14,6 +17,24 @@ import {
 import * as validateCatalogModule from "../src/config/validateCatalog.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 import { REPO_ROOT, FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+
+const U7_HOME_SENTINEL = "/tmp/sf-u7-home-lint";
+
+async function withStageflowHome<T>(
+  home: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prev = process.env.STAGEFLOW_HOME;
+  process.env.STAGEFLOW_HOME = home;
+  resetGlobalStageflowHomeForTests();
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.STAGEFLOW_HOME;
+    else process.env.STAGEFLOW_HOME = prev;
+    resetGlobalStageflowHomeForTests();
+  }
+}
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const manifestCatalog = path.join(fixtures, "manifest-catalog");
@@ -49,10 +70,6 @@ const validStageYaml = (id: string) =>
     "      type: object",
     "",
   ].join("\n");
-
-function findingCodes(findings: ValidationFinding[]): string[] {
-  return findings.map((f) => f.code);
-}
 
 function findingsForPath(findings: ValidationFinding[], relPath: string): ValidationFinding[] {
   return findings.filter((f) => f.path === relPath || f.path.endsWith(relPath));
@@ -243,9 +260,9 @@ describe("validateCatalog manifest-all", () => {
       await cp(manifestCatalog, root, { recursive: true });
       clearFindProjectRootCacheForTests();
       const result = await validateCatalog({ scope: "full", cwd: root });
-      expect(
-        findingsForPath(result.findings, "pipelines/broken.pipeline.yaml").length,
-      ).toBeGreaterThan(0);
+      const broken = findingsForPath(result.findings, "pipelines/broken.pipeline.yaml");
+      expect(broken.map((f) => f.code)).toEqual(["pipeline.invalid_shape"]);
+      expect(broken[0]?.message).toMatch(/id is required/);
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
@@ -254,30 +271,6 @@ describe("validateCatalog manifest-all", () => {
 });
 
 describe("validateCatalog pipeline scope", () => {
-  it.skip("AE-S1-2: targeted docs-only passes — legacy fixtures S7", async () => {
-    const result = await validateCatalog({
-      scope: "pipeline",
-      pipeline: pipelinePath("docs-only"),
-      cwd: fixtures,
-    });
-    expect(result.ok).toBe(true);
-    expect(result.findings.some((f) => f.path.includes("broken.pipeline.yaml"))).toBe(false);
-  });
-
-  it.skip("AE-S5-3: targeted validate agrees with loadPipelineValidated — legacy S7", async () => {
-    const validateResult = await validateCatalog({
-      scope: "pipeline",
-      pipeline: pipelinePath("docs-only"),
-      cwd: fixtures,
-    });
-    const loadResult = await loadPipelineValidated(pipelinePath("docs-only"), {
-      cwd: fixtures,
-    });
-    expect(validateResult.ok).toBe(true);
-    expect(loadResult.ok).toBe(true);
-    expect(validateResult.findings.some((f) => f.path.includes("broken.pipeline.yaml"))).toBe(false);
-  });
-
   it("AE-S1-4: stage id must match filename stem", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-validate-id-mismatch-"));
     await writeManifest(
@@ -375,6 +368,20 @@ describe("validateCatalog task scope", () => {
     expect(result.findings.some((f) => f.code === "task.load_error")).toBe(true);
   });
 
+  it("malformed YAML produces load_error finding with line", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-task-"));
+    const taskPath = path.join(root, "bad.task.yaml");
+    await writeFile(taskPath, "id: [\n  - unclosed\n");
+    const result = await validateCatalog({
+      scope: "task",
+      task: taskPath,
+      cwd: root,
+    });
+    const finding = result.findings.find((f) => f.code === "task.load_error");
+    expect(finding?.line).toBe(2);
+    expect(finding?.column).toBe(3);
+  });
+
   it("throws when task scope omits task path", async () => {
     await expect(validateCatalog({ scope: "task", cwd: fixtures })).rejects.toThrow(
       /task is required/i,
@@ -382,17 +389,75 @@ describe("validateCatalog task scope", () => {
   });
 });
 
-describe("validateCatalog legacy fixtures", () => {
-  it.skip("full fixtures catalog cwd scan — legacy S7", async () => {
+describe("validateCatalog stage scope", () => {
+  it("valid stage file passes with scope stage", async () => {
+    const stagePath = path.join(fixtures, "stages/clarify.yaml");
     const result = await validateCatalog({
-      scope: "full",
+      scope: "stage",
+      stage: stagePath,
       cwd: fixtures,
     });
-    expect(result.ok).toBe(false);
-    expect(findingCodes(result.findings)).toContain("pipeline.missing_stage");
-    expect(findingCodes(result.findings)).toContain("pipeline.dag_error");
+    expect(result.scope).toBe("stage");
+    expect(result.ok).toBe(true);
+    expect(result.findings).toHaveLength(0);
   });
 
+  it("invalid shape produces stage finding", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-"));
+    const stagePath = path.join(root, "bad.yaml");
+    await writeFile(stagePath, "id: bad\n");
+    const result = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: root,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.findings.some((f) => f.code === "stage.invalid_shape")).toBe(true);
+  });
+
+  it("throws when stage scope omits stage path", async () => {
+    await expect(validateCatalog({ scope: "stage", cwd: fixtures })).rejects.toThrow(
+      /stage is required/i,
+    );
+  });
+
+  it("stageContent validates the buffer, not the on-disk file", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-buf-"));
+    const stagePath = path.join(root, "ok.yaml");
+    await writeFile(
+      stagePath,
+      [
+        "id: ok",
+        "system_prompt: valid on disk",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const bad = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: root,
+      stageContent: "id: ok\n",
+    });
+    expect(bad.ok).toBe(false);
+    expect(bad.findings.some((f) => f.code === "stage.invalid_shape")).toBe(true);
+    const good = await validateCatalog({
+      scope: "stage",
+      stage: stagePath,
+      cwd: root,
+    });
+    expect(good.ok).toBe(true);
+  });
+});
+
+describe("validateCatalog legacy fixtures", () => {
   it("full scope on project without manifest emits manifest_missing", async () => {
     clearFindProjectRootCacheForTests();
     const { root, cleanup } = await initTempGitRepo();
@@ -528,7 +593,9 @@ describe("validateCatalog stage MCP catalog inspect", () => {
       clearFindProjectRootCacheForTests();
       const result = await validatePipeline(pipelinePath, { cwd: root });
       expect(result.ok).toBe(false);
-      expect(catalogFindings(result.findings).length).toBeGreaterThan(0);
+      expect(catalogFindings(result.findings).map((f) => f.message)).toEqual([
+        expect.stringMatching(/not valid JSON/),
+      ]);
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
@@ -546,7 +613,9 @@ describe("validateCatalog stage MCP catalog inspect", () => {
       clearFindProjectRootCacheForTests();
       const result = await validatePipeline(pipelinePath, { cwd: root });
       expect(result.ok).toBe(false);
-      expect(catalogFindings(result.findings).length).toBeGreaterThan(0);
+      expect(catalogFindings(result.findings).map((f) => f.message)).toEqual([
+        expect.stringMatching(/mcpServers must be an object/),
+      ]);
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
@@ -618,7 +687,9 @@ describe("validateCatalog stage MCP catalog inspect", () => {
       clearFindProjectRootCacheForTests();
       const result = await validatePipeline(pipelinePath, { cwd: root });
       expect(result.ok).toBe(false);
-      expect(catalogFindings(result.findings).length).toBeGreaterThan(0);
+      expect(catalogFindings(result.findings).map((f) => f.message)).toEqual([
+        expect.stringMatching(/is missing/),
+      ]);
     } finally {
       clearFindProjectRootCacheForTests();
     }
@@ -636,5 +707,132 @@ describe("validateCatalog stage MCP catalog inspect", () => {
       clearFindProjectRootCacheForTests();
       await cleanup();
     }
+  });
+});
+
+describe("loadPipelineValidated — inline pipeline objects", () => {
+  const REQUIRED_IO = {
+    io: {
+      input: { schema: { type: "object" } },
+      output: { schema: { type: "object" } },
+    },
+  };
+
+  it("accepts an inline pipeline object directly, same shape as a file-based load", async () => {
+    const result = await loadPipelineValidated(
+      {
+        id: "inline-demo",
+        stages: [
+          {
+            id: "plan",
+            system_prompt: "Do work",
+            model: "anthropic/claude-sonnet-4-5",
+            ...REQUIRED_IO,
+          },
+        ],
+      },
+      { cwd: REPO_ROOT },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.loaded.pipeline.id).toBe("inline-demo");
+    expect(result.loaded.stages).toHaveLength(1);
+  });
+
+  it("an inline pipeline validation failure produces the same finding shape a bad file would", async () => {
+    const result = await loadPipelineValidated(
+      {
+        id: "inline-broken",
+        stages: [{ id: "plan", system_prompt: "Do work" }],
+      },
+      { cwd: REPO_ROOT },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.findings.some((f) => f.code === "stage.invalid_io")).toBe(true);
+  });
+
+  it("still accepts a plain string path — widened signature doesn't affect the existing file-based call", async () => {
+    clearFindProjectRootCacheForTests();
+    const result = await loadPipelineValidated(SINGLE_PIPELINE, { cwd: REPO_ROOT });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("validateCatalog STAGEFLOW_HOME absolute path lint (§2.6)", () => {
+  it("collectAbsolutePathCandidates finds POSIX absolute tokens", () => {
+    expect(
+      collectAbsolutePathCandidates(
+        'edit /tmp/sf-u7-home-lint/worktrees/r1/a.ts and /usr/bin/git.',
+      ),
+    ).toEqual(["/tmp/sf-u7-home-lint/worktrees/r1/a.ts", "/usr/bin/git"]);
+  });
+
+  it("isPathUnderStageflowHome requires home prefix with separator", () => {
+    expect(isPathUnderStageflowHome("/tmp/sf-u7-home-lint", U7_HOME_SENTINEL)).toBe(
+      true,
+    );
+    expect(
+      isPathUnderStageflowHome("/tmp/sf-u7-home-lint/worktrees/r1", U7_HOME_SENTINEL),
+    ).toBe(true);
+    expect(isPathUnderStageflowHome("/tmp/sf-u7-home-lint-evil", U7_HOME_SENTINEL)).toBe(
+      false,
+    );
+    expect(isPathUnderStageflowHome("/usr/bin/git", U7_HOME_SENTINEL)).toBe(false);
+  });
+
+  it("flags absolute STAGEFLOW_HOME path in system_prompt", async () => {
+    await withStageflowHome(U7_HOME_SENTINEL, async () => {
+      const result = await validatePipeline(pipelinePath("home-path-absolute-prompt"), {
+        cwd: FIXTURES_ROOT,
+      });
+      expect(result.ok).toBe(false);
+      const hit = result.findings.find(
+        (f) => f.code === "catalog.stageflow_home_absolute_path",
+      );
+      expect(hit).toBeDefined();
+      expect(hit?.message).toContain("STAGEFLOW_CHECKOUT");
+      expect(hit?.stageId).toBe("home-path-prompt");
+    });
+  });
+
+  it("flags absolute STAGEFLOW_HOME path in verify command run", async () => {
+    await withStageflowHome(U7_HOME_SENTINEL, async () => {
+      const result = await validatePipeline(pipelinePath("home-path-absolute-verify"), {
+        cwd: FIXTURES_ROOT,
+      });
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.some(
+          (f) =>
+            f.code === "catalog.stageflow_home_absolute_path" &&
+            f.message.includes("verify command"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("passes when prompts and verify use STAGEFLOW_CHECKOUT only", async () => {
+    await withStageflowHome(U7_HOME_SENTINEL, async () => {
+      const result = await validatePipeline(pipelinePath("home-path-checkout-env"), {
+        cwd: FIXTURES_ROOT,
+      });
+      expect(
+        result.findings.filter((f) => f.code === "catalog.stageflow_home_absolute_path"),
+      ).toEqual([]);
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  it("does not ban absolute paths outside STAGEFLOW_HOME", async () => {
+    await withStageflowHome(U7_HOME_SENTINEL, async () => {
+      const result = await validatePipeline(pipelinePath("home-path-other-absolute"), {
+        cwd: FIXTURES_ROOT,
+      });
+      expect(
+        result.findings.filter((f) => f.code === "catalog.stageflow_home_absolute_path"),
+      ).toEqual([]);
+      expect(result.ok).toBe(true);
+    });
   });
 });

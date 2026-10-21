@@ -4,6 +4,8 @@ import type {
   CompactStage,
   FeedbackLoopHistory,
   FeedbackLoopRecord,
+  RunBindingCompact,
+  RunBindingDetail,
   RunDetail,
   RunMeta,
   RunPipelineDagSnapshot,
@@ -21,6 +23,48 @@ export type FeedbackProjectionInput = {
   feedback_loops?: FeedbackLoopHistory[];
   active_feedback_loop?: FeedbackLoopRecord;
 };
+
+export function projectRunBindingCompact(meta: RunMeta): RunBindingCompact {
+  if (meta.repository != null && meta.repository !== "") {
+    return {
+      kind: "repository",
+      repository: meta.repository,
+      ...(meta.ref !== undefined ? { ref: meta.ref } : {}),
+      ...(meta.resolved_sha !== undefined
+        ? { resolved_sha: meta.resolved_sha }
+        : {}),
+    };
+  }
+  if (meta.checkout_root != null && meta.checkout_root !== "") {
+    return {
+      kind: "checkout",
+      ...(meta.resolved_sha !== undefined
+        ? { resolved_sha: meta.resolved_sha }
+        : {}),
+    };
+  }
+  return { kind: "unbound" };
+}
+
+export function projectRunBindingDetail(meta: RunMeta): RunBindingDetail {
+  const compact = projectRunBindingCompact(meta);
+  if (compact.kind === "unbound") return compact;
+  if (compact.kind === "checkout") {
+    return {
+      ...compact,
+      ...(meta.checkout_root !== undefined
+        ? { checkout_root: meta.checkout_root }
+        : {}),
+    };
+  }
+  return {
+    ...compact,
+    ...(meta.run_branch !== undefined ? { run_branch: meta.run_branch } : {}),
+    ...(meta.checkout_root !== undefined
+      ? { checkout_root: meta.checkout_root }
+      : {}),
+  };
+}
 
 export function overlayPlannedStages(
   stageIds: string[],
@@ -132,7 +176,7 @@ function resolveListedStatus(
   dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
 ): RunStatus {
   if (stages.length === 0) return meta.status ?? "created";
-  const derived = deriveStatusFromStages(stages, dag);
+  const derived = deriveStatusFromStages(stages, dag, meta.status);
   if (meta.status === "succeeded" && derived === "running") {
     const hasActiveStage = stages.some(
       (s) => s.status === "running" || s.status === "waiting_for_input",
@@ -168,9 +212,13 @@ export function projectRunSummary(
     ...(meta.pipeline_path !== undefined ? { pipeline_path: meta.pipeline_path } : {}),
     ...(meta.task_path !== undefined ? { task_path: meta.task_path } : {}),
     ...(meta.project_root !== undefined ? { project_root: meta.project_root } : {}),
+    ...(meta.pipeline_source !== undefined
+      ? { pipeline_source: meta.pipeline_source }
+      : {}),
     status: resolveListedStatus(stages, meta, dag),
     created_at: meta.created_at,
     updated_at: meta.updated_at,
+    binding: projectRunBindingCompact(meta),
     stages: compactStages(stages),
     ...waiting,
     ...failedFieldsFromStages(stages, dag),
@@ -178,6 +226,15 @@ export function projectRunSummary(
       ? { active_feedback_loop: feedback.active_feedback_loop }
       : {}),
     ...(cost !== undefined ? { total_cost_usd: cost } : {}),
+    ...(meta.cancel_reason !== undefined
+      ? { cancel_reason: meta.cancel_reason }
+      : {}),
+    ...(meta.finished_at !== undefined ? { finished_at: meta.finished_at } : {}),
+    ...(meta.slimmed_at !== undefined ? { slimmed_at: meta.slimmed_at } : {}),
+    ...(meta.disk_bytes !== undefined ? { disk_bytes: meta.disk_bytes } : {}),
+    ...(meta.disk_measured_at !== undefined
+      ? { disk_measured_at: meta.disk_measured_at }
+      : {}),
   };
 }
 
@@ -205,9 +262,17 @@ export function projectRunDetail(
   });
   return {
     ...summary,
+    binding: projectRunBindingDetail(dag ? { ...meta, pipeline_dag: dag } : meta),
     task_yaml,
     stages: ordered,
     pipeline_track,
     feedback_loops: feedback?.feedback_loops ?? [],
+    ...(meta.config_origins !== undefined && meta.config_origins.length > 0
+      ? { config_origins: meta.config_origins }
+      : {}),
+    ...(meta.caller_id !== undefined ? { caller_id: meta.caller_id } : {}),
+    ...(meta.run_manifest !== undefined
+      ? { run_manifest: meta.run_manifest }
+      : {}),
   };
 }

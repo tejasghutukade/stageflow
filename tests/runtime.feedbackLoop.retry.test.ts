@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import type {
-  AgentPort,
+  StagePort,
   FeedbackLoopContext,
   StageRunInput,
 } from "../src/agent/port.js";
@@ -40,7 +40,7 @@ type FakeAgentBehavior =
 
 function stageKeyedAgent(
   behaviorsByStage: Record<string, FakeAgentBehavior[]>,
-): AgentPort & {
+): StagePort & {
   openCounts: Map<string, number>;
   sessionModes: Map<string, Array<string | undefined>>;
   feedbackContexts: Map<string, FeedbackLoopContext[]>;

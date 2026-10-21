@@ -1,0 +1,29 @@
+# Copy this file to email.yaml in the Stageflow workspace, then set the secret
+# environment variable before you start the host. Use your provider's settings.
+# This first account shows Gmail with an app password. Your Google account must
+# permit IMAP and SMTP. Replace the address, set PERSONAL_EMAIL_PASSWORD,
+# and change enabled to true when ready.
+version: 1
+accounts:
+  - accountId: personal-inbox
+    displayName: My personal email
+    address: your-address@gmail.com
+    enabled: false
+    imap:
+      host: imap.gmail.com
+      port: 993
+      username: your-address@gmail.com
+      tls: implicit
+      auth:
+        type: password
+        secretRef: env:PERSONAL_EMAIL_PASSWORD
+    smtp:
+      host: smtp.gmail.com
+      port: 587
+      username: your-address@gmail.com
+      tls: starttls
+      auth:
+        type: password
+        secretRef: env:PERSONAL_EMAIL_PASSWORD
+    folders: [INBOX]
+    sentCopyPolicy: provider-managed

@@ -10,8 +10,8 @@ system_prompt: |
   --generate-notes. Do not call ask_operator.
 
   Target commit is GITHUB_SHA if set, otherwise git rev-parse HEAD.
-  Auth is GH_TOKEN or GITHUB_TOKEN already in the environment. gh is
-  on PATH.
+  Auth uses GIT_ASKPASS from a declared secrets: [GITHUB_TOKEN] grant
+  (file-backed helper — not ambient GH_TOKEN/GITHUB_TOKEN). gh is on PATH.
 
   If DRY_RUN is 1, do not create the release. Write publish.md via
   write_stage_artifact recording the gh command you would have run,

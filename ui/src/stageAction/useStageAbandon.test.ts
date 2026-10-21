@@ -39,6 +39,16 @@ describe("isStageActionBusy", () => {
         "stage-c",
       ),
     ).toBe(false);
+    expect(
+      isStageActionBusy(
+        {
+          retryingStageIds: new Set(),
+          abandoningStageId: null,
+          resumingStageIds: new Set(["stage-d"]),
+        },
+        "stage-d",
+      ),
+    ).toBe(true);
   });
 });
 

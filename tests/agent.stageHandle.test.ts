@@ -31,7 +31,7 @@ const successEnvelope = {
   payload: {},
 };
 
-describe("AgentPort stage handle (HITL wait/answer)", () => {
+describe("StagePort stage handle (HITL wait/answer)", () => {
   it("wait → deliverAnswer → emit: result ok only after emit", async () => {
     const seen: StageActivityEvent[] = [];
     const agent = new FakeAgent({

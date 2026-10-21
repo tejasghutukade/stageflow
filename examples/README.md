@@ -14,7 +14,7 @@ Upgrading older YAML: [`sf migrate-yaml`](../docs/cli-reference.md#sf-migrate-ya
 
 - **Route `if`** — `detect-changes` emits `author_diagrams` and skips `author-diagrams` when the PR diff has no diagram-relevant types
 - **Multi-type output** — one pipeline authors 1–5 Archify diagram specs (`architecture`, `workflow`, `sequence`, `dataflow`, `lifecycle`)
-- **Skill binding** — `skill: archify` on the pipeline stage entry; GHA provisions the skill via `sf skills install`
+- **Skill binding** — `skill: archify` on the stage file; GHA provisions the skill via `sf skills install`
 - **Deterministic handoff** — agents emit JSON specs; GHA runs `sf envelope get --format handoff` and Archify `deliver` outside the agent
 - **Real automation** — [`.github/workflows/archify-pr-diagrams.yml`](../.github/workflows/archify-pr-diagrams.yml) posts sticky PR comments with browser-viewable HTML artifacts
 
@@ -30,21 +30,24 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [generic-fan-in](generic-fan-in/) | Dummy diamond join; inspect keyed parent envelopes | `sf ui`, then `sf run` |
 | [stage-mcp](stage-mcp/) | Stage MCP via project `.mcp.json` and a local echo fixture | `sf validate`, then `sf run` from git root |
 | [playwright-mcp](playwright-mcp/) | One stage: open a page and save a PNG screenshot (Playwright MCP) | `sf validate`, then `sf run` from git root |
+| [browser-session](browser-session/) | Saved browser login: check, human login only when logged out, then work; local fixture site | [README](browser-session/README.md), then `sf run` |
 | [context7-mcp](context7-mcp/) | Three stages: resolve a library, fetch docs, write a brief (Context7 MCP) | `sf validate`, then `sf run` from git root |
 | [feedback-loop](feedback-loop/) | Source-owned review loop (`continue` / `send_back`) | `sf validate`, then `sf run` |
 | [feature-loop](feature-loop/) | Epic-to-PR; two Clone Chains + `{ type: loop }` | `sf validate`, then `sf run` |
 | [ship-feature](ship-feature/) | Plan → implement → parallel review → operator-approved PR | `sf validate`, then `sf run` |
 | [oss-issue-contribution](oss-issue-contribution/) | Real upstream issue: reproduce, parallel investigation, gated fix, verification, parallel review | [README](oss-issue-contribution/README.md), then `sf run` |
+| [oss-quick-fix](oss-quick-fix/) | Unattended sibling of oss-issue-contribution: straight-line fix with no operator gate | [README](oss-quick-fix/README.md), then `sf run` |
 | [github-release](github-release/) | Dogfood: draft + publish GitHub Release | Used in publish/release workflows |
 | [archify-on-pr](archify-on-pr/) | **Featured** — PR diagrams via Route `if` + Archify handoff | [README](archify-on-pr/README.md), archify-pr-diagrams workflow |
 | [ci-validate](ci-validate/) | Strict manifest validate in CI | `./validate.sh` |
 | [route-if-tour](route-if-tour/) | Deterministic `if` tour: operators, composition, skip, join fire/miss | `sf ui`, then pick `route-if-tour` |
 | [verify-tour](verify-tour/) | Verify check types: artifact, command, checklist, payload_schema, gate, checkout_changes | `sf ui`, then pick `verify-tour` |
 | [retry-tour](retry-tour/) | Retry surfaces: emit soft-reject, automatic repair, manual recover, ordinary Retry | `sf ui`, then pick `retry-tour` |
+| [mcp-hitl-tour](mcp-hitl-tour/) | MCP HITL tour: free_text gate, ungated fan-out + Clone Chain join, wait_for_human loop, artifacts | `sf ui` / MCP `start_run`, then [README](mcp-hitl-tour/README.md) |
 
 Current wiring tours: [`route-wiring-smoke-test`](route-wiring-smoke-test/), [`route-if-tour`](route-if-tour/).
 
-Browse scope is declared in repo-root [`stageflow.yaml`](../stageflow.yaml). **`sf ui` started from any subdirectory** still uses `<repo>/.stageflow` for run state.
+Browse scope is declared in repo-root [`stageflow.yaml`](../stageflow.yaml). Cold Host (`sf ui` / `sf mcp`) also browses the packaged seeded root via [`examples/stageflow.yaml`](stageflow.yaml) (paths relative to `examples/`; wire `project_root: "examples"`). **`sf ui` started from any subdirectory** still uses the global durable root (`$STAGEFLOW_HOME`) for run state.
 
 ## Prerequisites (all examples)
 

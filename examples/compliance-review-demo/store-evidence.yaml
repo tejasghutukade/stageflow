@@ -1,0 +1,143 @@
+id: store-evidence
+system_prompt: |
+  Append one row to the checkout-relative evidence log at
+  examples/compliance-review-demo/data/evidence-log.json.
+
+  Read that file with the Read tool if it exists and parse it as a JSON
+  array; if it does not exist yet, start from an empty array. Append a new
+  object with: timestamp (ISO 8601, now), check_id, resource, control_id,
+  verdict, reviewed, auto_approved, reviewer (use JSON null in this file
+  when reviewer is "") — all from the prior stage's payload. Write the full
+  updated array back to that same path with the checkout write/edit tool,
+  pretty-printed.
+
+  Success requires real checkout edits. Put
+  ["examples/compliance-review-demo/data/evidence-log.json"] in
+  payload.changed_files. Do not put stages/.../artifacts paths there. A
+  report or map alone is a failure emit, not success.
+
+  summary and payload are handed to the next stage verbatim. State outcomes
+  and artifact pointers only. Do not repeat this stage's prohibitions in
+  summary — downstream will obey them literally.
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload matching io.output.schema: everything carried
+  forward from the prior stage, plus changed_files naming the evidence log
+  path. Your last tool call in this attempt must be emit_stage_envelope. An
+  empty final message is a stage failure.
+model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - bucket
+        - check_id
+        - scenario
+        - source
+        - block_public_acls
+        - ignore_public_acls
+        - block_public_policy
+        - restrict_public_buckets
+        - verdict
+        - resource
+        - failed_fields
+        - reviewed
+        - auto_approved
+        - reviewer
+        - control_id
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+        source:
+          type: string
+        block_public_acls:
+          type: boolean
+        ignore_public_acls:
+          type: boolean
+        block_public_policy:
+          type: boolean
+        restrict_public_buckets:
+          type: boolean
+        verdict:
+          type: string
+        resource:
+          type: string
+        failed_fields:
+          type: array
+          items:
+            type: string
+        reviewed:
+          type: boolean
+        auto_approved:
+          type: boolean
+        reviewer:
+          type: string
+        control_id:
+          type: string
+  output:
+    schema:
+      type: object
+      required:
+        - bucket
+        - check_id
+        - scenario
+        - source
+        - block_public_acls
+        - ignore_public_acls
+        - block_public_policy
+        - restrict_public_buckets
+        - verdict
+        - resource
+        - failed_fields
+        - reviewed
+        - auto_approved
+        - reviewer
+        - control_id
+        - changed_files
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+        source:
+          type: string
+        block_public_acls:
+          type: boolean
+        ignore_public_acls:
+          type: boolean
+        block_public_policy:
+          type: boolean
+        restrict_public_buckets:
+          type: boolean
+        verdict:
+          type: string
+        resource:
+          type: string
+        failed_fields:
+          type: array
+          items:
+            type: string
+        reviewed:
+          type: boolean
+        auto_approved:
+          type: boolean
+        reviewer:
+          type: string
+        control_id:
+          type: string
+        changed_files:
+          type: array
+          items:
+            type: string
+verify:
+  - id: evidence-log-written
+    type: checkout_changes
+    path_fields: [changed_files]
+    when: [after]

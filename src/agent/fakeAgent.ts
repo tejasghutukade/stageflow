@@ -5,6 +5,7 @@ import {
   isAdvancingEnvelope,
 } from "../envelope/check.js";
 import { assertFeedbackLoopAction } from "../envelope/feedbackLoop.js";
+import { loginCheckIssue } from "../browser/loginCheck.js";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
 import { assertForkEnvelope } from "../envelope/forkChoice.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
@@ -14,7 +15,7 @@ import {
 } from "../tools/askOperator.js";
 import { tryParsePendingPrompt } from "../runtime/stageHitl.js";
 import type {
-  AgentPort,
+  StagePort,
   OpaqueAnswer,
   OpaqueWaitRequest,
   StageHandle,
@@ -38,7 +39,7 @@ function opaqueEqual(a: unknown, b: unknown): boolean {
 }
 
 export type FakeAgentBehavior =
-  | { type: "emit"; envelope: unknown }
+  | { type: "emit"; envelope: unknown; toolArgs?: string }
   | { type: "never_emit" }
   | { type: "throw"; message: string }
   | {
@@ -111,7 +112,7 @@ function loadFakeHitlResume(
   }
 }
 
-export class FakeAgent implements AgentPort {
+export class FakeAgent implements StagePort {
   lastRoots?: RecordedStageRoots;
   receivedAnswers: OpaqueAnswer[] = [];
 
@@ -132,7 +133,9 @@ export class FakeAgent implements AgentPort {
     let resumeCorrupt = false;
     const sessionMode = input.sessionMode ?? "fresh";
     const skipHitlPark =
-      sessionMode === "feedback_resume" || sessionMode === "new_session";
+      sessionMode === "feedback_resume" ||
+      sessionMode === "timeout_resume" ||
+      sessionMode === "new_session";
 
     if (sessionMode === "feedback_resume" && input.feedbackLoopContext === undefined) {
       return createCompletedOnlyStageHandle({
@@ -176,13 +179,6 @@ export class FakeAgent implements AgentPort {
       }
     }
 
-    if (sessionMode === "feedback_resume" && behavior.type === "wait_then_emit") {
-      behavior = {
-        type: "emit",
-        envelope: behavior.envelope,
-      };
-    }
-
     const emitStartActivity = () => {
       if (started) return;
       started = true;
@@ -191,6 +187,9 @@ export class FakeAgent implements AgentPort {
         event: "tool_start",
         toolName: "fake_tool",
         toolCallId: "fake-1",
+        ...("toolArgs" in behavior && behavior.toolArgs !== undefined
+          ? { argsPreview: behavior.toolArgs }
+          : {}),
       });
       input.onActivity?.({
         event: "tool_end",
@@ -233,6 +232,13 @@ export class FakeAgent implements AgentPort {
           assertForkEnvelope(envelope, input.forkEmitContext);
         }
         assertEnvelopePayload(envelope, input.stage.payload_schema);
+        if (envelope.status !== "failure") {
+          for (const check of input.stage.pre_emit_checks ?? []) {
+            if (check.type !== "browser_login_check") continue;
+            const issue = loginCheckIssue(envelope.payload, check);
+            if (issue !== undefined) throw new Error(issue);
+          }
+        }
         if (!isAdvancingEnvelope(envelope)) {
           input.onActivity?.({ event: "agent_end" });
           return {
@@ -382,7 +388,7 @@ export class FakeAgent implements AgentPort {
 
 export function scriptedFakeAgent(
   behaviors: FakeAgentBehavior[],
-): AgentPort & { recorded: RecordedStageRoots[] } {
+): StagePort & { recorded: RecordedStageRoots[] } {
   const recorded: RecordedStageRoots[] = [];
   let index = 0;
   return {

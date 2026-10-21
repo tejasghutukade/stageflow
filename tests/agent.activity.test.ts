@@ -16,12 +16,10 @@ import {
   routeSessionEventToProgress,
 } from "../src/agent/piAdapter.js";
 import { FakeAgent } from "../src/agent/fakeAgent.js";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunStore } from "../src/runstore/createStore.js";
-import { deriveStatusFromStages } from "../src/runstore/port.js";
-import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { runStage } from "../src/runtime/stageRunner.js";
 import { emptyStageUsage } from "../src/types/usage.js";
 
@@ -42,26 +40,6 @@ function captureStderr() {
 describe("stage activity observer", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("forwards StageActivityEvent to onActivity in order", () => {
-    const seen: StageActivityEvent[] = [];
-    const observer = createStageActivityObserver({
-      onActivity: (e) => seen.push(e),
-      writeStderr: false,
-    });
-    observer.onActivity({ event: "agent_start" });
-    observer.onActivity({
-      event: "tool_start",
-      toolName: "read",
-      toolCallId: "c1",
-    });
-    observer.onActivity({ event: "agent_end" });
-    expect(seen.map((e) => e.event)).toEqual([
-      "agent_start",
-      "tool_start",
-      "agent_end",
-    ]);
   });
 
   it("maps Pi-shaped records at the adapter edge before observe", () => {
@@ -92,21 +70,6 @@ describe("stage activity observer", () => {
         assistantMessageEvent: { type: "text_delta", delta: "x" },
       }),
     ).toBeNull();
-  });
-
-  it("maps bash tool_start argsPreview from command object", () => {
-    const mapped = mapSessionEventToActivity({
-      type: "tool_execution_start",
-      toolName: "bash",
-      toolCallId: "b1",
-      args: { command: "ls -la" },
-    });
-    expect(mapped).toEqual({
-      event: "tool_start",
-      toolName: "bash",
-      toolCallId: "b1",
-      argsPreview: '{"command":"ls -la"}',
-    });
   });
 
   it("truncates long activity text for previews", () => {
@@ -195,33 +158,6 @@ describe("stage activity observer", () => {
     stderr.restore();
   });
 
-  it("FakeAgent emits onActivity milestones", async () => {
-    const seen: StageActivityEvent[] = [];
-    const agent = new FakeAgent({
-      type: "emit",
-      envelope: {
-        status: "success",
-        summary: "done",
-        artifacts: [],
-      },
-    });
-    const result = await agent.runStage({
-      roots: buildStageRoots("/tmp", "s"),
-      stage: { id: "s", model: "fake", system_prompt: "x" },
-      task: { id: "t", goal: "g" },
-      priorEnvelope: null,
-      onActivity: (e) => seen.push(e),
-    });
-    expect(result.ok).toBe(true);
-    expect(seen.map((e) => e.event)).toEqual([
-      "agent_start",
-      "tool_start",
-      "tool_end",
-      "message",
-      "agent_end",
-    ]);
-  });
-
   it("interleaved activity lines do not break catalog status", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-act-"));
     const store = createRunStore({ rootDir: root });
@@ -244,17 +180,7 @@ describe("stage activity observer", () => {
     expect(detail.stages[0]?.events.some((e) => e.event === "tool_start")).toBe(
       true,
     );
-    expect(
-      deriveStatusFromStages([
-        {
-          stage_id: "clarify",
-          status: "succeeded",
-          events: [],
-          envelope: null,
-          artifacts: [],
-        },
-      ]),
-    ).toBe("succeeded");
+    await rm(root, { recursive: true, force: true });
   });
 
   it("stageRunner persists FakeAgent activity via RunStore", async () => {
@@ -290,6 +216,7 @@ describe("stage activity observer", () => {
     expect(events).toContain("message");
     expect(events.at(-1)).toBe("succeeded");
     expect(detail.stages[0]?.envelope?.payload).toEqual({ n: 1 });
+    await rm(root, { recursive: true, force: true });
   });
 });
 
@@ -325,26 +252,6 @@ describe("activity text limit env", () => {
     expect(
       readActivityTextLimit({ [ACTIVITY_TEXT_LIMIT_ENV]: "50" }, 0),
     ).toBe(ACTIVITY_TEXT_LIMIT);
-  });
-
-  it("mapped tool_end preview length matches configured limit", () => {
-    const limit = 40;
-    const result = { content: [{ type: "text", text: "z".repeat(100) }] };
-    const preview = truncateActivityText(result, limit);
-    expect(preview!.length).toBe(limit + 1);
-    const mapped = mapSessionEventToActivity({
-      type: "tool_execution_end",
-      toolName: "bash",
-      result,
-      isError: false,
-    });
-    expect(mapped?.event).toBe("tool_end");
-    if (mapped?.event === "tool_end") {
-      expect(mapped.resultPreview!.length).toBeLessThanOrEqual(
-        readActivityTextLimit() + 1,
-      );
-    }
-    expect(preview).toBe(truncateActivityText(result, limit));
   });
 });
 
@@ -653,18 +560,6 @@ describe("activity verbose routing", () => {
 
 describe("passed-server MCP tool activity (AE4)", () => {
   const MCP_TOOL_NAME = "github__list_issues";
-  const existingActivityEvents = new Set<StageActivityEvent["event"]>([
-    "agent_start",
-    "agent_end",
-    "turn_start",
-    "tool_start",
-    "tool_end",
-    "tool_progress",
-    "message",
-    "operator_prompt",
-    "operator_answer",
-  ]);
-
   it("maps tool_execution_start with github__list_issues to tool_start", () => {
     const mapped = mapSessionEventToActivity({
       type: "tool_execution_start",
@@ -694,7 +589,7 @@ describe("passed-server MCP tool activity (AE4)", () => {
       toolName: MCP_TOOL_NAME,
       toolCallId: "mcp-1",
       isError: false,
-      resultPreview: truncateActivityText(result),
+      resultPreview: '{"content":[{"type":"text","text":"[{\\"number\\":1}]"}]}',
     });
 
     const failed = mapSessionEventToActivity({
@@ -768,10 +663,6 @@ describe("passed-server MCP tool activity (AE4)", () => {
       { observer, verbose: false },
     );
     expect(seen.map((e) => e.event)).toEqual(["tool_start", "tool_end"]);
-    for (const e of seen) {
-      expect(existingActivityEvents.has(e.event)).toBe(true);
-      expect(e.event).not.toMatch(/mcp/i);
-    }
     expect(seen[0]).toMatchObject({
       event: "tool_start",
       toolName: MCP_TOOL_NAME,

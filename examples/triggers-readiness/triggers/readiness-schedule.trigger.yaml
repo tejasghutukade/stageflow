@@ -1,0 +1,8 @@
+id: readiness-schedule
+pipeline: readiness
+task: readiness-task
+kind: schedule
+enabled: false
+schedule:
+  cron: "*/5 * * * *"
+  timezone: UTC

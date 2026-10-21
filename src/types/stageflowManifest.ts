@@ -3,9 +3,11 @@ export type StageflowManifestVersion = 1;
 export type StageflowManifestCatalog = {
   pipelines: string[];
   tasks: string[];
+  triggers?: string[];
   patterns?: {
     pipeline?: string;
     task?: string;
+    trigger?: string;
   };
   exclude?: string[];
 };
@@ -13,7 +15,7 @@ export type StageflowManifestCatalog = {
 export type StageflowManifest = {
   version: StageflowManifestVersion;
   catalog: StageflowManifestCatalog;
-  /** Default AgentPort backend for every pipeline/stage that doesn't override it. */
+  /** Default StagePort backend for every pipeline/stage that doesn't override it. */
   agent?: string;
   /** Default LLM model id for every stage that doesn't override it at pipeline or stage level. */
   model?: string;
@@ -26,5 +28,6 @@ export type LoadedManifest = {
   patterns: {
     pipeline: string;
     task: string;
+    trigger: string;
   };
 };

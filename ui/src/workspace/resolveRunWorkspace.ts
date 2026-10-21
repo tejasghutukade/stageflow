@@ -66,6 +66,8 @@ export type SpatialNodeChrome = {
   gateKinds?: StageGateKind[];
   promptSummary?: string;
   meta?: string;
+  /** Workshop studio cards show the stage name only. */
+  titleOnly?: boolean;
   isWaitingAttention: boolean;
   isFeedbackSource?: boolean;
   isFeedbackTarget?: boolean;
@@ -121,6 +123,8 @@ export type RunWorkspace = {
   inboundEnvelope: StageEnvelopeView | null;
   inboundFromStageId: string | undefined;
   inboundToStageId: string | undefined;
+  outboundEnvelope: StageEnvelopeView | null;
+  outboundToStageId: string | undefined;
   drawer: WorkspaceDrawer | null;
   envelope: WorkspaceEnvelope | null;
   liveStream: boolean;
@@ -235,6 +239,44 @@ export function collectSupersededStageIds(
   return ids;
 }
 
+function addSupersededCloneStageIds(
+  ids: Set<string>,
+  generations: FeedbackLoopHistory["fork_generations"],
+): void {
+  for (const gen of generations) {
+    if (gen.status !== "superseded") continue;
+    for (const id of gen.clone_stage_ids) ids.add(id);
+  }
+}
+
+export function collectSupersededCloneStageIds(
+  history: FeedbackLoopHistory[] | undefined,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of history ?? []) {
+    addSupersededCloneStageIds(ids, entry.fork_generations);
+    for (const replay of entry.replays) {
+      addSupersededCloneStageIds(ids, replay.fork_generations);
+    }
+  }
+  return ids;
+}
+
+function omitHiddenStageIds(ids: string[], hidden: Set<string>): string[] {
+  return ids.filter((id) => !hidden.has(id));
+}
+
+function omitHiddenTrack(
+  track: PipelineTrackProjection,
+  hidden: Set<string>,
+): PipelineTrackProjection {
+  if (hidden.size === 0) return track;
+  return {
+    nodes: track.nodes.filter((n) => !hidden.has(n.stage_id)),
+    edges: track.edges.filter((e) => !hidden.has(e.from) && !hidden.has(e.to)),
+  };
+}
+
 export function resolveFeedbackDecide(
   run: Pick<
     RunDetail,
@@ -304,15 +346,43 @@ function pickStageId(run: RunDetail, selection: OperatorSelection): string | nul
     return selection.previousStageId;
   }
   const waitKey = activeWaitKey(run);
+  const waitOpen = Boolean(waitKey && waitKey !== selection.dismissedWaitKey);
   if (
-    waitKey &&
-    waitKey !== selection.dismissedWaitKey &&
+    waitOpen &&
     run.waiting_stage_id &&
     stageExists(run, run.waiting_stage_id)
   ) {
     return run.waiting_stage_id;
   }
-  return null;
+  if (
+    selection.dismissedWaitKey &&
+    waitKey &&
+    waitKey === selection.dismissedWaitKey
+  ) {
+    return null;
+  }
+  const order = orderedStageIds(run);
+  const snapshotMap = snapshotById(run);
+  if (waitOpen) {
+    for (const stageId of order) {
+      if (snapshotMap.get(stageId)?.status === "waiting_for_input") {
+        return stageId;
+      }
+    }
+  }
+  for (const stageId of order) {
+    if (snapshotMap.get(stageId)?.status === "failed") return stageId;
+  }
+  for (const stageId of order) {
+    if (snapshotMap.get(stageId)?.status === "running") return stageId;
+  }
+  if (
+    selection.previousStageId &&
+    stageExists(run, selection.previousStageId)
+  ) {
+    return selection.previousStageId;
+  }
+  return order[order.length - 1] ?? run.stages[run.stages.length - 1]?.stage_id ?? null;
 }
 
 function stageOwnsArtifactPath(stage: StageSnapshot, path: string): boolean {
@@ -487,6 +557,7 @@ function nodeChromeFromTrack(
         readiness: node.readiness,
         blocked_by: node.blocked_by,
         status,
+        blockersLabel: (id) => stageCloneLabel(run, id),
       }),
       gateKinds: node.gate_kinds,
       meta: status === "running" ? snapshot?.last_at : undefined,
@@ -538,22 +609,30 @@ function buildRunGraph(
   plannedStageIds: string[] | undefined,
   feedbackOverlays: FeedbackOverlay[],
   supersededIds: Set<string>,
+  hiddenCloneIds: Set<string>,
 ): {
   spatialLayout: SpatialTrackLayout;
   nodeChrome: SpatialNodeChrome[];
   trackStages: WorkspaceTrackStage[];
 } {
   const snapshots = snapshotById(run);
-  const spatialLayout = layoutSpatialTrack(run.pipeline_track, {
-    liveStageIds: run.stages.map((s) => s.stage_id),
-    plannedStageIds,
+  const track = omitHiddenTrack(run.pipeline_track, hiddenCloneIds);
+  const visiblePlannedIds = plannedStageIds
+    ? omitHiddenStageIds(plannedStageIds, hiddenCloneIds)
+    : plannedStageIds;
+  const spatialLayout = layoutSpatialTrack(track, {
+    liveStageIds: omitHiddenStageIds(
+      run.stages.map((s) => s.stage_id),
+      hiddenCloneIds,
+    ),
+    plannedStageIds: visiblePlannedIds,
   });
-  const track = run.pipeline_track;
   const feedbackSourceIds = new Set(feedbackOverlays.map((o) => o.from));
   const feedbackTargetIds = new Set(feedbackOverlays.map((o) => o.to));
 
   if (!track.nodes.length) {
-    const trackStages = toTrackStages(run.stages, selectedStageId, plannedStageIds);
+    const visibleStages = run.stages.filter((s) => !hiddenCloneIds.has(s.stage_id));
+    const trackStages = toTrackStages(visibleStages, selectedStageId, visiblePlannedIds);
     return {
       spatialLayout,
       nodeChrome: nodeChromeFromStages(
@@ -599,6 +678,7 @@ function composerState(
     !status ||
     status === "succeeded" ||
     status === "failed" ||
+    status === "interrupted" ||
     status === "pending" ||
     status === "skipped"
   ) {
@@ -611,7 +691,13 @@ function sessionChipKind(
   status: StageSnapshot["status"] | undefined,
 ): SessionChipKind {
   if (status === "waiting_for_input") return "alive";
-  if (status === "succeeded" || status === "failed" || status === "pending" || status === "skipped") {
+  if (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "interrupted" ||
+    status === "pending" ||
+    status === "skipped"
+  ) {
     return "closed";
   }
   return null;
@@ -763,6 +849,7 @@ export function resolveRunWorkspace(
     run.feedback_loops,
     run.pipeline_track,
   );
+  const hiddenCloneIds = collectSupersededCloneStageIds(run.feedback_loops);
   const supersededIds = collectSupersededStageIds(run.feedback_loops);
   const envelopeStageId = view.kind === "envelope" ? view.stageId : null;
   const envelopeStage = envelopeStageId
@@ -796,6 +883,7 @@ export function resolveRunWorkspace(
     plannedStageIds,
     feedbackOverlays,
     supersededIds,
+    hiddenCloneIds,
   );
 
   return {
@@ -823,6 +911,10 @@ export function resolveRunWorkspace(
     inboundEnvelope: inboundStage?.envelope ?? null,
     inboundFromStageId: inboundStage?.stage_id,
     inboundToStageId: selectedStage?.stage_id,
+    outboundEnvelope: selectedStage?.envelope ?? null,
+    outboundToStageId: selectedStageId
+      ? outboundStageId(run, selectedStageId, catalogOverlay)
+      : undefined,
     drawer,
     envelope,
     liveStream:

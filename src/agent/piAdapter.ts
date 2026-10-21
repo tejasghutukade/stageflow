@@ -1,5 +1,5 @@
 /**
- * Pi implementation of AgentPort.
+ * Pi implementation of StagePort.
  *
  * One stage = one `createAgentSession` (single-shot SDK path, not
  * AgentSessionRuntime / interactive / RPC). The session is sealed from host
@@ -26,17 +26,17 @@
  * fails closed with `StageSessionReconstructError` (KTD7). Epic proving
  * vehicle: pipeline `plan-review-proving` (Pi live wait + console answers).
  *
- * `ask_operator` is registered on sealed stage sessions unless the stage
- * declares `gate_kinds: []`.
+ * `ask_operator` is registered on sealed stage sessions only when the stage
+ * declares a non-empty `gate_kinds` list.
  */
 import { existsSync } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { BROWSER_SKILL_NAME } from "../config/builtinSkills.js";
 import {
   type AgentSession,
-  type EventBus,
+  type ExtensionFactory,
   type InlineExtension,
-  createAgentSession,
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
@@ -48,7 +48,18 @@ import { StageMcpError } from "../config/resolveStageMcpServers.js";
 import {
   attachIsolatedMcp,
   STAGEFLOW_PI_MCP_EXTENSION_NAME,
+  UNREQUESTED_MCP_ADAPTER_TOOLS,
 } from "./piIsolatedMcp.js";
+import { warmIsolatedMcpMetadata } from "./piIsolatedMcpProbe.js";
+import {
+  createToolOutputBudgetExtension,
+  STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
+} from "./toolOutputBudgetExtension.js";
+import { TOOL_OUTPUT_ARTIFACT_DIR } from "./toolOutputSpill.js";
+import {
+  createPiAgentSession,
+  createSealedResourceLoader,
+} from "./piSessionFactory.js";
 import { isAdvancingEnvelope } from "../envelope/check.js";
 import { formatFeedbackLoopContext } from "../prompt/feedbackLoopContext.js";
 import { formatPriorEnvelope } from "../prompt/priorEnvelope.js";
@@ -61,13 +72,19 @@ import {
   createEmitStageEnvelopeTool,
   type EmitCapture,
 } from "../tools/emitStageEnvelope.js";
+import { remindUntilEmitted, type StageTurnSession } from "./stageTurnDriver.js";
 import {
   createAskOperatorTool,
   type AskOperatorPrompt,
   type AskOperatorWaitBridge,
 } from "../tools/askOperator.js";
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
+import { createSendEmailTool } from "../tools/sendEmail.js";
+import { createSendMessageTool } from "../tools/sendMessage.js";
+import { createReplyEmailTool } from "../tools/replyEmail.js";
+import { createGetEmailTool, createSearchEmailTool, createDownloadEmailAttachmentTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
+import { isCursorModelRef, readCursorApiKey } from "./cursorProvider.js";
 import { findProviderSupport } from "./providerSupport.js";
 import { mapSessionEventToActivity, readActivityVerbose, type StageActivityEvent } from "./activity.js";
 import {
@@ -75,7 +92,7 @@ import {
   type StageActivityObserver,
 } from "./activityObserver.js";
 import type {
-  AgentPort,
+  StagePort,
   OpaqueAnswer,
   StageHandle,
   StageHandleCloseOptions,
@@ -87,10 +104,67 @@ import type {
 import { DEFAULT_STAGE_TIMEOUT_MS, runtimeStageId, runStageViaOpen } from "./port.js";
 import type { StageGateKind } from "../types/stage.js";
 import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
+import {
+  TIMEOUT_ABORT_TOOL_RESULT,
+  composeTimeoutResumePrompt,
+  stageTimeoutReason,
+} from "./stageTimeout.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  isUsableAuthFile,
+  STAGEFLOW_AGENT_AUTH_PATH_ENV,
+} from "../runtime/credentialBinding.js";
+import { SF_STAGE_WORKER } from "../runtime/stageWorkerProtocol.js";
+import {
+  durableRootFileToolDenial,
+  STAGEFLOW_PATH_DENIED,
+} from "../runstore/workspaceLayout.js";
 
+export { STAGEFLOW_PATH_DENIED };
+export { createSealedResourceLoader } from "./piSessionFactory.js";
+
+export const STAGEFLOW_PATH_DENY_EXTENSION_NAME = "stageflow-path-deny";
+
+const PATH_DENY_FILE_TOOLS = new Set(["read", "write", "edit"]);
+
+export function createDurableRootPathDenyExtension(options: {
+  runWorkspaceDir: string;
+  durableRoot: string;
+  checkoutRoot?: string;
+}): ExtensionFactory {
+  const { runWorkspaceDir, durableRoot, checkoutRoot } = options;
+  const allowlistedRoots =
+    checkoutRoot !== undefined && checkoutRoot !== ""
+      ? [checkoutRoot]
+      : undefined;
+  return (pi) => {
+    pi.on("tool_call", async (event, ctx) => {
+      if (!PATH_DENY_FILE_TOOLS.has(event.toolName)) {
+        return undefined;
+      }
+      const rawPath = (event.input as { path?: unknown }).path;
+      if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
+        return undefined;
+      }
+      const candidate = path.isAbsolute(rawPath)
+        ? rawPath
+        : path.resolve(ctx.cwd, rawPath);
+      const reason = await durableRootFileToolDenial(
+        candidate,
+        runWorkspaceDir,
+        durableRoot,
+        allowlistedRoots,
+      );
+      if (reason !== undefined) {
+        return { block: true, reason };
+      }
+      return undefined;
+    });
+  };
+}
 /**
  * Stage tool allowlist for sealed Pi sessions.
- * Includes `ask_operator` unless `gateKinds` is an empty list (R6).
+ * Includes `ask_operator` only when `gateKinds` is a non-empty list.
  * `write_stage_artifact` when registered (always, for bound and unbound —
  * bound/unbound only gates cwd / env bind).
  */
@@ -107,7 +181,7 @@ export function resolveStageToolNames(
     "edit",
     emitToolName,
   ];
-  if (gateKinds === undefined || gateKinds.length > 0) {
+  if (Array.isArray(gateKinds) && gateKinds.length > 0) {
     tools.push(askOperatorToolName);
   }
   if (artifactToolName) {
@@ -489,8 +563,13 @@ function attachStageProgress(
   session: AgentSession,
   onActivity?: (event: StageActivityEvent) => void,
   usage?: StageUsage,
+  onAssistantTextDelta?: (delta: string) => void,
 ): () => void {
-  const observer = createStageActivityObserver({ onActivity, writeStderr: true });
+  const observer = createStageActivityObserver({
+    onActivity,
+    onAssistantTextDelta,
+    writeStderr: true,
+  });
   const verbose = readActivityVerbose();
 
   const unsubscribe = session.subscribe((event) => {
@@ -546,10 +625,21 @@ function buildUserPrompt(
 
   const attempt = input.roots.attempt ?? 1;
   const attemptArtifactsPath = `stages/${runtimeStageId(input)}/attempts/${attempt}/artifacts/`;
-  const skillBaseDir =
+  const skillBaseDirs = [
     input.stage.skill !== undefined && input.skillFilePath !== undefined
       ? path.dirname(input.skillFilePath)
-      : undefined;
+      : undefined,
+    input.browserSkillFilePath !== undefined
+      ? path.dirname(input.browserSkillFilePath)
+      : undefined,
+  ].filter((dir): dir is string => dir !== undefined);
+  const skillBaseDir = skillBaseDirs.length > 0 ? skillBaseDirs.join(", ") : undefined;
+  const browserGuidance = formatBrowserGuidance(input);
+  const toolOutputGuidance =
+    Object.keys(input.resolvedMcpServers ?? {}).length > 0 ||
+    (input.stage.email?.length ?? 0) > 0
+      ? `Large tool results are saved automatically as stage artifacts under ${attemptArtifactsPath}${TOOL_OUTPUT_ARTIFACT_DIR}/. The tool result names the path. Read or grep that file; do not copy tool output into ${artifactToolName ?? "an artifact"}.`
+      : "";
   const artifactGuidance =
     input.roots.mode === "bound" && artifactToolName !== undefined
       ? [
@@ -572,6 +662,12 @@ function buildUserPrompt(
         : `Create factory stage artifacts under ${attemptArtifactsPath} relative to the run folder.`;
 
   return [
+    ...(input.stage.channels?.length ? [
+      `Stageflow channels: ${JSON.stringify(input.stage.channels.map(channel => ({ channel: channel.alias ?? channel.connection, operations: channel.operations })))}. Use send_message with the channel name. Recipients are fixed by configuration and you cannot change them. Use a stable operationKey for each intended message. Provider acceptance does not prove delivery. Never resend an unknown submission automatically.`,
+    ] : []),
+    ...(input.stage.email?.length ? [
+      `Stageflow email permissions: ${JSON.stringify(input.stage.email)}. Use only declared accounts and operations. Use a stable operationKey for each intended message. Provider acceptance does not prove delivery. Never resend an unknown submission automatically.`,
+    ] : []),
     `Task id: ${input.task.id}`,
     `Stage id: ${runtimeStageId(input)}`,
     `Goal: ${input.task.goal}`,
@@ -590,10 +686,36 @@ function buildUserPrompt(
       : "",
     "",
     artifactGuidance,
+    toolOutputGuidance,
+    browserGuidance,
     emitHint,
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function formatBrowserGuidance(input: StageRunInput): string {
+  const browser = input.stage.browser;
+  if (browser === undefined) return "";
+  const lines = [
+    "This stage has a browser. Run only agent-browser commands in bash. The session is already set in the environment.",
+  ];
+  if (browser.allow_domains !== undefined && browser.allow_domains.length > 0) {
+    lines.push(
+      `Allowed domains: ${browser.allow_domains.join(", ")}. Open no other domain.`,
+    );
+  }
+  if (
+    input.browserSkillFilePath !== undefined &&
+    input.stage.skill !== BROWSER_SKILL_NAME
+  ) {
+    lines.push(
+      input.stage.skill !== undefined
+        ? `Before you use the browser, read the browser skill at ${input.browserSkillFilePath}.`
+        : "Follow the browser skill.",
+    );
+  }
+  return lines.join("\n");
 }
 
 export function composeStageUserPrompt(
@@ -610,6 +732,9 @@ export function composeStageUserPrompt(
   );
   if (input.stage.skill !== undefined) {
     return `/skill:${input.stage.skill} ${body}`;
+  }
+  if (input.browserSkillFilePath !== undefined && input.stage.browser !== undefined) {
+    return `/skill:${BROWSER_SKILL_NAME} ${body}`;
   }
   return body;
 }
@@ -628,56 +753,28 @@ export function composeFeedbackResumePrompt(input: StageRunInput): string {
   ].join("\n\n");
 }
 
-/**
- * DefaultResourceLoader with host/global discovery turned off.
- *
- * Without these flags the loader walks up from the run folder and would pick
- * up the consumer project's AGENTS.md, `.agents/skills/`, `.pi/extensions`,
- * and APPEND_SYSTEM.md. Stages must not inherit that context.
- *
- * `additionalExtensionPaths` is the Cursor/provider seam. `extensionFactories`
- * is the isolated MCP seam. With `noExtensions: true`, discovered
- * global/project packages stay out; only those allowlists load.
- * `additionalSkillPaths` is the matching allowlist for one named skill.
- */
-export function createSealedResourceLoader(options: {
-  cwd: string;
-  agentDir: string;
-  settingsManager: SettingsManager;
-  systemPrompt: string;
-  additionalExtensionPaths?: string[];
-  additionalSkillPaths?: string[];
-  extensionFactories?: InlineExtension[];
-  eventBus?: EventBus;
-}): DefaultResourceLoader {
-  return new DefaultResourceLoader({
-    cwd: options.cwd,
-    agentDir: options.agentDir,
-    settingsManager: options.settingsManager,
-    systemPromptOverride: () => options.systemPrompt,
-    appendSystemPromptOverride: () => [],
-    additionalExtensionPaths: options.additionalExtensionPaths,
-    additionalSkillPaths: options.additionalSkillPaths,
-    ...(options.extensionFactories !== undefined
-      ? { extensionFactories: options.extensionFactories }
-      : {}),
-    ...(options.eventBus !== undefined ? { eventBus: options.eventBus } : {}),
-    noContextFiles: true,
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-  });
+function mcpExtensionTools(loader: DefaultResourceLoader): string[] {
+  const inlinePath = `<inline:${STAGEFLOW_PI_MCP_EXTENSION_NAME}>`;
+  return loader
+    .getExtensions()
+    .extensions.filter((ext) => ext.path === inlinePath)
+    .flatMap((ext) => [...ext.tools.keys()]);
 }
 
-function collectMcpExtensionToolNames(loader: DefaultResourceLoader): string[] {
-  const inlinePath = `<inline:${STAGEFLOW_PI_MCP_EXTENSION_NAME}>`;
+export function mcpToolMetadataMissing(loader: DefaultResourceLoader): boolean {
+  return mcpExtensionTools(loader).includes("mcp");
+}
+
+export function collectMcpExtensionToolNames(
+  loader: DefaultResourceLoader,
+): { ok: true; names: string[] } | { ok: false; unrequested: string[] } {
   const names: string[] = [];
-  for (const ext of loader.getExtensions().extensions) {
-    if (ext.path !== inlinePath) continue;
-    names.push(...ext.tools.keys());
+  const unrequested: string[] = [];
+  for (const name of mcpExtensionTools(loader)) {
+    if (UNREQUESTED_MCP_ADAPTER_TOOLS.has(name)) unrequested.push(name);
+    else names.push(name);
   }
-  return names;
+  return unrequested.length > 0 ? { ok: false, unrequested } : { ok: true, names };
 }
 
 async function shutdownSession(session: AgentSession | undefined): Promise<void> {
@@ -700,7 +797,10 @@ async function shutdownSession(session: AgentSession | undefined): Promise<void>
   }
 }
 
-function resultFromCapture(capture: EmitCapture): StageRunResult {
+function resultFromCapture(capture: EmitCapture, providerError?: string): StageRunResult {
+  if (providerError !== undefined && !capture.envelope) {
+    return { ok: false, reason: `provider error: ${providerError}` };
+  }
   if (capture.error && !capture.envelope) {
     return { ok: false, reason: capture.error };
   }
@@ -1025,6 +1125,29 @@ async function prepareStageSessionWiring(
 ): Promise<StageSessionWiring | StageRunResult> {
   const { roots } = input;
   const provider = findProviderSupport(input.stage.model);
+  if (process.env[SF_STAGE_WORKER] === "1" && !provider) {
+    if (!roots.authPath || !isUsableAuthFile(roots.authPath)) {
+      const authPath = roots.authPath;
+      return {
+        ok: false,
+        reason: authPath
+          ? `Stage provider auth is not configured (auth file missing or empty: ${authPath}).`
+          : `Stage provider auth is not configured (${STAGEFLOW_AGENT_AUTH_PATH_ENV} is unset).`,
+      };
+    }
+  }
+  if (
+    process.env[SF_STAGE_WORKER] === "1" &&
+    provider &&
+    isCursorModelRef(input.stage.model) &&
+    !readCursorApiKey()
+  ) {
+    return {
+      ok: false,
+      reason:
+        "Stage provider auth is not configured (Cursor API key missing from the credential root).",
+    };
+  }
   const capture: EmitCapture = {};
   const usage: StageUsage = emptyStageUsage();
   const askWaitChannel = existingAskWaitChannel ?? new AskOperatorWaitChannel();
@@ -1043,11 +1166,11 @@ async function prepareStageSessionWiring(
   const emitTool = defineTool(emitDef);
 
   const gateKinds = input.stage.gate_kinds;
-  const includeAsk = gateKinds === undefined || gateKinds.length > 0;
+  const includeAsk = Array.isArray(gateKinds) && gateKinds.length > 0;
   const askDef = includeAsk
     ? createAskOperatorTool({
         requestWait: (prompt) => askWaitChannel.requestWait(prompt),
-        ...(gateKinds !== undefined ? { allowedKinds: gateKinds } : {}),
+        allowedKinds: gateKinds,
       })
     : undefined;
   const askTool = askDef ? defineTool(askDef) : undefined;
@@ -1065,6 +1188,11 @@ async function prepareStageSessionWiring(
       reason: `Skill "${input.stage.skill}" is not installed`,
     };
   }
+
+  const additionalSkillPaths = [
+    input.skillFilePath,
+    input.stage.browser !== undefined ? input.browserSkillFilePath : undefined,
+  ].filter((p, i, all): p is string => p !== undefined && all.indexOf(p) === i);
 
   const additionalExtensionPaths: string[] = [];
   let restoreProvider: (() => void) | undefined;
@@ -1095,27 +1223,73 @@ async function prepareStageSessionWiring(
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
     });
-    attached = await attachIsolatedMcp(input.resolvedMcpServers);
+    attached = await attachIsolatedMcp(input.resolvedMcpServers, {
+      lifecycle: "eager",
+    });
     const failAfterAttach = (reason: string): StageRunResult => {
       attached?.cancel?.();
       restoreProvider?.();
       return { ok: false, reason };
     };
+    const extensionFactories: InlineExtension[] = [
+      {
+        name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
+        factory: createDurableRootPathDenyExtension({
+          runWorkspaceDir: roots.runWorkspaceDir,
+          durableRoot: globalStageflowHome(),
+          ...(roots.checkoutRoot !== undefined
+            ? { checkoutRoot: roots.checkoutRoot }
+            : {}),
+        }),
+      },
+      {
+        name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
+        factory: createToolOutputBudgetExtension({
+          runWorkspaceDir: roots.runWorkspaceDir,
+          stageId: runtimeStageId(input),
+          attempt: roots.attempt ?? 1,
+          exempt: new Set([
+            "read",
+            "bash",
+            emitDef.name,
+            artifactDef.name,
+            askDef?.name ?? "ask_operator",
+          ]),
+        }),
+      },
+      ...(attached.extensionFactories ?? []),
+    ];
     const loader = createSealedResourceLoader({
       cwd: roots.cwd,
       agentDir: roots.agentDir,
       settingsManager,
       systemPrompt: input.stage.system_prompt,
       additionalExtensionPaths,
-      ...(input.skillFilePath !== undefined
-        ? { additionalSkillPaths: [input.skillFilePath] }
-        : {}),
-      ...(attached.extensionFactories !== undefined
-        ? { extensionFactories: attached.extensionFactories }
-        : {}),
+      ...(additionalSkillPaths.length > 0 ? { additionalSkillPaths } : {}),
+      extensionFactories,
       ...(attached.eventBus !== undefined ? { eventBus: attached.eventBus } : {}),
     });
     await loader.reload();
+    if (
+      attached.extensionFactories !== undefined &&
+      input.resolvedMcpServers !== undefined &&
+      mcpToolMetadataMissing(loader)
+    ) {
+      // A cold adapter metadata cache registers only the `mcp` gateway at load,
+      // and the session allowlist is fixed at load. Warm the cache, then reload
+      // so the declared servers' direct tools exist when the allowlist is built.
+      try {
+        await warmIsolatedMcpMetadata(input.resolvedMcpServers, { cwd: roots.cwd });
+      } catch (err) {
+        return failAfterAttach(err instanceof Error ? err.message : String(err));
+      }
+      await loader.reload();
+      if (mcpToolMetadataMissing(loader)) {
+        return failAfterAttach(
+          `MCP tool metadata unavailable for: ${Object.keys(input.resolvedMcpServers).join(", ")}`,
+        );
+      }
+    }
 
     const extensionErrors = loader.getExtensions().errors;
     if (extensionErrors.length > 0) {
@@ -1143,7 +1317,7 @@ async function prepareStageSessionWiring(
       return failAfterAttach(`Skill "${input.stage.skill}" is not installed`);
     }
 
-    const customTools = askTool
+    const customTools: StageSessionWiring["customTools"] = askTool
       ? [emitTool, askTool, artifactTool]
       : [emitTool, artifactTool];
     const tools = resolveStageToolNames(
@@ -1153,7 +1327,32 @@ async function prepareStageSessionWiring(
       gateKinds,
     );
     if (attached.extensionFactories !== undefined) {
-      tools.push(...collectMcpExtensionToolNames(loader));
+      const mcpTools = collectMcpExtensionToolNames(loader);
+      if (!mcpTools.ok) {
+        return failAfterAttach(
+          `MCP adapter registered unrequested tool(s): ${mcpTools.unrequested.join(", ")}`,
+        );
+      }
+      tools.push(...mcpTools.names);
+    }
+    if (input.channels && input.stage.channels?.some(channel => channel.operations.includes("send"))) {
+      const definition = createSendMessageTool(input.channels);
+      customTools.push(defineTool(definition));
+      tools.push(definition.name);
+    }
+    if (input.email) {
+      const permitted = new Set(input.stage.email?.flatMap(permission => permission.operations));
+      const definitions = [
+        permitted.has("send") ? createSendEmailTool(input.email) : undefined,
+        permitted.has("reply") ? createReplyEmailTool(input.email) : undefined,
+        permitted.has("search") ? createSearchEmailTool(input.email) : undefined,
+        permitted.has("getMessage") ? createGetEmailTool(input.email) : undefined,
+        permitted.has("downloadAttachment") ? createDownloadEmailAttachmentTool(input.email) : undefined,
+      ];
+      for (const definition of definitions) if (definition) {
+        customTools.push(defineTool(definition));
+        tools.push(definition.name);
+      }
     }
 
     return {
@@ -1225,7 +1424,7 @@ export async function reconstructStageSessionForAnswer(
 
   let session: AgentSession | undefined;
   try {
-    const created = await createAgentSession({
+    const created = await createPiAgentSession({
       cwd: input.roots.cwd,
       agentDir: input.roots.agentDir,
       modelRuntime: wiring.modelRuntime,
@@ -1255,6 +1454,13 @@ export async function reconstructStageSessionForAnswer(
     if (resolved.thinkingLevel) {
       session.setThinkingLevel(resolved.thinkingLevel);
     }
+    await input.onResolvedModel?.({
+      stageId: runtimeStageId(input),
+      model: resolved.model.id,
+      ...(resolved.thinkingLevel !== undefined
+        ? { thinkingLevel: resolved.thinkingLevel }
+        : {}),
+    });
 
     const liveSession = session;
     return {
@@ -1290,7 +1496,7 @@ async function bindStageSession(
   wiring: StageSessionWiring,
 ): Promise<AgentSession | StageRunResult> {
   const { roots } = input;
-  const created = await createAgentSession({
+  const created = await createPiAgentSession({
     cwd: roots.cwd,
     agentDir: roots.agentDir,
     modelRuntime: wiring.modelRuntime,
@@ -1333,6 +1539,13 @@ async function bindStageSession(
     if (resolved.thinkingLevel) {
       session.setThinkingLevel(resolved.thinkingLevel);
     }
+    await input.onResolvedModel?.({
+      stageId: runtimeStageId(input),
+      model: resolved.model.id,
+      ...(resolved.thinkingLevel !== undefined
+        ? { thinkingLevel: resolved.thinkingLevel }
+        : {}),
+    });
   } catch (err) {
     await shutdownSession(session);
     return {
@@ -1351,7 +1564,7 @@ function syncAgentMessagesFromSession(
   session.agent.state.messages = sessionManager.buildSessionContext().messages;
 }
 
-export class PiAgentAdapter implements AgentPort {
+export class PiAgentAdapter implements StagePort {
   openStage(input: StageRunInput): StageHandle {
     const timeoutMs = input.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS;
     const askWaitChannel = new AskOperatorWaitChannel();
@@ -1361,6 +1574,7 @@ export class PiAgentAdapter implements AgentPort {
     let sessionManager: SessionManager | undefined;
     let resumeWaiting = false;
     let feedbackResume = false;
+    let timeoutResume = false;
     let forceNewSession = sessionMode === "new_session";
 
     if (sessionMode === "feedback_resume") {
@@ -1394,6 +1608,31 @@ export class PiAgentAdapter implements AgentPort {
       }
       ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
       feedbackResume = true;
+    } else if (sessionMode === "timeout_resume") {
+      if (!existsSync(sessionFile)) {
+        throw new StageSessionReconstructError(
+          `stage session file missing for timeout_resume: ${sessionFile}`,
+          { stageId: runtimeStageId(input), sessionFile },
+        );
+      }
+      try {
+        sessionManager = SessionManager.open(
+          sessionFile,
+          path.dirname(sessionFile),
+          input.roots.cwd,
+        );
+      } catch (err) {
+        throw new StageSessionReconstructError(
+          `stage session file corrupt or unreadable for timeout_resume: ${sessionFile}`,
+          {
+            stageId: runtimeStageId(input),
+            sessionFile,
+            cause: err,
+          },
+        );
+      }
+      ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
+      timeoutResume = true;
     } else if (sessionMode !== "new_session") {
       if (sessionMode === "waiting_resume" || existsSync(sessionFile)) {
         if (existsSync(sessionFile)) {
@@ -1434,6 +1673,7 @@ export class PiAgentAdapter implements AgentPort {
     let wiring: StageSessionWiring | undefined;
     let unsubscribeProgress: (() => void) | undefined;
     let prepareError: StageRunResult | undefined;
+    let closing = false;
 
     const preparePromise = (async () => {
       if (forceNewSession) {
@@ -1466,7 +1706,12 @@ export class PiAgentAdapter implements AgentPort {
         return;
       }
       session = bound;
-      unsubscribeProgress = attachStageProgress(session, input.onActivity, wiring.usage);
+      unsubscribeProgress = attachStageProgress(
+        session,
+        input.onActivity,
+        wiring.usage,
+        input.onAssistantTextDelta,
+      );
     })();
 
     const runWithTimeout = async (
@@ -1481,15 +1726,34 @@ export class PiAgentAdapter implements AgentPort {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const workPromise = work();
+        const live = session;
+        const capture = wiring.capture;
+        const emitToolName = wiring.emitDefName;
+        const turns: StageTurnSession = {
+          prompt: (text) => live.prompt(text),
+          get messages() {
+            return live.messages ?? live.agent?.state?.messages ?? [];
+          },
+        };
+        const workPromise = (async () => {
+          await work();
+          return remindUntilEmitted(turns, capture, {
+            emitToolName,
+            shouldStop: () => closing || controller.signal.aborted,
+          });
+        })();
         const abortPromise = new Promise<never>((_, reject) => {
           controller.signal.addEventListener("abort", () => {
-            reject(new Error(`stage timed out after ${timeoutMs}ms`));
+            void session?.abort();
+            reject(new Error(stageTimeoutReason(timeoutMs)));
           });
         });
-        await Promise.race([workPromise, abortPromise]);
-        return { ...resultFromCapture(wiring.capture), usage: wiring.usage };
+        const outcome = await Promise.race([workPromise, abortPromise]);
+        return { ...resultFromCapture(capture, outcome.providerError), usage: wiring.usage };
       } catch (err) {
+        if (sessionManager) {
+          ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
+        }
         if (wiring.capture.envelope && isAdvancingEnvelope(wiring.capture.envelope)) {
           return { ok: true, envelope: wiring.capture.envelope, usage: wiring.usage };
         }
@@ -1517,6 +1781,18 @@ export class PiAgentAdapter implements AgentPort {
           if (feedbackResume) {
             syncAgentMessagesFromSession(session!, sessionManager!);
             await session!.prompt(composeFeedbackResumePrompt(input));
+            return;
+          }
+          if (timeoutResume) {
+            syncAgentMessagesFromSession(session!, sessionManager!);
+            if (findOpenToolCall(sessionManager!)) {
+              injectOpaqueAnswerIntoSession(
+                sessionManager!,
+                TIMEOUT_ABORT_TOOL_RESULT,
+              );
+              syncAgentMessagesFromSession(session!, sessionManager!);
+            }
+            await session!.prompt(composeTimeoutResumePrompt());
             return;
           }
           const userPrompt = composeStageUserPrompt(
@@ -1557,6 +1833,7 @@ export class PiAgentAdapter implements AgentPort {
           }
         : undefined,
       onClose: async (closeOptions) => {
+        closing = true;
         await preparePromise.catch(() => undefined);
         if (closeOptions?.park) {
           if (sessionManager) {

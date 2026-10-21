@@ -4,9 +4,13 @@ import type { Stats } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
+import { resolveBashPath } from "../preflight/bash.js";
+import { redactString } from "../logging/redact.js";
+import { getNamedSecrets } from "../logging/namedSecrets.js";
 import type { CompletionCheck, CompletionContract } from "../types/completion.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageGateKind } from "../types/stage.js";
+import { signalProcessGroup } from "./stageProcessLauncher.js";
 
 /**
  * The result of executing a pipeline-owned command. Command execution is a
@@ -24,6 +28,7 @@ export type CommandExecutionInput = {
   command: string;
   cwd: string;
   timeout_ms?: number;
+  env?: NodeJS.ProcessEnv;
 };
 
 export type CommandExecutor = {
@@ -74,6 +79,8 @@ export type CompletionCheckRunnerInput = {
   artifactsDir: string;
   /** Base directory used for a command check without its own cwd. */
   commandWorkingDirectory?: string;
+  /** Curated env for command checks; omit to inherit the caller's process env. */
+  commandEnv?: NodeJS.ProcessEnv;
   commandExecutor?: CommandExecutor;
   gates?: GateDecisionProvider;
   /** Captured before the agent attempt began. */
@@ -82,6 +89,12 @@ export type CompletionCheckRunnerInput = {
   /** Why the runtime could not establish the required pre-stage baseline. */
   checkoutError?: string;
   checklistAttestations?: readonly ChecklistAttestation[];
+  /** Re-runs the Host login check against the stage's own browser session. */
+  browserLogin?: () => Promise<{
+    state: "logged_in" | "logged_out" | "unknown";
+    logged_in: boolean | null;
+    url: string;
+  }>;
   onCheckStart?: (check: CompletionCheck) => Promise<void> | void;
   onCheckComplete?: (result: CompletionCheckResult) => Promise<void> | void;
 };
@@ -135,7 +148,14 @@ export type ChecklistCheckEvidence = {
   unexpected_items: string[];
 };
 
+export type BrowserLoginCheckEvidence = {
+  kind: "browser_login";
+  state?: "logged_in" | "logged_out" | "unknown";
+  url?: string;
+};
+
 export type CompletionCheckEvidence =
+  | BrowserLoginCheckEvidence
   | CommandCheckEvidence
   | ArtifactCheckEvidence
   | PayloadSchemaCheckEvidence
@@ -158,6 +178,7 @@ export type CompletionVerificationResult = {
 };
 
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
+const COMMAND_KILL_ESCALATE_MS = 2000;
 
 function captureOutput(
   chunks: Buffer[],
@@ -182,19 +203,25 @@ export const nodeCommandExecutor: CommandExecutor = {
       let timedOut = false;
       let settled = false;
       let timeout: NodeJS.Timeout | undefined;
+      let escalateTimer: NodeJS.Timeout | undefined;
 
       const finish = (result: CommandExecution) => {
         if (settled) return;
         settled = true;
         if (timeout) clearTimeout(timeout);
+        // When timed out, keep escalateTimer so SIGKILL still runs after the
+        // grace window even if the parent already exited cooperatively.
+        if (escalateTimer && !timedOut) clearTimeout(escalateTimer);
         resolve(result);
       };
 
       let child;
       try {
-        child = spawn(input.command, {
+        const bash = resolveBashPath(input.env ?? process.env);
+        child = spawn(bash, ["-c", input.command], {
           cwd: input.cwd,
-          shell: true,
+          env: input.env,
+          detached: true,
           stdio: ["ignore", "pipe", "pipe"],
         });
       } catch (error) {
@@ -213,6 +240,12 @@ export const nodeCommandExecutor: CommandExecutor = {
       });
       child.stderr?.on("data", (data: Buffer) => {
         stderrSize = captureOutput(stderr, Buffer.from(data), stderrSize);
+      });
+      child.once("exit", () => {
+        if (timedOut) {
+          // Parent may exit on SIGTERM while SIGTERM-proof grandchildren remain.
+          signalProcessGroup(child.pid, "SIGKILL");
+        }
       });
       child.once("error", (error) => {
         finish({
@@ -234,7 +267,12 @@ export const nodeCommandExecutor: CommandExecutor = {
       if (input.timeout_ms !== undefined) {
         timeout = setTimeout(() => {
           timedOut = true;
-          child.kill("SIGTERM");
+          const pid = child.pid;
+          signalProcessGroup(pid, "SIGTERM");
+          escalateTimer = setTimeout(() => {
+            // Always escalate after the grace window regardless of exited.
+            signalProcessGroup(pid, "SIGKILL");
+          }, COMMAND_KILL_ESCALATE_MS);
         }, input.timeout_ms);
       }
     });
@@ -276,16 +314,31 @@ async function runCommandCheck(
   const cwd = resolveCommandCwd(check, base);
   const executor = input.commandExecutor ?? nodeCommandExecutor;
   try {
-    const execution = await executor.run({ command: check.run, cwd, timeout_ms: check.timeout_ms });
+    const execution = await executor.run({
+      command: check.run,
+      cwd,
+      timeout_ms: check.timeout_ms,
+      ...(input.commandEnv !== undefined ? { env: input.commandEnv } : {}),
+    });
     const evidence: CommandCheckEvidence = {
       kind: "command",
       command: check.run,
       cwd,
       exit_code: execution.exit_code,
-      stdout: execution.stdout,
-      stderr: execution.stderr,
+      stdout: redactString(execution.stdout, {
+        namedSecrets: getNamedSecrets(),
+      }),
+      stderr: redactString(execution.stderr, {
+        namedSecrets: getNamedSecrets(),
+      }),
       timed_out: execution.timed_out,
-      ...(execution.error !== undefined ? { error: execution.error } : {}),
+      ...(execution.error !== undefined
+        ? {
+            error: redactString(execution.error, {
+              namedSecrets: getNamedSecrets(),
+            }),
+          }
+        : {}),
     };
     if (execution.timed_out) return result(check, "failed", evidence, "command timed out");
     if (execution.error !== undefined) return result(check, "error", evidence, execution.error);
@@ -522,6 +575,34 @@ function runChecklistCheck(
   return result(check, "passed", evidence);
 }
 
+async function runBrowserLoginCheck(
+  check: Extract<CompletionCheck, { type: "browser_login" }>,
+  input: CompletionCheckRunnerInput,
+): Promise<CompletionCheckResult> {
+  const empty: BrowserLoginCheckEvidence = { kind: "browser_login" };
+  if (input.browserLogin === undefined) {
+    return result(check, "error", empty, "browser_login check requires a browser session");
+  }
+  try {
+    const observed = await input.browserLogin();
+    const evidence: BrowserLoginCheckEvidence = {
+      kind: "browser_login",
+      state: observed.state,
+      url: observed.url,
+    };
+    return observed.logged_in === true
+      ? result(check, "passed", evidence)
+      : result(
+          check,
+          "failed",
+          evidence,
+          `the Host login check still sees a ${observed.state === "unknown" ? "session it cannot confirm" : "logged-out session"}`,
+        );
+  } catch (error) {
+    return result(check, "error", empty, error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function runCheck(
   check: CompletionCheck,
   input: CompletionCheckRunnerInput,
@@ -539,6 +620,8 @@ async function runCheck(
       return runCheckoutChangesCheck(check, input);
     case "checklist":
       return runChecklistCheck(check, input);
+    case "browser_login":
+      return runBrowserLoginCheck(check, input);
   }
 }
 

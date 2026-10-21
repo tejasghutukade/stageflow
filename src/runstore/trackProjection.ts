@@ -109,6 +109,7 @@ function deriveReadiness(
   if (status === "skipped") return { readiness: "skipped" };
   if (status === "running") return { readiness: "running" };
   if (status === "waiting_for_input") return { readiness: "waiting" };
+  if (status === "interrupted") return { readiness: "interrupted" };
 
   if (halted && !stageStarted(stage)) {
     return { readiness: "skipped" };

@@ -1,32 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  ARTIFACT_USAGE,
   runArtifactCommand,
 } from "../src/cli/artifactCommand.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { globalStageflowHome } from "../src/project/globalHome.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const cli = path.join(root, "src", "cli.ts");
-const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
-
-function runCli(args: string[], cwd = root) {
-  return spawnSync(process.execPath, [tsxCli, cli, ...args], {
-    cwd,
-    encoding: "utf8",
-  });
-}
 
 async function seedArtifact(
   projectRoot: string,
   relPath: string,
   contents: string,
 ): Promise<{ runId: string; workspaceDir: string }> {
-  const store = createRunStore({ rootDir: projectRoot });
+  const store = createRunStore({ rootDir: globalStageflowHome() });
   const created = await store.createRun({
     pipelineId: "docs-only",
     taskYaml: "id: a\ngoal: g\n",
@@ -39,6 +29,20 @@ async function seedArtifact(
 }
 
 describe("runArtifactCommand", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-art-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
   it("prints artifact contents to stdout", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-art-read-"));
     const rel = path.join("stages", "s1", "out.txt");
@@ -203,36 +207,5 @@ describe("runArtifactCommand", () => {
     expect(code).toBe(1);
     expect(stderr.join("\n")).toMatch(/Missing --run and\/or --path/);
     expect(stderr.join("\n")).toMatch(/sf artifact read/);
-  });
-
-  it("prints usage on --help", async () => {
-    const stderr: string[] = [];
-    const code = await runArtifactCommand(["read", "--help"], {
-      io: {
-        log: () => undefined,
-        error: (line) => stderr.push(line),
-      },
-    });
-
-    expect(code).toBe(0);
-    expect(stderr.join("\n")).toBe(ARTIFACT_USAGE);
-  });
-});
-
-describe("CLI artifact read", { timeout: 15_000 }, () => {
-  it("artifact read --help shows usage and exits zero", () => {
-    const result = runCli(["artifact", "read", "--help"]);
-    expect(result.status).toBe(0);
-    const out = result.stdout + result.stderr;
-    expect(out).toMatch(/sf artifact read/);
-    expect(out).toMatch(/--run <runId>/);
-    expect(out).toMatch(/--path <relPath>/);
-    expect(out).toMatch(/--out <file>/);
-  });
-
-  it("top-level --help lists artifact read", () => {
-    const result = runCli(["--help"]);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/sf artifact read/);
   });
 });

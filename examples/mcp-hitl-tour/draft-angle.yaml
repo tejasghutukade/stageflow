@@ -1,0 +1,33 @@
+id: draft-angle
+system_prompt: |
+  Draft one clone angle. Your io.input is a single Angle (id, title, topic).
+  Write 5–8 sentences. Do not cover the other clone's title.
+
+  1. Call write_stage_artifact with path angle.md for this id and title.
+  2. Emit success with artifacts [angle.md] and payload
+     { "id": "<input id>", "title": "<input title>" }.
+io:
+  input:
+    schema:
+      $ref: "#/schemas/Angle"
+  output:
+    schema:
+      type: object
+      required: [id, title]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+verify:
+  - id: angle-declared
+    type: artifact
+    basename: angle.md
+    when:
+      - emit
+  - id: angle-on-disk
+    type: artifact
+    path: angle.md
+    nonempty: true
+    when:
+      - after

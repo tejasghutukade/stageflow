@@ -120,11 +120,20 @@ export type StageLifecycleEvent =
   | { event: "resumed" }
   | { event: "succeeded"; usage?: StageUsage }
   | { event: "failed"; reason: string; usage?: StageUsage }
+  | { event: "interrupted"; reason: string }
   | { event: "skipped" }
+  /** A previously skipped stage is runnable again (parent succeeded). */
+  | { event: "reopened" }
   /** Operator explicitly authorized a new attempt after verified failure. */
   | { event: "manual_recovery_requested"; guidance?: string }
   /** Operator chose to leave the verified failure terminal. */
-  | { event: "manual_recovery_stopped" };
+  | { event: "manual_recovery_stopped" }
+  | {
+      event: "feedback_loop_decided";
+      decision: "extend" | "continue" | "abandon";
+      loopId: string;
+      reason?: string;
+    };
 
 export type StageLogLine = StageActivityEvent | StageLifecycleEvent;
 

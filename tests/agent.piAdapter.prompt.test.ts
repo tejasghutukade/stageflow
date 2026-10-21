@@ -148,6 +148,31 @@ describe("composeStageUserPrompt", () => {
   });
 });
 
+describe("composeStageUserPrompt tool output guidance", () => {
+  it("stages with MCP learn that large results are saved as artifacts", () => {
+    const prompt = composeStageUserPrompt(
+      { ...baseInput(), resolvedMcpServers: { exa: { url: "https://mcp.example.invalid" } } },
+      "emit_stage_envelope",
+      undefined,
+      "write_stage_artifact",
+    );
+    expect(prompt).toContain(
+      "Large tool results are saved automatically as stage artifacts under stages/oss-plan-investigation/attempts/1/artifacts/tool-output/.",
+    );
+    expect(prompt).toContain("do not copy tool output into write_stage_artifact.");
+  });
+
+  it("stages without MCP or email get no tool output guidance", () => {
+    const prompt = composeStageUserPrompt(
+      baseInput(),
+      "emit_stage_envelope",
+      undefined,
+      "write_stage_artifact",
+    );
+    expect(prompt).not.toContain("Large tool results");
+  });
+});
+
 describe("composeFeedbackResumePrompt", () => {
   it("includes labelled Feedback Loop Context for feedback_resume", () => {
     const ctx = makeFeedbackLoopContext();

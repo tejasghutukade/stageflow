@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { findProjectRoot } from "./findProjectRoot.js";
-import { ensureGlobalHome, globalStageflowHome } from "./globalHome.js";
+import { globalStageflowHome } from "./globalHome.js";
 
 export type ProjectContext = {
   invocationCwd: string;
@@ -13,7 +13,7 @@ export type ProjectContext = {
 export function resolveProjectContext(invocationCwd: string): ProjectContext {
   const resolvedInvocation = path.resolve(invocationCwd);
   const gitRoot = findProjectRoot(resolvedInvocation);
-  const globalHome = ensureGlobalHome();
+  const globalHome = globalStageflowHome();
   if (gitRoot !== null) {
     return {
       invocationCwd: resolvedInvocation,

@@ -44,7 +44,11 @@ export async function materializeStageModels(
     if (!modelOutcome.ok) {
       return loadFailure(modelOutcome.issues);
     }
-    materialized.push({ ...stage, model: modelOutcome.value });
+    materialized.push({
+      ...stage,
+      model: modelOutcome.value.model,
+      model_tier: modelOutcome.value.tier,
+    });
   }
   return loadSuccess(materialized);
 }

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en" data-redesign="on" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="color-scheme" content="dark light" />
+    <script>
+      try {
+        var light = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+        document.documentElement.setAttribute("data-theme", light ? "light" : "dark");
+      } catch (e) {}
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/stageflow-icon.svg" />
+    <title>Chat</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/chat/main.tsx"></script>
+  </body>
+</html>

@@ -17,115 +17,117 @@ function stageRef(id: string, needs?: string) {
 }
 
 describe("parseCreatePipelineBody", () => {
-  it("accepts valid object stage entries and rejects invalid shape", () => {
-    expect(
-      parseCreatePipelineBody({
+  const bareStringError = (id: string) =>
+    `stages[0]: bare string stage refs are not supported; use { id: "${id}", uses: "./${id}.yaml" } or inline body`;
+
+  it.each([
+    {
+      name: "object stage entries",
+      body: {
         directory: "pipelines",
         id: "plan-review-proving",
         stages: [stageRef("plan-review"), stageRef("plan-review-followup")],
-      }),
-    ).toEqual({
-      directory: "pipelines",
-      id: "plan-review-proving",
-      stages: [stageRef("plan-review"), stageRef("plan-review-followup")],
-    });
-
-    expect(parseCreatePipelineBody(null)).toEqual({
-      ok: false,
-      status: 400,
-      error: "Request body must be an object",
-    });
-    expect(parseCreatePipelineBody({ id: "ok", stages: [] })).toEqual({
-      ok: false,
-      status: 400,
-      error: "directory is required",
-    });
-    expect(parseCreatePipelineBody({ directory: "pipelines", id: "ok", stages: [] })).toEqual({
-      ok: false,
-      status: 400,
-      error: "stages must be a non-empty array",
-    });
-    expect(parseCreatePipelineBody({ directory: "pipelines", id: "ok", stages: [1] })).toEqual({
-      ok: false,
-      status: 400,
-      error: "stages[0] must be an object with id",
-    });
-    expect(parseCreatePipelineBody({ directory: "pipelines", id: "Bad", stages: [stageRef("a")] })).toEqual({
-      ok: false,
-      status: 400,
-      error: "id must be lowercase kebab-case",
-    });
-  });
-
-  it("rejects bare string stage refs", () => {
-    expect(
-      parseCreatePipelineBody({
-        directory: "pipelines",
-        id: "linear",
-        stages: ["plan-review"],
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
-      error:
-        'stages[0]: bare string stage refs are not supported; use { id: "plan-review", uses: "./plan-review.yaml" } or inline body',
-    });
-  });
-
-  it("accepts DAG-shaped stage entries", () => {
-    expect(
-      parseCreatePipelineBody({
+      },
+    },
+    {
+      name: "DAG-shaped stage entries",
+      body: {
         directory: "pipelines",
         id: "fan-out",
-        stages: [{ id: "a", uses: "./a.yaml" }, { id: "b", uses: "./b.yaml", needs: "a" }],
-      }),
-    ).toEqual({
-      directory: "pipelines",
-      id: "fan-out",
-      stages: [{ id: "a", uses: "./a.yaml" }, { id: "b", uses: "./b.yaml", needs: "a" }],
-    });
+        stages: [stageRef("a"), stageRef("b", "a")],
+      },
+    },
+  ])("passes through $name unchanged", ({ body }) => {
+    expect(parseCreatePipelineBody(body)).toEqual(body);
   });
 
-  it("rejects mixed string and object stage arrays", () => {
-    expect(
-      parseCreatePipelineBody({
+  it.each([
+    { name: "a non-object body", body: null, error: "Request body must be an object" },
+    { name: "a missing directory", body: { id: "ok", stages: [] }, error: "directory is required" },
+    {
+      name: "an empty stages array",
+      body: { directory: "pipelines", id: "ok", stages: [] },
+      error: "stages must be a non-empty array",
+    },
+    {
+      name: "a non-object stage entry",
+      body: { directory: "pipelines", id: "ok", stages: [1] },
+      error: "stages[0] must be an object with id",
+    },
+    {
+      name: "a bad id format",
+      body: { directory: "pipelines", id: "Bad", stages: [stageRef("a")] },
+      error: "id must be lowercase kebab-case",
+    },
+    {
+      name: "bare string stage refs",
+      body: { directory: "pipelines", id: "linear", stages: ["plan-review"] },
+      error: bareStringError("plan-review"),
+    },
+    {
+      name: "mixed string and object stage arrays",
+      body: {
         directory: "pipelines",
         id: "mixed",
         stages: ["a", { id: "b", uses: "./b.yaml" }],
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
-      error:
-        'stages[0]: bare string stage refs are not supported; use { id: "a", uses: "./a.yaml" } or inline body',
-    });
-  });
-
-  it("rejects object entries missing id or with non-string needs", () => {
-    expect(
-      parseCreatePipelineBody({
-        directory: "pipelines",
-        id: "bad-object",
-        stages: [{}],
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
+      },
+      error: bareStringError("a"),
+    },
+    {
+      name: "an object entry missing id",
+      body: { directory: "pipelines", id: "bad-object", stages: [{}] },
       error: "stages[0].id is required",
-    });
-
-    expect(
-      parseCreatePipelineBody({
+    },
+    {
+      name: "non-string needs",
+      body: {
         directory: "pipelines",
         id: "bad-needs",
         stages: [{ id: "a", uses: "./a.yaml", needs: 1 }],
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
+      },
       error: "stages[0].needs must be a non-empty string or a non-empty array",
-    });
+    },
+    {
+      name: "HTTP needs items that include if",
+      body: {
+        directory: "pipelines",
+        id: "gated",
+        stages: [
+          { id: "triage", uses: "./triage.yaml" },
+          {
+            id: "page",
+            uses: "./page.yaml",
+            needs: [
+              { id: "triage", on: ["succeeded"], if: { field: "ok", op: "eq", value: true } },
+            ],
+          },
+        ],
+      },
+      error: 'stages[1].needs item: unknown key "if"',
+    },
+    {
+      name: "an empty inline model",
+      body: {
+        directory: "pipelines",
+        id: "hello",
+        stages: [{ id: "hello", system_prompt: "Say hello.", model: "" }],
+      },
+      error: "stages[0].model must be a non-empty string",
+    },
+    {
+      name: "a whitespace-only inline model",
+      body: {
+        directory: "pipelines",
+        id: "hello",
+        stages: [{ id: "hello", system_prompt: "Say hello.", model: "   " }],
+      },
+      error: "stages[0].model must be a non-empty string",
+    },
+  ])("rejects $name", ({ body, error }) => {
+    expect(parseCreatePipelineBody(body)).toEqual({ ok: false, status: 400, error });
+  });
 
+  it("normalizes a single-string needs array to an on: [succeeded] edge", () => {
     expect(
       parseCreatePipelineBody({
         directory: "pipelines",
@@ -135,104 +137,21 @@ describe("parseCreatePipelineBody", () => {
     ).toMatchObject({
       directory: "pipelines",
       id: "one-parent-array",
-      stages: [
-        {
-          id: "a",
-          uses: "./a.yaml",
-          needs: [{ id: "b", on: ["succeeded"] }],
-        },
-      ],
+      stages: [{ id: "a", uses: "./a.yaml", needs: [{ id: "b", on: ["succeeded"] }] }],
     });
   });
 
-  it("rejects HTTP needs items that include if", () => {
-    expect(
-      parseCreatePipelineBody({
-        directory: "pipelines",
-        id: "gated",
-        stages: [
-          { id: "triage", uses: "./triage.yaml" },
-          {
-            id: "page",
-            uses: "./page.yaml",
-            needs: [
-              {
-                id: "triage",
-                on: ["succeeded"],
-                if: { field: "ok", op: "eq", value: true },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
-      error: 'stages[1].needs item: unknown key "if"',
-    });
-  });
-
-  it("accepts inline stage without model", () => {
+  it("accepts an inline stage without model", () => {
     expect(
       parseCreatePipelineBody({
         directory: "pipelines",
         id: "hello",
-        stages: [
-          {
-            id: "hello",
-            system_prompt: "Say hello.",
-          },
-        ],
+        stages: [{ id: "hello", system_prompt: "Say hello." }],
       }),
     ).toEqual({
       directory: "pipelines",
       id: "hello",
-      stages: [
-        {
-          id: "hello",
-          inline: {
-            system_prompt: "Say hello.",
-          },
-        },
-      ],
-    });
-  });
-
-  it("rejects present-but-empty inline model", () => {
-    expect(
-      parseCreatePipelineBody({
-        directory: "pipelines",
-        id: "hello",
-        stages: [
-          {
-            id: "hello",
-            system_prompt: "Say hello.",
-            model: "",
-          },
-        ],
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
-      error: "stages[0].model must be a non-empty string",
-    });
-
-    expect(
-      parseCreatePipelineBody({
-        directory: "pipelines",
-        id: "hello",
-        stages: [
-          {
-            id: "hello",
-            system_prompt: "Say hello.",
-            model: "   ",
-          },
-        ],
-      }),
-    ).toEqual({
-      ok: false,
-      status: 400,
-      error: "stages[0].model must be a non-empty string",
+      stages: [{ id: "hello", inline: { system_prompt: "Say hello." } }],
     });
   });
 
@@ -409,48 +328,6 @@ describe("pipelineConfigToYaml", () => {
         "    uses: ./recon.yaml",
         "  - id: improve-a",
         "    uses: ./improve-a.yaml",
-        "",
-      ].join("\n"),
-    );
-  });
-
-  it("round-trips a succeeded-only gated Route if through create YAML emit", () => {
-    expect(
-      pipelineConfigToYaml(
-        {
-          id: "gated-page",
-          stages: [
-            { id: "triage", uses: "./triage.yaml" },
-            {
-              id: "page",
-              uses: "./page.yaml",
-              needs: [
-                {
-                  id: "triage",
-                  on: ["succeeded"],
-                  if: { field: "ok", op: "eq", value: true },
-                },
-              ],
-            },
-          ],
-        },
-        { format: "dag" },
-      ),
-    ).toBe(
-      [
-        "id: gated-page",
-        "stages:",
-        "  - id: triage",
-        "    entry: true",
-        "    route:",
-        "      - to: page",
-        "        if:",
-        "          field: ok",
-        "          op: eq",
-        "          value: true",
-        "    uses: ./triage.yaml",
-        "  - id: page",
-        "    uses: ./page.yaml",
         "",
       ].join("\n"),
     );

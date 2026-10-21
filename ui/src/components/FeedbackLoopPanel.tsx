@@ -1,3 +1,4 @@
+import { Collapsible } from "@astryxdesign/core/Collapsible";
 import type {
   FeedbackLoopHistory,
   FeedbackLoopRecord,
@@ -58,6 +59,8 @@ export function FeedbackLoopPanel({ active, history }: FeedbackLoopPanelProps) {
 
   const loop = active ?? history[history.length - 1]?.loop;
   const routeLine = loop ? loopRouteLine(loop, history) : null;
+  const summaryLine = loop ? (routeLine ?? replayBudgetLine(loop)) : null;
+  const waiting = loop?.state === "waiting_for_human";
   const timelineReplays = history.flatMap((entry) => entry.replays);
   const supersededCount = history.reduce((count, entry) => {
     let n = entry.fork_generations.filter((g) => g.status === "superseded").length;
@@ -69,59 +72,69 @@ export function FeedbackLoopPanel({ active, history }: FeedbackLoopPanelProps) {
 
   return (
     <section className="feedback-loop-panel block">
-      <div className="block__body">
-        <div className="block__meta">
-          <span className="block__pipeline">Feedback loop</span>
+      <Collapsible
+        key={waiting ? "waiting" : "idle"}
+        trigger={
+          <span className="feedback-loop-panel__trigger">
+            <span className="block__pipeline">Feedback loop</span>
+            {loop ? (
+              <span className={loopStatusClass(loop.state)}>
+                {loop.state.replaceAll("_", " ")}
+              </span>
+            ) : null}
+            {summaryLine ? (
+              <span className="feedback-loop-panel__summary">{summaryLine}</span>
+            ) : null}
+          </span>
+        }
+        defaultIsOpen={waiting}
+      >
+        <div className="feedback-loop-panel__body">
           {loop ? (
-            <span className={loopStatusClass(loop.state)}>
-              {loop.state.replaceAll("_", " ")}
-            </span>
+            <dl className="kv">
+              <dt>Budget</dt>
+              <dd>{replayBudgetLine(loop)}</dd>
+              {routeLine ? (
+                <>
+                  <dt>Route</dt>
+                  <dd>{routeLine}</dd>
+                </>
+              ) : null}
+              <dt>Session</dt>
+              <dd>{loop.policy.replay_session}</dd>
+            </dl>
+          ) : null}
+
+          {timelineReplays.length > 0 ? (
+            <div className="feedback-loop-panel__timeline">
+              <div className="decide__label">Replay timeline</div>
+              <ol className="feedback-loop-panel__list">
+                {timelineReplays.map(({ replay, stage_passes }) => (
+                  <li key={replay.replay_id}>
+                    <span>
+                      #{replay.replay_number} {replay.source_stage_id} →{" "}
+                      {replay.target_stage_id}
+                    </span>
+                    <span className="feedback-loop-panel__status">
+                      {replay.status.replaceAll("_", " ")}
+                      {stage_passes.length > 0
+                        ? ` · ${stage_passes.length} stage pass${stage_passes.length === 1 ? "" : "es"}`
+                        : ""}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+
+          {supersededCount > 0 ? (
+            <p className="block__sub">
+              {supersededCount} superseded fork generation
+              {supersededCount === 1 ? "" : "s"} hidden from the map.
+            </p>
           ) : null}
         </div>
-        {loop ? (
-          <dl className="kv">
-            <dt>Budget</dt>
-            <dd>{replayBudgetLine(loop)}</dd>
-            {routeLine ? (
-              <>
-                <dt>Route</dt>
-                <dd>{routeLine}</dd>
-              </>
-            ) : null}
-            <dt>Session</dt>
-            <dd>{loop.policy.replay_session}</dd>
-          </dl>
-        ) : null}
-
-        {timelineReplays.length > 0 ? (
-          <div className="feedback-loop-panel__timeline">
-            <div className="decide__label">Replay timeline</div>
-            <ol className="feedback-loop-panel__list">
-              {timelineReplays.map(({ replay, stage_passes }) => (
-                <li key={replay.replay_id}>
-                  <span>
-                    #{replay.replay_number} {replay.source_stage_id} →{" "}
-                    {replay.target_stage_id}
-                  </span>
-                  <span className="feedback-loop-panel__status">
-                    {replay.status.replaceAll("_", " ")}
-                    {stage_passes.length > 0
-                      ? ` · ${stage_passes.length} stage pass${stage_passes.length === 1 ? "" : "es"}`
-                      : ""}
-                  </span>
-                </li>
-              ))}
-            </ol>
-          </div>
-        ) : null}
-
-        {supersededCount > 0 ? (
-          <p className="block__sub">
-            {supersededCount} superseded fork generation
-            {supersededCount === 1 ? "" : "s"} marked on the map.
-          </p>
-        ) : null}
-      </div>
+      </Collapsible>
     </section>
   );
 }

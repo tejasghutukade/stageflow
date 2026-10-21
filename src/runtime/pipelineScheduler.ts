@@ -1,7 +1,24 @@
-import type { AgentPort } from "../agent/port.js";
+import type { StagePort } from "../agent/port.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
+import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
 import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
+import {
+  defaultStageBrowserSupport,
+  resolveStageBrowserEnv,
+} from "../browser/stageBrowserEnv.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
+import { runOwnerScope } from "../browser/ownerScope.js";
+import {
+  teardownRunBrowsers,
+  teardownStageBrowser,
+} from "../browser/browserTeardown.js";
+import { isHumanLoginStage } from "../browser/humanLogin.js";
+import { createRunLiveness } from "../browser/runLiveness.js";
+import {
+  acquireStageProfile,
+  profileWaitingMessage,
+} from "../browser/stageProfileLock.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
@@ -32,12 +49,14 @@ import {
   joinAllowsRun,
   pickStalledJoinSkips,
 } from "./joinReadiness.js";
+import { reopenRunnableSkippedStages, persistReopenedStages } from "./reopenSkipped.js";
 import type {
   FeedbackLoopDecisionInput,
   ResolveFeedbackLoopDecisionResult,
 } from "./feedbackLoopDecision.js";
 import {
   forkChoicePreservesReplaySource,
+  forkCohortMapsFromStore,
   mintCohortForFanout,
 } from "./forkGeneration.js";
 import {
@@ -60,18 +79,35 @@ import {
 } from "./replayLifecycle.js";
 import { WAIT_WITHOUT_WORKER_DISPATCH } from "./answerResume.js";
 import type { PipelineRunResult } from "./pipelineRunner.js";
+import { reclaimWorkspaceOnRunSucceeded } from "./repositoryMaterialize.js";
+import { syncRunStatusFromStages } from "./stageRecovery.js";
 import type { StageProcessLauncher } from "./stageProcessLauncher.js";
 import type { StageExecutionMode } from "./stageConcurrency.js";
 import { runStage, isRunStageWaiting } from "./stageRunner.js";
 import type { StageHitlController } from "./stageHitl.js";
 import { attemptContext, resumeSessionFilePath } from "./stageAttemptContext.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import { stageBindingEnvFromRun } from "./stageRoots.js";
+import { attemptWorkspaceDir } from "../runstore/workspaceLayout.js";
+import {
+  cleanupCredentialsDir,
+  loadSecretRegistry,
+  resolveStageSecrets,
+  SecretUnavailableError,
+} from "./stageSecrets.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  logger as rootLogger,
+} from "../logging/logger.js";
+import { registerNamedSecrets, REDACTION_SECRETS_FILENAME } from "../logging/namedSecrets.js";
+import { finaliseStoredRunManifest } from "../runstore/runManifest.js";
 
 type SchedulerPreparedPipeline = {
   task: TaskFile;
   loaded: LoadedPipeline;
   run: { runId: string; workspaceDir: string };
-  agent: AgentPort;
+  agent: StagePort;
   store: RunStore;
   cwd: string;
   projectRoot?: string;
@@ -79,6 +115,7 @@ type SchedulerPreparedPipeline = {
   hitl?: StageHitlController;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  browser?: StageBrowserSupport;
 };
 
 export type { SchedulerPreparedPipeline };
@@ -152,6 +189,8 @@ export function snapshotToScheduleState(
       return "active";
     case "waiting_for_input":
       return executionMode === "process" ? "waiting" : "active";
+    case "interrupted":
+      return "waiting";
     case "skipped":
       return "skipped";
     default:
@@ -203,6 +242,14 @@ export async function hydrateScheduleFromStore(
     schedulingHalted = true;
   }
 
+  await reopenRunnableSkippedStages(
+    store,
+    runId,
+    resolvedDag,
+    states,
+    completedEnvelopes,
+  );
+
   return {
     states,
     completedEnvelopes,
@@ -238,6 +285,7 @@ export async function hydrateScheduleForRetryRoots(
     }
   }
   const retryRootSet = new Set(retryStageIds);
+  const { supersededCloneIds } = await forkCohortMapsFromStore(store, runId);
 
   const states = new Map<string, StageScheduleState>();
   for (const node of resolvedDag.nodes) {
@@ -246,9 +294,11 @@ export async function hydrateScheduleForRetryRoots(
 
   const overrides = new Map<string, StageScheduleState>();
   for (const rootId of retryStageIds) {
+    if (supersededCloneIds.has(rootId)) continue;
     overrides.set(rootId, "pending");
   }
   for (const id of downstream) {
+    if (supersededCloneIds.has(id)) continue;
     overrides.set(id, "pending");
   }
 
@@ -260,6 +310,18 @@ export async function hydrateScheduleForRetryRoots(
       completedEnvelopes.delete(id);
     }
   }
+
+  const skippedToReopen: string[] = [];
+  const skipStates = new Map<string, StageScheduleState>();
+  for (const snap of runDetail.stages) {
+    const id = snap.stage_id;
+    if (supersededCloneIds.has(id)) continue;
+    if (snap.status !== "skipped") continue;
+    if (!retryRootSet.has(id) && !downstream.has(id)) continue;
+    skippedToReopen.push(id);
+    skipStates.set(id, "skipped");
+  }
+  await persistReopenedStages(store, runId, skippedToReopen, skipStates);
 
   return {
     states,
@@ -286,7 +348,24 @@ export type ResumeRunOptions = {
   initialPrior?: StageEnvelope | null;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
+
+/** Refuses to overwrite a cancelled run (KTD7). */
+export async function writeTerminalRunStatus(
+  store: RunStore,
+  runId: string,
+  status: "succeeded" | "failed",
+): Promise<void> {
+  const meta = await store.readRunMeta(runId);
+  if (meta.status === "cancelled") return;
+  await store.updateRunStatus(runId, status);
+  await finaliseStoredRunManifest(store, runId).catch(() => undefined);
+  await refreshRunDiskUsage(store, runId).catch(() => undefined);
+  if (status === "succeeded") {
+    await reclaimWorkspaceOnRunSucceeded(store, runId);
+  }
+}
 
 export async function resumeRun(
   options: ResumeRunOptions,
@@ -329,7 +408,8 @@ export async function resumeRun(
 
   if (allTerminal) {
     const unhandledFailure = scheduleHasUnhandledFailure(dag, hydrated.states);
-    await prepared.store.updateRunStatus(
+    await writeTerminalRunStatus(
+      prepared.store,
       prepared.run.runId,
       unhandledFailure ? "failed" : "succeeded",
     );
@@ -373,6 +453,8 @@ export type RunPipelineDagOptions = {
       decision: FeedbackLoopDecisionInput,
     ) => Promise<ResolveFeedbackLoopDecisionResult>;
   }) => Promise<void>;
+  /** Live cancel flag — when set, launchStage/startStage stop. */
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
 
 export type RetryRunOptions = {
@@ -384,6 +466,7 @@ export type RetryRunOptions = {
   mutationQueue?: RetryMutationQueue;
   onLoopTick?: () => void | Promise<void>;
   onRetryRootTerminal?: OnRetryRootTerminal;
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
 
 export async function retryRun(
@@ -406,6 +489,7 @@ export async function retryRun(
     mutationQueue: options.mutationQueue,
     onLoopTick: options.onLoopTick,
     onRetryRootTerminal: options.onRetryRootTerminal,
+    schedulingHalt: options.schedulingHalt,
   });
 }
 
@@ -447,6 +531,33 @@ export function applyForkSkipsFromEnvelopes(
     const chosen = normalizeForkChoice(envelope.fork_choice, "stored");
     applyForkChoiceToSchedule(dag, node.id, chosen, states);
   }
+}
+
+async function applyEagerRouteIfSkipsFromEnvelopes(
+  dag: ResolvedPipelineDag,
+  states: Map<string, StageScheduleState>,
+  completedEnvelopes: Map<string, StageEnvelope>,
+  persistSkip: (id: string) => Promise<void>,
+): Promise<string | undefined> {
+  for (const [parentId, envelope] of completedEnvelopes) {
+    if (states.get(parentId) !== "succeeded") continue;
+    for (const childId of dag.childrenOf[parentId] ?? []) {
+      const child = dag.nodes.find((n) => n.id === childId);
+      if (!child) continue;
+      const result = classifyInboundAfterSuccess(
+        child,
+        parentId,
+        envelope.payload,
+      );
+      if (result === "missing_field") {
+        return parentId;
+      }
+      if (isEagerSingleParentIfSkip(child, parentId, envelope.payload)) {
+        await persistSkip(childId);
+      }
+    }
+  }
+  return undefined;
 }
 
 export function applyRetryRootDelta(
@@ -619,11 +730,18 @@ export async function runPipelineDag(
     options.initialSchedule ??
     (await hydrateScheduleFromStore(store, run.runId, fallbackDag, executionMode));
   let dag: RunPipelineDagSnapshot = hydratedDag ?? fallbackDag;
+  const runMeta = await store.readRunMeta(run.runId);
   if (hydratedDag === undefined) {
-    const meta = await store.readRunMeta(run.runId);
-    dag = meta.pipeline_dag ?? fallbackDag;
+    dag = runMeta.pipeline_dag ?? fallbackDag;
   }
+  const stageBinding = stageBindingEnvFromRun({
+    meta: runMeta,
+    task,
+    runWorkspaceDir: run.workspaceDir,
+    hostEnv: process.env,
+  });
   const stageById = buildStageConfigById(loaded);
+  const runUsesBrowser = [...stageById.values()].some((s) => s.browser !== undefined);
 
   const retryContext = options.retryContext;
   const feedbackSchedule = createReplaySchedule();
@@ -772,6 +890,19 @@ export async function runPipelineDag(
     if (state !== "failed") continue;
     for (const id of cloneFailFastSkipIds(dag, stageId, completedEnvelopes)) {
       await persistSkipPending(id);
+    }
+  }
+
+  const missingRouteIfParent = await applyEagerRouteIfSkipsFromEnvelopes(
+    dag,
+    states,
+    completedEnvelopes,
+    persistSkipPending,
+  );
+  if (missingRouteIfParent !== undefined) {
+    schedulingHalted = true;
+    if (firstFailureReason === undefined) {
+      firstFailureReason = `stage "${missingRouteIfParent}": route if field missing from payload`;
     }
   }
 
@@ -1110,26 +1241,27 @@ export async function runPipelineDag(
       }
     }
 
-    const childIds = dag.childrenOf[stageId] ?? [];
-    for (const childId of childIds) {
-      const child = dag.nodes.find((node) => node.id === childId);
-      if (!child) continue;
-      const result = classifyInboundAfterSuccess(
-        child,
-        stageId,
-        envelope.payload,
-      );
-      if (result === "missing_field") {
-        schedulingHalted = true;
-        if (firstFailureReason === undefined) {
-          firstFailureReason = `stage "${stageId}": route if field missing from payload`;
-        }
-        return;
+    const missingParent = await applyEagerRouteIfSkipsFromEnvelopes(
+      dag,
+      states,
+      new Map([[stageId, envelope]]),
+      persistSkipPending,
+    );
+    if (missingParent !== undefined) {
+      schedulingHalted = true;
+      if (firstFailureReason === undefined) {
+        firstFailureReason = `stage "${missingParent}": route if field missing from payload`;
       }
-      if (isEagerSingleParentIfSkip(child, stageId, envelope.payload)) {
-        await persistSkipPending(childId);
-      }
+      return;
     }
+
+    await reopenRunnableSkippedStages(
+      store,
+      run.runId,
+      dag,
+      states,
+      completedEnvelopes,
+    );
   };
 
   const handlePostSuccessError = async (stageId: string, reason: string) => {
@@ -1152,6 +1284,47 @@ export async function runPipelineDag(
     }
 
     const attempt = await resolveLaunchAttempt(stageId);
+    if (stage.browser?.profile !== undefined) {
+      const profile = stage.browser.profile;
+      // A stage queued behind another run's lease must not hold one of this
+      // run's active slots; it takes the slot back once it joins the lease.
+      let slotReleased = false;
+      let acquired: Awaited<ReturnType<typeof acquireStageProfile>>;
+      try {
+        acquired = await acquireStageProfile(
+          prepared.browser ?? defaultStageBrowserSupport(),
+          {
+            scope: runOwnerScope(prepared.browser ?? defaultStageBrowserSupport(), { runId: run.runId }),
+            profile,
+            owner: { runId: run.runId, stageId },
+            isRunLive: createRunLiveness(store),
+            halted: () => options.schedulingHalt?.halted === true,
+            onWaiting: async (holder) => {
+              if (!slotReleased) {
+                slotReleased = true;
+                activeCount -= 1;
+              }
+              await store.appendStageEvent(
+                run.runId,
+                stageId,
+                {
+                  event: "message",
+                  role: "host",
+                  text: profileWaitingMessage(profile, holder),
+                },
+                { attempt },
+              );
+            },
+          },
+        );
+      } finally {
+        if (slotReleased) activeCount += 1;
+      }
+      if (acquired === "halted") {
+        states.set(stageId, "skipped");
+        return;
+      }
+    }
     const attemptCtx = attemptContext(attempt);
     const prep = launchFor(feedbackSchedule, stageId);
     const feedbackLoopContext = prep?.feedbackLoopContext;
@@ -1174,34 +1347,120 @@ export async function runPipelineDag(
       });
     }
 
+    const attemptDir = attemptWorkspaceDir(run.workspaceDir, stageId, attempt);
+    await mkdir(attemptDir, { recursive: true });
+    const attemptHome = path.join(attemptDir, "home");
+    await mkdir(attemptHome, { recursive: true });
+    let grants;
+    try {
+      const resolved = resolveStageSecrets({
+        decls: stage.secrets,
+        registry: loadSecretRegistry(process.env),
+        hostEnv: process.env,
+        attemptDir,
+      });
+      grants = resolved.grants;
+      registerNamedSecrets(resolved.knownValues);
+      await writeFile(
+        path.join(attemptDir, REDACTION_SECRETS_FILENAME),
+        `${JSON.stringify(resolved.knownValues)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      for (const warning of resolved.warnings) {
+        rootLogger.warn("stage.secrets", warning, {
+          run_id: run.runId,
+          stage_id: stageId,
+        });
+      }
+      await writeFile(
+        path.join(attemptDir, "declared-secrets.json"),
+        `${JSON.stringify({ names: grants.declaredSecretNames }, null, 2)}\n`,
+        "utf8",
+      );
+    } catch (err) {
+      const reason =
+        err instanceof SecretUnavailableError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      await onStageFailure(stageId, reason);
+      return;
+    }
+
+    const cleanupAttemptCredentials = () => {
+      try {
+        cleanupCredentialsDir(attemptDir);
+      } catch {
+        // best-effort Host cleanup
+      }
+    };
+
+    let browserEnv: Record<string, string> | undefined;
+    try {
+      browserEnv = await resolveStageBrowserEnv(
+        prepared.browser ?? defaultStageBrowserSupport(),
+        {
+          runId: run.runId,
+          stageId,
+          scope: runOwnerScope(prepared.browser ?? defaultStageBrowserSupport(), { runId: run.runId }),
+          runDir: run.workspaceDir,
+          browser: stage.browser,
+          attempt,
+          humanLogin: isHumanLoginStage(dag, definitionId, stage.browser),
+        },
+      );
+    } catch (err) {
+      cleanupAttemptCredentials();
+      await onStageFailure(
+        stageId,
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
+
     if (executionMode === "process") {
       const launcher = options.stageProcessLauncher;
       if (!launcher) {
+        cleanupAttemptCredentials();
         await onStageFailure(stageId, "stage process launcher is not configured");
         return;
       }
-      const launchResult = await launcher.launch({
-        runId: run.runId,
-        stageId,
-        rootDir: factoryCwd,
-        attempt,
-        ...(sessionMode !== undefined
-          ? {
-              mode:
-                sessionMode === "feedback_resume"
-                  ? "feedback_resume"
-                  : sessionMode === "new_session"
-                    ? "new_session"
-                    : "run",
-            }
-          : {}),
-        ...(resumeToken !== undefined ? { sessionFilePath: resumeToken } : {}),
-        ...(prepared.operatorCatalog !== undefined
-          ? { operatorCatalog: prepared.operatorCatalog }
-          : {}),
-        ...(prepared.skipGates ? { skipGates: true } : {}),
-      });
-      if (launchResult.type === "succeeded") {
+      let launchResult;
+      try {
+        launchResult = await launcher.launch({
+          runId: run.runId,
+          stageId,
+          rootDir: factoryCwd,
+          stage,
+          factoryCwd,
+          workspaceDir: run.workspaceDir,
+          attempt,
+          env: stageBinding.env,
+          bindingKind: stageBinding.kind,
+          model: stage.model,
+          grants,
+          attemptHome,
+          ...(browserEnv !== undefined ? { browserEnv } : {}),
+          ...(sessionMode !== undefined
+            ? {
+                mode:
+                  sessionMode === "feedback_resume"
+                    ? "feedback_resume"
+                    : sessionMode === "new_session"
+                      ? "new_session"
+                      : "run",
+              }
+            : {}),
+          ...(resumeToken !== undefined ? { sessionFilePath: resumeToken } : {}),
+          ...(prepared.operatorCatalog !== undefined
+            ? { operatorCatalog: prepared.operatorCatalog }
+            : {}),
+          ...(prepared.skipGates ? { skipGates: true } : {}),
+        });
+      } finally {
+        cleanupAttemptCredentials();
+      }      if (launchResult.type === "succeeded") {
         try {
           const envelope = await store.readEnvelope(run.runId, stageId);
           await onStageSuccess(stageId, envelope);
@@ -1214,6 +1473,19 @@ export async function runPipelineDag(
       if (launchResult.type === "waiting") {
         states.set(stageId, "waiting");
         return;
+      }
+      if (options.schedulingHalt?.hostShutdown) {
+        states.set(stageId, "waiting");
+        return;
+      }
+      const recorded = await store.listStageEvents(run.runId, stageId, attempt);
+      if (!recorded.some((event) => event.event === "failed")) {
+        await store.appendStageEvent(
+          run.runId,
+          stageId,
+          { event: "failed", reason: launchResult.reason },
+          { attempt },
+        );
       }
       await onStageFailure(stageId, launchResult.reason);
       return;
@@ -1235,10 +1507,18 @@ export async function runPipelineDag(
       operatorCatalog: prepared.operatorCatalog,
       completedEnvelopes,
       skipGates: prepared.skipGates,
+      ...(prepared.browser !== undefined ? { browser: prepared.browser } : {}),
+      stageEnv: {
+        ...stageBinding.env,
+        ...grants.env,
+        ...browserEnv,
+        HOME: attemptHome,
+      },
       ...(sessionMode !== undefined ? { sessionMode } : {}),
       ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
       ...(resumeToken !== undefined ? { resumeToken } : {}),
     });
+    cleanupAttemptCredentials();
 
     if (isRunStageWaiting(result)) {
       await onStageFailure(stageId, WAIT_WITHOUT_WORKER_DISPATCH);
@@ -1246,6 +1526,10 @@ export async function runPipelineDag(
     }
 
     if (!result.ok) {
+      if (options.schedulingHalt?.hostShutdown) {
+        states.set(stageId, "waiting");
+        return;
+      }
       await onStageFailure(
         stageId,
         result.reason ?? "stage failed",
@@ -1271,10 +1555,25 @@ export async function runPipelineDag(
     states.set(stageId, "active");
     launchedIds.add(stageId);
     activeCount += 1;
-    const taskPromise = launchStage(stageId).finally(() => {
-      activeCount -= 1;
-      inFlight.delete(taskPromise);
-    });
+    const taskPromise = launchStage(stageId)
+      .then(async () => {
+        const state = states.get(stageId);
+        if (runUsesBrowser && (state === "succeeded" || state === "failed")) {
+          await teardownStageBrowser(
+            prepared.browser ?? defaultStageBrowserSupport(),
+            {
+              runId: run.runId,
+              runDir: run.workspaceDir,
+              stageId,
+              events: () => store.listStageEvents(run.runId, stageId),
+            },
+          ).catch(() => undefined);
+        }
+      })
+      .finally(() => {
+        activeCount -= 1;
+        inFlight.delete(taskPromise);
+      });
     inFlight.add(taskPromise);
   };
 
@@ -1308,10 +1607,16 @@ export async function runPipelineDag(
   };
 
   while (!allTerminal()) {
+    if (options.schedulingHalt?.halted) {
+      schedulingHalted = true;
+    }
     drainRetryMutations();
     await applyStalledJoinSkips();
     if (options.onLoopTick !== undefined) {
       await options.onLoopTick();
+    }
+    if (options.schedulingHalt?.halted) {
+      schedulingHalted = true;
     }
     if (!schedulingHalted) {
       const runnable = pickRunnable();
@@ -1348,6 +1653,20 @@ export async function runPipelineDag(
   }
 
   const hasWaiting = [...states.values()].some((s) => s === "waiting");
+  if (
+    runUsesBrowser &&
+    !(hasWaiting && !schedulingHalted) &&
+    !options.schedulingHalt?.hostShutdown
+  ) {
+    await teardownRunBrowsers(
+      prepared.browser ?? defaultStageBrowserSupport(),
+      {
+        runId: run.runId,
+        runDir: run.workspaceDir,
+        events: (stageId) => store.listStageEvents(run.runId, stageId),
+      },
+    );
+  }
   if (hasWaiting && !schedulingHalted) {
     return {
       ok: false,
@@ -1360,11 +1679,15 @@ export async function runPipelineDag(
   if (schedulingHalted) {
     markSkippedPending();
     if (retryContext === undefined) {
-      await store.updateRunStatus(run.runId, "failed");
+      if (options.schedulingHalt?.hostShutdown) {
+        await syncRunStatusFromStages(store, run.runId);
+      } else {
+        await writeTerminalRunStatus(store, run.runId, "failed");
+      }
     }
     return {
       ok: false,
-      outcome: "failed",
+      outcome: options.schedulingHalt?.hostShutdown ? "waiting" : "failed",
       runDir: run.workspaceDir,
       runId: run.runId,
       reason: firstFailureReason,
@@ -1373,7 +1696,7 @@ export async function runPipelineDag(
 
   if (scheduleHasUnhandledFailure(dag, states) || !allTerminal()) {
     if (retryContext === undefined) {
-      await store.updateRunStatus(run.runId, "failed");
+      await writeTerminalRunStatus(store, run.runId, "failed");
     }
     return {
       ok: false,
@@ -1384,7 +1707,7 @@ export async function runPipelineDag(
     };
   }
 
-  await store.updateRunStatus(run.runId, "succeeded");
+  await writeTerminalRunStatus(store, run.runId, "succeeded");
   return {
     ok: true,
     outcome: "succeeded",

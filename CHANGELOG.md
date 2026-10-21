@@ -7,6 +7,346 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-10-20
+
+### Added
+
+- **Overview, a control center for the console.** `#/overview` (pinned above Inbox in the rail) shows what needs you (gates, agent approvals and failed runs, with Accept, Reject and Retry in place for approvals and failed stages), live runs and agent sessions, system health (agent slots, providers, connections, triggers, run store size), run and success-rate trends with spend, runs by outcome, and per-pipeline success, median time and cost with a flaky tag. A 24h / 7d / 30d control sets the window. Inbox stays the home page. See [Overview](docs/console-overview.md).
+- **`GET /api/overview?range=24h|7d|30d`.** One aggregate over runs and summed stage cost: totals, the previous window for comparison, rolling outcome buckets and per-pipeline rows. It reads one light row per run and loads no stages; no schema change.
+
+## [0.37.0] - 2026-10-17
+
+### Fixed
+
+- **Agent turns, approvals and replies are safer.** One module (`turnLifecycle`) now owns every change of a turn, its session and its approval. Stopping a turn at an ask-first gate used to leave the approval pending, so it could be approved later and then wave through a later identical call; it is now closed with the turn. Finishing a turn that already ended is ignored, and a late reply-delivery result no longer rewrites a finished turn. Guardrail block patterns now hold streamed text until the finished reply passes, on the console and the public chat. Path protection covers every tool with a path argument, not only `write` and `edit`; `bash` is not path-confined, so the editor warns about it and every `bash` call now always waits for approval, even when `ask_first` does not list it. Overlapping retry sweeps can no longer send a channel reply twice. A public-chat request with `Origin: null` or a malformed origin no longer throws. Reserved agent ids (`sessions`, `approvals`, `new`) are rejected wherever an id is parsed, not only when generated. `sf agents chat` exits non-zero when the stream closes without a result, and `sf agents restore` needs `--base` so its optimistic lock means something. The MCP tools `get_agent_session`, `approve_agent_action`, `deny_agent_action` and `stop_agent_session` now take the agent `id` and refuse a session that belongs to another agent.
+- **Agent runtime sessions no longer pile up.** A Pi session and its isolated MCP processes are released after 30 idle minutes (`STAGEFLOW_AGENT_SESSION_IDLE_MINUTES`), when a turn is stopped, when the agent is archived, and when the Host stops.
+- **Cheaper agent reads.** The agents directory is no longer re-read and re-hashed on every call: an unchanged tree costs a directory listing and a stat per file, and edits are still picked up.
+
+### Added
+
+- **Agents.** An agent is a YAML file (`agents/<id>.agent.yaml`) with instructions, a model, granted tools, ask-first approvals and limits. It answers in the console and on web chat, by email (AgentMail), iMessage, Slack or Telegram, or runs on a schedule, and every turn is traced (spans, cost, optional groundedness eval and OTLP export). The console has an Agents directory, an agent page with revisions, a session page with a run inspector (Steps, Waterfall, Messages, Logs, Configuration), and approvals in the Inbox. The same operations exist as `sf agents`, REST (`/api/agents`) and MCP tools. See [Agents](docs/agents.md).
+- **Console secrets work in pipeline stages.** A stage can list a secret saved from Settings → Project MCP under `secrets:` so its `mcp:` servers can use `${NAME}`. The value fills MCP servers only; it is never put in the stage environment, and `sf validate` no longer rejects it as unknown.
+- **Allow-lists for Slack and Telegram agents.** `channel.allow_from` accepts a Slack user id (`U02ABC1234`) and a Telegram `@username` besides emails, phone numbers, `@domain` and `*`. Before, only `*` worked on those two channels.
+- **Desktop notification for agent approvals.** The Notifications setting that alerts you when a stage waits on you now also alerts you when an agent asks for approval.
+- **One model list for every screen.** Stage, pipeline, Workshop, Settings and agent pickers now read the models of the providers you have connected, grouped by provider and searchable, through one catalog (`GET /api/models`). The Host asks each connected provider for its current list through Pi (OpenRouter's free models included) and falls back to Pi's built-in list when a provider is unreachable. `POST /api/models/refresh` and the picker's refresh button refetch. A model id no connected provider lists is still accepted and shows a "not in connected providers" warning; agent validation warns the same way. The default model comes from the same catalog: `stageflow.yaml` `model`, then the Settings Workshop model, then the first free model of a connected provider. Cursor models appear only when Cursor is connected.
+
+- **Agents can use Stageflow's own tools.** One registry groups the MCP tools (discover, runs, gates, triggers, agents, pipeline authoring) with a risk level, and an agent definition grants groups or single tools under `tools.stageflow`. The console has a Stageflow tools section in the agent editor and turns on ask-first for everything that is not read-only. An agent can never grant a tool it does not hold, edit or archive itself, or decide its own approvals.
+- **Granular permissions.** The agent editor shows files, shell and Stageflow tools as one grouped checkbox tree: tick a group to select its tools, or tick single tools. `tools.builtin_tools` (read, grep, find, ls, write, edit, bash) joins `tools.builtin` groups in the YAML; the saved form stays compact.
+- Some Stageflow tools are operator-only and cannot be granted to an agent: answering gates, deciding feedback loops and approving agent actions. Destructive tools moved into their own groups (`runs.cleanup`, `agents.cleanup`), gates split into `gates.read` and `gates.decide`, a web-chat agent that can read sessions gets a warning, and a copied agent can no longer drop an ask-first its creator is bound by.
+- **Agents answer on AgentMail and iMessage.** An agent has one `channel` (`connection_id` plus a sender allow-list) and a connection has one agent. The Host listens itself (AgentMail WebSocket, Spectrum stream), so no public URL is needed: replies stay in the email thread, mail loops are ignored, senders are rate limited, and a dropped stream reconnects and catches up. `limits.always_on` keeps one conversation going without a time or turn limit and retries a turn a restart cut off. The old `channels` list still loads. Adds the `agentmail` dependency. For iMessage the editor shows which number to text (the project's line, or the number Photon assigned to each allowed person) and warns about allowed phones that are not registered in Photon; `GET /api/agents/:id/channel/contact`.
+- **A channel reply is part of the turn.** The turn only succeeds once the reply reaches the person: transient failures are retried (5 s, 30 s, 2 min), permanent ones and unknown outcomes fail the turn as `agent.reply_undelivered` with the reason, and the run page offers Resend and Mark as delivered. An unknown outcome is never resent on its own. Migration 014 adds `agent_deliveries`.
+- **Sidebar grouped by job, plus an Agent sessions list.** Inbox is pinned on top; Activity holds Pipeline runs and Agent sessions, Build holds Pipelines, Agents, Tasks, Workshop and Catalog, and Connect holds Triggers and Connections. Agent sessions lists every agent's sessions in one place with agent, status and source filters, search, project-wide metrics and a live badge; `GET /api/agents/sessions` (optional `agent`, `status`, `source`, `q`, `cursor`, `limit`).
+- **New pipeline opens the Workshop.** The old New pipeline form (directory, id, stage ids) is gone from the console, along with the unused legacy Pipelines and Tasks page code and the old New stage panel. The Workshop is reached from Pipelines (New pipeline, Open in Workshop) and no longer has a sidebar item. `POST /api/pipelines` is unchanged.
+- **Add MCP servers from the console.** Settings → Project MCP has Add server (a stdio/http form, or Paste JSON from a server's docs), Edit, Remove and Check, so a Host with no `.mcp.json` (the Docker image) is no longer a dead end. Servers added there are saved under `$STAGEFLOW_HOME/mcp/.mcp.json` (survives rebuilds) and merged over the project `.mcp.json`; on a name clash the console entry wins. They work for agents, stages, preflight, validation and probes, but never for a repository checkout's own `.mcp.json`. Routes: `PUT/GET/DELETE /api/project-mcp/:name`, `POST /api/project-mcp/import`; `GET /api/project-mcp` rows now carry `origin` (`project` or `console`).
+- **Remote MCP servers get the right fields.** The add form takes the command on one line (`npx -y @scope/server`), labels environment rows, and for a URL server offers Authorization (None, Bearer token, Custom headers) and the connection type (Automatic streamable HTTP with SSE fallback, or SSE only, `httpTransport: sse`). Paste JSON is the first tab and also accepts other tools' shapes (`serverUrl`, `httpUrl`, `type: sse | http | stdio`). A bearer token typed in is stored as a secret and the file keeps `Authorization: Bearer ${NAME}`.
+- **Sign in to OAuth MCP servers from Settings.** A URL server that asks for browser sign-in (Notion, Linear, Atlassian and the like) shows "Needs sign-in" on Check; Sign in gives a link to open, then you paste back the address your browser ended on (it points at `localhost`, which a Docker or remote Host cannot receive). On a local Host the callback finishes it by itself. Tokens are stored encrypted under `$STAGEFLOW_HOME/agent/mcp-oauth-encrypted` with a Host key in `$STAGEFLOW_HOME/secrets/mcp-oauth.key` (or `PI_MCP_ADAPTER_OAUTH_FILE_KEY`), so no OS keyring is needed. Refresh is automatic; Sign out removes them. Signed-in servers work for agents and Check, not for pipeline stages (they run in a sealed agent dir); use a bearer token for stages. Routes: `GET/DELETE /api/project-mcp/:name/oauth`, `POST .../oauth/start`, `POST .../oauth/complete`.
+- **MCP status on arrival, and a tool checklist in the agent editor.** Settings → Project MCP checks every server when it opens (three at a time), so each row shows Connected, Needs sign-in or the error without clicking Check. In the agent editor, an MCP server's tools are a checklist with descriptions (filter once there are many, Select all, Refresh) instead of typed names; if the server cannot be reached the typed field stays as a fallback. `GET /api/project-mcp/:name/tools` returns the tools the Host last saw; a successful probe now also returns `tools`.
+- **MCP secrets stay out of the file.** A literal token in a server's env or headers is moved into a write-only store (`$STAGEFLOW_HOME/secrets/mcp-secrets.json`, mode 0600) and replaced with `${NAME}`. Stored values fill `${VAR}` (they win over Host env of the same name) and are never returned: `GET /api/mcp-secrets` lists names, which servers use them and whether each is set; `PUT/DELETE /api/mcp-secrets/:name`. Settings shows the placeholders each server needs with a value field.
+- **Agent approvals show in the Inbox.** When an agent is paused on an ask-first tool, the Needs you tab lists it beside pipeline gates (longest-waiting first, tagged with the agent and tool). The focus pane shows what will run and has Approve and run / Deny (`1` / `3`) and Open session (`O`). The sidebar Inbox badge counts both.
+- New MCP tools: `read_pipeline`, `create_pipeline`, `edit_pipeline`, `create_stage`, `edit_stage`, `create_task`, `edit_task` (author pipelines on disk with the Workshop's validation), `update_trigger`, `set_trigger_enabled`, `list_agent_sessions`, `stop_agent_session`, `archive_agent`.
+
+### Changed
+
+- **The Agents list shows how each agent is reached.** A Reach column gives the web chat link (open or copy), the channel provider and connection, or the schedule, so a chat, email or iMessage agent is obvious at a glance. It also shows all-time cost per agent and in total, Enabled / Disabled / Needs setup as clear pills, and the first tools and approvals with a View all dialog. Disabling an agent now asks first and says what will happen: new sessions, web chat and channel replies stop, a running turn finishes, and nothing is deleted.
+- **One page header.** Agents, Connections, Pipelines, Tasks, Triggers, Catalog and the agent pages share one 56px header bar, and Settings content is centered. The run inspector drops the Flame graph and Span list tabs, which repeated what the Waterfall shows.
+- `GET /api/models` and MCP `list_models` keep `models` and `entries`, and add `providers`, `default`, `fetchedAt` and `unlisted`. `models` no longer includes a baked-in list: it is the connected providers' models plus ids your pipelines already use.
+
+### Security
+
+- **MCP backend hardening.** MCP secrets resolve by who asks: a stage sees console secrets only for names it declared in `secrets:`; agents and Check fill `${NAME}` from console secrets and from Host env names listed in `STAGEFLOW_MCP_ENV_ALLOW`, never from arbitrary Host env, and a stored secret is no longer shadowed by Host env (`host: true` is replaced by a named scope). Server entries cannot use `${NAME}` for control-token or provider/cloud credential names unless allow-listed, `PI_MCP_ADAPTER_OAUTH_FILE_KEY` is never grantable, and `GET /api/mcp-secrets` `set` reflects only the console store and allow-list. URL servers cannot target link-local or cloud-metadata addresses (save, resolve, Check, OAuth); project `.mcp.json` entries get the same shape and URL checks. Tokens in URL query/userinfo and `--token=` style args move to the secrets store, `GET /api/project-mcp/:name` returns a masked config, and error text from Check and sign-in is scrubbed. A corrupt host `.mcp.json` or secrets file now answers `409` instead of reading as empty, saves restore the secrets file if the catalog write fails, state files are written atomically (dir `0700`, files `0600`), and the OAuth key file is created without a half-written window. Malformed percent-encoding in `/api/project-mcp/*` and `/api/mcp-secrets/*` returns `400`; OAuth status/delete/complete reject unknown servers and `complete` rejects input that is not a URL or code.
+
+## [0.36.0] - 2026-10-14
+
+### Added
+
+- **Communication channels (send-only).** Connect AgentMail, Slack, Telegram, iMessage or WhatsApp once, then let a stage send through it. A stage (or a pipeline default) declares `channels:` with the recipient pinned in YAML, and the agent gets one neutral `send_message` tool on the Pi backend. It cannot choose a recipient. iMessage and WhatsApp go through Photon and use optional `@spectrum-ts/*` packages. A stage uses one channel for now (enforced when a stage is parsed, merged, validated and sent; the code that supports several stays behind one limit). Receiving messages and agent channels are not part of this release. See [Communication channels](docs/channels.md).
+- **Connections page.** Connect a provider from the console: Test connection before saving, Replace key, disable, disconnect, and a per-connection page with a status fix hint and a `channels:` snippet. First run explains that nothing is connected and offers every provider. Email accounts and `.mcp.json` tool servers are listed alongside. New `GET`/`POST /api/connections`, `POST /api/connections/test`, `PATCH`/`DELETE /api/connections/{id}`, `POST /api/connections/{id}/check` and `POST /api/connections/{id}/validate-target`.
+- **Stage channels in the pipeline editor.** The stage inspector has a Channels section: pick a connection, enter a provider-shaped recipient with live validation, see the connection's status. Pipeline-level `channels:` now survives a draft save.
+- **Host-level connections and a secret store.** Connections live in `$STAGEFLOW_HOME/connections.yaml` and are shared by every project (a project-root file wins; `STAGEFLOW_CONNECTIONS_FILE` overrides). Secrets are `env:NAME` references or `store:NAME` references to `channel-secrets.json` (mode `0600`) written by the console. A YAML value is never a secret.
+- **Run-start channel check.** Preflight, `start_run` and `sf doctor` check each connection live and block the run with `channel_check_failed`, naming the connection and the reason. Only transient failures are retried, at most twice.
+- **Safe sending.** Sends are idempotent per operation key through a durable ledger; a send that may have reached the provider is never resent, even after a restart. Secrets stay out of the stage worker, logs, errors and API responses.
+- `examples/channels-smoke/`: a two-stage pipeline that sends one email and one text.
+
+### Changed
+
+- The Claude agent backend rejects a stage that declares `channels:` instead of running without `send_message`.
+- The Docker image includes the optional Spectrum packages (about 100 MB); `npm install --omit=optional` skips them and iMessage/WhatsApp then report `CHANNEL_PROVIDER_UNSUPPORTED`.
+
+### Known limits
+
+- A Free or Pro Photon user must be a project user and must text their assigned Photon line once before iMessage sends are accepted. The run-start check cannot detect this.
+- `sf backup` does not include `connections.yaml` or `channel-secrets.json`.
+- Not verified against a real account: Slack, Telegram and WhatsApp sends.
+
+## [0.35.0] - 2026-10-13
+
+### Added
+
+- **Operator console.** Inbox, pipelines list, pipeline editor (live DAG, inspector, YAML, Problems, session history), catalog, tasks, triggers, Workshop, and run detail (timeline / graph / list) are the console. There is no second UI and no theme picker; the console is dark.
+- **Workspace catalog as the default write root.** Omitted `project_root` resolves to a Host-provisioned writable workspace under `$STAGEFLOW_HOME`, so Workshop and catalog saves work without a git checkout or multi-root picker.
+- **Catalog paste-install for skills.** Install a skill tree into the workspace `.pi/skills` root from the Catalog UI (`npx skills add` wrapper), without requiring a project_root when the Host has multiple roots.
+- **Stage-file editor from Catalog.** Edit a single external stage file in the full pipeline editor chrome (graph + inspector + YAML).
+- **Triggers readiness catalog.** `examples/triggers-readiness/` ships one trigger per kind (manual, schedule, GitHub pull request, webhook, email, dynamic manual) and is registered in the local Docker image.
+
+### Changed
+
+- **Breaking: stage `skill:` is body-only.** `skill:` on a pipeline `uses:` wrapper is rejected (`pipeline.stage_wrapper_skill_rejected`). Put `skill:` on the external stage file or inline stage body. The console inspector and draft overwrite strip wrapper `skill`. In-repo examples (`archify-on-pr`, `oss-issue-contribution`) were migrated. See [Skill binding](docs/yaml-catalog.md#skill-binding).
+- **Credential root separate from run data.** Stage workers and Workshop resolve provider auth from `STAGEFLOW_CREDENTIAL_HOME` (default `~/.stageflow`); run SQLite stays under `$STAGEFLOW_HOME`. Cursor models use the credential-root key; other models still require a usable `auth.json` there and fail closed.
+- **Docker console image.** The image does not bake the full `examples/` tree. Compose registers `/opt/stageflow/catalog/triggers-readiness` so the readiness triggers are listed on a local Host.
+
+### Fixed
+
+- Workshop saves use `.pipeline.yaml` / `.task.yaml`, re-pin build ties to the catalog save root, and stop claiming paths under a stale image-root examples tree.
+- `createStage` persists `skill` on the stage file; draft load/overwrite hoists legacy wrapper `skill` onto the stage body so save cannot drop the binding.
+- Workshop mutation cards survive a reload because the transcript stores the draft, not only the summary.
+- Run detail header and the stage inspector share one rule for showing Retry, Resume, and Abandon.
+
+## [0.34.0] - 2026-10-07
+
+### Added
+
+- **Live view for human login gates.** When a Host has no window an operator can see, the console shows the stage's browser inside the login gate and forwards mouse, keyboard, paste and touch input to it, so a person can log in (password, two-factor code, popup sign-ins) from the console. It uses agent-browser's built-in stream relayed by the Host; no new dependency. See `docs/browser.md` (Live view) and `docs/browser-internals.md`.
+  - The gate handoff is now capability-driven: `local_window` on a desktop, `live_view` (a stable path, never a credential) on a Host with a virtual display or headless-only with the relay. A Host with no screen and no live view still fails the login stage early.
+  - Console API under `/api/runs/:run/stages/:stage/live-view`: single-use, short-lived tickets (`view` or `control`) redeemed into a path-scoped cookie, an event stream, ordered input, and a dialog answer route. Control works only while the stage waits at a live view gate and is revoked when the gate is answered, abandoned or cancelled. Input and frames are never logged or stored.
+  - Popups and new tabs are followed automatically; `confirm` and `prompt` dialogs can be answered in the viewer; `alert` and `beforeunload` are handled by agent-browser. Unanswered dialogs are dismissed after `browser.dialog_timeout_seconds` (default 60).
+  - "Reopen browser tab" fallback in the viewer's "Page seems stuck?" section (`POST .../live-view/reopen-tab`, relay `reopenTab()`): replaces a tab that stopped accepting input with a fresh one at the same URL in the same browser, moves the stage session and stream to it, then closes the old tab.
+  - Virtual display support: a Linux Host without a display but with `Xvfb` runs the browser headed. Host config keys `browser.launch_args` and `browser.executable_path` (never in YAML) for launch options and distribution Chromium on ARM.
+  - `docker/Dockerfile.browser` recipe that extends the runtime image with Chromium, Xvfb and agent-browser (`docs/docker.md`).
+  - Provider-neutral ports with in-tree fakes (browser host capabilities, sandbox orchestrator, live view relay, live view source) as seams for container and provider browser hosts.
+  - Opt-in smokes: `STAGEFLOW_BROWSER_SMOKE=1` (real Chrome, console API, popups, dialogs) and `STAGEFLOW_DOCKER_SMOKE=1` (browser recipe image).
+
+### Changed
+
+- Browser permission prompts (camera, microphone, location, notifications, clipboard) are denied by default for every browser session the Host launches (`--deny-permission-prompts`).
+- Browser teardown first closes any live view for the stage or run (bounded wait), then runs the existing tab, session and anchor order.
+
+## [0.33.0] - 2026-10-07
+
+### Added
+
+- Public hosted runtime for embedding one repository-free pipeline. `createHostedRuntime` accepts the existing Pi `StagePort` from `createPiStagePort()`, a local run store, and a `HostedEventSink`, then runs inline and returns a structured result and execution receipt. `configurePiProviderApiKey` stores a managed OpenRouter key in the Pi auth file that adapter already reads. Package skills at `.pi/skills/<name>/` are materialized for that run; operator-home skills are not loaded. See [Hosted runtime](docs/hosted.md).
+- Package-root `exports` so consumers can `import { createHostedRuntime } from "stageflow"`.
+
+### Changed
+
+- A hosted run does not create the operator home. Stage credentials resolve from `STAGEFLOW_AGENT_AUTH_PATH` when set, otherwise from a path next to the local store.
+
+## [0.32.0] - 2026-10-06
+
+### Added
+
+- Host-owned email connections to existing IMAP/SMTP mailboxes, configured through workspace `email.yaml`, with scoped stage tools for sending, replying, retrieving, searching, and handling bounded attachments.
+- Durable incoming-email detection and filtered pipeline triggers, with bounded retry queues, historical-message replay, and optional Sent-folder copies.
+- A read-only Connections page listing configured email accounts without credentials, and email-rule list and detail views on the Triggers page.
+- Single-stage email-send and conversational threaded-reply examples, including automatic-reply safeguards.
+
+### Changed
+
+- Inline mailbox passwords from local YAML stay in Host memory; persisted account configuration contains opaque credential references.
+- Email list-limit tests use a small mailbox instead of bulk network fetches. The clock-sensitive schedule catch-up test is temporarily skipped pending a deterministic timing check.
+
+## [0.30.0] - 2026-10-04
+
+### Added
+
+- Workshop Author on `#/workshop`: a chat agent that drafts a pipeline, asks when a missing detail would change the stages or the wiring, and shows the draft on the studio stage map. Click a stage for its prompt, IO, verify, and HITL summary.
+- Untitled drafts persist as build records under `$STAGEFLOW_HOME/workshop/builds/{id}.json` (no catalog file until save). Chat history persists separately under `workshop/sessions`, and each session points at the build it was editing.
+- Author tools to list, focus, and create builds; create and edit the pipeline, stages, and an optional task; validate the draft; and save. Save writes catalog YAML only when asked, and refuses an invalid package unless the operator explicitly allows it. A save that does not name a folder lands in `workshop/<pipeline-id>`, and that folder is added to the catalog so Run lists the pipeline and task.
+- Studio picker lists each open build and each on-disk pipeline once. The same chat can switch builds, or History can reopen the session that last edited another pipeline.
+- `sf init` includes `workshop` in the pipeline and task catalog. Host boot registers the project root so that catalog is visible without a manual project add.
+
+### Changed
+
+- Workshop chat opens on the `model` in `stageflow.yaml`. When that is unset, the default is `openrouter/nvidia/nemotron-3.5-lightning:free`.
+
+### Fixed
+
+- `npm run dev` stage workers load the TypeScript CLI through tsx. They no longer exit looking for a missing `src/cli.js`.
+- A stage process that exits before it can record a failure is marked failed, instead of leaving later stages skipped with the entry still pending.
+- Cursor models find `pi-cursor-sdk` from the Host Pi agent directory. The stage worker's attempt `HOME` no longer hides `~/.pi/agent`.
+
+## [0.29.0] - 2026-10-03
+
+### Added
+
+- **Browser sessions.** A stage can drive a real browser that stays logged in. The browser tool is [agent-browser](https://github.com/vercel-labs/agent-browser), used through the CLI and a bundled `browser` skill (no MCP). See `docs/browser.md` (users) and `docs/browser-internals.md` (contributors and agents).
+  - Stage `browser` field: `profile`, `headed`, `allow_domains`, `login_url`, `check` (`url`, `logged_in_url`, `logged_out_url`). The `agent-browser` requirement is added automatically.
+  - Profiles: named, saved logins kept on the Host under `$STAGEFLOW_HOME/browser/<scope>/<name>/` with owner-only permissions. A profile is leased to one run. Other runs queue until that run ends.
+  - Shared browser per run and profile: the Host starts one Chrome and keeps it open for the whole run. Each stage attaches over CDP with pin-tab and gets its own tab, so parallel stages share one login. The Host closes each stage's tab at stage end and the browser at run end, cancel, or abandon. An orphan sweep runs at Host start.
+  - Host-computed login check: `{ logged_in, url }` is computed by the Host and validated against the stage envelope. Human login stage: `verify: browser_login` with a confirm gate. The gate payload carries `handoff`, `site`, and `profile`. A wrong confirm returns `{ ok: true, verification: "failed_retrying" }` and raises a new gate while repair attempts remain.
+  - `sf browser profiles | status | check | login | clear`.
+  - Host config `browser.blocked_sites`, a per-Host audit log (`browser/audit.jsonl`), redaction of cookie and token output for browser stages, and owner-scope seams (`ProfileStore`, `ProfileLock`, `BrowserHost`, `KeyProvider`, `AuditSink`) for a future multi-tenant service.
+  - Example `examples/browser-session/` (local fixture login server, two parallel work stages) and an opt-in real-Chrome smoke test (`STAGEFLOW_BROWSER_SMOKE=1`).
+- Answer responses (HTTP 202 body, MCP `answer_gate`, `sf runs answer --json`) may include an optional `verification` field.
+
+### Changed
+
+- Stage workers receive the Host's Pi auth path through `STAGEFLOW_PI_HOME_AUTH_PATH`.
+
+### Fixed
+
+- Stages failed with "No API key" under the `pi_home` credential source, because the worker's empty attempt `$HOME` hid `~/.pi/agent/auth.json`.
+
+### Known limitations
+
+- Profile stages use a soft `allow_domains` check (agent-browser rejects its native allowlist with a profile or CDP). Profile-less stages get the native allowlist.
+- The agent-browser key does not protect the Chrome profile folder and is not wired. A visible login window needs a screen; Docker Hosts fail the login stage with a clear message. Only macOS with agent-browser 0.38.2 was verified. The full list is in `docs/browser-internals.md`.
+
+## [0.28.1] - 2026-09-30
+
+### Fixed
+
+- Project root resolution no longer requires git. `resolveStageflowContext` now finds the nearest `stageflow.yaml` first (like a `package.json` for npm), the same way for catalog discovery, trigger-adapter discovery, and stage/pipeline/trigger creation. `isGitProject` is still reported and still gates anything that genuinely needs git (checkout, worktrees), but no longer blocks reading or writing a catalog that has no git repo behind it. Previously, none of the three trigger adapters (schedule, GitHub poll, email) could discover triggers in a non-git catalog root at all.
+
+## [0.28.0] - 2026-09-30
+
+### Added
+
+- Pipeline trigger and scheduler backbone: `kind: event` / `kind: schedule` trigger YAML, `TriggerSourcePort` adapter seam, and dynamic task mode (a firing event can build a one-off `TaskFile` instead of requiring a pre-authored task).
+- Three trigger adapters, each a real `TriggerSourcePort` implementation: a GitHub poll connector (ETag-conditional, grouped by repo so N triggers on one repo cost one API call), a generic webhook adapter (per-trigger URL, HMAC-SHA256 verified), and an email connector (IMAP IDLE, connections pooled per mailbox, bounded-backoff reconnect).
+- Generic `trigger_adapter_state` store table for adapter-persisted cursors (ETags, UID watermarks) shared across all three adapters.
+
+### Fixed
+
+- `event.config` was silently dropped on trigger creation (both HTTP and MCP); it now passes through opaquely to adapters.
+- `STAGEFLOW_GITHUB_POLL_INTERVAL_MS` and `STAGEFLOW_TRIGGER_TICK_INTERVAL_MS` are now recognized Host env keys; setting either to tune an adapter's interval no longer crashes boot.
+- The GitHub poll adapter no longer logs an error on every "nothing changed since last poll" tick — Octokit throws on HTTP 304, which was being caught and logged as a failure instead of handled as the expected no-op.
+
+## [0.27.1] - 2026-09-26
+
+### Fixed
+
+- Registered catalog roots with a local `stageflow.yaml` now list pipelines/tasks without requiring git, so MCP/HTTP discovery matches `start_run` / validate for non-git projects.
+- Cold Host seeded `examples` browse via `examples/stageflow.yaml` (symbolic `project_root: "examples"`).
+- Empty catalog lists return a registration tip; absolute-path rejections keep the ban but include richer relative-path / CLI-ensure guidance.
+- Unset `TMPDIR` / `TMP` / `TEMP` soft-defaults to `$STAGEFLOW_HOME/tmp` before the Host writability assert.
+- HTTP health exposes `boot_providers` (and clarified live provider summary); MCP `get_health` includes `stageflow_home`.
+- `sf init` / author defaults prefer a configured provider (or a loud placeholder) instead of silently assuming Anthropic.
+
+### Changed
+
+- **BREAKING:** Omitting `gate_kinds` no longer registers `ask_operator`. Only an explicit non-empty `gate_kinds` list registers the tool (kinds allowlist as before). `gate_kinds: []` remains explicit off. Stages that relied on omit-means-on must declare kinds. See `docs/hitl.md` and `docs/yaml-catalog.md`.
+- Quickstart and setup skill split CLI smoke vs MCP smoke (Host + register + catalog-relative paths); docs contrast `STAGEFLOW_OPERATOR_CWD` (skills) vs catalog `project_root`.
+
+## [0.27.0] - 2026-09-25
+
+### Added
+
+- Container image delivery (Slot 10): multi-stage `Dockerfile` (digest-pinned Node 22 slim, non-root `10001`, tini + `sf mcp`, `HEALTHCHECK` on `/livez`, toolchain at `/etc/stageflow/toolchain.json`); root `docker-compose.yml` for local try; `scripts/docker-smoke.sh` + CI job; GHCR multi-arch publish + cosign keyless sign-by-digest on the npm version gate. See `docs/docker.md`.
+- `sf doctor` `store_integrity` check runs full `PRAGMA integrity_check` (boot/readyz stay on `quick_check`).
+- `sf validate` flags absolute paths under `$STAGEFLOW_HOME` in stage prompts and verify commands (`catalog.stageflow_home_absolute_path`).
+
+### Fixed
+
+- `STAGEFLOW_BUILD_SHA` is an allowed Host env (image provenance / `/api/health` `build_sha`) so container boot no longer rejects the Dockerfile-baked value.
+- Bound-run Pi `read`/`write`/`edit` allow the stage `checkoutRoot` (still deny other durable-root paths such as `state.db`, `agent/`, sibling worktrees).
+- Bare repo cache uses `git clone --bare` with remotes-style fetch (`+refs/heads/*:refs/remotes/origin/*` and `+refs/tags/*:refs/tags/*`, no `remote.origin.mirror`); existing mirrored or `+refs/*:refs/*` caches are healed under the cache lock, short refs resolve via remotes tips, and non-`stageflow/` local heads are pruned so linked-worktree `git push` keeps working.
+- For `GITHUB_TOKEN` / `GH_TOKEN`, `{ as: env }` is additive with askpass: curated env keeps the value and `GIT_ASKPASS` + token file are still materialised for plain HTTPS git.
+- When a repository-bound run reaches `succeeded`, Stageflow reclaims the Host worktree (keeps `run_branch`; leaves `checkout_root` recorded; does not set `slimmed_at`). Fail/cancel and mid-pipeline checkouts are unchanged; retry after succeed soft-fails `checkout_reclaimed` when the path is gone.
+
+### Changed
+
+- `docs/mcp.md` Limitations / CLI-only table refreshed to match shipped Slot 9 surfaces (`skills`, `export_run`, debug-bundle).
+- Stage-env migration / YAML catalog docs clarify that GitHub `{ as: env }` keeps askpass for HTTPS git.
+- Docker Local try docs rewritten as a Compose first-run checklist; add root `.env.example` and align `docker-compose.yml` with `STAGEFLOW_PROVIDER_*` boot keys.
+- Harness skills suite updated for Compose local try, drive-token MCP calls, `$STAGEFLOW_HOME` run store, repository/`ref` binding, and Slot 6 `secrets:` authoring.
+
+## [0.26.0] - 2026-09-24
+
+### Added
+
+- Host-global project registry under `$STAGEFLOW_HOME`: durable `ensure` of absolute project roots; `sf run` ensure-then-starts before `start_run`; remotes may only use registered ∪ seeded catalog roots (no invent of unknown absolute `project_root`; Host boot cwd is not a catalog root). See `docs/mcp.md`, `docs/cli-reference.md`, `docs/data-directory.md`.
+- Curated stage environment (Slot 6): stages no longer inherit Host ambient env; declare `secrets:`; file-backed git askpass; value redaction; proxy/CA passthrough; shared `$STAGEFLOW_HOME/cache`; MCP connect default 30s; finite stage-process/heap caps; Claude-as-root refusal. See `docs/migration-stage-environment.md`.
+
+### Changed
+
+- Catalog start/write path selection is shared (`resolveCatalogStartInput` / `resolveWritableCatalogRoot`); MCP `run_stage` and A2A string stage paths honor the same catalog containment as `start_run`.
+- Operator-terminal run statuses (`cancelled` / `queued`) are preserved inside `deriveStatusFromStages` so recovery and projection cannot overwrite them.
+- Host shutdown drains through a required `DrainableHost` adapter (single drain path).
+- Stage worker builds / preserves curated env explicitly (forked workers keep launcher-granted secrets; in-process path filters via `buildStageEnvironment`).
+- Path-checkout lease (`busy_checkout`) applies only to path-bound runs. Repository-bound runs each get their own worktree and may run in parallel on the same repository; attach/resume no longer re-lease worktree paths.
+- `verify` commands run under `bash -c` (not `/bin/sh`).
+- Stage MCP `${VAR}` interpolation resolves against the curated stage env only.
+
+### Removed
+
+- Dead `RunStore.listProjectRoots` (superseded by `listRegisteredProjects`) and unused `isMutatingApi` predicate (superseded by `requiredScopeFor`).
+
+## [0.25.0] - 2026-09-21
+
+### Added
+
+- `run_stage`: run a single stage directly, without authoring a pipeline — a catalog stage path or a bare inline stage body, exactly one of `task_path`/`task`/`envelope_ref` for input, optional `blocking`/`timeout_ms` for a single-round-trip result instead of poll, and a per-call `model` override. Internally synthesizes a one-stage pipeline and runs it through the exact same path `start_run` uses, so it gets the same persistence, `verify`/retry, and HITL behavior and is pollable with `wait_run`/`get_envelope` like any other run. Exposed identically as an MCP tool, a new `sf run-stage` CLI command (distinct from the existing internal-only `sf internal run-stage`), and a new A2A operation. See `docs/mcp.md#run_stage`, `docs/cli-reference.md#sf-run-stage`, `docs/a2a.md`.
+- `envelope_ref`: chain a `run_stage` call off a previously stored `StageEnvelope` — from another `run_stage` call or from any stage inside a full pipeline run — instead of an inline task. Accepts either one reference or an array of them; multiple references are resolved and namespaced under their `stageId` in the next call's `input` (disambiguated by `runId` on a `stageId` collision), with summaries combined into `goal`.
+- A2A's `run_stage` operation deliberately bypasses `a2a.yaml`'s `publications`/`allowed_callers` allowlist — any authenticated caller can run any catalog or inline stage/pipeline through it, the same wildcard-access default the MCP tool and CLI give a local harness. A temporary trade-off for proving out standalone stage execution, not a hardened access-control surface; existing `invoke`/`answer` and their allowlist enforcement are unchanged.
+
+## [0.24.0] - 2026-09-20
+
+### Added
+
+- Inbound A2A: publish explicit pipelines as A2A capabilities that other agents invoke over JSON-RPC. Discovery via Agent Card and per-publication contracts, durable at-most-once run submission, invoke/poll/results, caller-answerable clarification gates, result freezing with opaque artifact downloads, per-caller rate limits and admission caps, and terminal-task/message retention. See `docs/a2a.md`.
+- `a2a.yaml` is auto-discovered at the project root (next to `stageflow.yaml`) when `sf ui` starts -- no environment variable required. `STAGEFLOW_A2A_CONFIG` still works as an explicit override for a config living outside the project. `sf a2a validate`/`sf a2a list` follow the same discovery rule, with `--config` now optional on both.
+- New `sf a2a add-caller <id>` command: generates a caller's token and writes its `id`/`token_env` name into `a2a.yaml` (scaffolding the file if it doesn't exist yet), printing the token to export -- never writes a secret value to disk.
+
+## [0.23.0] - 2026-09-15
+
+### Added
+
+- Live output streaming for a running stage: assistant text is now captured as it streams, batched every ~300ms, redacted for secret-shaped substrings, and persisted to a small size-capped `stream.log` per stage attempt. New poll-based MCP tool `tail_stage_log` (`{ runId, stageId, attempt?, since_offset? }` → `{ text, next_offset, attempt_complete, truncated?, earliest_offset? }`) lets any watcher (the console, a host integration) follow along with a byte-offset cursor. Always on, no pipeline flag; purely additive — `log.jsonl`, `list_stage_events`, and `resources/subscribe` are unchanged.
+
+## [0.22.0] - 2026-09-15
+
+### Added
+
+- `start_run`'s `pipeline` field now also accepts an inline pipeline definition object (`{ id, stages: [...] }`), not just a filesystem path — validated and executed through the exact same path a file-based pipeline uses, so a host integration can delegate a well-defined, typed task without first writing and saving a YAML file. No new tool, no stage-count limit, no special-cased single-stage mode. A run started this way has no `pipeline_path` and can't be `rerun` — save it to a file if you want that.
+
+### Fixed
+
+- MCP `start_run` now returns a structured `{ error, validation }` body on a pipeline validation failure, matching `POST /api/runs`, instead of an uncaught bare-string error
+
+## [0.21.0] - 2026-09-15
+
+### Added
+
+- `get_health`'s MCP response now includes a `version` field, so a host integration can detect a behavior change that doesn't add or remove a whole tool
+- New lightweight `get_waiting_summary` MCP tool — a cheap count/identity list of waiting stages (no prompt bodies, artifacts, or questions) for status-bar badges, scoped by optional `runId` or `path`, spanning every project by default
+- MCP inspect parity with the operator console: read-only `list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` (no login, settings-write, or Stage MCP attach)
+- `describe_pipeline` includes Clone Chain, feedback-loop, and inbound route `if`/`on` wiring so agents can inspect before `start_run`
+- `read_artifact` returns PNG/JPEG/GIF/WebP as MCP image content blocks (text stays JSON; unknown binary still errors)
+- Lean `get_run` / `wait_run` (and the run resource) pass through `total_cost_usd` and clone `definition_id` when present on the store
+- `decide_feedback_loop` appends a durable `feedback_loop_decided` stage event with optional `reason` before succeeded/failed
+- Optional `attempt` on `get_envelope` to read a prior execution's stored envelope (omit = latest)
+- `examples/mcp-hitl-tour` walkthrough for MCP-first HITL (`answer_gate`) and feedback-loop decide
+
+### Fixed
+
+- Feedback-loop `wait_for_human` source passes persist as `waiting`, then `succeeded`/`failed` on continue/abandon, so `get_run` no longer leaves the pass `running`
+
+## [0.20.0] - 2026-09-15
+
+### Added
+
+- Stageflow now runs as a single global, auto-starting service instead of one process per project — `sf run`/`sf runs *` talk to it over HTTP, and it starts itself on first use, so opening a second project or git worktree no longer collides on port binding
+
+### Changed
+
+- Run data lives in one shared `~/.stageflow` store instead of per-project `.stageflow/` directories — a run started from any project shows up in `sf runs list` from any other project too
+- `maxConcurrent` is a global setting for the whole service, not per-project
+- `--operator-cwd`/`--operator-agent-dir` on `sf run` no longer have any effect, since the shared service's operator catalog is fixed once at its own startup; set `STAGEFLOW_OPERATOR_CWD`/`STAGEFLOW_OPERATOR_AGENT_DIR` before the service first starts instead
+
+## [0.19.0] - 2026-09-14
+
+### Added
+
+- Resume a timed-out failed stage on the same attempt from the CLI, MCP, and operator console
+- Collapsible feedback-loop banner on the run map; collapsed by default except when waiting for a human decision
+
+### Fixed
+
+- Feedback-loop remints keep Join and scheduling on the active clone cohort and skip superseded instances
+- Stringified JSON objects in `emit_stage_envelope` and `ask_operator` arguments are coerced before schema validation
+- Operator console hides superseded Clone Chain instances from the spatial map
+
 ## [0.18.0] - 2026-09-12
 
 ### Added
@@ -122,7 +462,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Claude Agent SDK backend as an alternative to Pi for stage execution, selected via `agent: claude` in `stageflow.yml` at global, pipeline, or gated stage scope
 - HITL parity for the Claude backend: non-blocking `ask_operator` handling with session-marker-based resume, matching Pi's wait/answer lifecycle
-- Parameterized `AgentPort` contract tests covering both backends
+- Parameterized `StagePort` contract tests covering both backends
 
 ## [0.9.0] - 2026-09-02
 
@@ -256,7 +596,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/tejasghutukade/stageflow/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/tejasghutukade/stageflow/compare/v0.17.0...v0.18.0
 [0.15.0]: https://github.com/tejasghutukade/stageflow/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/tejasghutukade/stageflow/compare/v0.13.0...v0.14.0

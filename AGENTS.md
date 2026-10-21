@@ -10,7 +10,7 @@ Stageflow is a runtime for **configurable multi-stage agent workflows**, with a 
 - Each stage runs in a fresh Pi agent session
 - Stages hand off via typed envelopes and artifacts
 - HITL gates pause for operator input; the same pipeline runs locally, in CI (`sf run --json`), via MCP when `sf ui` or `sf mcp` is running, and host-down via `sf runs`
-- The orchestration layer is separated from agent execution by `AgentPort`
+- The orchestration layer is separated from agent execution by `StagePort`
 
 **Stages are domain-agnostic.** Release automation, research flows, content review, SDLC, and ops runbooks are all valid patterns. Stageflow validates shape and wiring; it does not ship domain-specific stage types.
 
@@ -32,10 +32,11 @@ Stageflow is a runtime for **configurable multi-stage agent workflows**, with a 
 | `cli/` | `sf run`, `sf runs`, `sf validate`, `sf ui`, `sf providers` |
 | `config/` | YAML load/validate, pipeline DAG resolution |
 | `runtime/` | Pipeline runner, stage worker, HITL, scheduling |
-| `runstore/` | SQLite run state under `.stageflow/` |
+| `runstore/` | SQLite run state under `$STAGEFLOW_HOME` (default `~/.stageflow/`) |
 | `agent/` | Pi coding agent adapter |
 | `mcp/` | MCP server and tools |
 | `server/` | HTTP routes for the operator console API |
+| `browser/` | Browser sessions: profile store, lock, host, login check, teardown (see `docs/browser.md`) |
 | `tools/` | Pi tools (`ask_operator`, `emit_stage_envelope`, …) |
 | `envelope/` | Envelope schema and validation |
 
@@ -91,6 +92,19 @@ Related docs: [envelopes.md](docs/envelopes.md), [hitl.md](docs/hitl.md), [cli-r
 - Stage worker protocol: `src/runtime/stageWorkerProtocol.ts`
 - Provider auth: `src/agent/providerAuth.ts`, `docs/providers.md`
 
+### Browser sessions
+
+Stage `browser:` field, saved logins, shared browser per run. Code: `src/browser/`, `src/cli/browserCommand.ts`, `src/config/stageBrowser.ts`, `builtin-skills/browser/SKILL.md`, plus hooks in `src/runtime/` (scheduler, run manager, stage launcher). Read [docs/browser-internals.md](docs/browser-internals.md) before changing it; user docs are [docs/browser.md](docs/browser.md).
+
+Rules every change must keep:
+
+- The stage browser env is byte-identical for every command, attempt, and resume worker. Compute once, persist, reuse.
+- YAML never carries a path or a scope. The Host chooses both.
+- The owner scope is fixed to `local` today. Hosted multi-tenant work is tracked in `TODO(multi-tenant)` comments (`grep -rn "TODO(multi-tenant)" src`) and the table in [docs/browser-internals.md](docs/browser-internals.md#multi-tenant-todo). Keep new code taking a scope as input, never a literal.
+- Tests use an injected `BrowserRunner` (no real `agent-browser`) and a per-test `socketRoot`. `tests/globalSetup.socketLeakGuard.ts` fails the run on leaked socket dirs.
+
+Real Chrome smoke test (opt-in, needs `agent-browser` on `PATH`): `STAGEFLOW_BROWSER_SMOKE=1 npx vitest run tests/browser.realChrome.smoke.test.ts`
+
 ### Tests
 
 - Tests live in `tests/*.test.ts`
@@ -101,6 +115,21 @@ Related docs: [envelopes.md](docs/envelopes.md), [hitl.md](docs/hitl.md), [cli-r
 
 Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** for UI-specific rules (Astryx workflow, chrome exception, UX docs, component map). Do not duplicate that file here.
 
+### Connections (communication channels and tools)
+
+Send-only stage channels are built (`src/channels/`, `src/tools/sendMessage.ts`, `src/server/channelRoutes.ts`, `ui/src/redesign/connections/`, the editor's `StageChannelsSection`). User docs: **[docs/channels.md](docs/channels.md)**. Before changing them or adding a provider, read that page. Local-only working notes (gitignored, not in the repo) may exist at `docs/specs/connections-spec.md`, `connections-provider-reference.md` and `connections-design-handoff.md`; if you have them, the provider reference holds verified third-party facts.
+
+Rules every change must keep:
+
+- A secret is never a YAML value, never in a response, log, error, run state or the stage worker. Providers get secrets only through `ResolvedConnection` (non-enumerable). Errors carry codes, never response bodies or request URLs.
+- Recipients are pinned in YAML. The agent never chooses one.
+- A send that may have reached the provider is `CHANNEL_SEND_OUTCOME_UNKNOWN` and is never resent. Only definite failures (refused connection, DNS/TLS, 4xx) are retryable or resendable under a new key.
+- A stage uses one channel (`MAX_CHANNELS_PER_STAGE`). Keep it enforced at parse, merge, validation and send; tests that need several raise it with `setStageChannelLimitForTests`.
+- Connections are host-level (`$STAGEFLOW_HOME/connections.yaml`, project file wins, `STAGEFLOW_CONNECTIONS_FILE` overrides). The test setup pins an empty `STAGEFLOW_HOME` so host files never leak in.
+- A provider is one file: its adapter, its `meta` (form fields, recipient shape, examples; the console renders from `GET /api/connections/meta`) and its tests. Every `ChannelErrorCode` is explained once in `src/channels/errorInfo.ts` (a `Record`, so a missing entry is a compile error). After changing either, run `npx tsx scripts/generate-channel-meta-fixture.ts` so the console fixture matches; `tests/channels.metaFixture.test.ts` fails if it does not.
+- Connection edits (create, replace key, enable, remove) go through `ConnectionEdits.apply`, which changes secrets and file together and undoes both on failure. Do not write the secret store or `connections.yaml` anywhere else.
+- Provider tests use the local HTTP fixture or a fake SDK importer, never the network. Real-account smoke tests are opt-in env-gated files.
+
 ## Documentation
 
 - Public docs index: [docs/README.md](docs/README.md)
@@ -110,3 +139,18 @@ Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** 
 ## Positioning (public copy)
 
 When writing user-facing text, avoid framing Stageflow as an SDLC-only tool. Lead with **configurable stages / pipelines**; cite SDLC as one example among others (releases, research, ops, etc.).
+
+<!-- agenttrail -->
+## agenttrail plan convention
+Maintain PLAN.md as the living plan. It is read by the project OWNER, not by you — write it for them.
+- nodes are COMPONENTS of the system being built (`## Plain-language name {#id}`), not phases or sprints; keep the map at 5-9 components regardless of repo size — grow tasks, not cards, and split a component only when one agent could no longer own it for a session
+- naming rule: titles are verb-led, plain-language, and CONCRETE — the owner can tell when it is done ("Read alerts out loud", "Watch the repo"). Never engineer-speak ("fs watcher + activity signal") and never vague vibes ("Decide what matters"); put the engineer phrasing on a `tech:` line under the heading
+- tasks inside a component: `- [ ] Plain outcome {#id}`, optional indented `tech:` line beneath; mark a task `[~]` BEFORE you start it and save PLAN.md immediately — this drives the live in-progress view; flip it to `[x]` the moment it completes, `[!]` if stuck (clear once unblocked). Never batch plan updates for the end of the session
+- when you mark a task `[~]`, add an indented `by: <your name>` line under it (claude, codex, cursor, …) and leave it there when done — it is the record of who did what
+- edges under a component heading: `needs: [id, id]` = must come after those components; `links: [id, id]` = interconnected with / talks to
+- `files: [src/audio/**, config.py]` under a component declares which paths it owns — keep it current; it is how the live view knows which component you are really working in, including when you revisit finished work
+- `{#id}`s are stable — never rename, only add or remove nodes
+- open tasks carry an indented `from:` line naming their provenance — `from: agent` when YOU are declaring it as your own imminent build intent (the owner corrects these on sight if wrong), `from: roadmap` when it comes from planning documents (durable intent, backloggable); omit when neither
+- new work NEVER creates a component by default: it lands as your session todos plus tasks under the component whose files it touches. Add a NEW component only when the system grows a durable new part. Durable is not a prediction — test it NOW: something else already depends on it (load-bearing), deleting it would change what the product does, you can name a plausible second task for it, and it owns files no component claims. Record the addition under `## decisions`. Time corrects mistakes cheaply: merge a card back into its neighbor if no second change ever comes; promote a task to a card when work keeps clustering in files its siblings never touch. Remove a component only when that part is deleted from the product
+- before ending a session, graduate your plan-worthy completed todos into PLAN.md as `[x]` tasks (with `by:`) — housekeeping todos stay out of the plan
+- record any plan-affecting decision under `## decisions` BEFORE implementing it

@@ -1,0 +1,76 @@
+---
+layout: default
+title: Data Directory
+---
+
+# Data directory
+
+Stageflow keeps the SQLite run store, run workspaces, Host Pi agent files, and related state under one **durable root**. Override it with `STAGEFLOW_HOME`. When unset, the default is `~/.stageflow`.
+
+The operator auth file is `<credential-root>/agent/auth.json`. `STAGEFLOW_CREDENTIAL_HOME` sets that root to a directory. When it is unset, the root is the host user's `~/.stageflow`. A job-local data directory is its own operator when `STAGEFLOW_CREDENTIAL_HOME` is set to that directory. Docker and the release and publish workflows set the override. [`scripts/start-ui-local.sh`](../scripts/start-ui-local.sh) leaves it unset, so that server shares the machine operator store. When an existing login lives under a non-default data directory, set `STAGEFLOW_CREDENTIAL_HOME` to that directory.
+
+The Host is **machine-global**. Catalog roots are **seeded** examples plus **registered** absolute project folders stored in the durable SQLite store (not only past-run history). `sf ui` registers the directory it was started in. `sf mcp` does not. Local `sf run` registers its resolved project folder before start. Remote MCP/HTTP may only use already-registered or seeded roots. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root) and [CLI — `sf run`](cli-reference.md#sf-run).
+
+Per-project settings stay at `<git-root>/.stageflow/settings.json`. They are not the run store.
+
+See also [CLI reference — Storage locations](cli-reference.md#storage-locations) and [Providers](providers.md).
+
+## Layout
+
+| Path under `$STAGEFLOW_HOME` | Keep / disposable | Notes |
+|------------------------------|-------------------|-------|
+| `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode), including the durable **projects registry** and the agent tables ([agent](agents.md#storage)): `agent_definitions`, `agent_revisions`, `agent_sessions`, `agent_messages`, `agent_turns`, `agent_spans`, `agent_eval_scores`, `agent_approvals`, `agent_executed_payloads`, `agent_outbound_sends`, `agent_inbound_events`, `agent_deliveries`, `agent_schedules`. Agent YAML stays in the project; only history is here |
+| `settings.json` | **keep** | Global settings (credential source, concurrency, …) |
+| `agent/auth.json` | **keep** | Operator auth file when this directory is the credential root |
+| `connections.yaml` | **keep** | Host-level [communication channel](channels.md) connections (provider settings, `env:`/`store:` secret references; never a secret value). A project-root `connections.yaml` or `STAGEFLOW_CONNECTIONS_FILE` can replace it. **Not included in `sf backup`.** |
+| `channel-secrets.json` | **keep** | Secrets typed into the console Connections page, mode `0600`. Lives in the credential root (this directory when it is the credential root). Plaintext, same trust level as `agent/auth.json`. **Not included in `sf backup`.** |
+| `.stageflow/channel-sends.json` | **keep** | Per-workspace send ledger for channel messages (hashes and outcomes, never message text). Keeps an uncertain send from being repeated after a restart. Records older than 30 days are pruned. |
+| `agent/` | **keep** | Host Pi agent directory (`PI_CODING_AGENT_DIR` for the Host process). OAuth tokens for MCP servers you signed in to live in `agent/mcp-oauth-encrypted` (AES-256-GCM) |
+| `agents/pi-sessions/` | **keep** | Pi session files for [agent](agents.md) conversations (one per agent session; history and costs are in `state.db`) |
+| `agent/mcp-cache.json` | disposable | Tool lists cached from the last successful MCP connect or Check |
+| `mcp/.mcp.json` | **keep** | MCP servers added in Settings → Project MCP, merged over the project `.mcp.json`. Holds `${NAME}` references, never token values. Not included in `sf backup`; see [MCP servers](mcp-servers.md). Mode `0600`, written atomically. A corrupt file is reported, never overwritten |
+| `secrets/mcp-secrets.json` | **keep** | Write-only store for the values behind those `${NAME}` references (directory `0700`, file `0600`, plaintext at the same trust level as `channel-secrets.json`) |
+| `secrets/mcp-oauth.key` | **keep** | Host key for the encrypted OAuth store (`0600`); `PI_MCP_ADAPTER_OAUTH_FILE_KEY` overrides it |
+| `runs/` | disposable | Per-run workspaces, stage attempts, artifacts |
+| `a2a-artifacts/` | disposable | A2A artifact bytes |
+| `repos/` | disposable | Shared bare-clone cache (`repos/<host>/<owner>/<repo>.git`); Host-owned, used for repository-bound runs |
+| `worktrees/` | disposable | Per-run checkouts (`worktrees/<runId>`); Host-owned, created on repository-bound start. When a run reaches `succeeded`, Stageflow may reclaim the worktree (keeping `run_branch`); the `checkout_root` column can still be recorded after the directory is gone. Failed/cancelled runs keep their worktrees until retention SLIM. |
+| `cache/` | disposable | Reserved name; this release creates `cache/jiti` when the jiti MCP fallback runs |
+| `tmp/` | disposable | Soft-default when `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty at Host boot (`assertTmpdirUsable` creates `$STAGEFLOW_HOME/tmp` then asserts writability) |
+| `backups/` | disposable | `sf backup` archives (default output) |
+| `restore-pending/` | disposable | Staged API restore archives + marker |
+| `service.log` | disposable | Detached Host autostart log (stays at the root) |
+| `workshop/builds/` | **keep** | Untitled Workshop drafts. One `{id}.json` per build (the draft package). Always under `$STAGEFLOW_HOME`. |
+| `workshop/sessions/` | **keep** | Workshop Author chat sessions (History / New): per-id directory with `session.json` (title, timestamps, transcript, `piSessionId`, optional `activeBuildId`) and optional `pi-session.jsonl`. The session points at a build; it does not embed the draft. Always under `$STAGEFLOW_HOME`. |
+| `workshop/autosave/` | disposable | Older Workshop WIP slots (draft package + chat messages). The studio uses builds. For git catalog projects this usually lives under `<git-root>/.stageflow/workshop/autosave/`; otherwise under `$STAGEFLOW_HOME/workshop/autosave/`. |
+
+### Workshop: builds and sessions
+
+| | `workshop/builds/` | `workshop/sessions/` |
+|--|--------------------|----------------------|
+| **Purpose** | The untitled draft | Durable Author chat (History / New) |
+| **Contents** | Draft package JSON | Transcript + title/timestamps + `piSessionId` + optional `activeBuildId` |
+| **Draft?** | Yes | No — `activeBuildId` names the build |
+| **Root** | Always `$STAGEFLOW_HOME` | Always `$STAGEFLOW_HOME` |
+
+History reopens the session and the build in `activeBuildId`. **New** starts a fresh session. Saved catalog YAML lives in the project (by default `workshop/<pipeline-id>/`), not in this directory. See [Workshop Author](workshop.md).
+
+For the operator keep-table and why `cp state.db` is unsafe, see [Docker and self-hosting](docker.md).
+
+Stage workers do **not** use `$STAGEFLOW_HOME/agent/` as their Pi agent directory. Each stage attempt binds `PI_CODING_AGENT_DIR` to a per-attempt directory under that run's workspace (`runs/<runId>/stages/<stageId>/attempts/<n>/.pi-agent`).
+
+`models.json` sits beside the operator auth file. The Cursor key file is `<credential-root>/agent/cursor-api-key`. A usable `agent/auth.json` in a data directory is the store only when that directory is the credential root.
+
+**Temp dir:** Host boot still requires a writable temp directory. If `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty, Stageflow soft-defaults to `$STAGEFLOW_HOME/tmp` (creates it), then asserts writability. An explicit unwritable `TMPDIR` still fails with `tmpdir_unusable`.
+
+Stage agents' Pi `read`, `write`, and `edit` tools deny paths whose real path is inside the durable root and outside that run's workspace (`stageflow_path_denied`). On repository- or path-bound runs, `checkoutRoot` (the Host worktree or checkout path) is **allowlisted** for those file tools so the agent can edit the bound tree; other durable-root paths (`state.db`, `agent/`, sibling worktrees) stay denied. That is defence in depth, not a sandbox — `bash` is not path-restricted.
+
+## Container image user and volumes
+
+The published image runs as **`10001:10001`** (`stageflow`). Named volumes are the default mount for the durable root. The process never recursively changes ownership of the data root on boot — if the volume is not writable by that uid/gid, startup fails with a message that includes the live uid and a `chown` hint.
+
+## Version support
+
+- **Patch versions** of Stageflow are interchangeable against the same database schema.
+- **Minor versions** are upgrade-only: a newer binary may migrate the store forward; an older binary that cannot read the on-disk schema version refuses to open it.
+- Rolling a **newer database** back to an older Stageflow binary means **restoring a backup**, not opening the newer file with the older image.

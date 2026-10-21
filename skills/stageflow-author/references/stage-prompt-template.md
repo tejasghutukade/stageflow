@@ -1,6 +1,6 @@
 # Stage prompt template
 
-Every external stage file has `id`, `system_prompt`, `io.input.schema`, and `io.output.schema`. Filename stem matches `id`. `model` is optional when the pipeline or `stageflow.yaml` supplies it — otherwise set it on the stage. Default when writing a concrete string is `anthropic/claude-sonnet-4-5`. When the human names a different model, write that string verbatim. Before writing models, confirm at least one provider is `configured` (see the skill Provider gate). Sibling stages after fan-out should use the same configured model family unless the human asks otherwise.
+Every external stage file has `id`, `system_prompt`, `io.input.schema`, and `io.output.schema`. Filename stem matches `id`. `model` is optional when the pipeline or `stageflow.yaml` supplies it — otherwise set it on the stage. Prefer the **configured** provider's model id (`sf providers status` — use that family's default, e.g. `openrouter/auto` or `anthropic/claude-sonnet-4-5` only when that provider is configured). When no provider is configured or more than one is, write a loud placeholder `CHANGE_ME/<provider-model>` and stop for the human — do not silently hardcode Anthropic. When the human names a different model, write that string verbatim. Before writing models, confirm at least one provider is `configured` (see the skill Provider gate). Sibling stages after fan-out should use the same configured model family unless the human asks otherwise.
 
 ## Base
 
@@ -17,7 +17,7 @@ system_prompt: |
   artifacts, and a payload the next stage can use. Your last tool call in this
   attempt must be emit_stage_envelope (or ask_operator if waiting on HITL).
   An empty final message is a stage failure.
-model: anthropic/claude-sonnet-4-5
+model: CHANGE_ME/<provider-model>
 io:
   input:
     schema:
@@ -27,7 +27,7 @@ io:
       type: object
 ```
 
-The prompt has no `ask_operator` line. It ends on the `emit_stage_envelope` instruction. Call `emit_stage_envelope` once per attempt.
+Replace `CHANGE_ME/<provider-model>` with the configured provider's model id before validate/run (Anthropic example only when that provider is configured).
 
 When the pipeline entry will carry after-phase `verify` with `type: artifact`, add this line after the goal:
 
@@ -81,7 +81,7 @@ system_prompt: |
      with artifact_backed in this same stage. Do not complete yet.
   4. Call emit_stage_envelope with an advancing success status only after the
      operator accepts. Never emit before accept.
-model: anthropic/claude-sonnet-4-5
+model: CHANGE_ME/<provider-model>
 io:
   input:
     schema:

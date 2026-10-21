@@ -60,7 +60,22 @@ function sessionIdFromRequest(req: IncomingMessage): string | undefined {
 }
 
 function toolDepsFrom(deps: McpHttpDeps): McpToolDeps {
-  return { manager: deps.manager, store: deps.store, cwd: deps.cwd };
+  return {
+    manager: deps.manager,
+    store: deps.store,
+    cwd: deps.cwd,
+    ...(deps.agentDir !== undefined ? { agentDir: deps.agentDir } : {}),
+    ...(deps.providerAuthContext !== undefined
+      ? { providerAuthContext: deps.providerAuthContext }
+      : {}),
+    ...(deps.projectRoot !== undefined ? { projectRoot: deps.projectRoot } : {}),
+    ...(deps.providerBoot !== undefined ? { providerBoot: deps.providerBoot } : {}),
+    ...(deps.agentService !== undefined ? { agentService: deps.agentService } : {}),
+    ...(deps.agentChat !== undefined ? { agentChat: deps.agentChat } : {}),
+    ...(deps.agentConversationBackend !== undefined
+      ? { agentConversationBackend: deps.agentConversationBackend }
+      : {}),
+  };
 }
 
 function attachBusNotifications(

@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { parse as parseYaml } from "yaml";
-import type { CheckoutDescriptor, TaskFile } from "../types/task.js";
+import type { CheckoutDescriptor, TaskFile, TaskGitIdentity } from "../types/task.js";
+import { resolveWorkspaceBinding } from "../runtime/workspaceBinding.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
+import { yamlParsePosition } from "./yamlParsePosition.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -17,9 +19,56 @@ function parseCheckout(value: unknown): CheckoutDescriptor | undefined {
   return undefined;
 }
 
-export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFile> {
+function parseGitIdentity(raw: unknown): TaskGitIdentity | undefined {
+  if (!isPlainObject(raw)) return undefined;
+  const identity: TaskGitIdentity = {};
+  if (typeof raw.name === "string") identity.name = raw.name;
+  if (typeof raw.email === "string") identity.email = raw.email;
+  return identity;
+}
+
+/** Structural TaskFile shape only — does not enforce workspace binding XOR. */
+export function coerceTaskFile(raw: unknown): TaskFile | undefined {
   const record = raw as Record<string, unknown> | null | undefined;
   if (typeof record?.id !== "string" || typeof record?.goal !== "string") {
+    return undefined;
+  }
+  if (record.input !== undefined && !isPlainObject(record.input)) {
+    return undefined;
+  }
+
+  return {
+    id: record.id,
+    goal: record.goal,
+    context: typeof record.context === "string" ? record.context : undefined,
+    constraints: typeof record.constraints === "string" ? record.constraints : undefined,
+    checkout: parseCheckout(record.checkout),
+    ...(typeof record.repository === "string" ? { repository: record.repository } : {}),
+    ...(typeof record.ref === "string" ? { ref: record.ref } : {}),
+    ...(typeof record.run_branch_template === "string"
+      ? { run_branch_template: record.run_branch_template }
+      : {}),
+    ...(isPlainObject(record.git_identity)
+      ? { git_identity: parseGitIdentity(record.git_identity) }
+      : {}),
+    ...(record.input !== undefined ? { input: record.input } : {}),
+  };
+}
+
+export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFile> {
+  const record = raw as Record<string, unknown> | null | undefined;
+  const task = coerceTaskFile(raw);
+  if (task === undefined) {
+    if (typeof record?.id === "string" && typeof record?.goal === "string") {
+      return loadFailure([
+        {
+          code: "task.invalid_shape",
+          message: `Invalid ${source}: input must be an object`,
+          category: "task",
+          taskId: record.id,
+        },
+      ]);
+    }
     return loadFailure([
       {
         code: "task.invalid_shape",
@@ -29,17 +78,18 @@ export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFi
       },
     ]);
   }
-  if (record.input !== undefined && !isPlainObject(record.input)) {
-    return loadFailure([
-      {
-        code: "task.invalid_shape",
-        message: `Invalid ${source}: input must be an object`,
-        category: "task",
-        taskId: record.id,
-      },
-    ]);
+
+  const binding = resolveWorkspaceBinding(task);
+  if (!binding.ok) {
+    return loadFailure(
+      binding.issues.map((issue) => {
+        if (issue.category !== "task") return issue;
+        return { ...issue, taskId: task.id };
+      }),
+    );
   }
-  if (isPlainObject(record.checkout)) {
+
+  if (isPlainObject(record?.checkout)) {
     const { branch, base } = record.checkout;
     if (branch !== undefined && typeof branch !== "string") {
       return loadFailure([
@@ -47,7 +97,7 @@ export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFi
           code: "task.invalid_shape",
           message: `Invalid ${source}: checkout.branch must be a string`,
           category: "task",
-          taskId: record.id,
+          taskId: task.id,
         },
       ]);
     }
@@ -57,19 +107,13 @@ export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFi
           code: "task.invalid_shape",
           message: `Invalid ${source}: checkout.base must be a string`,
           category: "task",
-          taskId: record.id,
+          taskId: task.id,
         },
       ]);
     }
   }
-  return loadSuccess({
-    id: record.id,
-    goal: record.goal,
-    context: typeof record.context === "string" ? record.context : undefined,
-    constraints: typeof record.constraints === "string" ? record.constraints : undefined,
-    checkout: parseCheckout(record.checkout),
-    ...(record.input !== undefined ? { input: record.input } : {}),
-  });
+
+  return loadSuccess(task);
 }
 
 export function loadTaskFromYamlOutcome(
@@ -86,6 +130,7 @@ export function loadTaskFromYamlOutcome(
         code: "task.load_error",
         message,
         category: "task",
+        ...yamlParsePosition(err),
       },
     ]);
   }

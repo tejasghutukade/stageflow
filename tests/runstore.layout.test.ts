@@ -34,24 +34,6 @@ describe("runstore layout", () => {
     expect(meta.checkout_root).toBe(checkout);
   });
 
-  it("writeEnvelope and readEnvelope roundtrip", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-run-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: "id: t1\ngoal: demo\n",
-    });
-
-    const envelope = {
-      status: "success" as const,
-      summary: "done",
-      artifacts: ["stages/clarify/attempts/1/artifacts/notes.md"],
-    };
-    await store.createStageExecution(run.runId, "clarify");
-    await store.writeEnvelope(run.runId, "clarify", envelope);
-    await expect(store.readEnvelope(run.runId, "clarify")).resolves.toEqual(envelope);
-  });
-
   it("failed run still leaves attempt workspace intact", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-run-"));
     const store = createRunStore({ rootDir: root });

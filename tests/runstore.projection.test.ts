@@ -372,6 +372,69 @@ describe("run projection", () => {
     expect(summary.project_root).toBe(project_root);
   });
 
+  it("projects unbound / checkout / repository binding shapes", () => {
+    const unboundSummary = projectRunSummary(meta(), []);
+    expect(unboundSummary.binding).toEqual({ kind: "unbound" });
+    expect(unboundSummary.binding).not.toHaveProperty("checkout_root");
+    expect(unboundSummary.binding).not.toHaveProperty("run_branch");
+
+    const checkoutMeta = meta({
+      checkout_root: "/Users/me/work/acme",
+      resolved_sha: "abc123",
+    });
+    const checkoutSummary = projectRunSummary(checkoutMeta, []);
+    expect(checkoutSummary.binding).toEqual({
+      kind: "checkout",
+      resolved_sha: "abc123",
+    });
+    expect(checkoutSummary.binding).not.toHaveProperty("checkout_root");
+    expect(checkoutSummary.binding).not.toHaveProperty("run_branch");
+    const checkoutDetail = projectRunDetail(checkoutMeta, [], "id: t\n");
+    expect(checkoutDetail.binding).toEqual({
+      kind: "checkout",
+      resolved_sha: "abc123",
+      checkout_root: "/Users/me/work/acme",
+    });
+
+    const repoMeta = meta({
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: "a".repeat(40),
+      run_branch: "stageflow/run-1",
+      checkout_root: "/data/worktrees/run-1",
+    });
+    const repoSummary = projectRunSummary(repoMeta, []);
+    expect(repoSummary.binding).toEqual({
+      kind: "repository",
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: "a".repeat(40),
+    });
+    expect(repoSummary.binding).not.toHaveProperty("checkout_root");
+    expect(repoSummary.binding).not.toHaveProperty("run_branch");
+    const repoDetail = projectRunDetail(repoMeta, [], "id: t\n");
+    expect(repoDetail.binding).toEqual({
+      kind: "repository",
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: "a".repeat(40),
+      run_branch: "stageflow/run-1",
+      checkout_root: "/data/worktrees/run-1",
+    });
+  });
+
+  it("prefers repository kind over checkout_root when both are set", () => {
+    const summary = projectRunSummary(
+      meta({
+        repository: "acme/api",
+        ref: "main",
+        checkout_root: "/data/worktrees/run-1",
+      }),
+      [],
+    );
+    expect(summary.binding.kind).toBe("repository");
+  });
+
   it("diamond projectRunDetail pipeline_track has both inbound synthesize edges", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,

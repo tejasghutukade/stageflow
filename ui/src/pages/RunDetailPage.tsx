@@ -13,8 +13,16 @@ import {
   type StageVerificationHistory,
 } from "../api";
 import { useRunCatalogHandle } from "../catalog/useRunCatalog";
-import { runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
+import {
+  bindingLocatorText,
+  bindingLocatorTitle,
+  runLocatorSubtitle,
+  runTaskLabel,
+} from "../catalog/displayCatalogPath";
 import { ReplyZone } from "../ReplyZone";
+import { canWatchBrowser, liveViewHandoffUrl } from "../liveView/handoff";
+import { WATCH_LABEL } from "../liveView/helpText";
+import { WatchBrowserPanel } from "../liveView/WatchBrowser";
 import { AttemptCountBadge } from "../components/AttemptCountBadge";
 import { CostBadge, formatCostUsd } from "../components/CostBadge";
 import { ArtifactAside } from "../components/ArtifactAside";
@@ -31,7 +39,13 @@ import { TranscriptTurns } from "../components/TranscriptTurns";
 import { VerificationHistory } from "../components/VerificationHistory";
 import type { DetailView } from "../routes";
 import {
+  canCancelRun,
+  canDeleteRun,
+} from "../runLifecycle/runActions";
+import { useRunCancel, useRunDelete } from "../runLifecycle/useRunLifecycle";
+import {
   abandonedDisplayCopy,
+  cancelledDisplayCopy,
   cssStatusToken,
   isAbandonedDisplay,
   statusCopy,
@@ -39,8 +53,10 @@ import {
 import {
   canAbandon,
   canRetry,
+  canResumeTimedOut,
   isStageActionBusy,
   useStageAbandon,
+  useStageResume,
   useStageRetry,
 } from "../stageAction";
 import {
@@ -53,16 +69,21 @@ import {
   type SessionChipKind,
 } from "../workspace/resolveRunWorkspace";
 import { resolveStreamRoute } from "../workspace/resolveStreamRoute";
+import { useRedesign } from "../redesign/flag";
+import { RunDetailPageRedesign } from "./runDetail/RunDetailPageRedesign";
+import {
+  clampWorkHeight,
+  MAP_MIN_H,
+  WORK_ARROW_STEP,
+  WORK_DEFAULT_H,
+  WORK_MIN_H,
+} from "./runDetail/runDetailPaneSplit";
 
-const WORK_DEFAULT_H = 300;
-const WORK_MIN_H = 200;
-const MAP_MIN_H = 140;
-const WORK_ARROW_STEP = 24;
+export { clampWorkHeight } from "./runDetail/runDetailPaneSplit";
 
-export function clampWorkHeight(requested: number, paneHeight: number): number {
-  const maxByMap = paneHeight - MAP_MIN_H;
-  if (paneHeight < 340) return Math.max(0, maxByMap);
-  return Math.max(WORK_MIN_H, Math.min(requested, maxByMap));
+export function liveViewWorkHeight(paneHeight: number, headHeight: number): number {
+  if (paneHeight <= 0) return WORK_DEFAULT_H;
+  return Math.max(WORK_MIN_H, paneHeight - headHeight - MAP_MIN_H);
 }
 
 function sessionChipEl(kind: SessionChipKind) {
@@ -120,7 +141,52 @@ export function RunDetailPage({
   onOpenArtifact: (path: string) => void;
   onOpenEnvelope: (stageId: string) => void;
 }) {
+  const redesign = useRedesign();
+  if (redesign) {
+    return (
+      <RunDetailPageRedesign
+        runId={runId}
+        view={view}
+        onBack={onBack}
+        onReran={onReran}
+        onOpenStream={onOpenStream}
+        onOpenArtifact={onOpenArtifact}
+        onOpenEnvelope={onOpenEnvelope}
+      />
+    );
+  }
+  return (
+    <RunDetailPageLegacy
+      runId={runId}
+      view={view}
+      onBack={onBack}
+      onReran={onReran}
+      onOpenStream={onOpenStream}
+      onOpenArtifact={onOpenArtifact}
+      onOpenEnvelope={onOpenEnvelope}
+    />
+  );
+}
+
+function RunDetailPageLegacy({
+  runId,
+  view,
+  onBack,
+  onReran,
+  onOpenStream,
+  onOpenArtifact,
+  onOpenEnvelope,
+}: {
+  runId: string;
+  view: DetailView;
+  onBack: () => void;
+  onReran: (runId: string) => void;
+  onOpenStream: (stageId?: string) => void;
+  onOpenArtifact: (path: string) => void;
+  onOpenEnvelope: (stageId: string) => void;
+}) {
   const [run, setRun] = useState<RunDetail | null>(null);
+  const [watchStageId, setWatchStageId] = useState<string | null>(null);
   const [pipelines, setPipelines] = useState<PipelineListing[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [verification, setVerification] = useState<StageVerificationHistory | null>(null);
@@ -134,10 +200,12 @@ export function RunDetailPage({
   const [drawerStageId, setDrawerStageId] = useState<string | null>(null);
   const [dismissedWaitKey, setDismissedWaitKey] = useState<string | null>(null);
   const [workHeight, setWorkHeight] = useState(WORK_DEFAULT_H);
+  const [layoutAdjusted, setLayoutAdjusted] = useState(false);
   const [hiddenCenterSide, setHiddenCenterSide] = useState<"transcript" | "logs" | null>(
     null,
   );
   const [paneHeight, setPaneHeight] = useState(0);
+  const [headHeight, setHeadHeight] = useState(0);
   const [splitDragging, setSplitDragging] = useState(false);
   const paneRef = useRef<HTMLDivElement>(null);
   const splitGestureRef = useRef<{ id: number; y: number; h: number } | null>(null);
@@ -215,15 +283,51 @@ export function RunDetailPage({
   );
 
   const {
+    resumingStageIds,
+    error: resumeError,
+    resume,
+    clearError: clearResumeError,
+  } = useStageResume(runId, onStageActionSuccess);
+
+  const resumeAndSelect = useCallback(
+    (stageId: string) => {
+      setUserPickedStageId(stageId);
+      onOpenStream(stageId);
+      resume(stageId);
+    },
+    [onOpenStream, resume],
+  );
+
+  const {
     abandoningStageId,
     error: abandonError,
     abandon,
     clearError: clearAbandonError,
   } = useStageAbandon(runId, onStageActionSuccess);
 
+  const onDeleted = useCallback(async () => {
+    catalog.refresh();
+    onBack();
+  }, [catalog, onBack]);
+
+  const {
+    cancelling,
+    error: cancelError,
+    cancel,
+    clearError: clearCancelError,
+  } = useRunCancel(runId, onStageActionSuccess);
+
+  const {
+    deleting,
+    error: deleteError,
+    deleteRun: removeRun,
+    clearError: clearDeleteError,
+  } = useRunDelete(runId, run?.status, onDeleted);
+
   const actionBusy = {
     retryingStageIds,
     abandoningStageId,
+    resumingStageIds,
   };
 
   useEffect(() => {
@@ -232,6 +336,7 @@ export function RunDetailPage({
     setDrawerStageId(null);
     setDismissedWaitKey(null);
     setWorkHeight(WORK_DEFAULT_H);
+    setLayoutAdjusted(false);
     setHiddenCenterSide(null);
     setRun(null);
     setError(null);
@@ -356,7 +461,10 @@ export function RunDetailPage({
   useEffect(() => {
     const el = paneRef.current;
     if (!el) return;
-    const measure = () => setPaneHeight(el.getBoundingClientRect().height);
+    const measure = () => {
+      setPaneHeight(el.getBoundingClientRect().height);
+      setHeadHeight(el.firstElementChild?.getBoundingClientRect().height ?? 0);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
@@ -366,6 +474,7 @@ export function RunDetailPage({
   const applyWorkHeight = useCallback(
     (requested: number) => {
       const height = paneRef.current?.getBoundingClientRect().height ?? paneHeight;
+      setLayoutAdjusted(true);
       setWorkHeight(clampWorkHeight(requested, height));
     },
     [paneHeight],
@@ -397,6 +506,9 @@ export function RunDetailPage({
     setError(null);
     clearRetryError();
     clearAbandonError();
+    clearResumeError();
+    clearCancelError();
+    clearDeleteError();
     try {
       const result = await rerun(runId);
       onReran(result.runId);
@@ -417,6 +529,19 @@ export function RunDetailPage({
   const composer = workspace
     ? composerEl(runId, workspace, onOpenArtifact)
     : undefined;
+  const liveViewGate = Boolean(
+    stage &&
+      workspace?.composer.kind === "reply" &&
+      liveViewHandoffUrl(workspace.composer.prompt) !== null,
+  );
+  const watchStage = stage && canWatchBrowser(stage.status) ? stage : null;
+  const watching = watchStage !== null && watchStageId === watchStage.stage_id;
+  const gateLayout = liveViewGate && !layoutAdjusted;
+  const effectiveWorkHeight = gateLayout
+    ? liveViewWorkHeight(paneHeight, headHeight)
+    : workHeight;
+  const effectiveHiddenSide =
+    gateLayout && hiddenCenterSide === null ? "logs" : hiddenCenterSide;
   const hasMapNodes = Boolean(workspace && workspace.spatialLayout.nodes.length > 0);
   const showWorkspace = Boolean(
     workspace &&
@@ -486,14 +611,17 @@ export function RunDetailPage({
   } else if (workspace.selectedStageId) {
     const streamStageId = workspace.selectedStageId;
     const stageToken = stage ? cssStatusToken(stage.status) : undefined;
-    const showTranscript = hiddenCenterSide !== "transcript";
-    const showLogs = hiddenCenterSide !== "logs";
+    const showTranscript = effectiveHiddenSide !== "transcript";
+    const showLogs = effectiveHiddenSide !== "logs";
     const transcriptTrailing = (
       <>
         <button
           type="button"
           className="btn btn--sm"
-          onClick={() => setHiddenCenterSide(showLogs ? "logs" : null)}
+          onClick={() => {
+            setLayoutAdjusted(true);
+            setHiddenCenterSide(showLogs ? "logs" : null);
+          }}
         >
           {showLogs ? "Hide logs" : "Show logs"}
         </button>
@@ -506,7 +634,10 @@ export function RunDetailPage({
         <button
           type="button"
           className="btn btn--sm"
-          onClick={() => setHiddenCenterSide(showTranscript ? "transcript" : null)}
+          onClick={() => {
+            setLayoutAdjusted(true);
+            setHiddenCenterSide(showTranscript ? "transcript" : null);
+          }}
         >
           {showTranscript ? "Hide transcript" : "Show transcript"}
         </button>
@@ -537,6 +668,18 @@ export function RunDetailPage({
             {stage ? <AttemptCountBadge count={stage.attempt_count} /> : null}
             {stage ? <CostBadge costUsd={stage.cost_usd} /> : null}
             {sessionChipEl(workspace.sessionChip)}
+            {stage && canResumeTimedOut(stage) && manualRecovery === undefined ? (
+              <button
+                type="button"
+                className="btn btn--sm"
+                disabled={isStageActionBusy(actionBusy, stage.stage_id)}
+                onClick={() => resumeAndSelect(stage.stage_id)}
+              >
+                {resumingStageIds.has(stage.stage_id)
+                  ? "Resuming…"
+                  : "Resume session"}
+              </button>
+            ) : null}
             {stage && canRetry(stage.status) && manualRecovery === undefined ? (
               <button
                 type="button"
@@ -547,6 +690,16 @@ export function RunDetailPage({
                 {retryingStageIds.has(stage.stage_id)
                   ? "Retrying…"
                   : "Retry stage"}
+              </button>
+            ) : null}
+            {watchStage !== null && !liveViewGate ? (
+              <button
+                type="button"
+                className="btn btn--sm"
+                aria-pressed={watching}
+                onClick={() => setWatchStageId(watching ? null : watchStage.stage_id)}
+              >
+                {WATCH_LABEL}
               </button>
             ) : null}
             {stage && canAbandon(stage.status) ? (
@@ -594,7 +747,7 @@ export function RunDetailPage({
       <div
         ref={paneRef}
         className={`pane run-detail${showWorkspace ? " has-stage" : ""}${splitDragging ? " is-resizing" : ""}`}
-        style={{ height: "100%", ["--work-h" as string]: `${workHeight}px` }}
+        style={{ height: "100%", ["--work-h" as string]: `${effectiveWorkHeight}px` }}
       >
         <div>
           <div className="topbar">
@@ -605,10 +758,28 @@ export function RunDetailPage({
                 {runLocatorSubtitle(run)}
               </span>
             ) : null}
+            {run?.binding ? (
+              <span
+                className="topbar__sub"
+                title={bindingLocatorTitle(run.binding)}
+              >
+                {bindingLocatorText(run.binding)}
+              </span>
+            ) : null}
             {run ? (
-              <span className={`status${runToken && runToken !== "running" ? ` status--${runToken}` : ""}`}>
+              <span
+                className={`status${runToken && runToken !== "running" ? ` status--${runToken}` : ""}`}
+                title={
+                  run.status === "cancelled" && run.cancel_reason
+                    ? run.cancel_reason
+                    : undefined
+                }
+              >
                 <span className={`dot${runToken ? ` dot--${runToken}` : ""}`}></span>
-                {" "}{statusCopy(run.status)}
+                {" "}
+                {run.status === "cancelled"
+                  ? cancelledDisplayCopy(run.cancel_reason)
+                  : statusCopy(run.status)}
               </span>
             ) : null}
             {run && formatCostUsd(run.total_cost_usd) ? (
@@ -617,7 +788,33 @@ export function RunDetailPage({
               </span>
             ) : null}
             <span className="topbar__spacer"></span>
-            <button className="btn btn--primary" disabled={rerunning} onClick={() => void onRerunClick()}>
+            {run && canCancelRun(run.status) ? (
+              <button
+                type="button"
+                className="btn btn--sm"
+                disabled={cancelling || deleting || rerunning}
+                onClick={() => {
+                  clearCancelError();
+                  cancel();
+                }}
+              >
+                {cancelling ? "Cancelling…" : "Cancel"}
+              </button>
+            ) : null}
+            {run && canDeleteRun(run.status) ? (
+              <button
+                type="button"
+                className="btn btn--sm btn--reject"
+                disabled={cancelling || deleting || rerunning}
+                onClick={() => {
+                  clearDeleteError();
+                  removeRun();
+                }}
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            ) : null}
+            <button className="btn btn--primary" disabled={rerunning || cancelling || deleting} onClick={() => void onRerunClick()}>
               {rerunning
                 ? run?.status === "created"
                   ? "Starting…"
@@ -634,9 +831,27 @@ export function RunDetailPage({
             </div>
           ) : null}
 
+          {resumeError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {resumeError}
+            </div>
+          ) : null}
+
           {abandonError ? (
             <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
               {abandonError}
+            </div>
+          ) : null}
+
+          {cancelError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {cancelError}
+            </div>
+          ) : null}
+
+          {deleteError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {deleteError}
             </div>
           ) : null}
 
@@ -675,6 +890,8 @@ export function RunDetailPage({
               onDeselect={hideWorkspace}
               retryingStageIds={retryingStageIds}
               onRetryStage={retryAndSelect}
+              resumingStageIds={resumingStageIds}
+              onResumeStage={resumeAndSelect}
               abandoningStageId={abandoningStageId}
               onAbandonStage={abandon}
               runId={runId}
@@ -697,7 +914,7 @@ export function RunDetailPage({
               aria-label="Resize workspace"
               aria-valuemin={splitMin}
               aria-valuemax={splitMax}
-              aria-valuenow={Math.round(workHeight)}
+              aria-valuenow={Math.round(effectiveWorkHeight)}
               tabIndex={0}
               onPointerDown={(event) => {
                 if (event.button != null && event.button !== 0) return;
@@ -707,7 +924,7 @@ export function RunDetailPage({
                 splitGestureRef.current = {
                   id: event.pointerId,
                   y: event.clientY,
-                  h: workHeight,
+                  h: effectiveWorkHeight,
                 };
               }}
               onPointerMove={(event) => {
@@ -728,11 +945,11 @@ export function RunDetailPage({
               onKeyDown={(event) => {
                 if (event.key === "ArrowUp") {
                   event.preventDefault();
-                  applyWorkHeight(workHeight + WORK_ARROW_STEP);
+                  applyWorkHeight(effectiveWorkHeight + WORK_ARROW_STEP);
                 }
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  applyWorkHeight(workHeight - WORK_ARROW_STEP);
+                  applyWorkHeight(effectiveWorkHeight - WORK_ARROW_STEP);
                 }
                 if (event.key === "Home") {
                   event.preventDefault();
@@ -833,6 +1050,14 @@ export function RunDetailPage({
             setDrawerStageId(null);
             onOpenArtifact(path);
           }}
+        />
+      ) : null}
+
+      {watching && watchStage !== null && !liveViewGate ? (
+        <WatchBrowserPanel
+          runId={runId}
+          stageId={watchStage.stage_id}
+          onClose={() => setWatchStageId(null)}
         />
       ) : null}
     </>

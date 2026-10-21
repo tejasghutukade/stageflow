@@ -4,11 +4,7 @@ import {
   fetchProvidersDetect,
   type CredentialSource,
 } from "../api";
-import {
-  countConfigured,
-  isProviderAuthReady,
-  needsFirstRun,
-} from "./helpers";
+import { countConfigured, needsFirstRun } from "./helpers";
 
 export type ProviderAuthReadiness = {
   ready: boolean;
@@ -18,18 +14,6 @@ export type ProviderAuthReadiness = {
 
 export async function loadProviderAuthReadiness(): Promise<ProviderAuthReadiness> {
   const detect = await fetchProvidersDetect();
-  if (needsFirstRun(detect)) {
-    return {
-      ready: false,
-      message:
-        "Connect providers before starting a run. Choose an existing Pi login or add API keys in Stageflow.",
-    };
-  }
-  const credentialSource = detect.credentialSource;
-  if (credentialSource === "pi_home") {
-    return { ready: true, credentialSource };
-  }
-
   const listed = await fetchProviders();
   const statuses = await Promise.all(
     listed.providers.map(async (provider) => {
@@ -42,18 +26,23 @@ export async function loadProviderAuthReadiness(): Promise<ProviderAuthReadiness
     }),
   );
   const configuredCount = countConfigured(statuses);
-  if (
-    !isProviderAuthReady({
-      credentialSource,
-      configuredCount,
-    })
-  ) {
+  const credentialSource = detect.credentialSource;
+
+  if (needsFirstRun(detect, configuredCount)) {
+    if (credentialSource === undefined) {
+      return {
+        ready: false,
+        message:
+          "Connect providers before starting a run. Add API keys or OAuth in Stageflow, or set up Cursor (SDK) with CURSOR_API_KEY.",
+      };
+    }
     return {
       ready: false,
       credentialSource,
       message:
-        "Connect at least one provider API key in Settings → Providers (or #/connect) before starting a run.",
+        "Connect at least one model provider in Settings → Providers (Pi API key or OAuth, or Cursor SDK with CURSOR_API_KEY) before starting a run.",
     };
   }
+
   return { ready: true, credentialSource };
 }

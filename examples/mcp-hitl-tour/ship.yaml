@@ -1,0 +1,25 @@
+id: ship
+system_prompt: |
+  Ship the approved brief. Call write_stage_artifact with path ship.md
+  summarizing the final brief in a few sentences. Emit success with
+  artifacts [ship.md]. This stage is replay_safe: false — it runs only after
+  review continues.
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
+verify:
+  - id: ship-declared
+    type: artifact
+    basename: ship.md
+    when:
+      - emit
+  - id: ship-on-disk
+    type: artifact
+    path: ship.md
+    nonempty: true
+    when:
+      - after

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type Decision, type PendingPrompt } from "./api";
 import {
   emptyMultiDraft,
@@ -6,6 +6,8 @@ import {
   isMultiDraftReady,
 } from "./stageAnswer/answerRules";
 import { useOperatorAnswer } from "./stageAnswer/useOperatorAnswer";
+import { LiveView } from "./liveView/LiveView";
+import { liveViewHandoffUrl } from "./liveView/handoff";
 
 export function ReplyZone({
   runId,
@@ -31,6 +33,13 @@ export function ReplyZone({
     { promptId: prompt.id, kind: prompt.kind },
   );
 
+  const [askCount, setAskCount] = useState(0);
+  const wasSubmitting = useRef(false);
+  useEffect(() => {
+    if (wasSubmitting.current && !submitting) setAskCount((n) => n + 1);
+    wasSubmitting.current = submitting;
+  }, [submitting]);
+
   useEffect(() => {
     setText("");
     setOptionalText("");
@@ -55,17 +64,25 @@ export function ReplyZone({
     await submitIntent({ type: "multi", draft: multiDraft }, prompt);
   }
 
+  const liveViewUrl = liveViewHandoffUrl(prompt);
+
   const promptBody =
     prompt.kind === "multi_question"
       ? "Answer each question below."
       : prompt.message;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-3)" }}>
+    <div
+      className={`reply-zone${liveViewUrl !== null ? " reply-zone--liveview" : ""}`}
+      style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-3)" }}
+    >
       <div>
-        <h4 style={{ margin: "0 0 var(--spacing-1)", fontSize: "var(--font-size-base)", fontWeight: 600 }}>Operator reply</h4>
+        <h4 className="reply-zone__title" style={{ margin: "0 0 var(--spacing-1)", fontSize: "var(--font-size-base)", fontWeight: 600 }}>Operator reply</h4>
         <p className="muted" style={{ margin: 0, fontSize: "var(--font-size-sm)" }}>{promptBody}</p>
       </div>
+      {liveViewUrl !== null ? (
+        <LiveView handoffUrl={liveViewUrl} mode="control" reopenKey={`${prompt.id}:${askCount}`} />
+      ) : null}
       {error ? (
         <div className="gate" style={{ padding: "var(--spacing-3)", borderColor: "var(--color-border-red)", borderLeftColor: "var(--color-error)", background: "var(--color-background-red)", color: "var(--color-text-red)" }}>
           <p style={{ margin: 0, fontSize: "var(--font-size-sm)" }}>Could not submit answer: {error}</p>
@@ -104,16 +121,16 @@ export function ReplyZone({
               Review side by side
             </button>
           ) : null}
+          <div className="reply-zone__confirm">
           <textarea
-            className="select"
+            className="select reply-zone__notes"
             value={optionalText}
             onChange={(e) => setOptionalText(e.target.value)}
             rows={3}
             disabled={locked}
             placeholder="Optional notes"
-            style={{ minHeight: 62, resize: "vertical" }}
           ></textarea>
-          <div style={{ display: "flex", gap: "var(--spacing-2)" }}>
+          <div className="reply-zone__decide" style={{ display: "flex", gap: "var(--spacing-2)" }}>
             <button
               className="btn btn--accept"
               disabled={locked}
@@ -128,6 +145,7 @@ export function ReplyZone({
             >
               Reject
             </button>
+          </div>
           </div>
         </>
       ) : null}
