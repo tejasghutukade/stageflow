@@ -20,9 +20,9 @@ import {
   DEFAULT_LIMIT,
   engineCheck,
   EvalApiError,
-  findEvalOr404,
+  locateEval,
+  loadAggregatedEvalList,
   listEvalRunsPage,
-  loadEvalListItems,
   MAX_LIMIT,
   runByIdOr404,
   validateEvalText,
@@ -117,8 +117,11 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     z.object({ project_root: projectRootField }),
     async ({ project_root }) => {
       manager();
-      const projectRoot = await projectRootFor(project_root);
-      const { items } = await loadEvalListItems({ store, projectRoot });
+      const { items } = await loadAggregatedEvalList({
+        options: { store, bootCwd: cwd },
+        wire: project_root,
+        now: new Date(),
+      });
       return { items };
     },
   );
@@ -129,8 +132,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     z.object({ eval_id: z.string(), project_root: projectRootField }),
     async ({ eval_id, project_root }) => {
       manager();
-      const projectRoot = await projectRootFor(project_root);
-      const ref = await findEvalOr404(projectRoot, eval_id);
+      const { projectRoot, ref } = await locateEval({ store, bootCwd: cwd }, project_root, eval_id);
       return buildEvalDetail({ store, projectRoot, absPath: ref.absPath });
     },
   );
@@ -148,11 +150,12 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
       if ((eval_id === undefined) === (yaml === undefined)) {
         throw new EvalApiError(400, "invalid_request", "Provide exactly one of eval_id or yaml");
       }
-      const projectRoot = await projectRootFor(project_root);
+      const located = eval_id !== undefined ? await locateEval({ store, bootCwd: cwd }, project_root, eval_id) : undefined;
+      const projectRoot = located?.projectRoot ?? (await projectRootFor(project_root));
       let evalAbs: string;
       let derived: string;
-      if (eval_id !== undefined) {
-        evalAbs = (await findEvalOr404(projectRoot, eval_id)).absPath;
+      if (located !== undefined) {
+        evalAbs = located.ref.absPath;
         derived = await readFile(evalAbs, "utf8");
       } else {
         const manifest = await manifestForWrite(projectRoot);
@@ -185,8 +188,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     }),
     async (input) => {
       const evalRunManager = manager();
-      const projectRoot = await projectRootFor(input.project_root);
-      const ref = await findEvalOr404(projectRoot, input.eval_id);
+      const { projectRoot, ref } = await locateEval({ store, bootCwd: cwd }, input.project_root, input.eval_id);
       engineCheck((deps.evalEngineStatus ?? (() => promptfooEngineStatus({ home: globalStageflowHome() })))());
       const overrides: EvalOverrides = {};
       if (input.repeats !== undefined) overrides.repeats = input.repeats;

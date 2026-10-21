@@ -15,6 +15,7 @@ export type EvalResultStatus =
 export type EvalInterval = { low: number; high: number };
 
 export type EvalRunHeadline = {
+  project_root?: string;
   eval_run_id: string;
   eval_id: string;
   run_number: number;
@@ -30,6 +31,7 @@ export type EvalRunHeadline = {
 };
 
 export type EvalListItem = {
+  project_root?: string;
   id: string;
   name: string;
   description: string | null;
@@ -404,6 +406,7 @@ export type EvalEngineStatus = {
 export type EvalDatasetFormat = "jsonl" | "json" | "csv";
 
 export type EvalDatasetListItem = {
+  project_root?: string;
   id: string;
   path: string;
   format: EvalDatasetFormat | null;

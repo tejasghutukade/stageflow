@@ -7,6 +7,7 @@ import {
   resolveCatalogStartInput,
   resolveWritableCatalogRoot,
 } from "../config/catalogRelativePath.js";
+import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import { EvalsWriteError, FileChangedError, contentHash } from "../config/atomicWrite.js";
 import { casesFromRuns, listDatasetCandidates } from "../config/datasetCandidates.js";
 import { checkDatasetAgainstStage } from "../config/datasetStageCheck.js";
@@ -56,9 +57,13 @@ import {
   ENGINE_NAME,
   engineCheck as engineCheckStatus,
   EvalApiError,
-  findEvalOr404,
+  evalScopeRoots,
   listEvalRunsPage,
-  loadEvalListItems,
+  loadAggregatedEvalList,
+  locateDataset,
+  locateEval,
+  locateEvalRoot,
+  wireRootOf,
   MAX_LIMIT,
   planFindings as planFindingsShared,
   rel,
@@ -223,10 +228,24 @@ function listParam(url: URL, name: string): string[] | undefined {
 
 async function projectRootFor(c: Ctx, wire: string | undefined, write = false): Promise<string> {
   const options = { store: c.store, bootCwd: c.cwd };
-  const { wireRoot } = write
-    ? await resolveWritableCatalogRoot(options, wire)
-    : await resolveCatalogStartInput(options, wire);
-  return wireRoot.path;
+  if (write) return (await resolveWritableCatalogRoot(options, wire)).wireRoot.path;
+  if (wire === undefined) {
+    try {
+      return (await resolveCatalogStartInput(options, wire)).wireRoot.path;
+    } catch (err) {
+      if (!(err instanceof CatalogPathError)) throw err;
+      return (await resolveWritableCatalogRoot(options)).wireRoot.path;
+    }
+  }
+  return (await resolveCatalogStartInput(options, wire)).wireRoot.path;
+}
+
+function rootOptions(c: Ctx) {
+  return { store: c.store, bootCwd: c.cwd };
+}
+
+async function evalRootFor(c: Ctx, wire: string | undefined, id: string, write = false) {
+  return locateEval(rootOptions(c), wire, id, write);
 }
 
 function wireFromQuery(c: Ctx): string | undefined {
@@ -292,28 +311,28 @@ function targetLabelFilter(items: EvalListItem[], projectRoot: string, url: URL)
 }
 
 async function handleEvalList(c: Ctx): Promise<void> {
-  const projectRoot = await projectRootFor(c, wireFromQuery(c));
-  const { items, banner, manifest } = await loadEvalListItems({
-    store: c.store,
-    projectRoot,
+  const aggregated = await loadAggregatedEvalList({
+    options: rootOptions(c),
+    wire: wireFromQuery(c),
+    now: c.now?.() ?? new Date(),
     ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
   });
   const q = c.url.searchParams.get("q")?.trim().toLowerCase();
-  const filtered = targetLabelFilter(items, projectRoot, c.url).filter((item) => {
-    if (q === undefined || q === "") return true;
-    const dataset = path.basename(item.dataset_path).replace(/\.dataset\.(jsonl|json|csv)$/, "");
-    return [item.id, item.name, item.target.stage_id ?? "", dataset].some((v) => v.toLowerCase().includes(q));
-  });
-  const datasetFiles = await listDatasetFiles(manifest);
-  const now = c.now?.() ?? new Date();
+  const filtered = aggregated.groups
+    .flatMap((g) => targetLabelFilter(g.items, g.root.path, c.url))
+    .filter((item) => {
+      if (q === undefined || q === "") return true;
+      const dataset = path.basename(item.dataset_path).replace(/\.dataset\.(jsonl|json|csv)$/, "");
+      return [item.id, item.name, item.target.stage_id ?? "", dataset].some((v) => v.toLowerCase().includes(q));
+    });
   c.json(c.res, 200, {
     items: filtered,
     next_cursor: null,
-    banner,
+    banner: aggregated.banner,
     footer: {
-      evals: items.length,
-      datasets: datasetFiles.length,
-      cost_last_7_days: await costLastSevenDays(c.store, projectRoot, now),
+      evals: aggregated.items.length,
+      datasets: aggregated.datasets,
+      cost_last_7_days: aggregated.cost,
     },
   });
 }
@@ -398,8 +417,7 @@ async function handleEvalCreate(c: Ctx): Promise<void> {
 }
 
 async function handleEvalGet(c: Ctx, id: string): Promise<void> {
-  const projectRoot = await projectRootFor(c, wireFromQuery(c));
-  const ref = await findEvalOr404(projectRoot, id);
+  const { projectRoot, ref } = await evalRootFor(c, wireFromQuery(c), id);
   c.json(c.res, 200, await evalDetail(c, projectRoot, ref.absPath));
 }
 
@@ -408,8 +426,7 @@ async function handleEvalUpdate(c: Ctx, id: string): Promise<void> {
   const input = parseDefinitionOrYaml(body);
   const baseHash = body.base_hash;
   if (typeof baseHash !== "string" || baseHash === "") throw bad(`"base_hash" is required`);
-  const projectRoot = await projectRootFor(c, wireFromBody(body), true);
-  const ref = await findEvalOr404(projectRoot, id);
+  const { projectRoot, ref } = await evalRootFor(c, wireFromBody(body), id, true);
   const current = await readFile(ref.absPath);
   const currentHash = contentHash(current);
   if (currentHash !== baseHash) throw new FileChangedError(currentHash);
@@ -504,13 +521,14 @@ async function handleTry(c: Ctx): Promise<void> {
   const caseId = optString(body, "case_id");
   const hasCase = body.case !== undefined;
   if ((caseId === undefined) === !hasCase) throw bad("Provide exactly one of case_id or case");
-  const projectRoot = await projectRootFor(c, wireFromBody(body));
+  const located = evalId !== undefined ? await evalRootFor(c, wireFromBody(body), evalId) : undefined;
+  const projectRoot = located?.projectRoot ?? (await projectRootFor(c, wireFromBody(body)));
   const manifest = await manifestForWrite(projectRoot);
 
   let evalPath: string;
   let definition: EvalFile | undefined;
-  if (evalId !== undefined) {
-    evalPath = (await findEvalOr404(projectRoot, evalId)).absPath;
+  if (located !== undefined) {
+    evalPath = located.ref.absPath;
   } else {
     if (!isRecord(body.definition)) throw bad(`"definition" must be an object`);
     definition = body.definition as unknown as EvalFile;
@@ -598,8 +616,7 @@ async function handleRunStart(c: Ctx, id: string): Promise<void> {
   if (typeof startedVia !== "string" || !(EVAL_STARTED_VIA as readonly string[]).includes(startedVia)) {
     throw bad(`"started_via" must be one of ${EVAL_STARTED_VIA.join(", ")}`);
   }
-  const projectRoot = await projectRootFor(c, wireFromBody(body));
-  const ref = await findEvalOr404(projectRoot, id);
+  const { projectRoot, ref } = await evalRootFor(c, wireFromBody(body), id);
   engineCheck(c);
   try {
     const started = await c.evalRunManager.start({
@@ -635,8 +652,7 @@ async function recentStageCosts(c: Ctx, target: { pipelinePath?: string; stageId
 }
 
 async function handleRunEstimate(c: Ctx, id: string): Promise<void> {
-  const projectRoot = await projectRootFor(c, wireFromQuery(c));
-  const ref = await findEvalOr404(projectRoot, id);
+  const { projectRoot, ref } = await evalRootFor(c, wireFromQuery(c), id);
   const overrides = queryOverrides(c.url);
   const built = await buildEvalPlan({
     projectRoot,
@@ -693,15 +709,26 @@ async function runDetailResponse(c: Ctx, row: EvalRunRow) {
 }
 
 async function handleRunByNumber(c: Ctx, id: string, runNumber: number): Promise<void> {
-  const projectRoot = await projectRootFor(c, wireFromQuery(c));
-  const row = await c.store.getEvalRunByNumber(projectRoot, id, runNumber);
-  if (row === null) throw new EvalApiError(404, "EVAL_RUN_NOT_FOUND", `Eval run not found: ${id} #${runNumber}`);
-  c.json(c.res, 200, await runDetailResponse(c, row));
+  const notFound = () => new EvalApiError(404, "EVAL_RUN_NOT_FOUND", `Eval run not found: ${id} #${runNumber}`);
+  const wire = wireFromQuery(c);
+  const found: Array<{ root: CatalogRoot; row: EvalRunRow }> = [];
+  for (const root of await evalScopeRoots(rootOptions(c), wire)) {
+    const row = await c.store.getEvalRunByNumber(root.path, id, runNumber);
+    if (row !== null) found.push({ root, row });
+  }
+  if (found.length > 1) {
+    throw new EvalApiError(409, "EVAL_AMBIGUOUS", `Eval "${id}" exists in more than one project; pass project_root`, {
+      project_roots: found.map((f) => f.root.project_root),
+    });
+  }
+  if (found[0] === undefined) throw notFound();
+  c.json(c.res, 200, await runDetailResponse(c, found[0].row));
 }
 
 async function handleRunList(c: Ctx): Promise<void> {
   const wire = wireFromQuery(c);
   const projectRoot = wire !== undefined ? await projectRootFor(c, wire) : undefined;
+  const wireRootOfPath = await wireRootOf(rootOptions(c));
   const evalId = c.url.searchParams.get("eval_id") ?? undefined;
   const status = c.url.searchParams.get("status") ?? undefined;
   const stageRunId = c.url.searchParams.get("stage_run_id") ?? undefined;
@@ -712,6 +739,7 @@ async function handleRunList(c: Ctx): Promise<void> {
     200,
     await listEvalRunsPage(c.store, {
       ...(projectRoot !== undefined ? { projectRoot } : {}),
+      wireRootOf: wireRootOfPath,
       ...(evalId !== undefined ? { evalId } : {}),
       ...(status !== undefined ? { status } : {}),
       ...(stageRunId !== undefined ? { stageRunId } : {}),
@@ -783,8 +811,8 @@ async function handleReviewPut(c: Ctx, id: string, caseId: string, repeat: numbe
 }
 
 async function handleFailureTypes(c: Ctx, id: string): Promise<void> {
-  const projectRoot = await projectRootFor(c, wireFromQuery(c));
-  c.json(c.res, 200, { items: await c.store.listFailureTypes(projectRoot, id), next_cursor: null });
+  const root = await locateEvalRoot(rootOptions(c), wireFromQuery(c), id);
+  c.json(c.res, 200, { items: await c.store.listFailureTypes(root.path, id), next_cursor: null });
 }
 
 async function handleCancel(c: Ctx, id: string): Promise<void> {
@@ -861,23 +889,25 @@ async function loadEvalUses(projectRoot: string): Promise<{ uses: Map<string, Ev
 }
 
 async function handleDatasetList(c: Ctx): Promise<void> {
-  const projectRoot = await projectRootFor(c, wireFromQuery(c));
-  const manifest = await manifestForWrite(projectRoot);
-  const { uses } = await loadEvalUses(projectRoot);
-  const files = await listDatasetFiles(manifest);
   const items: DatasetListItem[] = [];
-  for (const file of files) {
-    const loaded = await loadDatasetFile(file.absPath, { root: projectRoot });
-    items.push({
-      id: datasetStem(path.basename(file.absPath)),
-      path: file.relPath,
-      format: loaded.format ?? null,
-      cases: loaded.cases.length,
-      hash: loaded.contentHash,
-      editable: loaded.format === "jsonl",
-      used_by: (uses.get(path.resolve(file.absPath)) ?? []).map((u) => u.id),
-      findings_count: loaded.findings.length,
-    });
+  for (const root of await evalScopeRoots(rootOptions(c), wireFromQuery(c))) {
+    const projectRoot = root.path;
+    const manifest = await manifestForWrite(projectRoot);
+    const { uses } = await loadEvalUses(projectRoot);
+    for (const file of await listDatasetFiles(manifest)) {
+      const loaded = await loadDatasetFile(file.absPath, { root: projectRoot });
+      items.push({
+        project_root: root.project_root,
+        id: datasetStem(path.basename(file.absPath)),
+        path: file.relPath,
+        format: loaded.format ?? null,
+        cases: loaded.cases.length,
+        hash: loaded.contentHash,
+        editable: loaded.format === "jsonl",
+        used_by: (uses.get(path.resolve(file.absPath)) ?? []).map((u) => u.id),
+        findings_count: loaded.findings.length,
+      });
+    }
   }
   c.json(c.res, 200, { items, next_cursor: null });
 }
@@ -928,17 +958,10 @@ function datasetQuery(url: URL): { offset: number; limit: number; tag?: string; 
   };
 }
 
-async function findDatasetOr404(projectRoot: string, id: string) {
-  const ref = await findDatasetFile(projectRoot, id);
-  if (ref === undefined) throw new EvalApiError(404, "DATASET_NOT_FOUND", `Dataset not found: ${id}`);
-  return ref;
-}
-
 async function handleDatasetGet(c: Ctx, id: string): Promise<void> {
-  const projectRoot = await projectRootFor(c, wireFromQuery(c));
-  const ref = await findDatasetOr404(projectRoot, id);
+  const { projectRoot, ref } = await locateDataset(rootOptions(c), wireFromQuery(c), id, { write: false, missing: "throw" });
   const evalId = c.url.searchParams.get("eval_id") ?? undefined;
-  c.json(c.res, 200, await datasetDetailFor(c, projectRoot, id, ref.absPath, evalId, datasetQuery(c.url)));
+  c.json(c.res, 200, await datasetDetailFor(c, projectRoot, id, (ref as NonNullable<typeof ref>).absPath, evalId, datasetQuery(c.url)));
 }
 
 function targetFrom(value: unknown): DatasetTarget {
@@ -1001,7 +1024,10 @@ async function sampleCases(c: Ctx): Promise<DatasetCase[]> {
 
 async function handleDatasetCreate(c: Ctx): Promise<void> {
   const body = await readBody(c);
-  const projectRoot = await projectRootFor(c, wireFromBody(body), true);
+  const projectRoot =
+    typeof body.dataset_id === "string" && body.dataset_id !== ""
+      ? (await locateDataset(rootOptions(c), wireFromBody(body), body.dataset_id, { write: true, missing: "default" })).projectRoot
+      : await projectRootFor(c, wireFromBody(body), true);
   const directory = optString(body, "directory");
   let absPath: string;
   let id: string;
@@ -1073,7 +1099,7 @@ async function handleDatasetPatch(c: Ctx, id: string): Promise<void> {
   if (!Array.isArray(body.ops) || body.ops.some((op) => !isRecord(op) || !CASE_OPS.has(String(op.op)))) {
     throw bad(`"ops" must be an array of add, update, delete or set_tags operations`);
   }
-  const projectRoot = await projectRootFor(c, wireFromBody(body), true);
+  const { projectRoot } = await locateDataset(rootOptions(c), wireFromBody(body), id, { write: true, missing: "default" });
   const written = await applyCaseOps({
     projectRoot,
     id,
@@ -1087,7 +1113,7 @@ async function handleDatasetPatch(c: Ctx, id: string): Promise<void> {
 async function handleDatasetConvert(c: Ctx, id: string): Promise<void> {
   const body = await readBody(c);
   if (typeof body.base_hash !== "string" || body.base_hash === "") throw bad(`"base_hash" is required`);
-  const projectRoot = await projectRootFor(c, wireFromBody(body), true);
+  const { projectRoot } = await locateDataset(rootOptions(c), wireFromBody(body), id, { write: true, missing: "default" });
   const written = await convertDatasetToJsonl({ projectRoot, id, baseHash: body.base_hash });
   audit(c, "dataset_write", "ok");
   c.json(c.res, 201, await datasetDetailFor(c, projectRoot, id, written.path, undefined, { offset: 0, limit: MAX_LIMIT, filter: "all" }));

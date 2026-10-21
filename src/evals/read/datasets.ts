@@ -20,6 +20,7 @@ export type InputField = { name: string; required: boolean };
 export type DatasetTarget = { pipeline_path?: string; stage_id?: string; file?: string };
 
 export type DatasetListItem = {
+  project_root: string;
   id: string;
   path: string;
   format: DatasetFormat | null;

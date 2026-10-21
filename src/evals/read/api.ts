@@ -1,9 +1,18 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { contentHash } from "../../config/atomicWrite.js";
-import { loadEvalCatalog } from "../../config/evalCatalog.js";
+import {
+  resolveDefaultWriteRoot,
+  resolveCatalogStartInput,
+} from "../../config/catalogRelativePath.js";
+import { listDatasetFiles, loadEvalCatalog } from "../../config/evalCatalog.js";
+import {
+  resolveCatalogRoots,
+  type CatalogRoot,
+  type ResolveCatalogRootsOptions,
+} from "../../config/resolveCatalogRoots.js";
 import { loadDatasetFile } from "../../config/loadDataset.js";
-import { evalStem, findEvalFile, manifestForWrite } from "../../config/evalWriteRoots.js";
+import { evalStem, findDatasetFile, findEvalFile, manifestForWrite } from "../../config/evalWriteRoots.js";
 import { parseEvalOutcome, resolveEvalPaths, type LoadedEval } from "../../config/loadEval.js";
 import type { ValidationFinding } from "../../config/validateCatalog.js";
 import { evalFindingsFromIssues } from "../../config/validateEval.js";
@@ -12,9 +21,10 @@ import { EVAL_RUN_STATUSES } from "../constants.js";
 import type { EngineStatus } from "../engine/promptfoo/status.js";
 import { PINNED_PROMPTFOO_VERSION } from "../engine/promptfoo/pinned.js";
 import { buildEvalPlan } from "../plan.js";
-import { buildEvalListItems } from "./list.js";
+import { buildEvalListItems, costLastSevenDays, type EvalListItem } from "./list.js";
 import { resultKey } from "../statsTypes.js";
 import type { EvalRunRow } from "../storeTypes.js";
+import { regressionBanner, type BannerEvalInput } from "../listStatus.js";
 import { buildResultRows, RESULT_ROW_STATUSES, type ResultRowStatus } from "./results.js";
 import { completedRunsNewestFirst, resultToWire, runHeadline } from "./runs.js";
 
@@ -169,6 +179,7 @@ export async function listEvalRunsPage(
   store: RunStore,
   input: {
     projectRoot?: string;
+    wireRootOf?: (projectRoot: string) => string;
     evalId?: string;
     status?: string;
     stageRunId?: string;
@@ -196,7 +207,10 @@ export async function listEvalRunsPage(
   }
   const items = await Promise.all(
     page.items.map(async (row) => {
-      const headline = runHeadline(row);
+      const headline = {
+        ...runHeadline(row),
+        project_root: input.wireRootOf?.(row.projectRoot) ?? row.projectRoot,
+      };
       if (stageRunId === undefined) return headline;
       const match = (await store.listEvalResults(row.evalRunId)).find((r) => r.stageRunId === stageRunId);
       return {
@@ -272,8 +286,14 @@ async function exists(abs: string): Promise<boolean> {
   }
 }
 
-export async function loadEvalListItems(input: { store: RunStore; projectRoot: string; isKnownModel?: IsKnownModel }) {
+export async function loadEvalListItems(input: {
+  store: RunStore;
+  projectRoot: string;
+  wireRoot?: string;
+  isKnownModel?: IsKnownModel;
+}) {
   const { store, projectRoot } = input;
+  const wireRoot = input.wireRoot ?? projectRoot;
   const manifest = await manifestForWrite(projectRoot);
   const counts = new Map<string, number>();
   const entries = await loadEvalCatalog(manifest, {
@@ -286,11 +306,137 @@ export async function loadEvalListItems(input: { store: RunStore; projectRoot: s
       return report;
     },
   });
-  const { items, banner } = await buildEvalListItems({
+  const built = await buildEvalListItems({
     store,
     projectRoot,
     entries,
     datasetCases: (abs) => counts.get(abs) ?? 0,
   });
-  return { items, banner, manifest };
+  const items: EvalListItem[] = built.items.map((item) => ({ ...item, project_root: wireRoot }));
+  return { items, banner: built.banner, bannerInputs: built.bannerInputs, manifest };
+}
+
+export type RootsOptions = ResolveCatalogRootsOptions;
+
+export async function evalScopeRoots(options: RootsOptions, wire: string | undefined): Promise<CatalogRoot[]> {
+  if (wire !== undefined) return [(await resolveCatalogStartInput(options, wire)).wireRoot];
+  const roots = await resolveCatalogRoots(options);
+  return roots.filter((r) => !r.read_only && r.available !== false);
+}
+
+export async function wireRootOf(options: RootsOptions): Promise<(projectRoot: string) => string> {
+  const roots = await resolveCatalogRoots(options);
+  return (projectRoot) => roots.find((r) => r.path === projectRoot)?.project_root ?? projectRoot;
+}
+
+export async function loadAggregatedEvalList(input: {
+  options: RootsOptions;
+  wire: string | undefined;
+  now: Date;
+  isKnownModel?: IsKnownModel;
+}) {
+  const roots = await evalScopeRoots(input.options, input.wire);
+  const groups: Array<{ root: CatalogRoot; items: EvalListItem[] }> = [];
+  const bannerInputs: BannerEvalInput[] = [];
+  let datasets = 0;
+  let cost = 0;
+  for (const root of roots) {
+    const loaded = await loadEvalListItems({
+      store: input.options.store,
+      projectRoot: root.path,
+      wireRoot: root.project_root,
+      ...(input.isKnownModel ? { isKnownModel: input.isKnownModel } : {}),
+    });
+    groups.push({ root, items: loaded.items });
+    bannerInputs.push(...loaded.bannerInputs);
+    datasets += (await listDatasetFiles(loaded.manifest)).length;
+    cost += await costLastSevenDays(input.options.store, root.path, input.now);
+  }
+  return {
+    groups,
+    items: groups.flatMap((g) => g.items),
+    banner: regressionBanner(bannerInputs),
+    datasets,
+    cost,
+  };
+}
+
+function ambiguous(code: string, noun: string, id: string, roots: string[]): EvalApiError {
+  return new EvalApiError(
+    409,
+    code,
+    `${noun} "${id}" exists in more than one project; pass project_root`,
+    { project_roots: roots },
+  );
+}
+
+async function locate<T>(
+  options: RootsOptions,
+  wire: string | undefined,
+  write: boolean,
+  find: (projectRoot: string) => Promise<T | undefined>,
+  fail: { ambiguousCode: string; notFoundCode: string; noun: string; id: string },
+  missing: "throw" | "default",
+): Promise<{ root: CatalogRoot; ref: T | undefined }> {
+  const notFound = () => new EvalApiError(404, fail.notFoundCode, `${fail.noun} not found: ${fail.id}`);
+  if (wire !== undefined) {
+    const root = write
+      ? (await resolveDefaultWriteRoot(options, wire)).wireRoot
+      : (await resolveCatalogStartInput(options, wire)).wireRoot;
+    const ref = await find(root.path);
+    if (ref === undefined && missing === "throw") throw notFound();
+    return { root, ref };
+  }
+  const matches: Array<{ root: CatalogRoot; ref: T }> = [];
+  for (const root of await evalScopeRoots(options, undefined)) {
+    const ref = await find(root.path);
+    if (ref !== undefined) matches.push({ root, ref });
+  }
+  if (matches.length > 1) {
+    throw ambiguous(fail.ambiguousCode, fail.noun, fail.id, matches.map((m) => m.root.project_root));
+  }
+  if (matches[0] !== undefined) return matches[0];
+  if (missing === "throw") throw notFound();
+  return { root: (await resolveDefaultWriteRoot(options)).wireRoot, ref: undefined };
+}
+
+export async function locateEval(options: RootsOptions, wire: string | undefined, id: string, write = false) {
+  const { root, ref } = await locate(
+    options,
+    wire,
+    write,
+    (projectRoot) => findEvalFile(projectRoot, id),
+    { ambiguousCode: "EVAL_AMBIGUOUS", notFoundCode: "EVAL_NOT_FOUND", noun: "Eval", id },
+    "throw",
+  );
+  return { root, projectRoot: root.path, ref: ref as NonNullable<typeof ref> };
+}
+
+export async function locateEvalRoot(options: RootsOptions, wire: string | undefined, id: string) {
+  const { root } = await locate(
+    options,
+    wire,
+    false,
+    (projectRoot) => findEvalFile(projectRoot, id),
+    { ambiguousCode: "EVAL_AMBIGUOUS", notFoundCode: "EVAL_NOT_FOUND", noun: "Eval", id },
+    "default",
+  );
+  return root;
+}
+
+export async function locateDataset(
+  options: RootsOptions,
+  wire: string | undefined,
+  id: string,
+  opts: { write: boolean; missing: "throw" | "default" },
+) {
+  const { root, ref } = await locate(
+    options,
+    wire,
+    opts.write,
+    (projectRoot) => findDatasetFile(projectRoot, id),
+    { ambiguousCode: "DATASET_AMBIGUOUS", notFoundCode: "DATASET_NOT_FOUND", noun: "Dataset", id },
+    opts.missing,
+  );
+  return { root, projectRoot: root.path, ref };
 }

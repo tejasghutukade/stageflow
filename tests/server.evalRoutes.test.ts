@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -414,6 +414,75 @@ describe("eval routes: evals", () => {
     const again = await h.post("/api/evals/sample", { project_root: h.root });
     expect(again.status).toBe(409);
     expect(again.body.code).toBe("SAMPLE_EXISTS");
+  });
+
+  describe("without project_root", () => {
+    it("lists a sample installed to the workspace root", async () => {
+      const h = await setup();
+      const real = await realpath(h.root);
+      const before = await h.get("/api/evals");
+      expect(before.body.items.map((i: any) => i.id)).toEqual(["review"]);
+      expect(before.body.items[0].project_root).toBe(real);
+      const installed = await h.post("/api/evals/sample", {});
+      expect(installed.status).toBe(201);
+      const list = await h.get("/api/evals");
+      expect(list.body.items.map((i: any) => i.id).sort()).toEqual(["critique-sample", "review"]);
+      const sample = list.body.items.find((i: any) => i.id === "critique-sample");
+      expect(sample.project_root).toBe("workspace");
+      expect(list.body.footer.evals).toBe(2);
+      const detail = await h.get("/api/evals/critique-sample");
+      expect(detail.status).toBe(200);
+      expect(detail.body.id).toBe("critique-sample");
+      const datasets = await h.get("/api/datasets");
+      expect(datasets.body.items.map((i: any) => `${i.project_root}:${i.id}`).sort()).toEqual([
+        `workspace:critique-sample`,
+        `${real}:review`,
+      ].sort());
+      const scoped = await h.get(`/api/evals?project_root=${encodeURIComponent(h.root)}`);
+      expect(scoped.body.items.map((i: any) => i.id)).toEqual(["review"]);
+      expect(scoped.body.footer.evals).toBe(1);
+    });
+
+    it("answers EVAL_AMBIGUOUS with project_roots and scopes with an explicit project_root", async () => {
+      const h = await setup();
+      const real = await realpath(h.root);
+      await h.post("/api/evals/sample", {});
+      const ws = (await h.get("/api/evals")).body.items.find((i: any) => i.id === "critique-sample");
+      expect(ws.project_root).toBe("workspace");
+      const dup = await readFile(path.join(h.root, "evals", "review.eval.yaml"), "utf8");
+      await writeFile(path.join(h.root, "evals", "critique-sample.eval.yaml"), dup.replace("id: review", "id: critique-sample"));
+
+      const ambiguous = await h.get("/api/evals/critique-sample");
+      expect(ambiguous.status).toBe(409);
+      expect(ambiguous.body.code).toBe("EVAL_AMBIGUOUS");
+      expect([...ambiguous.body.project_roots].sort()).toEqual(["workspace", real].sort());
+      expect((await h.get("/api/evals/critique-sample/runs/estimate")).body.code).toBe("EVAL_AMBIGUOUS");
+
+      const scoped = await h.get(`/api/evals/critique-sample?project_root=${encodeURIComponent("workspace")}`);
+      expect(scoped.status).toBe(200);
+      const other = await h.get(`/api/evals/critique-sample?project_root=${encodeURIComponent(h.root)}`);
+      expect(other.status).toBe(200);
+      expect(other.body.path).toBe("evals/critique-sample.eval.yaml");
+
+      const missing = await h.get("/api/evals/nope");
+      expect(missing.status).toBe(404);
+      expect(missing.body.code).toBe("EVAL_NOT_FOUND");
+    });
+
+    it("finds an eval in a registered root for id routes and flags ambiguous datasets", async () => {
+      const h = await setup();
+      const real = await realpath(h.root);
+      const detail = await h.get("/api/evals/review");
+      expect(detail.status).toBe(200);
+      await h.post("/api/evals/sample", {});
+      const wsPath = (await h.get("/api/evals")).body.items.find((i: any) => i.id === "critique-sample").path;
+      expect(wsPath).toContain("critique-sample");
+      const ds = await h.get("/api/datasets/review");
+      expect(ds.status).toBe(200);
+      const none = await h.get("/api/datasets/zzz");
+      expect(none.status).toBe(404);
+      expect(none.body.code).toBe("DATASET_NOT_FOUND");
+    });
   });
 
   it("tries one case from an eval, an unsaved definition with an inline case, and refuses while a run is active", async () => {

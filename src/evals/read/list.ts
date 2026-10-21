@@ -20,6 +20,7 @@ import {
 } from "./runs.js";
 
 export type EvalListItem = {
+  project_root?: string;
   id: string;
   name: string;
   description: string | null;
@@ -71,7 +72,7 @@ export async function buildEvalListItems(input: {
   projectRoot: string;
   entries: readonly EvalCatalogEntry[];
   datasetCases: (absPath: string) => number;
-}): Promise<{ items: EvalListItem[]; banner: RegressionBanner | null }> {
+}): Promise<{ items: EvalListItem[]; banner: RegressionBanner | null; bannerInputs: BannerEvalInput[] }> {
   const { store, projectRoot } = input;
   const items: EvalListItem[] = [];
   const bannerInputs: BannerEvalInput[] = [];
@@ -163,7 +164,7 @@ export async function buildEvalListItems(input: {
         })),
     });
   }
-  return { items, banner: regressionBanner(bannerInputs) };
+  return { items, banner: regressionBanner(bannerInputs), bannerInputs };
 }
 
 export async function costLastSevenDays(
