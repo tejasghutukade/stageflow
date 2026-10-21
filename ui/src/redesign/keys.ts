@@ -11,6 +11,7 @@ export type HotkeyScope =
   | "pipelines"
   | "workshop"
   | "triggers"
+  | "evals"
   | "catalog";
 
 export type HotkeyDef = {
@@ -30,6 +31,7 @@ const SCOPE_ORDER: HotkeyScope[] = [
   "pipelines",
   "workshop",
   "triggers",
+  "evals",
   "catalog",
   "inbox",
   "global",

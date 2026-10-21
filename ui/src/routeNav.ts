@@ -4,6 +4,7 @@ import type { AgentsScreen } from "./redesign/agents/AgentsRedesign";
 type RouteName = Route["name"];
 
 const AGENTS = "agents";
+const EVALS = "evals";
 
 /** Rail item lit for a route whose name is not its rail id. */
 const RAIL_ID: Partial<Record<RouteName, string>> = {
@@ -21,6 +22,15 @@ const RAIL_ID: Partial<Record<RouteName, string>> = {
   agent: AGENTS,
   agentSession: AGENTS,
   agentRun: AGENTS,
+  evals: EVALS,
+  evalNew: EVALS,
+  evalDetail: EVALS,
+  evalEdit: EVALS,
+  evalRun: EVALS,
+  evalCase: EVALS,
+  evalCompare: EVALS,
+  datasets: EVALS,
+  datasetDetail: EVALS,
 };
 
 /** With the redesign on, skills and extensions all live under Catalog. */

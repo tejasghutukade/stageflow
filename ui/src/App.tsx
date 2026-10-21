@@ -14,6 +14,8 @@ import { RunsPage } from "./pages/RunsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { NewRunPage } from "./pages/NewRunPage";
 import { InboxPage } from "./pages/InboxPage";
+import { EvalsComingSoon } from "./redesign/evals/EvalsComingSoon";
+import { EvalsRedesign } from "./redesign/evals/EvalsRedesign";
 import { OverviewRedesign } from "./redesign/overview/OverviewRedesign";
 import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
@@ -201,6 +203,19 @@ function ConsoleRoot() {
     content = <TasksPage taskId={route.taskId} onNew={go} />;
   } else if (route.name === "triggers") {
     content = <TriggersPage />;
+  } else if (route.name === "evals") {
+    content = <EvalsRedesign stage={route.stage} />;
+  } else if (
+    route.name === "evalNew" ||
+    route.name === "evalDetail" ||
+    route.name === "evalEdit" ||
+    route.name === "evalRun" ||
+    route.name === "evalCase" ||
+    route.name === "evalCompare" ||
+    route.name === "datasets" ||
+    route.name === "datasetDetail"
+  ) {
+    content = <EvalsComingSoon title={route.name === "datasets" || route.name === "datasetDetail" ? "Datasets" : "Evals"} />;
   } else if (route.name === "connections") {
     content = <ConnectionsPage />;
   } else if (route.name === "connection") {

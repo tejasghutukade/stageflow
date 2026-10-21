@@ -20,6 +20,21 @@ describe("railActiveId", () => {
     for (const [route, id] of cases) expect(railActiveId(route, true)).toBe(id);
   });
 
+  it("keeps every eval and dataset route under Evals", () => {
+    const routes: Route[] = [
+      { name: "evals" },
+      { name: "evalNew" },
+      { name: "evalDetail", evalId: "e" },
+      { name: "evalEdit", evalId: "e" },
+      { name: "evalRun", evalId: "e", runNumber: 1 },
+      { name: "evalCase", evalId: "e", runNumber: 1, caseId: "c" },
+      { name: "evalCompare", evalId: "e" },
+      { name: "datasets" },
+      { name: "datasetDetail", datasetId: "d" },
+    ];
+    for (const route of routes) expect(railActiveId(route, true)).toBe("evals");
+  });
+
   it("keeps every agent route under Agents, create included", () => {
     const routes: Route[] = [
       { name: "agents" },

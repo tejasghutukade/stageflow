@@ -7,6 +7,15 @@ import {
   agentSessionsPath,
   agentsPath,
   catalogPath,
+  datasetPath,
+  datasetsPath,
+  evalCasePath,
+  evalComparePath,
+  evalEditPath,
+  evalNewPath,
+  evalPath,
+  evalRunPath,
+  evalsPath,
   extensionFilePath,
   extensionPackagePath,
   inboxPath,
@@ -285,3 +294,44 @@ describe("run stage hash", () => {
   });
 });
 
+
+describe("eval routes", () => {
+  it("round-trips every route through its builder and parser", () => {
+    const cases: Array<[string, unknown]> = [
+      [evalsPath(), { name: "evals" }],
+      [evalsPath({ stage: "triage" }), { name: "evals", stage: "triage" }],
+      [evalNewPath(), { name: "evalNew" }],
+      [
+        evalNewPath({ pipeline: "p/a b.pipeline.yaml", stage: "review" }),
+        { name: "evalNew", pipeline: "p/a b.pipeline.yaml", stage: "review" },
+      ],
+      [evalNewPath({ file: "stages/x.yaml" }), { name: "evalNew", file: "stages/x.yaml" }],
+      [evalPath("review-findings"), { name: "evalDetail", evalId: "review-findings" }],
+      [evalEditPath("review-findings"), { name: "evalEdit", evalId: "review-findings" }],
+      [evalRunPath("e", 14), { name: "evalRun", evalId: "e", runNumber: 14 }],
+      [evalRunPath("e", 14, { tab: "graders" }), { name: "evalRun", evalId: "e", runNumber: 14, tab: "graders" }],
+      [evalCasePath("e", 14, "c001"), { name: "evalCase", evalId: "e", runNumber: 14, caseId: "c001" }],
+      [
+        evalCasePath("e", 14, "c 1", { repeat: 0 }),
+        { name: "evalCase", evalId: "e", runNumber: 14, caseId: "c 1", repeat: 0 },
+      ],
+      [evalComparePath("e"), { name: "evalCompare", evalId: "e" }],
+      [evalComparePath("e", { a: 13, b: 14 }), { name: "evalCompare", evalId: "e", a: 13, b: 14 }],
+      [datasetsPath(), { name: "datasets" }],
+      [datasetPath("d1"), { name: "datasetDetail", datasetId: "d1" }],
+      [datasetPath("d1", { eval: "e" }), { name: "datasetDetail", datasetId: "d1", evalId: "e" }],
+    ];
+    for (const [path, route] of cases) expect(parseHash(`#${path}`)).toEqual(route);
+  });
+
+  it("reads new before an eval id and ignores bad tabs and numbers", () => {
+    expect(parseHash("#/evals/new")).toEqual({ name: "evalNew" });
+    expect(parseHash("#/evals/e/runs/3?tab=nope")).toEqual({ name: "evalRun", evalId: "e", runNumber: 3 });
+    expect(parseHash("#/evals/e/compare?a=x&b=0")).toEqual({ name: "evalCompare", evalId: "e" });
+  });
+
+  it("falls back to inbox for malformed eval paths", () => {
+    expect(parseHash("#/evals/e/runs/zero")).toEqual({ name: "inbox" });
+    expect(parseHash("#/evals/e/unknown")).toEqual({ name: "inbox" });
+  });
+});
