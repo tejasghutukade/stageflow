@@ -18,7 +18,7 @@ graders:
   - id: output-schema
     type: schema
     must_pass: true
-  - id: issues-have-severity
+  - id: valid-verdict
     type: field
     checks:
-      - { path: "payload.issues[*].severity", op: in, value: [high, medium, low] }
+      - { path: "payload.verdict", op: in, value: [ok, needs_work] }

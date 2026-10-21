@@ -8,7 +8,7 @@ A small eval that checks whether a `critique` stage finds planted problems in sh
 - `critique-sample.dataset.jsonl`: 8 cases. Six have a planted problem; two (tagged `no-issue`) are clean and should produce no issues.
 - `critique-sample.eval.yaml`: four graders.
   - `output-schema` (schema, must pass): the output matches the stage's output schema.
-  - `issues-have-severity` (field): every issue has a valid severity. On a clean draft the issues list is empty, there is nothing to check, and this grader reports a failure (a field check over `[*]` fails when the list is empty); the two clean cases still pass because their other graders carry more weight.
+  - `valid-verdict` (field): the verdict is `ok` or `needs_work`.
   - `finds-expected-issues` (reference): each expected keyword appears in the reported issues.
   - `no-false-alarms` (code): clean drafts get no issues. Runs JavaScript on your machine with your permissions.
 - `critique-sample.task.yaml`: a normal task, so `sf run` works on the pipeline too.

@@ -31,7 +31,7 @@ describe("examples/evals sample", () => {
     expect(outcome.value.id).toBe("critique-sample");
     expect(outcome.value.graders.map((g) => [g.id, g.type])).toEqual([
       ["output-schema", "schema"],
-      ["issues-have-severity", "field"],
+      ["valid-verdict", "field"],
       ["finds-expected-issues", "reference"],
       ["no-false-alarms", "code"],
     ]);
