@@ -5,6 +5,7 @@ import type { ConversationBackend } from "../agents/sessions.js";
 import type { AgentService } from "../agents/service.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
+import type { EngineStatus } from "../evals/engine/promptfoo/status.js";
 import type { EvalRunManager } from "../evals/manager.js";
 import type { RunManager } from "../runtime/runManager.js";
 
@@ -20,6 +21,7 @@ export type McpToolDeps = {
   agentChat?: AgentChatController;
   agentConversationBackend?: ConversationBackend;
   evalRunManager?: EvalRunManager;
+  evalEngineStatus?: () => EngineStatus;
 };
 
 export type McpHttpDeps = McpToolDeps & {

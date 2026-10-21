@@ -6,6 +6,7 @@ import { registerControlTools } from "./controlTools.js";
 import { registerProjectMcpTools } from "./projectMcpTools.js";
 import { registerPipelineAuthorTools } from "./pipelineAuthorTools.js";
 import { registerProviderTools } from "./providerTools.js";
+import { registerEvalTools } from "./evalTools.js";
 import { registerTriggerTools } from "./triggerTools.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
@@ -26,6 +27,7 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
   registerProviderTools(server, deps);
   registerProjectMcpTools(server, deps);
   registerTriggerTools(server, deps);
+  registerEvalTools(server, deps);
   registerPipelineAuthorTools(server, deps);
   registerAgentTools(server, deps);
 

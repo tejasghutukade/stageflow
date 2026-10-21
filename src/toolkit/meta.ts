@@ -18,6 +18,8 @@ export type ToolGroupId =
   | "agents.manage"
   | "agents.cleanup"
   | "agents.converse"
+  | "evals.read"
+  | "evals.run"
   | "pipelines.author";
 
 export type ToolGroup = {
@@ -41,6 +43,8 @@ export const TOOL_GROUPS: readonly ToolGroup[] = [
   { id: "agents.cleanup", title: "Archive agents", summary: "Archive an agent. Destructive." },
   { id: "agents.converse", title: "Talk to agents", summary: "Chat with an agent and stop its running turn." },
   { id: "pipelines.author", title: "Author pipelines and tasks", summary: "Read, create and edit pipelines, stages and tasks directly on disk." },
+  { id: "evals.read", title: "Read evals", summary: "List evals, runs and results; validate and compare. Free." },
+  { id: "evals.run", title: "Run evals", summary: "Start and cancel eval runs. Calls models and costs money." },
 ];
 
 export type ToolMeta = {
@@ -129,6 +133,17 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   edit_stage: t("pipelines.author", "write"),
   create_task: t("pipelines.author", "write"),
   edit_task: t("pipelines.author", "write"),
+
+  list_evals: t("evals.read", "read"),
+  get_eval: t("evals.read", "read"),
+  validate_eval: t("evals.read", "read"),
+  get_eval_run: t("evals.read", "read"),
+  list_eval_runs: t("evals.read", "read"),
+  get_eval_results: t("evals.read", "read"),
+  get_eval_result: t("evals.read", "read"),
+  compare_eval_runs: t("evals.read", "read"),
+  run_eval: t("evals.run", "external"),
+  cancel_eval_run: t("evals.run", "write"),
 };
 
 export type StageflowGrants = { groups: readonly string[]; tools: readonly string[] };
