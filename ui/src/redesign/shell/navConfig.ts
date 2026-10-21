@@ -3,6 +3,7 @@ import {
   LuBot,
   LuInbox,
   LuLayers,
+  LuLayoutDashboard,
   LuList,
   LuMessagesSquare,
   LuPlug,
@@ -28,7 +29,10 @@ export type NavGroup = {
 
 export const NAV_GROUPS: NavGroup[] = [
   {
-    items: [{ id: "inbox", label: "Inbox", href: "#/inbox", icon: LuInbox, badge: "waiting" }],
+    items: [
+      { id: "overview", label: "Overview", href: "#/overview", icon: LuLayoutDashboard },
+      { id: "inbox", label: "Inbox", href: "#/inbox", icon: LuInbox, badge: "waiting" },
+    ],
   },
   {
     label: "Activity",

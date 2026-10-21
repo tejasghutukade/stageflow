@@ -1304,3 +1304,45 @@ export type CreateTriggerResult =
 export type MemoryCardList = { keys: string[] };
 
 export type MemoryCardBody = { body: string };
+
+export type OverviewRange = "24h" | "7d" | "30d";
+
+export type OverviewTotals = {
+  runs: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  in_flight: number;
+  finished: number;
+  success_rate: number | null;
+  cost_usd: number;
+};
+
+export type OverviewBucket = {
+  start: string;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+};
+
+export type OverviewPipeline = {
+  pipeline_id: string;
+  runs: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  success_rate: number | null;
+  median_duration_ms: number | null;
+  cost_usd: number;
+  last_run_at: string;
+};
+
+export type OverviewSummary = {
+  range: OverviewRange;
+  generated_at: string;
+  since: string;
+  totals: OverviewTotals;
+  previous: OverviewTotals;
+  buckets: OverviewBucket[];
+  pipelines: OverviewPipeline[];
+};

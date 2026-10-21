@@ -134,7 +134,7 @@ describe("sf runs gc", () => {
         taskYaml: "id: t\ngoal: g\n",
       });
       await store.updateRunStatus(planted.runId, "succeeded");
-      const now = new Date("2026-09-22T12:00:00.000Z");
+      const now = new Date();
       setFinishedAt(
         connection,
         planted.runId,

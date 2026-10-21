@@ -9,6 +9,8 @@ import type {
   FeedbackLoopDecisionKind,
   LoginSessionMutationResult,
   LoginSessionProjection,
+  OverviewRange,
+  OverviewSummary,
   PipelineListing,
   ProvidersDetectResult,
   ProviderAuthMutationResult,
@@ -551,6 +553,10 @@ export function fetchExtensions(): Promise<{
 
 export function fetchHealth(): Promise<CapacityHealth> {
   return api("/api/health");
+}
+
+export function fetchOverview(range: OverviewRange): Promise<OverviewSummary> {
+  return api(`/api/overview?range=${range}`);
 }
 
 export function postEnsureProject(projectRoot: string): Promise<{ project_root: string }> {

@@ -83,6 +83,10 @@ describe("parseHash", () => {
     expect(parseHash("#/connect")).toEqual({ name: "connect" });
   });
 
+  it("parses the overview route", () => {
+    expect(parseHash("#/overview")).toEqual({ name: "overview" });
+  });
+
   it("parses the inbox route", () => {
     expect(parseHash("#/inbox")).toEqual({ name: "inbox" });
   });
