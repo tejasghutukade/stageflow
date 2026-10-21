@@ -9,6 +9,10 @@ catalog:
     - workshop
   triggers:
     - examples
+  evals:
+    - examples/evals
+  datasets:
+    - examples/evals
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
