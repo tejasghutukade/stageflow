@@ -483,9 +483,12 @@ describe("ClaudeAgentAdapter — bash-in-a-box toolAliases", () => {
     >;
     const toolNames = mcpServers.stageflow.instance.tools.map((t) => t.name);
     expect(toolNames).not.toContain("sandbox_bash");
+    expect(toolNames).not.toContain("sandbox_read");
+    expect(toolNames).not.toContain("sandbox_write");
+    expect(toolNames).not.toContain("sandbox_edit");
   });
 
-  it("sets toolAliases.Bash to the sandbox_bash tool and registers it when roots.containerName is set", async () => {
+  it("aliases Read, Write, Edit, and Bash onto sandbox tools when roots.containerName is set", async () => {
     queryImpl = emptyStream;
     const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
     const adapter = new ClaudeAgentAdapter();
@@ -497,6 +500,9 @@ describe("ClaudeAgentAdapter — bash-in-a-box toolAliases", () => {
 
     expect(lastQueryOptions?.toolAliases).toEqual({
       Bash: "mcp__stageflow__sandbox_bash",
+      Read: "mcp__stageflow__sandbox_read",
+      Write: "mcp__stageflow__sandbox_write",
+      Edit: "mcp__stageflow__sandbox_edit",
     });
     expect(lastQueryOptions?.tools).toEqual(["Read", "Write", "Edit", "Bash"]);
     const mcpServers = lastQueryOptions?.mcpServers as Record<
@@ -504,7 +510,14 @@ describe("ClaudeAgentAdapter — bash-in-a-box toolAliases", () => {
       { instance: { tools: MockToolDef[] } }
     >;
     const toolNames = mcpServers.stageflow.instance.tools.map((t) => t.name);
-    expect(toolNames).toContain("sandbox_bash");
+    expect(toolNames).toEqual(
+      expect.arrayContaining([
+        "sandbox_bash",
+        "sandbox_read",
+        "sandbox_write",
+        "sandbox_edit",
+      ]),
+    );
   });
 });
 

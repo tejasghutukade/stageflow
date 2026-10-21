@@ -26,10 +26,9 @@ export type StageRoots = {
   /** Durable Pi auth.json path for ModelRuntime.create({ authPath }). */
   authPath?: string;
   /**
-   * Bash-in-a-Box (V2, docs/specs/stage-container-sandbox.md): the sandbox
-   * container `stageWorker.ts` started for this attempt, if any. Only the
-   * Claude adapter reads this (to alias `Bash` calls onto `sandbox_bash`);
-   * undefined preserves today's host-Bash behavior exactly.
+   * Sandbox container `stageWorker.ts` started for this attempt, if any.
+   * When set, read/write/edit/bash run inside that container's /workspace
+   * desk. Undefined leaves those tools on the host.
    */
   containerName?: string;
   /** The docker binary the container above was started with (see STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN). */

@@ -5,10 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildStartContainerArgs,
+  SANDBOX_MOUNT_PATH,
   execInSandboxContainer,
   resolveSandboxContainerOptions,
   SANDBOX_CONTAINER_DOCKER_BIN_ENV,
   SANDBOX_CONTAINER_IMAGE_ENV,
+  sandboxVolumeName,
   startSandboxContainer,
   stopSandboxContainer,
 } from "../src/runtime/sandboxContainer.js";
@@ -64,9 +66,8 @@ describe("resolveSandboxContainerOptions", () => {
 });
 
 describe("buildStartContainerArgs", () => {
-  it("mounts rootDir at the same absolute path and runs sleep infinity", () => {
+  it("mounts a daemon-owned volume at a fixed path and runs sleep infinity", () => {
     const args = buildStartContainerArgs({
-      rootDir: "/Users/tejas/project",
       image: "stageflow-bash:v1",
       containerName: "stageflow-run-1-implement-1-abc",
     });
@@ -76,13 +77,14 @@ describe("buildStartContainerArgs", () => {
       "--name",
       "stageflow-run-1-implement-1-abc",
       "-v",
-      "/Users/tejas/project:/Users/tejas/project",
+      `sf-bash-stageflow-run-1-implement-1-abc:${SANDBOX_MOUNT_PATH}`,
       "-w",
-      "/Users/tejas/project",
+      SANDBOX_MOUNT_PATH,
       "stageflow-bash:v1",
       "sleep",
       "infinity",
     ]);
+    expect(args.join(" ")).not.toContain("/Users/");
   });
 });
 
@@ -95,7 +97,6 @@ describe("startSandboxContainer / stopSandboxContainer (via fake docker binary)"
     process.env.FAKE_DOCKER_LOG_FILE = logFile;
     try {
       const { containerName } = await startSandboxContainer({
-        rootDir,
         image: "stageflow-bash:v1",
         runId: "run-1",
         stageId: "implement",
@@ -110,6 +111,7 @@ describe("startSandboxContainer / stopSandboxContainer (via fake docker binary)"
       const log = await readFile(logFile, "utf8");
       expect(log).toContain(`start ${containerName}`);
       expect(log).toContain(`stop ${containerName}`);
+      expect(log).toContain(`volume-rm ${sandboxVolumeName(containerName)}`);
     } finally {
       if (previousLogFile === undefined) {
         delete process.env.FAKE_DOCKER_LOG_FILE;
@@ -120,9 +122,7 @@ describe("startSandboxContainer / stopSandboxContainer (via fake docker binary)"
   });
 
   it("gives distinct containers on repeated calls for the same attempt (random suffix)", async () => {
-    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-sandbox-container-dup-"));
     const first = await startSandboxContainer({
-      rootDir,
       image: "stageflow-bash:v1",
       runId: "run-1",
       stageId: "review~1",
@@ -130,7 +130,6 @@ describe("startSandboxContainer / stopSandboxContainer (via fake docker binary)"
       dockerBin: fakeDockerBin,
     });
     const second = await startSandboxContainer({
-      rootDir,
       image: "stageflow-bash:v1",
       runId: "run-1",
       stageId: "review~2",

@@ -12,17 +12,12 @@ import {
   overlayStageBindingEnv,
   rootsForStageWorker,
   stageBindingEnvFromRun,
-  withContainerName,
   withResolvedAuthPath,
 } from "./stageRoots.js";
 import { buildStageEnvironment } from "./stageEnvironment.js";
 import { ensureStageCacheDirs } from "./stageCacheEnv.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
-import {
-  resolveSandboxContainerOptions,
-  startSandboxContainer,
-  stopSandboxContainer,
-} from "./sandboxContainer.js";
+import { openStageSandbox } from "./stageSandbox.js";
 import {
   runStage,
   type RunStageOutcome,
@@ -102,9 +97,8 @@ export async function runStageWorker(
   );
   const mode = input.mode ?? "run";
   const attempt = input.attempt ?? 1;
-  loadNamedSecretsFromAttemptDir(
-    attemptWorkspaceDir(workspaceDir, input.stageId, attempt),
-  );
+  const attemptDir = attemptWorkspaceDir(workspaceDir, input.stageId, attempt);
+  loadNamedSecretsFromAttemptDir(attemptDir);
   const attemptCtx =
     input.attempt !== undefined ? attemptContext(input.attempt) : undefined;
   const eventOptions = { attempt };
@@ -120,30 +114,24 @@ export async function runStageWorker(
   );
   const unbindAgentDir = bindPiAgentDirEnv(roots.agentDir);
 
-  // Bash-in-a-Box (V2, docs/specs/stage-container-sandbox.md): the worker
-  // owns the sandbox container's lifecycle, scoped to exactly this stage
-  // attempt. Only the Claude adapter ever reads roots.containerName, so
-  // leaving it unset (the default, no image configured) is a complete
-  // no-op for every other agent backend and every existing test.
-  const sandboxContainerOptions = resolveSandboxContainerOptions(process.env);
-  let sandboxContainerName: string | undefined;
+  const sandbox = await openStageSandbox({
+    env: process.env,
+    roots,
+    runId: input.runId,
+    stageId: input.stageId,
+    attempt,
+    attemptDir,
+    ...(checkoutRoot !== undefined ? { checkoutRoot } : {}),
+  });
+  roots = sandbox.roots;
+  const beforeVerify = sandbox.beforeVerify;
+  let outcome: RunStageOutcome | undefined;
+  let thrown: unknown;
 
   try {
-    if (sandboxContainerOptions) {
-      const started = await startSandboxContainer({
-        rootDir: input.rootDir,
-        image: sandboxContainerOptions.image,
-        dockerBin: sandboxContainerOptions.dockerBin,
-        runId: input.runId,
-        stageId: input.stageId,
-        attempt,
-      });
-      sandboxContainerName = started.containerName;
-      roots = withContainerName(
-        roots,
-        sandboxContainerName,
-        sandboxContainerOptions.dockerBin,
-      );
+    outcome = await (async (): Promise<RunStageOutcome> => {
+    if (sandbox.failure !== undefined) {
+      return { ok: false, reason: sandbox.failure };
     }
 
     if (mode === "resume") {
@@ -196,6 +184,7 @@ export async function runStageWorker(
         operatorCatalog: input.operatorCatalog,
         skipGates: input.skipGates,
         stageEnv,
+        beforeVerify,
       });
       return outcome;
     }
@@ -266,6 +255,7 @@ export async function runStageWorker(
         operatorCatalog: input.operatorCatalog,
         skipGates: input.skipGates,
         stageEnv,
+        beforeVerify,
       });
     }
 
@@ -286,24 +276,21 @@ export async function runStageWorker(
       operatorCatalog: input.operatorCatalog,
       skipGates: input.skipGates,
       stageEnv,
+      beforeVerify,
     });
+    })();
+  } catch (err) {
+    thrown = err;
   } finally {
     unbindAgentDir();
-    if (sandboxContainerName !== undefined) {
-      try {
-        await stopSandboxContainer({
-          containerName: sandboxContainerName,
-          dockerBin: sandboxContainerOptions?.dockerBin,
-        });
-      } catch (err) {
-        process.stderr.write(
-          `[stageWorker] failed to stop sandbox container ${sandboxContainerName}: ${
-            err instanceof Error ? err.message : String(err)
-          }\n`,
-        );
-      }
-    }
+    await sandbox.close();
   }
+
+  if (thrown !== undefined) throw thrown;
+  if (outcome === undefined) {
+    throw new Error("stage worker finished without an outcome");
+  }
+  return outcome;
 }
 
 export function sendWorkerResult(result: StageWorkerResult): Promise<void> {

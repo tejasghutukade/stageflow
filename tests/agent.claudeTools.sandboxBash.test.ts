@@ -36,6 +36,9 @@ describe("buildStageflowMcpServer — sandbox_bash conditional registration", ()
     const server = buildStageflowMcpServer(baseServerOptions());
     const names = toolsOf(server).map((t) => t.name);
     expect(names).not.toContain("sandbox_bash");
+    expect(names).not.toContain("sandbox_read");
+    expect(names).not.toContain("sandbox_write");
+    expect(names).not.toContain("sandbox_edit");
   });
 
   it("registers sandbox_bash when sandboxBash option is present", async () => {
@@ -45,7 +48,33 @@ describe("buildStageflowMcpServer — sandbox_bash conditional registration", ()
       sandboxBash: { containerName: "stageflow-run-1-implement-1-abc" },
     });
     const names = toolsOf(server).map((t) => t.name);
-    expect(names).toContain("sandbox_bash");
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "sandbox_bash",
+        "sandbox_read",
+        "sandbox_write",
+        "sandbox_edit",
+      ]),
+    );
+  });
+});
+
+describe("sandbox file tools", () => {
+  it("rejects a host path before calling docker", async () => {
+    const { buildStageflowMcpServer } = await import("../src/agent/claudeTools.js");
+    const execute = vi.fn();
+    const server = buildStageflowMcpServer({
+      ...baseServerOptions(),
+      sandboxBash: { containerName: "my-container", execute },
+    });
+    const tool = toolsOf(server).find((t) => t.name === "sandbox_read");
+    if (!tool) throw new Error("sandbox_read not registered");
+    const result = await tool.handler({ file_path: "/etc/passwd" }, {});
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/sandbox/i);
+    expect(execute).not.toHaveBeenCalled();
+    expect(text).not.toContain("root:");
   });
 });
 
