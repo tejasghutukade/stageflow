@@ -111,6 +111,8 @@ export type EvalDetail = {
   findings: ValidationFinding[];
   runs_count: number;
   last_run: EvalRunHeadline | null;
+  target_model?: string | null;
+  judge_default?: string | null;
 };
 
 export type EvalValidateInput = {
@@ -433,7 +435,7 @@ export type EvalDatasetDetail = {
   tagged_total: number;
   matched_total: number;
   tags: Record<string, number>;
-  input_fields: Array<{ name: string; required: boolean }>;
+  input_fields: Array<{ name: string; required: boolean; type?: string }>;
   cases: EvalDatasetCase[];
   findings: ValidationFinding[];
   used_by: string[];

@@ -15,6 +15,7 @@ import type { DatasetCase } from "../config/datasetTypes.js";
 import { listDatasetFiles, listEvalFiles, loadEvalCatalog } from "../config/evalCatalog.js";
 import {
   assertInsideProject,
+  datasetIdsFor,
   datasetStem,
   findDatasetFile,
   findEvalFile,
@@ -894,11 +895,13 @@ async function handleDatasetList(c: Ctx): Promise<void> {
     const projectRoot = root.path;
     const manifest = await manifestForWrite(projectRoot);
     const { uses } = await loadEvalUses(projectRoot);
-    for (const file of await listDatasetFiles(manifest)) {
+    const files = await listDatasetFiles(manifest);
+    const ids = datasetIdsFor(files);
+    for (const file of files) {
       const loaded = await loadDatasetFile(file.absPath, { root: projectRoot });
       items.push({
         project_root: root.project_root,
-        id: datasetStem(path.basename(file.absPath)),
+        id: ids.get(file.absPath) ?? datasetStem(path.basename(file.absPath)),
         path: file.relPath,
         format: loaded.format ?? null,
         cases: loaded.cases.length,
@@ -1022,6 +1025,22 @@ async function sampleCases(c: Ctx): Promise<DatasetCase[]> {
   return parseDatasetText(text, "jsonl").cases;
 }
 
+async function casesFromRunsBody(c: Ctx, projectRoot: string, body: Record<string, unknown>): Promise<NewDatasetCase[]> {
+  const resolved = await resolveDatasetTarget(projectRoot, targetFrom(body.target));
+  if (!resolved.ok) throw new EvalApiError(422, "EVAL_INVALID", resolved.message);
+  const runIds = optStringArray(body, "run_ids");
+  if (!runIds || runIds.length === 0) throw bad(`"run_ids" must be a non-empty array`);
+  if (resolved.value.stageId === undefined) throw bad("target does not name a stage");
+  return casesFromRuns({
+    store: c.store,
+    runIds,
+    target: {
+      stageId: resolved.value.stageId,
+      ...(resolved.value.pipelineAbsPath !== undefined ? { pipelinePath: resolved.value.pipelineAbsPath } : {}),
+    },
+  });
+}
+
 async function handleDatasetCreate(c: Ctx): Promise<void> {
   const body = await readBody(c);
   const projectRoot =
@@ -1036,14 +1055,21 @@ async function handleDatasetCreate(c: Ctx): Promise<void> {
     id = optString(body, "dataset_id") as string;
     const mode = body.mode;
     if (mode !== "append" && mode !== "replace") throw bad(`"mode" must be append or replace`);
-    if (!Array.isArray(body.cases)) throw bad(`"cases" must be an array`);
     if (typeof body.base_hash !== "string" || body.base_hash === "") throw bad(`"base_hash" is required`);
+    let newCases: NewDatasetCase[];
+    if (body.source === "runs") {
+      if (mode !== "append") throw bad(`source "runs" requires mode "append"`);
+      newCases = await casesFromRunsBody(c, projectRoot, body);
+    } else {
+      if (!Array.isArray(body.cases)) throw bad(`"cases" must be an array`);
+      newCases = body.cases as NewDatasetCase[];
+    }
     const written = await appendOrReplaceCases({
       projectRoot,
       id,
       baseHash: body.base_hash,
       mode,
-      cases: body.cases as NewDatasetCase[],
+      cases: newCases,
     });
     absPath = written.path;
   } else {
@@ -1063,17 +1089,7 @@ async function handleDatasetCreate(c: Ctx): Promise<void> {
           throw new EvalsWriteError("DATASET_INVALID", "The sample cases do not match this stage's input");
         }
       } else {
-        const runIds = optStringArray(body, "run_ids");
-        if (!runIds || runIds.length === 0) throw bad(`"run_ids" must be a non-empty array`);
-        if (resolved.value.stageId === undefined) throw bad("target does not name a stage");
-        cases = await casesFromRuns({
-          store: c.store,
-          runIds,
-          target: {
-            stageId: resolved.value.stageId,
-            ...(resolved.value.pipelineAbsPath !== undefined ? { pipelinePath: resolved.value.pipelineAbsPath } : {}),
-          },
-        });
+        cases = await casesFromRunsBody(c, projectRoot, body);
       }
     } else {
       if (!Array.isArray(body.cases)) throw bad(`"cases" must be an array`);
@@ -1116,7 +1132,7 @@ async function handleDatasetConvert(c: Ctx, id: string): Promise<void> {
   const { projectRoot } = await locateDataset(rootOptions(c), wireFromBody(body), id, { write: true, missing: "default" });
   const written = await convertDatasetToJsonl({ projectRoot, id, baseHash: body.base_hash });
   audit(c, "dataset_write", "ok");
-  c.json(c.res, 201, await datasetDetailFor(c, projectRoot, id, written.path, undefined, { offset: 0, limit: MAX_LIMIT, filter: "all" }));
+  c.json(c.res, 201, await datasetDetailFor(c, projectRoot, written.id, written.path, undefined, { offset: 0, limit: MAX_LIMIT, filter: "all" }));
 }
 
 async function handleCandidates(c: Ctx): Promise<void> {

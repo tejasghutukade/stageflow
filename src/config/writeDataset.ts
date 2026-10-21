@@ -132,7 +132,7 @@ async function loadEditable(
   baseHash: string,
   requireJsonl: boolean,
 ): Promise<{ absPath: string; relPath: string; cases: DatasetCase[]; format: "jsonl" | "json" | "csv" }> {
-  const ref = await findDatasetFile(projectRoot, id, undefined, requireJsonl ? "jsonl" : "other");
+  const ref = await findDatasetFile(projectRoot, id);
   if (ref === undefined) throw new EvalsWriteError("DATASET_NOT_FOUND", `Dataset "${id}" not found`);
   const format = datasetFormatFromPath(ref.absPath);
   if (format === undefined) throw new EvalsWriteError("DATASET_INVALID", "Unknown dataset format");
@@ -247,5 +247,5 @@ export async function convertDatasetToJsonl(input: {
   const text = renderDatasetJsonl(current.cases);
   const checked = checkedCases(text, relPath);
   await writeFileAtomic(absPath, text);
-  return { id, path: absPath, relPath, text, ...checked };
+  return { id: datasetStem(path.basename(absPath)), path: absPath, relPath, text, ...checked };
 }

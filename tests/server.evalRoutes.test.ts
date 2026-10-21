@@ -324,6 +324,8 @@ describe("eval routes: evals", () => {
     expect(res.body.file_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(res.body.yaml).toContain("id: review");
     expect(res.body.last_run.run_number).toBe(1);
+    expect(typeof res.body.target_model).toBe("string");
+    expect(res.body).toHaveProperty("judge_default");
     const missing = await h.get(`/api/evals/nope?${q(h)}`);
     expect(missing.status).toBe(404);
     expect(missing.body.code).toBe("EVAL_NOT_FOUND");
@@ -846,7 +848,7 @@ describe("eval routes: datasets", () => {
       invalid_total: 1,
       tagged_total: 1,
       tags: { smoke: 1 },
-      input_fields: [{ name: "diff", required: true }],
+      input_fields: [{ name: "diff", required: true, type: "string" }],
       used_by: ["review"],
     });
     const bad = detail.body.cases.find((c: any) => c.id === "bad");
@@ -868,7 +870,7 @@ describe("eval routes: datasets", () => {
     expect(orphan.body.cases[0].input_check).toBeNull();
     const withEval = await h.get(`/api/datasets/extra?${q(h, "&eval_id=review")}`);
     expect(withEval.body.cases[0].input_check).toEqual({ valid: true });
-    expect(withEval.body.input_fields).toEqual([{ name: "diff", required: true }]);
+    expect(withEval.body.input_fields).toEqual([{ name: "diff", required: true, type: "string" }]);
     expect((await h.get(`/api/datasets/nope?${q(h)}`)).body.code).toBe("DATASET_NOT_FOUND");
   });
 
@@ -974,6 +976,61 @@ describe("eval routes: datasets", () => {
     const noRuns = await h.post("/api/datasets", { project_root: h.root, name: "from-runs", source: "runs", target, run_ids: ["missing-run"] });
     expect(noRuns.status).toBe(422);
     expect(noRuns.body.code).toBe("DATASET_CASE_OP_INVALID");
+
+    const appendNoRuns = await h.post("/api/datasets", {
+      project_root: h.root,
+      dataset_id: "mine",
+      mode: "append",
+      source: "runs",
+      target,
+      run_ids: ["missing-run"],
+      base_hash: replaced.body.hash,
+    });
+    expect(appendNoRuns.status).toBe(422);
+    expect(appendNoRuns.body.code).toBe("DATASET_CASE_OP_INVALID");
+    const appendBadMode = await h.post("/api/datasets", {
+      project_root: h.root,
+      dataset_id: "mine",
+      mode: "replace",
+      source: "runs",
+      target,
+      run_ids: ["x"],
+      base_hash: replaced.body.hash,
+    });
+    expect(appendBadMode.status).toBe(400);
+    const appendNoIds = await h.post("/api/datasets", {
+      project_root: h.root,
+      dataset_id: "mine",
+      mode: "append",
+      source: "runs",
+      target,
+      base_hash: replaced.body.hash,
+    });
+    expect(appendNoIds.status).toBe(400);
+  });
+
+  it("gives the jsonl file the bare id and other files with the same stem <stem>.<ext>", async () => {
+    const h = await setup();
+    await writeFile(path.join(h.root, "datasets", "legacy.dataset.csv"), "id,input.diff:json\nc001,1\n");
+    await writeFile(path.join(h.root, "datasets", "legacy.dataset.jsonl"), JSON.stringify({ id: "a", input: { diff: "1" } }) + "\n");
+    const list = await h.get(`/api/datasets?${q(h)}`);
+    const byPath = Object.fromEntries(list.body.items.map((d: any) => [d.path, d.id]));
+    expect(byPath["datasets/legacy.dataset.jsonl"]).toBe("legacy");
+    expect(byPath["datasets/legacy.dataset.csv"]).toBe("legacy.csv");
+    expect((await h.get(`/api/datasets/legacy?${q(h)}`)).body.format).toBe("jsonl");
+    const csv = await h.get(`/api/datasets/legacy.csv?${q(h)}`);
+    expect(csv.body).toMatchObject({ id: "legacy.csv", format: "csv", editable: false });
+  });
+
+  it("converts a lone csv to jsonl and returns the jsonl detail under the bare id", async () => {
+    const h = await setup();
+    await writeFile(path.join(h.root, "datasets", "solo.dataset.csv"), "id,input.diff:json\nc001,1\n");
+    const before = await h.get(`/api/datasets/solo?${q(h)}`);
+    expect(before.body.format).toBe("csv");
+    const converted = await h.post("/api/datasets/solo/convert", { project_root: h.root, base_hash: before.body.hash });
+    expect(converted.status, converted.text).toBe(201);
+    expect(converted.body).toMatchObject({ id: "solo", format: "jsonl", editable: true });
+    expect((await h.get(`/api/datasets/solo.csv?${q(h)}`)).body.format).toBe("csv");
   });
 
   it("refuses the sample dataset when its cases do not match the stage input", async () => {
@@ -1048,7 +1105,10 @@ describe("eval routes: datasets", () => {
     expect(converted.body).toMatchObject({ path: "datasets/csvset.dataset.jsonl", format: "jsonl", editable: true });
     expect(converted.body.hash).toBe(json.body.hash);
     const again = await h.post("/api/datasets/csvset/convert", { project_root: h.root, base_hash: json.body.hash });
-    expect(again.status).toBe(409);
+    expect(again.status).toBe(422);
+    const existing = await h.post("/api/datasets/csvset.json/convert", { project_root: h.root, base_hash: json.body.hash });
+    expect(existing.status).toBe(409);
+    expect(existing.body.code).toBe("DATASET_EXISTS");
 
     const cands = await h.get(`/api/datasets/candidates?${q(h, "&pipeline_path=pipelines/feature-ship.pipeline.yaml&stage_id=review")}`);
     expect(cands.status).toBe(200);

@@ -281,10 +281,10 @@ describe("convertDatasetToJsonl", () => {
       "datasets/seed.dataset.jsonl": SEED_TEXT,
     });
     const hash = (await loadDatasetFile(path.join(root, "datasets", "j.dataset.json"))).contentHash;
-    await expect(convertDatasetToJsonl({ projectRoot: root, id: "j", baseHash: hash })).rejects.toMatchObject({
+    await expect(convertDatasetToJsonl({ projectRoot: root, id: "j.json", baseHash: hash })).rejects.toMatchObject({
       code: "DATASET_EXISTS",
     });
-    await expect(convertDatasetToJsonl({ projectRoot: root, id: "j", baseHash: "stale" })).rejects.toBeInstanceOf(
+    await expect(convertDatasetToJsonl({ projectRoot: root, id: "j.json", baseHash: "stale" })).rejects.toBeInstanceOf(
       FileChangedError,
     );
     await expect(convertDatasetToJsonl({ projectRoot: root, id: "seed", baseHash: SEED_HASH })).rejects.toMatchObject({

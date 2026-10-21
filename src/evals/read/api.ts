@@ -13,6 +13,7 @@ import {
 } from "../../config/resolveCatalogRoots.js";
 import { loadDatasetFile } from "../../config/loadDataset.js";
 import { evalStem, findDatasetFile, findEvalFile, manifestForWrite } from "../../config/evalWriteRoots.js";
+import { resolveEvalTarget } from "../../config/resolveEvalTarget.js";
 import { parseEvalOutcome, resolveEvalPaths, type LoadedEval } from "../../config/loadEval.js";
 import type { ValidationFinding } from "../../config/validateCatalog.js";
 import { evalFindingsFromIssues } from "../../config/validateEval.js";
@@ -103,6 +104,8 @@ export type EvalDetailWire = {
   findings: ValidationFinding[];
   runs_count: number;
   last_run: ReturnType<typeof runHeadline> | null;
+  target_model: string | null;
+  judge_default: string | null;
 };
 
 export async function buildEvalDetail(input: {
@@ -125,6 +128,11 @@ export async function buildEvalDetail(input: {
     cursor = page.nextCursor ?? undefined;
   } while (cursor !== undefined);
   const last = (await completedRunsNewestFirst(store, projectRoot, id, 1))[0];
+  let targetModel: string | null = null;
+  if (entry?.outcome.ok) {
+    const target = await resolveEvalTarget(entry.outcome.value.file, entry.outcome.value.path, projectRoot);
+    if (target.ok) targetModel = target.value.modelResolved;
+  }
   return {
     id,
     path: rel(projectRoot, absPath),
@@ -134,6 +142,8 @@ export async function buildEvalDetail(input: {
     findings: entry?.findings ?? [],
     runs_count: runsCount,
     last_run: last ? runHeadline(last) : null,
+    target_model: targetModel,
+    judge_default: entry?.outcome.ok ? (entry.outcome.value.file.defaults?.judge ?? null) : null,
   };
 }
 

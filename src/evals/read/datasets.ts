@@ -15,7 +15,7 @@ import { resolveEvalTarget } from "../../config/resolveEvalTarget.js";
 import type { ValidationFinding } from "../../config/validateCatalog.js";
 import type { EvalFile } from "../types.js";
 
-export type InputField = { name: string; required: boolean };
+export type InputField = { name: string; required: boolean; type?: string };
 
 export type DatasetTarget = { pipeline_path?: string; stage_id?: string; file?: string };
 
@@ -61,7 +61,10 @@ export function inputFieldsOf(schema: unknown): InputField[] {
   const { properties, required } = schema as { properties?: unknown; required?: unknown };
   if (typeof properties !== "object" || properties === null) return [];
   const requiredSet = new Set(Array.isArray(required) ? required.filter((r): r is string => typeof r === "string") : []);
-  return Object.keys(properties).map((name) => ({ name, required: requiredSet.has(name) }));
+  return Object.entries(properties as Record<string, unknown>).map(([name, prop]) => {
+    const type = typeof prop === "object" && prop !== null ? (prop as { type?: unknown }).type : undefined;
+    return { name, required: requiredSet.has(name), ...(typeof type === "string" ? { type } : {}) };
+  });
 }
 
 export type ResolvedDatasetTarget = { inputSchema: unknown; stageId: string | undefined; pipelineAbsPath: string | undefined };
