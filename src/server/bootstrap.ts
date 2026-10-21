@@ -30,6 +30,10 @@ import { consoleStageBrowserSupport } from "../browser/stageBrowserEnv.js";
 import { RunManager } from "../runtime/runManager.js";
 import { EvalRunManager } from "../evals/manager.js";
 import { createStageCaseRunner } from "../evals/runner/stageCaseRunner.js";
+import { getEngine } from "../evals/engine/index.js";
+import { RunTokenRegistry } from "../evals/engine/promptfoo/runTokens.js";
+import { EVAL_DEFAULT_ENGINE } from "../evals/manager.js";
+import type { EvalInternalServices } from "./evalInternalRoutes.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { PI_CODING_AGENT_DIR_ENV } from "../runtime/stageRoots.js";
 import {
@@ -109,6 +113,10 @@ export type StageflowHostBootstrap = {
   manager?: RunManager;
   /** Eval runs: shared with HTTP routes and MCP. Absent when `manager` is. */
   evalRunManager?: EvalRunManager;
+  /** Services for the internal eval callback route; absent when `evalRunManager` is. */
+  evalServices?: EvalInternalServices;
+  /** Set once the HTTP host is listening so the promptfoo provider knows where to call back. */
+  setEvalCallbackBase?: (baseUrl: string) => void;
   runChangeBus: RunChangeBus;
   mcpStateless: boolean;
   providerAuthContext: ProviderAuthContext | undefined;
@@ -403,9 +411,24 @@ export async function bootstrapStageflowHost(
   await manager.resumeStalledSchedules();
   await manager.reenqueuePersistedQueuedRuns();
   const evalLog = rootLogger.child({ component: "evals" });
+  const evalStageRunner = createStageCaseRunner({ manager, store });
+  const evalTokens = new RunTokenRegistry();
+  let evalCallbackBase = "";
   const evalRunManager = new EvalRunManager({
     store,
-    stageRunner: createStageCaseRunner({ manager, store }),
+    stageRunner: evalStageRunner,
+    engines: (name, engineOptions) =>
+      getEngine(
+        name,
+        name === EVAL_DEFAULT_ENGINE
+          ? {
+              tokens: evalTokens,
+              callbackUrl: () => `${evalCallbackBase}/api/evals/internal/run-case`,
+              home: ctx.globalHome,
+              ...(engineOptions as Record<string, unknown> | undefined),
+            }
+          : engineOptions,
+      ),
     stageflowVersion: PACKAGE_VERSION,
     workDirRoot: path.join(ctx.globalHome, "eval-runs"),
     logger: {
@@ -417,6 +440,14 @@ export async function bootstrapStageflowHost(
   await evalRunManager.recoverOnBoot().catch((err: unknown) =>
     evalLog.warn("eval.recover_failed", err instanceof Error ? err.message : String(err)),
   );
+  const evalServices: EvalInternalServices = {
+    tokens: evalTokens,
+    runner: evalStageRunner,
+    isRunning: (evalRunId) => evalRunManager.activeRunId() === evalRunId,
+  };
+  const setEvalCallbackBase = (baseUrl: string): void => {
+    evalCallbackBase = baseUrl.replace(/\/+$/, "");
+  };
   await warnDurableRootDiskIfNeeded(ctx.globalHome, { env });
   const gcInterval = startPeriodicRunGc(manager, gcIntervalMsFromEnv(env));
   const stopGcInterval = () => {
@@ -569,6 +600,8 @@ export async function bootstrapStageflowHost(
     store,
     manager,
     evalRunManager,
+    evalServices,
+    setEvalCallbackBase,
     runChangeBus,
     mcpStateless,
     providerAuthContext: options.providerAuthContext,

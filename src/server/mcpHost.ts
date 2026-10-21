@@ -73,6 +73,8 @@ export async function startMcpServer(
           controlTokens,
           getShutdown: () => shutdown,
           ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
+          ...(boot.evalRunManager ? { evalRunManager: boot.evalRunManager } : {}),
+          ...(boot.evalServices ? { evalServices: boot.evalServices } : {}),
         });
   const envelope = await createHttpHost({
     boot,
@@ -84,6 +86,7 @@ export async function startMcpServer(
     maxConnections: options.maxConnections,
     routes,
   });
+  boot.setEvalCallbackBase?.(envelope.url);
   shutdown = installShutdownController({
     server: envelope.server,
     host: makeDrainableHostFromOptional(envelope.manager, envelope.store),
