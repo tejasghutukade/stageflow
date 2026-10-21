@@ -15,7 +15,6 @@ import { listDatasetFiles, listEvalFiles, loadEvalCatalog } from "../config/eval
 import {
   assertInsideProject,
   datasetStem,
-  evalStem,
   findDatasetFile,
   findEvalFile,
   manifestForWrite,
@@ -23,11 +22,9 @@ import {
 } from "../config/evalWriteRoots.js";
 import { installEvalSample, EVAL_SAMPLE_FILES } from "../config/installEvalSample.js";
 import { loadDatasetFile, parseDatasetText } from "../config/loadDataset.js";
-import { loadEvalOutcome, parseEvalOutcome, resolveEvalPaths, type LoadedEval } from "../config/loadEval.js";
+import { loadEvalOutcome, resolveEvalPaths, type LoadedEval } from "../config/loadEval.js";
 import { resolveEvalTarget } from "../config/resolveEvalTarget.js";
 import { resolveSeededExamplesPath } from "../config/seededCatalog.js";
-import type { ValidationFinding } from "../config/validateCatalog.js";
-import { evalFindingsFromIssues } from "../config/validateEval.js";
 import {
   applyCaseOps,
   appendOrReplaceCases,
@@ -44,12 +41,30 @@ import {
   updateEvalFile,
 } from "../config/writeEval.js";
 import { CompareMismatchError } from "../evals/compare.js";
-import { EVAL_LIMITS, EVAL_REVIEW_LABELS, EVAL_STARTED_VIA, EVAL_RUN_STATUSES } from "../evals/constants.js";
+import { EVAL_LIMITS, EVAL_REVIEW_LABELS, EVAL_STARTED_VIA } from "../evals/constants.js";
 import { PINNED_PROMPTFOO_VERSION } from "../evals/engine/promptfoo/pinned.js";
 import type { EngineStatus } from "../evals/engine/promptfoo/status.js";
 import { estimateRun, type EstimatePreviousRun } from "../evals/estimate.js";
 import { EvalRunError, type EvalRunManager, type TryCaseInput, type TryResult } from "../evals/manager.js";
 import { buildEvalPlan, type EvalOverrides } from "../evals/plan.js";
+import {
+  badRequest,
+  buildEvalDetail,
+  buildResultDetail,
+  buildResultsPage,
+  DEFAULT_LIMIT,
+  ENGINE_NAME,
+  engineCheck as engineCheckStatus,
+  EvalApiError,
+  findEvalOr404,
+  listEvalRunsPage,
+  loadEvalListItems,
+  MAX_LIMIT,
+  planFindings as planFindingsShared,
+  rel,
+  runByIdOr404 as runByIdOr404Shared,
+  validateEvalText,
+} from "../evals/read/api.js";
 import { buildCompare } from "../evals/read/compare.js";
 import {
   buildDatasetDetail,
@@ -60,18 +75,14 @@ import {
   type DatasetTarget,
 } from "../evals/read/datasets.js";
 import { buildEvalListItems, costLastSevenDays, type EvalListItem } from "../evals/read/list.js";
-import { buildResultRows, RESULT_ROW_STATUSES, type ResultRowStatus } from "../evals/read/results.js";
 import {
   buildExport,
   buildRunDetail,
   completedRunsNewestFirst,
-  resultToWire,
-  runHeadline,
   statsOfRun,
   type WireResultDetail,
 } from "../evals/read/runs.js";
 import { EvalStoreError } from "../evals/storeError.js";
-import { resultKey } from "../evals/statsTypes.js";
 import type { EvalRunRow } from "../evals/storeTypes.js";
 import type { EvalFile } from "../evals/types.js";
 import { writeAudit } from "../logging/audit.js";
@@ -103,22 +114,7 @@ type Ctx = EvalRoutesDeps & {
   evalRunManager: EvalRunManager;
 };
 
-class RouteError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-    readonly extra: Record<string, unknown> = {},
-  ) {
-    super(message);
-    this.name = "RouteError";
-  }
-}
-
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 200;
-const ENGINE_NAME = "promptfoo";
 const CANCEL_WAIT_MS = 5000;
 
 const WRITE_ERROR_STATUS: Record<string, number> = {
@@ -149,8 +145,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function bad(message: string, code = "invalid_request"): RouteError {
-  return new RouteError(400, code, message);
+function bad(message: string, code = "invalid_request"): EvalApiError {
+  return badRequest(message, code);
 }
 
 function sendError(c: Ctx, status: number, code: string, message: string, extra: Record<string, unknown> = {}): void {
@@ -225,21 +221,6 @@ function listParam(url: URL, name: string): string[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
-function encodeOffset(offset: number): string {
-  return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
-}
-
-function decodeOffset(cursor: string | null): number {
-  if (cursor === null || cursor === "") return 0;
-  try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as { offset?: unknown };
-    if (typeof parsed.offset === "number" && Number.isInteger(parsed.offset) && parsed.offset >= 0) return parsed.offset;
-  } catch {
-    // fall through to the error below
-  }
-  throw bad("Invalid cursor", "invalid_cursor");
-}
-
 async function projectRootFor(c: Ctx, wire: string | undefined, write = false): Promise<string> {
   const options = { store: c.store, bootCwd: c.cwd };
   const { wireRoot } = write
@@ -257,10 +238,6 @@ function wireFromBody(body: Record<string, unknown>): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-function rel(projectRoot: string, abs: string): string {
-  return path.relative(projectRoot, abs).split(path.sep).join("/");
-}
-
 async function exists(abs: string): Promise<boolean> {
   try {
     await stat(abs);
@@ -271,87 +248,33 @@ async function exists(abs: string): Promise<boolean> {
 }
 
 function engineCheck(c: Ctx): void {
-  const status = c.engineStatus();
-  if (!status.nodeOk) {
-    throw new RouteError(503, "EVAL_NODE_TOO_OLD", `Evals need a newer Node.js; found ${status.node}`);
-  }
-  if (!status.installed) {
-    throw new RouteError(
-      503,
-      "EVAL_ENGINE_UNAVAILABLE",
-      `The eval engine is not installed. Run \`${status.installCommand}\`.`,
-    );
-  }
-}
-
-async function findEvalOr404(projectRoot: string, id: string) {
-  const ref = await findEvalFile(projectRoot, id);
-  if (ref === undefined) throw new RouteError(404, "EVAL_NOT_FOUND", `Eval not found: ${id}`);
-  return ref;
+  engineCheckStatus(c.engineStatus());
 }
 
 async function runByIdOr404(c: Ctx, id: string): Promise<EvalRunRow> {
-  const row = await c.store.getEvalRun(id);
-  if (row === null) throw new RouteError(404, "EVAL_RUN_NOT_FOUND", `Eval run not found: ${id}`);
-  return row;
+  return runByIdOr404Shared(c.store, id);
 }
-
-type EvalDetailWire = {
-  id: string;
-  path: string;
-  file_hash: string;
-  definition: unknown;
-  yaml: string;
-  findings: ValidationFinding[];
-  runs_count: number;
-  last_run: ReturnType<typeof runHeadline> | null;
-};
 
 function catalogOptions(c: Ctx) {
   return c.isKnownModel ? { isKnownModel: c.isKnownModel } : {};
 }
 
-async function evalDetail(c: Ctx, projectRoot: string, absPath: string): Promise<EvalDetailWire> {
-  const manifest = await manifestForWrite(projectRoot);
-  const entries = await loadEvalCatalog(manifest, catalogOptions(c));
-  const entry = entries.find((e) => path.resolve(e.absPath) === path.resolve(absPath));
-  const bytes = await readFile(absPath);
-  const id = entry?.outcome.ok ? entry.outcome.value.id : evalStem(path.basename(absPath));
-  let runsCount = 0;
-  let cursor: string | undefined;
-  do {
-    const page = await c.store.listEvalRuns({ projectRoot, evalId: id, limit: MAX_LIMIT, ...(cursor ? { cursor } : {}) });
-    runsCount += page.items.length;
-    cursor = page.nextCursor ?? undefined;
-  } while (cursor !== undefined);
-  const last = (await completedRunsNewestFirst(c.store, projectRoot, id, 1))[0];
-  return {
-    id,
-    path: rel(projectRoot, absPath),
-    file_hash: contentHash(bytes),
-    definition: entry?.outcome.ok ? entry.outcome.value.file : null,
-    yaml: bytes.toString("utf8"),
-    findings: entry?.findings ?? [],
-    runs_count: runsCount,
-    last_run: last ? runHeadline(last) : null,
-  };
+async function evalDetail(c: Ctx, projectRoot: string, absPath: string) {
+  return buildEvalDetail({
+    store: c.store,
+    projectRoot,
+    absPath,
+    ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
+  });
 }
 
-async function planFindings(
-  c: Ctx,
-  projectRoot: string,
-  evalPath: string,
-  evalText: string,
-): Promise<{ ok: boolean; findings: ValidationFinding[] }> {
-  const built = await buildEvalPlan({
+async function planFindings(c: Ctx, projectRoot: string, evalPath: string, evalText: string) {
+  return planFindingsShared({
     projectRoot,
     evalPath,
     evalText,
-    evalRunId: "er_validate",
-    engine: { name: ENGINE_NAME, version: PINNED_PROMPTFOO_VERSION, nodeVersion: process.versions.node },
     ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
   });
-  return { ok: built.ok, findings: built.findings };
 }
 
 function targetLabelFilter(items: EvalListItem[], projectRoot: string, url: URL): EvalListItem[] {
@@ -370,25 +293,10 @@ function targetLabelFilter(items: EvalListItem[], projectRoot: string, url: URL)
 
 async function handleEvalList(c: Ctx): Promise<void> {
   const projectRoot = await projectRootFor(c, wireFromQuery(c));
-  const manifest = await manifestForWrite(projectRoot);
-  const datasetCache = new Map<string, Promise<number | undefined>>();
-  const entries = await loadEvalCatalog(manifest, {
-    ...catalogOptions(c),
-    datasetReportFor: async (loaded: LoadedEval) => {
-      const { datasetPath } = resolveEvalPaths(loaded.file, loaded.path);
-      if (!(await exists(datasetPath))) return undefined;
-      const report = await loadDatasetFile(datasetPath, { root: projectRoot });
-      datasetCache.set(datasetPath, Promise.resolve(report.cases.length));
-      return report;
-    },
-  });
-  const counts = new Map<string, number>();
-  for (const [key, value] of datasetCache) counts.set(key, (await value) ?? 0);
-  const { items, banner } = await buildEvalListItems({
+  const { items, banner, manifest } = await loadEvalListItems({
     store: c.store,
     projectRoot,
-    entries,
-    datasetCases: (abs) => counts.get(abs) ?? 0,
+    ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
   });
   const q = c.url.searchParams.get("q")?.trim().toLowerCase();
   const filtered = targetLabelFilter(items, projectRoot, c.url).filter((item) => {
@@ -449,11 +357,12 @@ async function handleEvalValidate(c: Ctx): Promise<void> {
     derived = renderEvalCreateYaml(input.definition as EvalFile);
   }
 
-  const parsed = parseEvalOutcome(derived, evalAbs, projectRoot);
-  const checked = await planFindings(c, projectRoot, evalAbs, derived);
-  const findings = checked.findings.length > 0 || parsed.ok
-    ? checked.findings
-    : evalFindingsFromIssues(rel(projectRoot, evalAbs), parsed.issues);
+  const { findings, parsed } = await validateEvalText({
+    projectRoot,
+    evalAbs,
+    derived,
+    ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
+  });
   c.json(c.res, 200, {
     findings,
     derived_yaml: derived,
@@ -481,7 +390,7 @@ async function handleEvalCreate(c: Ctx): Promise<void> {
   const checked = await planFindings(c, projectRoot, absPath, text);
   if (!checked.ok) {
     audit(c, "eval_create", "error", undefined, "EVAL_INVALID");
-    throw new RouteError(422, "EVAL_INVALID", "Eval definition is invalid", { findings: checked.findings });
+    throw new EvalApiError(422, "EVAL_INVALID", "Eval definition is invalid", { findings: checked.findings });
   }
   const written = await createEvalFile({ projectRoot, definition, ...(directory !== undefined ? { directory } : {}) });
   audit(c, "eval_create", "ok");
@@ -513,7 +422,7 @@ async function handleEvalUpdate(c: Ctx, id: string): Promise<void> {
   const checked = await planFindings(c, projectRoot, ref.absPath, text);
   if (!checked.ok) {
     audit(c, "eval_update", "error", undefined, "EVAL_INVALID");
-    throw new RouteError(422, "EVAL_INVALID", "Eval definition is invalid", { findings: checked.findings });
+    throw new EvalApiError(422, "EVAL_INVALID", "Eval definition is invalid", { findings: checked.findings });
   }
   await updateEvalFile({
     projectRoot,
@@ -738,7 +647,7 @@ async function handleRunEstimate(c: Ctx, id: string): Promise<void> {
     failedCaseIdsOf: (runId) => failedCaseIdsOf(c, projectRoot, ref.absPath, runId),
     ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
   });
-  if (!built.ok) throw new RouteError(422, "EVAL_INVALID", "Eval is invalid", { findings: built.findings });
+  if (!built.ok) throw new EvalApiError(422, "EVAL_INVALID", "Eval is invalid", { findings: built.findings });
   const { plan } = built;
   const last = (await completedRunsNewestFirst(c.store, projectRoot, plan.evalId, 1))[0];
   let previous: EstimatePreviousRun | null = null;
@@ -786,7 +695,7 @@ async function runDetailResponse(c: Ctx, row: EvalRunRow) {
 async function handleRunByNumber(c: Ctx, id: string, runNumber: number): Promise<void> {
   const projectRoot = await projectRootFor(c, wireFromQuery(c));
   const row = await c.store.getEvalRunByNumber(projectRoot, id, runNumber);
-  if (row === null) throw new RouteError(404, "EVAL_RUN_NOT_FOUND", `Eval run not found: ${id} #${runNumber}`);
+  if (row === null) throw new EvalApiError(404, "EVAL_RUN_NOT_FOUND", `Eval run not found: ${id} #${runNumber}`);
   c.json(c.res, 200, await runDetailResponse(c, row));
 }
 
@@ -795,38 +704,21 @@ async function handleRunList(c: Ctx): Promise<void> {
   const projectRoot = wire !== undefined ? await projectRootFor(c, wire) : undefined;
   const evalId = c.url.searchParams.get("eval_id") ?? undefined;
   const status = c.url.searchParams.get("status") ?? undefined;
-  if (status !== undefined && !(EVAL_RUN_STATUSES as readonly string[]).includes(status)) {
-    throw bad(`"status" must be one of ${EVAL_RUN_STATUSES.join(", ")}`);
-  }
   const stageRunId = c.url.searchParams.get("stage_run_id") ?? undefined;
   const limit = intParam(c.url, "limit", DEFAULT_LIMIT, 1, MAX_LIMIT);
   const cursor = c.url.searchParams.get("cursor") ?? undefined;
-  let page;
-  try {
-    page = await c.store.listEvalRuns({
+  c.json(
+    c.res,
+    200,
+    await listEvalRunsPage(c.store, {
       ...(projectRoot !== undefined ? { projectRoot } : {}),
       ...(evalId !== undefined ? { evalId } : {}),
-      ...(status !== undefined ? { status: status as (typeof EVAL_RUN_STATUSES)[number] } : {}),
+      ...(status !== undefined ? { status } : {}),
       ...(stageRunId !== undefined ? { stageRunId } : {}),
       limit,
       ...(cursor !== undefined ? { cursor } : {}),
-    });
-  } catch (err) {
-    if (cursor !== undefined && err instanceof SyntaxError) throw bad("Invalid cursor", "invalid_cursor");
-    throw err;
-  }
-  const items = await Promise.all(
-    page.items.map(async (row) => {
-      const headline = runHeadline(row);
-      if (stageRunId === undefined) return headline;
-      const match = (await c.store.listEvalResults(row.evalRunId)).find((r) => r.stageRunId === stageRunId);
-      return {
-        ...headline,
-        ...(match ? { result: { case_id: match.caseId, repeat_index: match.repeatIndex } } : {}),
-      };
     }),
   );
-  c.json(c.res, 200, { items, next_cursor: page.nextCursor });
 }
 
 async function handleRunGet(c: Ctx, id: string): Promise<void> {
@@ -834,58 +726,26 @@ async function handleRunGet(c: Ctx, id: string): Promise<void> {
 }
 
 async function handleResultsList(c: Ctx, id: string): Promise<void> {
-  const row = await runByIdOr404(c, id);
-  const status = c.url.searchParams.get("status") ?? undefined;
-  if (status !== undefined && !(RESULT_ROW_STATUSES as readonly string[]).includes(status)) {
-    throw bad(`"status" must be one of ${RESULT_ROW_STATUSES.join(", ")}`);
-  }
-  const limit = intParam(c.url, "limit", DEFAULT_LIMIT, 1, MAX_LIMIT);
-  const offset = decodeOffset(c.url.searchParams.get("cursor"));
-  const [cases, results, reviews] = await Promise.all([
-    c.store.getEvalCases(row.evalRunId),
-    c.store.listEvalResults(row.evalRunId),
-    c.store.getEvalReviews(row.evalRunId),
-  ]);
   const grader = c.url.searchParams.get("grader") ?? undefined;
   const q = c.url.searchParams.get("q") ?? undefined;
   const tag = c.url.searchParams.get("tag") ?? undefined;
-  const { rows, counts } = buildResultRows({
-    cases,
-    results,
-    reviews,
-    filter: {
-      ...(status !== undefined ? { status: status as ResultRowStatus } : {}),
+  const status = c.url.searchParams.get("status") ?? undefined;
+  c.json(
+    c.res,
+    200,
+    await buildResultsPage(c.store, id, {
+      ...(status !== undefined ? { status } : {}),
       ...(grader !== undefined ? { grader } : {}),
       ...(q !== undefined ? { q } : {}),
       ...(tag !== undefined ? { tag } : {}),
-    },
-  });
-  const page = rows.slice(offset, offset + limit);
-  c.json(c.res, 200, {
-    items: page,
-    next_cursor: offset + limit < rows.length ? encodeOffset(offset + limit) : null,
-    counts,
-  });
+      limit: intParam(c.url, "limit", DEFAULT_LIMIT, 1, MAX_LIMIT),
+      cursor: c.url.searchParams.get("cursor"),
+    }),
+  );
 }
 
 async function handleResultDetail(c: Ctx, id: string, caseId: string): Promise<void> {
-  const row = await runByIdOr404(c, id);
-  const [cases, results, reviews] = await Promise.all([
-    c.store.getEvalCases(row.evalRunId),
-    c.store.getEvalResultsForCase(row.evalRunId, caseId),
-    c.store.getEvalReviews(row.evalRunId),
-  ]);
-  const caseRow = cases.find((x) => x.caseId === caseId);
-  if (!caseRow || results.length === 0) {
-    throw new RouteError(404, "EVAL_RUN_NOT_FOUND", `Eval result not found: ${id}/${caseId}`);
-  }
-  const reviewByKey = new Map(reviews.map((r) => [resultKey(r.caseId, r.repeatIndex), r]));
-  c.json(c.res, 200, {
-    case: { ...caseRow.case, position: caseRow.position },
-    repeats: [...results]
-      .sort((a, b) => a.repeatIndex - b.repeatIndex)
-      .map((r) => resultToWire(r, reviewByKey.get(resultKey(r.caseId, r.repeatIndex)))),
-  });
+  c.json(c.res, 200, await buildResultDetail(c.store, id, caseId));
 }
 
 async function handleReviewPut(c: Ctx, id: string, caseId: string, repeat: number): Promise<void> {
@@ -938,7 +798,7 @@ async function handleCancel(c: Ctx, id: string): Promise<void> {
 async function handleDelete(c: Ctx, id: string): Promise<void> {
   const row = await runByIdOr404(c, id);
   if (row.status === "queued" || row.status === "running") {
-    throw new RouteError(409, "EVAL_RUN_ACTIVE", "Eval run is still running; cancel it first");
+    throw new EvalApiError(409, "EVAL_RUN_ACTIVE", "Eval run is still running; cancel it first");
   }
   const stageRunIds = await c.store.deleteEvalRun(id);
   for (const runId of stageRunIds) {
@@ -1035,7 +895,7 @@ async function datasetDetailFor(
   const usedBy = (uses.get(path.resolve(absPath)) ?? []).map((u) => u.id);
   const useEval = evalId !== undefined ? byId.get(evalId) : byId.get(usedBy[0] ?? "");
   if (evalId !== undefined && useEval === undefined) {
-    throw new RouteError(404, "EVAL_NOT_FOUND", `Eval not found: ${evalId}`);
+    throw new EvalApiError(404, "EVAL_NOT_FOUND", `Eval not found: ${evalId}`);
   }
   let inputSchema: unknown;
   if (useEval !== undefined) {
@@ -1070,7 +930,7 @@ function datasetQuery(url: URL): { offset: number; limit: number; tag?: string; 
 
 async function findDatasetOr404(projectRoot: string, id: string) {
   const ref = await findDatasetFile(projectRoot, id);
-  if (ref === undefined) throw new RouteError(404, "DATASET_NOT_FOUND", `Dataset not found: ${id}`);
+  if (ref === undefined) throw new EvalApiError(404, "DATASET_NOT_FOUND", `Dataset not found: ${id}`);
   return ref;
 }
 
@@ -1112,7 +972,7 @@ async function handleDatasetPreview(c: Ctx): Promise<void> {
   let inputSchema: unknown;
   if (body.target !== undefined) {
     const resolved = await resolveDatasetTarget(projectRoot, targetFrom(body.target));
-    if (!resolved.ok) throw new RouteError(422, "EVAL_INVALID", resolved.message);
+    if (!resolved.ok) throw new EvalApiError(422, "EVAL_INVALID", resolved.message);
     inputSchema = resolved.value.inputSchema;
   }
   c.json(c.res, 200, previewUpload({
@@ -1168,7 +1028,7 @@ async function handleDatasetCreate(c: Ctx): Promise<void> {
     if (body.source === "sample" || body.source === "runs") {
       const target = targetFrom(body.target);
       const resolved = await resolveDatasetTarget(projectRoot, target);
-      if (!resolved.ok) throw new RouteError(422, "EVAL_INVALID", resolved.message);
+      if (!resolved.ok) throw new EvalApiError(422, "EVAL_INVALID", resolved.message);
       if (body.source === "sample") {
         const sample = await sampleCases(c);
         cases = sample;
@@ -1241,7 +1101,7 @@ async function handleCandidates(c: Ctx): Promise<void> {
     if (v !== null && v !== "") target[key] = v;
   }
   const resolved = await resolveDatasetTarget(projectRoot, target);
-  if (!resolved.ok) throw new RouteError(422, "EVAL_INVALID", resolved.message);
+  if (!resolved.ok) throw new EvalApiError(422, "EVAL_INVALID", resolved.message);
   if (resolved.value.stageId === undefined) throw bad("target does not name a stage");
   const items = await listDatasetCandidates({
     store: c.store,
@@ -1258,7 +1118,7 @@ async function handleCandidates(c: Ctx): Promise<void> {
 }
 
 function mapError(c: Ctx, err: unknown): void {
-  if (err instanceof RouteError) {
+  if (err instanceof EvalApiError) {
     sendError(c, err.status, err.code, err.message, err.extra);
   } else if (err instanceof CatalogPathError) {
     c.json(c.res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
