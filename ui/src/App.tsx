@@ -14,9 +14,9 @@ import { RunsPage } from "./pages/RunsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { NewRunPage } from "./pages/NewRunPage";
 import { InboxPage } from "./pages/InboxPage";
-import { EvalsComingSoon } from "./redesign/evals/EvalsComingSoon";
 import { EvalsRedesign } from "./redesign/evals/EvalsRedesign";
 import { NewEvalWizard } from "./redesign/evals/newEval/NewEvalWizard";
+import { EditEvalPage } from "./redesign/evals/edit/EditEvalPage";
 import { EvalDetailRedirect } from "./redesign/evals/run/EvalDetailRedirect";
 import { ComparePage } from "./redesign/evals/compare/ComparePage";
 import { EvalRunPage } from "./redesign/evals/run/EvalRunPage";
@@ -222,10 +222,8 @@ function ConsoleRoot() {
     content = <ComparePage evalId={route.evalId} a={route.a} b={route.b} />;
   } else if (route.name === "evalNew") {
     content = <NewEvalWizard pipeline={route.pipeline} stage={route.stage} file={route.file} />;
-  } else if (
-    route.name === "evalEdit"
-  ) {
-    content = <EvalsComingSoon title="Evals" />;
+  } else if (route.name === "evalEdit") {
+    content = <EditEvalPage evalId={route.evalId} />;
   } else if (route.name === "datasets") {
     content = <DatasetsPage />;
   } else if (route.name === "datasetDetail") {

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { LuCheck, LuCircleAlert, LuCircleDashed } from "react-icons/lu";
 import { INPUT } from "../datasets/DialogShell";
 import type { CheckLine } from "./wizardModel";
@@ -92,3 +92,26 @@ export function YamlBlock({ title, yaml, loading, badge }: { title?: string; yam
     </div>
   );
 }
+
+export function NumberField({ value, parse, show, onCommit, error, prefix }: { value: number; parse: (t: string) => number | null; show: (n: number) => string; onCommit: (n: number) => void; error?: string | undefined; prefix?: string }) {
+  const [text, setText] = useState<string | null>(null);
+  const shown = text ?? show(value);
+  return (
+    <div className="relative">
+      {prefix ? <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[13px] text-[var(--sf-text-3)]">{prefix}</span> : null}
+      <input
+        className={`${INPUT} ${prefix ? "pl-6" : ""} ${error ? "border-[var(--sf-fail)]" : ""}`}
+        value={shown}
+        inputMode="decimal"
+        onChange={(e) => {
+          setText(e.target.value);
+          const n = parse(e.target.value);
+          if (n !== null) onCommit(n);
+          else onCommit(Number.NaN);
+        }}
+        onBlur={() => setText(null)}
+      />
+    </div>
+  );
+}
+
