@@ -340,7 +340,10 @@ async function handleEvalList(c: Ctx): Promise<void> {
     items: filtered,
     next_cursor: null,
     banner: aggregated.banner,
-    write_roots: await writeRoots(c),
+    ...(await writeRoots(c).then(
+      (roots) => ({ write_roots: roots }),
+      () => ({}),
+    )),
     footer: {
       evals: aggregated.items.length,
       datasets: aggregated.datasets,
