@@ -22,12 +22,14 @@ import {
   evalFilePath,
   goBack,
   goNext,
+  holdsCases,
   initialDraft,
   preselectRow,
   sameTarget,
   validateEvalId,
   visibleFindings,
   withTarget,
+  writeRootsFor,
   type Preselect,
   type WizardDraft,
 } from "./wizardModel";
@@ -76,8 +78,9 @@ export function NewEvalWizard({ pipeline, stage, file }: Preselect) {
 
   const row = data.rows.find((r) => sameTarget(r, draft.target)) ?? null;
   const fields = useStageFields(draft.target, row);
-  const { preview, dirs } = useWizardPreview(draft, datasetPaths, draft.target !== null && draft.dataset !== null);
-  const findings = visibleFindings(preview.findings, datasetWritten);
+  const writeRoots = writeRootsFor(data.writeRoots, draft.target);
+  const { preview, dirs } = useWizardPreview(draft, datasetPaths, draft.target !== null && draft.dataset !== null, writeRoots);
+  const findings = visibleFindings(preview.findings, datasetWritten || holdsCases(draft));
   const judgeModels = useMemo(() => data.models.filter((m) => m.judge_capable !== false).map((m) => m.id), [data.models]);
 
   const step = draft.step;

@@ -21,6 +21,7 @@ import type {
   EvalReview,
   EvalReviewInput,
   EvalRunDetail,
+  EvalDraftEstimateInput,
   EvalRunEstimate,
   EvalRunListItem,
   EvalRunListQuery,
@@ -138,6 +139,10 @@ export function fetchEvalRunEstimate(
   options: EvalRunOptions & { project_root?: string } = {},
 ): Promise<EvalRunEstimate> {
   return evalRequest(`/api/evals/${enc(id)}/runs/estimate${evalQueryString(options)}`);
+}
+
+export function fetchEvalDraftEstimate(input: EvalDraftEstimateInput): Promise<EvalRunEstimate> {
+  return evalRequest("/api/evals/runs/estimate", { method: "POST", body: input });
 }
 
 export function fetchEvalRunByNumber(id: string, runNumber: number, projectRoot?: string): Promise<EvalRunDetail> {

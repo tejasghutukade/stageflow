@@ -31,6 +31,10 @@ import {
   setBudget,
   validateEvalId,
   visibleFindings,
+  draftDatasetCases,
+  estimateText,
+  holdsCases,
+  writeRootsFor,
   withId,
   withTarget,
   filterStageRows,
@@ -329,5 +333,33 @@ describe("stage rows", () => {
     ] as EvalListItem[];
     expect(evalCountFor(rows.find((r) => r.stageId === "review")!, evals)).toBe(2);
     expect(evalCountFor(rows.find((r) => r.stageId === "inline")!, evals)).toBe(1);
+  });
+});
+
+describe("draft cases, write roots and estimate", () => {
+  it("holds cases only for uploaded or pasted datasets", () => {
+    const d = readyDraft();
+    expect(holdsCases(d)).toBe(true);
+    expect(draftDatasetCases(d)).toEqual([{ input: { diff: "x" } }]);
+    const sample = { ...d, dataset: datasetFromSample("review", []) };
+    expect(draftDatasetCases({ ...sample, dataset: { ...sample.dataset, cases: null } })).toBeUndefined();
+    expect(holdsCases(initialDraft())).toBe(false);
+  });
+  it("write roots win over the guess and only apply to the same project root", () => {
+    const roots = { project_root: "/p", evals_dir: "qa/evals", datasets_dir: "qa/data" };
+    expect(inferDirs("x", ["a/b.dataset.jsonl"], roots)).toEqual({ evals: "qa/evals", datasets: "qa/data" });
+    expect(inferDirs(null, [], null)).toEqual({ evals: "evals", datasets: "datasets" });
+    expect(writeRootsFor(roots, null)).toBe(roots);
+    expect(writeRootsFor(roots, { ...target, projectRoot: "/p" })).toBe(roots);
+    expect(writeRootsFor(roots, { ...target, projectRoot: "/other" })).toBeNull();
+    expect(writeRootsFor(undefined, null)).toBeNull();
+  });
+  it("shows no cost history only when estimate_usd is null", () => {
+    const base = { estimate_seconds: 90, judge_included: true };
+    expect(estimateText(null).hasEstimate).toBe(false);
+    expect(estimateText({ ...base, estimate_usd: null })).toEqual({ title: "No cost history yet", hasEstimate: false });
+    const t = estimateText({ ...base, estimate_usd: 0.42 });
+    expect(t.hasEstimate).toBe(true);
+    expect(t.title).toContain("$0.42");
   });
 });

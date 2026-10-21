@@ -1,4 +1,5 @@
 import { access, readFile } from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
 import {
   Document,
@@ -295,6 +296,7 @@ export function previewEvalUpdate(currentText: string, definition: unknown): str
   if (doc.errors.length > 0 || !isMap(doc.contents)) return renderEvalYaml(definition);
   const target = orderedDefinition(definition);
   if (!isPlain(target)) return renderEvalYaml(definition);
+  if (isDeepStrictEqual(doc.toJS(), JSON.parse(JSON.stringify(target)))) return currentText;
   syncMap(doc, doc.contents, target, []);
   return toText(doc);
 }

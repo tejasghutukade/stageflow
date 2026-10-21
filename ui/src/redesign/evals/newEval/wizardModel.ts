@@ -1,10 +1,12 @@
 import type {
   EvalCaseInput,
+  EvalRunEstimate,
   EvalDefinition,
   EvalListItem,
 } from "../../../api/evalTypes";
 import type { PipelineListing, ValidationFinding } from "../../../api/types";
 import { GRADER_ID_PATTERN, MAX_GRADERS, graderProblems, hasRubricWithoutJudge, newGrader, type GraderConfig, type GraderType } from "./graderForms";
+import { formatCost, formatDuration } from "../format";
 import type { StageInputField } from "./stageInput";
 
 export const WIZARD_STEPS = ["setup", "graders", "review"] as const;
@@ -146,8 +148,18 @@ export function datasetFilePath(dirs: WriteDirs, name: string): string {
   return joinPath(dirs.datasets, `${name}.dataset.jsonl`);
 }
 
+export type WriteRootsInfo = { project_root: string; evals_dir: string; datasets_dir: string };
+
+/** The server's write roots apply when the draft targets the same project root (or names none). */
+export function writeRootsFor(roots: WriteRootsInfo | null | undefined, target: WizardTarget | null): WriteRootsInfo | null {
+  if (!roots) return null;
+  const wanted = target?.projectRoot;
+  return wanted === undefined || wanted === roots.project_root ? roots : null;
+}
+
 /** The datasets directory sits next to the evals directory when no dataset shows where datasets live. */
-export function inferDirs(evalDir: string | null, datasetPaths: readonly string[]): WriteDirs {
+export function inferDirs(evalDir: string | null, datasetPaths: readonly string[], writeRoots?: WriteRootsInfo | null): WriteDirs {
+  if (writeRoots) return { evals: writeRoots.evals_dir, datasets: writeRoots.datasets_dir };
   const evals = evalDir ?? DEFAULT_EVALS_DIR;
   const known = datasetPaths.find((p) => p.includes("/"));
   if (known) return { evals, datasets: known.slice(0, known.lastIndexOf("/")) };
@@ -517,8 +529,25 @@ export function preselectRow(rows: readonly StageRow[], q: Preselect): { row: St
 
 export type CheckLine = { tone: "ok" | "error" | "warning" | "muted"; text: string };
 
-export function visibleFindings(findings: readonly ValidationFinding[], datasetOnDisk: boolean): ValidationFinding[] {
-  return datasetOnDisk ? [...findings] : findings.filter((f) => !DATASET_PENDING_CODES.has(f.code) && !f.code.startsWith("dataset."));
+export function holdsCases(draft: Pick<WizardDraft, "dataset">): boolean {
+  return (draft.dataset?.cases?.length ?? 0) > 0;
+}
+
+/** Cases the wizard holds travel with validate, try and estimate, so the dataset file is not read. */
+export function draftDatasetCases(draft: Pick<WizardDraft, "dataset">): EvalCaseInput[] | undefined {
+  return holdsCases(draft) ? (draft.dataset?.cases ?? undefined) : undefined;
+}
+
+/** Dataset findings are real when the file is on disk or the wizard sent its cases; otherwise they only mean "not written yet". */
+export function visibleFindings(findings: readonly ValidationFinding[], datasetKnown: boolean): ValidationFinding[] {
+  return datasetKnown ? [...findings] : findings.filter((f) => !DATASET_PENDING_CODES.has(f.code) && !f.code.startsWith("dataset."));
+}
+
+/** "No cost history yet" only when the estimate has no dollar figure. */
+export function estimateText(estimate: Pick<EvalRunEstimate, "estimate_usd" | "estimate_seconds" | "judge_included"> | null): { title: string; hasEstimate: boolean } {
+  if (!estimate || estimate.estimate_usd === null) return { title: NO_COST_HISTORY, hasEstimate: false };
+  const time = estimate.estimate_seconds !== null ? ` · about ${formatDuration(estimate.estimate_seconds * 1000)}` : "";
+  return { title: `About ${formatCost(estimate.estimate_usd)}${time}`, hasEstimate: true };
 }
 
 export function blockingFindings(findings: readonly ValidationFinding[]): ValidationFinding[] {

@@ -9,7 +9,7 @@ import {
 import { fetchEvalDatasets, fetchEvals } from "../../../api/evalsClient";
 import type { EvalDatasetListItem, EvalListItem } from "../../../api/evalTypes";
 import { stageInputFields, type StageInputField } from "./stageInput";
-import { buildStageRows, type StageRow, type WizardTarget } from "./wizardModel";
+import { buildStageRows, type StageRow, type WizardTarget, type WriteRootsInfo } from "./wizardModel";
 
 export type WizardData = {
   loading: boolean;
@@ -18,10 +18,11 @@ export type WizardData = {
   evals: EvalListItem[];
   datasets: EvalDatasetListItem[];
   models: CatalogModel[];
+  writeRoots: WriteRootsInfo | null;
 };
 
 export function useWizardData(): WizardData {
-  const [state, setState] = useState<WizardData>({ loading: true, error: null, rows: [], evals: [], datasets: [], models: [] });
+  const [state, setState] = useState<WizardData>({ loading: true, error: null, rows: [], evals: [], datasets: [], models: [], writeRoots: null });
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +41,7 @@ export function useWizardData(): WizardData {
         rows: buildStageRows(pipelines.pipelines, readOnly),
         evals: evals?.items ?? [],
         datasets: datasets?.items ?? [],
+        writeRoots: evals?.write_roots ?? null,
         models: models ? models.providers.flatMap((p) => p.models) : [],
       };
     })().then(
