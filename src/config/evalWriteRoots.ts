@@ -121,16 +121,29 @@ export async function findEvalFile(
   return refs.find((ref) => evalStem(path.basename(ref.absPath)) === id);
 }
 
+export function datasetIdsFor(refs: readonly CatalogFileRef[]): Map<string, string> {
+  const byStem = new Map<string, CatalogFileRef[]>();
+  for (const ref of refs) {
+    const stem = datasetStem(path.basename(ref.absPath));
+    byStem.set(stem, [...(byStem.get(stem) ?? []), ref]);
+  }
+  const ids = new Map<string, string>();
+  for (const [stem, group] of byStem) {
+    for (const ref of group) {
+      const format = datasetFormatFromPath(ref.absPath);
+      ids.set(ref.absPath, group.length > 1 && format !== "jsonl" ? `${stem}.${format ?? "unknown"}` : stem);
+    }
+  }
+  return ids;
+}
+
 export async function findDatasetFile(
   projectRoot: string,
   id: string,
   manifest?: LoadedManifest,
-  prefer: "jsonl" | "other" = "jsonl",
 ): Promise<CatalogFileRef | undefined> {
   const m = manifest ?? (await manifestForWrite(projectRoot));
-  const refs = (await listDatasetFiles(m)).filter(
-    (ref) => datasetStem(path.basename(ref.absPath)) === id,
-  );
-  const isJsonl = (ref: CatalogFileRef): boolean => datasetFormatFromPath(ref.absPath) === "jsonl";
-  return refs.find((ref) => isJsonl(ref) === (prefer === "jsonl")) ?? refs[0];
+  const refs = await listDatasetFiles(m);
+  const ids = datasetIdsFor(refs);
+  return refs.find((ref) => ids.get(ref.absPath) === id);
 }
