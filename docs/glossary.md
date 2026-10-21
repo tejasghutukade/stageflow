@@ -27,3 +27,14 @@ Terms that are easy to mix up.
 | **Console secret** | A write-only value saved in Settings → Project MCP that fills `${NAME}` in MCP servers | A stage `secrets:` entry from the Host environment |
 | **Grant** | A tool an agent may call (`tools:`), enforced on every call | An approval |
 | **Ask first** | A grant that needs a person's approval each time the call is new in a session | A block |
+| **Eval** | The file `evals/<id>.eval.yaml` that names one stage, a dataset, graders and run defaults. See [Evals](evals.md) | An eval run, or an agent's `evals:` groundedness setting ([Agent observability](agent-observability.md)) |
+| **Dataset** | A file of cases (`datasets/<name>.dataset.jsonl`, `.json` or `.csv`) | A task input |
+| **Case** | One test input in a dataset: `id`, `input`, optional `expected`, `tags` | A result |
+| **Repeat** | One execution of a case. Each case runs `repeats` times because models vary | A retry of a failed stage |
+| **Result** | One (case, repeat): the stage output and its grades | A pipeline run result |
+| **Grader** | One rule that scores a result: `schema`, `field`, `reference`, `rubric` or `code`. Its verdict on one result is a **grade** | A gate or a `verify` check |
+| **Rubric** | A grader written in words and judged by a model | A rubric for human reviewers |
+| **Judge** | The model that applies rubric graders (`anthropic`, `openai` or `openrouter` models) | The stage's own model |
+| **Eval run** | One execution of an eval: all results, grades, statistics, cost and a config snapshot (`er_…` ids, `Run #n`) | A pipeline run. The stage runs it starts are marked `origin = eval` and hidden from the Runs list |
+| **Config snapshot** | Everything that determined an eval run, stored with it and never edited | The eval file, which can change later |
+| **Fingerprint** | The first 8 hex characters of a hash of the config snapshot. Equal fingerprints mean the same setup | A git commit |

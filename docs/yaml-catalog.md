@@ -19,6 +19,8 @@ my-project/
     hello.pipeline.yaml       # inline or uses: stage entries
   tasks/
     hello.task.yaml
+  evals/                      # optional: *.eval.yaml (see Evals)
+  datasets/                   # optional: *.dataset.jsonl|json|csv
   workshop/                   # Workshop Author saves (scan root; created on the first save)
   .stageflow/                 # per-project settings only
 ```
@@ -36,6 +38,8 @@ Runnable examples live under [`examples/`](../examples/). This repo's manifest i
 | Pipeline | `*.pipeline.yaml` | `hello.pipeline.yaml` |
 | Task | `*.task.yaml` | `my-task.task.yaml` |
 | Trigger | `*.trigger.yaml` | `manual-hello-world.trigger.yaml` |
+| Eval | `*.eval.yaml` | `review-findings.eval.yaml` |
+| Dataset | `*.dataset.jsonl`, `*.dataset.json`, `*.dataset.csv` | `review-diffs.dataset.jsonl` |
 | Stage (external) | any `*.yaml` beside pipeline or under shared pool | `research.yaml`, `../stages/clarify.yaml` |
 
 CLI **`--pipeline` and `--task` require filesystem paths** — there is no bare-id fallback.
@@ -1227,6 +1231,139 @@ See [`tests/fixtures/triggers/dynamic-hello.trigger.yaml`](../tests/fixtures/tri
 
 See [`tests/fixtures/triggers/manual-dangling-refs.trigger.yaml`](../tests/fixtures/triggers/manual-dangling-refs.trigger.yaml) — a trigger whose `pipeline`/`task` reference ids that don't exist in the catalog.
 
+## Evals (`*.eval.yaml`) {#evals-eval-yaml}
+
+An eval names one stage, a dataset of cases, graders and run defaults. How to use evals, read results and what they cost: [Evals](evals.md). Sample: [`examples/evals/`](../examples/evals/).
+
+```yaml
+version: 1
+id: review-findings
+name: Review findings
+description: Review flags real defects
+type: capability
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+task:
+  goal: Review the change and list defects.
+defaults:
+  repeats: 3
+  judge: anthropic/claude-sonnet-4-5
+  pass_threshold: 0.8
+  max_cost_usd: 2
+  concurrency: 4
+graders:
+  - id: output-schema
+    type: schema
+    must_pass: true
+  - id: clear-and-actionable
+    type: rubric
+    rubric: A developer could act on each finding without asking questions.
+    scale: 1_to_5
+    pass_at: 4
+budget:
+  latency_ms: 300000
+  cost_usd: 0.3
+```
+
+Unknown keys at any level are an error (`eval.unknown_key`).
+
+| Key | Type | Required | Rule |
+|-----|------|----------|------|
+| `version` | `1` | yes | Only `1` is accepted |
+| `id` | string | yes | `^[a-z0-9][a-z0-9-]{0,62}$`. Must equal the filename stem. Unique in the project |
+| `name` | string | no | 1 to 80 characters. Default: `id` |
+| `description` | string | no | Up to 500 characters |
+| `type` | `capability` \| `regression` | no | Default `capability`. Display and guidance only |
+| `target` | object | yes | See below |
+| `dataset` | string | yes | Path to a dataset file, **relative to the eval file's directory**, inside the project root |
+| `task` | object | no | `{ goal?, context?, constraints? }`, all strings. Template for each case's task |
+| `defaults` | object | no | See below |
+| `graders` | array | yes | 1 to 20 graders with unique ids |
+| `budget` | object | no | `{ latency_ms?, cost_usd? }`, positive numbers. Per-result warnings, never failures |
+
+**Target.** `kind: stage` is required (`eval.target_kind_unsupported` otherwise) with exactly one of two forms. Paths are relative to the eval file.
+
+| Form | Keys | Meaning |
+|------|------|---------|
+| Pipeline stage | `pipeline: <path>`, `stage: <stage id>` | A stage of a pipeline (`uses:` or inline), materialized by the normal loader with the pipeline's model default |
+| Stage file | `file: <path>` | A standalone stage YAML file. Model resolves stage, then the manifest default |
+
+**Defaults.**
+
+| Key | Type | Default | Rule |
+|-----|------|---------|------|
+| `repeats` | integer | 3 | 1 to 10 |
+| `judge` | string | none | A model id `provider/model`. Required when a `rubric` grader has none of its own. Judge-capable providers: `anthropic`, `openai`, `openrouter` |
+| `pass_threshold` | number | 0.8 | `0 < x <= 1` |
+| `max_cost_usd` | number | 2 | `> 0`. Stage runs plus judge calls |
+| `concurrency` | integer | 4 | 1 to 8 |
+| `model` | string | none | Replaces the stage's model for every case |
+
+**Graders.** Common keys: `id` (same pattern as the eval id, unique), `type`, `description` (up to 200 characters), `weight` (number above 0, default 1) and `must_pass` (default `false`; a failing `must_pass` grader fails the result and its weight is ignored).
+
+| `type` | Keys | Notes |
+|--------|------|-------|
+| `schema` | none | Envelope `status` is `success` and the payload validates against the stage's `io.output.schema` (required) |
+| `field` | `checks`: non-empty array of `{ path, op, value? }` | All checks must hold. `path` is a dotted path over `{ status, summary, artifacts, payload }`, with `[n]` and `[*]`. `op`: `exists`, `not_empty`, `equals`, `not_equals`, `contains`, `matches`, `gte`, `lte`, `between`, `in`, `length_gte`, `length_lte` |
+| `reference` | `mode`: `each_mentioned` \| `equals` (required); `path` (default `payload`); `expected` (path into the case, required); `pass_at` (0 to 1, default 1) | `each_mentioned` needs an array of strings and scores the share found, case-insensitively |
+| `rubric` | `rubric` (1 to 4,000 characters, required); `scale`: `pass_fail` (default) \| `1_to_5`; `pass_at` (integer 1 to 5, default 4, only with `1_to_5`); `judge`; `examples` (up to 6) | Judged by a model. Examples are `{ verdict: pass\|fail, output, reason? }` for `pass_fail` and `{ score: 1-5, output, reason? }` for `1_to_5` |
+| `code` | `code`: body of a JavaScript function (required) | Receives `(output, testCase, context)`; returns a boolean, a number 0 to 1, or `{ pass, score?, reason? }`. 5 second limit. Runs on the author's machine with the author's permissions |
+
+`command` graders are not available. The grader types, scoring and statistics are explained in [Evals](evals.md#writing-an-eval).
+
+### Eval validation findings {#eval-validation-findings}
+
+`sf validate`, `sf eval validate` and the console report these with `category: "eval"`.
+
+| Code | Severity | When |
+|------|----------|------|
+| `eval.load_error` | error | YAML does not parse |
+| `eval.not_object` | error | The document is not a mapping |
+| `eval.invalid_version` | error | `version` is not `1` |
+| `eval.unknown_key` | error | A key that is not listed |
+| `eval.invalid_id` | error | `id` does not match the pattern |
+| `eval.id_filename_mismatch` | error | `id` differs from the filename stem |
+| `eval.duplicate_id` | error | Two evals in the project share an `id` |
+| `eval.invalid_field` | error | Wrong type or range |
+| `eval.target_kind_unsupported` | error | `target.kind` is not `stage` |
+| `eval.target_invalid` | error | Not exactly one target form |
+| `eval.target_unresolved` | error | The pipeline, stage or file is not found or does not load (for example no resolvable `model`) |
+| `eval.dataset_unresolved` | error | The dataset file is not found or is outside the project |
+| `eval.dataset_invalid` | error | The dataset file fails its own validation |
+| `eval.cases_skipped` | warning | Some cases fail the stage's `io.input.schema`; they are skipped when a run starts |
+| `eval.no_valid_cases` | error | No case remains after skipping |
+| `eval.grader_duplicate_id` | error | A repeated grader id |
+| `eval.grader_type_unsupported` | error | A type other than `schema`, `field`, `reference`, `rubric`, `code` (`command` has its own message) |
+| `eval.grader_invalid` | error | A type-specific rule is broken |
+| `eval.schema_grader_without_output_schema` | error | A `schema` grader on a stage with no `io.output.schema` |
+| `eval.judge_missing` | error | A rubric needs a judge and none is set |
+| `eval.judge_unknown_model` | warning | The judge id is not in the model catalog (the catalog may be offline) |
+| `eval.judge_same_as_stage` | warning | The effective judge is the stage's own model |
+| `eval.stage_has_gates` | warning | The target stage declares `gate_kinds` |
+| `eval.stage_needs_checkout` | warning | The stage `requires` a repository |
+| `eval.cases_missing_expected` | warning | A `reference` grader and some cases lack the `expected` path |
+| `eval.large_run` | warning | Cases x repeats is above 500 |
+| `eval.too_large_run` | error | Cases x repeats is above 5,000 |
+
+## Datasets (`*.dataset.jsonl`) {#datasets-dataset-jsonl}
+
+A dataset is a file of cases. The loader checks only the case shape; matching `input` to a stage happens when an eval uses the dataset.
+
+| Key | Type | Required | Rule |
+|-----|------|----------|------|
+| `id` | string | yes | `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, unique in the file |
+| `input` | object | yes | Becomes `task.input`; must match the stage's `io.input.schema` |
+| `title` | string | no | Up to 120 characters |
+| `expected` | any JSON | no | Reference data for `reference` graders and rubric judges |
+| `tags` | string[] | no | Up to 10, each `^[a-z0-9][a-z0-9-]{0,31}$` |
+| `goal` | string | no | Replaces the eval's `task.goal` for this case |
+| `metadata` | object | no | Free-form, never read by Stageflow |
+
+Formats: JSONL (one object per line, blank lines ignored), JSON (an array or `{ "cases": [...] }`) and CSV (header `id`, `title`, `goal`, `tags` split on `;`, `input.<name>`, `expected.<name>`, any header ending `:json` parsed as JSON). Limits: 5,000 cases, 1 MB per case, 50 MB per uploaded file. Dataset findings use `category: "dataset"`: `dataset.load_error`, `dataset.empty`, `dataset.not_object`, `dataset.invalid_shape`, `dataset.unknown_key`, `dataset.case_missing_id`, `dataset.case_invalid_id`, `dataset.duplicate_id`, `dataset.case_missing_input`, `dataset.invalid_field`, `dataset.csv_unknown_column`, `dataset.too_many_cases`, `dataset.case_too_large`, `dataset.file_too_large` (errors) and `dataset.input_mismatch`, `dataset.few_cases` (warnings). See [Evals: Datasets](evals.md#datasets).
+
 ## Manifest (`stageflow.yaml`)
 
 Declares catalog roots for **`sf validate`** (manifest-all) and operator-console browse. Optional top-level `model` is the global default LLM id for stages that omit both stage and pipeline `model` (see [Model defaults and precedence](#model-defaults-and-precedence)). Optional top-level `agent` selects the default execution backend and is independent of `model`.
@@ -1243,10 +1380,14 @@ catalog:
     - examples/hello-world
     - examples/plan-review
   triggers: []
+  evals: [evals]            # optional; default [evals]
+  datasets: [datasets]      # optional; default [datasets]
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
     trigger: "*.trigger.yaml"
+    eval: "*.eval.yaml"
+    dataset: ["*.dataset.jsonl", "*.dataset.json", "*.dataset.csv"]
   exclude:
     - tests/fixtures
 ```
@@ -1256,6 +1397,7 @@ catalog:
 - **`exclude`**: paths omitted from console browse (fixtures may still be loaded by explicit CLI path in tests).
 - **`patterns`**: glob for directory scans (defaults shown above).
 - **`triggers`**: catalog roots scanned for `*.trigger.yaml` — see [Triggers](#triggers-trigger-yaml).
+- **`evals`** and **`datasets`**: catalog roots scanned for `*.eval.yaml` and dataset files — see [Evals](#evals-eval-yaml). When a key is absent the loader scans `evals/` and `datasets/` under the project root; a key that is present replaces that default. `patterns.dataset` accepts a string or an array. `exclude` applies to both.
 
 Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (with an inline stage in `hello.pipeline.yaml`), and `tasks/`. The manifest lists `pipelines`, `tasks`, and `workshop` as scan roots. `workshop/` is created on the first Workshop save. There is no global `stages/` pool.
 

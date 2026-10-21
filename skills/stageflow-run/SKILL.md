@@ -205,6 +205,10 @@ MCP `get_run` / `wait_run` and `sf runs wait` / `sf runs show` `--json` carry li
 
 **Done when** that five-part report is printed.
 
+## Eval runs
+
+An eval run is not a pipeline run, so none of the steps above apply to it. When the human wants to run an eval, read [`../stageflow/references/evals.md`](../stageflow/references/evals.md) and follow it: `sf eval validate` first (free), say what the run will cost and wait for a yes, then `run_eval` (host up) or `sf eval run --json` (host down), and report `outcome`, `pass_rate` with its interval, `threshold`, `cost_total` and `url`. Eval tools are not in the list under [MCP tools](#mcp-tools) and `mcp-call.mjs` does not call them: use this harness's native Stageflow MCP tools when their names are in the tool list, otherwise the `sf eval` CLI.
+
 ## Non-goals
 
 This job starts, watches, and answers runs. It does not require `sf ui`. The operator console is not the answer path. It does not register or invent an MCP tool. It does not start `sf mcp`. It does not retry, resume, abandon, recover, cancel, delete, gc, or rerun stages or runs.

@@ -32,6 +32,8 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `secrets/mcp-secrets.json` | **keep** | Write-only store for the values behind those `${NAME}` references (directory `0700`, file `0600`, plaintext at the same trust level as `channel-secrets.json`) |
 | `secrets/mcp-oauth.key` | **keep** | Host key for the encrypted OAuth store (`0600`); `PI_MCP_ADAPTER_OAUTH_FILE_KEY` overrides it |
 | `runs/` | disposable | Per-run workspaces, stage attempts, artifacts |
+| `eval-engine/` | disposable | The eval engine installed by `sf eval engine install`: `eval-engine/<promptfoo-version>/` (about 1.2 GB, pinned version `0.124.0`). Re-installable. The Docker image bakes it in. See [Evals](evals.md#the-engine) |
+| `eval-runs/` | disposable | Work directory of an eval run in progress (`eval-runs/<evalRunId>/`: generated engine config, results, logs). Removed when the run ends unless `STAGEFLOW_EVALS_KEEP_WORKDIR=1`. Eval results themselves are in `state.db` |
 | `a2a-artifacts/` | disposable | A2A artifact bytes |
 | `repos/` | disposable | Shared bare-clone cache (`repos/<host>/<owner>/<repo>.git`); Host-owned, used for repository-bound runs |
 | `worktrees/` | disposable | Per-run checkouts (`worktrees/<runId>`); Host-owned, created on repository-bound start. When a run reaches `succeeded`, Stageflow may reclaim the worktree (keeping `run_branch`); the `checkout_root` column can still be recorded after the directory is gone. Failed/cancelled runs keep their worktrees until retention SLIM. |

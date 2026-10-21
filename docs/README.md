@@ -16,7 +16,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 |-----|-------------------|
 | [Quick start](quickstart.md) | Install, `sf init`, path-based run |
 | [YAML catalog](yaml-catalog.md) | Author dialect `io` / `verify` / `on_verify_fail` and wiring `route` / `entry` / `type: loop` / [Clone Chain](yaml-catalog.md#clone-chain) ([upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs)) |
-| [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf run-stage`, `sf validate`, `sf envelope`, `sf ui`, `sf mcp`, `sf providers` |
+| [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf run-stage`, `sf validate`, `sf eval`, `sf envelope`, `sf ui`, `sf mcp`, `sf providers` |
 | [Harness skills suite](skills-suite.md) | `npx skills add tejasghutukade/stageflow` — router + five job skills for Cursor, Claude Code, Codex, Pi, and OpenCode |
 
 ## Core concepts
@@ -38,6 +38,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [MCP servers](mcp-servers.md) | Add MCP servers, secrets and OAuth from Settings or `.mcp.json`; use them from agents and stages |
 | [Glossary](glossary.md) | Agent, agent session, pipeline run, connection, Project MCP and other terms |
 | [Workshop Author](workshop.md) | Chat-draft a pipeline at `#/workshop`, save it into the catalog, and run it |
+| [Evals](evals.md) | Check a stage against a dataset: eval files, datasets, graders (schema, field, reference, rubric, code), repeats and honest statistics, compare, cost limits, the engine, privacy, what is not built |
 | [Browser sessions](browser.md) | Stage `browser` field, saved logins (profiles), login check and human login pattern, queueing, teardown, headed vs headless, live view and watch-the-agent for Hosts with no screen, container browser host (development), Host config keys, what is not built |
 | [Browser sessions internals](browser-internals.md) | For contributors: module map, lifecycle, file layout, env contract, invariants, seams, extension recipes, test and debug guide for browser sessions |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
@@ -55,15 +56,16 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Console: Inbox](console-inbox.md) | Gates and agent approvals waiting on you, desktop notifications |
 | [Console: Pipeline runs](console-runs.md) | Run list, Start a run, run detail (Timeline, Graph, List; Transcript, Events, Envelope, Artifacts) |
 | [Console: Pipelines, tasks and catalog](console-pipelines-catalog.md) | Pipeline editor, Tasks, Catalog, Triggers, Workshop |
+| [Console: Evals](console-evals.md) | Evals list, New eval wizard, Datasets, Run dialog and live progress, results, case drawer, Compare |
 | [Console: Agents](console-agents.md) | Directory, create and edit, sessions, run inspector |
 | [Console: Connections](console-connections.md) | Channels, email accounts, tool servers |
 | [Console: Settings](console-settings.md) | Providers, Concurrency, MCP server, Project MCP, Notifications |
 | [Environment variables](environment-variables.md) | Every `STAGEFLOW_*` variable the Host reads |
 | [Migrating stage environments](migration-stage-environment.md) | Move stages to declared secrets and the curated stage environment |
 | [Triggers readiness](triggers-readiness.md) | Checklist: which trigger kinds and console options the Host runs today vs manual-only |
-| [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running, including standalone `run_stage` |
+| [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running, including standalone `run_stage` and the eval tools |
 | [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC, plus the wildcard-access `run_stage` operation |
-| [CI / headless](ci.md) | `--json`, exit codes, GitHub Actions, PR diagram dogfood |
+| [CI / headless](ci.md) | `--json`, exit codes, `sf eval run` in CI, GitHub Actions, PR diagram dogfood |
 
 ## Featured example
 

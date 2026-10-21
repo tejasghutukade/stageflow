@@ -94,7 +94,7 @@ A task with `repository` + `ref` (or `sf run --repository` / `--ref`) materializ
 
 ### Eval engine in the container {#eval-engine}
 
-The image installs the pinned eval engine (promptfoo `0.124.0`, build arg `PROMPTFOO_VERSION`) at build time into `/data/eval-engine/0.124.0` (`$STAGEFLOW_HOME/eval-engine/<version>`). It adds about **1.2 GB** to the image. A new named volume is seeded from the image on first mount. An existing volume or a bind mount over `/data` hides the baked-in copy; run `sf eval engine install` inside the container to install it there. The engine is only used by evals and never contacts promptfoo servers (a network guard blocks `*.promptfoo.app` and `*.promptfoo.dev`).
+The image installs the pinned eval engine (promptfoo `0.124.0`, build arg `PROMPTFOO_VERSION`) at build time into `/data/eval-engine/0.124.0` (`$STAGEFLOW_HOME/eval-engine/<version>`). It adds about **1.2 GB** to the image. A new named volume is seeded from the image on first mount. An existing volume or a bind mount over `/data` hides the baked-in copy; run `sf eval engine install` inside the container to install it there. The engine is only used by evals and never contacts promptfoo servers (a network guard blocks `*.promptfoo.app` and `*.promptfoo.dev`). It needs Node 22.22.0 or newer; `sf eval engine status` inside the container shows the Node it sees. Run evals with `sf eval run` through `docker exec`, the console, or the MCP `run_eval` tool. A judge model for rubric graders must be `anthropic/…`, `openai/…` or `openrouter/…`; its key is read from the container's auth file (an `api_key` entry for that provider) or the environment variable of the same name. See [Evals](evals.md#the-engine).
 
 ### Named volume
 
@@ -270,6 +270,7 @@ STAGEFLOW_DOCKER_SMOKE=1 npx vitest run tests/docker.containerBrowserHost.smoke.
 | `runs/<runId>/` | Situational | Artifact bytes; records live in `state.db`. |
 | `a2a-artifacts/` | Situational | Opt in with `sf backup --include-a2a-artifacts`. |
 | `repos/`, `worktrees/`, `cache/` (includes `cache/jiti`) | Disposable | Re-clonable / rebuildable. |
+| `eval-engine/`, `eval-runs/` | Disposable | The installed [eval engine](#eval-engine) (re-installable with `sf eval engine install`) and per-run engine work files, removed after each eval run. Eval results are in `state.db`. |
 | `backups/`, `restore-pending/` | Disposable | Products of backup/restore. |
 
 A volume snapshot of the whole data directory is **not** a substitute for `sf backup` — it is larger, includes disposable trees, and is taken while the WAL is moving.
@@ -420,6 +421,9 @@ docker exec -it stageflow sf skills install --from-zip "https://example.com/skil
 docker exec -it stageflow sf a2a validate --config /data/a2a.yaml
 docker exec -it stageflow sf a2a list --config /data/a2a.yaml
 docker exec -it stageflow sf a2a add-caller procurement --config /data/a2a.yaml
+
+# Eval engine, only if /data was mounted over the baked-in copy (see "Eval engine in the container").
+docker exec -it stageflow sf eval engine install
 
 # Provider OAuth (interactive / browser). API keys: boot env, not exec — see below.
 docker exec -it stageflow sf providers login anthropic --type oauth

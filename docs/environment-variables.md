@@ -52,6 +52,9 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_TOOLCHAIN_MANIFEST` | Path to the toolchain manifest used by preflight |
 | `STAGEFLOW_LEGACY_YAML` | `0` rejects legacy authoring keys |
 | `STAGEFLOW_ACTIVITY_TEXT_LIMIT`, `STAGEFLOW_ACTIVITY_VERBOSE` | Transcript truncation and verbosity |
+| `STAGEFLOW_EVALS_KEEP_WORKDIR` | `1` keeps the eval engine's work directory (`$STAGEFLOW_HOME/eval-runs/<evalRunId>/`: generated config, results, logs) after a run, for debugging. Otherwise it is removed when the run ends. See [Evals](evals.md#troubleshooting) |
+| `STAGEFLOW_EVALS_SMOKE` | Test only, not read by the Host: `1` enables the opt-in real-engine test `tests/evals.promptfoo.smoke.test.ts` (needs the engine installed and network access). See [Evals](evals.md#the-engine) |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | Judge key for rubric graders when the credential file has no `api_key` entry for that provider. See [Evals: Judge models](evals.md#judge-models) |
 | `STAGEFLOW_GC_INTERVAL_MS` | Garbage-collection interval (default 1 h, `0` disables) |
 | `STAGEFLOW_BARE_CACHE_TTL_MS`, `STAGEFLOW_SLIM_ARTIFACT_MAX_BYTES`, `STAGEFLOW_SLIM_*`, `STAGEFLOW_PURGE_*` | Retention knobs |
 | `STAGEFLOW_DISK_WARN_BYTES`, `STAGEFLOW_MIN_FREE_DISK_BYTES` | Free-disk warning and admission floor (bytes or `N%`) |
