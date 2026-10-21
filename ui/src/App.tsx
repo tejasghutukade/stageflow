@@ -16,6 +16,7 @@ import { NewRunPage } from "./pages/NewRunPage";
 import { InboxPage } from "./pages/InboxPage";
 import { EvalsComingSoon } from "./redesign/evals/EvalsComingSoon";
 import { EvalsRedesign } from "./redesign/evals/EvalsRedesign";
+import { NewEvalWizard } from "./redesign/evals/newEval/NewEvalWizard";
 import { EvalDetailRedirect } from "./redesign/evals/run/EvalDetailRedirect";
 import { ComparePage } from "./redesign/evals/compare/ComparePage";
 import { EvalRunPage } from "./redesign/evals/run/EvalRunPage";
@@ -215,8 +216,9 @@ function ConsoleRoot() {
     content = <EvalRunPage evalId={route.evalId} runNumber={route.runNumber} />;
   } else if (route.name === "evalCompare") {
     content = <ComparePage evalId={route.evalId} a={route.a} b={route.b} />;
+  } else if (route.name === "evalNew") {
+    content = <NewEvalWizard pipeline={route.pipeline} stage={route.stage} file={route.file} />;
   } else if (
-    route.name === "evalNew" ||
     route.name === "evalEdit" ||
     route.name === "evalCase"
   ) {
