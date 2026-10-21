@@ -123,6 +123,7 @@ export type EvalValidateInput = {
   definition?: EvalDefinition;
   yaml?: string;
   path?: string;
+  dataset_cases?: EvalCaseInput[];
 };
 
 export type EvalValidateResult = {
@@ -189,6 +190,14 @@ export type EvalTryInput = {
   definition?: EvalDefinition;
   case_id?: string;
   case?: EvalCaseInput;
+  dataset_cases?: EvalCaseInput[];
+};
+
+export type EvalDraftEstimateInput = {
+  project_root?: string;
+  definition: EvalDefinition;
+  dataset_cases?: EvalCaseInput[];
+  repeats?: number;
 };
 
 export type EvalRunOptions = {

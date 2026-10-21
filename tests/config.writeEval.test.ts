@@ -232,6 +232,33 @@ describe("updateEvalFile", () => {
     expect(await readFile(file, "utf8")).toBe(COMMENTED);
   });
 
+  const FLOW = `version: 1
+id: flow
+name: Flow
+target:
+  kind: stage
+  pipeline: p
+  stage: s
+dataset: d.dataset.jsonl
+graders:
+  - id: f
+    type: field
+    checks:
+      - { path: severity, op: in, value: [ high, medium ] }
+`;
+
+  it("previewEvalUpdate returns the original text for an unchanged flow-sequence file", () => {
+    expect(previewEvalUpdate(FLOW, parseYaml(FLOW))).toBe(FLOW);
+  });
+
+  it("previewEvalUpdate still rewrites on a real change in a flow-sequence file", () => {
+    const def = parseYaml(FLOW);
+    def.name = "Renamed";
+    const out = previewEvalUpdate(FLOW, def);
+    expect(out).not.toBe(FLOW);
+    expect(parseYaml(out).name).toBe("Renamed");
+  });
+
   async function edit(mutate: (d: Record<string, any>) => void): Promise<{ text: string; preview: string; onDisk: string }> {
     const { root, file, hash, definition } = await seeded();
     mutate(definition);

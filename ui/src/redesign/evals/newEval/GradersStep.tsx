@@ -109,7 +109,7 @@ function TryPanel({ draft, dirs, findings }: { draft: WizardDraft; dirs: WriteDi
     setState({ status: "running" });
     try {
       const root = draft.target?.projectRoot;
-      const result = await tryEvalCase({ definition, case: tryCaseOf(chosen, index), ...(root ? { project_root: root } : {}) });
+      const result = await tryEvalCase({ definition, case: tryCaseOf(chosen, index), dataset_cases: cases, ...(root ? { project_root: root } : {}) });
       setState({ status: "done", result });
     } catch (err) {
       setState({ status: "error", message: err instanceof Error ? err.message : String(err) });

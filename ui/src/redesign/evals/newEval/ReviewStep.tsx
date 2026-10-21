@@ -4,7 +4,8 @@ import { describeGrader, chipFor, weightLabel } from "./graderForms";
 import { CARD, Chip, Field, FindingsList, MONO, YamlBlock } from "./parts";
 import type { WizardPreview } from "./useWizardPreview";
 import {
-  NO_COST_HISTORY,
+  estimateText,
+  holdsCases,
   datasetFilePath,
   datasetSummary,
   evalFilePath,
@@ -38,7 +39,7 @@ export function ReviewStep({ draft, setDraft, takenIds, preview, dirs, datasetWr
   const idError = validateEvalId(draft.id, takenIds);
   const ds = draft.dataset;
   const d = draft.defaults;
-  const findings = visibleFindings(preview.findings, datasetWritten);
+  const findings = visibleFindings(preview.findings, datasetWritten || holdsCases(draft));
 
   return (
     <div className="flex min-h-0 flex-1 justify-center overflow-y-auto px-7 py-5">
@@ -98,7 +99,7 @@ export function ReviewStep({ draft, setDraft, takenIds, preview, dirs, datasetWr
             Will write <span className={`${MONO} text-[var(--sf-text-1)]`}>{evalFilePath(dirs, draft.id)}</span>
             {ds && !datasetWritten ? <> and <span className={`${MONO} text-[var(--sf-text-1)]`}>{datasetFilePath(dirs, ds.name)}</span></> : null}
           </span>
-          <span>{NO_COST_HISTORY}</span>
+          <span>{estimateText(preview.estimate).title}</span>
         </div>
 
         <YamlBlock yaml={preview.yaml} loading={preview.loading} />

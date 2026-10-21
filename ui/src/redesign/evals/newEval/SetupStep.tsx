@@ -9,7 +9,8 @@ import type { WizardData } from "./useWizardData";
 import type { WizardPreview } from "./useWizardPreview";
 import {
   JUDGE_SAME_HINT,
-  NO_COST_HISTORY,
+  estimateText,
+  holdsCases,
   datasetFilePath,
   datasetFromConfirm,
   datasetFromRuns,
@@ -70,7 +71,7 @@ export function SetupStep({ data, draft, setDraft, fields, preview, dirs }: Prop
     setDialog(null);
   }
 
-  const findings = visibleFindings(preview.findings, false);
+  const findings = visibleFindings(preview.findings, holdsCases(draft));
   const checks = setupChecks(draft, findings);
   const evalPath = evalFilePath(dirs, draft.id);
 
@@ -202,7 +203,7 @@ export function SetupStep({ data, draft, setDraft, fields, preview, dirs }: Prop
           <CheckList lines={checks} />
         </div>
         <div className={`${CARD} flex flex-col gap-0.5 p-3.5`}>
-          <span className="text-[13px] font-medium text-[var(--sf-text-1)]">{NO_COST_HISTORY}</span>
+          <span className="text-[13px] font-medium text-[var(--sf-text-1)]">{estimateText(preview.estimate).title}</span>
           <span className="text-xs text-[var(--sf-text-3)]">The cost limit of {formatCost(draft.defaults.maxCostUsd)} still applies.</span>
         </div>
         {selectedRow?.readOnly ? <Chip tone="warn">Read-only catalog</Chip> : null}
