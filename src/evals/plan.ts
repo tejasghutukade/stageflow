@@ -1,7 +1,7 @@
 import path from "node:path";
 import { checkDatasetAgainstStage } from "../config/datasetStageCheck.js";
 import type { DatasetCase } from "../config/datasetTypes.js";
-import { loadDatasetFile } from "../config/loadDataset.js";
+import { loadDatasetFile, parseDatasetCases } from "../config/loadDataset.js";
 import {
   EVAL_DEFAULT_CONCURRENCY,
   EVAL_DEFAULT_MAX_COST_USD,
@@ -55,6 +55,8 @@ export type BuildEvalPlanInput = {
   /** Eval file text to use instead of reading `evalPath`; the path still sets where relative paths resolve. */
   evalText?: string;
   overrides?: EvalOverrides;
+  /** Cases to use instead of reading the dataset file; the definition's dataset path is then only a label. */
+  datasetCases?: readonly unknown[];
   evalRunId: string;
   /** Case ids with at least one failed executed result in the given eval run; undefined when the run is unknown. */
   failedCaseIdsOf?: (evalRunId: string) => string[] | undefined | Promise<string[] | undefined>;
@@ -239,11 +241,20 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
   const loaded = withOverrides(base, overrides);
   const { file } = loaded;
   const paths = resolveEvalPaths(file, loaded.path);
-  const dataset = await loadDatasetFile(paths.datasetPath, { root: projectRoot });
+  const dataset =
+    input.datasetCases !== undefined
+      ? {
+          path: paths.datasetPath,
+          relPath: posix(projectRoot, paths.datasetPath),
+          format: undefined,
+          ...parseDatasetCases(input.datasetCases, { path: posix(projectRoot, paths.datasetPath) }),
+        }
+      : await loadDatasetFile(paths.datasetPath, { root: projectRoot });
 
   const validation = await validateEval(loaded, {
     projectRoot,
     datasetReport: dataset,
+    ...(input.datasetCases !== undefined ? { datasetInline: true } : {}),
     ...(input.isKnownModel ? { isKnownModel: input.isKnownModel } : {}),
   });
   const findings = [...validation.filter((f) => !RUN_SIZE_CODES.has(f.code)), ...dataset.findings];

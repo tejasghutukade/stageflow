@@ -27,6 +27,7 @@ export type ValidateEvalContext = {
   projectRoot: string;
   evals?: ReadonlyArray<{ id: string; absPath: string }>;
   datasetReport?: DatasetReport;
+  datasetInline?: boolean;
   isKnownModel?: (id: string) => Promise<boolean>;
 };
 
@@ -177,7 +178,9 @@ export async function validateEval(
   }
 
   const paths = resolveEvalPaths(file, loaded.path);
-  const datasetProblem = await datasetFileFinding(loaded, paths.datasetPath, ctx.projectRoot);
+  const datasetProblem = ctx.datasetInline
+    ? undefined
+    : await datasetFileFinding(loaded, paths.datasetPath, ctx.projectRoot);
   if (datasetProblem) {
     findings.push(datasetProblem);
     return findings;

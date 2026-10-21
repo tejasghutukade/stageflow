@@ -151,12 +151,14 @@ export async function planFindings(input: {
   projectRoot: string;
   evalPath: string;
   evalText: string;
+  datasetCases?: readonly unknown[];
   isKnownModel?: IsKnownModel;
 }): Promise<{ ok: boolean; findings: ValidationFinding[] }> {
   const built = await buildEvalPlan({
     projectRoot: input.projectRoot,
     evalPath: input.evalPath,
     evalText: input.evalText,
+    ...(input.datasetCases !== undefined ? { datasetCases: input.datasetCases } : {}),
     evalRunId: "er_validate",
     engine: { name: ENGINE_NAME, version: PINNED_PROMPTFOO_VERSION, nodeVersion: process.versions.node },
     ...(input.isKnownModel ? { isKnownModel: input.isKnownModel } : {}),
@@ -168,6 +170,7 @@ export async function validateEvalText(input: {
   projectRoot: string;
   evalAbs: string;
   derived: string;
+  datasetCases?: readonly unknown[];
   isKnownModel?: IsKnownModel;
 }) {
   const { projectRoot, evalAbs, derived } = input;
@@ -176,6 +179,7 @@ export async function validateEvalText(input: {
     projectRoot,
     evalPath: evalAbs,
     evalText: derived,
+    ...(input.datasetCases !== undefined ? { datasetCases: input.datasetCases } : {}),
     ...(input.isKnownModel ? { isKnownModel: input.isKnownModel } : {}),
   });
   const findings =

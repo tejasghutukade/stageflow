@@ -90,7 +90,7 @@ import {
 } from "../evals/read/runs.js";
 import { EvalStoreError } from "../evals/storeError.js";
 import type { EvalRunRow } from "../evals/storeTypes.js";
-import type { EvalFile } from "../evals/types.js";
+import type { EvalFile, EvalPlan } from "../evals/types.js";
 import { writeAudit } from "../logging/audit.js";
 import type { Logger } from "../logging/logger.js";
 import type { RunStore } from "../runstore/port.js";
@@ -311,6 +311,16 @@ function targetLabelFilter(items: EvalListItem[], projectRoot: string, url: URL)
   });
 }
 
+async function writeRoots(c: Ctx) {
+  const projectRoot = await projectRootFor(c, wireFromQuery(c), true);
+  const manifest = await manifestForWrite(projectRoot);
+  const [evals, datasets] = await Promise.all([
+    resolveWriteDir(projectRoot, manifest, "evals"),
+    resolveWriteDir(projectRoot, manifest, "datasets"),
+  ]);
+  return { project_root: projectRoot, evals_dir: evals.relDir, datasets_dir: datasets.relDir };
+}
+
 async function handleEvalList(c: Ctx): Promise<void> {
   const aggregated = await loadAggregatedEvalList({
     options: rootOptions(c),
@@ -330,12 +340,20 @@ async function handleEvalList(c: Ctx): Promise<void> {
     items: filtered,
     next_cursor: null,
     banner: aggregated.banner,
+    write_roots: await writeRoots(c),
     footer: {
       evals: aggregated.items.length,
       datasets: aggregated.datasets,
       cost_last_7_days: aggregated.cost,
     },
   });
+}
+
+function optDatasetCases(body: Record<string, unknown>): unknown[] | undefined {
+  const value = body.dataset_cases;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw bad(`"dataset_cases" must be an array`);
+  return value;
 }
 
 function parseDefinitionOrYaml(body: Record<string, unknown>): { definition?: unknown; yaml?: string } {
@@ -356,6 +374,7 @@ async function handleEvalValidate(c: Ctx): Promise<void> {
   const projectRoot = await projectRootFor(c, wireFromBody(body));
   const manifest = await manifestForWrite(projectRoot);
   const suppliedPath = optString(body, "path");
+  const datasetCases = optDatasetCases(body);
 
   let evalAbs: string;
   if (suppliedPath !== undefined) {
@@ -381,6 +400,7 @@ async function handleEvalValidate(c: Ctx): Promise<void> {
     projectRoot,
     evalAbs,
     derived,
+    ...(datasetCases !== undefined ? { datasetCases } : {}),
     ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
   });
   c.json(c.res, 200, {
@@ -520,6 +540,7 @@ async function handleTry(c: Ctx): Promise<void> {
   const hasDefinition = body.definition !== undefined;
   if ((evalId === undefined) === !hasDefinition) throw bad("Provide exactly one of eval_id or definition");
   const caseId = optString(body, "case_id");
+  const datasetCases = optDatasetCases(body);
   const hasCase = body.case !== undefined;
   if ((caseId === undefined) === !hasCase) throw bad("Provide exactly one of case_id or case");
   const located = evalId !== undefined ? await evalRootFor(c, wireFromBody(body), evalId) : undefined;
@@ -542,6 +563,7 @@ async function handleTry(c: Ctx): Promise<void> {
     projectRoot,
     evalPath,
     ...(definition !== undefined ? { definition } : {}),
+    ...(datasetCases !== undefined ? { datasetCases } : {}),
     ...(caseId !== undefined ? { caseId } : { case: tryCaseFrom(body.case) }),
   });
   audit(c, "eval_try", "ok");
@@ -685,6 +707,10 @@ async function handleRunEstimate(c: Ctx, id: string): Promise<void> {
           : null,
     };
   }
+  await sendEstimate(c, plan, previous);
+}
+
+async function sendEstimate(c: Ctx, plan: EvalPlan, previous: EstimatePreviousRun | null): Promise<void> {
   const estimate = estimateRun({
     resultsTotal: plan.cases.length * plan.repeats,
     rubricGraderCount: plan.graders.filter((g) => g.type === "rubric").length,
@@ -703,6 +729,32 @@ async function handleRunEstimate(c: Ctx, id: string): Promise<void> {
     judge_included: !estimate.judge_excluded,
     based_on_run_number: estimate.based_on_run_number,
   });
+}
+
+async function handleDraftEstimate(c: Ctx): Promise<void> {
+  const body = await readBody(c);
+  if (!isRecord(body.definition)) throw bad(`"definition" must be an object`);
+  const definition = body.definition as unknown as EvalFile;
+  const datasetCases = optDatasetCases(body);
+  const overrides = startOverrides({ ...(body.repeats !== undefined ? { repeats: body.repeats } : {}) });
+  const projectRoot = await projectRootFor(c, wireFromBody(body));
+  const manifest = await manifestForWrite(projectRoot);
+  const dir = await resolveWriteDir(projectRoot, manifest, "evals");
+  const rawId = (definition as { id?: unknown }).id;
+  const evalPath = path.join(dir.absDir, typeof rawId === "string" && ID_RE.test(rawId) ? `${rawId}.eval.yaml` : "new.eval.yaml");
+  assertInsideProject(projectRoot, evalPath, "eval path");
+  const built = await buildEvalPlan({
+    projectRoot,
+    evalPath,
+    evalText: renderEvalCreateYaml(definition),
+    ...(datasetCases !== undefined ? { datasetCases } : {}),
+    overrides,
+    evalRunId: "er_estimate",
+    engine: { name: ENGINE_NAME, version: PINNED_PROMPTFOO_VERSION, nodeVersion: process.versions.node },
+    ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
+  });
+  if (!built.ok) throw new EvalApiError(422, "EVAL_INVALID", "Eval is invalid", { findings: built.findings });
+  await sendEstimate(c, built.plan, null);
 }
 
 async function runDetailResponse(c: Ctx, row: EvalRunRow) {
@@ -1231,6 +1283,8 @@ export async function handleEvalRoutes(
   if (method === "POST" && pathname === "/api/evals/validate") return run(() => handleEvalValidate(c));
   if (method === "POST" && pathname === "/api/evals/sample") return run(() => handleSampleInstall(c));
   if (method === "POST" && pathname === "/api/evals/try") return run(() => handleTry(c));
+
+  if (method === "POST" && pathname === "/api/evals/runs/estimate") return run(() => handleDraftEstimate(c));
 
   let match = m(/^\/api\/evals\/([^/]+)\/runs\/estimate$/);
   if (method === "GET" && match) return run(() => handleRunEstimate(c, seg(match![1])));

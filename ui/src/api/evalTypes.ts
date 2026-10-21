@@ -71,7 +71,10 @@ export type EvalListResponse = {
   next_cursor: string | null;
   banner: EvalRegressionBanner | null;
   footer: { evals: number; datasets: number; cost_last_7_days: number };
+  write_roots?: EvalWriteRoots;
 };
+
+export type EvalWriteRoots = { project_root: string; evals_dir: string; datasets_dir: string };
 
 export type EvalListQuery = {
   project_root?: string;

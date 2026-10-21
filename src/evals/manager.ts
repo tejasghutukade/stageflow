@@ -108,6 +108,7 @@ export type TryOneInput = {
   projectRoot: string;
   evalPath: string;
   definition?: EvalFile | string;
+  datasetCases?: readonly unknown[];
   caseId?: string;
   case?: TryCaseInput;
 };
@@ -752,6 +753,7 @@ export class EvalRunManager {
         projectRoot: input.projectRoot,
         evalPath: input.evalPath,
         ...(evalText !== undefined ? { evalText } : {}),
+        ...(input.datasetCases !== undefined ? { datasetCases: input.datasetCases } : {}),
         overrides: { repeats: 1, ...(input.caseId !== undefined ? { case_ids: [input.caseId] } : {}) },
         evalRunId,
         engine: engineInfo,

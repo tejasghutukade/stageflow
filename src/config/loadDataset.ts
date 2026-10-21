@@ -334,6 +334,15 @@ export function parseDatasetText(
   else if (format === "json") entries = parseJson(text, filePath, findings);
   else entries = parseCsvEntries(text, filePath, findings, options.csvDelimiter);
 
+  return finishParse(entries, filePath, limits, findings);
+}
+
+function finishParse(
+  entries: RawEntry[],
+  filePath: string,
+  limits: DatasetLimits,
+  findings: ValidationFinding[],
+): ParseDatasetResult {
   const cases = validateEntries(entries, filePath, limits, findings);
 
   if (entries.length === 0 && !findings.some((f) => f.severity === "error")) {
@@ -354,6 +363,18 @@ export function parseDatasetText(
   }
 
   return { cases, findings, contentHash: datasetContentHash(cases) };
+}
+
+export function parseDatasetCases(
+  rawCases: readonly unknown[],
+  options: ParseDatasetOptions = {},
+): ParseDatasetResult {
+  const limits = { ...DATASET_LIMITS, ...options.limits };
+  const entries = rawCases.map((value, idx) => ({
+    value,
+    pos: { line: 0, label: `case ${idx + 1}` },
+  }));
+  return finishParse(entries, options.path ?? "", limits, []);
 }
 
 export async function loadDatasetFile(

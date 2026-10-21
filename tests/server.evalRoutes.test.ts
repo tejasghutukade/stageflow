@@ -520,6 +520,100 @@ describe("eval routes: evals", () => {
     expect(blocked.body.code).toBe("EVAL_RUN_ACTIVE");
     await h.post(`/api/eval-runs/${started.body.eval_run_id}/cancel`);
   });
+
+  describe("draft with inline dataset cases", () => {
+    const inlineCases = [
+      ...[1, 2, 3, 4, 5].map((n) => ({ id: `d${n}`, input: { diff: `change ${n}` } })),
+      { id: "bad", input: { other: 1 } },
+    ];
+    const draftDefinition = async (h: Harness) => {
+      const detail = await h.get(`/api/evals/review?${q(h)}`);
+      return { ...detail.body.definition, id: "draft", dataset: "../datasets/not-written-yet.dataset.jsonl" };
+    };
+
+    it("validates without reading the dataset file and reports skipped cases", async () => {
+      const h = await setup();
+      const definition = await draftDefinition(h);
+      const missing = await h.post("/api/evals/validate", { project_root: h.root, definition });
+      expect(missing.body.findings.map((f: any) => f.code)).toContain("eval.dataset_unresolved");
+
+      const res = await h.post("/api/evals/validate", { project_root: h.root, definition, dataset_cases: inlineCases });
+      expect(res.status).toBe(200);
+      const codes = res.body.findings.map((f: any) => f.code);
+      expect(codes).not.toContain("eval.dataset_unresolved");
+      expect(codes).toContain("eval.cases_skipped");
+      expect(res.body.findings.filter((f: any) => f.severity === "error")).toEqual([]);
+
+      const none = await h.post("/api/evals/validate", {
+        project_root: h.root,
+        definition,
+        dataset_cases: [{ id: "bad", input: { other: 1 } }],
+      });
+      expect(none.body.findings.map((f: any) => f.code)).toContain("eval.no_valid_cases");
+
+      const shape = await h.post("/api/evals/validate", {
+        project_root: h.root,
+        definition,
+        dataset_cases: [{ input: { diff: "x" } }],
+      });
+      expect(shape.body.findings.map((f: any) => f.code)).toContain("eval.dataset_invalid");
+
+      const notArray = await h.post("/api/evals/validate", { project_root: h.root, definition, dataset_cases: {} });
+      expect(notArray.status).toBe(400);
+    });
+
+    it("tries a case by id from the inline cases", async () => {
+      const h = await setup();
+      const definition = await draftDefinition(h);
+      const tried = await h.post("/api/evals/try", {
+        project_root: h.root,
+        definition,
+        dataset_cases: inlineCases,
+        case_id: "d2",
+      });
+      expect(tried.status).toBe(200);
+      expect(tried.body.result).toMatchObject({ case_id: "d2", status: "completed", passed: true });
+      expect(await readdir(path.join(h.root, "datasets"))).not.toContain("not-written-yet.dataset.jsonl");
+    });
+
+    it("estimates a draft from stage history without a previous run", async () => {
+      const h = await setup();
+      const definition = await draftDefinition(h);
+      const res = await h.post("/api/evals/runs/estimate", {
+        project_root: h.root,
+        definition,
+        dataset_cases: inlineCases,
+        repeats: 3,
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        results_total: 15,
+        stage_calls: 15,
+        judge_calls: 0,
+        judge_included: true,
+        based_on_run_number: null,
+      });
+      const defaultRepeats = await h.post("/api/evals/runs/estimate", {
+        project_root: h.root,
+        definition,
+        dataset_cases: inlineCases,
+      });
+      expect(defaultRepeats.body.results_total).toBe(10);
+      const missing = await h.post("/api/evals/runs/estimate", { project_root: h.root, definition });
+      expect(missing.status).toBe(422);
+      const noDefinition = await h.post("/api/evals/runs/estimate", { project_root: h.root });
+      expect(noDefinition.status).toBe(400);
+    });
+  });
+
+  it("exposes the directories a new eval and dataset would be written to", async () => {
+    const h = await setup();
+    const list = await h.get(`/api/evals?${q(h)}`);
+    expect(list.body.write_roots).toMatchObject({ evals_dir: "evals", datasets_dir: "datasets" });
+    expect(list.body.write_roots.project_root.endsWith(path.basename(h.root))).toBe(true);
+    const bare = await h.get("/api/evals");
+    expect(typeof bare.body.write_roots.project_root).toBe("string");
+  });
 });
 
 async function call(h: Harness, method: string, urlPath: string, body?: unknown) {
