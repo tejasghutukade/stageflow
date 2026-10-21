@@ -324,6 +324,18 @@ describe("eval routes", () => {
     for (const [path, route] of cases) expect(parseHash(`#${path}`)).toEqual(route);
   });
 
+  it("round-trips the openRun flag", () => {
+    expect(parseHash(`#${evalPath("e", { openRun: true })}`)).toEqual({ name: "evalDetail", evalId: "e", openRun: true });
+    expect(parseHash(`#${evalEditPath("e", { openRun: true })}`)).toEqual({ name: "evalEdit", evalId: "e", openRun: true });
+    expect(parseHash(`#${evalRunPath("e", 3, { tab: "config", openRun: true })}`)).toEqual({
+      name: "evalRun",
+      evalId: "e",
+      runNumber: 3,
+      tab: "config",
+      openRun: true,
+    });
+  });
+
   it("reads new before an eval id and ignores bad tabs and numbers", () => {
     expect(parseHash("#/evals/new")).toEqual({ name: "evalNew" });
     expect(parseHash("#/evals/e/runs/3?tab=nope")).toEqual({ name: "evalRun", evalId: "e", runNumber: 3 });

@@ -42,9 +42,9 @@ export type Route =
   | { name: "extensions" }
   | { name: "evals"; stage?: string }
   | { name: "evalNew"; pipeline?: string; stage?: string; file?: string }
-  | { name: "evalDetail"; evalId: string }
-  | { name: "evalEdit"; evalId: string }
-  | { name: "evalRun"; evalId: string; runNumber: number; tab?: EvalRunTab }
+  | { name: "evalDetail"; evalId: string; openRun?: boolean }
+  | { name: "evalEdit"; evalId: string; openRun?: boolean }
+  | { name: "evalRun"; evalId: string; runNumber: number; tab?: EvalRunTab; openRun?: boolean }
   | { name: "evalCase"; evalId: string; runNumber: number; caseId: string; repeat?: number }
   | { name: "evalCompare"; evalId: string; a?: number; b?: number }
   | { name: "datasets" }
@@ -218,17 +218,26 @@ export function evalNewPath(opts?: { pipeline?: string; stage?: string; file?: s
   return withQuery("/evals/new", params);
 }
 
-export function evalPath(evalId: string): string {
-  return `/evals/${encodeURIComponent(evalId)}`;
+export function evalPath(evalId: string, opts?: { openRun?: boolean }): string {
+  const params = new URLSearchParams();
+  if (opts?.openRun) params.set("openRun", "1");
+  return withQuery(`/evals/${encodeURIComponent(evalId)}`, params);
 }
 
-export function evalEditPath(evalId: string): string {
-  return `${evalPath(evalId)}/edit`;
+export function evalEditPath(evalId: string, opts?: { openRun?: boolean }): string {
+  const params = new URLSearchParams();
+  if (opts?.openRun) params.set("openRun", "1");
+  return withQuery(`/evals/${encodeURIComponent(evalId)}/edit`, params);
 }
 
-export function evalRunPath(evalId: string, runNumber: number, opts?: { tab?: EvalRunTab }): string {
+export function evalRunPath(
+  evalId: string,
+  runNumber: number,
+  opts?: { tab?: EvalRunTab; openRun?: boolean },
+): string {
   const params = new URLSearchParams();
   if (opts?.tab) params.set("tab", opts.tab);
+  if (opts?.openRun) params.set("openRun", "1");
   return withQuery(`${evalPath(evalId)}/runs/${runNumber}`, params);
 }
 
@@ -323,8 +332,10 @@ function parseEvalRoute(path: string, params: URLSearchParams): Route | null {
     const parts = path.slice("evals/".length).split("/");
     const evalId = decodeURIComponent(parts[0] ?? "");
     if (!evalId) return null;
-    if (parts.length === 1) return { name: "evalDetail", evalId };
-    if (parts.length === 2 && parts[1] === "edit") return { name: "evalEdit", evalId };
+    const openRun = params.get("openRun") === "1";
+    const flag = openRun ? { openRun: true } : {};
+    if (parts.length === 1) return { name: "evalDetail", evalId, ...flag };
+    if (parts.length === 2 && parts[1] === "edit") return { name: "evalEdit", evalId, ...flag };
     if (parts.length === 2 && parts[1] === "compare") {
       const a = positiveInt(params.get("a"));
       const b = positiveInt(params.get("b"));
@@ -341,7 +352,7 @@ function parseEvalRoute(path: string, params: URLSearchParams): Route | null {
       if (parts.length === 3) {
         const tabRaw = params.get("tab");
         const tab = EVAL_RUN_TABS.find((t) => t === tabRaw);
-        return { name: "evalRun", evalId, runNumber, ...(tab ? { tab } : {}) };
+        return { name: "evalRun", evalId, runNumber, ...(tab ? { tab } : {}), ...flag };
       }
       if (parts.length === 5 && parts[3] === "case" && parts[4]) {
         const repeatRaw = params.get("repeat");

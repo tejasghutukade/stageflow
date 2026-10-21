@@ -1,4 +1,4 @@
-import { LuChevronRight } from "react-icons/lu";
+import { LuChevronRight, LuPlay } from "react-icons/lu";
 import type { EvalRowModel, EvalTone, TrendDot } from "./evalListModel";
 
 const MONO = "font-['Geist_Mono',monospace]";
@@ -40,11 +40,13 @@ export function EvalRow({
   selected,
   onSelect,
   onOpen,
+  onRun,
 }: {
   row: EvalRowModel;
   selected: boolean;
   onSelect: () => void;
   onOpen: () => void;
+  onRun: () => void;
 }) {
   return (
     <div
@@ -115,6 +117,22 @@ export function EvalRow({
         <span className="block size-1.5 shrink-0 rounded-full" style={{ background: TONE_COLOR[row.status.tone] }} />
         <span className="whitespace-nowrap text-[13px] text-[var(--sf-text-1)]">{row.status.label}</span>
       </div>
+      <span className="block w-[52px] shrink-0">
+        {row.canRun ? (
+          <button
+            type="button"
+            aria-label={`Run ${row.id}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRun();
+            }}
+            className="flex h-7 items-center gap-1.5 rounded-md border border-[var(--sf-hairline-strong)] px-2 text-xs font-medium text-[var(--sf-text-1)]"
+          >
+            <LuPlay className="size-3" aria-hidden />
+            Run
+          </button>
+        ) : null}
+      </span>
       <LuChevronRight className="size-3.5 shrink-0 text-[var(--sf-text-3)]" aria-hidden />
     </div>
   );
