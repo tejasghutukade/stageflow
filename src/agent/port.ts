@@ -80,6 +80,8 @@ export type StageRunInput = {
   channels?: StageChannels;
   /** Memories attached to this stage. The host reads and replaces the page. */
   memory?: StageMemory;
+  /** Refreshed memory prompt; preferred over deriving from `memory` at prompt build time. */
+  memoryPrompt?: string;
   /** Bundled browser skill; set by the runtime when the stage has `browser`. */
   browserSkillFilePath?: string;
   forkEmitContext?: ForkEmitContext;

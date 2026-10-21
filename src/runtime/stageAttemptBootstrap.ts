@@ -4,6 +4,7 @@ import { channelHostFor, stageChannels, validateStageChannelConnections, workerS
 import { bindStageMemory } from "../memory/access.js";
 import { memoryHostFor } from "../memory/host.js";
 import { workerMemoryForStage } from "../memory/worker.js";
+import { memoryPrompt } from "../tools/memoryTools.js";
 import { EmailError } from "../email/port.js";
 import type {
   StagePort,
@@ -749,6 +750,11 @@ export async function openStageAttempt(
       throw error;
     }
   }
+  const stageMemory = input.stage.memories?.length
+    ? process.env.SF_STAGE_WORKER === "1"
+      ? await workerMemoryForStage(input.stage.memories)
+      : await bindStageMemory(memoryHostFor(), input.stage.memories)
+    : undefined;
   const opened = await openStageWithOperatorCatalog(
     input.agent,
     {
@@ -770,11 +776,9 @@ export async function openStageAttempt(
         channels: process.env.SF_STAGE_WORKER === "1" ? workerStageChannels()
           : stageChannels(channelHostFor(input.factoryCwd ?? process.cwd()), input.stage, input.runId),
       } : {}),
-      ...(input.stage.memories?.length ? {
-        memory: process.env.SF_STAGE_WORKER === "1"
-          ? await workerMemoryForStage(input.stage.memories)
-          : await bindStageMemory(memoryHostFor(), input.stage.memories),
-      } : {}),
+      ...(stageMemory
+        ? { memory: stageMemory, memoryPrompt: await memoryPrompt(stageMemory) }
+        : {}),
       ...(input.sessionMode !== undefined ? { sessionMode: input.sessionMode } : {}),
       onActivity: (event) => {
         input.onActivity?.(

@@ -599,7 +599,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         }
         if (pathname === "/api/memories" || pathname.startsWith("/api/memories/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
-          if (!boot.memories) { json(res, 503, { code: "MEMORY_UNREADABLE" }); return true; }
+          if (!boot.memories) { json(res, 503, { code: "memory.unavailable" }); return true; }
           if (await handleMemoryRoutes(req, method, pathname, boot.memories, res, json)) return true;
         }
         if (pathname === "/api/connections" || pathname.startsWith("/api/connections/")) {

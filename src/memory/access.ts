@@ -3,6 +3,7 @@ import { MemoryError, type MemoryCardHit, type MemoryHost, type MemoryMeta } fro
 /** What a stage or agent session is allowed to do with the memories attached to it. */
 export type StageMemory = {
   attachments: MemoryMeta[];
+  refreshAttachments(): Promise<MemoryMeta[]>;
   read(id: string): Promise<string>;
   replace(id: string, content: string): Promise<void>;
   addCard(id: string, key: string, body: string): Promise<void>;
@@ -49,6 +50,13 @@ export async function attachMemory(ids: readonly string[], port: MemoryPort): Pr
   const allowed = new Set(ids);
   return {
     attachments,
+    async refreshAttachments() {
+      const next: MemoryMeta[] = [];
+      for (const id of ids) next.push(await port.meta(id));
+      attachments.length = 0;
+      attachments.push(...next);
+      return next;
+    },
     async read(id) {
       gate(allowed, id);
       return port.read(id);
@@ -102,13 +110,13 @@ export async function runMemoryRequest(
   if (typeof id !== "string" || !allowed.includes(id)) throw new MemoryError("MEMORY_NOT_ATTACHED");
   if (type === "memory.read") return { body: await host.read(id) };
   if (type === "memory.replace") {
-    if (typeof args.content !== "string") throw new MemoryError("MEMORY_TOO_LARGE");
+    if (typeof args.content !== "string") throw new MemoryError("MEMORY_UNREADABLE");
     await host.replace(id, args.content);
     return {};
   }
   if (type === "memory.addCard" || type === "memory.updateCard") {
     if (typeof args.key !== "string") throw new MemoryError("MEMORY_INVALID_KEY");
-    if (typeof args.content !== "string") throw new MemoryError("MEMORY_TOO_LARGE");
+    if (typeof args.content !== "string") throw new MemoryError("MEMORY_UNREADABLE");
     if (type === "memory.addCard") await host.addCard(id, args.key, args.content);
     else await host.updateCard(id, args.key, args.content);
     return {};
@@ -118,8 +126,8 @@ export async function runMemoryRequest(
     return { body: await host.readCard(id, args.key) };
   }
   if (type === "memory.searchCards") {
-    if (typeof args.query !== "string") throw new MemoryError("MEMORY_UNREADABLE");
-    return { hits: await host.searchCards(id, args.query) };
+    const query = typeof args.query === "string" ? args.query : "";
+    return { hits: await host.searchCards(id, query) };
   }
   return { meta: await host.readMeta(id) };
 }

@@ -82,6 +82,15 @@ describe("memory card routes", () => {
     });
   });
 
+  it("returns no-previous when the cover was never replaced", async () => {
+    const memory = await host();
+    await memory.create({ id: "pool", description: "People already sourced." });
+    expect(await invoke(memory, "GET", "/api/memories/pool/previous")).toMatchObject({
+      status: 404,
+      body: { code: "MEMORY_NO_PREVIOUS" },
+    });
+  });
+
   it("returns not-found for a missing key and too-large for an over-cap body", async () => {
     const memory = await host();
     await memory.create({ id: "pool", description: "People already sourced." });

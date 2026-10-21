@@ -1,7 +1,7 @@
 import { useEffect, useRef, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { Markdown } from "@astryxdesign/core/Markdown";
-import { LuBookOpen, LuClock, LuHistory, LuLock, LuPencil, LuRotateCcw, LuSave, LuSearch, LuTrash2, LuTriangleAlert, LuX } from "react-icons/lu";
+import { LuBookOpen, LuClock, LuLock, LuPencil, LuRotateCcw, LuSave, LuSearch, LuTrash2, LuTriangleAlert, LuX } from "react-icons/lu";
 import { lineDiff } from "./lineDiff";
 
 const MONO = "sf-mono";
@@ -19,6 +19,7 @@ function VersionToggle({ previous, onChange }: { previous: boolean; onChange: (p
     <div className="flex h-7 items-center rounded-md bg-[var(--sf-ground)] p-0.5">
       <button
         type="button"
+        aria-pressed={!previous}
         onClick={() => onChange(false)}
         className={`h-6 rounded-sm px-2.5 text-xs leading-[1.33333] ${previous ? "text-[var(--sf-text-3)]" : "bg-[var(--sf-raised)] font-medium text-[var(--sf-text-1)]"}`}
       >
@@ -26,6 +27,7 @@ function VersionToggle({ previous, onChange }: { previous: boolean; onChange: (p
       </button>
       <button
         type="button"
+        aria-pressed={previous}
         onClick={() => onChange(true)}
         className={`h-6 rounded-sm px-2.5 text-xs leading-[1.33333] ${previous ? "bg-[var(--sf-raised)] font-medium text-[var(--sf-text-1)]" : "text-[var(--sf-text-3)]"}`}
       >
@@ -150,16 +152,7 @@ export function CoverPanel({
           </span>
         ) : (
           <span key="cover-reading" className="flex items-center gap-1.5">
-            {previous !== null ? (
-              <button
-                type="button"
-                onClick={() => onShowPrevious(!showPrevious)}
-                className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs leading-[1.33333] text-[var(--sf-text-2)]"
-              >
-                <LuHistory className="size-3.5" aria-hidden />
-                {showPrevious ? "Current" : "Previous"}
-              </button>
-            ) : null}
+            {previous !== null ? <VersionToggle previous={showPrevious} onChange={onShowPrevious} /> : null}
             <button
               type="button"
               onClick={(event) => { event.preventDefault(); onEdit(); }}
@@ -206,6 +199,7 @@ export function CardsSection({
   editing,
   showPrevious,
   saving,
+  loading,
   onFilter,
   onOpen,
   onDraft,
@@ -225,6 +219,7 @@ export function CardsSection({
   editing: boolean;
   showPrevious: boolean;
   saving: boolean;
+  loading: boolean;
   onFilter: (value: string) => void;
   onOpen: (key: string) => void;
   onDraft: (value: string) => void;
@@ -255,6 +250,7 @@ export function CardsSection({
               value={filter}
               onChange={(event) => onFilter(event.target.value)}
               placeholder="Search cards…"
+              aria-label="Filter cards"
               className="min-w-0 flex-1 bg-transparent text-xs leading-[1.33333] text-[var(--sf-text-1)] outline-none placeholder:text-[var(--sf-text-3)]"
             />
           </label>
@@ -325,7 +321,7 @@ export function CardsSection({
                     </button>
                   ) : (
                     <>
-                      <button type="button" onClick={onEdit} className={`${GHOST_BTN} text-[var(--sf-text-1)]`}>
+                      <button type="button" disabled={loading} onClick={onEdit} className={`${GHOST_BTN} text-[var(--sf-text-1)] disabled:opacity-40`}>
                         <LuPencil className="size-3" aria-hidden />
                         Edit
                       </button>
@@ -338,7 +334,11 @@ export function CardsSection({
                 </span>
               )}
             </div>
-            {editing ? (
+            {loading ? (
+              <div className="flex flex-1 items-center justify-center px-5 py-10" data-testid="memory-card-loading">
+                <p className="text-[13px] leading-normal text-[var(--sf-text-3)]">Opening card…</p>
+              </div>
+            ) : editing ? (
               <SourceEditor value={draft} onChange={onDraft} testId="memory-card-draft" />
             ) : diffing ? (
               <div className="flex flex-1 flex-col" data-testid="memory-previous-card">
@@ -405,13 +405,18 @@ export function DeleteCardDialog({
       }}
       data-testid="memory-delete-dialog"
     >
-      <div className="flex w-[440px] max-w-[calc(100%-32px)] flex-col overflow-hidden rounded-xl border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)] shadow-[0px_24px_64px_rgba(0,0,0,0.55)]">
+      <div
+        className="flex w-[440px] max-w-[calc(100%-32px)] flex-col overflow-hidden rounded-xl border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)] shadow-[0px_24px_64px_rgba(0,0,0,0.55)]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="memory-delete-title"
+      >
         <div className="flex gap-4 p-5">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--sf-fail-bg)]">
             <LuTriangleAlert className="size-4 text-[var(--sf-fail)]" aria-hidden />
           </div>
           <div className="flex min-w-0 flex-1 flex-col gap-2">
-            <h2 className="break-words text-base font-semibold leading-[1.3] text-[var(--sf-text-1)]">Delete ‘{cardKey}’?</h2>
+            <h2 id="memory-delete-title" className="break-words text-base font-semibold leading-[1.3] text-[var(--sf-text-1)]">Delete ‘{cardKey}’?</h2>
             <p className="text-[13px] leading-[1.55] text-[var(--sf-text-2)]">
               This removes the card and its previous copy from {memoryId}. Agents lose it the next time they read this memory. This can’t be undone.
             </p>

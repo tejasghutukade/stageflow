@@ -154,6 +154,10 @@ export function createSearchMemoryCardsTool(memory: StageMemory) {
   };
 }
 
+export async function memoryPrompt(memory: StageMemory): Promise<string> {
+  return formatMemoryPrompt(await memory.refreshAttachments());
+}
+
 /** Prompt text and tools for one attached-memory session. */
 export function memorySession(memory: StageMemory) {
   return {

@@ -839,7 +839,7 @@ An id is `[a-z][a-z0-9_-]{0,63}`. An empty list is the same as omitting the key.
 
 Every stage in the pipeline receives that list. `memories` on a stage entry is rejected (`pipeline.invalid_shape`). There is no per-stage override.
 
-On the Pi backend each attached stage gets `read_memory` and `replace_memory` for the cover, and `add_memory_card`, `update_memory_card`, `read_memory_card`, and `search_memory_cards` for cards. The prompt lists the memory ids and their descriptions. It does not include the cover or any card body. The Claude backend does not provide the memory tools, so a pipeline that lists memories fails at stage start there, the same way a stage with `channels:` does.
+On the Pi backend each attached stage gets `read_memory` and `replace_memory` for the cover, and `add_memory_card`, `update_memory_card`, `read_memory_card`, and `search_memory_cards` for cards. The prompt lists the memory ids and their descriptions. It does not include the cover or any card body. Pi stages with memories block shell access to the memory store; use the memory tools instead. The Claude backend does not provide the memory tools, so a pipeline that lists memories fails at stage start there, the same way a stage with `channels:` does.
 
 The cover and each card body are capped at 64,000 characters. A write over the cap is refused. A memory holds at most 200 cards. Two cover replacements that overlap are last-write-wins.
 

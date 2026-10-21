@@ -36,7 +36,10 @@ export function PipelineMemoriesSection({
       </p>
       {failed ? <p className="text-xs text-[#e8a0a0]">Memories could not be loaded.</p> : null}
       {available && available.length === 0 ? (
-        <p className="text-xs text-[#8b8f98]">No memories yet. Create one from Memories.</p>
+        <p className="text-xs text-[#8b8f98]">
+          No memories yet.{" "}
+          <a href="#/memories" className="text-[#ecedee] underline-offset-2 hover:underline">Create one from Memories</a>.
+        </p>
       ) : null}
       <ul className="flex flex-col gap-1">
         {(available ?? []).map((item) => (

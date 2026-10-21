@@ -217,7 +217,7 @@ describe("memory host", () => {
     );
     await writeFile(path.join(folder, "body.md"), "Ada was sourced.\n", "utf8");
     const host = createMemoryHost(dir);
-    expect(await host.list()).toEqual([{ id: "pool", description: "People already sourced." }]);
+    expect(await host.list()).toEqual([{ id: "pool", description: "People already sourced.", cardCount: 0 }]);
     expect(await host.read("pool")).toBe("Ada was sourced.\n");
     expect(await host.listCards("pool")).toEqual([]);
   });

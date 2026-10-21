@@ -22,6 +22,7 @@ export const MEMORY_ERROR_CODES = [
   "MEMORY_INVALID_KEY",
   "MEMORY_EXISTS",
   "MEMORY_NOT_FOUND",
+  "MEMORY_NO_PREVIOUS",
   "MEMORY_CARD_EXISTS",
   "MEMORY_CARD_NOT_FOUND",
   "MEMORY_TOO_MANY_CARDS",
@@ -45,13 +46,15 @@ export class MemoryError extends Error {
 
 export type MemoryMeta = { id: string; description: string };
 
+export type MemoryListItem = MemoryMeta & { cardCount: number };
+
 export type MemoryRecord = MemoryMeta & { body: string };
 
 export type MemoryCardHit = { key: string; snippet: string };
 
 export type MemoryHost = {
   create(input: { id: string; description: string }): Promise<MemoryRecord>;
-  list(): Promise<MemoryMeta[]>;
+  list(): Promise<MemoryListItem[]>;
   read(id: string): Promise<string>;
   readMeta(id: string): Promise<MemoryMeta>;
   replace(id: string, body: string): Promise<void>;
@@ -200,12 +203,20 @@ function tempPath(dir: string, name: string): string {
 
 async function commitNew(dir: string, name: string, content: string): Promise<void> {
   const tmp = tempPath(dir, name);
+  const dest = path.join(dir, name);
   try {
     await writeFile(tmp, content, "utf8");
-    await link(tmp, path.join(dir, name));
-    await rm(tmp, { force: true });
+    try {
+      await link(tmp, dest);
+      await rm(tmp, { force: true });
+    } catch (linkError) {
+      if ((linkError as NodeJS.ErrnoException).code === "EEXIST") throw new MemoryError("MEMORY_CARD_EXISTS");
+      await copyFile(tmp, dest);
+      await rm(tmp, { force: true });
+    }
   } catch (error) {
     await rm(tmp, { force: true });
+    if (error instanceof MemoryError) throw error;
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new MemoryError("MEMORY_CARD_EXISTS");
     throw new MemoryError("MEMORY_UNREADABLE");
   }
@@ -291,10 +302,12 @@ export function createMemoryHost(home: string): MemoryHost {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
         throw error;
       }
-      const metas: MemoryMeta[] = [];
+      const metas: MemoryListItem[] = [];
       for (const name of names) {
         const inspected = inspectMemorySync(home, name);
-        if (inspected.ok) metas.push(inspected.meta);
+        if (!inspected.ok) continue;
+        const cards = await currentCards(memoryDir(home, name));
+        metas.push({ id: inspected.meta.id, description: inspected.meta.description, cardCount: cards.length });
       }
       metas.sort((a, b) => a.id.localeCompare(b.id));
       return metas;
@@ -323,7 +336,7 @@ export function createMemoryHost(home: string): MemoryHost {
     async readPreviousCover(id) {
       await readMetaAt(home, id);
       const text = await readKept(path.join(memoryDir(home, id), COVER_PREVIOUS));
-      if (text === null) throw new MemoryError("MEMORY_NOT_FOUND");
+      if (text === null) throw new MemoryError("MEMORY_NO_PREVIOUS");
       return text;
     },
 

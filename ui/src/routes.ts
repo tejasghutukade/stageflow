@@ -163,6 +163,14 @@ export function connectionPath(connectionId: string): string {
   return `/connections/${encodeURIComponent(connectionId)}`;
 }
 
+export function memoriesPath(): string {
+  return "/memories";
+}
+
+export function memoryPath(memoryId: string): string {
+  return `/memories/${encodeURIComponent(memoryId)}`;
+}
+
 export function agentsPath(): string {
   return "/agents";
 }

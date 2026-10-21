@@ -95,6 +95,8 @@ import type {
   WorkshopPickerRow,
   MemoryCardBody,
   MemoryCardList,
+  MemoryDetail,
+  MemorySummary,
 } from "./types";
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 
@@ -2270,9 +2272,6 @@ export async function writeCatalogFile(input: {
   };
 }
 
-export type MemorySummary = { id: string; description: string };
-export type MemoryDetail = MemorySummary & { body: string };
-
 export function fetchMemories(): Promise<{ memories: MemorySummary[] }> {
   return api("/api/memories");
 }
@@ -2281,8 +2280,19 @@ export function fetchMemory(id: string): Promise<MemoryDetail> {
   return api(`/api/memories/${encodeURIComponent(id)}`);
 }
 
-export function createMemory(input: { id: string; description: string }): Promise<MemoryDetail> {
-  return api("/api/memories", { method: "POST", body: JSON.stringify(input) });
+export async function createMemory(input: { id: string; description: string }): Promise<MemoryDetail> {
+  try {
+    return await api("/api/memories", { method: "POST", body: JSON.stringify(input) });
+  } catch (error) {
+    const code = (error as MemoryRequestError).code;
+    if (code === "MEMORY_TOO_LARGE") {
+      throw Object.assign(new Error("That text is too long."), { code }) as MemoryRequestError;
+    }
+    if (code === "MEMORY_INVALID_DESCRIPTION") {
+      throw Object.assign(new Error("Add a short description so you can spot this memory later."), { code }) as MemoryRequestError;
+    }
+    throw error;
+  }
 }
 
 export type MemoryRequestError = Error & { code?: string };
@@ -2326,7 +2336,7 @@ async function optionalMemoryBody(path: string): Promise<string | null> {
     return body.body;
   } catch (error) {
     const code = (error as MemoryRequestError).code;
-    if (code === "MEMORY_NOT_FOUND" || code === "MEMORY_CARD_NOT_FOUND") return null;
+    if (code === "MEMORY_NOT_FOUND" || code === "MEMORY_CARD_NOT_FOUND" || code === "MEMORY_NO_PREVIOUS") return null;
     throw error;
   }
 }

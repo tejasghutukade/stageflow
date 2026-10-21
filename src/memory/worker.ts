@@ -1,17 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { MemoryError, type MemoryCardHit, type MemoryErrorCode, type MemoryMeta } from "./host.js";
-import { attachMemory, type MemoryPort } from "./access.js";
+import { attachMemory, type MemoryPort, type MemoryVerb } from "./access.js";
 
 const TIMEOUT_MS = 30_000;
-
-type MemoryVerb =
-  | "memory.read"
-  | "memory.replace"
-  | "memory.meta"
-  | "memory.addCard"
-  | "memory.updateCard"
-  | "memory.readCard"
-  | "memory.searchCards";
 
 type MemoryResponse = {
   type?: string;

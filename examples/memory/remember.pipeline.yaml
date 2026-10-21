@@ -55,4 +55,4 @@ stages:
               type: string
           additionalProperties: false
 memories:
-  - new-notebook
+  - notebook

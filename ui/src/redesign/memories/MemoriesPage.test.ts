@@ -22,7 +22,7 @@ describe("memories page cards", () => {
     const html = renderToStaticMarkup(createElement(MemoriesPage, {
       memoryId: "pool",
       loaded: {
-        detail: { id: "pool", description: "People already sourced.", body: "new cover" },
+        detail: { id: "pool", description: "People already sourced.", body: "new cover", cardCount: 2 },
         previousCover: "old cover",
         keys: [KEY, "ada@example.com"],
         card: { key: KEY, body: "shortlisted", previous: "sourced" },
@@ -49,7 +49,7 @@ describe("memories page cards", () => {
     const html = renderToStaticMarkup(createElement(MemoriesPage, {
       memoryId: "pool",
       loaded: {
-        detail: { id: "pool", description: "People already sourced.", body: "only cover" },
+        detail: { id: "pool", description: "People already sourced.", body: "only cover", cardCount: 1 },
         previousCover: null,
         keys: ["ada@example.com"],
         card: { key: "ada@example.com", body: "sourced", previous: null },

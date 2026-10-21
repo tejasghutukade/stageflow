@@ -1187,7 +1187,12 @@ function AgentMemoriesField({
     <div className="flex flex-col gap-2" data-testid="agent-memories">
       <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Memories</span>
       <Note>Every session of this agent can read and replace these pages.</Note>
-      {available && available.length === 0 ? <Note>No memories yet. Create one from Memories.</Note> : null}
+      {available && available.length === 0 ? (
+        <Note>
+          No memories yet.{" "}
+          <a href="#/memories" className="text-[var(--sf-text-1)] underline-offset-2 hover:underline">Create one from Memories</a>.
+        </Note>
+      ) : null}
       <ul className="flex flex-col gap-1">
         {(available ?? []).map((item) => (
           <li key={item.id}>

@@ -27,6 +27,8 @@ import { globalStageflowHome } from "../../project/globalHome.js";
 import { isUsableAuthFile, resolveCredentialBinding } from "../../runtime/credentialBinding.js";
 import { getModelCatalog } from "../../models/catalog.js";
 import { AgentError } from "../errors.js";
+import { MEMORY_STORE_BASH_DENIED, memoryStorePathInCommand } from "../../memory/bashDeny.js";
+import { memoryHome } from "../../memory/host.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
 import { grantedStageflowTools, isOperatorOnlyTool, type ToolkitTool } from "../../toolkit/index.js";
@@ -373,6 +375,12 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         // Every tool whose arguments name a path is checked, not only write/edit. `bash` cannot be: see forbiddenWriteTarget.
         if (forbiddenWriteTarget(projectRoot, globalStageflowHome(), call.toolName, call.input) !== undefined) {
           return { block: true, reason: "Agent definitions and Stageflow state cannot be written by an agent." };
+        }
+        if (memory && call.toolName === "bash") {
+          const command = call.input.command;
+          if (typeof command === "string" && memoryStorePathInCommand(command, memoryHome())) {
+            return { block: true, reason: MEMORY_STORE_BASH_DENIED };
+          }
         }
         const release = state.stall?.hold();
         const decision = await hooks.gate({ id: call.toolCallId, tool, input: call.input }).finally(() => release?.());

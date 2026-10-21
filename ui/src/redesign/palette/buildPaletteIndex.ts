@@ -22,6 +22,7 @@ const NAV_ITEMS: PaletteNavDef[] = [
   { id: "tasks", label: "Tasks", path: "/tasks" },
   { id: "catalog", label: "Catalog", path: "/catalog?tab=stages" },
   { id: "triggers", label: "Triggers", path: "/triggers" },
+  { id: "memories", label: "Memories", path: "/memories" },
   { id: "settings", label: "Settings", path: "/settings" },
 ];
 
