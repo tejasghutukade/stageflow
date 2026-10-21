@@ -1,0 +1,24 @@
+id: file-release
+goal: File the release card with a table and the rollback command
+context: Memory new-notebook already exists. This key does not. It is not the older releases/2.4.1 card.
+constraints: The card body is the note exactly. Do not change the cover.
+input:
+  key: releases/2.5.0
+  note: |
+    # Release 2.5.0
+
+    Held. Do not deploy until the checkout incident on `TICKET-3180` is closed.
+
+    | Check | State | Owner |
+    | --- | --- | --- |
+    | Payments migration | reverted on 2.4.1 | payments |
+    | EU checkout | recovered 16:40 UTC | ada@example.com |
+    | This release | held | release desk |
+
+    Rollback command that was used for 2.4.1:
+
+    ```
+    sf runs rerun --run <previous> --from payments-migrate
+    ```
+
+    Decision: ship 2.5.0 only after a clean EU checkout hour, with the migration left out.

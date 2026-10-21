@@ -5,6 +5,7 @@ import { Cron } from "croner";
 import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
 import { z } from "zod";
 import { yamlParsePosition } from "./yamlParsePosition.js";
+import { MEMORY_ID_PATTERN } from "../memory/ids.js";
 
 /**
  * Project agent definition (`agents/<id>.agent.yaml`), schema v2.
@@ -178,6 +179,10 @@ const agentDefinitionObject = z.strictObject({
     .prefault({}),
   /** The one connection (AgentMail inbox, iMessage line, ...) this agent answers on. */
   channel: channelSchema.optional(),
+  memories: z
+    .array(z.string().regex(MEMORY_ID_PATTERN, "Invalid memory id"))
+    .optional()
+    .refine((list) => list === undefined || new Set(list).size === list.length, "Duplicate memory"),
   web_chat: webChatSchema,
   schedule: scheduleSchema.optional(),
   limits: limitsSchema,
@@ -347,6 +352,7 @@ export function serializeAgentDefinition(definition: AgentDefinition): string {
     "evals",
     "observability",
     "channel",
+    "memories",
     "web_chat",
     "schedule",
     "limits",
@@ -354,6 +360,7 @@ export function serializeAgentDefinition(definition: AgentDefinition): string {
   for (const key of keys) {
     const value = definition[key];
     if (value === undefined) continue;
+    if (key === "memories" && Array.isArray(value) && value.length === 0) continue;
     const pruned = pruneDefaults(value, defaults[key]);
     if (pruned !== undefined) out[key] = pruned;
   }

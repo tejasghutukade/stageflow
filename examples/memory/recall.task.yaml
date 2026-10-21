@@ -1,0 +1,5 @@
+id: recall-notebook
+goal: Read the shared notebook and report the page exactly
+context: A later pipeline, attached to the same memory
+constraints: Do not change the page
+input: {}

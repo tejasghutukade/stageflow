@@ -10,6 +10,8 @@ import {
   extensionFilePath,
   extensionPackagePath,
   inboxPath,
+  memoriesPath,
+  memoryPath,
   newRunPath,
   parseHash,
   pipelinePath,
@@ -85,6 +87,14 @@ describe("parseHash", () => {
 
   it("parses the overview route", () => {
     expect(parseHash("#/overview")).toEqual({ name: "overview" });
+  });
+
+  it("parses memories list and detail routes", () => {
+    expect(parseHash(`#${memoriesPath()}`)).toEqual({ name: "memories" });
+    expect(parseHash(`#${memoryPath("candidate-pool")}`)).toEqual({
+      name: "memory",
+      memoryId: "candidate-pool",
+    });
   });
 
   it("parses the inbox route", () => {

@@ -1,0 +1,28 @@
+id: file-timeline
+goal: File the checkout outage as a structured card
+context: Memory new-notebook already exists. This key does not.
+constraints: The card body is the note exactly. Do not change the cover.
+input:
+  key: TICKET-3180
+  note: |
+    # Checkout 502s — EU
+
+    ## What broke
+
+    EU checkout returned 502 from 14:10 UTC. The payments migration in `releases/2.4.1` was the trigger. US traffic stayed up.
+
+    ## Timeline
+
+    1. **14:10** — Error rate crossed 8% on `POST /checkout`.
+    2. **14:22** — On-call paged `ada@example.com`.
+    3. **15:05** — Rollback of `releases/2.4.1` started.
+    4. **16:40** — 502s stopped.
+
+    ## Not the cause
+
+    > The storefront cache was flushed at 13:40. That was a separate change and the 502s started later, only in EU.
+
+    ## Next
+
+    - Write the rollback note on `releases/2.4.1`
+    - Keep this ticket as the incident record

@@ -41,6 +41,7 @@ import { EmailSource } from "../runtime/emailSource.js";
 import { emailHostFor, releaseEmailHost } from "../email/host.js";
 import { EmailTriggers } from "../email/triggers.js";
 import { startChannelService, type ChannelService } from "../channels/service.js";
+import { memoryHostFor, type MemoryHost } from "../memory/host.js";
 import { fireTrigger } from "../runtime/triggerRunner.js";
 import type { TriggerFireEvent } from "../runtime/triggerPort.js";
 import {
@@ -122,6 +123,8 @@ export type StageflowHostBootstrap = {
   stopEmailSource: () => void;
   /** Connections page read model and background health checks. */
   channels?: ChannelService;
+  /** Named markdown pages under `$STAGEFLOW_HOME/memories`. */
+  memories?: MemoryHost;
   /** Shared agent store, chat controller, and conversation backend for HTTP/MCP. */
   agentHost?: AgentHostContext;
   email?: ReturnType<typeof emailHostFor> & { triggers: EmailTriggers; stop: () => Promise<void> };
@@ -560,6 +563,7 @@ export async function bootstrapStageflowHost(
     stopEmailSource,
     email: { ...emailHost, triggers: emailTriggers, stop: stopAccountEmail },
     channels,
+    memories: memoryHostFor(),
     storeFilesystem,
     workspaceCatalog,
     ...(agentHost ? { agentHost } : {}),

@@ -1,0 +1,6 @@
+id: remember-ada
+goal: Add Ada to the shared notebook
+context: First note in an empty notebook
+constraints: One line only. Do not drop earlier lines.
+input:
+  note: Ada was sourced.

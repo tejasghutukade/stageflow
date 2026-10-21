@@ -1,0 +1,7 @@
+id: find-ticket-1842
+goal: Read the ticket card and search the notebook
+context: A later run. The card should already be filed under TICKET-1842.
+constraints: Do not change the card or the cover.
+input:
+  key: TICKET-1842
+  query: refund

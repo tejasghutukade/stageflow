@@ -75,6 +75,8 @@ export type StageConfig = {
   mcp?: string[];
   /** Communication channels this stage may send on. Inherits pipeline `channels` defaults. */
   channels?: StageChannel[];
+  /** Memory ids copied from the pipeline at load. Not a stage YAML key. */
+  memories?: string[];
   /** Declared Host secret names this stage may receive (Slot 6). */
   secrets?: StageSecretDecl[];
   /** Declared toolchain binaries this stage needs (Slot 9). */

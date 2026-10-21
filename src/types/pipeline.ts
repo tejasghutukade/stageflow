@@ -22,6 +22,8 @@ export type PipelineConfig = {
   requires?: ToolRequirement[];
   /** Default channels inherited by every stage that does not override them. */
   channels?: StageChannel[];
+  /** Memory ids every stage in this pipeline can read and replace. */
+  memories?: string[];
 };
 
 /** An inline pipeline definition authored directly in a `start_run` call, with no backing file. */
@@ -33,6 +35,7 @@ export type InlinePipelineDefinition = {
   schemas?: unknown;
   requires?: unknown;
   channels?: unknown;
+  memories?: unknown;
 };
 
 export type PipelineForkConfig = {

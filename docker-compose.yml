@@ -42,7 +42,7 @@ services:
       GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
       EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
-      STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness
+      STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness,/catalog/memory
       # Agents (all safe when empty). Not passed on purpose: STAGEFLOW_AGENT_SESSION_IDLE_MINUTES and
       # STAGEFLOW_AGENT_STALL_SECONDS, because an empty value parses as 0 and turns them off.
       STAGEFLOW_MCP_ENV_ALLOW: ${STAGEFLOW_MCP_ENV_ALLOW:-}
@@ -52,8 +52,7 @@ services:
       STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS: ${STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS:-}
     volumes:
       - stageflow-data:/data
-      # Optional: bind-mount an extra catalog root (comma-separate in STAGEFLOW_ENSURE_PROJECT_ROOTS)
-      # - ./my-catalog:/catalog
+      - ./examples/memory:/catalog/memory:ro
     restart: unless-stopped
 
 volumes:

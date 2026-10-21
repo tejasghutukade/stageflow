@@ -32,6 +32,7 @@ import { ChannelError } from "../channels/errors.js";
 import { ChannelRegistry } from "../channels/registry.js";
 import { validateStageChannels } from "../channels/stageChannels.js";
 import type { AnyChannelProvider } from "../channels/types.js";
+import { inspectMemorySync, memoryHome } from "../memory/host.js";
 
 export type ValidationSeverity = "error" | "warning";
 
@@ -63,6 +64,8 @@ export type ValidationFindingCode =
   | "pipeline.invalid_requires"
   | "pipeline.requires_conflict"
   | "pipeline.invalid_channels"
+  | "pipeline.invalid_memories"
+  | "pipeline.memory_unavailable"
   | "stage.invalid_shape"
   | "stage.invalid_model"
   | "stage.missing_model"
@@ -569,6 +572,29 @@ function findingsForStageChannels(
   );
 }
 
+const MEMORY_FINDING: Record<string, (id: string) => string> = {
+  MEMORY_NOT_FOUND: (id) => `Memory "${id}" does not exist. Create it before attaching it.`,
+  MEMORY_MISMATCH: (id) => `Memory "${id}" does not match the id in its file.`,
+  MEMORY_UNREADABLE: (id) => `Memory "${id}" could not be read.`,
+  MEMORY_INVALID_ID: (id) => `Memory "${id}" is not a valid id.`,
+};
+
+function findingsForMemories(
+  cwd: string,
+  pipelinePath: string,
+  loaded: LoadedPipeline,
+): ValidationFinding[] {
+  const ids = loaded.pipeline.memories;
+  if (!ids?.length) return [];
+  const home = memoryHome();
+  return ids.flatMap((id) => {
+    const inspected = inspectMemorySync(home, id);
+    if (inspected.ok) return [];
+    const message = (MEMORY_FINDING[inspected.code] ?? MEMORY_FINDING.MEMORY_UNREADABLE)(id);
+    return [findingPipelineError(cwd, pipelinePath, message, "pipeline.memory_unavailable", loaded.pipeline.id)];
+  });
+}
+
 function findingsForStageSecrets(
   cwd: string,
   pipelinePath: string,
@@ -839,6 +865,7 @@ async function runPipelineValidation(
   findings.push(
     ...findingsForStageChannels(cwd, pipelinePath, outcome.value, projectRoot, options.channelProviders),
   );
+  findings.push(...findingsForMemories(cwd, pipelinePath, outcome.value));
   findings.push(...findingsForStageflowHomeAbsolutePaths(cwd, outcome.value));
 
   if (validateStages && outcome.value.stageSources) {

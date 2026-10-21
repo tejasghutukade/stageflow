@@ -27,6 +27,7 @@ import {
 } from "../workshop/inspector/stageFields";
 import { useChannelMeta } from "../connections/channelMeta";
 import { StageChannelsSection } from "./StageChannelsSection";
+import { PipelineMemoriesSection } from "./PipelineMemoriesSection";
 import {
   INSPECTOR_GATE_ORDER,
   applyGateKindToggle,
@@ -134,6 +135,7 @@ export function PipelineEditorInspector({
         className="flex min-h-0 shrink-0 flex-col bg-[#131418] [font-family:Geist,_sans-serif]"
         style={{ width }}
       >
+        <PipelineMemoriesSection draft={draft} onDraftChange={onDraftChange} />
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
           <p className="text-[13px] font-medium text-[#ecedee]">Click a stage on the graph</p>
           <p className="text-xs leading-[1.45] text-[#8b8f98]">
@@ -181,6 +183,7 @@ export function PipelineEditorInspector({
       className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-[#131418] [font-family:Geist,_sans-serif]"
       style={{ width }}
     >
+      <PipelineMemoriesSection draft={draft} onDraftChange={onDraftChange} />
       <div
         ref={bindFocus("header")}
         tabIndex={-1}

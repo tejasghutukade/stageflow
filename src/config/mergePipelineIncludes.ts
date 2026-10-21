@@ -14,6 +14,7 @@ import { readYamlObject } from "./readYamlObject.js";
 import { yamlParsePosition } from "./yamlParsePosition.js";
 import { parseToolRequires, type ToolRequirement } from "./toolRequires.js";
 import { parseChannels } from "../channels/stageChannels.js";
+import { parseMemoryIdList } from "../memory/ids.js";
 import type { StageChannel } from "../types/stage.js";
 import {
   classifyYamlDocument,
@@ -174,6 +175,7 @@ export async function mergePipelineStages(
     schemas?: PayloadSchemaMap;
     requires?: ToolRequirement[];
     channels?: StageChannel[];
+    memories?: string[];
     warnings: LoadIssue[];
   }>
 > {
@@ -258,6 +260,10 @@ export async function mergePipelineStages(
   if (!channelsOutcome.ok) return channelsOutcome;
   const channels = channelsOutcome.value;
 
+  const memoriesOutcome = parsePipelineMemories(raw.memories, `pipeline ${absRoot}`, pipelineId);
+  if (!memoriesOutcome.ok) return memoriesOutcome;
+  const memories = memoriesOutcome.value;
+
   const idLocations = new Map<string, string>();
   const entries: RawMergedEntry[] = [];
   const warnings: LoadIssue[] = [];
@@ -283,6 +289,7 @@ export async function mergePipelineStages(
     ...(schemas !== undefined ? { schemas } : {}),
     ...(requires !== undefined ? { requires } : {}),
     ...(channels !== undefined ? { channels } : {}),
+    ...(memories !== undefined ? { memories } : {}),
     warnings,
   });
 }
@@ -301,6 +308,7 @@ export async function mergeInlinePipelineStages(
     schemas?: PayloadSchemaMap;
     requires?: ToolRequirement[];
     channels?: StageChannel[];
+    memories?: string[];
     warnings: LoadIssue[];
   }>
 > {
@@ -373,6 +381,10 @@ export async function mergeInlinePipelineStages(
   if (!channelsOutcome.ok) return channelsOutcome;
   const channels = channelsOutcome.value;
 
+  const memoriesOutcome = parsePipelineMemories(raw.memories, `inline pipeline ${pipelineId}`, pipelineId);
+  if (!memoriesOutcome.ok) return memoriesOutcome;
+  const memories = memoriesOutcome.value;
+
   const entries: RawMergedEntry[] = [];
   for (let index = 0; index < raw.stages.length; index++) {
     const entry = raw.stages[index];
@@ -397,8 +409,28 @@ export async function mergeInlinePipelineStages(
     ...(schemas !== undefined ? { schemas } : {}),
     ...(requires !== undefined ? { requires } : {}),
     ...(channels !== undefined ? { channels } : {}),
+    ...(memories !== undefined ? { memories } : {}),
     warnings: [],
   });
+}
+
+function parsePipelineMemories(
+  raw: unknown,
+  label: string,
+  pipelineId: string,
+): LoadOutcome<string[] | undefined> {
+  const parsed = parseMemoryIdList(raw);
+  if (!parsed.ok) {
+    return loadFailure([
+      {
+        code: "pipeline.invalid_memories",
+        message: `Invalid ${label}: ${parsed.message}`,
+        category: "pipeline",
+        pipelineId,
+      },
+    ]);
+  }
+  return loadSuccess(parsed.value);
 }
 
 function parsePipelineChannels(

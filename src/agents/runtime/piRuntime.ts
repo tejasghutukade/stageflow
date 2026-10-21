@@ -18,12 +18,17 @@ import { createPiAgentSession, createSealedResourceLoader } from "../../agent/pi
 import { bindCursorApiKey, isCursorModelRef } from "../../agent/cursorProvider.js";
 import { findProviderSupport } from "../../agent/providerSupport.js";
 import { grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
+import { bindStageMemory, type StageMemory } from "../../memory/access.js";
+import { MemoryError, memoryHostFor } from "../../memory/host.js";
+import { memorySession } from "../../tools/memoryTools.js";
 import { resolveSkillByName } from "../../config/listSkills.js";
 import { resolveStageMcpServers } from "../../config/resolveStageMcpServers.js";
 import { globalStageflowHome } from "../../project/globalHome.js";
 import { isUsableAuthFile, resolveCredentialBinding } from "../../runtime/credentialBinding.js";
 import { getModelCatalog } from "../../models/catalog.js";
 import { AgentError } from "../errors.js";
+import { MEMORY_STORE_BASH_DENIED, memoryStorePathInCommand } from "../../memory/bashDeny.js";
+import { memoryHome } from "../../memory/host.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
 import { grantedStageflowTools, isOperatorOnlyTool, type ToolkitTool } from "../../toolkit/index.js";
@@ -55,6 +60,7 @@ export type OpenSessionInput = {
   delegateTool?: (agentId: string, message: string) => Promise<string>;
   /** Stageflow tools this agent is granted. */
   stageflowTools?: ToolkitTool[];
+  memory?: StageMemory;
   hooks: () => TurnHooks | undefined;
 };
 
@@ -210,6 +216,13 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
       }
     }
 
+    if (input.memory) {
+      for (const definition of memorySession(input.memory).tools) {
+        customTools.push(defineTool(definition));
+        toolNames.push(definition.name);
+      }
+    }
+
     for (const tool of input.stageflowTools ?? []) {
       customTools.push(
         defineTool({
@@ -336,13 +349,23 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     const stageflowTools = (options.toolkit?.() ?? []).filter((tool) => grantedSf.has(tool.name) && !isOperatorOnlyTool(tool.name));
     const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
-    const systemPrompt = `${definition.instructions}${context}`;
+    let memory: StageMemory | undefined;
+    if (definition.memories?.length) {
+      try {
+        memory = await bindStageMemory(memoryHostFor(), definition.memories);
+      } catch (error) {
+        const code = error instanceof MemoryError ? error.code : "MEMORY_UNREADABLE";
+        throw new AgentError("agent.invalid", `Memory could not be opened (${code})`);
+      }
+    }
+    const systemPrompt = `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}`;
     state.opened = await open({
       projectRoot,
       definition,
       systemPrompt,
       toolNames: piToolNames(definition),
       hooks: () => state.hooks,
+      ...(memory ? { memory } : {}),
       ...(stageflowTools.length > 0 ? { stageflowTools } : {}),
       ...(subAgents.length > 0 ? { delegateTool: (agentId, message) => state.hooks!.delegate(agentId, message) } : {}),
       gate: async (call) => {
@@ -352,6 +375,12 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         // Every tool whose arguments name a path is checked, not only write/edit. `bash` cannot be: see forbiddenWriteTarget.
         if (forbiddenWriteTarget(projectRoot, globalStageflowHome(), call.toolName, call.input) !== undefined) {
           return { block: true, reason: "Agent definitions and Stageflow state cannot be written by an agent." };
+        }
+        if (memory && call.toolName === "bash") {
+          const command = call.input.command;
+          if (typeof command === "string" && memoryStorePathInCommand(command, memoryHome())) {
+            return { block: true, reason: MEMORY_STORE_BASH_DENIED };
+          }
         }
         const release = state.stall?.hold();
         const decision = await hooks.gate({ id: call.toolCallId, tool, input: call.input }).finally(() => release?.());

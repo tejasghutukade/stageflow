@@ -228,6 +228,7 @@ async function buildLoadedPipelineFromMerge(
     schemas?: PayloadSchemaMap;
     requires?: ToolRequirement[];
     channels?: StageChannel[];
+    memories?: string[];
     warnings: LoadIssue[];
   },
   options: { projectRoot: string; requireIo: boolean; pipelinePath: string },
@@ -241,6 +242,7 @@ async function buildLoadedPipelineFromMerge(
     schemas: pipelineSchemas,
     requires: pipelineRequires,
     channels: pipelineChannels,
+    memories: pipelineMemories,
     warnings: mergeWarnings,
   } = merge;
   const ctx = { pipelineId, path: pipelinePath };
@@ -447,7 +449,9 @@ async function buildLoadedPipelineFromMerge(
   if (!materializeOutcome.ok) {
     return loadFailure(materializeOutcome.issues);
   }
-  const loadedStages = materializeOutcome.value;
+  const loadedStages = pipelineMemories?.length
+    ? materializeOutcome.value.map((stage) => ({ ...stage, memories: pipelineMemories }))
+    : materializeOutcome.value;
 
   const pipeline: PipelineConfig = {
     id: pipelineId,
@@ -457,6 +461,7 @@ async function buildLoadedPipelineFromMerge(
     ...(pipelineSchemas !== undefined ? { schemas: pipelineSchemas } : {}),
     ...(pipelineRequires !== undefined ? { requires: pipelineRequires } : {}),
     ...(pipelineChannels !== undefined ? { channels: pipelineChannels } : {}),
+    ...(pipelineMemories !== undefined ? { memories: pipelineMemories } : {}),
   };
 
   const effectiveRequires = mergeToolRequires(
