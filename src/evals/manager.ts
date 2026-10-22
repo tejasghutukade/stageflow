@@ -305,6 +305,7 @@ export class EvalRunManager {
         throw new EvalRunError("EVAL_INVALID", err instanceof Error ? err.message : String(err));
       }
 
+      const stageTarget = snapshot.target.kind === "stage" ? snapshot.target : null;
       const row = await this.store.createEvalRun({
         projectRoot: input.projectRoot,
         evalId: draft.evalId,
@@ -312,9 +313,9 @@ export class EvalRunManager {
         evalHash: snapshot.eval.hash,
         targetKind: "stage",
         targetRef: {
-          ...(snapshot.target.pipeline_path !== null ? { pipeline_path: snapshot.target.pipeline_path } : {}),
-          ...(snapshot.target.stage_id !== null ? { stage_id: snapshot.target.stage_id } : {}),
-          ...(snapshot.target.file !== null ? { file: snapshot.target.file } : {}),
+          ...(stageTarget?.pipeline_path != null ? { pipeline_path: stageTarget.pipeline_path } : {}),
+          ...(stageTarget?.stage_id != null ? { stage_id: stageTarget.stage_id } : {}),
+          ...(stageTarget?.file != null ? { file: stageTarget.file } : {}),
         },
         targetVersionHash: draft.targetVersionHash,
         datasetPath: snapshot.dataset.path,

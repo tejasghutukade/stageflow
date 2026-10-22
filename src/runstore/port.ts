@@ -1,4 +1,5 @@
 import type { StageLogLine } from "../agent/activity.js";
+import type { EvalTargetKind } from "../evals/constants.js";
 import type { ConfigOriginRecord } from "../config/configOrigin.js";
 import type { RunSubmission, RunSubmissionRecord } from "./submission.js";
 import { predecessorEdges } from "../config/pipelineNeeds.js";
@@ -675,6 +676,8 @@ export interface RunStore {
   ): Promise<Record<string, number>>;
   /** Deletes the eval run and its rows; returns the stage run ids it started so the caller can delete those runs. */
   deleteEvalRun(evalRunId: string): Promise<string[]>;
+  /** Distinct non-null result subject refs (stage run ids or agent session ids) when the run's target kind matches. */
+  listEvalSubjectRefs(evalRunId: string, targetKind: EvalTargetKind): Promise<string[]>;
   /** Idempotent upsert; returns the realpath/resolve-normalized absolute key. */
   ensureProject(absPath: string): Promise<string>;
   /** Absolute roots from the durable projects registry. */

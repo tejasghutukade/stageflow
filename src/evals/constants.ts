@@ -50,6 +50,10 @@ export const EVAL_RESULT_ERROR_CODES = [
   "EVAL_JUDGE_ERROR",
   "EVAL_GRADER_CODE_ERROR",
   "EVAL_CASE_MISSING_EXPECTED",
+  "EVAL_AGENT_FAILED",
+  "EVAL_AGENT_TIMEOUT",
+  "EVAL_SIMULATOR_ERROR",
+  "EVAL_GRADER_NOT_APPLICABLE",
 ] as const;
 
 export const EVAL_REQUEST_ERROR_CODES = [
@@ -62,6 +66,7 @@ export const EVAL_REQUEST_ERROR_CODES = [
   "DATASET_NOT_FOUND",
   "EVAL_RUN_NOT_FOUND",
   "EVAL_TAGS_ON_PASSED_RESULT",
+  "EVAL_REAL_TOOLS_NOT_CONFIRMED",
 ] as const;
 
 export const EVAL_ERROR_CODES = [
@@ -86,3 +91,16 @@ export const EVAL_RUN_ID_PREFIX = "er_";
 
 export const RUBRIC_PROMPT_VERSION = 1;
 export const CONFIG_SNAPSHOT_VERSION = 1;
+
+export const SIMULATOR_PROMPT_VERSION = 1;
+export const CONVERSATION_RUBRIC_PROMPT_VERSION = 1;
+
+export const EVAL_CONVERSATION_LIMITS = {
+  maxMessageChars: 4_000,
+  maxResultSummaryChars: 1_000,
+  maxArgsChars: 2_000,
+  maxMessages: 80,
+  keepFirstMessages: 4,
+  maxToolCalls: 200,
+  maxSubjectBytes: 256 * 1024,
+} as const;
