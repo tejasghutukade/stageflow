@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { AgentDefinition } from "../config/loadAgent.js";
 import { assertDelegateAllowed } from "./delegate.js";
 import { AgentError, isAgentError } from "./errors.js";
+import type { EvalGateRegistry } from "./evalGate.js";
 import { EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
 import { guardedStream } from "./guardrails.js";
 import { fitHistory } from "./historyFit.js";
@@ -36,6 +37,8 @@ export type ConversationOptions = {
   service: AgentService;
   backend: ConversationBackend;
   otlpSink?: OtlpSink | undefined;
+  /** Eval tool gates by session id. An eval session without one is denied every tool. */
+  evalGates?: EvalGateRegistry;
   logError?: (message: string) => void;
 };
 
@@ -144,6 +147,25 @@ export class AgentConversation {
     let gateChain: Promise<unknown> = Promise.resolve();
 
     const gateOne = async (call: ToolCall): Promise<GateDecision> => {
+      if (active.session.source === EVAL_SESSION_SOURCE) {
+        const gate = this.options.evalGates?.get(sessionId);
+        if (!gate) return { allow: false, reason: "No eval policy is registered for this session." };
+        const decision = gate.decide(call, definition);
+        if (gate.recordOf(call.id)?.policyOutcome === "would_ask_first") {
+          const at = new Date();
+          record({
+            turnId: turn.id,
+            parentSpanId: rootId,
+            name: `approval ${call.tool}`,
+            kind: "gate",
+            status: "error",
+            startedAt: at,
+            endedAt: at,
+            attributes: { "stageflow.approval.outcome": "would_ask_first", "gen_ai.tool.name": call.tool },
+          });
+        }
+        return decision;
+      }
       if (!isToolGranted(definition, call.tool)) {
         return { allow: false, reason: `Tool ${call.tool} is not granted to this agent.` };
       }
@@ -197,6 +219,7 @@ export class AgentConversation {
         toolStarts.set(call.id, new Date());
       },
       toolFinished: (call, result) => {
+        if (active.session.source === EVAL_SESSION_SOURCE) this.options.evalGates?.get(sessionId)?.observeFinished(call, result);
         const isAgent = call.tool.startsWith("agent:");
         record({
           turnId: turn.id,
@@ -248,6 +271,8 @@ export class AgentConversation {
             ...(inEval ? { sourceRef: active.session.id, eval: inherited } : {}),
             onSessionOpened: (childId) => {
               childSessions.set(callId ?? `agent:${agentId}`, childId);
+              const parentGate = inEval ? this.options.evalGates?.get(sessionId) : undefined;
+              if (parentGate) this.options.evalGates!.set(childId, parentGate);
             },
           });
           return [...detail.messages].reverse().find((m) => m.role === "assistant")?.text ?? "(no reply)";

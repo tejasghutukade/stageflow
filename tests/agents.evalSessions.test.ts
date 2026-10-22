@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentChatController } from "../src/agents/chatTurn.js";
+import { createEvalGate, EvalGateRegistry } from "../src/agents/evalGate.js";
 import { EVAL_SESSION_SOURCE } from "../src/agents/evalSession.js";
 import { agentInput, agentsFixture, scriptedBackend, type AgentsFixture } from "./helpers/agentsHarness.js";
 import { agentProjectKey } from "../src/agents/store.js";
@@ -103,7 +104,9 @@ describe("eval sessions: overrides", () => {
     const fx = await setup({ helper: { tools: { builtin: ["read"] }, observability: { capture: "metadata" } } });
     const session = await fx.service.openSession(fx.project, "helper", { source: "eval", eval: { capture: "full" } });
     const backend = scriptedBackend(async (_m, ctx) => (await ctx.tool("read", { path: "a.md" }, () => "file body")).output);
-    const detail = await new AgentChatController({ service: fx.service, backend }).send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "go" });
+    const evalGates = new EvalGateRegistry();
+    evalGates.set(session.id, createEvalGate({ policy: { tools: "read_only", approvals: "record_only", readOnlyTools: [], mocks: {} }, definition: (await fx.service.get(fx.project, "helper")).definition! }));
+    const detail = await new AgentChatController({ service: fx.service, backend, evalGates }).send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "go" });
     const tool = detail.spans.find((span) => span.kind === "tool")!;
     expect(tool).toMatchObject({ outputText: "file body" });
     expect(tool.inputText).toContain("a.md");
@@ -167,15 +170,11 @@ describe("eval sessions: hidden from operators", () => {
 
   it("never lists an eval session's pending approval", async () => {
     const fx = await setup({ helper: { tools: { builtin: ["read"], mcp: { web: ["fetch"] } }, approvals: { ask_first: ["web.fetch"], timeout_minutes: 30, on_timeout: "skip" } } });
-    const backend = scriptedBackend(async (_m, ctx) => (await ctx.tool("web.fetch", { url: "x" })).output);
-    const chat = new AgentChatController({ service: fx.service, backend });
     const session = await fx.service.openSession(fx.project, "helper", { source: "eval", eval: {} });
-    const turn = chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "go" });
-    await vi.waitFor(async () => expect((await fx.service.pendingApprovals(fx.project, { includeEval: true })).length).toBe(1));
+    await fx.service.requestApproval(fx.project, session.id, { tool: "web.fetch", payload: { url: "x" } });
+    expect((await fx.service.pendingApprovals(fx.project, { includeEval: true })).length).toBe(1);
     expect(await fx.service.pendingApprovals(fx.project)).toEqual([]);
     expect((await fx.service.list(fx.project))[0]!.pendingApprovals).toBe(0);
-    chat.stop(session.id);
-    await turn.catch(() => undefined);
   });
 
   it("keeps boot recovery and by-id reads working", async () => {
