@@ -125,6 +125,33 @@ export function formatFromFileName(name: string): EvalDatasetFormat | null {
   return null;
 }
 
+export const UPLOAD_EXT_ERROR = "Use a .jsonl, .json or .csv file.";
+export const UPLOAD_SIZE_ERROR = "That file is over the 50 MB limit.";
+export const DROP_LABEL = "Drop file to upload";
+
+/** Accept by extension and size; the error text is what the dialog shows. */
+export function checkUploadFile(file: { name: string; size: number }): { format: EvalDatasetFormat } | { error: string } {
+  const format = formatFromFileName(file.name);
+  if (!format) return { error: UPLOAD_EXT_ERROR };
+  if (file.size > MAX_UPLOAD_BYTES) return { error: UPLOAD_SIZE_ERROR };
+  return { format };
+}
+
+/** Only drags that carry files light up the zone (text or link drags are ignored). */
+export function isFileDrag(types: ArrayLike<string> | null | undefined): boolean {
+  return !!types && Array.from(types).includes("Files");
+}
+
+export function firstFile<T>(files: ArrayLike<T> | null | undefined): T | undefined {
+  return files && files.length > 0 ? files[0] : undefined;
+}
+
+/** Drag depth counter: enter/leave fire for every child, so highlight while the count is above zero. */
+export function dragDepth(depth: number, event: "enter" | "leave" | "reset"): number {
+  if (event === "reset") return 0;
+  return Math.max(0, depth + (event === "enter" ? 1 : -1));
+}
+
 export function defaultDelimiter(name: string): string {
   return name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
 }

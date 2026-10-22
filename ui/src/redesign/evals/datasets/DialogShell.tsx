@@ -39,7 +39,7 @@ export function DialogShell({
   }, [onClose]);
 
   return (
-    <div className={`${OVERLAY_SCRIM_CLASS} ${MODAL_SCRIM_PT}`} role="presentation">
+    <div className={`${OVERLAY_SCRIM_CLASS} ${MODAL_SCRIM_PT}`} role="presentation" onDragOver={(e) => e.preventDefault()} onDrop={(e) => e.preventDefault()}>
       <button type="button" className="absolute inset-0 cursor-default" aria-label="Close dialog" onClick={onClose} tabIndex={-1} />
       <div
         role="dialog"

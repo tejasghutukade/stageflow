@@ -5,26 +5,29 @@ import type { EvalDatasetFormat, EvalDatasetPreview, EvalDatasetTarget } from ".
 import { BTN, BTN_PRIMARY, DialogShell, LABEL, MONO, TEXTAREA } from "./DialogShell";
 import {
   DELIMITERS,
+  DROP_LABEL,
   EXTRAS_TITLE,
   FREE_MODE_HINT,
   FREE_MODE_NOTE,
-  MAX_UPLOAD_BYTES,
   SPLIT_OPTIONS,
   autoMatch,
   buildFullMapping,
   buildPreviewRequest,
   canConfirm,
+  checkUploadFile,
   casesForImport,
   cellsByColumn,
   confirmLabel,
   defaultDelimiter,
   detectPastedFormat,
+  dragDepth,
+  firstFile,
   extraColumns,
   extraConflicts,
   formatBytes,
-  formatFromFileName,
   freeFields,
   hasTarget,
+  isFileDrag,
   initExtras,
   modeLabels,
   patchExtra,
@@ -98,6 +101,7 @@ function UploadDialogBody({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [depth, setDepth] = useState(0);
   const parseSeq = useRef(0);
   const previewSeq = useRef(0);
   const [parsed, setParsed] = useState(false);
@@ -187,15 +191,12 @@ function UploadDialogBody({
 
   async function pickFile(file: File | undefined) {
     if (!file) return;
-    const format = formatFromFileName(file.name);
-    if (!format) {
-      setError("Use a .jsonl, .json or .csv file.");
+    const checked = checkUploadFile(file);
+    if ("error" in checked) {
+      setError(checked.error);
       return;
     }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setError("That file is over the 50 MB limit.");
-      return;
-    }
+    const { format } = checked;
     const content = await file.text();
     setDelimiter(defaultDelimiter(file.name));
     setColumns(null);
@@ -323,11 +324,43 @@ function UploadDialogBody({
           ) : (
             <button
               type="button"
+              data-testid="upload-drop-zone"
+              data-dragging={depth > 0}
               onClick={() => fileRef.current?.click()}
-              className="flex h-28 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[var(--sf-hairline-strong)] text-[13px] text-[var(--sf-text-2)]"
+              onDragEnter={(e) => {
+                if (!isFileDrag(e.dataTransfer?.types)) return;
+                e.preventDefault();
+                setDepth((d) => dragDepth(d, "enter"));
+              }}
+              onDragOver={(e) => {
+                if (!isFileDrag(e.dataTransfer?.types)) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+              }}
+              onDragLeave={(e) => {
+                if (!isFileDrag(e.dataTransfer?.types)) return;
+                setDepth((d) => dragDepth(d, "leave"));
+              }}
+              onDrop={(e) => {
+                if (!isFileDrag(e.dataTransfer?.types)) return;
+                e.preventDefault();
+                setDepth(dragDepth(0, "reset"));
+                void pickFile(firstFile(e.dataTransfer.files));
+              }}
+              className={`flex h-28 flex-col items-center justify-center gap-1 rounded-lg border border-dashed text-[13px] text-[var(--sf-text-2)] ${
+                depth > 0
+                  ? "border-[var(--sf-text-1)] bg-[var(--sf-raised)]"
+                  : "border-[var(--sf-hairline-strong)]"
+              }`}
             >
-              <span className="font-medium text-[var(--sf-text-1)]">Choose a file</span>
-              <span>JSONL, JSON or CSV, up to 50 MB</span>
+              {depth > 0 ? (
+                <span className="font-medium text-[var(--sf-text-1)]">{DROP_LABEL}</span>
+              ) : (
+                <>
+                  <span className="font-medium text-[var(--sf-text-1)]">Choose a file</span>
+                  <span>JSONL, JSON or CSV, up to 50 MB</span>
+                </>
+              )}
             </button>
           )}
           <input

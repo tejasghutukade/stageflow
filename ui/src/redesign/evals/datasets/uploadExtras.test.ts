@@ -4,6 +4,11 @@ import {
   buildFullMapping,
   buildPreviewRequest,
   cellsByColumn,
+  checkUploadFile,
+  dragDepth,
+  firstFile,
+  isFileDrag,
+  MAX_UPLOAD_BYTES,
   defaultExpectedKey,
   extraColumns,
   initExtras,
@@ -130,5 +135,32 @@ describe("reference-data rows", () => {
     const mapping = buildFullMapping(fields, state, initExtras(columns), columns);
     const req = buildPreviewRequest({ format: "csv", content: "x", mapping });
     expect(req.mapping?.["expected.category"]).toEqual({ column: "expected_category" });
+  });
+});
+
+describe("drag and drop", () => {
+  it("checks extension then size", () => {
+    expect(checkUploadFile({ name: "a.CSV", size: 10 })).toEqual({ format: "csv" });
+    expect(checkUploadFile({ name: "a.ndjson", size: 10 })).toEqual({ format: "jsonl" });
+    expect(checkUploadFile({ name: "a.txt", size: 10 })).toEqual({ error: "Use a .jsonl, .json or .csv file." });
+    expect(checkUploadFile({ name: "a.json", size: MAX_UPLOAD_BYTES + 1 })).toEqual({
+      error: "That file is over the 50 MB limit.",
+    });
+  });
+  it("recognises file drags only", () => {
+    expect(isFileDrag(["Files"])).toBe(true);
+    expect(isFileDrag(["text/plain", "Files"])).toBe(true);
+    expect(isFileDrag(["text/uri-list"])).toBe(false);
+    expect(isFileDrag(null)).toBe(false);
+  });
+  it("picks the first file", () => {
+    expect(firstFile(["a", "b"])).toBe("a");
+    expect(firstFile([])).toBeUndefined();
+    expect(firstFile(null)).toBeUndefined();
+  });
+  it("tracks drag depth without going negative", () => {
+    expect(dragDepth(dragDepth(0, "enter"), "enter")).toBe(2);
+    expect(dragDepth(0, "leave")).toBe(0);
+    expect(dragDepth(3, "reset")).toBe(0);
   });
 });
