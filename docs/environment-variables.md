@@ -40,6 +40,8 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_MAX_CONCURRENT_RUNS`, `_PER_PROJECT`, `STAGEFLOW_MAX_QUEUED` | Admission. See [CI](ci.md#concurrency-env-vars) |
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN`, `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage concurrency caps |
 | `STAGEFLOW_STAGE_EXECUTION` | `process` (default) or `inprocess` |
+| `STAGEFLOW_STAGE_CONTAINER_IMAGE` | Image for the per-attempt sandbox. When set, `read`, `write`, `edit`, and `bash` run in that container. Unset keeps those tools on the host |
+| `STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN` | Docker client used to start that sandbox (default `docker`) |
 | `STAGEFLOW_STAGE_ENV_ALLOW`, `STAGEFLOW_STAGE_ENV_PASSTHROUGH` | Extend the curated stage environment. See [Stage environment](migration-stage-environment.md) |
 | `STAGEFLOW_SECRET_REGISTRY` | Comma list of Host env names stages may declare under `secrets:` |
 | `STAGEFLOW_REQUIRE_PROVIDERS` | Providers that must be configured at boot |
