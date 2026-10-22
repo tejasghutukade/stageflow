@@ -564,10 +564,23 @@ export function datasetFromScenarios(
   };
 }
 
-export const AGENT_SAMPLE_UNAVAILABLE = "The agent sample is not available yet.";
+export const AGENT_SAMPLE_ID = "support-sample";
 
+/** The agent sample installs a whole sample agent and eval, so the server decides whether it fits. */
 export function agentSampleAvailability(): { ok: true } | { ok: false; reason: string } {
-  return { ok: false, reason: AGENT_SAMPLE_UNAVAILABLE };
+  return { ok: true };
+}
+
+/** Clear text for the codes `POST /api/evals/sample` returns for the agent sample. */
+export function agentSampleError(code: string, fallback: string): string {
+  if (code === "SAMPLE_NO_DEFAULT_MODEL") {
+    return "The sample agent needs a default model. Set `model` in stageflow.yaml, then try again.";
+  }
+  if (code === "SAMPLE_AGENTS_UNAVAILABLE") {
+    return "This host cannot create agents, so the sample agent cannot be installed.";
+  }
+  if (code === "SAMPLE_EXISTS") return "The sample agent eval is already installed. Opening it.";
+  return fallback;
 }
 
 export function datasetFromSample(stageId: string, takenNames: readonly string[]): DraftDataset {

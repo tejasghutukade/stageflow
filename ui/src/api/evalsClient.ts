@@ -122,10 +122,10 @@ export function updateEval(
   return evalRequest(`/api/evals/${enc(id)}`, { method: "PUT", body: input });
 }
 
-export function installEvalSample(projectRoot?: string): Promise<{ eval_id: string }> {
+export function installEvalSample(projectRoot?: string, kind?: "stage" | "agent"): Promise<{ eval_id: string }> {
   return evalRequest("/api/evals/sample", {
     method: "POST",
-    body: projectRoot !== undefined ? { project_root: projectRoot } : {},
+    body: { ...(projectRoot !== undefined ? { project_root: projectRoot } : {}), ...(kind === "agent" ? { kind } : {}) },
   });
 }
 

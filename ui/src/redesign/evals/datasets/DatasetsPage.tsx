@@ -23,6 +23,7 @@ import { datasetPath, evalsPath, navigate } from "../../../routes";
 import { showToast } from "../../../toast";
 import { PageHeader } from "../../shell/PageHeader";
 import { CandidatesDialog } from "./CandidatesDialog";
+import { SessionCandidatesDialog } from "./SessionCandidatesDialog";
 import { DatasetTable } from "./DatasetTable";
 import { ScenarioEditor } from "./ScenarioEditor";
 import { ScenarioTable } from "./ScenarioTable";
@@ -219,7 +220,7 @@ function DatasetDetailView({
   const [page, setPage] = useState(0);
   const [jsonl, setJsonl] = useState<string | null>(null);
   const [save, dispatchSave] = useReducer(saveReducer, INITIAL_SAVE);
-  const [dialog, setDialog] = useState<"upload" | "runs" | "add" | null>(null);
+  const [dialog, setDialog] = useState<"upload" | "runs" | "sessions" | "add" | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [editing, setEditing] = useState<EvalDatasetCase | null>(null);
   const [toolIds, setToolIds] = useState<string[]>([]);
@@ -451,6 +452,23 @@ function DatasetDetailView({
     onChanged();
   }
 
+  async function confirmSessions(sessionIds: string[]) {
+    if (!evalItem || evalItem.target.kind !== "agent") return;
+    const body = {
+      ...(root ? { project_root: root } : {}),
+      dataset_id: datasetId,
+      mode: "append",
+      source: "sessions",
+      target: { agent_id: evalItem.target.agent_id },
+      session_ids: sessionIds,
+      base_hash: hashRef.current,
+    };
+    await createEvalDataset(body as unknown as EvalCreateDatasetInput);
+    setDialog(null);
+    await load(true);
+    onChanged();
+  }
+
   const subtitle = detail
     ? datasetSubtitle({ cases: detail.cases_total, stage: stageLabel, usedBy: detail.used_by, path: detail.path, agent: agentEval })
     : undefined;
@@ -474,7 +492,12 @@ function DatasetDetailView({
               <LuUpload className="size-3.5" aria-hidden />
               Upload cases
             </button>
-            {agentEval ? null : (
+            {agentEval ? (
+              <button type="button" className={BTN} disabled={!editable} onClick={() => setDialog("sessions")}>
+                <LuHistory className="size-3.5" aria-hidden />
+                Add from sessions
+              </button>
+            ) : (
               <button
                 type="button"
                 className={BTN}
@@ -705,6 +728,14 @@ function DatasetDetailView({
           {...(root ? { projectRoot: root } : {})}
           onClose={() => setDialog(null)}
           onConfirm={(ids) => confirmRuns(ids)}
+        />
+      ) : null}
+      {dialog === "sessions" && evalItem?.target.kind === "agent" ? (
+        <SessionCandidatesDialog
+          agentId={evalItem.target.agent_id}
+          {...(root ? { projectRoot: root } : {})}
+          onClose={() => setDialog(null)}
+          onConfirm={(ids) => confirmSessions(ids)}
         />
       ) : null}
       {dialog === "add" && detail && allIds && agentEval ? (

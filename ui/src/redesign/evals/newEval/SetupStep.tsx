@@ -1,6 +1,9 @@
 import { useMemo, useState } from "react";
 import { LuClipboardList, LuFileText, LuFlaskConical, LuHistory, LuPencil, LuPlus, LuTrash2, LuUpload } from "react-icons/lu";
+import { EvalApiError, installEvalSample } from "../../../api/evalsClient";
 import type { EvalCaseInput } from "../../../api/evalTypes";
+import { evalPath as evalRoute, navigate } from "../../../routes";
+import { showToast } from "../../../toast";
 import { CandidatesDialog, UploadDialog, type UploadConfirm } from "../datasets";
 import { ScenarioEditor } from "../datasets/ScenarioEditor";
 import { SessionCandidatesDialog } from "../datasets/SessionCandidatesDialog";
@@ -19,7 +22,9 @@ import type { WizardPreview } from "./useWizardPreview";
 import {
   JUDGE_SAME_AGENT_HINT,
   JUDGE_SAME_HINT,
+  AGENT_SAMPLE_ID,
   agentSampleAvailability,
+  agentSampleError,
   agentTargetOf,
   estimateText,
   holdsCases,
@@ -73,6 +78,7 @@ const TILE = "flex flex-col gap-1 rounded-lg border p-3 text-left disabled:curso
 
 export function SetupStep({ data, agents, draft, setDraft, fields, preview, dirs }: Props) {
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [sampleBusy, setSampleBusy] = useState(false);
   const taken = useMemo(() => ({ evals: data.evals.map((e) => e.id), datasets: data.datasets.map((d) => d.id) }), [data]);
   const errors = defaultsErrors(draft.defaults);
   const agent = isAgentDraft(draft);
@@ -82,6 +88,21 @@ export function SetupStep({ data, agents, draft, setDraft, fields, preview, dirs
   const known = fields ?? null;
   const sample = agent ? agentSampleAvailability() : sampleCompatibility(fields === undefined ? null : known);
   const ds = draft.dataset;
+
+  async function installAgentSample() {
+    if (sampleBusy) return;
+    setSampleBusy(true);
+    try {
+      const out = await installEvalSample(t?.projectRoot, "agent");
+      navigate(evalRoute(out.eval_id, { openRun: true }));
+    } catch (err) {
+      const code = err instanceof EvalApiError ? err.code : "";
+      showToast(agentSampleError(code, err instanceof Error ? err.message : String(err)));
+      if (code === "SAMPLE_EXISTS") navigate(evalRoute(AGENT_SAMPLE_ID, { openRun: true }));
+    } finally {
+      setSampleBusy(false);
+    }
+  }
   const stageId = t?.stageId ?? (agent ? "agent" : "stage");
   const judgeModels = data.models.filter((m) => m.judge_capable !== false);
   const judgeIds = judgeModels.map((m) => m.id);
@@ -235,14 +256,16 @@ export function SetupStep({ data, agents, draft, setDraft, fields, preview, dirs
             </button>
             <button
               type="button"
-              disabled={!t || !sample.ok}
+              disabled={!t || !sample.ok || sampleBusy}
               title={sample.ok ? undefined : sample.reason}
-              onClick={() => setDraft((d) => ({ ...d, dataset: datasetFromSample(stageId, taken.datasets) }))}
+              onClick={() =>
+                agent ? void installAgentSample() : setDraft((d) => ({ ...d, dataset: datasetFromSample(stageId, taken.datasets) }))
+              }
               className={`${TILE} ${ds?.source === "sample" ? "border-[var(--sf-text-2)]" : "border-[var(--sf-hairline-strong)]"}`}
             >
               <LuFlaskConical className="size-4" aria-hidden />
               <span className="text-[13px] font-medium text-[var(--sf-text-1)]">Try sample data</span>
-              <span className="text-xs text-[var(--sf-text-3)]">{t && !sample.ok ? sample.reason : "8 demo cases, no setup"}</span>
+              <span className="text-xs text-[var(--sf-text-3)]">{t && !sample.ok ? sample.reason : agent ? "Installs a sample agent and 6 scenarios, then opens its eval" : "8 demo cases, no setup"}</span>
             </button>
           </div>
           {ds ? (
