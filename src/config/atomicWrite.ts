@@ -15,7 +15,9 @@ export type EvalsWriteErrorCode =
   | "DATASET_CASE_OP_INVALID"
   | "DATASET_NAME_INVALID"
   | "SAMPLE_EXISTS"
-  | "SAMPLE_SOURCE_MISSING";
+  | "SAMPLE_SOURCE_MISSING"
+  | "SAMPLE_NO_DEFAULT_MODEL"
+  | "SAMPLE_AGENTS_UNAVAILABLE";
 
 export class EvalsWriteError extends Error {
   readonly code: EvalsWriteErrorCode;

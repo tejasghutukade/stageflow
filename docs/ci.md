@@ -288,6 +288,36 @@ sf eval run review-findings --repeats 3 --max-cost 2 --json
 
 `pass_rate`, `pass_rate_ci`, `threshold` and `reliability` are `null` when they cannot be computed. Errors (a missing eval, `EVAL_ENGINE_UNAVAILABLE`, `EVAL_RUN_ACTIVE`, an invalid eval) are `{ "error", "code"?, "status"? }` with exit `1`; an invalid eval prints the validation result instead. `sf eval validate --json` exits `0` or `1` like `sf validate`. To start a run and read it later, use `--no-wait` (prints `{ "eval_run_id", "status" }`) and then `sf eval runs show <evalRunId> --json`. Compare against an earlier run with `sf eval compare <a> <b> --json`. Details: [CLI reference: `sf eval`](cli-reference.md#sf-eval) and [Evals](evals.md).
 
+### Agent evals in CI
+
+An eval whose target is an agent runs the same way, with the same exit codes. The differences:
+
+- **Cost.** A run pays for agent turns, a simulator model when a scenario is `simulated`, and the judge. A conversation of several turns costs several times a stage case, so keep `max_cost_usd` low (the default for agents is 1). A conversation that has started always finishes, so the spend can pass the limit by a little.
+- **The agent must exist in the job's checkout.** The eval resolves `agents/<id>.agent.yaml` from the project, so run the job in a checkout that has the agent file. It does not need to be enabled (a warning, not an error).
+- **Real tools need two consents.** An eval with `conversation.tools: real` also needs `conversation.allow_real_tools: true` in the file and `--allow-real-tools` on the command; without the flag `sf eval run` exits `1` with `EVAL_REAL_TOOLS_NOT_CONFIRMED` (`--json`: `{ "ok": false, "code": "EVAL_REAL_TOOLS_NOT_CONFIRMED", "message": … }`). Do not pass the flag in CI unless the job runs in a throwaway checkout. The default `read_only` stubs write, shell and unlisted tools.
+- **Additive JSON.** The `--json` document gains `target_kind: "agent"`, `agent_id`, `agent_revision`, `mean_turns`, `mean_tool_calls` and `tools_policy`. Every key above is unchanged, and stage documents are byte-for-byte the same. Exit codes and `outcome` values are unchanged.
+
+```json
+{
+  "outcome": "passed",
+  "eval_run_id": "er_7a02c9d41b5e",
+  "eval_id": "support-sample",
+  "pass_rate": 0.92,
+  "threshold": 0.8,
+  "results": { "executed": 12, "passed": 11, "errored": 0 },
+  "cost_total": 0.1184,
+  "fingerprint": "c3d90b17",
+  "target_kind": "agent",
+  "agent_id": "support_sample",
+  "agent_revision": 2,
+  "mean_turns": 1.3,
+  "mean_tool_calls": 0.2,
+  "tools_policy": "read_only"
+}
+```
+
+(Fields shown trimmed; the full document also has `pass_rate_ci`, `reliability` and `url`.) Conversations vary more than single outputs, so use `--repeats` of 3 or more and read `reliability` (pass^k) before trusting a green run. See [Evals: Evals for agents](evals.md#evals-for-agents).
+
 ## Extensions in CI
 
 Only provider-level hooks are supported today — for example `STAGEFLOW_CURSOR_EXTENSION` for Cursor-backed models. Per-stage extension YAML in the catalog is not supported in headless CI yet.

@@ -1,0 +1,38 @@
+version: 1
+id: support-sample
+name: Support sample
+description: "Sample eval: does the support agent answer from its facts, ask one question at a time and stay away from forbidden tools?"
+type: capability
+target:
+  kind: agent
+  agent: support_sample
+dataset: ./support-sample.dataset.jsonl
+defaults:
+  repeats: 2
+  pass_threshold: 0.8
+  max_cost_usd: 1
+  concurrency: 2
+conversation:
+  mode: script
+  max_turns: 4
+  tools: read_only
+  approvals: record_only
+graders:
+  - id: no-forbidden-tools
+    type: tool_calls
+    must_pass: true
+    must_call: []
+  - id: reads-files-when-asked
+    type: tool_calls
+    must_not_call: []
+  - id: replies-in-time
+    type: conversation_check
+    max_turns: 4
+  - id: one-question-per-turn
+    type: conversation_check
+    max_agent_questions_per_turn: 1
+  - id: mentions-the-fact
+    type: reference
+    weight: 3
+    mode: each_mentioned
+    expected: expected.mentions

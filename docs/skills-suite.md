@@ -26,7 +26,7 @@ This suite is for **operator harnesses** (Cursor, Claude Code, Codex, Pi CLI, Op
 
 ### Evals
 
-Evals are not a sixth job. The router and the author and run jobs point to one shared reference, [`skills/stageflow/references/evals.md`](../skills/stageflow/references/evals.md): when to use `sf eval validate` (free) and `sf eval run --json` (calls models, costs money, so the agent confirms first), how to read the `outcome`, and the limits to state. Writing eval and dataset files is `stageflow-author`; starting and reading an eval run is `stageflow-run`. See [Evals](evals.md).
+Evals (of a stage or an agent) are not a sixth job. The router and the author and run jobs point to one shared reference, [`skills/stageflow/references/evals.md`](../skills/stageflow/references/evals.md): when to use `sf eval validate` (free) and `sf eval run --json` (calls models, costs money, so the agent confirms first), how to read the `outcome`, what is different for agent evals (conversations, higher cost, read-only tools by default, the `--allow-real-tools` consent), and the limits to state. Writing eval and dataset files is `stageflow-author`; starting and reading an eval run is `stageflow-run`. See [Evals](evals.md).
 
 ### Native question UI (`stageflow-run`)
 

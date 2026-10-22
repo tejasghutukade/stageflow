@@ -37,6 +37,12 @@ Tokens and cost are summed per turn (`agent_turns`) and shown per session and pe
 
 Text is redacted **before it is stored** (secret-shaped strings and any named secret the Host knows are replaced), and again when a trace is exported, so a later change to storage cannot leak through export. Redaction removes known secret shapes; it does not understand your data. If an agent handles personal or confidential content, keep `metadata`.
 
+## Eval sessions {#eval-sessions}
+
+When an [agent eval](evals.md#evals-for-agents) runs, each conversation is an agent session marked as an eval session. Eval sessions are recorded like any other (messages, turns, spans, tokens, cost) with two differences: capture is forced to `full` so graders and the transcript can see tool arguments and results, and OTLP push and the groundedness judge are off. They are **hidden** from the agent's session list, the **Agent sessions** page, the Inbox, approval counts and statistics, so they never mix with real use.
+
+You can still open one by its id. In the console the eval result's **Transcript** tab links to the **Agent run** page, which shows the usual steps and waterfall for that conversation. Deleting the eval run deletes its eval sessions; a crashed run's leftovers are removed when the Host next starts, once they are 7 days old and no result refers to them.
+
 ## Where you see it
 
 - **Agent session** page: the messages, turns, cost and tokens of one session, and the average of its eval scores.

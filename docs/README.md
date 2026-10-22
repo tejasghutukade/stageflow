@@ -38,7 +38,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [MCP servers](mcp-servers.md) | Add MCP servers, secrets and OAuth from Settings or `.mcp.json`; use them from agents and stages |
 | [Glossary](glossary.md) | Agent, agent session, pipeline run, connection, Project MCP and other terms |
 | [Workshop Author](workshop.md) | Chat-draft a pipeline at `#/workshop`, save it into the catalog, and run it |
-| [Evals](evals.md) | Check a stage against a dataset: eval files, datasets, graders (schema, field, reference, rubric, code), repeats and honest statistics, compare, cost limits, the engine, privacy, what is not built |
+| [Evals](evals.md) | Check a stage or an agent against a dataset: eval files, datasets, graders (schema, field, reference, rubric, code, and for agents tool_calls, conversation_check, goal_reached), repeats and honest statistics, compare, cost limits, the engine, [Evals for agents](evals.md#evals-for-agents) (scenarios, tool and approval policy, eval sessions), privacy, what is not built |
 | [Browser sessions](browser.md) | Stage `browser` field, saved logins (profiles), login check and human login pattern, queueing, teardown, headed vs headless, live view and watch-the-agent for Hosts with no screen, container browser host (development), Host config keys, what is not built |
 | [Browser sessions internals](browser-internals.md) | For contributors: module map, lifecycle, file layout, env contract, invariants, seams, extension recipes, test and debug guide for browser sessions |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
@@ -56,7 +56,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Console: Inbox](console-inbox.md) | Gates and agent approvals waiting on you, desktop notifications |
 | [Console: Pipeline runs](console-runs.md) | Run list, Start a run, run detail (Timeline, Graph, List; Transcript, Events, Envelope, Artifacts) |
 | [Console: Pipelines, tasks and catalog](console-pipelines-catalog.md) | Pipeline editor, Tasks, Catalog, Triggers, Workshop |
-| [Console: Evals](console-evals.md) | Evals list, New eval wizard, Datasets, Run dialog and live progress, results, case drawer, Compare |
+| [Console: Evals](console-evals.md) | Evals list, New eval wizard (stage or agent), Datasets and scenarios, Run dialog and live progress, results, case drawer and conversation transcript, Compare |
 | [Console: Agents](console-agents.md) | Directory, create and edit, sessions, run inspector |
 | [Console: Connections](console-connections.md) | Channels, email accounts, tool servers |
 | [Console: Settings](console-settings.md) | Providers, Concurrency, MCP server, Project MCP, Notifications |

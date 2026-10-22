@@ -29,7 +29,7 @@ import {
   manifestForWrite,
   resolveWriteDir,
 } from "../config/evalWriteRoots.js";
-import { installEvalSample, EVAL_SAMPLE_FILES } from "../config/installEvalSample.js";
+import { installEvalSample, EVAL_SAMPLE_FILES, type EvalSampleAgents } from "../config/installEvalSample.js";
 import { loadDatasetFile, parseDatasetText } from "../config/loadDataset.js";
 import { loadEvalOutcome, resolveConversation, resolveEvalPaths, type LoadedEval } from "../config/loadEval.js";
 import { resolveEvalTarget } from "../config/resolveEvalTarget.js";
@@ -131,7 +131,7 @@ export type EvalRoutesDeps = {
   sampleSourceDir?: string;
   now?: () => Date;
   /** Lazy view of the agent service; absent or undefined means agents are unavailable on this host. */
-  agents?: () => (EvalAgentsPort & SessionsSource) | undefined;
+  agents?: () => RouteAgents | undefined;
   /** Model prices (USD per million tokens) for the agent cost estimate; unknown models are simply absent. */
   loadPrices?: (modelIds: string[], projectRoot: string) => Promise<Map<string, TokenPrice>>;
 };
@@ -161,6 +161,8 @@ const WRITE_ERROR_STATUS: Record<string, number> = {
   DATASET_NAME_INVALID: 400,
   SAMPLE_EXISTS: 409,
   SAMPLE_SOURCE_MISSING: 500,
+  SAMPLE_NO_DEFAULT_MODEL: 422,
+  SAMPLE_AGENTS_UNAVAILABLE: 503,
 };
 
 const RUN_ERROR_STATUS: Record<string, number> = {
@@ -293,7 +295,9 @@ async function exists(abs: string): Promise<boolean> {
   }
 }
 
-function agentsOf(c: Ctx): (EvalAgentsPort & SessionsSource) | undefined {
+type RouteAgents = EvalAgentsPort & SessionsSource & Partial<Pick<EvalSampleAgents, "create" | "setEnabled">>;
+
+function agentsOf(c: Ctx): RouteAgents | undefined {
   return c.agents?.();
 }
 
@@ -532,8 +536,21 @@ async function handleSampleInstall(c: Ctx): Promise<void> {
   const body = await readOptionalBody(c);
   const projectRoot = await projectRootFor(c, wireFromBody(body), true);
   try {
+    const kind = body.kind;
+    if (kind !== undefined && kind !== "stage" && kind !== "agent") throw bad(`"kind" must be "stage" or "agent"`);
+    const agents = agentsOf(c);
+    const samplePort =
+      agents?.create !== undefined && agents.setEnabled !== undefined
+        ? {
+            get: agents.get.bind(agents),
+            create: agents.create.bind(agents),
+            setEnabled: agents.setEnabled.bind(agents),
+          }
+        : undefined;
     const result = await installEvalSample({
       projectRoot,
+      ...(kind === "agent" ? { kind } : {}),
+      ...(samplePort ? { agents: samplePort } : {}),
       ...(c.sampleSourceDir !== undefined ? { sourceDir: c.sampleSourceDir } : {}),
     });
     audit(c, "eval_sample_install", "ok");

@@ -798,7 +798,7 @@ Validate, run and inspect [evals](evals.md). Like `sf run` and `sf runs`, `sf ev
 sf eval list [--json]
 sf eval show <id|path> [--json]
 sf eval validate [<id|path>] [--json] [--strict]
-sf eval run <id|path> [--repeats <n>] [--judge <model>] [--model <id>] [--max-cost <usd>] [--case <id> ...] [--tag <tag> ...] [--label <text>] [--no-wait] [--json]
+sf eval run <id|path> [--repeats <n>] [--judge <model>] [--model <id>] [--user-model <model>] [--allow-real-tools] [--max-cost <usd>] [--case <id> ...] [--tag <tag> ...] [--label <text>] [--no-wait] [--json]
 sf eval runs [<evalId>] [--json]
 sf eval runs show <evalRunId> [--json]
 sf eval runs cancel <evalRunId>
@@ -835,7 +835,9 @@ With no argument, validates every eval in the catalog (`catalog.evals`, default 
 |------|-------------|
 | `--repeats <n>` | Executions per case (a positive integer; the allowed range is 1 to 10) |
 | `--judge <model>` | Judge model for rubric graders |
-| `--model <id>` | Replace the stage's model for this run |
+| `--model <id>` | Replace the stage's model for this run. For an agent eval, replaces the agent's model |
+| `--user-model <model>` | Agent evals: the model that plays the user in `simulated` scenarios. Must be an `anthropic/…`, `openai/…` or `openrouter/…` model |
+| `--allow-real-tools` | Agent evals: your consent, for this run only, to an eval whose `conversation.tools` is `real`. Has no effect on other policies |
 | `--max-cost <usd>` | Cost limit in USD (a positive number) |
 | `--case <id>` | Run only this case. Repeat the flag for several |
 | `--tag <tag>` | Run only cases with this tag. Repeat the flag for several. Cannot be combined with `--case` |
@@ -843,7 +845,9 @@ With no argument, validates every eval in the catalog (`catalog.evals`, default 
 | `--no-wait` | Print the run id and return at once. The run continues on the Host |
 | `--json` | Machine-readable output |
 
-Overrides are recorded in the run's config snapshot. A run costs real money (stage calls plus judge calls), bounded by the cost limit. Only one eval run is active per Host.
+Overrides are recorded in the run's config snapshot. A run costs real money (stage calls plus judge calls; for an agent eval, agent turns, simulator calls and judge calls), bounded by the cost limit.
+
+**Real tools.** When the effective tool policy of an agent eval is `real` and `--allow-real-tools` is missing, the command exits `1` without starting a run: `EVAL_REAL_TOOLS_NOT_CONFIRMED: … Re-run with --allow-real-tools to confirm.` (`--json`: `{ "ok": false, "code": "EVAL_REAL_TOOLS_NOT_CONFIRMED", "message": … }`). With the flag, a `real` eval starts and prints `Warning: real tools can change files and call services from this machine.` to stderr. The eval file must also carry `conversation.allow_real_tools: true`. The safer-only overrides for `tools` and `approvals` are API and MCP fields; there is no CLI flag for them. Only one eval run is active per Host.
 
 While waiting, a terminal prints progress (`n/N results, $cost`) to stderr. **Ctrl+C cancels the run** on the Host (completed results are kept) and prints the final outcome.
 
@@ -865,6 +869,8 @@ The outcome is one of `passed`, `below_threshold`, `failed`, `cancelled` or `bud
 }
 ```
 
+For an **agent eval** the document also carries `target_kind: "agent"`, `agent_id`, `agent_revision`, `mean_turns`, `mean_tool_calls` and `tools_policy` (the effective tool policy). Stage documents do not have these keys. In human output the same facts print as two extra lines. See [Evals: Evals for agents](evals.md#evals-for-agents).
+
 `pass_rate`, `pass_rate_ci`, `threshold` and `reliability` are `null` when not available (for example no executed results, fewer than two cases, or one repeat). With `--no-wait --json` the document is `{ "eval_run_id", "status" }`. An invalid eval prints the same findings as `sf eval validate` (human or `--json`) and exits `1`.
 
 **Exit codes:** `0` the run completed and passed (pass rate at or above the threshold); `1` anything else: below threshold, failed, cancelled, stopped by the cost limit, an invalid eval, a missing engine or a Host error. `sf eval run` never exits `2`.
@@ -874,6 +880,8 @@ Errors with `--json` are `{ "error", "code"?, "status"? }` on stdout, with exit 
 ### `sf eval runs`, `compare`, `datasets`
 
 `sf eval runs` prints one tab-separated line per run: eval id, `#run_number`, status, pass rate, cost, `eval_run_id`. Filter by eval id. `sf eval runs show` prints the run's id and status, the reason when it stopped early, pass rate, progress, cost and fingerprint; with `--json` it is the full run detail (status, progress, stats, config snapshot, per-grader summary). `cancel` and `delete` print one line and have no `--json`. `sf eval compare --json` and the default output are the comparison document (verdict, per-grader and per-case changes, stage diff, warnings). `sf eval datasets` lists dataset files with their case counts.
+
+For agent evals, `sf eval show` first prints `Agent <id> r<revision> (<model>)` and the conversation settings; `sf eval runs show` prints the agent, the conversation settings from the snapshot, and `mean turns` and `mean tool calls`. `sf eval compare` of two agent runs adds an `agent_diff` (changed definition keys and an instructions line diff) in place of `stage_diff`; runs of different targets fail with `EVAL_COMPARE_MISMATCH`. There is no `sf eval new`: write agent evals in the console or by hand.
 
 ### `sf eval engine status`
 

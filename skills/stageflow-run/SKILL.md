@@ -207,7 +207,7 @@ MCP `get_run` / `wait_run` and `sf runs wait` / `sf runs show` `--json` carry li
 
 ## Eval runs
 
-An eval run is not a pipeline run, so none of the steps above apply to it. When the human wants to run an eval, read [`../stageflow/references/evals.md`](../stageflow/references/evals.md) and follow it: `sf eval validate` first (free), say what the run will cost and wait for a yes, then `run_eval` (host up) or `sf eval run --json` (host down), and report `outcome`, `pass_rate` with its interval, `threshold`, `cost_total` and `url`. Eval tools are not in the list under [MCP tools](#mcp-tools) and `mcp-call.mjs` does not call them: use this harness's native Stageflow MCP tools when their names are in the tool list, otherwise the `sf eval` CLI.
+An eval run is not a pipeline run, so none of the steps above apply to it. When the human wants to run an eval, read [`../stageflow/references/evals.md`](../stageflow/references/evals.md) and follow it: `sf eval validate` first (free), say what the run will cost and wait for a yes, then `run_eval` (host up) or `sf eval run --json` (host down), and report `outcome`, `pass_rate` with its interval, `threshold`, `cost_total` and `url`. An eval of an agent costs more (agent turns, a simulator, the judge), keeps tools read-only unless the file and the run both allow real tools (`allow_real_tools` / `--allow-real-tools`, which you never pass on your own), and adds `agent_id`, `agent_revision`, `mean_turns` and `mean_tool_calls` to the document; read the conversation with `get_eval_result`. Eval tools are not in the list under [MCP tools](#mcp-tools) and `mcp-call.mjs` does not call them: use this harness's native Stageflow MCP tools when their names are in the tool list, otherwise the `sf eval` CLI.
 
 ## Non-goals
 
