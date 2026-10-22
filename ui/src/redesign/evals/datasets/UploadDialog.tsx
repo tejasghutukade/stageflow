@@ -5,23 +5,29 @@ import type { EvalDatasetFormat, EvalDatasetPreview, EvalDatasetTarget } from ".
 import { BTN, BTN_PRIMARY, DialogShell, LABEL, MONO, TEXTAREA } from "./DialogShell";
 import {
   DELIMITERS,
+  EXTRAS_TITLE,
   FREE_MODE_HINT,
   FREE_MODE_NOTE,
   MAX_UPLOAD_BYTES,
   SPLIT_OPTIONS,
   autoMatch,
-  buildMapping,
+  buildFullMapping,
   buildPreviewRequest,
   canConfirm,
   casesForImport,
+  cellsByColumn,
   confirmLabel,
   defaultDelimiter,
   detectPastedFormat,
+  extraColumns,
+  extraConflicts,
   formatBytes,
   formatFromFileName,
   freeFields,
   hasTarget,
+  initExtras,
   modeLabels,
+  patchExtra,
   previewRows,
   readyCases,
   rowsFoundText,
@@ -29,6 +35,8 @@ import {
   setSplit,
   stageFields,
   summarize,
+  type ExtraChoice,
+  type ExtraState,
   type MappingState,
   type UploadConfirm,
   type UploadField,
@@ -83,6 +91,7 @@ function UploadDialogBody({
   const [columns, setColumns] = useState<string[] | null>(null);
   const [rowsFound, setRowsFound] = useState(0);
   const [mapping, setMapping] = useState<MappingState>({});
+  const [extras, setExtras] = useState<ExtraState>({});
   const [preview, setPreview] = useState<EvalDatasetPreview | null>(null);
   const [mode, setMode] = useState<UploadMode>("append");
   const [busy, setBusy] = useState(false);
@@ -99,6 +108,19 @@ function UploadDialogBody({
     if (!tabular) return [];
     return stageAware ? stageFields(inputFields, expectedFields) : freeFields(columns ?? []);
   }, [tabular, stageAware, inputFields, expectedFields, columns]);
+  const extraCols = useMemo(
+    () => (tabular && stageAware ? extraColumns(columns ?? [], fields, mapping) : []),
+    [tabular, stageAware, columns, fields, mapping],
+  );
+  const extraClashes = useMemo(
+    () =>
+      extraConflicts(
+        extras,
+        extraCols,
+        fields.filter((f) => f.role === "expected").map((f) => f.name.replace(/^expected\./, "")),
+      ),
+    [extras, extraCols, fields],
+  );
   const existing = existingCases?.length ?? 0;
   const hasExisting = existingCases !== undefined && existing > 0;
 
@@ -119,6 +141,7 @@ function UploadDialogBody({
         const names = res.columns ?? [];
         const f = stageAware ? stageFields(inputFields, expectedFields) : freeFields(names);
         setMapping(res.columns ? autoMatch(f, names) : {});
+        setExtras(res.columns ? initExtras(names, cellsByColumn(res.rows, names)) : {});
         setLoading(false);
         setParsed(true);
       },
@@ -143,7 +166,9 @@ function UploadDialogBody({
           format: source.format,
           content: source.content,
           delimiter,
-          ...(tabular ? { mapping: buildMapping(fields, mapping) } : {}),
+          ...(tabular
+            ? { mapping: buildFullMapping(fields, mapping, stageAware ? extras : null, columns ?? []) }
+            : {}),
           ...(stageAware && target ? { target } : {}),
           projectRoot,
         }),
@@ -158,7 +183,7 @@ function UploadDialogBody({
     }, 250);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, parsed, mapping, delimiter]);
+  }, [source, parsed, mapping, extras, delimiter]);
 
   async function pickFile(file: File | undefined) {
     if (!file) return;
@@ -371,6 +396,26 @@ function UploadDialogBody({
             </section>
           ) : null}
 
+          {extraCols.length > 0 ? (
+            <section className="flex flex-col gap-2" aria-label="Reference data">
+              <div className="flex items-baseline justify-between">
+                <h3 className={LABEL}>{EXTRAS_TITLE}</h3>
+                <span className="text-xs text-[var(--sf-text-3)]">Other columns, imported as expected answers</span>
+              </div>
+              <div className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
+                {extraCols.map((column) => (
+                  <ExtraRow
+                    key={column}
+                    column={column}
+                    choice={extras[column]}
+                    clash={extraClashes.has(column)}
+                    onChange={(patch) => setExtras((x) => patchExtra(x, column, patch))}
+                  />
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           <section className="flex flex-col gap-2" aria-label="Preview">
             <h3 className={LABEL}>Preview</h3>
             <div className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
@@ -479,6 +524,56 @@ function FieldRow({
       <span className="flex w-4 shrink-0 justify-center">
         {column !== null ? <LuCheck className="size-4 text-[var(--sf-ok)]" aria-label="Mapped" /> : null}
       </span>
+    </div>
+  );
+}
+
+function ExtraRow({
+  column,
+  choice,
+  clash,
+  onChange,
+}: {
+  column: string;
+  choice: ExtraChoice | undefined;
+  clash: boolean;
+  onChange: (patch: Partial<ExtraChoice>) => void;
+}) {
+  const enabled = choice?.enabled ?? false;
+  return (
+    <div className="flex items-center gap-3 border-b border-b-[var(--sf-hairline)] px-3.5 py-2.5 last:border-b-0" data-extra={column}>
+      <input
+        type="checkbox"
+        aria-label={`Import ${column} as reference data`}
+        checked={enabled}
+        onChange={(e) => onChange({ enabled: e.target.checked })}
+      />
+      <span className={`${MONO} min-w-0 flex-1 truncate text-[13px] text-[var(--sf-text-1)]`} title={column}>{column}</span>
+      <span className="text-[var(--sf-text-3)]" aria-hidden>→</span>
+      <span className={`${MONO} text-xs text-[var(--sf-text-3)]`}>expected.</span>
+      <input
+        type="text"
+        aria-label={`Key name for ${column}`}
+        aria-invalid={enabled && clash}
+        disabled={!enabled}
+        value={choice?.key ?? ""}
+        onChange={(e) => onChange({ key: e.target.value })}
+        title={enabled && clash ? "Empty or already used: this column will not be imported" : undefined}
+        className={`${MONO} h-8 w-[150px] shrink-0 rounded-lg border bg-[var(--sf-raised)] px-2.5 text-[13px] text-[var(--sf-text-1)] outline-none disabled:opacity-50 ${
+          enabled && clash ? "border-[var(--sf-fail)]" : "border-[var(--sf-hairline-strong)]"
+        }`}
+      />
+      <select
+        aria-label={`Split character for ${column}`}
+        disabled={!enabled}
+        value={choice?.split ?? ""}
+        onChange={(e) => onChange({ split: e.target.value })}
+        className="h-8 w-[104px] shrink-0 rounded-lg border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)] px-2 text-xs text-[var(--sf-text-2)] disabled:opacity-50"
+      >
+        {SPLIT_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
     </div>
   );
 }

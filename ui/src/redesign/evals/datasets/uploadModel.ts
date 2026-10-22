@@ -267,5 +267,120 @@ export function canConfirm(preview: Pick<EvalDatasetPreview, "counts"> | null, b
   return !busy && preview !== null && preview.counts.ready > 0;
 }
 
+export type ExtraChoice = { enabled: boolean; key: string; split: string };
+/** Reference-data rows, keyed by CSV column. */
+export type ExtraState = Record<string, ExtraChoice>;
+
+export const EXTRAS_TITLE = "Reference data (optional)";
+
+/** `Expected Category` and `expected_category` both become `category`. */
+export function defaultExpectedKey(column: string): string {
+  const flat = column.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const stripped = flat.replace(/^expected[._]/, "");
+  return stripped !== "" ? stripped : flat;
+}
+
+/** Suggest `;` when most non-empty cells contain one. */
+export function suggestSplit(values: readonly string[]): string {
+  const filled = values.filter((v) => v.trim() !== "");
+  if (filled.length === 0) return "";
+  const withSemi = filled.filter((v) => v.includes(";")).length;
+  return withSemi * 2 > filled.length ? ";" : "";
+}
+
+/** Raw cells per column, from preview rows that carry the CSV unmapped (every column as `input.<column>`). */
+export function cellsByColumn(
+  rows: ReadonlyArray<{ case: { input?: Record<string, unknown> } }>,
+  columns: readonly string[],
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const c of columns) {
+    out[c] = rows.map((r) => r.case.input?.[c]).filter((v): v is string => typeof v === "string");
+  }
+  return out;
+}
+
+/** Columns already named `expected_*` / `expected.*` start checked; the rest are opt-in. */
+export function initExtras(columns: readonly string[], cells: Record<string, readonly string[]> = {}): ExtraState {
+  const state: ExtraState = {};
+  for (const column of columns) {
+    state[column] = {
+      enabled: /^expected[._]/i.test(column.trim()),
+      key: defaultExpectedKey(column),
+      split: suggestSplit(cells[column] ?? []),
+    };
+  }
+  return state;
+}
+
+/** Columns not taken by an input field or a grader-driven `expected.<name>` row. */
+export function extraColumns(
+  columns: readonly string[],
+  fields: readonly UploadField[],
+  state: MappingState,
+): string[] {
+  const used = new Set<string>();
+  for (const f of fields) {
+    const col = state[f.key]?.column;
+    if (col) used.add(col);
+  }
+  return columns.filter((c) => !used.has(c));
+}
+
+export function patchExtra(state: ExtraState, column: string, patch: Partial<ExtraChoice>): ExtraState {
+  const prev = state[column] ?? { enabled: false, key: defaultExpectedKey(column), split: "" };
+  return { ...state, [column]: { ...prev, ...patch } };
+}
+
+function extraKey(choice: ExtraChoice): string {
+  return choice.key.trim().toLowerCase().replace(/[\s-]+/g, "_").replace(/^expected\./, "");
+}
+
+/** Empty keys, keys used twice, or keys clashing with a grader field do not import: grader rows win, then the first row in column order. */
+export function extraConflicts(
+  extras: ExtraState,
+  available: readonly string[],
+  takenKeys: readonly string[] = [],
+): Set<string> {
+  const seen = new Set(takenKeys);
+  const bad = new Set<string>();
+  for (const column of available) {
+    const choice = extras[column];
+    if (!choice?.enabled) continue;
+    const key = extraKey(choice);
+    if (key === "" || seen.has(key)) bad.add(column);
+    else seen.add(key);
+  }
+  return bad;
+}
+
+export function buildExtraMapping(
+  extras: ExtraState,
+  available: readonly string[],
+  takenKeys: readonly string[] = [],
+): EvalUploadMapping {
+  const bad = extraConflicts(extras, available, takenKeys);
+  const mapping: EvalUploadMapping = {};
+  for (const column of available) {
+    const choice = extras[column];
+    if (!choice?.enabled || bad.has(column)) continue;
+    mapping[`expected.${extraKey(choice)}`] = { column, ...(choice.split ? { split: choice.split } : {}) };
+  }
+  return mapping;
+}
+
+/** Field rows plus the optional reference-data rows (stage-aware mode only; pass `extras` null otherwise). */
+export function buildFullMapping(
+  fields: readonly UploadField[],
+  state: MappingState,
+  extras: ExtraState | null,
+  columns: readonly string[],
+): EvalUploadMapping {
+  const base = buildMapping(fields, state);
+  if (!extras) return base;
+  const taken = fields.filter((f) => f.role === "expected").map((f) => fieldBaseName(f));
+  return { ...buildExtraMapping(extras, extraColumns(columns, fields, state), taken), ...base };
+}
+
 export const FREE_MODE_HINT = "Pick fields to import";
 export const FREE_MODE_NOTE = "Without a stage, each column you pick becomes an input field.";

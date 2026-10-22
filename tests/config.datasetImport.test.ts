@@ -80,6 +80,17 @@ describe("applyUploadMapping", () => {
     expect(row!.case.expected).toEqual({ findings: ["a", "b", "c"] });
   });
 
+  it("accepts expected keys that no schema or grader declared", () => {
+    const [row] = applyUploadMapping(
+      [{ d: "x", c: "bug", k: "a;b" }],
+      { "input.diff": { column: "d" }, "expected.category": { column: "c" }, "expected.key_facts": { column: "k", split: ";" } },
+      schema,
+      [],
+    );
+    expect(row!.status).toBe("ready");
+    expect(row!.case.expected).toEqual({ category: "bug", key_facts: ["a", "b"] });
+  });
+
   it("continues ids after the highest cNNN and does not spend ids on skipped rows", () => {
     const res = applyUploadMapping(
       [{ d: "a" }, { d: "" }, { d: "b" }],
