@@ -427,6 +427,20 @@ describe("EvalRunManager: progress", () => {
 });
 
 describe("EvalRunManager.tryOne", () => {
+  it("counts the try run as executing while it runs, so the host callback is accepted", async () => {
+    let during: boolean | undefined;
+    let id = "";
+    const manager: EvalRunManager = makeManager(fake(), fakeRunner({ costPerCase: 0 }), {
+      onRunStarted: (evalRunId) => {
+        id = evalRunId;
+        during = manager.isExecuting(evalRunId);
+      },
+    });
+    await manager.tryOne({ projectRoot: root, evalPath: EVAL_REL, caseId: "c2" });
+    expect(during).toBe(true);
+    expect(manager.isExecuting(id)).toBe(false);
+  });
+
   it("returns grades and cost, writes no eval rows, and runs the lifecycle hooks", async () => {
     const events: string[] = [];
     const manager = makeManager(fake(), fakeRunner({ costPerCase: 0.02 }), {

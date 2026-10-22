@@ -443,7 +443,7 @@ export async function bootstrapStageflowHost(
   const evalServices: EvalInternalServices = {
     tokens: evalTokens,
     runner: evalStageRunner,
-    isRunning: (evalRunId) => evalRunManager.activeRunId() === evalRunId,
+    isRunning: (evalRunId) => evalRunManager.isExecuting(evalRunId),
   };
   const setEvalCallbackBase = (baseUrl: string): void => {
     evalCallbackBase = baseUrl.replace(/\/+$/, "");

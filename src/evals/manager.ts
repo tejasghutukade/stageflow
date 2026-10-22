@@ -235,6 +235,7 @@ export class EvalRunManager {
   private live: Live | undefined;
   private reserved = false;
   private trying = false;
+  private tryingRunId: string | null = null;
 
   constructor(private readonly deps: EvalRunManagerDeps) {
     this.store = deps.store;
@@ -246,6 +247,10 @@ export class EvalRunManager {
 
   activeRunId(): string | null {
     return this.live?.evalRunId ?? null;
+  }
+
+  isExecuting(evalRunId: string): boolean {
+    return this.live?.evalRunId === evalRunId || this.tryingRunId === evalRunId;
   }
 
   getLive(evalRunId: string): EvalLiveState | null {
@@ -738,6 +743,7 @@ export class EvalRunManager {
     this.reserved = false;
     this.trying = true;
     const evalRunId = `${EVAL_RUN_ID_PREFIX}${randomBytes(6).toString("hex")}`;
+    this.tryingRunId = evalRunId;
     const abort = new AbortController();
     let hooked = false;
     try {
@@ -835,6 +841,7 @@ export class EvalRunManager {
       };
     } finally {
       this.trying = false;
+      this.tryingRunId = null;
       const { onRunFinished } = this.deps;
       if (hooked && onRunFinished) await this.runHook("onRunFinished", () => onRunFinished(evalRunId));
       await this.cleanupWorkDir(evalRunId);
