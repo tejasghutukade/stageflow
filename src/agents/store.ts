@@ -158,7 +158,11 @@ export type SessionQuery = {
   limit: number;
   /** Opaque cursor from a previous page. */
   cursor?: string;
+  /** Eval sessions are hidden unless an internal reader (eval read models, tests) asks for them. */
+  includeEval?: boolean;
 };
+
+const HIDE_EVAL = "source <> 'eval'";
 
 export type SessionStats = {
   total: number;
@@ -544,6 +548,7 @@ export class AgentStore {
     query: SessionQuery,
   ): { sessions: AgentSessionListItem[]; nextCursor: string | null } {
     const where = ["project_key = @projectKey"];
+    if (!query.includeEval) where.push(HIDE_EVAL);
     const params: Record<string, unknown> = { projectKey, limit: query.limit + 1 };
     if (agentId !== undefined) {
       where.push("agent_id = @agentId");
@@ -602,12 +607,12 @@ export class AgentStore {
   }
 
   /** One visitor's sessions on one agent, newest first (public web chat). */
-  listSessionsForRef(projectKey: string, agentId: string, source: string, sourceRef: string, limit: number): AgentSession[] {
+  listSessionsForRef(projectKey: string, agentId: string, source: string, sourceRef: string, limit: number, includeEval = false): AgentSession[] {
     return (
       this.db
         .prepare(
           `SELECT * FROM agent_sessions
-            WHERE project_key = ? AND agent_id = ? AND source = ? AND source_ref = ?
+            WHERE project_key = ? AND agent_id = ? AND source = ? AND source_ref = ?${includeEval ? "" : ` AND ${HIDE_EVAL}`}
             ORDER BY updated_at DESC, session_id DESC LIMIT ?`,
         )
         .all(projectKey, agentId, source, sourceRef, limit) as Row[]
@@ -615,9 +620,9 @@ export class AgentStore {
   }
 
   /** Stats for one agent, or for every agent when `agentId` is omitted. */
-  sessionStats(projectKey: string, agentId: string | undefined, since: string): SessionStats {
-    const agentFilter = agentId === undefined ? "" : " AND agent_id = @agentId";
-    const sessionAgentFilter = agentId === undefined ? "" : " AND s.agent_id = @agentId";
+  sessionStats(projectKey: string, agentId: string | undefined, since: string, includeEval = false): SessionStats {
+    const agentFilter = (agentId === undefined ? "" : " AND agent_id = @agentId") + (includeEval ? "" : ` AND ${HIDE_EVAL}`);
+    const sessionAgentFilter = (agentId === undefined ? "" : " AND s.agent_id = @agentId") + (includeEval ? "" : ` AND s.${HIDE_EVAL}`);
     const bind = (extra: Record<string, unknown>) => (agentId === undefined ? extra : { ...extra, agentId });
     const row = this.db
       .prepare(
@@ -650,6 +655,30 @@ export class AgentStore {
       cost7d: numOrNull(turns.cost),
       costTotal: numOrNull(turns.cost_all),
     };
+  }
+
+  /** Eval sessions below a session or an eval run: those whose `source_ref` is it, and theirs, recursively. */
+  listChildSessions(parentId: string): AgentSession[] {
+    return (
+      this.db
+        .prepare(
+          `WITH RECURSIVE below(session_id) AS (
+             SELECT session_id FROM agent_sessions WHERE source = 'eval' AND source_ref = ?
+             UNION
+             SELECT s.session_id FROM agent_sessions s JOIN below b ON s.source_ref = b.session_id WHERE s.source = 'eval'
+           )
+           SELECT s.* FROM agent_sessions s JOIN below b ON b.session_id = s.session_id ORDER BY s.created_at, s.session_id`,
+        )
+        .all(parentId) as Row[]
+    ).map(toSession);
+  }
+
+  /** Delete eval sessions; messages, turns, spans, scores and approvals go with them. Never touches other sessions. */
+  deleteSessions(sessionIds: string[]): void {
+    this.transaction(() => {
+      const remove = this.db.prepare(`DELETE FROM agent_sessions WHERE session_id = ? AND source = 'eval'`);
+      for (const sessionId of sessionIds) remove.run(sessionId);
+    });
   }
 
   /** Ids of every session an agent has had, for releasing what a runtime holds for them. */
@@ -968,12 +997,12 @@ export class AgentStore {
     ).map(toApproval);
   }
 
-  listPendingApprovals(projectKey: string): Array<AgentApproval & { agentId: string }> {
+  listPendingApprovals(projectKey: string, includeEval = false): Array<AgentApproval & { agentId: string }> {
     return (
       this.db
         .prepare(
           `SELECT a.*, s.agent_id FROM agent_approvals a JOIN agent_sessions s ON s.session_id = a.session_id
-            WHERE s.project_key = ? AND a.status = 'pending' ORDER BY a.created_at`,
+            WHERE s.project_key = ? AND a.status = 'pending'${includeEval ? "" : ` AND s.${HIDE_EVAL}`} ORDER BY a.created_at`,
         )
         .all(projectKey) as Row[]
     ).map((row) => ({ ...toApproval(row), agentId: str(row.agent_id) }));

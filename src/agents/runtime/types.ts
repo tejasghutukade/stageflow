@@ -18,7 +18,7 @@ export type TurnHooks = {
   toolFinished(call: ToolCall, result: { ok: boolean; output: string }): void;
   modelFinished(info: { startedAt: Date; endedAt: Date; inputTokens: number; outputTokens: number; costUsd: number; model?: string }): void;
   /** Run another agent for a `agent:<id>` call and return its reply. */
-  delegate(agentId: string, message: string): Promise<string>;
+  delegate(agentId: string, message: string, callId?: string): Promise<string>;
 };
 
 export type CompleteInput = {
