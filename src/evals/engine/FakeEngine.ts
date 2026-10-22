@@ -1,4 +1,4 @@
-import { gradeDeterministic } from "../graders/index.js";
+import { gradeDeterministic, isDeterministicGrader } from "../graders/index.js";
 import type { GraderContext, Subject } from "../graders/types.js";
 import type {
   CaseOutput,
@@ -128,8 +128,15 @@ export class FakeEngine implements EvalEngine {
           for (const grader of plan.graders) {
             if (grader.type === "rubric") {
               grades.push(this.gradeRubric(grader, testCase, run.output, io));
-            } else {
+            } else if (isDeterministicGrader(grader)) {
               grades.push(gradeDeterministic(grader, toSubject(run.output), testCase, ctx));
+            } else {
+              grades.push({
+                graderId: grader.id,
+                graderType: grader.type,
+                status: "error",
+                errorCode: "EVAL_GRADER_NOT_APPLICABLE",
+              });
             }
           }
         } else if (run.code === "EVAL_BUDGET_EXCEEDED") {

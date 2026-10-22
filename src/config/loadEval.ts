@@ -1,18 +1,23 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
+import { AGENT_ID_PATTERN, isReservedAgentId } from "../agents/agentId.js";
 import { canonicalJson, hash6, sha256Hex } from "../evals/canonical.js";
 import type {
   EvalBudget,
+  EvalConversation,
   EvalDefaults,
   EvalFile,
   EvalTarget,
   EvalTask,
   FieldCheck,
   FieldOp,
+  FinalReplyCheck,
   GraderConfig,
+  ResolvedConversation,
   ResolvedGrader,
   RubricExample,
+  ToolArgCheck,
 } from "../evals/types.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { yamlParsePosition } from "./yamlParsePosition.js";
@@ -32,9 +37,43 @@ export const EVAL_DEFAULT_REPEATS = 3;
 export const EVAL_DEFAULT_PASS_THRESHOLD = 0.8;
 export const EVAL_DEFAULT_MAX_COST_USD = 2;
 export const EVAL_DEFAULT_CONCURRENCY = 4;
+export const EVAL_AGENT_DEFAULT_CONCURRENCY = 2;
+export const EVAL_AGENT_DEFAULT_MAX_COST_USD = 1;
+
+export const EVAL_CONVERSATION_DEFAULTS: ResolvedConversation = {
+  mode: "script",
+  maxTurns: 8,
+  turnTimeoutMs: 120_000,
+  tools: "read_only",
+  approvals: "record_only",
+  readOnlyTools: [],
+  allowRealTools: false,
+};
+
+export function resolveConversation(conversation: EvalConversation | undefined): ResolvedConversation {
+  const d = EVAL_CONVERSATION_DEFAULTS;
+  return {
+    mode: conversation?.mode ?? d.mode,
+    maxTurns: conversation?.max_turns ?? d.maxTurns,
+    turnTimeoutMs: conversation?.turn_timeout_ms ?? d.turnTimeoutMs,
+    tools: conversation?.tools ?? d.tools,
+    approvals: conversation?.approvals ?? d.approvals,
+    readOnlyTools: [...(conversation?.read_only_tools ?? d.readOnlyTools)],
+    allowRealTools: conversation?.allow_real_tools ?? d.allowRealTools,
+  };
+}
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const GRADER_TYPES = ["schema", "field", "reference", "rubric", "code"] as const;
+const GRADER_TYPES = [
+  "schema",
+  "field",
+  "reference",
+  "rubric",
+  "code",
+  "tool_calls",
+  "conversation_check",
+  "goal_reached",
+] as const;
 const FIELD_OPS: readonly FieldOp[] = [
   "exists",
   "not_empty",
@@ -61,12 +100,32 @@ const TOP_KEYS = [
   "dataset",
   "task",
   "defaults",
+  "conversation",
   "graders",
   "budget",
 ];
 const TARGET_KEYS = ["kind", "pipeline", "stage", "file"];
+const AGENT_TARGET_KEYS = ["kind", "agent"];
+const CONVERSATION_KEYS = [
+  "mode",
+  "max_turns",
+  "turn_timeout_ms",
+  "tools",
+  "approvals",
+  "read_only_tools",
+  "allow_real_tools",
+];
+const READ_ONLY_TOOL_PATTERN = /^[A-Za-z0-9_.*:-]{1,128}$/;
 const TASK_KEYS = ["goal", "context", "constraints"];
-const DEFAULTS_KEYS = ["repeats", "judge", "pass_threshold", "max_cost_usd", "concurrency", "model"];
+const DEFAULTS_KEYS = [
+  "repeats",
+  "judge",
+  "pass_threshold",
+  "max_cost_usd",
+  "concurrency",
+  "model",
+  "user_model",
+];
 const BUDGET_KEYS = ["latency_ms", "cost_usd"];
 const GRADER_COMMON_KEYS = ["id", "type", "description", "weight", "must_pass"];
 const GRADER_TYPE_KEYS: Record<(typeof GRADER_TYPES)[number], string[]> = {
@@ -75,7 +134,12 @@ const GRADER_TYPE_KEYS: Record<(typeof GRADER_TYPES)[number], string[]> = {
   reference: ["mode", "path", "expected", "pass_at"],
   rubric: ["rubric", "scale", "pass_at", "judge", "examples"],
   code: ["code"],
+  tool_calls: ["must_call", "must_not_call", "must_ask_first", "max_calls", "args"],
+  conversation_check: ["max_turns", "max_agent_questions_per_turn", "final_reply"],
+  goal_reached: ["judge", "guidance"],
 };
+const TOOL_ARG_KEYS = ["tool", "path", "op", "value"];
+const FINAL_REPLY_KEYS = ["op", "value"];
 const CHECK_KEYS = ["path", "op", "value"];
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -107,11 +171,10 @@ export type EvalPaths = {
 /** Paths in an eval file resolve against the eval file's directory (P6). */
 export function resolveEvalPaths(file: EvalFile, evalAbsPath: string): EvalPaths {
   const dir = path.dirname(evalAbsPath);
+  const stage = file.target.kind === "stage" ? file.target : undefined;
   return {
-    ...(file.target.pipeline !== undefined
-      ? { pipelinePath: path.resolve(dir, file.target.pipeline) }
-      : {}),
-    ...(file.target.file !== undefined ? { stageFile: path.resolve(dir, file.target.file) } : {}),
+    ...(stage?.pipeline !== undefined ? { pipelinePath: path.resolve(dir, stage.pipeline) } : {}),
+    ...(stage?.file !== undefined ? { stageFile: path.resolve(dir, stage.file) } : {}),
     datasetPath: path.resolve(dir, file.dataset),
   };
 }
@@ -187,14 +250,19 @@ function parseTarget(c: Collector, raw: unknown): EvalTarget | undefined {
     return undefined;
   }
   if (raw.kind === undefined) {
-    c.add("eval.invalid_field", `target "kind" is required (release 1 supports "stage")`);
+    c.add("eval.invalid_field", `target "kind" is required ("stage" or "agent")`);
     return undefined;
   }
+  if (raw.kind === "agent") return parseAgentTarget(c, raw);
   if (raw.kind !== "stage") {
     c.add(
       "eval.target_kind_unsupported",
-      `target kind ${JSON.stringify(raw.kind)} is not supported in release 1 (only "stage")`,
+      `target kind ${JSON.stringify(raw.kind)} is not supported (only "stage" and "agent")`,
     );
+    return undefined;
+  }
+  if (raw.agent !== undefined) {
+    c.add("eval.target_invalid", `target "agent" is only valid with kind: agent`);
     return undefined;
   }
   c.unknownKeys(raw, TARGET_KEYS, "target");
@@ -228,6 +296,33 @@ function parseTarget(c: Collector, raw: unknown): EvalTarget | undefined {
   };
 }
 
+function parseAgentTarget(c: Collector, raw: Record<string, unknown>): EvalTarget | undefined {
+  if (raw.revision !== undefined) {
+    c.add("eval.target_invalid", `target "revision" is recorded by the run, not authored`);
+    return undefined;
+  }
+  for (const key of ["pipeline", "stage", "file"]) {
+    if (raw[key] !== undefined) {
+      c.add("eval.target_invalid", `target "${key}" is only valid with kind: stage`);
+      return undefined;
+    }
+  }
+  c.unknownKeys(raw, AGENT_TARGET_KEYS, "target");
+  const agent = raw.agent;
+  if (typeof agent !== "string" || !AGENT_ID_PATTERN.test(agent)) {
+    c.add(
+      "eval.target_invalid",
+      `target "agent" must be an agent id matching ${AGENT_ID_PATTERN.source}`,
+    );
+    return undefined;
+  }
+  if (isReservedAgentId(agent)) {
+    c.add("eval.target_invalid", `target agent id "${agent}" is reserved`);
+    return undefined;
+  }
+  return { kind: "agent", agent };
+}
+
 function parseTask(c: Collector, raw: unknown): EvalTask | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) {
@@ -243,7 +338,11 @@ function parseTask(c: Collector, raw: unknown): EvalTask | undefined {
   return out;
 }
 
-function parseDefaults(c: Collector, raw: unknown): EvalDefaults | undefined {
+function parseDefaults(
+  c: Collector,
+  raw: unknown,
+  kind: EvalTarget["kind"] | undefined,
+): EvalDefaults | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) {
     c.add("eval.invalid_field", `"defaults" must be a mapping`);
@@ -274,6 +373,73 @@ function parseDefaults(c: Collector, raw: unknown): EvalDefaults | undefined {
   if (concurrency !== undefined) out.concurrency = concurrency;
   const model = optionalString(c, raw, "model", "defaults", { min: 1 });
   if (model !== undefined) out.model = model;
+  if (raw.user_model !== undefined) {
+    if (kind === "stage") {
+      c.add("eval.conversation_not_applicable", `defaults "user_model" is only valid with an agent target`);
+    } else {
+      const userModel = optionalString(c, raw, "user_model", "defaults", { min: 1 });
+      if (userModel !== undefined) out.user_model = userModel;
+    }
+  }
+  return out;
+}
+
+function parseConversation(
+  c: Collector,
+  raw: unknown,
+  kind: EvalTarget["kind"] | undefined,
+): EvalConversation | undefined {
+  if (raw === undefined) return undefined;
+  if (kind === "stage") {
+    c.add("eval.conversation_not_applicable", `"conversation" is only valid with an agent target`);
+    return undefined;
+  }
+  const bad = (key: string, rule: string): void =>
+    c.add("eval.conversation_invalid", `conversation "${key}" must be ${rule}`);
+  if (!isPlainObject(raw)) {
+    c.add("eval.conversation_invalid", `"conversation" must be a mapping`);
+    return undefined;
+  }
+  c.unknownKeys(raw, CONVERSATION_KEYS, "conversation");
+  const out: EvalConversation = {};
+  const oneOf = <T extends string>(key: string, allowed: readonly T[]): T | undefined => {
+    const value = raw[key];
+    if (value === undefined) return undefined;
+    if (typeof value === "string" && (allowed as readonly string[]).includes(value)) return value as T;
+    bad(key, `one of: ${allowed.join(", ")}`);
+    return undefined;
+  };
+  const mode = oneOf("mode", ["script", "simulated"] as const);
+  if (mode !== undefined) out.mode = mode;
+  const maxTurns = optionalNumber(c, raw, "max_turns", "conversation", "an integer from 1 to 30", (n) => isIntegerIn(n, 1, 30), "eval.conversation_invalid");
+  if (maxTurns !== undefined) out.max_turns = maxTurns;
+  const timeout = optionalNumber(c, raw, "turn_timeout_ms", "conversation", "an integer from 5000 to 600000", (n) => isIntegerIn(n, 5000, 600_000), "eval.conversation_invalid");
+  if (timeout !== undefined) out.turn_timeout_ms = timeout;
+  const tools = oneOf("tools", ["real", "read_only", "mocked"] as const);
+  if (tools !== undefined) out.tools = tools;
+  const approvals = oneOf("approvals", ["deny", "auto_approve_read", "record_only"] as const);
+  if (approvals !== undefined) out.approvals = approvals;
+  if (raw.read_only_tools !== undefined) {
+    const list = raw.read_only_tools;
+    if (
+      Array.isArray(list) &&
+      list.length <= 50 &&
+      list.every((item) => typeof item === "string" && READ_ONLY_TOOL_PATTERN.test(item))
+    ) {
+      out.read_only_tools = list as string[];
+    } else {
+      bad("read_only_tools", "an array of at most 50 tool grant ids");
+    }
+  }
+  if (raw.allow_real_tools !== undefined) {
+    if (typeof raw.allow_real_tools !== "boolean") {
+      bad("allow_real_tools", "a boolean");
+    } else if (raw.allow_real_tools && (tools ?? "read_only") !== "real") {
+      c.add("eval.conversation_invalid", `conversation "allow_real_tools" is only valid with tools: real`);
+    } else {
+      out.allow_real_tools = raw.allow_real_tools;
+    }
+  }
   return out;
 }
 
@@ -423,6 +589,99 @@ function parseExamples(
   return ok ? out : undefined;
 }
 
+function optionalToolList(
+  c: Collector,
+  raw: Record<string, unknown>,
+  key: string,
+  where: string,
+): string[] | undefined {
+  const value = raw[key];
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length > 50 ||
+    !value.every((item) => typeof item === "string" && item.length >= 1 && item.length <= 128)
+  ) {
+    c.add("eval.grader_invalid", `${where} "${key}" must be an array of at most 50 tool names`);
+    return undefined;
+  }
+  return value as string[];
+}
+
+function parseToolArgs(c: Collector, raw: unknown, where: string): ToolArgCheck[] | undefined {
+  if (!Array.isArray(raw) || raw.length > 20) {
+    c.add("eval.grader_invalid", `${where} "args" must be an array of at most 20 checks`);
+    return undefined;
+  }
+  const out: ToolArgCheck[] = [];
+  let ok = true;
+  raw.forEach((item, index) => {
+    const at = `${where} args[${index}]`;
+    if (!isPlainObject(item)) {
+      c.add("eval.grader_invalid", `${at} must be a mapping`);
+      ok = false;
+      return;
+    }
+    c.unknownKeys(item, TOOL_ARG_KEYS, at);
+    if (typeof item.tool !== "string" || item.tool.length < 1 || item.tool.length > 128) {
+      c.add("eval.grader_invalid", `${at} "tool" must be a tool name`);
+      ok = false;
+      return;
+    }
+    if (typeof item.path !== "string" || !FIELD_PATH_PATTERN.test(item.path)) {
+      c.add("eval.grader_invalid", `${at} "path" must be dot-separated keys with optional [n] or [*]`);
+      ok = false;
+      return;
+    }
+    if (typeof item.op !== "string" || !FIELD_OPS.includes(item.op as FieldOp)) {
+      c.add("eval.grader_invalid", `${at} "op" must be one of: ${FIELD_OPS.join(", ")}`);
+      ok = false;
+      return;
+    }
+    const op = item.op as FieldOp;
+    const problem = checkValueProblem(op, item.value, "value" in item);
+    if (problem) {
+      c.add("eval.grader_invalid", `${at} ${problem}`);
+      ok = false;
+      return;
+    }
+    out.push({ tool: item.tool, path: item.path, op, ...("value" in item ? { value: item.value } : {}) });
+  });
+  return ok ? out : undefined;
+}
+
+function parseFinalReply(c: Collector, raw: unknown, where: string): FinalReplyCheck[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 10) {
+    c.add("eval.grader_invalid", `${where} "final_reply" must be an array of 1-10 checks`);
+    return undefined;
+  }
+  const out: FinalReplyCheck[] = [];
+  let ok = true;
+  raw.forEach((item, index) => {
+    const at = `${where} final_reply[${index}]`;
+    if (!isPlainObject(item)) {
+      c.add("eval.grader_invalid", `${at} must be a mapping`);
+      ok = false;
+      return;
+    }
+    c.unknownKeys(item, FINAL_REPLY_KEYS, at);
+    if (typeof item.op !== "string" || !FIELD_OPS.includes(item.op as FieldOp)) {
+      c.add("eval.grader_invalid", `${at} "op" must be one of: ${FIELD_OPS.join(", ")}`);
+      ok = false;
+      return;
+    }
+    const op = item.op as FieldOp;
+    const problem = checkValueProblem(op, item.value, "value" in item);
+    if (problem) {
+      c.add("eval.grader_invalid", `${at} ${problem}`);
+      ok = false;
+      return;
+    }
+    out.push({ op, ...("value" in item ? { value: item.value } : {}) });
+  });
+  return ok ? out : undefined;
+}
+
 type ParsedGrader = { config: GraderConfig; resolved: UnhashedGrader };
 
 function parseGrader(
@@ -430,6 +689,7 @@ function parseGrader(
   raw: unknown,
   index: number,
   defaultJudge: string | undefined,
+  kind: EvalTarget["kind"] | undefined,
 ): ParsedGrader | undefined {
   if (!isPlainObject(raw)) {
     c.add("eval.grader_invalid", `graders[${index}] must be a mapping`);
@@ -461,7 +721,15 @@ function parseGrader(
     return undefined;
   }
   const graderType = type as (typeof GRADER_TYPES)[number];
-  c.unknownKeys(raw, [...GRADER_COMMON_KEYS, ...GRADER_TYPE_KEYS[graderType]], label);
+  const scaleOnGoal = graderType === "goal_reached" && raw.scale !== undefined;
+  c.unknownKeys(
+    scaleOnGoal ? Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "scale")) : raw,
+    [...GRADER_COMMON_KEYS, ...GRADER_TYPE_KEYS[graderType]],
+    label,
+  );
+  if (scaleOnGoal) {
+    c.add("eval.grader_invalid", `${label} "scale" is not accepted: goal_reached is always pass_fail`);
+  }
 
   const description = optionalString(c, raw, "description", label, { max: 200 });
   const weight = optionalNumber(c, raw, "weight", label, "a number greater than 0", (n) => n > 0);
@@ -511,7 +779,7 @@ function parseGrader(
         c.add("eval.grader_invalid", `${label} "mode" must be "each_mentioned" or "equals"`);
         ok = false;
       }
-      let pathValue = "payload";
+      let pathValue = kind === "agent" ? "final_reply" : "payload";
       if (raw.path !== undefined) {
         if (typeof raw.path === "string" && FIELD_PATH_PATTERN.test(raw.path)) pathValue = raw.path;
         else {
@@ -629,6 +897,126 @@ function parseGrader(
       }
       break;
     }
+    case "tool_calls": {
+      const mustCall = optionalToolList(c, raw, "must_call", label);
+      const mustNotCall = optionalToolList(c, raw, "must_not_call", label);
+      const mustAskFirst = optionalToolList(c, raw, "must_ask_first", label);
+      const maxCalls = optionalNumber(
+        c,
+        raw,
+        "max_calls",
+        label,
+        "an integer from 0 to 200",
+        (n) => isIntegerIn(n, 0, 200),
+        "eval.grader_invalid",
+      );
+      const args = raw.args === undefined ? [] : parseToolArgs(c, raw.args, label);
+      if (args !== undefined) {
+        result = {
+          config: {
+            ...common,
+            type: "tool_calls",
+            ...(mustCall !== undefined ? { must_call: mustCall } : {}),
+            ...(mustNotCall !== undefined ? { must_not_call: mustNotCall } : {}),
+            ...(mustAskFirst !== undefined ? { must_ask_first: mustAskFirst } : {}),
+            ...(maxCalls !== undefined ? { max_calls: maxCalls } : {}),
+            ...(raw.args !== undefined ? { args } : {}),
+          },
+          resolved: {
+            ...resolvedCommon,
+            type: "tool_calls",
+            ...(mustCall !== undefined ? { mustCall } : {}),
+            ...(mustNotCall !== undefined ? { mustNotCall } : {}),
+            ...(mustAskFirst !== undefined ? { mustAskFirst } : {}),
+            ...(maxCalls !== undefined ? { maxCalls } : {}),
+            args,
+          },
+        };
+      }
+      break;
+    }
+    case "conversation_check": {
+      const maxTurns = optionalNumber(
+        c,
+        raw,
+        "max_turns",
+        label,
+        "an integer from 1 to 100",
+        (n) => isIntegerIn(n, 1, 100),
+        "eval.grader_invalid",
+      );
+      const maxQuestions = optionalNumber(
+        c,
+        raw,
+        "max_agent_questions_per_turn",
+        label,
+        "an integer from 0 to 10",
+        (n) => isIntegerIn(n, 0, 10),
+        "eval.grader_invalid",
+      );
+      const finalReply = raw.final_reply === undefined ? [] : parseFinalReply(c, raw.final_reply, label);
+      if (raw.max_turns === undefined && raw.max_agent_questions_per_turn === undefined && raw.final_reply === undefined) {
+        c.add(
+          "eval.grader_invalid",
+          `${label} needs at least one of: max_turns, max_agent_questions_per_turn, final_reply`,
+        );
+      }
+      if (finalReply !== undefined) {
+        result = {
+          config: {
+            ...common,
+            type: "conversation_check",
+            ...(maxTurns !== undefined ? { max_turns: maxTurns } : {}),
+            ...(maxQuestions !== undefined ? { max_agent_questions_per_turn: maxQuestions } : {}),
+            ...(raw.final_reply !== undefined ? { final_reply: finalReply } : {}),
+          },
+          resolved: {
+            ...resolvedCommon,
+            type: "conversation_check",
+            ...(maxTurns !== undefined ? { maxTurns } : {}),
+            ...(maxQuestions !== undefined ? { maxAgentQuestionsPerTurn: maxQuestions } : {}),
+            finalReply,
+          },
+        };
+      }
+      break;
+    }
+    case "goal_reached": {
+      let ok = true;
+      let judge: string | undefined;
+      if (raw.judge !== undefined) {
+        if (typeof raw.judge === "string" && raw.judge.length > 0) judge = raw.judge;
+        else {
+          c.add("eval.grader_invalid", `${label} "judge" must be a model id string`);
+          ok = false;
+        }
+      }
+      let guidance: string | undefined;
+      if (raw.guidance !== undefined) {
+        if (typeof raw.guidance === "string" && raw.guidance.length <= 2000) guidance = raw.guidance;
+        else {
+          c.add("eval.grader_invalid", `${label} "guidance" must be a string of at most 2000 characters`);
+          ok = false;
+        }
+      }
+      if (ok) {
+        result = {
+          config: {
+            ...common,
+            type: "goal_reached",
+            ...(judge !== undefined ? { judge } : {}),
+            ...(guidance !== undefined ? { guidance } : {}),
+          },
+          resolved: {
+            ...resolvedCommon,
+            type: "goal_reached",
+            judge: judge ?? defaultJudge ?? "",
+            ...(guidance !== undefined ? { guidance } : {}),
+          },
+        };
+      }
+      break;
+    }
   }
   return c.issues.length > before ? undefined : result;
 }
@@ -666,6 +1054,24 @@ function graderHashObject(grader: UnhashedGrader): Record<string, unknown> {
       };
     case "code":
       return { ...base, code: grader.code };
+    case "tool_calls":
+      return {
+        ...base,
+        must_call: grader.mustCall,
+        must_not_call: grader.mustNotCall,
+        must_ask_first: grader.mustAskFirst,
+        max_calls: grader.maxCalls,
+        args: grader.args,
+      };
+    case "conversation_check":
+      return {
+        ...base,
+        max_turns: grader.maxTurns,
+        max_agent_questions_per_turn: grader.maxAgentQuestionsPerTurn,
+        final_reply: grader.finalReply,
+      };
+    case "goal_reached":
+      return { ...base, judge: grader.judge, guidance: grader.guidance };
   }
 }
 
@@ -737,7 +1143,7 @@ export function parseEvalOutcome(
   if (dataset !== undefined && !isInside(root, path.resolve(dir, dataset))) {
     c.add("eval.dataset_unresolved", `Dataset path "${dataset}" resolves outside the project root`);
   }
-  if (target) {
+  if (target?.kind === "stage") {
     for (const [key, value] of [
       ["pipeline", target.pipeline],
       ["file", target.file],
@@ -748,8 +1154,14 @@ export function parseEvalOutcome(
     }
   }
 
-  const task = parseTask(c, raw.task);
-  const defaults = parseDefaults(c, raw.defaults);
+  let task: EvalTask | undefined;
+  if (target?.kind === "agent" && raw.task !== undefined) {
+    c.add("eval.task_not_applicable", `"task" is not accepted for an agent target (the scenario goal is input.goal)`);
+  } else {
+    task = parseTask(c, raw.task);
+  }
+  const defaults = parseDefaults(c, raw.defaults, target?.kind);
+  const conversation = parseConversation(c, raw.conversation, target?.kind);
   const budget = parseBudget(c, raw.budget);
 
   const parsedGraders: ParsedGrader[] = [];
@@ -760,7 +1172,7 @@ export function parseEvalOutcome(
   } else {
     const seen = new Set<string>();
     raw.graders.forEach((rawGrader, index) => {
-      const parsed = parseGrader(c, rawGrader, index, defaults?.judge);
+      const parsed = parseGrader(c, rawGrader, index, defaults?.judge, target?.kind);
       if (isPlainObject(rawGrader) && typeof rawGrader.id === "string") {
         if (seen.has(rawGrader.id)) {
           c.add("eval.grader_duplicate_id", `Duplicate grader id "${rawGrader.id}"`);
@@ -786,6 +1198,7 @@ export function parseEvalOutcome(
     dataset,
     ...(task !== undefined ? { task } : {}),
     ...(defaults !== undefined ? { defaults } : {}),
+    ...(conversation !== undefined ? { conversation } : {}),
     graders: parsedGraders.map((g) => g.config),
     ...(budget !== undefined ? { budget } : {}),
   };

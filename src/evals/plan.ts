@@ -167,6 +167,7 @@ function evalDefinition(loaded: LoadedEval, projectRoot: string): Record<string,
   const rel = (abs: string | undefined): string | undefined =>
     abs === undefined ? undefined : posix(projectRoot, abs);
   const defaults = file.defaults ?? {};
+  const stageTarget = file.target.kind === "stage" ? file.target : undefined;
   return JSON.parse(
     JSON.stringify({
       version: file.version,
@@ -177,7 +178,7 @@ function evalDefinition(loaded: LoadedEval, projectRoot: string): Record<string,
       target: {
         kind: file.target.kind,
         pipeline: rel(paths.pipelinePath),
-        stage: file.target.stage,
+        stage: stageTarget?.stage,
         file: rel(paths.stageFile),
       },
       dataset: rel(paths.datasetPath),

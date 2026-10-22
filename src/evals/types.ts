@@ -20,11 +20,39 @@ export type RubricExample =
 
 export type EvalType = "capability" | "regression";
 
-export type EvalTarget = {
+export type StageEvalTarget = {
   kind: "stage";
   pipeline?: string;
   stage?: string;
   file?: string;
+};
+
+export type AgentEvalTarget = { kind: "agent"; agent: string };
+
+export type EvalTarget = StageEvalTarget | AgentEvalTarget;
+
+export type ConversationMode = "script" | "simulated";
+export type ConversationTools = "real" | "read_only" | "mocked";
+export type ConversationApprovals = "deny" | "auto_approve_read" | "record_only";
+
+export type EvalConversation = {
+  mode?: ConversationMode;
+  max_turns?: number;
+  turn_timeout_ms?: number;
+  tools?: ConversationTools;
+  approvals?: ConversationApprovals;
+  read_only_tools?: string[];
+  allow_real_tools?: boolean;
+};
+
+export type ResolvedConversation = {
+  mode: ConversationMode;
+  maxTurns: number;
+  turnTimeoutMs: number;
+  tools: ConversationTools;
+  approvals: ConversationApprovals;
+  readOnlyTools: string[];
+  allowRealTools: boolean;
 };
 
 export type EvalTask = { goal?: string; context?: string; constraints?: string };
@@ -36,6 +64,7 @@ export type EvalDefaults = {
   max_cost_usd?: number;
   concurrency?: number;
   model?: string;
+  user_model?: string;
 };
 
 export type EvalBudget = { latency_ms?: number; cost_usd?: number };
@@ -46,6 +75,9 @@ type GraderCommon = {
   weight?: number;
   must_pass?: boolean;
 };
+
+export type ToolArgCheck = { tool: string; path: string; op: FieldOp; value?: unknown };
+export type FinalReplyCheck = { op: FieldOp; value?: unknown };
 
 export type GraderConfig =
   | (GraderCommon & { type: "schema" })
@@ -65,7 +97,22 @@ export type GraderConfig =
       judge?: string;
       examples?: RubricExample[];
     })
-  | (GraderCommon & { type: "code"; code: string });
+  | (GraderCommon & { type: "code"; code: string })
+  | (GraderCommon & {
+      type: "tool_calls";
+      must_call?: string[];
+      must_not_call?: string[];
+      must_ask_first?: string[];
+      max_calls?: number;
+      args?: ToolArgCheck[];
+    })
+  | (GraderCommon & {
+      type: "conversation_check";
+      max_turns?: number;
+      max_agent_questions_per_turn?: number;
+      final_reply?: FinalReplyCheck[];
+    })
+  | (GraderCommon & { type: "goal_reached"; judge?: string; guidance?: string });
 
 export type EvalFile = {
   version: 1;
@@ -77,16 +124,21 @@ export type EvalFile = {
   dataset: string;
   task?: EvalTask;
   defaults?: EvalDefaults;
+  conversation?: EvalConversation;
   graders: GraderConfig[];
   budget?: EvalBudget;
 };
 
-export type TargetRef = {
+export type StageTargetRef = {
   kind: "stage";
   pipelinePath?: string;
   stageId?: string;
   file?: string;
 };
+
+export type AgentTargetRef = { kind: "agent"; agentId: string };
+
+export type TargetRef = StageTargetRef | AgentTargetRef;
 
 type ResolvedGraderCommon = {
   id: string;
@@ -114,7 +166,22 @@ export type ResolvedGrader =
       judge: string;
       examples: RubricExample[];
     })
-  | (ResolvedGraderCommon & { type: "code"; code: string });
+  | (ResolvedGraderCommon & { type: "code"; code: string })
+  | (ResolvedGraderCommon & {
+      type: "tool_calls";
+      mustCall?: string[];
+      mustNotCall?: string[];
+      mustAskFirst?: string[];
+      maxCalls?: number;
+      args: ToolArgCheck[];
+    })
+  | (ResolvedGraderCommon & {
+      type: "conversation_check";
+      maxTurns?: number;
+      maxAgentQuestionsPerTurn?: number;
+      finalReply: FinalReplyCheck[];
+    })
+  | (ResolvedGraderCommon & { type: "goal_reached"; judge: string; guidance?: string });
 
 export type PlanCase = {
   id: string;

@@ -5,7 +5,11 @@ import { gradeReference } from "./referenceGrader.js";
 import { gradeSchema } from "./schemaGrader.js";
 import type { GradeCase, GradeData, GraderContext, Subject } from "./types.js";
 
-export type DeterministicGrader = Exclude<ResolvedGrader, { type: "rubric" }>;
+export type DeterministicGrader = Extract<ResolvedGrader, { type: "schema" | "field" | "reference" | "code" }>;
+
+export function isDeterministicGrader(grader: ResolvedGrader): grader is DeterministicGrader {
+  return grader.type === "schema" || grader.type === "field" || grader.type === "reference" || grader.type === "code";
+}
 
 export function gradeDeterministic(
   grader: DeterministicGrader,

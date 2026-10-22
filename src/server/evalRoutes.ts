@@ -729,8 +729,8 @@ async function sendEstimate(c: Ctx, plan: EvalPlan, previous: EstimatePreviousRu
     rubricGraderCount: plan.graders.filter((g) => g.type === "rubric").length,
     previous,
     recentStageCosts: await recentStageCosts(c, {
-      ...(plan.target.pipelinePath !== undefined ? { pipelinePath: plan.target.pipelinePath } : {}),
-      ...(plan.target.stageId !== undefined ? { stageId: plan.target.stageId } : {}),
+      ...(plan.target.kind === "stage" && plan.target.pipelinePath !== undefined ? { pipelinePath: plan.target.pipelinePath } : {}),
+      ...(plan.target.kind === "stage" && plan.target.stageId !== undefined ? { stageId: plan.target.stageId } : {}),
     }),
   });
   c.json(c.res, 200, {
