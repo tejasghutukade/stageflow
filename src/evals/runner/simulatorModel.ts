@@ -48,7 +48,7 @@ export function createBackendSimulatorModel(options: {
       const prompt = `${input.system}\n\n${input.user}`;
       let text: string;
       try {
-        text = await backend.judge({ projectRoot, definition, prompt, signal: input.signal });
+        text = await backend.judge({ projectRoot, definition, prompt: input.user, systemPrompt: input.system, signal: input.signal });
       } catch (error) {
         if (input.signal.aborted) throw error;
         throw new SimulatorError();

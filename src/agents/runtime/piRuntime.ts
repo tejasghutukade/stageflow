@@ -474,7 +474,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       const opened = await open({
         projectRoot: input.projectRoot,
         definition: { ...input.definition, tools: { ...input.definition.tools, builtin: [], builtin_tools: [], mcp: {}, skills: [] }, sub_agents: [] },
-        systemPrompt: "You are a strict evaluator. Answer only with the requested number.",
+        systemPrompt: input.systemPrompt ?? "You are a strict evaluator. Answer only with the requested number.",
         toolNames: [],
         gate: async () => ({ block: true, reason: "No tools" }),
         hooks: () => undefined,

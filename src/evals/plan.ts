@@ -1,8 +1,12 @@
 import path from "node:path";
+import { classifyTool } from "../agents/toolRisk.js";
+import { checkDatasetAgainstAgent } from "../config/datasetAgentCheck.js";
 import { checkDatasetAgainstStage } from "../config/datasetStageCheck.js";
 import type { DatasetCase } from "../config/datasetTypes.js";
 import { loadDatasetFile, parseDatasetCases } from "../config/loadDataset.js";
 import {
+  EVAL_AGENT_DEFAULT_CONCURRENCY,
+  EVAL_AGENT_DEFAULT_MAX_COST_USD,
   EVAL_DEFAULT_CONCURRENCY,
   EVAL_DEFAULT_MAX_COST_USD,
   EVAL_DEFAULT_PASS_THRESHOLD,
@@ -10,10 +14,12 @@ import {
   graderHash,
   loadEvalOutcome,
   parseEvalOutcome,
+  resolveConversation,
   resolveEvalPaths,
   type LoadedEval,
 } from "../config/loadEval.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
+import { resolveAgentTarget, type AgentCatalogPort, type ResolvedAgentTarget } from "../config/resolveAgentTarget.js";
 import {
   resolveEvalTarget,
   stageDefinition,
@@ -28,7 +34,7 @@ import {
   validateEval,
 } from "../config/validateEval.js";
 import { canonicalJson, sha256Hex } from "./canonical.js";
-import { EVAL_LIMITS } from "./constants.js";
+import { EVAL_LIMITS, SIMULATOR_PROMPT_VERSION } from "./constants.js";
 import {
   buildComponents,
   buildSnapshot,
@@ -64,6 +70,8 @@ export type BuildEvalPlanInput = {
   /** Grader id to the ordinal of its current hash, from the run store; defaults to 1. */
   graderOrdinals?: Record<string, number>;
   isKnownModel?: (id: string) => Promise<boolean>;
+  /** Agent service view, needed for agent targets; without it an agent eval cannot be planned. */
+  agents?: AgentCatalogPort;
   /** Reserved: the snapshot carries no timestamp today. */
   now?: Date;
 };
@@ -175,12 +183,15 @@ function evalDefinition(loaded: LoadedEval, projectRoot: string): Record<string,
       name: file.name ?? file.id,
       description: file.description,
       type: file.type ?? "capability",
-      target: {
-        kind: file.target.kind,
-        pipeline: rel(paths.pipelinePath),
-        stage: stageTarget?.stage,
-        file: rel(paths.stageFile),
-      },
+      target:
+        file.target.kind === "agent"
+          ? { kind: "agent", agent: file.target.agent }
+          : {
+              kind: file.target.kind,
+              pipeline: rel(paths.pipelinePath),
+              stage: stageTarget?.stage,
+              file: rel(paths.stageFile),
+            },
       dataset: rel(paths.datasetPath),
       task: file.task,
       defaults: {
@@ -190,7 +201,9 @@ function evalDefinition(loaded: LoadedEval, projectRoot: string): Record<string,
         max_cost_usd: defaults.max_cost_usd ?? EVAL_DEFAULT_MAX_COST_USD,
         concurrency: defaults.concurrency ?? EVAL_DEFAULT_CONCURRENCY,
         model: defaults.model,
+        ...(file.target.kind === "agent" && defaults.user_model !== undefined ? { user_model: defaults.user_model } : {}),
       },
+      ...(file.target.kind === "agent" ? { conversation: file.conversation } : {}),
       graders: file.graders.map((g) => ({ ...g, weight: g.weight ?? 1, must_pass: g.must_pass ?? false })),
       budget: file.budget,
     }),
@@ -257,13 +270,29 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
     datasetReport: dataset,
     ...(input.datasetCases !== undefined ? { datasetInline: true } : {}),
     ...(input.isKnownModel ? { isKnownModel: input.isKnownModel } : {}),
+    ...(input.agents ? { agents: input.agents } : {}),
   });
   const findings = [...validation.filter((f) => !RUN_SIZE_CODES.has(f.code)), ...dataset.findings];
   if (findings.some((f) => f.severity === "error")) return fail(findings);
 
-  const targetOutcome = await resolveEvalTarget(file, loaded.path, projectRoot);
-  if (!targetOutcome.ok) return fail(evalFindingsFromIssues(loaded.relPath, targetOutcome.issues));
-  const target: ResolvedEvalTarget = targetOutcome.value;
+  let agentTarget: ResolvedAgentTarget | undefined;
+  let stageTarget: ResolvedEvalTarget | undefined;
+  if (file.target.kind === "agent") {
+    if (!input.agents) {
+      return fail([
+        ...findings,
+        evalFinding(loaded.relPath, "error", "eval.agents_unavailable", "Agents are unavailable on this host, so an agent eval cannot run"),
+      ]);
+    }
+    const resolved = await resolveAgentTarget(file, projectRoot, input.agents);
+    if (!resolved.ok) return fail(evalFindingsFromIssues(loaded.relPath, resolved.issues));
+    agentTarget = resolved.value;
+  } else {
+    const targetOutcome = await resolveEvalTarget(file, loaded.path, projectRoot);
+    if (!targetOutcome.ok) return fail(evalFindingsFromIssues(loaded.relPath, targetOutcome.issues));
+    stageTarget = targetOutcome.value;
+  }
+  const conversation = resolveConversation(file.conversation);
 
   if (overrides.case_ids !== undefined) {
     const known = new Set(dataset.cases.map((c) => c.id));
@@ -282,7 +311,10 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
   }
 
   const checks = new Map(
-    checkDatasetAgainstStage(dataset.cases, target.inputSchema).map((r) => [r.caseId, r.valid]),
+    (agentTarget
+      ? checkDatasetAgainstAgent(dataset.cases, { mode: conversation.mode })
+      : checkDatasetAgainstStage(dataset.cases, stageTarget?.inputSchema)
+    ).map((r) => [r.caseId, r.valid]),
   );
   const validCases = dataset.cases.filter((c) => checks.get(c.id) !== false);
   const selected = selectCases(dataset.cases, overrides, failedIds);
@@ -339,10 +371,34 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
 
   const defaults = file.defaults ?? {};
   const passThreshold = defaults.pass_threshold ?? EVAL_DEFAULT_PASS_THRESHOLD;
-  const concurrency = defaults.concurrency ?? EVAL_DEFAULT_CONCURRENCY;
-  const maxCostUsd = defaults.max_cost_usd ?? EVAL_DEFAULT_MAX_COST_USD;
+  const concurrency = defaults.concurrency ?? (agentTarget ? EVAL_AGENT_DEFAULT_CONCURRENCY : EVAL_DEFAULT_CONCURRENCY);
+  const maxCostUsd = defaults.max_cost_usd ?? (agentTarget ? EVAL_AGENT_DEFAULT_MAX_COST_USD : EVAL_DEFAULT_MAX_COST_USD);
   const judge = defaults.judge ?? "";
   const modelOverride = defaults.model;
+
+  if (agentTarget) {
+    return buildAgentResult({
+      input,
+      loaded,
+      base,
+      agentTarget,
+      conversation,
+      planCases,
+      runCases,
+      validCases,
+      skippedCaseIds,
+      dataset,
+      datasetPath: paths.datasetPath,
+      overrides,
+      passThreshold,
+      concurrency,
+      maxCostUsd,
+      judge,
+      repeats,
+      allFindings,
+    });
+  }
+  const target = stageTarget as ResolvedEvalTarget;
   const stageModel = modelOverride ?? target.modelResolved;
   const relOrUndef = (abs: string | undefined): string | undefined =>
     abs === undefined ? undefined : posix(projectRoot, abs);
@@ -454,4 +510,203 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
   };
 
   return { ok: true, plan, snapshot, fingerprint, components, skippedCaseIds, findings: allFindings };
+}
+
+type AgentResultInput = {
+  input: BuildEvalPlanInput;
+  loaded: LoadedEval;
+  base: LoadedEval;
+  agentTarget: ResolvedAgentTarget;
+  conversation: ReturnType<typeof resolveConversation>;
+  planCases: PlanCase[];
+  runCases: readonly DatasetCase[];
+  validCases: readonly DatasetCase[];
+  skippedCaseIds: string[];
+  dataset: { contentHash: string; format?: string | undefined; cases: DatasetCase[] };
+  datasetPath: string;
+  overrides: EvalOverrides;
+  passThreshold: number;
+  concurrency: number;
+  maxCostUsd: number;
+  judge: string;
+  repeats: number;
+  allFindings: ValidationFinding[];
+};
+
+const CONVERSATION_OVERHEAD_MINUTES = 5;
+
+async function buildAgentResult(a: AgentResultInput): Promise<BuildEvalPlanResult> {
+  const { input, loaded, agentTarget, conversation, planCases, runCases, validCases, skippedCaseIds, dataset } = a;
+  const { projectRoot } = input;
+  const { file } = loaded;
+  const defaults = file.defaults ?? {};
+  const revision = agentTarget.revision;
+  if (revision === null) {
+    return {
+      ok: false,
+      code: "EVAL_INVALID",
+      findings: [
+        ...a.allFindings,
+        evalFinding(loaded.relPath, "error", "eval.agents_unavailable", "The agent revision could not be read"),
+      ],
+    };
+  }
+  const { definition } = agentTarget;
+  const agentModel = agentTarget.modelResolved ?? "";
+  const anySimulated = planCases.some(
+    (c) => (typeof c.input.mode === "string" ? c.input.mode : conversation.mode) === "simulated",
+  );
+  const userModel = anySimulated ? (defaults.user_model ?? defaults.judge ?? null) : null;
+
+  const subAgents: Array<{ id: string; revision: number }> = [];
+  for (const id of definition.sub_agents) {
+    try {
+      const detail = await input.agents!.get(projectRoot, id);
+      subAgents.push({ id, revision: detail.agent.revision });
+    } catch {
+      continue;
+    }
+  }
+  const { max_turns, session_minutes, cost_usd, always_on } = definition.limits;
+  const effectiveLimits = {
+    max_turns: conversation.maxTurns + 1,
+    session_minutes:
+      Math.ceil((conversation.maxTurns * conversation.turnTimeoutMs) / 60_000) + CONVERSATION_OVERHEAD_MINUTES,
+    cost_usd: null,
+    always_on: false,
+  };
+
+  const components = buildComponents({
+    stageVersionHash: agentTarget.definitionHash,
+    model: agentModel,
+    datasetHash: dataset.contentHash,
+    caseIds: runCases.length < validCases.length ? runCases.map((c) => c.id) : null,
+    graders: loaded.graders,
+    judge: a.judge,
+    repeats: a.repeats,
+    passThreshold: a.passThreshold,
+    engine: input.engine,
+    agent: {
+      revision,
+      mode: conversation.mode,
+      max_turns: conversation.maxTurns,
+      turn_timeout_ms: conversation.turnTimeoutMs,
+      tools: conversation.tools,
+      approvals: conversation.approvals,
+      read_only_tools: conversation.readOnlyTools,
+      user_model: userModel,
+      simulator_prompt_version: SIMULATOR_PROMPT_VERSION,
+    },
+  });
+  const fingerprint = computeFingerprint(components);
+
+  const { overrides } = a;
+  const hasRubric = loaded.graders.some((g) => g.type === "rubric" || g.type === "goal_reached");
+  const plainDefinition = JSON.parse(JSON.stringify(definition)) as Record<string, unknown>;
+  const snapshot = buildSnapshot({
+    evalId: loaded.id,
+    evalPath: loaded.relPath,
+    evalHash: loaded.fileHash,
+    evalDefinition: evalDefinition(a.base, projectRoot),
+    overrides: {
+      repeats: overrides.repeats ?? null,
+      judge: overrides.judge ?? null,
+      model: overrides.model ?? null,
+      max_cost_usd: overrides.max_cost_usd ?? null,
+      case_ids: overrides.case_ids ?? null,
+      tags: overrides.tags ?? null,
+      only_failed_from: overrides.only_failed_from ?? null,
+    },
+    target: {
+      agent_id: agentTarget.agentId,
+      revision,
+      definition_hash: agentTarget.definitionHash,
+      definition: plainDefinition,
+      model: agentModel,
+      model_tier: "",
+      tools: agentTarget.tools.map((tool) => ({
+        id: tool.id,
+        risk: tool.risk,
+        class: classifyTool(definition, tool.id, conversation.readOnlyTools).class,
+      })),
+      ask_first: agentTarget.askFirst,
+      sub_agents: subAgents,
+      limits_override: {
+        agent: { max_turns, session_minutes, cost_usd, always_on },
+        effective: effectiveLimits,
+        capture: "full",
+        otlp: false,
+        groundedness: false,
+      },
+    },
+    dataset: {
+      path: posix(projectRoot, a.datasetPath),
+      hash: dataset.contentHash,
+      format: dataset.format ?? "jsonl",
+      case_count: dataset.cases.length,
+      cases_run: planCases.length,
+      cases_skipped: skippedCaseIds.length,
+      skipped_case_ids: skippedCaseIds,
+    },
+    graders: loaded.graders.map((g) => ({
+      id: g.id,
+      type: g.type,
+      hash: g.hash,
+      version_ordinal: input.graderOrdinals?.[g.id] ?? 1,
+      weight: g.weight,
+      must_pass: g.mustPass,
+    })),
+    settings: {
+      repeats: a.repeats,
+      pass_threshold: a.passThreshold,
+      judge: a.judge,
+      judge_same_as_stage: hasRubric && a.judge !== "" && a.judge === agentModel,
+      max_cost_usd: a.maxCostUsd,
+      concurrency: a.concurrency,
+      suite_type: file.type ?? "capability",
+      conversation: {
+        mode: conversation.mode,
+        max_turns: conversation.maxTurns,
+        turn_timeout_ms: conversation.turnTimeoutMs,
+        tools: conversation.tools,
+        approvals: conversation.approvals,
+        read_only_tools: conversation.readOnlyTools,
+        real_tools_confirmed: false,
+        user_model: userModel ?? "",
+        user_model_from_judge: userModel !== null && defaults.user_model === undefined,
+        simulator_prompt_version: SIMULATOR_PROMPT_VERSION,
+      },
+    },
+    engine: input.engine,
+    stageflowVersion: PACKAGE_VERSION,
+  });
+
+  const plan: EvalPlan = {
+    evalRunId: input.evalRunId,
+    projectRoot,
+    evalId: loaded.id,
+    target: { kind: "agent", agentId: agentTarget.agentId, revision },
+    targetVersionHash: agentTarget.definitionHash,
+    stageModel: agentModel,
+    task: {},
+    cases: planCases,
+    graders: loaded.graders,
+    repeats: a.repeats,
+    passThreshold: a.passThreshold,
+    concurrency: a.concurrency,
+    maxCostUsd: a.maxCostUsd,
+    ...(defaults.model !== undefined ? { modelOverride: defaults.model } : {}),
+    ...(file.budget !== undefined
+      ? {
+          budget: {
+            ...(file.budget.latency_ms !== undefined ? { latencyMs: file.budget.latency_ms } : {}),
+            ...(file.budget.cost_usd !== undefined ? { costUsd: file.budget.cost_usd } : {}),
+          },
+        }
+      : {}),
+    agent: { definitionHash: agentTarget.definitionHash, definition: plainDefinition },
+    conversation,
+    userModel,
+  };
+  return { ok: true, plan, snapshot, fingerprint, components, skippedCaseIds, findings: a.allFindings };
 }

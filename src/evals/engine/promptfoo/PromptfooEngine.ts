@@ -221,7 +221,7 @@ export class PromptfooEngine implements EvalEngine {
     const hostRuns = new Map<string, RunCaseResult>();
     const keyOf = (caseId: string, repeatIndex: number): string => `${caseId}#${repeatIndex}`;
     const runCase = async (req: RunCaseRequest): Promise<RunCaseResult> => {
-      io.onPhase(req.caseId, req.repeatIndex, "stage_running");
+      io.onPhase(req.caseId, req.repeatIndex, plan.target.kind === "agent" ? "agent_running" : "stage_running");
       const result = await io.runCase(req);
       hostRuns.set(keyOf(req.caseId, req.repeatIndex), result);
       if (result.ok) io.onPhase(req.caseId, req.repeatIndex, "grading");

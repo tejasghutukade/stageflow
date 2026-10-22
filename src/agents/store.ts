@@ -673,6 +673,22 @@ export class AgentStore {
     ).map(toSession);
   }
 
+  /** Root eval sessions (those pointing at an eval run, not at a parent session), optionally of given runs or older than a time. */
+  listEvalRootSessions(filter: { sourceRefs?: string[]; createdBefore?: string } = {}): AgentSession[] {
+    const clauses = [`source = 'eval'`, `(source_ref IS NULL OR source_ref NOT IN (SELECT session_id FROM agent_sessions))`];
+    const params: unknown[] = [];
+    if (filter.sourceRefs) {
+      if (filter.sourceRefs.length === 0) return [];
+      clauses.push(`source_ref IN (${filter.sourceRefs.map(() => "?").join(", ")})`);
+      params.push(...filter.sourceRefs);
+    }
+    if (filter.createdBefore) {
+      clauses.push(`created_at < ?`);
+      params.push(filter.createdBefore);
+    }
+    return (this.db.prepare(`SELECT * FROM agent_sessions WHERE ${clauses.join(" AND ")} ORDER BY created_at, session_id`).all(...params) as Row[]).map(toSession);
+  }
+
   /** Delete eval sessions; messages, turns, spans, scores and approvals go with them. Never touches other sessions. */
   deleteSessions(sessionIds: string[]): void {
     this.transaction(() => {

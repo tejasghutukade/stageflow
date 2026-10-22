@@ -35,7 +35,14 @@ export function assertionFnName(index: number): string {
   return `grader${index}`;
 }
 
-export function buildProviderSource(evalRunId: string): string {
+export function buildProviderSource(evalRunId: string, agent = false): string {
+  const okMeta = agent
+    ? `
+            subjectRef: reply.subjectRef,
+            turns: reply.output && reply.output.turns,
+            toolCallCount: reply.output && Array.isArray(reply.output.tool_calls) ? reply.output.tool_calls.length : undefined,`
+    : "";
+  const failKeys = agent ? '["stageRunId", "subjectRef", "latencyMs", "costUsd"]' : '["stageRunId", "latencyMs", "costUsd"]';
   return `import http from "node:http";
 
 const EVAL_RUN_ID = ${JSON.stringify(evalRunId)};
@@ -96,7 +103,7 @@ export default class StageflowHostProvider {
           output: JSON.stringify(reply.output),
           metadata: {
             ...base,
-            stageRunId: reply.stageRunId,
+            stageRunId: reply.stageRunId,${okMeta}
             latencyMs: reply.latencyMs,
             costUsd: reply.costUsd,
             tokensIn: reply.tokensIn,
@@ -105,7 +112,7 @@ export default class StageflowHostProvider {
         };
       }
       const extra = {};
-      for (const key of ["stageRunId", "latencyMs", "costUsd"]) {
+      for (const key of ${failKeys}) {
         if (reply && reply[key] !== undefined) extra[key] = reply[key];
       }
       return failure(
@@ -121,11 +128,14 @@ export default class StageflowHostProvider {
 `;
 }
 
-export function buildHooksSource(): string {
+export function buildHooksSource(agent = false): string {
+  const metaKeys = agent
+    ? '["caseId", "repeatIndex", "stageRunId", "subjectRef", "turns", "toolCallCount", "latencyMs", "costUsd", "tokensIn", "tokensOut", "errorCode"]'
+    : '["caseId", "repeatIndex", "stageRunId", "latencyMs", "costUsd", "tokensIn", "tokensOut", "errorCode"]';
   return `import { appendFileSync } from "node:fs";
 
 const STREAM = new URL(${JSON.stringify(RESULTS_STREAM_FILE)}, import.meta.url);
-const META_KEYS = ["caseId", "repeatIndex", "stageRunId", "latencyMs", "costUsd", "tokensIn", "tokensOut", "errorCode"];
+const META_KEYS = ${metaKeys};
 
 function pickMeta(meta) {
   const out = {};
@@ -290,9 +300,9 @@ export function buildConfig(plan: EvalPlan, options: GenerateOptions): Record<st
 export function generateFiles(plan: EvalPlan, options: GenerateOptions): GeneratedFiles {
   return {
     [CONFIG_FILE]: `${JSON.stringify(buildConfig(plan, options), null, 2)}\n`,
-    [PROVIDER_FILE]: buildProviderSource(plan.evalRunId),
+    [PROVIDER_FILE]: buildProviderSource(plan.evalRunId, plan.target.kind === "agent"),
     [ASSERTIONS_FILE]: buildAssertionsSource(plan, options.graderModuleUrl),
-    [HOOKS_FILE]: buildHooksSource(),
+    [HOOKS_FILE]: buildHooksSource(plan.target.kind === "agent"),
     [DATASET_FILE]: `${JSON.stringify(plan.cases, null, 2)}\n`,
     [GUARD_FILENAME]: GUARD_SOURCE,
   };

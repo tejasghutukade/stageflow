@@ -12,6 +12,9 @@ export type RecordMetadata = {
   caseId?: string;
   repeatIndex?: number;
   stageRunId?: string;
+  subjectRef?: string;
+  turns?: number;
+  toolCallCount?: number;
   latencyMs?: number;
   costUsd?: number;
   tokensIn?: number;
@@ -56,6 +59,9 @@ const META_KEYS = [
   "caseId",
   "repeatIndex",
   "stageRunId",
+  "subjectRef",
+  "turns",
+  "toolCallCount",
   "latencyMs",
   "costUsd",
   "tokensIn",
@@ -67,6 +73,9 @@ const FAILURE_CODES: readonly RunCaseFailureCode[] = [
   "EVAL_STAGE_FAILED",
   "EVAL_STAGE_NEEDS_INPUT",
   "EVAL_STAGE_TIMEOUT",
+  "EVAL_AGENT_FAILED",
+  "EVAL_AGENT_TIMEOUT",
+  "EVAL_SIMULATOR_ERROR",
   "EVAL_BUDGET_EXCEEDED",
   "EVAL_CANCELLED",
   "EVAL_ENGINE_ERROR",
@@ -161,10 +170,12 @@ function runFromRecord(record: ResultRecord): RunCaseResult {
     } catch {
       output = undefined;
     }
-    if (output !== undefined && meta.stageRunId !== undefined) {
+    const joined = meta.stageRunId ?? meta.subjectRef;
+    if (output !== undefined && joined !== undefined) {
       return {
         ok: true,
-        stageRunId: meta.stageRunId,
+        ...(meta.subjectRef !== undefined ? { subjectRef: meta.subjectRef } : {}),
+        ...(meta.stageRunId !== undefined ? { stageRunId: meta.stageRunId } : {}),
         output,
         latencyMs: meta.latencyMs ?? 0,
         costUsd: meta.costUsd ?? 0,
@@ -183,6 +194,7 @@ function runFromRecord(record: ResultRecord): RunCaseResult {
     ok: false,
     code,
     message,
+    ...(meta.subjectRef !== undefined ? { subjectRef: meta.subjectRef } : {}),
     ...(meta.stageRunId !== undefined ? { stageRunId: meta.stageRunId } : {}),
     ...(meta.latencyMs !== undefined ? { latencyMs: meta.latencyMs } : {}),
     ...(meta.costUsd !== undefined ? { costUsd: meta.costUsd } : {}),

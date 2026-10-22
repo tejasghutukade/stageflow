@@ -38,7 +38,14 @@ export type ConversationBackend = {
   id: "pi" | "claude";
   complete(input: CompleteInput): Promise<CompleteResult>;
   /** One-shot judgement with no tools (groundedness scoring). */
-  judge?(input: { projectRoot: string; definition: AgentDefinition; prompt: string; signal: AbortSignal }): Promise<string>;
+  judge?(input: {
+    projectRoot: string;
+    definition: AgentDefinition;
+    prompt: string;
+    /** Replaces the default "strict evaluator" system prompt. */
+    systemPrompt?: string;
+    signal: AbortSignal;
+  }): Promise<string>;
   /** Drop any cached model session for a conversation session. */
   release?(sessionId: string): Promise<void>;
   dispose?(): Promise<void>;

@@ -136,7 +136,7 @@ export type StageTargetRef = {
   file?: string;
 };
 
-export type AgentTargetRef = { kind: "agent"; agentId: string };
+export type AgentTargetRef = { kind: "agent"; agentId: string; revision?: number };
 
 export type TargetRef = StageTargetRef | AgentTargetRef;
 
@@ -211,15 +211,74 @@ export type EvalPlan = {
   maxCostUsd: number;
   modelOverride?: string;
   budget?: { latencyMs?: number; costUsd?: number };
+  /** Agent plans only: the revision pinned at plan time and the conversation settings. */
+  agent?: { definitionHash: string; definition: Record<string, unknown> };
+  conversation?: ResolvedConversation;
+  /** Agent plans only: null when no selected case is simulated. */
+  userModel?: string | null;
 };
 
-export type CaseOutput = {
+export type EnvelopeOutput = {
   kind: "envelope";
   status: "success" | "failure";
   summary: string;
   payload?: Record<string, unknown>;
   artifacts: string[];
 };
+
+export type ConversationStopReason =
+  | "script_end"
+  | "resolved"
+  | "abandoned"
+  | "max_turns"
+  | "no_progress"
+  | "empty_message"
+  | "error"
+  | "timeout";
+
+export type ConversationMessage = { role: "user" | "assistant"; text: string; turn: number };
+
+export type ConversationToolCall = {
+  id: string;
+  turn: number;
+  name: string;
+  args: Record<string, unknown>;
+  result_summary: string;
+  status: "ok" | "error" | "not_run";
+  policy_outcome: "ran" | "stubbed" | "mocked" | "would_ask_first" | "denied";
+  session_id?: string;
+};
+
+export type ConversationUsage = {
+  cost_usd: number;
+  agent_cost_usd: number;
+  simulator_cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  simulator_tokens_in: number;
+  simulator_tokens_out: number;
+  simulator_estimated: boolean;
+  agent_calls: number;
+  simulator_calls: number;
+};
+
+/** The stored JSON shape (snake_case), which graders, the judge renderer and the console read as is. */
+export type ConversationOutput = {
+  kind: "conversation";
+  status: "success" | "failure";
+  summary: string;
+  messages: ConversationMessage[];
+  tool_calls: ConversationToolCall[];
+  final_reply: string;
+  turns: number;
+  stop_reason: ConversationStopReason;
+  usage: ConversationUsage;
+  truncated?: Record<string, number>;
+  /** Transport only: the bounded rendered transcript for the judge. The manager drops it before storing. */
+  transcript?: string;
+};
+
+export type CaseOutput = EnvelopeOutput | ConversationOutput;
 
 export type RunCaseRequest = { evalRunId: string; caseId: string; repeatIndex: number };
 
@@ -229,12 +288,17 @@ export type RunCaseFailureCode =
   | "EVAL_STAGE_TIMEOUT"
   | "EVAL_BUDGET_EXCEEDED"
   | "EVAL_CANCELLED"
-  | "EVAL_ENGINE_ERROR";
+  | "EVAL_ENGINE_ERROR"
+  | "EVAL_AGENT_FAILED"
+  | "EVAL_AGENT_TIMEOUT"
+  | "EVAL_SIMULATOR_ERROR";
 
 export type RunCaseResult =
   | {
       ok: true;
-      stageRunId: string;
+      /** Root subject id: the stage run id (set by the manager when absent) or the root agent session id. */
+      subjectRef?: string;
+      stageRunId?: string;
       output: CaseOutput;
       latencyMs: number;
       costUsd: number;
@@ -245,7 +309,9 @@ export type RunCaseResult =
       ok: false;
       code: RunCaseFailureCode;
       message: string;
+      subjectRef?: string;
       stageRunId?: string;
+      output?: ConversationOutput;
       latencyMs?: number;
       costUsd?: number;
     };
@@ -277,7 +343,7 @@ export interface EngineIo {
   runCase(req: RunCaseRequest): Promise<RunCaseResult>;
   onResult(result: NormalizedResult): void;
   reportJudgeCost(usd: number): void;
-  onPhase(caseId: string, repeatIndex: number, phase: "stage_running" | "grading" | "done"): void;
+  onPhase(caseId: string, repeatIndex: number, phase: "stage_running" | "agent_running" | "grading" | "done"): void;
   log(level: "info" | "warn" | "error", message: string): void;
 }
 

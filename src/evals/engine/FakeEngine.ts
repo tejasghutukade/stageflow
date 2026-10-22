@@ -16,7 +16,7 @@ export type FakeJudgeReply = (
   | { score: number }
 ) & { reason?: string };
 
-export type FakeEnginePhase = "stage_running" | "grading" | "done";
+export type FakeEnginePhase = "stage_running" | "agent_running" | "grading" | "done";
 
 export type FakeEngineOptions = {
   judge?: (
@@ -57,6 +57,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 function toSubject(output: CaseOutput): Subject {
+  if (output.kind === "conversation") {
+    return { status: output.status, summary: output.summary, artifacts: [] };
+  }
   return {
     status: output.status,
     summary: output.summary,
@@ -111,7 +114,7 @@ export class FakeEngine implements EvalEngine {
           throw new FakeEngineError(`fake engine failed after ${emitted} results`);
         }
         const { testCase, repeatIndex } = items[next++];
-        await phase(testCase, repeatIndex, "stage_running");
+        await phase(testCase, repeatIndex, plan.target.kind === "agent" ? "agent_running" : "stage_running");
         const run = await io.runCase({ evalRunId: plan.evalRunId, caseId: testCase.id, repeatIndex });
         const grades: NormalizedGrade[] = [];
         if (run.ok) {

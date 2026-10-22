@@ -301,7 +301,7 @@ export type EvalRunDetail = {
     dataset_hash: string | null;
     grader_hashes: Record<string, string> | null;
   };
-  live?: Array<{ case_id: string; repeat_index: number; phase: "stage_running" | "grading" | "done" }>;
+  live?: Array<{ case_id: string; repeat_index: number; phase: "stage_running" | "agent_running" | "grading" | "done" }>;
 };
 
 export type EvalRunListQuery = {

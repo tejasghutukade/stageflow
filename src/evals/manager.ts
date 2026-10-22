@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
+import type { AgentCatalogPort } from "../config/resolveAgentTarget.js";
 import type { ValidationFinding } from "../config/validateCatalog.js";
 import type { RunStore } from "../runstore/port.js";
 import {
@@ -25,6 +26,7 @@ import type {
   EvalPlan,
   NormalizedGrade,
   NormalizedResult,
+  ConversationOutput,
   PlanCase,
   RunCaseFailureCode,
   RunCaseRequest,
@@ -60,9 +62,23 @@ export type EvalRunContext = {
   signal: AbortSignal;
 };
 
+/** What the manager needs from the agent service: plan resolution and cleanup of eval sessions. */
+export type EvalAgentsPort = AgentCatalogPort & {
+  deleteEvalSessions(projectRoot: string, sessionIds: string[]): Promise<string[]>;
+  sweepEvalSessions(input: {
+    runIds: string[];
+    olderThanMs: number;
+    isReferenced: (sessionId: string) => Promise<boolean> | boolean;
+  }): Promise<number>;
+};
+
+export const EVAL_ORPHAN_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 export type EvalRunManagerDeps = {
   store: EvalManagerStore;
   stageRunner: StageCaseRunner;
+  /** Lazy: the manager is built before the agent host. Absent or undefined means agents are unavailable. */
+  agents?: () => EvalAgentsPort | undefined;
   engines?: (name: string, options?: unknown) => EvalEngine;
   engineName?: string;
   stageflowVersion: string;
@@ -133,6 +149,7 @@ export type TryResult = {
     errorCode: string | null;
     errorMessage: string | null;
     stageRunId: string | null;
+    subjectRef: string | null;
     output: EvalJson | null;
     latencyMs: number | null;
     costUsd: number | null;
@@ -149,7 +166,7 @@ export type TryResult = {
   costUsd: number;
 };
 
-export type LivePhase = { caseId: string; repeatIndex: number; phase: "stage_running" | "grading" };
+export type LivePhase = { caseId: string; repeatIndex: number; phase: "stage_running" | "agent_running" | "grading" };
 
 export type EvalLiveState = { evalRunId: string; phases: LivePhase[] };
 
@@ -188,7 +205,19 @@ const RESULT_STATUS_BY_CODE: Record<RunCaseFailureCode, EvalResultStatus> = {
   EVAL_BUDGET_EXCEEDED: "skipped_budget",
   EVAL_CANCELLED: "cancelled",
   EVAL_ENGINE_ERROR: "error",
+  EVAL_AGENT_FAILED: "stage_failed",
+  EVAL_AGENT_TIMEOUT: "stage_failed",
+  EVAL_SIMULATOR_ERROR: "error",
 };
+
+function conversationFields(output: ConversationOutput): Pick<EvalResultInput, "output" | "turns" | "toolCallCount"> {
+  const { transcript: _transport, ...stored } = output;
+  return {
+    output: stored as unknown as EvalJson,
+    turns: output.turns,
+    toolCallCount: output.tool_calls.length,
+  };
+}
 
 const EXECUTED: readonly EvalResultStatus[] = ["completed", "stage_failed", "needs_input", "error"];
 
@@ -287,6 +316,7 @@ export class EvalRunManager {
         engine: engineInfo,
         failedCaseIdsOf: (id: string) => this.failedCaseIds(input.projectRoot, input.evalPath, id),
         ...(this.deps.isKnownModel ? { isKnownModel: this.deps.isKnownModel } : {}),
+        ...this.agentsInput(),
       };
       const first = await buildEvalPlan(base);
       if (!first.ok) throw new EvalRunError("EVAL_INVALID", "Eval is invalid", first.findings);
@@ -510,6 +540,10 @@ export class EvalRunManager {
         errorCode: run.code,
         errorMessage: run.message,
         stageRunId: run.stageRunId ?? null,
+        ...(run.subjectRef !== undefined || run.stageRunId !== undefined
+          ? { subjectRef: run.subjectRef ?? run.stageRunId ?? null }
+          : {}),
+        ...(run.output !== undefined ? conversationFields(run.output) : {}),
         latencyMs: run.latencyMs ?? null,
         costUsd: run.costUsd ?? null,
         score: null,
@@ -538,13 +572,18 @@ export class EvalRunManager {
     return {
       ...base,
       status: "completed",
-      stageRunId: run.stageRunId,
-      output: {
-        status: output.status,
-        summary: output.summary,
-        ...(output.payload !== undefined ? { payload: output.payload } : {}),
-        artifacts: output.artifacts,
-      },
+      stageRunId: run.stageRunId ?? null,
+      subjectRef: run.subjectRef ?? run.stageRunId ?? null,
+      ...(output.kind === "conversation"
+        ? conversationFields(output)
+        : {
+            output: {
+              status: output.status,
+              summary: output.summary,
+              ...(output.payload !== undefined ? { payload: output.payload } : {}),
+              artifacts: output.artifacts,
+            },
+          }),
       latencyMs: run.latencyMs,
       costUsd: run.costUsd,
       tokensIn: run.tokensIn,
@@ -704,6 +743,28 @@ export class EvalRunManager {
     return { finished: run.status !== "queued" && run.status !== "running", run };
   }
 
+  private agentsInput(): { agents?: AgentCatalogPort } {
+    const agents = this.deps.agents?.();
+    return agents ? { agents } : {};
+  }
+
+  /** Delete the agent sessions of recovered runs and eval sessions older than 7 days that no result references. */
+  async sweepAgentSessions(recoveredRunIds: string[]): Promise<number> {
+    const agents = this.deps.agents?.();
+    if (!agents) return 0;
+    try {
+      return await agents.sweepEvalSessions({
+        runIds: recoveredRunIds,
+        olderThanMs: EVAL_ORPHAN_SESSION_MAX_AGE_MS,
+        isReferenced: async (sessionId) =>
+          (await this.store.listEvalRuns({ subjectRef: sessionId, limit: 1 })).items.length > 0,
+      });
+    } catch (err) {
+      this.deps.logger?.warn("eval.session_sweep_failed", safeMessage(err));
+      return 0;
+    }
+  }
+
   async recoverOnBoot(): Promise<string[]> {
     const recovered: string[] = [];
     for (const status of ["queued", "running"] as const) {
@@ -739,6 +800,15 @@ export class EvalRunManager {
     return recovered;
   }
 
+  private async dropTrySession(tried: { projectRoot: string; subjectRef: string } | undefined): Promise<void> {
+    if (!tried) return;
+    try {
+      await this.deps.agents?.()?.deleteEvalSessions(tried.projectRoot, [tried.subjectRef]);
+    } catch (err) {
+      this.deps.logger?.warn("eval.try_session_cleanup_failed", safeMessage(err));
+    }
+  }
+
   async tryOne(input: TryOneInput): Promise<TryResult> {
     this.claim();
     this.reserved = false;
@@ -747,6 +817,7 @@ export class EvalRunManager {
     this.tryingRunId = evalRunId;
     const abort = new AbortController();
     let hooked = false;
+    let tried: { projectRoot: string; subjectRef: string } | undefined;
     try {
       const engine = this.engines(this.engineName);
       const engineInfo = { name: engine.name, version: await engine.version(), nodeVersion: process.versions.node };
@@ -765,6 +836,7 @@ export class EvalRunManager {
         evalRunId,
         engine: engineInfo,
         ...(this.deps.isKnownModel ? { isKnownModel: this.deps.isKnownModel } : {}),
+        ...this.agentsInput(),
       });
       if (!built.ok) throw new EvalRunError("EVAL_INVALID", "Eval is invalid", built.findings);
       let plan: EvalPlan = built.plan;
@@ -806,6 +878,7 @@ export class EvalRunManager {
         throw new EvalRunError("EVAL_ENGINE_ERROR", "Engine finished without a result for this case");
       }
       const row = this.resultInput(plan, captured);
+      if (plan.target.kind === "agent" && row.subjectRef) tried = { projectRoot: input.projectRoot, subjectRef: row.subjectRef };
       const grades: TryGrade[] = (row.grades ?? []).map((g) => ({
         graderId: g.graderId,
         graderType: g.graderType,
@@ -825,6 +898,7 @@ export class EvalRunManager {
           errorCode: row.errorCode ?? null,
           errorMessage: row.errorMessage ?? null,
           stageRunId: row.stageRunId ?? null,
+          subjectRef: row.subjectRef ?? null,
           output: row.output ?? null,
           latencyMs: row.latencyMs ?? null,
           costUsd: row.costUsd ?? null,
@@ -841,6 +915,7 @@ export class EvalRunManager {
         costUsd: this.runner.spend(evalRunId),
       };
     } finally {
+      await this.dropTrySession(tried);
       this.trying = false;
       this.tryingRunId = null;
       const { onRunFinished } = this.deps;

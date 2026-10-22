@@ -75,6 +75,9 @@ import {
 import { assertTmpdirUsable } from "../runstore/assertTmpdir.js";
 import { logger as rootLogger } from "../logging/logger.js";
 import { getModelCatalog } from "../models/catalog.js";
+import { createAgentCaseRunner } from "../evals/runner/agentCaseRunner.js";
+import { createEvalCaseRunner } from "../evals/runner/caseRunner.js";
+import { defaultLoadJudgePrices } from "../evals/engine/promptfoo/judgeServices.js";
 import { createAgentHostContext, type AgentHostContext } from "../agents/hostContext.js";
 import type { ConversationBackend } from "../agents/sessions.js";
 
@@ -412,11 +415,17 @@ export async function bootstrapStageflowHost(
   await manager.reenqueuePersistedQueuedRuns();
   const evalLog = rootLogger.child({ component: "evals" });
   const evalStageRunner = createStageCaseRunner({ manager, store });
+  const evalAgentRunner = createAgentCaseRunner({
+    host: () => agentHost,
+    loadPrices: defaultLoadJudgePrices,
+  });
+  const evalRunner = createEvalCaseRunner({ stage: evalStageRunner, agent: evalAgentRunner });
   const evalTokens = new RunTokenRegistry();
   let evalCallbackBase = "";
   const evalRunManager = new EvalRunManager({
     store,
-    stageRunner: evalStageRunner,
+    stageRunner: evalRunner,
+    agents: () => agentHost?.service,
     engines: (name, engineOptions) =>
       getEngine(
         name,
@@ -437,12 +446,13 @@ export async function bootstrapStageflowHost(
       error: (event, msg) => evalLog.error(event, msg),
     },
   });
-  await evalRunManager.recoverOnBoot().catch((err: unknown) =>
-    evalLog.warn("eval.recover_failed", err instanceof Error ? err.message : String(err)),
-  );
+  const recoveredEvalRuns = await evalRunManager.recoverOnBoot().catch((err: unknown): string[] => {
+    evalLog.warn("eval.recover_failed", err instanceof Error ? err.message : String(err));
+    return [];
+  });
   const evalServices: EvalInternalServices = {
     tokens: evalTokens,
-    runner: evalStageRunner,
+    runner: evalRunner,
     isRunning: (evalRunId) => evalRunManager.isExecuting(evalRunId),
   };
   const setEvalCallbackBase = (baseUrl: string): void => {
@@ -558,6 +568,7 @@ export async function bootstrapStageflowHost(
           },
         })
       : undefined;
+  if (agentHost) void evalRunManager.sweepAgentSessions(recoveredEvalRuns);
   const mcpStateless = resolveMcpStateless({
     mcpStateless: options.mcpStateless,
   });

@@ -214,12 +214,12 @@ describe("createBackendSimulatorModel", () => {
   const definition = { model: { id: "anthropic/main", thinking: "off" } } as unknown as AgentDefinition;
 
   it("runs the judge with the user model, estimates usage and prices it", async () => {
-    const seen: Array<{ prompt: string; model: string }> = [];
+    const seen: Array<{ prompt: string; system?: string; model: string }> = [];
     const backend = {
       id: "pi",
       complete: async () => ({ text: "", toolOutputs: [] }),
-      judge: async (input: { prompt: string; definition: AgentDefinition }) => {
-        seen.push({ prompt: input.prompt, model: input.definition.model.id });
+      judge: async (input: { prompt: string; systemPrompt?: string; definition: AgentDefinition }) => {
+        seen.push({ prompt: input.prompt, system: input.systemPrompt, model: input.definition.model.id });
         return "x".repeat(40);
       },
     } as unknown as ConversationBackend;
@@ -232,7 +232,8 @@ describe("createBackendSimulatorModel", () => {
     });
     const reply = await model.complete({ system: "s".repeat(8), user: "u".repeat(8), signal });
     expect(seen[0]!.model).toBe("openai/gpt-x");
-    expect(seen[0]!.prompt).toContain("ssssssss");
+    expect(seen[0]!.system).toBe("ssssssss");
+    expect(seen[0]!.prompt).toBe("uuuuuuuu");
     expect(definition.model.id).toBe("anthropic/main");
     expect(reply.usage).toEqual({ costUsd: 5 * 1 + 10 * 2, tokensIn: 5, tokensOut: 10, model: "openai/gpt-x", estimated: true });
   });

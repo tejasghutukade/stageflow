@@ -474,6 +474,28 @@ export class AgentService {
     return ids;
   }
 
+  /**
+   * Boot cleanup of eval sessions: those of the given (recovered) eval runs, and older root sessions no eval result
+   * references. Returns how many sessions were deleted, descendants included.
+   */
+  async sweepEvalSessions(input: { runIds: string[]; olderThanMs: number; isReferenced: (sessionId: string) => Promise<boolean> | boolean }): Promise<number> {
+    const roots = new Map<string, AgentSession>();
+    for (const session of this.store.listEvalRootSessions({ sourceRefs: input.runIds })) roots.set(session.id, session);
+    const cutoff = new Date(this.clockMs() - input.olderThanMs).toISOString();
+    for (const session of this.store.listEvalRootSessions({ createdBefore: cutoff })) {
+      if (!roots.has(session.id) && !(await input.isReferenced(session.id))) roots.set(session.id, session);
+    }
+    const all = new Set<string>();
+    for (const root of roots.values()) {
+      all.add(root.id);
+      for (const child of this.store.listChildSessions(root.id)) all.add(child.id);
+    }
+    const ids = [...all];
+    this.store.deleteSessions(ids);
+    for (const sessionId of ids) this.evalOverrides.delete(sessionId);
+    return ids.length;
+  }
+
   /** Forget a finished eval session's in-memory overrides. The rows stay readable. */
   forgetEvalSession(sessionId: string): void {
     this.evalOverrides.delete(sessionId);
