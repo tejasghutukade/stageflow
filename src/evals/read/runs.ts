@@ -1,6 +1,7 @@
 import path from "node:path";
 import { loadDatasetFile } from "../../config/loadDataset.js";
 import { loadEvalOutcome, resolveEvalPaths } from "../../config/loadEval.js";
+import { resolveAgentTarget, type AgentCatalogPort } from "../../config/resolveAgentTarget.js";
 import { resolveEvalTarget } from "../../config/resolveEvalTarget.js";
 import type { RunStore } from "../../runstore/port.js";
 import type { EvalLiveState } from "../manager.js";
@@ -63,6 +64,10 @@ export type WireResultDetail = {
   error_code: string | null;
   error_message: string | null;
   stage_run_id: string | null;
+  subject_ref: string | null;
+  turns: number | null;
+  tool_call_count: number | null;
+  agent?: { id: string; session_id: string | null } | null;
   output: unknown;
   latency_ms: number | null;
   cost_usd: number | null;
@@ -80,7 +85,28 @@ export type RunCurrent = {
   stage_version_hash: string | null;
   dataset_hash: string | null;
   grader_hashes: Record<string, string> | null;
+  agent_revision?: number | null;
+  agent_definition_hash?: string | null;
 };
+
+export type ConversationView = {
+  messages: unknown[];
+  tool_calls: unknown[];
+  final_reply: string;
+  stop_reason: string;
+};
+
+export function conversationView(output: unknown): ConversationView | null {
+  const rec = asRecord(output);
+  if (rec.kind !== "conversation") return null;
+  if (!Array.isArray(rec.messages) || !Array.isArray(rec.tool_calls)) return null;
+  return {
+    messages: rec.messages,
+    tool_calls: rec.tool_calls,
+    final_reply: typeof rec.final_reply === "string" ? rec.final_reply : "",
+    stop_reason: typeof rec.stop_reason === "string" ? rec.stop_reason : "",
+  };
+}
 
 export type EvalRunDetail = {
   eval_run_id: string;
@@ -166,6 +192,7 @@ export function statsOfRun(
   extra: { reviews?: readonly EvalReviewRow[]; previousRun?: PreviousRunLite | null } = {},
 ): Stats {
   return computeStats({
+    ...(row.targetKind === "agent" ? { targetKind: "agent" as const } : {}),
     results: results.map(toResultRecord),
     grades: results.flatMap(toGradeRecords),
     graders: graderRefsOf(row),
@@ -242,7 +269,11 @@ export function gradeToWire(g: EvalGradeRow): WireGrade {
   };
 }
 
-export function resultToWire(r: EvalResultWithGrades, review: EvalReviewRow | undefined): WireResultDetail {
+export function resultToWire(
+  r: EvalResultWithGrades,
+  review: EvalReviewRow | undefined,
+  agentId?: string,
+): WireResultDetail {
   const hasReview = review !== undefined && (review.label !== null || review.note !== null);
   return {
     case_id: r.caseId,
@@ -251,6 +282,12 @@ export function resultToWire(r: EvalResultWithGrades, review: EvalReviewRow | un
     error_code: r.errorCode,
     error_message: r.errorMessage,
     stage_run_id: r.stageRunId,
+    subject_ref: r.subjectRef,
+    turns: r.turns,
+    tool_call_count: r.toolCallCount,
+    ...(agentId !== undefined
+      ? { agent: r.subjectRef !== null ? { id: agentId, session_id: r.subjectRef } : null }
+      : {}),
     output: r.output,
     latency_ms: r.latencyMs,
     cost_usd: r.costUsd,
@@ -265,22 +302,43 @@ export function resultToWire(r: EvalResultWithGrades, review: EvalReviewRow | un
   };
 }
 
-export async function currentHashes(row: EvalRunRow): Promise<RunCurrent> {
-  const none: RunCurrent = { stage_version_hash: null, dataset_hash: null, grader_hashes: null };
+export async function currentHashes(row: EvalRunRow, agents?: AgentCatalogPort): Promise<RunCurrent> {
+  const isAgent = row.targetKind === "agent";
+  const none: RunCurrent = {
+    stage_version_hash: null,
+    dataset_hash: null,
+    grader_hashes: null,
+    ...(isAgent ? { agent_revision: null, agent_definition_hash: null } : {}),
+  };
   const evalAbs = path.resolve(row.projectRoot, row.evalPath);
   try {
     const outcome = await loadEvalOutcome(evalAbs, row.projectRoot);
     if (!outcome.ok) return none;
     const loaded = outcome.value;
     const paths = resolveEvalPaths(loaded.file, loaded.path);
-    const [target, dataset] = await Promise.all([
+    const datasetHashOf = async () => {
+      const dataset = await loadDatasetFile(paths.datasetPath, { root: row.projectRoot });
+      return dataset.findings.some((f) => f.severity === "error") ? null : dataset.contentHash;
+    };
+    const graderHashes = Object.fromEntries(loaded.graders.map((g) => [g.id, g.hash]));
+    if (isAgent) {
+      const resolved = agents ? await resolveAgentTarget(loaded.file, row.projectRoot, agents) : null;
+      return {
+        stage_version_hash: null,
+        dataset_hash: await datasetHashOf(),
+        grader_hashes: graderHashes,
+        agent_revision: resolved?.ok ? resolved.value.revision : null,
+        agent_definition_hash: resolved?.ok ? resolved.value.definitionHash : null,
+      };
+    }
+    const [target, datasetHash] = await Promise.all([
       resolveEvalTarget(loaded.file, loaded.path, row.projectRoot),
-      loadDatasetFile(paths.datasetPath, { root: row.projectRoot }),
+      datasetHashOf(),
     ]);
     return {
       stage_version_hash: target.ok ? target.value.stageVersionHash : null,
-      dataset_hash: dataset.findings.some((f) => f.severity === "error") ? null : dataset.contentHash,
-      grader_hashes: Object.fromEntries(loaded.graders.map((g) => [g.id, g.hash])),
+      dataset_hash: datasetHash,
+      grader_hashes: graderHashes,
     };
   } catch {
     return none;
@@ -291,6 +349,7 @@ export async function buildRunDetail(input: {
   store: ReadStore;
   row: EvalRunRow;
   live?: EvalLiveState | null;
+  agents?: AgentCatalogPort;
 }): Promise<EvalRunDetail> {
   const { store, row } = input;
   const [results, reviews] = await Promise.all([
@@ -326,7 +385,7 @@ export async function buildRunDetail(input: {
     fingerprint: row.configFingerprint,
     components: row.configComponents,
     stats,
-    current: await currentHashes(row),
+    current: await currentHashes(row, input.agents),
   };
   if (input.live && (row.status === "running" || row.status === "queued")) {
     detail.live = input.live.phases.map((p) => ({

@@ -16,6 +16,7 @@ export interface ComputeStatsInput {
   passThreshold: number;
   reviewsTags?: Map<string, string[]>;
   previousRun?: PreviousRunLite | null;
+  targetKind?: "stage" | "agent";
 }
 
 export interface CaseStat {
@@ -81,6 +82,8 @@ export interface Stats {
   score_histogram: { bins: number[]; threshold: number };
   failure_types: { by_tag: Record<string, number>; untagged: number };
   failing_cases: FailingCase[];
+  mean_turns?: number | null;
+  mean_tool_calls?: number | null;
 }
 
 const EPS = 1e-9;
@@ -270,6 +273,11 @@ export function computeStats(input: ComputeStatsInput): Stats {
       passes: c.flags,
     }));
 
+  const turnValues = executed.flatMap((r) => (r.turns != null ? [r.turns] : []));
+  const toolCallValues = executed.flatMap((r) => (r.toolCalls != null ? [r.toolCalls] : []));
+  const hasAgentData =
+    input.targetKind === "agent" || input.results.some((r) => r.turns != null || r.toolCalls != null);
+
   return {
     cases_counted: cases.length,
     results_executed: resultsExecuted,
@@ -297,5 +305,6 @@ export function computeStats(input: ComputeStatsInput): Stats {
     score_histogram: { bins, threshold: input.passThreshold },
     failure_types: { by_tag: byTag, untagged },
     failing_cases: failing,
+    ...(hasAgentData ? { mean_turns: mean(turnValues), mean_tool_calls: mean(toolCallValues) } : {}),
   };
 }

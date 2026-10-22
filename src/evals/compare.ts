@@ -1,4 +1,5 @@
 import { buildCaseStats, clusteredCi, computeStats, mean, sampleSd, type Interval, type Stats } from "./stats.js";
+import { agentDiff, type AgentDiff } from "./agentDiff.js";
 import { stageDiff, type StageDiff } from "./stageDiff.js";
 import {
   EVAL_COMPARE_MISMATCH,
@@ -15,6 +16,10 @@ export interface CompareRunInput {
   datasetHash: string;
   stageVersionHash: string;
   stageDefinition: Record<string, unknown> | null;
+  targetKind?: "stage" | "agent";
+  agentId?: string | null;
+  agentRevision?: number | null;
+  agentDefinition?: Record<string, unknown> | null;
   configComponents: Record<string, unknown>;
   results: ResultRecord[];
   grades: GradeRecord[];
@@ -89,8 +94,11 @@ export interface CompareResult {
     latency_p95: NumberDelta;
     flaky_cases: NumberDelta;
     mean_score: NumberDelta;
+    mean_turns?: NumberDelta;
+    mean_tool_calls?: NumberDelta;
   };
   stage_diff: StageDiff | null;
+  agent_diff?: AgentDiff | null;
   components: ComponentDiff[];
   same_config: boolean;
   warnings: CompareWarning[];
@@ -102,8 +110,8 @@ export interface CompareResult {
 
 export class CompareMismatchError extends Error {
   readonly code = EVAL_COMPARE_MISMATCH;
-  constructor(a: string, b: string) {
-    super(`Cannot compare runs of different evals (${a} vs ${b})`);
+  constructor(a: string, b: string, what = "different evals") {
+    super(`Cannot compare runs of ${what} (${a} vs ${b})`);
     this.name = "CompareMismatchError";
   }
 }
@@ -160,6 +168,12 @@ function executedKeysOf(results: ResultRecord[]): Set<string> {
 
 export function compareRuns(a: CompareRunInput, b: CompareRunInput): CompareResult {
   if (a.evalId !== b.evalId) throw new CompareMismatchError(a.evalId, b.evalId);
+  const kindA = a.targetKind ?? "stage";
+  const kindB = b.targetKind ?? "stage";
+  if (kindA !== kindB || (kindA === "agent" && (a.agentId ?? null) !== (b.agentId ?? null))) {
+    throw new CompareMismatchError(a.evalId, b.evalId, "different targets");
+  }
+  const isAgent = kindA === "agent";
 
   const statsA = computeStats(a);
   const statsB = computeStats(b);
@@ -261,6 +275,7 @@ export function compareRuns(a: CompareRunInput, b: CompareRunInput): CompareResu
   if (m < 5) warnings.push({ code: "few_shared_cases", shared_cases: m });
 
   const stage =
+    !isAgent &&
     a.stageVersionHash !== b.stageVersionHash && a.stageDefinition && b.stageDefinition
       ? stageDiff(a.stageDefinition, b.stageDefinition)
       : null;
@@ -280,8 +295,25 @@ export function compareRuns(a: CompareRunInput, b: CompareRunInput): CompareResu
       latency_p95: delta(statsA.latency_p95, statsB.latency_p95),
       flaky_cases: delta(statsA.flaky_cases.length, statsB.flaky_cases.length),
       mean_score: delta(statsA.mean_score, statsB.mean_score),
+      ...(isAgent
+        ? {
+            mean_turns: delta(statsA.mean_turns ?? null, statsB.mean_turns ?? null),
+            mean_tool_calls: delta(statsA.mean_tool_calls ?? null, statsB.mean_tool_calls ?? null),
+          }
+        : {}),
     },
     stage_diff: stage,
+    ...(isAgent
+      ? {
+          agent_diff:
+            a.stageVersionHash !== b.stageVersionHash && a.agentDefinition && b.agentDefinition
+              ? agentDiff(a.agentDefinition, b.agentDefinition, {
+                  a: a.agentRevision ?? null,
+                  b: b.agentRevision ?? null,
+                })
+              : null,
+        }
+      : {}),
     components,
     same_config: components.every((c) => c.status === "same"),
     warnings,

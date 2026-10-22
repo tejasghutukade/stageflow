@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { EvalCatalogEntry } from "../../config/evalCatalog.js";
-import { EVAL_DEFAULT_REPEATS, resolveEvalPaths } from "../../config/loadEval.js";
+import { EVAL_DEFAULT_REPEATS, resolveConversation, resolveEvalPaths } from "../../config/loadEval.js";
+import type { AgentCatalogPort } from "../../config/resolveAgentTarget.js";
 import { evalStem } from "../../config/evalWriteRoots.js";
 import {
   listStatus,
@@ -19,6 +20,23 @@ import {
   type RunHeadline,
 } from "./runs.js";
 
+export type EvalListTarget =
+  | {
+      kind: "stage";
+      pipeline_path?: string;
+      stage_id?: string;
+      file?: string;
+      label: string;
+    }
+  | {
+      kind: "agent";
+      agent_id: string;
+      agent_name: string;
+      model: string | null;
+      revision: number | null;
+      label: string;
+    };
+
 export type EvalListItem = {
   project_root?: string;
   id: string;
@@ -26,13 +44,8 @@ export type EvalListItem = {
   description: string | null;
   type: string;
   path: string;
-  target: {
-    kind: "stage";
-    pipeline_path?: string;
-    stage_id?: string;
-    file?: string;
-    label: string;
-  };
+  target: EvalListTarget;
+  conversation?: { mode: string; max_turns: number; tools: string; approvals: string };
   dataset_path: string;
   dataset_cases: number;
   repeats: number;
@@ -56,6 +69,50 @@ function pipelineStem(pipelinePath: string): string {
   return path.basename(pipelinePath).replace(/\.pipeline\.ya?ml$/, "");
 }
 
+function str(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+async function agentListTarget(
+  agentId: string,
+  last: EvalRunRow | undefined,
+  agents: AgentCatalogPort | undefined,
+  projectRoot: string,
+): Promise<Extract<EvalListTarget, { kind: "agent" }>> {
+  const snap = last && last.targetKind === "agent" ? (last.config as { target?: Record<string, unknown> }).target : undefined;
+  let name: string | null = null;
+  let model: string | null = null;
+  let revision: number | null = null;
+  if (snap) {
+    const def = (snap.definition ?? {}) as { name?: unknown };
+    name = str(def.name);
+    model = str(snap.model);
+    revision = typeof snap.revision === "number" ? snap.revision : null;
+  } else if (agents) {
+    try {
+      const detail = await agents.get(projectRoot, agentId);
+      name = str(detail.agent.name);
+      model = str(detail.agent.model?.id);
+      revision = detail.agent.revision;
+    } catch {
+      // the agent may be deleted or unreadable: fall back to the id
+    }
+  }
+  const agentName = name ?? agentId;
+  return { kind: "agent", agent_id: agentId, agent_name: agentName, model, revision, label: agentName };
+}
+
+export function filterEvalListItems(
+  items: readonly EvalListItem[],
+  filter: { target_kind?: string | null; agent?: string | null },
+): EvalListItem[] {
+  return items.filter((item) => {
+    if (filter.target_kind && item.target.kind !== filter.target_kind) return false;
+    if (filter.agent && !(item.target.kind === "agent" && item.target.agent_id === filter.agent)) return false;
+    return true;
+  });
+}
+
 async function listRunSummary(store: ReadStore, row: EvalRunRow): Promise<ListRunSummary> {
   const stats = statsOfRun(row, await store.listEvalResults(row.evalRunId));
   return {
@@ -72,6 +129,7 @@ export async function buildEvalListItems(input: {
   projectRoot: string;
   entries: readonly EvalCatalogEntry[];
   datasetCases: (absPath: string) => number;
+  agents?: AgentCatalogPort;
 }): Promise<{ items: EvalListItem[]; banner: RegressionBanner | null; bannerInputs: BannerEvalInput[] }> {
   const { store, projectRoot } = input;
   const items: EvalListItem[] = [];
@@ -120,6 +178,12 @@ export async function buildEvalListItems(input: {
     );
     bannerInputs.push({ evalId: loaded.id, status, last: lastSummary, previous: previousSummary });
 
+    const agentTarget =
+      file.target.kind === "agent"
+        ? await agentListTarget(file.target.agent, last, input.agents, projectRoot)
+        : undefined;
+    const conv = agentTarget ? resolveConversation(file.conversation) : undefined;
+
     const pipelinePath = paths.pipelinePath !== undefined ? posix(projectRoot, paths.pipelinePath) : undefined;
     const stageFile = paths.stageFile !== undefined ? posix(projectRoot, paths.stageFile) : undefined;
     const label =
@@ -137,13 +201,16 @@ export async function buildEvalListItems(input: {
       description: file.description ?? null,
       type,
       path: entry.relPath,
-      target: {
+      target: agentTarget ?? {
         kind: "stage",
         ...(pipelinePath !== undefined ? { pipeline_path: pipelinePath } : {}),
         ...(stageId !== undefined ? { stage_id: stageId } : {}),
         ...(stageFile !== undefined ? { file: stageFile } : {}),
         label,
       },
+      ...(conv
+        ? { conversation: { mode: conv.mode, max_turns: conv.maxTurns, tools: conv.tools, approvals: conv.approvals } }
+        : {}),
       dataset_path: posix(projectRoot, paths.datasetPath),
       dataset_cases: input.datasetCases(paths.datasetPath),
       repeats: file.defaults?.repeats ?? EVAL_DEFAULT_REPEATS,

@@ -597,8 +597,12 @@ export class EvalRunManager {
     };
   }
 
-  private statsFor(plan: Pick<EvalPlan, "graders" | "repeats" | "passThreshold">, results: EvalResultWithGrades[]): Stats {
+  private statsFor(
+    plan: Pick<EvalPlan, "graders" | "repeats" | "passThreshold"> & { target?: { kind: string } },
+    results: EvalResultWithGrades[],
+  ): Stats {
     return computeStats({
+      ...(plan.target?.kind === "agent" ? { targetKind: "agent" as const } : {}),
       results: results.map(toResultRecord),
       grades: results.flatMap(toGradeRecords),
       graders: plan.graders.map((g) => ({ id: g.id, type: g.type, hash: g.hash })),
@@ -619,6 +623,8 @@ export class EvalRunManager {
       cost_total: stats.cost_total,
       latency_p50: stats.latency_p50,
       flaky_count: stats.flaky_cases.length,
+      ...(stats.mean_turns !== undefined ? { mean_turns: stats.mean_turns } : {}),
+      ...(stats.mean_tool_calls !== undefined ? { mean_tool_calls: stats.mean_tool_calls } : {}),
     };
   }
 
@@ -780,7 +786,10 @@ export class EvalRunManager {
           try {
             const results = await this.store.listEvalResults(run.evalRunId);
             summary = this.summaryOf(
-              this.statsFor({ graders: [], repeats: run.repeats, passThreshold: run.passThreshold }, results),
+              this.statsFor(
+                { graders: [], repeats: run.repeats, passThreshold: run.passThreshold, target: { kind: run.targetKind } },
+                results,
+              ),
             );
           } catch (err) {
             this.deps.logger?.warn("eval.recover_summary_failed", safeMessage(err));

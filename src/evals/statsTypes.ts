@@ -31,6 +31,8 @@ export interface ResultRecord {
   tokensOut: number | null;
   score: number | null;
   passed: 0 | 1;
+  turns?: number | null;
+  toolCalls?: number | null;
 }
 
 export interface GradeRecord {

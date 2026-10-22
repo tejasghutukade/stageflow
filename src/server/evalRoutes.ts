@@ -81,7 +81,7 @@ import {
   type DatasetListItem,
   type DatasetTarget,
 } from "../evals/read/datasets.js";
-import { buildEvalListItems, costLastSevenDays, type EvalListItem } from "../evals/read/list.js";
+import { buildEvalListItems, costLastSevenDays, filterEvalListItems, type EvalListItem } from "../evals/read/list.js";
 import {
   buildExport,
   buildRunDetail,
@@ -304,10 +304,15 @@ function targetLabelFilter(items: EvalListItem[], projectRoot: string, url: URL)
   const file = url.searchParams.get("target_file");
   const same = (a: string | undefined, b: string): boolean =>
     a !== undefined && path.resolve(projectRoot, a) === path.resolve(projectRoot, b);
-  return items.filter((item) => {
-    if (pipeline !== null && !same(item.target.pipeline_path, pipeline)) return false;
-    if (stage !== null && item.target.stage_id !== stage) return false;
-    if (file !== null && !same(item.target.file, file)) return false;
+  const kinds = filterEvalListItems(items, {
+    target_kind: url.searchParams.get("target_kind"),
+    agent: url.searchParams.get("agent"),
+  });
+  return kinds.filter((item) => {
+    const t = item.target.kind === "stage" ? item.target : undefined;
+    if (pipeline !== null && !same(t?.pipeline_path, pipeline)) return false;
+    if (stage !== null && t?.stage_id !== stage) return false;
+    if (file !== null && !same(t?.file, file)) return false;
     return true;
   });
 }
@@ -335,7 +340,7 @@ async function handleEvalList(c: Ctx): Promise<void> {
     .filter((item) => {
       if (q === undefined || q === "") return true;
       const dataset = path.basename(item.dataset_path).replace(/\.dataset\.(jsonl|json|csv)$/, "");
-      return [item.id, item.name, item.target.stage_id ?? "", dataset].some((v) => v.toLowerCase().includes(q));
+      return [item.id, item.name, item.target.kind === "agent" ? item.target.agent_id : (item.target.stage_id ?? ""), dataset].some((v) => v.toLowerCase().includes(q));
     });
   c.json(c.res, 200, {
     items: filtered,
@@ -516,6 +521,9 @@ function tryResultToWire(result: TryResult): { result: WireResultDetail; stage_r
       error_code: r.errorCode,
       error_message: r.errorMessage,
       stage_run_id: r.stageRunId,
+      subject_ref: null,
+      turns: null,
+      tool_call_count: null,
       output: r.output,
       latency_ms: r.latencyMs,
       cost_usd: r.costUsd,

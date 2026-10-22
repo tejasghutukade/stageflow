@@ -13,6 +13,7 @@ import {
 } from "../../config/resolveCatalogRoots.js";
 import { loadDatasetFile } from "../../config/loadDataset.js";
 import { evalStem, findDatasetFile, findEvalFile, manifestForWrite } from "../../config/evalWriteRoots.js";
+import type { AgentCatalogPort } from "../../config/resolveAgentTarget.js";
 import { resolveEvalTarget } from "../../config/resolveEvalTarget.js";
 import { parseEvalOutcome, resolveEvalPaths, type LoadedEval } from "../../config/loadEval.js";
 import type { ValidationFinding } from "../../config/validateCatalog.js";
@@ -253,6 +254,7 @@ export async function buildResultsPage(
     store.getEvalReviews(row.evalRunId),
   ]);
   const { rows, counts } = buildResultRows({
+    targetKind: row.targetKind,
     cases,
     results,
     reviews,
@@ -287,7 +289,13 @@ export async function buildResultDetail(store: RunStore, id: string, caseId: str
     case: { ...caseRow.case, position: caseRow.position },
     repeats: [...results]
       .sort((a, b) => a.repeatIndex - b.repeatIndex)
-      .map((r) => resultToWire(r, reviewByKey.get(resultKey(r.caseId, r.repeatIndex)))),
+      .map((r) =>
+        resultToWire(
+          r,
+          reviewByKey.get(resultKey(r.caseId, r.repeatIndex)),
+          row.targetKind === "agent" ? (row.targetRef.agent_id ?? "") : undefined,
+        ),
+      ),
   };
 }
 
@@ -305,6 +313,7 @@ export async function loadEvalListItems(input: {
   projectRoot: string;
   wireRoot?: string;
   isKnownModel?: IsKnownModel;
+  agents?: AgentCatalogPort;
 }) {
   const { store, projectRoot } = input;
   const wireRoot = input.wireRoot ?? projectRoot;
@@ -325,6 +334,7 @@ export async function loadEvalListItems(input: {
     projectRoot,
     entries,
     datasetCases: (abs) => counts.get(abs) ?? 0,
+    ...(input.agents ? { agents: input.agents } : {}),
   });
   const items: EvalListItem[] = built.items.map((item) => ({ ...item, project_root: wireRoot }));
   return { items, banner: built.banner, bannerInputs: built.bannerInputs, manifest };
@@ -348,6 +358,7 @@ export async function loadAggregatedEvalList(input: {
   wire: string | undefined;
   now: Date;
   isKnownModel?: IsKnownModel;
+  agents?: AgentCatalogPort;
 }) {
   const roots = await evalScopeRoots(input.options, input.wire);
   const groups: Array<{ root: CatalogRoot; items: EvalListItem[] }> = [];
@@ -360,6 +371,7 @@ export async function loadAggregatedEvalList(input: {
       projectRoot: root.path,
       wireRoot: root.project_root,
       ...(input.isKnownModel ? { isKnownModel: input.isKnownModel } : {}),
+      ...(input.agents ? { agents: input.agents } : {}),
     });
     groups.push({ root, items: loaded.items });
     bannerInputs.push(...loaded.bannerInputs);

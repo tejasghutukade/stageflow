@@ -12,6 +12,8 @@ export function toResultRecord(row: EvalResultRow): ResultRecord {
     tokensOut: row.tokensOut,
     score: row.score,
     passed: row.passed ? 1 : 0,
+    ...(row.turns !== null && row.turns !== undefined ? { turns: row.turns } : {}),
+    ...(row.toolCallCount !== null && row.toolCallCount !== undefined ? { toolCalls: row.toolCallCount } : {}),
   };
 }
 

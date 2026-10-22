@@ -17,6 +17,8 @@ export type ResultRow = {
   latency_ms_p50: number | null;
   cost_usd: number;
   failure_tags: string[];
+  turns?: number | null;
+  tool_calls?: number | null;
 };
 
 export type ResultRowFilter = {
@@ -45,6 +47,7 @@ function buildFacts(
   caseId: string,
   results: readonly EvalResultWithGrades[],
   reviews: Map<string, EvalReviewRow>,
+  targetKind?: string,
 ): RowFacts {
   const sorted = [...results].sort((a, b) => a.repeatIndex - b.repeatIndex);
   const executedResults = sorted.filter((r) => EXECUTED_RESULT_STATUSES.includes(r.status));
@@ -67,6 +70,9 @@ function buildFacts(
     .map((r) => r.latencyMs)
     .filter((v): v is number => v !== null)
     .sort((a, b) => a - b);
+  const turns = executedResults.flatMap((r) => (r.turns !== null ? [r.turns] : []));
+  const toolCalls = executedResults.flatMap((r) => (r.toolCallCount !== null ? [r.toolCallCount] : []));
+  const agentData = targetKind === "agent" || turns.length > 0 || toolCalls.length > 0;
   const title = caseField<string>(caseRow, "title");
   const tags = caseField<string[]>(caseRow, "tags") ?? [];
   return {
@@ -91,6 +97,7 @@ function buildFacts(
       latency_ms_p50: percentile(latencies, 0.5),
       cost_usd: cost,
       failure_tags: [...failureTags].sort(),
+      ...(agentData ? { turns: mean(turns), tool_calls: mean(toolCalls) } : {}),
     },
   };
 }
@@ -108,6 +115,7 @@ export function buildResultRows(input: {
   results: readonly EvalResultWithGrades[];
   reviews: readonly EvalReviewRow[];
   filter?: ResultRowFilter;
+  targetKind?: string;
 }): { rows: ResultRow[]; counts: ResultRowCounts } {
   const { filter = {} } = input;
   const reviews = new Map(input.reviews.map((r) => [resultKey(r.caseId, r.repeatIndex), r]));
@@ -123,7 +131,7 @@ export function buildResultRows(input: {
   );
   const q = filter.q?.trim().toLowerCase();
   const facts = ordered
-    .map((id) => buildFacts(caseById.get(id), id, byCase.get(id) ?? [], reviews))
+    .map((id) => buildFacts(caseById.get(id), id, byCase.get(id) ?? [], reviews, input.targetKind))
     .filter((f) => {
       if (filter.grader !== undefined && !f.row.failed_graders.includes(filter.grader)) return false;
       if (filter.tag !== undefined && !f.row.failure_tags.includes(filter.tag) && !f.row.tags.includes(filter.tag)) {

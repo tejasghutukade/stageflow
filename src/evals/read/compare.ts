@@ -5,9 +5,21 @@ import { graderRefsOf, type ReadStore } from "./runs.js";
 
 async function compareInput(store: ReadStore, row: EvalRunRow): Promise<CompareRunInput> {
   const results = await store.listEvalResults(row.evalRunId);
-  const target = (row.config as { target?: { stage_definition?: unknown } }).target;
-  const definition = target?.stage_definition;
+  const target = (row.config as { target?: { stage_definition?: unknown; definition?: unknown; revision?: unknown } })
+    .target;
+  const isAgent = row.targetKind === "agent";
+  const definition = isAgent ? undefined : target?.stage_definition;
+  const agentDefinition = isAgent ? target?.definition : undefined;
+  const plain = (v: unknown) => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
   return {
+    targetKind: row.targetKind === "agent" ? "agent" : "stage",
+    ...(isAgent
+      ? {
+          agentId: row.targetRef.agent_id ?? null,
+          agentRevision: typeof target?.revision === "number" ? target.revision : null,
+          agentDefinition: plain(agentDefinition),
+        }
+      : {}),
     evalId: row.evalId,
     runNumber: row.runNumber,
     datasetHash: row.datasetHash,
