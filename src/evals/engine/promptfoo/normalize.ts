@@ -1,3 +1,4 @@
+import { CONVERSATION_RUBRIC_PROMPT_VERSION } from "../../constants.js";
 import type {
   CaseOutput,
   EvalPlan,
@@ -235,17 +236,32 @@ function deterministicGrade(grader: ResolvedGrader, component: RecordComponent):
 
 export type RubricGradeResult = { grade: NormalizedGrade; priceUnknown: boolean };
 
+type JudgedGrader = {
+  id: string;
+  type: "rubric" | "goal_reached";
+  judge: string;
+  scale: "pass_fail" | "1_to_5";
+  passAt: number;
+};
+
+function judgedView(grader: Extract<ResolvedGrader, { type: "rubric" | "goal_reached" }>): JudgedGrader {
+  return grader.type === "rubric"
+    ? grader
+    : { id: grader.id, type: "goal_reached", judge: grader.judge, scale: "pass_fail", passAt: 1 };
+}
+
 function rubricGrade(
-  grader: Extract<ResolvedGrader, { type: "rubric" }>,
+  grader: JudgedGrader,
   component: RecordComponent,
   judgePrice: NormalizeContext["judgePrice"],
+  conversation: boolean,
 ): RubricGradeResult {
   const tokensIn = component.tokensIn ?? 0;
   const tokensOut = component.tokensOut ?? 0;
   const price = judgePrice?.(grader.judge);
   const judged: NormalizedGrade = {
     graderId: grader.id,
-    graderType: "rubric",
+    graderType: grader.type,
     status: "graded",
     judgeModel: grader.judge,
     judgeTokensIn: tokensIn,
@@ -255,13 +271,17 @@ function rubricGrade(
         ? 0
         : (tokensIn * price.inputPerMillion + tokensOut * price.outputPerMillion) / 1_000_000,
   };
-  const withUnknownPrice = (g: NormalizedGrade): RubricGradeResult => ({
-    grade:
-      price === undefined && tokensIn + tokensOut > 0
-        ? { ...g, details: { judgeCostUnknown: true } }
-        : g,
-    priceUnknown: price === undefined && tokensIn + tokensOut > 0,
-  });
+  const variant = conversation
+    ? { promptVariant: "conversation", promptVersion: CONVERSATION_RUBRIC_PROMPT_VERSION }
+    : undefined;
+  const withUnknownPrice = (g: NormalizedGrade): RubricGradeResult => {
+    const unknown = price === undefined && tokensIn + tokensOut > 0;
+    const details = { ...(variant ?? {}), ...(unknown ? { judgeCostUnknown: true } : {}) };
+    return {
+      grade: Object.keys(details).length > 0 ? { ...g, details } : g,
+      priceUnknown: unknown,
+    };
+  };
   const bad = (): RubricGradeResult =>
     withUnknownPrice({ ...judged, status: "error", errorCode: JUDGE_ERROR_CODE });
 
@@ -296,7 +316,7 @@ export type NormalizeOutcome = {
 export function normalizeRecord(
   record: ResultRecord,
   identity: { caseId: string; repeatIndex: number },
-  plan: Pick<EvalPlan, "graders">,
+  plan: Pick<EvalPlan, "graders"> & { target?: EvalPlan["target"] },
   ctx: NormalizeContext = {},
 ): NormalizeOutcome {
   const run = ctx.hostRun?.(identity.caseId, identity.repeatIndex) ?? runFromRecord(record);
@@ -314,8 +334,16 @@ export function normalizeRecord(
       const component = byMetric.get(grader.id);
       if (component === undefined) {
         grades.push(errorGrade(grader, ENGINE_ERROR_CODE));
-      } else if (grader.type === "rubric") {
-        const { grade, priceUnknown } = rubricGrade(grader, component, ctx.judgePrice);
+      } else if (
+        (grader.type === "rubric" || grader.type === "goal_reached") &&
+        component.type !== "javascript"
+      ) {
+        const { grade, priceUnknown } = rubricGrade(
+          judgedView(grader),
+          component,
+          ctx.judgePrice,
+          plan.target?.kind === "agent",
+        );
         if (priceUnknown && !priceUnknownModels.includes(grader.judge)) priceUnknownModels.push(grader.judge);
         judgeCostUsd += grade.judgeCostUsd ?? 0;
         grades.push(grade);

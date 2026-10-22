@@ -104,3 +104,10 @@ export const EVAL_CONVERSATION_LIMITS = {
   maxToolCalls: 200,
   maxSubjectBytes: 256 * 1024,
 } as const;
+
+export const JUDGE_TRANSCRIPT_LIMITS = {
+  turns: 30,
+  messageChars: 2_000,
+  toolArgsChars: 500,
+  toolResultChars: 500,
+} as const;

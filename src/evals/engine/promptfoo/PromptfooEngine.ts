@@ -189,7 +189,7 @@ export class PromptfooEngine implements EvalEngine {
     const judgeEnv: Record<string, string> = {};
     const judgeModels = new Set<string>();
     for (const grader of plan.graders) {
-      if (grader.type !== "rubric") continue;
+      if (grader.type !== "rubric" && grader.type !== "goal_reached") continue;
       judgeModels.add(grader.judge);
       const mapping = mapJudge(grader.judge) as JudgeMapping;
       if (judgeEnv[mapping.envVar] !== undefined) continue;

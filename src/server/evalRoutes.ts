@@ -721,7 +721,7 @@ async function handleRunEstimate(c: Ctx, id: string): Promise<void> {
       resultsExecuted: stats.results_executed,
       rubricGradesGraded: results
         .flatMap((r) => r.grades)
-        .filter((g) => g.graderType === "rubric" && g.status === "graded").length,
+        .filter((g) => (g.graderType === "rubric" || g.graderType === "goal_reached") && g.status === "graded").length,
       wallSeconds:
         last.startedAt !== null && last.finishedAt !== null
           ? Math.max(0, (Date.parse(last.finishedAt) - Date.parse(last.startedAt)) / 1000)
@@ -734,7 +734,7 @@ async function handleRunEstimate(c: Ctx, id: string): Promise<void> {
 async function sendEstimate(c: Ctx, plan: EvalPlan, previous: EstimatePreviousRun | null): Promise<void> {
   const estimate = estimateRun({
     resultsTotal: plan.cases.length * plan.repeats,
-    rubricGraderCount: plan.graders.filter((g) => g.type === "rubric").length,
+    rubricGraderCount: plan.graders.filter((g) => g.type === "rubric" || g.type === "goal_reached").length,
     previous,
     recentStageCosts: await recentStageCosts(c, {
       ...(plan.target.kind === "stage" && plan.target.pipelinePath !== undefined ? { pipelinePath: plan.target.pipelinePath } : {}),

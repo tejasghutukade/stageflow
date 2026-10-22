@@ -2,6 +2,7 @@ import { redactSecrets } from "../../agent/streamLogRedact.js";
 import type { EvalToolCallRecord } from "../../agents/evalGate.js";
 import type { AgentSessionDetail } from "../../agents/service.js";
 import { EVAL_CONVERSATION_LIMITS } from "../constants.js";
+import { renderTranscript } from "../graders/transcript.js";
 import type {
   ConversationMessage,
   ConversationOutput,
@@ -148,6 +149,7 @@ export function buildConversationSubject(input: ConversationSubjectInput): Conve
       tool_calls_dropped: truncation.tool_calls_dropped,
     };
   }
+  output.transcript = renderTranscript(output);
   return output;
 }
 

@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ResolvedGrader } from "../types.js";
 import { resolveValue } from "./path.js";
-import { show, subjectEnvelope, truncate } from "./subject.js";
+import { show, subjectRoot, truncate } from "./subject.js";
 import type { GradeCase, GradeData, GraderContext, Subject } from "./types.js";
 
 const norm = (s: string): string => s.replace(/\s+/g, " ").trim().toLowerCase();
@@ -28,7 +28,7 @@ export function gradeReference(
   if (!expectedRef.found || expectedRef.value === undefined || expectedRef.value === null) {
     return missing(`case has no value at ${grader.expected}`);
   }
-  const actual = resolveValue(subjectEnvelope(subject), grader.path);
+  const actual = resolveValue(subjectRoot(subject), grader.path);
 
   if (grader.mode === "equals") {
     const passed = actual.found && isDeepStrictEqual(actual.value, expectedRef.value);
