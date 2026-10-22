@@ -1,5 +1,6 @@
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 import type {
+  EvalAgentTarget,
   EvalCaseOp,
   EvalCaseResults,
   EvalCompareResult,
@@ -21,6 +22,7 @@ import type {
   EvalReview,
   EvalReviewInput,
   EvalRunDetail,
+  EvalSessionCandidate,
   EvalDraftEstimateInput,
   EvalRunEstimate,
   EvalRunListItem,
@@ -90,6 +92,10 @@ const enc = encodeURIComponent;
 
 export function fetchEvals(query: EvalListQuery = {}): Promise<EvalListResponse> {
   return evalRequest(`/api/evals${evalQueryString(query)}`);
+}
+
+export function fetchEvalAgentTargets(projectRoot?: string): Promise<{ items: EvalAgentTarget[] }> {
+  return evalRequest(`/api/evals/agent-targets${evalQueryString({ project_root: projectRoot })}`);
 }
 
 export function fetchEval(id: string, projectRoot?: string): Promise<EvalDetail> {
@@ -227,6 +233,13 @@ export function convertEvalDataset(
   input: { project_root?: string; base_hash: string },
 ): Promise<EvalDatasetDetail> {
   return evalRequest(`/api/datasets/${enc(id)}/convert`, { method: "POST", body: input });
+}
+
+export function fetchEvalSessionCandidates(
+  agentId: string,
+  options: { project_root?: string; limit?: number } = {},
+): Promise<{ items: EvalSessionCandidate[]; next_cursor: string | null }> {
+  return evalRequest(`/api/datasets/candidates${evalQueryString({ agent: agentId, ...options })}`);
 }
 
 export function fetchEvalDatasetCandidates(

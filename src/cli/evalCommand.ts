@@ -42,7 +42,7 @@ export const EVAL_USAGE = `Usage:
   sf eval list [--json]
   sf eval show <id|path> [--json]
   sf eval validate [<id|path>] [--json] [--strict]
-  sf eval run <id|path> [--repeats <n>] [--judge <model>] [--model <id>] [--max-cost <usd>] [--case <id> ...] [--tag <tag> ...] [--label <text>] [--no-wait] [--json]
+  sf eval run <id|path> [--repeats <n>] [--judge <model>] [--model <id>] [--user-model <model>] [--allow-real-tools] [--max-cost <usd>] [--case <id> ...] [--tag <tag> ...] [--label <text>] [--no-wait] [--json]
   sf eval runs [<evalId>] [--json]
   sf eval runs show <evalRunId> [--json]
   sf eval runs cancel <evalRunId>
@@ -51,6 +51,9 @@ export const EVAL_USAGE = `Usage:
   sf eval datasets [--json]
   sf eval engine status [--json]
   sf eval engine install
+
+  Agent evals: --model overrides the agent's model, --user-model the model that plays the user. An eval whose
+  conversation.tools is real also needs --allow-real-tools.
 
   Every subcommand also accepts --project-root <id-or-path>.`;
 
@@ -94,6 +97,8 @@ const FLAGS: Record<string, Record<string, FlagSpec>> = {
     "--repeats": { value: true },
     "--judge": { value: true },
     "--model": { value: true },
+    "--user-model": { value: true },
+    "--allow-real-tools": {},
     "--max-cost": { value: true },
     "--case": { value: true, repeat: true },
     "--tag": { value: true, repeat: true },
@@ -111,6 +116,8 @@ type Parsed = {
   json: boolean;
   strict: boolean;
   noWait: boolean;
+  allowRealTools: boolean;
+  userModel?: string;
   projectRoot?: string;
   repeats?: number;
   judge?: string;
@@ -131,6 +138,7 @@ function parseArgs(command: string, rest: string[]): Parsed {
     json: false,
     strict: false,
     noWait: false,
+    allowRealTools: false,
     cases: [],
     tags: [],
     positionals: [],
@@ -164,6 +172,12 @@ function parseArgs(command: string, rest: string[]): Parsed {
         break;
       case "--no-wait":
         parsed.noWait = true;
+        break;
+      case "--allow-real-tools":
+        parsed.allowRealTools = true;
+        break;
+      case "--user-model":
+        parsed.userModel = value;
         break;
       case "--project-root":
         parsed.projectRoot = value;
@@ -214,6 +228,25 @@ function pct(value: number | null | undefined): string {
 function usd(value: number | null | undefined): string {
   return typeof value === "number" ? `$${value.toFixed(4)}` : "n/a";
 }
+
+type AgentTarget = { agent_id?: unknown; id?: unknown; revision?: unknown };
+
+function agentLabel(target: AgentTarget): string {
+  const id = String(target.agent_id ?? target.id ?? "");
+  return typeof target.revision === "number" ? `Agent ${id} r${target.revision}` : `Agent ${id}`;
+}
+
+function targetLabel(target: Record<string, any> | undefined): string {
+  if (target?.kind === "agent") return agentLabel(target);
+  return target?.label ?? "";
+}
+
+function conversationLine(conversation: Record<string, any> | undefined): string | null {
+  if (!conversation) return null;
+  return `Conversation: ${conversation.mode ?? "script"}, up to ${conversation.max_turns ?? "?"} turns, tools ${conversation.tools ?? "read_only"}, approvals ${conversation.approvals ?? "record_only"}`;
+}
+
+const REAL_TOOLS_WARNING = "Warning: real tools can change files and call services from this machine.";
 
 type RunOutcome = "passed" | "below_threshold" | "failed" | "cancelled" | "budget_stopped";
 
@@ -453,7 +486,7 @@ export async function runEvalCommand(
               item.status,
               item.valid === false ? "invalid" : "valid",
               item.last_run ? pct(item.last_run.pass_rate) : "-",
-              item.target?.label ?? "",
+              targetLabel(item.target),
             ].join("\t"),
           );
         }
@@ -463,7 +496,24 @@ export async function runEvalCommand(
       const target = await resolveEvalFile(positionals[0]);
       if (typeof target === "string") return fail({ reason: target, code: "EVAL_NOT_FOUND" });
       return show(await httpGetEval(base, target.id, wireRoot), (body) => {
-        out.log(String((body as { yaml?: unknown }).yaml ?? ""));
+        const detail = body as { yaml?: unknown; agent?: Record<string, any> | null; definition?: Record<string, any> | null };
+        if (detail.definition?.target?.kind === "agent") {
+          const live = detail.agent;
+          out.log(
+            live
+              ? `${agentLabel({ id: live.id, revision: live.revision })}${live.model ? ` (${live.model})` : ""}`
+              : agentLabel({ id: detail.definition.target.agent }),
+          );
+          const line = conversationLine({
+            mode: detail.definition.conversation?.mode,
+            max_turns: detail.definition.conversation?.max_turns,
+            tools: detail.definition.conversation?.tools,
+            approvals: detail.definition.conversation?.approvals,
+          });
+          if (line) out.log(line);
+          out.log("");
+        }
+        out.log(String(detail.yaml ?? ""));
       });
     }
 
@@ -487,6 +537,14 @@ export async function runEvalCommand(
           out.log(
             `pass rate ${pct(d.stats?.pass_rate)}\tresults ${d.progress?.results_done}/${d.progress?.results_total}\tcost ${usd(d.stats?.cost_total ?? d.progress?.cost_usd)}`,
           );
+          if (d.config?.target?.agent_id !== undefined) {
+            out.log(agentLabel(d.config.target));
+            const line = conversationLine(d.config.settings?.conversation);
+            if (line) out.log(line);
+            out.log(
+              `mean turns ${d.stats?.mean_turns ?? "n/a"}\tmean tool calls ${d.stats?.mean_tool_calls ?? "n/a"}`,
+            );
+          }
           out.log(`fingerprint ${d.fingerprint}`);
         });
       }
@@ -541,13 +599,27 @@ export async function runEvalCommand(
       ...(parsed.repeats !== undefined ? { repeats: parsed.repeats } : {}),
       ...(parsed.judge !== undefined ? { judge: parsed.judge } : {}),
       ...(parsed.model !== undefined ? { model: parsed.model } : {}),
+      ...(parsed.userModel !== undefined ? { user_model: parsed.userModel } : {}),
+      ...(parsed.allowRealTools ? { allow_real_tools: true } : {}),
       ...(parsed.maxCost !== undefined ? { max_cost_usd: parsed.maxCost } : {}),
       ...(parsed.cases.length > 0 ? { case_ids: parsed.cases } : {}),
       ...(parsed.tags.length > 0 ? { tags: parsed.tags } : {}),
       ...(parsed.label !== undefined ? { label: parsed.label } : {}),
     };
+    if (parsed.allowRealTools) {
+      const detail = await httpGetEval(base, target.id, wireRoot);
+      const definition = detail.ok ? (detail.body as { definition?: Record<string, any> | null }).definition : null;
+      if (definition?.target?.kind === "agent" && definition.conversation?.tools === "real") {
+        out.error(REAL_TOOLS_WARNING);
+      }
+    }
     const started = await httpStartEvalRun(base, target.id, input);
     if (!started.ok) {
+      if (started.code === "EVAL_REAL_TOOLS_NOT_CONFIRMED") {
+        if (json) printJson({ ok: false, code: started.code, message: started.reason });
+        else out.error(`${started.code}: ${started.reason} Re-run with --allow-real-tools to confirm.`);
+        return 1;
+      }
       if (started.code === "EVAL_INVALID" && started.findings !== undefined) {
         const result = buildValidationResult("full", started.findings as ValidationFinding[], false);
         out.log(json ? formatValidationJson(result) : formatValidationHuman(result));
@@ -634,6 +706,16 @@ export async function runEvalCommand(
       cost_total: stats?.cost_total ?? detail.progress?.cost_usd ?? 0,
       fingerprint: detail.fingerprint as string,
       url: `${base}/#/evals/${detail.eval_id}/runs/${detail.run_number}`,
+      ...(detail.config?.target?.agent_id !== undefined
+        ? {
+            target_kind: "agent" as const,
+            agent_id: detail.config.target.agent_id as string,
+            agent_revision: (detail.config.target.revision ?? null) as number | null,
+            mean_turns: (stats?.mean_turns ?? null) as number | null,
+            mean_tool_calls: (stats?.mean_tool_calls ?? null) as number | null,
+            tools_policy: (detail.config.settings?.conversation?.tools ?? null) as string | null,
+          }
+        : {}),
     };
     if (json) {
       printJson(doc);
@@ -648,6 +730,10 @@ export async function runEvalCommand(
         `Results: ${doc.results.executed} executed, ${doc.results.passed} passed, ${doc.results.errored} errored`,
       );
       out.log(`Reliability: ${doc.reliability ?? "n/a"}`);
+      if (doc.target_kind === "agent") {
+        out.log(`${agentLabel({ id: doc.agent_id, revision: doc.agent_revision })}, tools ${doc.tools_policy ?? "n/a"}`);
+        out.log(`Mean turns: ${doc.mean_turns ?? "n/a"}, mean tool calls: ${doc.mean_tool_calls ?? "n/a"}`);
+      }
       out.log(`Cost: ${usd(doc.cost_total)}`);
       out.log(`Fingerprint: ${doc.fingerprint}`);
       out.log(`URL: ${doc.url}`);

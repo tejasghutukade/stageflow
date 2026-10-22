@@ -11,6 +11,12 @@ import {
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import { EvalsWriteError, FileChangedError, contentHash } from "../config/atomicWrite.js";
 import { casesFromRuns, listDatasetCandidates } from "../config/datasetCandidates.js";
+import {
+  casesFromSessions,
+  listSessionCandidates,
+  SessionCaseError,
+  type SessionsSource,
+} from "../config/datasetFromSessions.js";
 import { checkDatasetAgainstStage } from "../config/datasetStageCheck.js";
 import type { DatasetCase } from "../config/datasetTypes.js";
 import { listDatasetFiles, listEvalFiles, loadEvalCatalog } from "../config/evalCatalog.js";
@@ -25,7 +31,7 @@ import {
 } from "../config/evalWriteRoots.js";
 import { installEvalSample, EVAL_SAMPLE_FILES } from "../config/installEvalSample.js";
 import { loadDatasetFile, parseDatasetText } from "../config/loadDataset.js";
-import { loadEvalOutcome, resolveEvalPaths, type LoadedEval } from "../config/loadEval.js";
+import { loadEvalOutcome, resolveConversation, resolveEvalPaths, type LoadedEval } from "../config/loadEval.js";
 import { resolveEvalTarget } from "../config/resolveEvalTarget.js";
 import { resolveSeededExamplesPath } from "../config/seededCatalog.js";
 import {
@@ -47,8 +53,20 @@ import { CompareMismatchError } from "../evals/compare.js";
 import { EVAL_LIMITS, EVAL_REVIEW_LABELS, EVAL_STARTED_VIA } from "../evals/constants.js";
 import { PINNED_PROMPTFOO_VERSION } from "../evals/engine/promptfoo/pinned.js";
 import type { EngineStatus } from "../evals/engine/promptfoo/status.js";
-import { estimateRun, type EstimatePreviousRun } from "../evals/estimate.js";
-import { EvalRunError, type EvalRunManager, type TryCaseInput, type TryResult } from "../evals/manager.js";
+import {
+  AGENT_ESTIMATE_ASSUMPTIONS,
+  estimateRun,
+  type AgentEstimateBlock,
+  type EstimatePreviousRun,
+  type TokenPrice,
+} from "../evals/estimate.js";
+import {
+  EvalRunError,
+  type EvalAgentsPort,
+  type EvalRunManager,
+  type TryCaseInput,
+  type TryResult,
+} from "../evals/manager.js";
 import { buildEvalPlan, type EvalOverrides } from "../evals/plan.js";
 import {
   badRequest,
@@ -72,10 +90,12 @@ import {
   runByIdOr404 as runByIdOr404Shared,
   validateEvalText,
 } from "../evals/read/api.js";
+import { listAgentTargets } from "../evals/read/agentTargets.js";
 import { buildCompare } from "../evals/read/compare.js";
 import {
   buildDatasetDetail,
   previewUpload,
+  type AgentDatasetUse,
   resolveDatasetTarget,
   type DatasetDetail,
   type DatasetListItem,
@@ -110,6 +130,10 @@ export type EvalRoutesDeps = {
   isKnownModel?: (id: string) => Promise<boolean>;
   sampleSourceDir?: string;
   now?: () => Date;
+  /** Lazy view of the agent service; absent or undefined means agents are unavailable on this host. */
+  agents?: () => (EvalAgentsPort & SessionsSource) | undefined;
+  /** Model prices (USD per million tokens) for the agent cost estimate; unknown models are simply absent. */
+  loadPrices?: (modelIds: string[], projectRoot: string) => Promise<Map<string, TokenPrice>>;
 };
 
 type Ctx = EvalRoutesDeps & {
@@ -143,6 +167,7 @@ const RUN_ERROR_STATUS: Record<string, number> = {
   EVAL_INVALID: 422,
   EVAL_RUN_ACTIVE: 409,
   EVAL_RUN_NOT_FOUND: 404,
+  EVAL_REAL_TOOLS_NOT_CONFIRMED: 422,
   EVAL_ENGINE_UNAVAILABLE: 503,
   EVAL_NODE_TOO_OLD: 503,
   EVAL_TAGS_ON_PASSED_RESULT: 400,
@@ -268,6 +293,15 @@ async function exists(abs: string): Promise<boolean> {
   }
 }
 
+function agentsOf(c: Ctx): (EvalAgentsPort & SessionsSource) | undefined {
+  return c.agents?.();
+}
+
+function agentsInput(c: Ctx): { agents?: EvalAgentsPort & SessionsSource } {
+  const agents = agentsOf(c);
+  return agents ? { agents } : {};
+}
+
 function engineCheck(c: Ctx): void {
   engineCheckStatus(c.engineStatus());
 }
@@ -286,6 +320,7 @@ async function evalDetail(c: Ctx, projectRoot: string, absPath: string) {
     projectRoot,
     absPath,
     ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
+    ...agentsInput(c),
   });
 }
 
@@ -295,6 +330,7 @@ async function planFindings(c: Ctx, projectRoot: string, evalPath: string, evalT
     evalPath,
     evalText,
     ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
+    ...agentsInput(c),
   });
 }
 
@@ -333,6 +369,7 @@ async function handleEvalList(c: Ctx): Promise<void> {
     wire: wireFromQuery(c),
     now: c.now?.() ?? new Date(),
     ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
+    ...agentsInput(c),
   });
   const q = c.url.searchParams.get("q")?.trim().toLowerCase();
   const filtered = aggregated.groups
@@ -420,6 +457,7 @@ async function handleEvalValidate(c: Ctx): Promise<void> {
     derived,
     ...(datasetCases !== undefined ? { datasetCases } : {}),
     ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
+    ...agentsInput(c),
   });
   c.json(c.res, 200, {
     findings,
@@ -579,6 +617,9 @@ async function handleTry(c: Ctx): Promise<void> {
     const dir = await resolveWriteDir(projectRoot, manifest, "evals");
     evalPath = path.join(dir.absDir, typeof rawId === "string" && ID_RE.test(rawId) ? `${rawId}.eval.yaml` : "new.eval.yaml");
   }
+  if (body.allow_real_tools !== undefined && typeof body.allow_real_tools !== "boolean") {
+    throw bad(`"allow_real_tools" must be a boolean`);
+  }
   engineCheck(c);
   const tried = await c.evalRunManager.tryOne({
     projectRoot,
@@ -586,6 +627,7 @@ async function handleTry(c: Ctx): Promise<void> {
     ...(definition !== undefined ? { definition } : {}),
     ...(datasetCases !== undefined ? { datasetCases } : {}),
     ...(caseId !== undefined ? { caseId } : { case: tryCaseFrom(body.case) }),
+    ...(body.allow_real_tools === true ? { allowRealTools: true } : {}),
   });
   audit(c, "eval_try", "ok");
   c.json(c.res, 200, tryResultToWire(tried));
@@ -611,6 +653,16 @@ function startOverrides(body: Record<string, unknown>): EvalOverrides {
   if (tags !== undefined) overrides.tags = tags;
   const failedFrom = optString(body, "only_failed_from");
   if (failedFrom !== undefined) overrides.only_failed_from = failedFrom;
+  const userModel = optString(body, "user_model");
+  if (userModel !== undefined) overrides.user_model = userModel;
+  const tools = optString(body, "tools");
+  if (tools !== undefined) overrides.tools = tools as EvalOverrides["tools"];
+  const approvals = optString(body, "approvals");
+  if (approvals !== undefined) overrides.approvals = approvals as EvalOverrides["approvals"];
+  if (body.allow_real_tools !== undefined) {
+    if (typeof body.allow_real_tools !== "boolean") throw bad(`"allow_real_tools" must be a boolean`);
+    if (body.allow_real_tools) overrides.allow_real_tools = true;
+  }
   return overrides;
 }
 
@@ -627,7 +679,7 @@ function queryOverrides(url: URL): EvalOverrides {
   if (repeats !== undefined) body.repeats = repeats;
   const maxCost = num("max_cost_usd");
   if (maxCost !== undefined) body.max_cost_usd = maxCost;
-  for (const key of ["judge", "model", "only_failed_from"]) {
+  for (const key of ["judge", "model", "only_failed_from", "user_model", "tools", "approvals"]) {
     const value = url.searchParams.get(key);
     if (value !== null && value !== "") body[key] = value;
   }
@@ -661,16 +713,18 @@ async function handleRunStart(c: Ctx, id: string): Promise<void> {
     throw bad(`"started_via" must be one of ${EVAL_STARTED_VIA.join(", ")}`);
   }
   const { projectRoot, ref } = await evalRootFor(c, wireFromBody(body), id);
-  engineCheck(c);
+  const startInput = {
+    projectRoot,
+    evalPath: ref.absPath,
+    overrides,
+    startedVia: startedVia as (typeof EVAL_STARTED_VIA)[number],
+    ...(label !== undefined ? { label } : {}),
+    ...(callerIdFromRequestAuth() !== null ? { callerId: callerIdFromRequestAuth() as string } : {}),
+  };
   try {
-    const started = await c.evalRunManager.start({
-      projectRoot,
-      evalPath: ref.absPath,
-      overrides,
-      startedVia: startedVia as (typeof EVAL_STARTED_VIA)[number],
-      ...(label !== undefined ? { label } : {}),
-      ...(callerIdFromRequestAuth() !== null ? { callerId: callerIdFromRequestAuth() as string } : {}),
-    });
+    await c.evalRunManager.preflightAgentStart(startInput);
+    engineCheck(c);
+    const started = await c.evalRunManager.start(startInput);
     audit(c, "eval_run_start", "ok", started.evalRunId);
     c.json(c.res, 202, { eval_run_id: started.evalRunId, status: "queued", run_number: started.runNumber });
   } catch (err) {
@@ -706,6 +760,7 @@ async function handleRunEstimate(c: Ctx, id: string): Promise<void> {
     engine: { name: ENGINE_NAME, version: PINNED_PROMPTFOO_VERSION, nodeVersion: process.versions.node },
     failedCaseIdsOf: (runId) => failedCaseIdsOf(c, projectRoot, ref.absPath, runId),
     ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
+    ...agentsInput(c),
   });
   if (!built.ok) throw new EvalApiError(422, "EVAL_INVALID", "Eval is invalid", { findings: built.findings });
   const { plan } = built;
@@ -731,7 +786,40 @@ async function handleRunEstimate(c: Ctx, id: string): Promise<void> {
   await sendEstimate(c, plan, previous);
 }
 
+async function agentEstimateBlock(c: Ctx, plan: EvalPlan): Promise<AgentEstimateBlock> {
+  const conversation = plan.conversation ?? resolveConversation(undefined);
+  let turns = 0;
+  let simulatorCalls = 0;
+  for (const planCase of plan.cases) {
+    const mode = planCase.input.mode === "script" || planCase.input.mode === "simulated" ? planCase.input.mode : conversation.mode;
+    if (mode === "simulated") {
+      const t = Math.min(conversation.maxTurns, AGENT_ESTIMATE_ASSUMPTIONS.maxTurnsCap);
+      turns += t;
+      simulatorCalls += Math.max(0, t - 1);
+    } else {
+      const script = Array.isArray(planCase.input.script) ? planCase.input.script.length : 1;
+      turns += Math.min(script, conversation.maxTurns);
+    }
+  }
+  const count = Math.max(1, plan.cases.length);
+  const judge = plan.graders.find((g) => g.type === "rubric" || g.type === "goal_reached");
+  const judgeModel = judge !== undefined && "judge" in judge && judge.judge !== "" ? judge.judge : undefined;
+  const wanted = [plan.stageModel, plan.userModel ?? undefined, judgeModel].filter(
+    (id): id is string => typeof id === "string" && id !== "",
+  );
+  const prices = (await c.loadPrices?.([...new Set(wanted)], plan.projectRoot).catch(() => undefined)) ?? new Map<string, TokenPrice>();
+  return {
+    turnsPerCase: turns / count,
+    simulatorCallsPerCase: simulatorCalls / count,
+    judgeTranscriptTokens: AGENT_ESTIMATE_ASSUMPTIONS.judgeCall.tokensIn,
+    agentPrice: prices.get(plan.stageModel) ?? null,
+    simulatorPrice: plan.userModel != null ? (prices.get(plan.userModel) ?? null) : null,
+    judgePrice: judgeModel !== undefined ? (prices.get(judgeModel) ?? null) : null,
+  };
+}
+
 async function sendEstimate(c: Ctx, plan: EvalPlan, previous: EstimatePreviousRun | null): Promise<void> {
+  const agent = plan.target.kind === "agent" ? await agentEstimateBlock(c, plan) : undefined;
   const estimate = estimateRun({
     resultsTotal: plan.cases.length * plan.repeats,
     rubricGraderCount: plan.graders.filter((g) => g.type === "rubric" || g.type === "goal_reached").length,
@@ -740,6 +828,7 @@ async function sendEstimate(c: Ctx, plan: EvalPlan, previous: EstimatePreviousRu
       ...(plan.target.kind === "stage" && plan.target.pipelinePath !== undefined ? { pipelinePath: plan.target.pipelinePath } : {}),
       ...(plan.target.kind === "stage" && plan.target.stageId !== undefined ? { stageId: plan.target.stageId } : {}),
     }),
+    ...(agent !== undefined ? { agent } : {}),
   });
   c.json(c.res, 200, {
     results_total: plan.cases.length * plan.repeats,
@@ -749,6 +838,13 @@ async function sendEstimate(c: Ctx, plan: EvalPlan, previous: EstimatePreviousRu
     estimate_seconds: estimate.estimate_seconds,
     judge_included: !estimate.judge_excluded,
     based_on_run_number: estimate.based_on_run_number,
+    ...(agent !== undefined
+      ? {
+          target_kind: "agent",
+          simulator_calls: estimate.simulator_calls ?? 0,
+          estimate_basis: estimate.estimate_basis ?? null,
+        }
+      : {}),
   });
 }
 
@@ -757,7 +853,12 @@ async function handleDraftEstimate(c: Ctx): Promise<void> {
   if (!isRecord(body.definition)) throw bad(`"definition" must be an object`);
   const definition = body.definition as unknown as EvalFile;
   const datasetCases = optDatasetCases(body);
-  const overrides = startOverrides({ ...(body.repeats !== undefined ? { repeats: body.repeats } : {}) });
+  const overrides = startOverrides({
+    ...(body.repeats !== undefined ? { repeats: body.repeats } : {}),
+    ...(body.user_model !== undefined ? { user_model: body.user_model } : {}),
+    ...(body.tools !== undefined ? { tools: body.tools } : {}),
+    ...(body.approvals !== undefined ? { approvals: body.approvals } : {}),
+  });
   const projectRoot = await projectRootFor(c, wireFromBody(body));
   const manifest = await manifestForWrite(projectRoot);
   const dir = await resolveWriteDir(projectRoot, manifest, "evals");
@@ -773,13 +874,19 @@ async function handleDraftEstimate(c: Ctx): Promise<void> {
     evalRunId: "er_estimate",
     engine: { name: ENGINE_NAME, version: PINNED_PROMPTFOO_VERSION, nodeVersion: process.versions.node },
     ...(c.isKnownModel ? { isKnownModel: c.isKnownModel } : {}),
+    ...agentsInput(c),
   });
   if (!built.ok) throw new EvalApiError(422, "EVAL_INVALID", "Eval is invalid", { findings: built.findings });
   await sendEstimate(c, built.plan, null);
 }
 
 async function runDetailResponse(c: Ctx, row: EvalRunRow) {
-  return buildRunDetail({ store: c.store, row, live: c.evalRunManager.getLive(row.evalRunId) });
+  return buildRunDetail({
+    store: c.store,
+    row,
+    live: c.evalRunManager.getLive(row.evalRunId),
+    ...agentsInput(c),
+  });
 }
 
 async function handleRunByNumber(c: Ctx, id: string, runNumber: number): Promise<void> {
@@ -806,6 +913,7 @@ async function handleRunList(c: Ctx): Promise<void> {
   const evalId = c.url.searchParams.get("eval_id") ?? undefined;
   const status = c.url.searchParams.get("status") ?? undefined;
   const stageRunId = c.url.searchParams.get("stage_run_id") ?? undefined;
+  const subjectRef = c.url.searchParams.get("subject_ref") ?? undefined;
   const limit = intParam(c.url, "limit", DEFAULT_LIMIT, 1, MAX_LIMIT);
   const cursor = c.url.searchParams.get("cursor") ?? undefined;
   c.json(
@@ -817,6 +925,7 @@ async function handleRunList(c: Ctx): Promise<void> {
       ...(evalId !== undefined ? { evalId } : {}),
       ...(status !== undefined ? { status } : {}),
       ...(stageRunId !== undefined ? { stageRunId } : {}),
+      ...(subjectRef !== undefined ? { subjectRef } : {}),
       limit,
       ...(cursor !== undefined ? { cursor } : {}),
     }),
@@ -902,9 +1011,13 @@ async function handleDelete(c: Ctx, id: string): Promise<void> {
   if (row.status === "queued" || row.status === "running") {
     throw new EvalApiError(409, "EVAL_RUN_ACTIVE", "Eval run is still running; cancel it first");
   }
+  const sessionIds = row.targetKind === "agent" ? await c.store.listEvalSubjectRefs(id, "agent") : [];
   const stageRunIds = await c.store.deleteEvalRun(id);
   for (const runId of stageRunIds) {
     await c.manager.deleteRun(runId, { channel: "rest" }).catch(() => undefined);
+  }
+  if (sessionIds.length > 0) {
+    await agentsOf(c)?.deleteEvalSessions(row.projectRoot, sessionIds).catch(() => undefined);
   }
   audit(c, "eval_run_delete", "ok", id);
   c.res.writeHead(204);
@@ -1004,14 +1117,20 @@ async function datasetDetailFor(
     throw new EvalApiError(404, "EVAL_NOT_FOUND", `Eval not found: ${evalId}`);
   }
   let inputSchema: unknown;
+  let agent: AgentDatasetUse | undefined;
   if (useEval !== undefined) {
-    const target = await resolveEvalTarget(useEval.loaded.file, useEval.loaded.path, projectRoot);
-    if (target.ok) inputSchema = target.value.inputSchema;
+    if (useEval.loaded.file.target.kind === "agent") {
+      agent = { mode: resolveConversation(useEval.loaded.file.conversation).mode };
+    } else {
+      const target = await resolveEvalTarget(useEval.loaded.file, useEval.loaded.path, projectRoot);
+      if (target.ok) inputSchema = target.value.inputSchema;
+    }
   }
   return buildDatasetDetail({
     id,
     loaded,
     inputSchema,
+    ...(agent !== undefined ? { agent } : {}),
     hasEval: useEval !== undefined,
     usedBy,
     query,
@@ -1043,7 +1162,7 @@ async function handleDatasetGet(c: Ctx, id: string): Promise<void> {
 function targetFrom(value: unknown): DatasetTarget {
   if (!isRecord(value)) throw bad(`"target" must be an object`);
   const target: DatasetTarget = {};
-  for (const key of ["pipeline_path", "stage_id", "file"] as const) {
+  for (const key of ["pipeline_path", "stage_id", "file", "agent_id"] as const) {
     const v = value[key];
     if (v !== undefined) {
       if (typeof v !== "string" || v === "") throw bad(`target.${key} must be a non-empty string`);
@@ -1051,6 +1170,16 @@ function targetFrom(value: unknown): DatasetTarget {
     }
   }
   return target;
+}
+
+async function conversationModeOf(c: Ctx, body: Record<string, unknown>) {
+  const evalId = optString(body, "eval_id");
+  if (evalId === undefined) return undefined;
+  const { projectRoot, ref } = await evalRootFor(c, wireFromBody(body), evalId);
+  const outcome = await loadEvalOutcome(ref.absPath, projectRoot);
+  return outcome.ok && outcome.value.file.target.kind === "agent"
+    ? resolveConversation(outcome.value.file.conversation).mode
+    : undefined;
 }
 
 async function handleDatasetPreview(c: Ctx): Promise<void> {
@@ -1069,18 +1198,28 @@ async function handleDatasetPreview(c: Ctx): Promise<void> {
   }
   const projectRoot = await projectRootFor(c, wireFromBody(body));
   let inputSchema: unknown;
+  let agent: AgentDatasetUse | undefined;
   if (body.target !== undefined) {
-    const resolved = await resolveDatasetTarget(projectRoot, targetFrom(body.target));
+    const resolved = await resolveDatasetTarget(projectRoot, targetFrom(body.target), agentsOf(c));
     if (!resolved.ok) throw new EvalApiError(422, "EVAL_INVALID", resolved.message);
     inputSchema = resolved.value.inputSchema;
+    if (resolved.value.agentId !== undefined) {
+      agent = { mode: (await conversationModeOf(c, body)) ?? "simulated" };
+    }
   }
-  c.json(c.res, 200, previewUpload({
+  const preview = previewUpload({
     format,
     content: body.content,
     ...(delimiter !== undefined ? { delimiter: delimiter as string } : {}),
     ...(mapping !== undefined ? { mapping } : {}),
     ...(inputSchema !== undefined ? { inputSchema } : {}),
-  }));
+    ...(agent !== undefined ? { agent } : {}),
+  });
+  const unsupported = preview.findings.find((f) => f.code === "dataset.mapping_unsupported_field");
+  if (unsupported !== undefined) {
+    throw new EvalApiError(400, "EVAL_INVALID", unsupported.message, { findings: preview.findings });
+  }
+  c.json(c.res, 200, preview);
 }
 
 async function sampleCases(c: Ctx): Promise<DatasetCase[]> {
@@ -1096,6 +1235,23 @@ async function sampleCases(c: Ctx): Promise<DatasetCase[]> {
     throw new EvalsWriteError("SAMPLE_SOURCE_MISSING", "The packaged sample dataset was not found");
   }
   return parseDatasetText(text, "jsonl").cases;
+}
+
+async function casesFromSessionsBody(c: Ctx, projectRoot: string, body: Record<string, unknown>): Promise<NewDatasetCase[]> {
+  const resolved = await resolveDatasetTarget(projectRoot, targetFrom(body.target), agentsOf(c));
+  if (!resolved.ok) throw new EvalApiError(422, "EVAL_INVALID", resolved.message);
+  const agentId = resolved.value.agentId;
+  if (agentId === undefined) throw bad(`source "sessions" needs target.agent_id`);
+  const sessionIds = optStringArray(body, "session_ids");
+  if (!sessionIds || sessionIds.length === 0) throw bad(`"session_ids" must be a non-empty array`);
+  const agents = agentsOf(c);
+  if (!agents) throw new EvalApiError(503, "EVAL_ENGINE_UNAVAILABLE", "Agents are not available on this Host");
+  try {
+    return await casesFromSessions({ sessions: agents, projectRoot, agentId, sessionIds });
+  } catch (err) {
+    if (err instanceof SessionCaseError) throw bad(err.message);
+    throw err;
+  }
 }
 
 async function casesFromRunsBody(c: Ctx, projectRoot: string, body: Record<string, unknown>): Promise<NewDatasetCase[]> {
@@ -1133,6 +1289,9 @@ async function handleDatasetCreate(c: Ctx): Promise<void> {
     if (body.source === "runs") {
       if (mode !== "append") throw bad(`source "runs" requires mode "append"`);
       newCases = await casesFromRunsBody(c, projectRoot, body);
+    } else if (body.source === "sessions") {
+      if (mode !== "append") throw bad(`source "sessions" requires mode "append"`);
+      newCases = await casesFromSessionsBody(c, projectRoot, body);
     } else {
       if (!Array.isArray(body.cases)) throw bad(`"cases" must be an array`);
       newCases = body.cases as NewDatasetCase[];
@@ -1150,10 +1309,13 @@ async function handleDatasetCreate(c: Ctx): Promise<void> {
     if (name === undefined) throw bad(`"name" is required`);
     id = name;
     let cases: NewDatasetCase[];
-    if (body.source === "sample" || body.source === "runs") {
+    if (body.source === "sessions") {
+      cases = await casesFromSessionsBody(c, projectRoot, body);
+    } else if (body.source === "sample" || body.source === "runs") {
       const target = targetFrom(body.target);
-      const resolved = await resolveDatasetTarget(projectRoot, target);
+      const resolved = await resolveDatasetTarget(projectRoot, target, agentsOf(c));
       if (!resolved.ok) throw new EvalApiError(422, "EVAL_INVALID", resolved.message);
+      if (resolved.value.agentId !== undefined) throw bad(`source "${body.source}" is not available for an agent target`);
       if (body.source === "sample") {
         const sample = await sampleCases(c);
         cases = sample;
@@ -1208,7 +1370,33 @@ async function handleDatasetConvert(c: Ctx, id: string): Promise<void> {
   c.json(c.res, 201, await datasetDetailFor(c, projectRoot, written.id, written.path, undefined, { offset: 0, limit: MAX_LIMIT, filter: "all" }));
 }
 
+async function handleAgentTargets(c: Ctx): Promise<void> {
+  const agents = agentsOf(c);
+  const projectRoot = await projectRootFor(c, wireFromQuery(c));
+  c.json(c.res, 200, { items: agents ? await listAgentTargets(agents, projectRoot) : [] });
+}
+
+async function handleSessionCandidates(c: Ctx, agentId: string): Promise<void> {
+  const projectRoot = await projectRootFor(c, wireFromQuery(c));
+  const agents = agentsOf(c);
+  if (!agents) throw new EvalApiError(503, "EVAL_ENGINE_UNAVAILABLE", "Agents are not available on this Host");
+  try {
+    const items = await listSessionCandidates({
+      sessions: agents,
+      projectRoot,
+      agentId,
+      limit: intParam(c.url, "limit", DEFAULT_LIMIT, 1, MAX_LIMIT),
+    });
+    c.json(c.res, 200, { items, next_cursor: null });
+  } catch (err) {
+    if (err instanceof SessionCaseError) throw new EvalApiError(404, "AGENT_NOT_FOUND", err.message);
+    throw err;
+  }
+}
+
 async function handleCandidates(c: Ctx): Promise<void> {
+  const agent = c.url.searchParams.get("agent");
+  if (agent !== null && agent !== "") return handleSessionCandidates(c, agent);
   const projectRoot = await projectRootFor(c, wireFromQuery(c));
   const target: DatasetTarget = {};
   for (const key of ["pipeline_path", "stage_id", "file"] as const) {
@@ -1304,6 +1492,7 @@ export async function handleEvalRoutes(
   if (method === "POST" && pathname === "/api/evals/validate") return run(() => handleEvalValidate(c));
   if (method === "POST" && pathname === "/api/evals/sample") return run(() => handleSampleInstall(c));
   if (method === "POST" && pathname === "/api/evals/try") return run(() => handleTry(c));
+  if (method === "GET" && pathname === "/api/evals/agent-targets") return run(() => handleAgentTargets(c));
 
   if (method === "POST" && pathname === "/api/evals/runs/estimate") return run(() => handleDraftEstimate(c));
 

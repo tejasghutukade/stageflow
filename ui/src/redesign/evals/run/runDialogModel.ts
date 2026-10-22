@@ -63,7 +63,7 @@ export function buildContext(input: {
 }): RunDialogContext {
   const { detail, lastRunConfig } = input;
   const def = detail.definition;
-  const stageLabel = def?.target.stage ?? def?.target.file ?? "—";
+  const stageLabel = def?.target.kind === "agent" ? def.target.agent : (def?.target.stage ?? def?.target.file ?? "—");
   const datasetLabel = def ? datasetIdOf(def.dataset) : "—";
   const graders = def?.graders.length ?? 0;
   const model = def?.defaults?.model ?? lastRunConfig?.target?.model ?? null;

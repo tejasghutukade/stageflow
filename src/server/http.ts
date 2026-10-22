@@ -21,6 +21,7 @@ import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import type { EvalRunManager } from "../evals/manager.js";
 import { handleTriggerRoutes } from "./triggerRoutes.js";
 import { handleEvalRoutes } from "./evalRoutes.js";
+import { defaultLoadJudgePrices } from "../evals/engine/promptfoo/judgeServices.js";
 import { engineStatus as promptfooEngineStatus } from "../evals/engine/promptfoo/status.js";
 import {
   readCatalogFileForHttp,
@@ -3412,6 +3413,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             readJsonBody,
             auditLog,
             engineStatus: () => promptfooEngineStatus({ home: globalStageflowHome() }),
+            agents: () => agentHost?.service,
+            loadPrices: defaultLoadJudgePrices,
           })
         ) {
           return true;

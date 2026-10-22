@@ -74,11 +74,19 @@ function parseCell(
   return { value: cell };
 }
 
+export type UploadMappingOptions = {
+  /** Also map the top-level `title` and `tags` targets (agent datasets). */
+  caseMeta?: boolean;
+  /** Extra check on the built case; a returned text skips the row with that reason. */
+  check?: (draft: DatasetCase) => string | undefined;
+};
+
 export function applyUploadMapping(
   rows: ReadonlyArray<Record<string, string>>,
   mapping: UploadMapping,
   inputSchema: unknown,
   existingIds: Iterable<string>,
+  options: UploadMappingOptions = {},
 ): UploadPreviewRow[] {
   let nextId = nextIdNumber(existingIds);
   const entries = Object.entries(mapping).filter(
@@ -89,8 +97,17 @@ export function applyUploadMapping(
     const input: Record<string, unknown> = {};
     const expected: Record<string, unknown> = {};
     let parseError: string | undefined;
+    let title: string | undefined;
+    let tags: string[] | undefined;
 
     for (const [target, entry] of entries) {
+      if (options.caseMeta === true && (target === "title" || target === "tags")) {
+        const raw = row[entry.column];
+        if (raw === undefined || raw.trim() === "") continue;
+        if (target === "title") title = raw.trim();
+        else tags = (entry.split !== undefined ? raw.split(entry.split) : raw.split(",")).map((t) => t.trim()).filter((t) => t !== "");
+        continue;
+      }
       const dot = target.indexOf(".");
       const base = dot === -1 ? target : target.slice(0, dot);
       const name = dot === -1 ? "" : target.slice(dot + 1);
@@ -108,6 +125,8 @@ export function applyUploadMapping(
 
     const draft: DatasetCase = { id: "", input };
     if (Object.keys(expected).length > 0) draft.expected = expected;
+    if (title !== undefined) draft.title = title;
+    if (tags !== undefined && tags.length > 0) draft.tags = tags;
 
     let reason = parseError;
     if (reason === undefined && inputSchema !== undefined) {
@@ -117,6 +136,7 @@ export function applyUploadMapping(
         reason = err instanceof Error ? err.message : String(err);
       }
     }
+    if (reason === undefined && options.check) reason = options.check(draft);
     if (reason !== undefined) {
       return { index, case: draft, status: "skipped" as const, reason: trimReason(reason) };
     }

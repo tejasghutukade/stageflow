@@ -502,8 +502,10 @@ export function sameTarget(row: StageRow, target: WizardTarget | null): boolean 
 export function evalCountFor(row: StageRow, evals: readonly EvalListItem[]): number {
   return evals.filter((e) => {
     if (e.project_root !== undefined && row.projectRoot !== undefined && e.project_root !== row.projectRoot) return false;
-    if (e.target.file !== undefined) return row.usesPath !== undefined && e.target.file === row.usesPath;
-    return e.target.stage_id === row.stageId && row.pipelines.some((p) => p.path === e.target.pipeline_path);
+    const t = e.target;
+    if (t.kind !== "stage") return false;
+    if (t.file !== undefined) return row.usesPath !== undefined && t.file === row.usesPath;
+    return t.stage_id === row.stageId && row.pipelines.some((p) => p.path === t.pipeline_path);
   }).length;
 }
 

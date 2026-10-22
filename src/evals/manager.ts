@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
+import { loadEvalOutcome } from "../config/loadEval.js";
 import type { AgentCatalogPort } from "../config/resolveAgentTarget.js";
 import type { ValidationFinding } from "../config/validateCatalog.js";
 import type { RunStore } from "../runstore/port.js";
@@ -127,6 +128,8 @@ export type TryOneInput = {
   datasetCases?: readonly unknown[];
   caseId?: string;
   case?: TryCaseInput;
+  /** The per-run consent to `conversation.tools: real`. */
+  allowRealTools?: boolean;
 };
 
 export type TryGrade = {
@@ -335,18 +338,23 @@ export class EvalRunManager {
         throw new EvalRunError("EVAL_INVALID", err instanceof Error ? err.message : String(err));
       }
 
+      this.requireRealToolsConsent(draft, input.overrides);
       const stageTarget = snapshot.target.kind === "stage" ? snapshot.target : null;
+      const agentTarget = snapshot.target.kind === "agent" ? snapshot.target : null;
       const row = await this.store.createEvalRun({
         projectRoot: input.projectRoot,
         evalId: draft.evalId,
         evalPath: snapshot.eval.path,
         evalHash: snapshot.eval.hash,
-        targetKind: "stage",
-        targetRef: {
-          ...(stageTarget?.pipeline_path != null ? { pipeline_path: stageTarget.pipeline_path } : {}),
-          ...(stageTarget?.stage_id != null ? { stage_id: stageTarget.stage_id } : {}),
-          ...(stageTarget?.file != null ? { file: stageTarget.file } : {}),
-        },
+        targetKind: agentTarget !== null ? "agent" : "stage",
+        targetRef:
+          agentTarget !== null
+            ? { agent_id: agentTarget.agent_id, revision: agentTarget.revision }
+            : {
+                ...(stageTarget?.pipeline_path != null ? { pipeline_path: stageTarget.pipeline_path } : {}),
+                ...(stageTarget?.stage_id != null ? { stage_id: stageTarget.stage_id } : {}),
+                ...(stageTarget?.file != null ? { file: stageTarget.file } : {}),
+              },
         targetVersionHash: draft.targetVersionHash,
         datasetPath: snapshot.dataset.path,
         datasetHash: snapshot.dataset.hash,
@@ -749,6 +757,36 @@ export class EvalRunManager {
     return { finished: run.status !== "queued" && run.status !== "running", run };
   }
 
+  private requireRealToolsConsent(plan: EvalPlan, overrides: EvalOverrides | undefined): void {
+    if (plan.target.kind === "agent" && plan.conversation?.tools === "real" && overrides?.allow_real_tools !== true) {
+      throw new EvalRunError(
+        "EVAL_REAL_TOOLS_NOT_CONFIRMED",
+        "This eval uses real tools, which can change files and call services from this machine. Confirm with allow_real_tools to run it.",
+      );
+    }
+  }
+
+  /**
+   * Validation and the real-tools consent for an agent eval, without claiming the run slot, so a transport can answer
+   * them before it checks the engine. Does nothing for stage evals and unreadable files.
+   */
+  async preflightAgentStart(input: StartEvalRunInput): Promise<void> {
+    const outcome = await loadEvalOutcome(path.resolve(input.projectRoot, input.evalPath), input.projectRoot);
+    if (!outcome.ok || outcome.value.file.target.kind !== "agent") return;
+    const built = await buildEvalPlan({
+      projectRoot: input.projectRoot,
+      evalPath: input.evalPath,
+      ...(input.overrides !== undefined ? { overrides: input.overrides } : {}),
+      evalRunId: "er_preflight",
+      engine: { name: this.engineName, version: "preflight", nodeVersion: process.versions.node },
+      failedCaseIdsOf: (id: string) => this.failedCaseIds(input.projectRoot, input.evalPath, id),
+      ...(this.deps.isKnownModel ? { isKnownModel: this.deps.isKnownModel } : {}),
+      ...this.agentsInput(),
+    });
+    if (!built.ok) throw new EvalRunError("EVAL_INVALID", "Eval is invalid", built.findings);
+    this.requireRealToolsConsent(built.plan, input.overrides);
+  }
+
   private agentsInput(): { agents?: AgentCatalogPort } {
     const agents = this.deps.agents?.();
     return agents ? { agents } : {};
@@ -841,13 +879,18 @@ export class EvalRunManager {
         evalPath: input.evalPath,
         ...(evalText !== undefined ? { evalText } : {}),
         ...(input.datasetCases !== undefined ? { datasetCases: input.datasetCases } : {}),
-        overrides: { repeats: 1, ...(input.caseId !== undefined ? { case_ids: [input.caseId] } : {}) },
+        overrides: {
+          repeats: 1,
+          ...(input.caseId !== undefined ? { case_ids: [input.caseId] } : {}),
+          ...(input.allowRealTools === true ? { allow_real_tools: true } : {}),
+        },
         evalRunId,
         engine: engineInfo,
         ...(this.deps.isKnownModel ? { isKnownModel: this.deps.isKnownModel } : {}),
         ...this.agentsInput(),
       });
       if (!built.ok) throw new EvalRunError("EVAL_INVALID", "Eval is invalid", built.findings);
+      this.requireRealToolsConsent(built.plan, { allow_real_tools: input.allowRealTools === true });
       let plan: EvalPlan = built.plan;
       if (input.case !== undefined) {
         const c = input.case;

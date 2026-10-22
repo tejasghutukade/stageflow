@@ -92,8 +92,10 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     return wireRoot.path;
   };
 
+  const agentsInput = () => (deps.agentService !== undefined ? { agents: deps.agentService } : {});
+
   const runDetail = (row: EvalRunRow) =>
-    buildRunDetail({ store, row, live: manager().getLive(row.evalRunId) });
+    buildRunDetail({ store, row, live: manager().getLive(row.evalRunId), ...agentsInput() });
 
   const tool = <S extends z.ZodObject>(
     name: string,
@@ -113,7 +115,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "list_evals",
-    "List the evals (*.eval.yaml) in a project with target, dataset size, last-run headline and trend. Read-only, free. Same items as GET /api/evals.",
+    "List the evals (*.eval.yaml) in a project with target (a stage, or an agent with its revision), dataset size, last-run headline and trend. Read-only, free. Same items as GET /api/evals.",
     z.object({ project_root: projectRootField }),
     async ({ project_root }) => {
       manager();
@@ -121,6 +123,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
         options: { store, bootCwd: cwd },
         wire: project_root,
         now: new Date(),
+        ...agentsInput(),
       });
       return { items };
     },
@@ -128,12 +131,12 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "get_eval",
-    "Get one eval: parsed definition, raw YAML, file hash, validation findings, run count and last run. Read-only, free. Same as GET /api/evals/:id. Fails EVAL_NOT_FOUND for an unknown id.",
+    "Get one eval: parsed definition, raw YAML, file hash, validation findings, run count and last run; for an agent eval also the live agent (model, revision, tools with risk, ask-first list). Read-only, free. Same as GET /api/evals/:id. Fails EVAL_NOT_FOUND for an unknown id.",
     z.object({ eval_id: z.string(), project_root: projectRootField }),
     async ({ eval_id, project_root }) => {
       manager();
       const { projectRoot, ref } = await locateEval({ store, bootCwd: cwd }, project_root, eval_id);
-      return buildEvalDetail({ store, projectRoot, absPath: ref.absPath });
+      return buildEvalDetail({ store, projectRoot, absPath: ref.absPath, ...agentsInput() });
     },
   );
 
@@ -165,19 +168,23 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
         assertInsideProject(projectRoot, evalAbs, "eval path");
         derived = (yaml as string).endsWith("\n") ? (yaml as string) : `${yaml as string}\n`;
       }
-      const { findings } = await validateEvalText({ projectRoot, evalAbs, derived });
+      const { findings } = await validateEvalText({ projectRoot, evalAbs, derived, ...agentsInput() });
       return { findings };
     },
   );
 
   tool(
     "run_eval",
-    "Run an eval: executes every case of the eval's dataset through its target stage (repeats times each) and grades the results. This calls models and may cost real money (stage calls plus judge calls for rubric graders), bounded by max_cost_usd. Only one eval run is active per host; a second start fails EVAL_RUN_ACTIVE. With wait false (default) it returns { eval_run_id } immediately and the run continues in the background: poll get_eval_run. With wait true it blocks up to timeout_ms (default 600000, max 1800000) and returns the finished run detail, or { eval_run_id, status: \"timeout\" } if still running (the run keeps going; cancel_eval_run stops it). An invalid eval returns an error result with findings.",
+    "Run an eval: executes every case of the eval's dataset through its target (a stage, or an agent held as a conversation; repeats times each) and grades the results. This calls models and may cost real money (stage calls plus judge calls for rubric graders), bounded by max_cost_usd. Agent runs call the agent's model, a simulator model that plays the user (simulated cases) and the judge, and can cost much more than stage runs. Agent tools are read-only by default: write, shell and unlisted tools are stubbed and recorded, never executed. An eval with conversation.tools: real needs allow_real_tools true on top of allow_real_tools in the eval file, else it fails EVAL_REAL_TOOLS_NOT_CONFIRMED. Only one eval run is active per host; a second start fails EVAL_RUN_ACTIVE. With wait false (default) it returns { eval_run_id } immediately and the run continues in the background: poll get_eval_run. With wait true it blocks up to timeout_ms (default 600000, max 1800000) and returns the finished run detail, or { eval_run_id, status: \"timeout\" } if still running (the run keeps going; cancel_eval_run stops it). An invalid eval returns an error result with findings.",
     z.object({
       eval_id: z.string(),
       repeats: z.number().int().min(EVAL_LIMITS.repeats.min).max(EVAL_LIMITS.repeats.max).optional().describe("Override executions per case"),
       judge: z.string().optional().describe("Override the judge model for rubric graders"),
-      model: z.string().optional().describe("Override the stage model"),
+      model: z.string().optional().describe("Override the stage or agent model"),
+      user_model: z.string().optional().describe("Agent evals: override the model that plays the simulated user"),
+      allow_real_tools: z.boolean().optional().describe("Agent evals: consent to conversation.tools real; no effect on other policies"),
+      tools: z.enum(["read_only", "mocked"]).optional().describe("Agent evals: run with a safer tool policy than the file (never riskier)"),
+      approvals: z.enum(["deny", "record_only"]).optional().describe("Agent evals: run with a safer approval policy than the file (never riskier)"),
       max_cost_usd: z.number().positive().optional().describe("Override the cost cap in USD"),
       case_ids: z.array(z.string()).optional().describe("Run only these case ids"),
       tags: z.array(z.string()).optional().describe("Run only cases with these tags"),
@@ -189,8 +196,11 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     async (input) => {
       const evalRunManager = manager();
       const { projectRoot, ref } = await locateEval({ store, bootCwd: cwd }, input.project_root, input.eval_id);
-      engineCheck((deps.evalEngineStatus ?? (() => promptfooEngineStatus({ home: globalStageflowHome() })))());
       const overrides: EvalOverrides = {};
+      if (input.user_model !== undefined) overrides.user_model = input.user_model;
+      if (input.tools !== undefined) overrides.tools = input.tools;
+      if (input.approvals !== undefined) overrides.approvals = input.approvals;
+      if (input.allow_real_tools === true) overrides.allow_real_tools = true;
       if (input.repeats !== undefined) overrides.repeats = input.repeats;
       if (input.judge !== undefined) overrides.judge = input.judge;
       if (input.model !== undefined) overrides.model = input.model;
@@ -198,16 +208,24 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
       if (input.case_ids !== undefined) overrides.case_ids = input.case_ids;
       if (input.tags !== undefined) overrides.tags = input.tags;
       const callerId = callerIdFromRequestAuth();
+      const startInput = {
+        projectRoot,
+        evalPath: ref.absPath,
+        overrides,
+        startedVia: "mcp" as const,
+        ...(input.label !== undefined ? { label: input.label } : {}),
+        ...(callerId !== null ? { callerId } : {}),
+      };
+      try {
+        await evalRunManager.preflightAgentStart(startInput);
+      } catch (err) {
+        audit("eval_run_start", "error", undefined, err instanceof EvalRunError ? err.code : "internal_error");
+        throw err;
+      }
+      engineCheck((deps.evalEngineStatus ?? (() => promptfooEngineStatus({ home: globalStageflowHome() })))());
       let started;
       try {
-        started = await evalRunManager.start({
-          projectRoot,
-          evalPath: ref.absPath,
-          overrides,
-          startedVia: "mcp",
-          ...(input.label !== undefined ? { label: input.label } : {}),
-          ...(callerId !== null ? { callerId } : {}),
-        });
+        started = await evalRunManager.start(startInput);
       } catch (err) {
         audit("eval_run_start", "error", undefined, err instanceof EvalRunError ? err.code : "internal_error");
         throw err;
@@ -276,7 +294,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "get_eval_result",
-    "Get one case of an eval run in full: the case input and expected value plus every repeat's stage output, grades, cost and review. Read-only, free. Same as GET /api/eval-runs/:id/results/:case_id.",
+    "Get one case of an eval run in full: the case input and expected value plus every repeat's stage output (for an agent eval, the conversation subject: messages, tool calls with policy outcomes, usage), grades, cost and review. Read-only, free. Same as GET /api/eval-runs/:id/results/:case_id.",
     z.object({ eval_run_id: z.string(), case_id: z.string() }),
     async ({ eval_run_id, case_id }) => {
       manager();

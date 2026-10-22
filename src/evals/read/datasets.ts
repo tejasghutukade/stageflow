@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isInsideProjectRoot } from "../../config/catalogRelativePath.js";
 import { parseCsv, CsvParseError } from "../../config/csv.js";
+import { checkDatasetAgainstAgent } from "../../config/datasetAgentCheck.js";
 import { checkDatasetAgainstStage } from "../../config/datasetStageCheck.js";
 import {
   applyUploadMapping,
@@ -13,11 +14,33 @@ import type { DatasetCase, DatasetFormat, DatasetLoadResult } from "../../config
 import { DATASET_LIMITS } from "../../config/loadDataset.js";
 import { resolveEvalTarget } from "../../config/resolveEvalTarget.js";
 import type { ValidationFinding } from "../../config/validateCatalog.js";
-import type { EvalFile } from "../types.js";
+import { AGENT_ID_PATTERN, isReservedAgentId } from "../../agents/agentId.js";
+import type { AgentCatalogPort } from "../../config/resolveAgentTarget.js";
+import { isAgentError } from "../../agents/errors.js";
+import type { ConversationMode, EvalFile } from "../types.js";
 
 export type InputField = { name: string; required: boolean; type?: string };
 
-export type DatasetTarget = { pipeline_path?: string; stage_id?: string; file?: string };
+export type DatasetTarget = { pipeline_path?: string; stage_id?: string; file?: string; agent_id?: string };
+
+/** What an agent eval reads from a dataset: the effective conversation mode decides which scenario keys are required. */
+export type AgentDatasetUse = { mode: ConversationMode };
+
+export function agentInputFields(mode: ConversationMode): InputField[] {
+  const simulated = mode === "simulated";
+  return [
+    { name: "mode", required: false },
+    { name: "opening", required: simulated },
+    { name: "persona", required: simulated },
+    { name: "goal", required: simulated },
+    { name: "facts", required: false },
+    { name: "script", required: !simulated },
+    { name: "tool_mocks", required: false },
+  ];
+}
+
+/** The upload mapping targets an agent dataset cannot take from a column: scripts and tool mocks are JSON or JSONL only. */
+export const AGENT_UNSUPPORTED_MAPPING_TARGETS = ["input.script", "input.tool_mocks"] as const;
 
 export type DatasetListItem = {
   project_root: string;
@@ -67,12 +90,36 @@ export function inputFieldsOf(schema: unknown): InputField[] {
   });
 }
 
-export type ResolvedDatasetTarget = { inputSchema: unknown; stageId: string | undefined; pipelineAbsPath: string | undefined };
+export type ResolvedDatasetTarget = {
+  inputSchema: unknown;
+  stageId: string | undefined;
+  pipelineAbsPath: string | undefined;
+  agentId?: string;
+};
 
 export async function resolveDatasetTarget(
   projectRoot: string,
   target: DatasetTarget,
+  agents?: AgentCatalogPort,
 ): Promise<{ ok: true; value: ResolvedDatasetTarget } | { ok: false; message: string }> {
+  if (target.agent_id !== undefined) {
+    if (target.file !== undefined || target.pipeline_path !== undefined || target.stage_id !== undefined) {
+      return { ok: false, message: "target needs either agent_id, file, or pipeline_path with stage_id" };
+    }
+    const agentId = target.agent_id;
+    if (!AGENT_ID_PATTERN.test(agentId) || isReservedAgentId(agentId)) {
+      return { ok: false, message: `"${agentId}" is not a valid agent id` };
+    }
+    if (agents) {
+      try {
+        await agents.get(projectRoot, agentId);
+      } catch (err) {
+        if (isAgentError(err)) return { ok: false, message: `Agent "${agentId}" was not found` };
+        throw err;
+      }
+    }
+    return { ok: true, value: { inputSchema: undefined, stageId: undefined, pipelineAbsPath: undefined, agentId } };
+  }
   const kindFile = target.file !== undefined;
   const kindPipeline = target.pipeline_path !== undefined && target.stage_id !== undefined;
   if (kindFile === kindPipeline) {
@@ -105,10 +152,16 @@ export function buildDatasetDetail(input: {
   hasEval: boolean;
   usedBy: string[];
   query: DatasetQuery;
+  agent?: AgentDatasetUse;
 }): DatasetDetail {
   const { loaded, query } = input;
   const checks = input.hasEval
-    ? new Map(checkDatasetAgainstStage(loaded.cases, input.inputSchema).map((c) => [c.caseId, c]))
+    ? new Map<string, { caseId: string; valid: boolean; message?: string; notes?: Array<{ code: string; message: string }> }>(
+        (input.agent
+          ? checkDatasetAgainstAgent(loaded.cases, { mode: input.agent.mode })
+          : checkDatasetAgainstStage(loaded.cases, input.inputSchema)
+        ).map((c) => [c.caseId, c]),
+      )
     : undefined;
   const tags: Record<string, number> = {};
   let tagged = 0;
@@ -139,7 +192,7 @@ export function buildDatasetDetail(input: {
     tagged_total: tagged,
     matched_total: matched.length,
     tags,
-    input_fields: inputFieldsOf(input.inputSchema),
+    input_fields: input.agent ? agentInputFields(input.agent.mode) : inputFieldsOf(input.inputSchema),
     cases: page.map((c) => {
       const check = checks?.get(c.id);
       return {
@@ -147,9 +200,22 @@ export function buildDatasetDetail(input: {
         input_check: check === undefined ? null : { valid: check.valid, ...(check.message !== undefined ? { message: check.message } : {}) },
       };
     }),
-    findings: loaded.findings,
+    findings: input.agent && input.hasEval ? [...loaded.findings, ...scenarioNotes(loaded.relPath, checks)] : loaded.findings,
     used_by: input.usedBy,
   };
+}
+
+function scenarioNotes(
+  relPath: string,
+  checks: Map<string, { notes?: Array<{ code: string; message: string }> }> | undefined,
+): ValidationFinding[] {
+  const out: ValidationFinding[] = [];
+  for (const check of checks?.values() ?? []) {
+    for (const note of check.notes ?? []) {
+      out.push({ severity: "warning", code: note.code, path: relPath, message: note.message, category: "dataset" });
+    }
+  }
+  return out;
 }
 
 const CASE_KEYS = new Set(["id", "input", "title", "expected", "tags", "goal", "metadata"]);
@@ -162,6 +228,8 @@ export type PreviewInput = {
   mapping?: UploadMapping;
   inputSchema?: unknown;
   existingIds?: readonly string[];
+  /** Agent dataset: rows are checked as scenarios, in this mode unless the row maps `input.mode`. */
+  agent?: AgentDatasetUse;
 };
 
 export type PreviewResult = {
@@ -223,8 +291,17 @@ function stringCell(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-function defaultMapping(columns: readonly string[], inputSchema: unknown): UploadMapping {
+function defaultMapping(columns: readonly string[], inputSchema: unknown, agent?: AgentDatasetUse): UploadMapping {
   const mapping: UploadMapping = {};
+  if (agent) {
+    for (const field of agentInputFields(agent.mode)) {
+      if (field.name === "script" || field.name === "tool_mocks") continue;
+      const column = columns.find((c) => c === field.name || c === `input.${field.name}`);
+      mapping[`input.${field.name}`] =
+        column === undefined ? null : field.name === "facts" ? { column, split: "|" } : { column };
+    }
+    return mapping;
+  }
   const fields = inputFieldsOf(inputSchema);
   if (fields.length === 0) {
     for (const column of columns) mapping[`input.${column}`] = { column };
@@ -237,17 +314,23 @@ function defaultMapping(columns: readonly string[], inputSchema: unknown): Uploa
   return mapping;
 }
 
+function scenarioReason(draft: DatasetCase, mode: ConversationMode): string | undefined {
+  const [result] = checkDatasetAgainstAgent([draft], { mode });
+  return result !== undefined && !result.valid ? result.message : undefined;
+}
+
 function directRows(
   objects: ReadonlyArray<Record<string, unknown>>,
   inputSchema: unknown,
   existingIds: readonly string[],
+  agent?: AgentDatasetUse,
 ): UploadPreviewRow[] {
   const shaped = objects.map((raw) => (isPlain(raw.input) ? raw : { input: raw }));
   let next = nextIdNumber([...existingIds, ...shaped.flatMap((o) => (typeof o.id === "string" ? [o.id] : []))]);
-  const checks = checkDatasetAgainstStage(
-    shaped.map((o, i) => ({ id: String(i), input: o.input as Record<string, unknown> })),
-    inputSchema,
-  );
+  const cases = shaped.map((o, i) => ({ id: String(i), input: o.input as Record<string, unknown> }));
+  const checks = agent
+    ? checkDatasetAgainstAgent(cases, { mode: agent.mode })
+    : checkDatasetAgainstStage(cases, inputSchema);
   return shaped.map((row, index): UploadPreviewRow => {
     const draft = { ...row, id: typeof row.id === "string" ? row.id : "" } as DatasetCase;
     const unknownKey = Object.keys(row).find((k) => !CASE_KEYS.has(k));
@@ -267,6 +350,23 @@ function directRows(
 export function previewUpload(input: PreviewInput): PreviewResult {
   const findings: ValidationFinding[] = [];
   const existingIds = input.existingIds ?? [];
+  const { agent } = input;
+  const mapOptions = agent
+    ? { caseMeta: true, check: (draft: DatasetCase) => scenarioReason(draft, agent.mode) }
+    : {};
+  if (agent && input.mapping !== undefined) {
+    for (const target of AGENT_UNSUPPORTED_MAPPING_TARGETS) {
+      if (input.mapping[target] != null) {
+        findings.push(
+          uploadFinding(
+            "dataset.mapping_unsupported_field",
+            `${target} cannot be mapped from a file column; scripts and tool mocks need a JSON or JSONL file`,
+          ),
+        );
+      }
+    }
+    if (findings.length > 0) return { rows: [], findings, counts: { ready: 0, skipped: 0 } };
+  }
   if (Buffer.byteLength(input.content, "utf8") > DATASET_LIMITS.maxFileBytes) {
     findings.push(uploadFinding("dataset.file_too_large", `file is larger than ${DATASET_LIMITS.maxFileBytes} bytes`));
     return { rows: [], findings, counts: { ready: 0, skipped: 0 } };
@@ -295,7 +395,13 @@ export function previewUpload(input: PreviewInput): PreviewResult {
         .slice(headerIdx + 1)
         .filter((r) => !(r.length === 1 && r[0] === ""))
         .map((cells) => Object.fromEntries(headers.map((h, i) => [h, cells[i] ?? ""])));
-      rows = applyUploadMapping(body, input.mapping ?? defaultMapping(headers, input.inputSchema), input.inputSchema, existingIds);
+      rows = applyUploadMapping(
+        body,
+        input.mapping ?? defaultMapping(headers, input.inputSchema, agent),
+        input.inputSchema,
+        existingIds,
+        mapOptions,
+      );
     }
   } else {
     const objects = parseObjectRows(input.format, input.content, findings);
@@ -303,9 +409,9 @@ export function previewUpload(input: PreviewInput): PreviewResult {
       const keys = [...new Set(objects.flatMap((o) => Object.keys(o)))];
       columns = keys;
       const flat = objects.map((o) => Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, stringCell(o[k])])));
-      rows = applyUploadMapping(flat, input.mapping, input.inputSchema, existingIds);
+      rows = applyUploadMapping(flat, input.mapping, input.inputSchema, existingIds, mapOptions);
     } else {
-      rows = directRows(objects, input.inputSchema, existingIds);
+      rows = directRows(objects, input.inputSchema, existingIds, agent);
     }
   }
 

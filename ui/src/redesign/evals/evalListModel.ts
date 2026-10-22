@@ -51,7 +51,7 @@ function matchesQuery(item: EvalListItem, query: string): boolean {
   const haystack = [
     item.id,
     item.name,
-    item.target.stage_id ?? "",
+    (item.target.kind === "stage" ? item.target.stage_id : item.target.agent_id) ?? "",
     item.target.label,
     datasetName(item.dataset_path),
     item.dataset_path,
@@ -67,7 +67,7 @@ export function filterEvals(
     if (opts.tab === "regressed" && item.status !== "regressed") return false;
     if (opts.tab === "stages" && item.target.kind !== "stage") return false;
     if (opts.tab === "agents") return false;
-    if (opts.stage && item.target.stage_id !== opts.stage) return false;
+    if (opts.stage && (item.target.kind !== "stage" || item.target.stage_id !== opts.stage)) return false;
     return matchesQuery(item, opts.query);
   });
 }
@@ -133,7 +133,7 @@ function plural(count: number, one: string, many: string): string {
 }
 
 function targetPath(item: EvalListItem): string {
-  return item.target.file ?? item.target.pipeline_path ?? "";
+  return item.target.kind === "stage" ? (item.target.file ?? item.target.pipeline_path ?? "") : "";
 }
 
 function datasetMeta(item: EvalListItem): string {

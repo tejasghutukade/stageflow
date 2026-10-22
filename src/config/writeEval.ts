@@ -29,6 +29,9 @@ import {
   resolveWriteDir,
 } from "./evalWriteRoots.js";
 import {
+  EVAL_AGENT_DEFAULT_CONCURRENCY,
+  EVAL_AGENT_DEFAULT_MAX_COST_USD,
+  EVAL_CONVERSATION_DEFAULTS,
   EVAL_DEFAULT_CONCURRENCY,
   EVAL_DEFAULT_MAX_COST_USD,
   EVAL_DEFAULT_PASS_THRESHOLD,
@@ -48,12 +51,22 @@ const TOP_ORDER = [
   "dataset",
   "task",
   "defaults",
+  "conversation",
   "graders",
   "budget",
 ];
-const TARGET_ORDER = ["kind", "pipeline", "stage", "file"];
+const TARGET_ORDER = ["kind", "pipeline", "stage", "file", "agent"];
+const CONVERSATION_ORDER = [
+  "mode",
+  "max_turns",
+  "turn_timeout_ms",
+  "tools",
+  "approvals",
+  "read_only_tools",
+  "allow_real_tools",
+];
 const TASK_ORDER = ["goal", "context", "constraints"];
-const DEFAULTS_ORDER = ["repeats", "judge", "pass_threshold", "max_cost_usd", "concurrency", "model"];
+const DEFAULTS_ORDER = ["repeats", "judge", "user_model", "pass_threshold", "max_cost_usd", "concurrency", "model"];
 const BUDGET_ORDER = ["latency_ms", "cost_usd"];
 const GRADER_COMMON_ORDER = ["id", "type", "description", "weight", "must_pass"];
 const GRADER_TYPE_ORDER: Record<string, string[]> = {
@@ -62,8 +75,14 @@ const GRADER_TYPE_ORDER: Record<string, string[]> = {
   reference: ["mode", "path", "expected", "pass_at"],
   rubric: ["rubric", "scale", "pass_at", "judge", "examples"],
   code: ["code"],
+  tool_calls: ["must_call", "must_not_call", "must_ask_first", "max_calls", "args"],
+  conversation_check: ["max_turns", "max_agent_questions_per_turn", "final_reply"],
+  goal_reached: ["judge", "guidance"],
 };
 const CHECK_ORDER = ["path", "op", "value"];
+const TOOL_ARG_ORDER = ["tool", "path", "op", "value"];
+const FINAL_REPLY_ORDER = ["op", "value"];
+const FLOW_LISTS = new Set(["checks", "args", "final_reply"]);
 
 export type EvalWriteResult = {
   id: string;
@@ -99,6 +118,12 @@ function orderedGrader(grader: Record<string, unknown>): Record<string, unknown>
   if (Array.isArray(out.checks)) {
     out.checks = out.checks.map((c) => (isPlain(c) ? ordered(c, CHECK_ORDER) : c));
   }
+  if (Array.isArray(out.args)) {
+    out.args = out.args.map((c) => (isPlain(c) ? ordered(c, TOOL_ARG_ORDER) : c));
+  }
+  if (Array.isArray(out.final_reply)) {
+    out.final_reply = out.final_reply.map((c) => (isPlain(c) ? ordered(c, FINAL_REPLY_ORDER) : c));
+  }
   if (Array.isArray(out.examples)) {
     out.examples = out.examples.map((e) =>
       isPlain(e) ? ordered(e, ["verdict", "score", "output", "reason"]) : e,
@@ -114,6 +139,7 @@ function orderedDefinition(definition: unknown): unknown {
     ["target", TARGET_ORDER],
     ["task", TASK_ORDER],
     ["defaults", DEFAULTS_ORDER],
+    ["conversation", CONVERSATION_ORDER],
     ["budget", BUDGET_ORDER],
   ];
   for (const [key, order] of subs) {
@@ -133,7 +159,7 @@ function styleNode(node: unknown, keys: string[]): void {
     }
   } else if (isSeq(node)) {
     for (const item of node.items) {
-      if (keys[keys.length - 1] === "checks" && isMap(item)) item.flow = true;
+      if (FLOW_LISTS.has(keys[keys.length - 1] ?? "") && isMap(item)) item.flow = true;
       styleNode(item, [...keys, "[]"]);
     }
   } else if (isScalar(node) && typeof node.value === "string") {
@@ -159,6 +185,33 @@ export function renderEvalYaml(definition: unknown): string {
 }
 
 function fillCreateDefaults(definition: EvalFile): EvalFile {
+  if (definition.target?.kind === "agent") {
+    const conversation = { ...definition.conversation } as Record<string, unknown>;
+    const d = EVAL_CONVERSATION_DEFAULTS;
+    const explicit: Record<string, unknown> = {
+      mode: d.mode,
+      max_turns: d.maxTurns,
+      turn_timeout_ms: d.turnTimeoutMs,
+      tools: d.tools,
+      approvals: d.approvals,
+    };
+    for (const [key, value] of Object.entries(explicit)) conversation[key] ??= value;
+    if (Array.isArray(conversation.read_only_tools) && conversation.read_only_tools.length === 0) {
+      delete conversation.read_only_tools;
+    }
+    if (conversation.allow_real_tools === false) delete conversation.allow_real_tools;
+    return {
+      ...definition,
+      defaults: {
+        repeats: EVAL_DEFAULT_REPEATS,
+        pass_threshold: EVAL_DEFAULT_PASS_THRESHOLD,
+        max_cost_usd: EVAL_AGENT_DEFAULT_MAX_COST_USD,
+        concurrency: EVAL_AGENT_DEFAULT_CONCURRENCY,
+        ...definition.defaults,
+      },
+      conversation: conversation as EvalFile["conversation"],
+    };
+  }
   return {
     ...definition,
     defaults: {
@@ -174,22 +227,22 @@ export function renderEvalCreateYaml(definition: EvalFile): string {
   return renderEvalYaml(fillCreateDefaults(definition));
 }
 
-function isOmittableDefault(keys: string[], value: unknown, parent: Record<string, unknown>): boolean {
+function isOmittableDefault(keys: string[], value: unknown, parent: Record<string, unknown>, agent: boolean): boolean {
   const key = keys[keys.length - 1];
   if (keys.length === 1) return key === "type" && value === "capability";
   if (keys.length === 2 && keys[0] === "defaults") {
     return (
       (key === "repeats" && value === EVAL_DEFAULT_REPEATS) ||
       (key === "pass_threshold" && value === EVAL_DEFAULT_PASS_THRESHOLD) ||
-      (key === "max_cost_usd" && value === EVAL_DEFAULT_MAX_COST_USD) ||
-      (key === "concurrency" && value === EVAL_DEFAULT_CONCURRENCY)
+      (key === "max_cost_usd" && value === (agent ? EVAL_AGENT_DEFAULT_MAX_COST_USD : EVAL_DEFAULT_MAX_COST_USD)) ||
+      (key === "concurrency" && value === (agent ? EVAL_AGENT_DEFAULT_CONCURRENCY : EVAL_DEFAULT_CONCURRENCY))
     );
   }
   if (keys.length === 3 && keys[0] === "graders") {
     if (key === "weight") return value === 1;
     if (key === "must_pass") return value === false;
     if (key === "scale") return value === "pass_fail";
-    if (key === "path") return parent.type === "reference" && value === "payload";
+    if (key === "path") return parent.type === "reference" && value === (agent ? "final_reply" : "payload");
     if (key === "pass_at") {
       if (parent.type === "reference") return value === 1;
       if (parent.type === "rubric") return parent.scale === "1_to_5" && value === 4;
@@ -221,15 +274,15 @@ function pairKey(pair: { key: unknown }): string {
   return isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
 }
 
-function syncValue(doc: Document, node: unknown, value: unknown, keys: string[]): unknown {
+function syncValue(doc: Document, node: unknown, value: unknown, keys: string[], agent: boolean): unknown {
   if (isPlain(value)) {
     if (!isMap(node)) return replace(doc, node, value, keys);
-    syncMap(doc, node, value, keys);
+    syncMap(doc, node, value, keys, agent);
     return node;
   }
   if (Array.isArray(value)) {
     if (!isSeq(node)) return replace(doc, node, value, keys);
-    syncSeq(doc, node, value, keys);
+    syncSeq(doc, node, value, keys, agent);
     return node;
   }
   if (isScalar(node) && (value === null || typeof value !== "object")) {
@@ -246,7 +299,7 @@ function syncValue(doc: Document, node: unknown, value: unknown, keys: string[])
   return replace(doc, node, value, keys);
 }
 
-function syncMap(doc: Document, map: YAMLMap, value: Record<string, unknown>, keys: string[]): void {
+function syncMap(doc: Document, map: YAMLMap, value: Record<string, unknown>, keys: string[], agent: boolean): void {
   const desired = Object.keys(value).filter((k) => value[k] !== undefined);
   map.items = map.items.filter((pair) => desired.includes(pairKey(pair)));
   let lastIndex = -1;
@@ -255,11 +308,11 @@ function syncMap(doc: Document, map: YAMLMap, value: Record<string, unknown>, ke
     const index = map.items.findIndex((pair) => pairKey(pair) === key);
     if (index >= 0) {
       const pair = map.items[index]!;
-      pair.value = syncValue(doc, pair.value, value[key], childKeys) as typeof pair.value;
+      pair.value = syncValue(doc, pair.value, value[key], childKeys, agent) as typeof pair.value;
       lastIndex = index;
       continue;
     }
-    if (isOmittableDefault(childKeys, value[key], value)) continue;
+    if (isOmittableDefault(childKeys, value[key], value, agent)) continue;
     const pair = doc.createPair(key, create(doc, value[key], childKeys));
     map.items.splice(lastIndex + 1, 0, pair);
     lastIndex += 1;
@@ -272,7 +325,7 @@ function itemId(node: unknown): string | undefined {
   return typeof id === "string" ? id : undefined;
 }
 
-function syncSeq(doc: Document, seq: YAMLSeq, value: unknown[], keys: string[]): void {
+function syncSeq(doc: Document, seq: YAMLSeq, value: unknown[], keys: string[], agent: boolean): void {
   const byId = keys[keys.length - 1] === "graders";
   const childKeys = [...keys, "[]"];
   const used = new Set<unknown>();
@@ -286,7 +339,7 @@ function syncSeq(doc: Document, seq: YAMLSeq, value: unknown[], keys: string[]):
     }
     if (existing === undefined) return create(doc, item, childKeys);
     used.add(existing);
-    return syncValue(doc, existing, item, childKeys);
+    return syncValue(doc, existing, item, childKeys, agent);
   });
   seq.items = next as typeof seq.items;
 }
@@ -297,7 +350,8 @@ export function previewEvalUpdate(currentText: string, definition: unknown): str
   const target = orderedDefinition(definition);
   if (!isPlain(target)) return renderEvalYaml(definition);
   if (isDeepStrictEqual(doc.toJS(), JSON.parse(JSON.stringify(target)))) return currentText;
-  syncMap(doc, doc.contents, target, []);
+  const targetKind = isPlain(target.target) ? target.target.kind : undefined;
+  syncMap(doc, doc.contents, target, [], targetKind === "agent");
   return toText(doc);
 }
 

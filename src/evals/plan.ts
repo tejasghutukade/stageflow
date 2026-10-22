@@ -43,7 +43,7 @@ import {
   type ConfigSnapshot,
   type SnapshotOverrides,
 } from "./snapshot.js";
-import type { EvalPlan, PlanCase, ResolvedGrader } from "./types.js";
+import type { EvalFile, EvalPlan, PlanCase, ResolvedGrader } from "./types.js";
 
 export type EvalOverrides = {
   repeats?: number;
@@ -53,6 +53,13 @@ export type EvalOverrides = {
   case_ids?: string[];
   tags?: string[];
   only_failed_from?: string;
+  user_model?: string;
+  /** Safer-only: `real` to `read_only`/`mocked`, `read_only` to `mocked`. Agent targets only. */
+  tools?: "read_only" | "mocked";
+  /** Safer-only: `auto_approve_read` to `record_only`/`deny`, `record_only` to `deny`. Agent targets only. */
+  approvals?: "deny" | "record_only";
+  /** The per-run consent to `conversation.tools: real`; not part of the fingerprint. */
+  allow_real_tools?: boolean;
 };
 
 export type BuildEvalPlanInput = {
@@ -134,9 +141,60 @@ function checkOverrides(relPath: string, overrides: EvalOverrides): ValidationFi
   return out;
 }
 
+const TOOLS_SAFETY: Record<string, number> = { real: 0, read_only: 1, mocked: 2 };
+const APPROVALS_SAFETY: Record<string, number> = { auto_approve_read: 0, record_only: 1, deny: 2 };
+
+function checkConversationOverrides(relPath: string, file: EvalFile, overrides: EvalOverrides): ValidationFinding[] {
+  const out: ValidationFinding[] = [];
+  const keys = (["user_model", "tools", "approvals"] as const).filter((key) => overrides[key] !== undefined);
+  if (keys.length === 0) return out;
+  if (file.target.kind !== "agent") {
+    out.push(
+      evalFinding(
+        relPath,
+        "error",
+        "eval.conversation_not_applicable",
+        `Override ${keys.map((k) => `"${k}"`).join(", ")} applies to agent targets only`,
+      ),
+    );
+    return out;
+  }
+  const current = resolveConversation(file.conversation);
+  const bad = (message: string): void => {
+    out.push(evalFinding(relPath, "error", "eval.invalid_field", message));
+  };
+  if (overrides.user_model !== undefined && (typeof overrides.user_model !== "string" || overrides.user_model === "")) {
+    bad(`Override "user_model" must be a model id string`);
+  }
+  if (overrides.tools !== undefined) {
+    if (overrides.tools !== "read_only" && overrides.tools !== "mocked") {
+      bad(`Override "tools" must be read_only or mocked`);
+    } else if (TOOLS_SAFETY[overrides.tools]! < TOOLS_SAFETY[current.tools]!) {
+      bad(`Override "tools" ${overrides.tools} would make the tool policy less safe than ${current.tools}`);
+    }
+  }
+  if (overrides.approvals !== undefined) {
+    if (overrides.approvals !== "deny" && overrides.approvals !== "record_only") {
+      bad(`Override "approvals" must be deny or record_only`);
+    } else if (APPROVALS_SAFETY[overrides.approvals]! < APPROVALS_SAFETY[current.approvals]!) {
+      bad(`Override "approvals" ${overrides.approvals} would make the approval policy less safe than ${current.approvals}`);
+    }
+  }
+  return out;
+}
+
 function withOverrides(loaded: LoadedEval, overrides: EvalOverrides): LoadedEval {
+  const conversation =
+    overrides.tools !== undefined || overrides.approvals !== undefined
+      ? {
+          ...loaded.file.conversation,
+          ...(overrides.tools !== undefined ? { tools: overrides.tools } : {}),
+          ...(overrides.approvals !== undefined ? { approvals: overrides.approvals } : {}),
+        }
+      : undefined;
   const defaults = {
     ...loaded.file.defaults,
+    ...(overrides.user_model !== undefined ? { user_model: overrides.user_model } : {}),
     ...(overrides.repeats !== undefined ? { repeats: overrides.repeats } : {}),
     ...(overrides.judge !== undefined ? { judge: overrides.judge } : {}),
     ...(overrides.model !== undefined ? { model: overrides.model } : {}),
@@ -149,7 +207,11 @@ function withOverrides(loaded: LoadedEval, overrides: EvalOverrides): LoadedEval
     const { hash: _old, ...rest } = { ...grader, judge: overrides.judge };
     return { ...rest, hash: graderHash(rest) };
   });
-  return { ...loaded, file: { ...loaded.file, defaults }, graders };
+  return {
+    ...loaded,
+    file: { ...loaded.file, defaults, ...(conversation !== undefined ? { conversation } : {}) },
+    graders,
+  };
 }
 
 function selectCases(
@@ -235,6 +297,8 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
 
   const overrideFindings = checkOverrides(base.relPath, overrides);
   if (overrideFindings.length > 0) return fail(overrideFindings);
+  const conversationOverrideFindings = checkConversationOverrides(base.relPath, base.file, overrides);
+  if (conversationOverrideFindings.length > 0) return fail(conversationOverrideFindings);
 
   let failedIds: Set<string> | undefined;
   if (overrides.only_failed_from !== undefined) {
@@ -616,6 +680,9 @@ async function buildAgentResult(a: AgentResultInput): Promise<BuildEvalPlanResul
       case_ids: overrides.case_ids ?? null,
       tags: overrides.tags ?? null,
       only_failed_from: overrides.only_failed_from ?? null,
+      user_model: overrides.user_model ?? null,
+      tools: overrides.tools ?? null,
+      approvals: overrides.approvals ?? null,
     },
     target: {
       agent_id: agentTarget.agentId,
@@ -671,7 +738,7 @@ async function buildAgentResult(a: AgentResultInput): Promise<BuildEvalPlanResul
         tools: conversation.tools,
         approvals: conversation.approvals,
         read_only_tools: conversation.readOnlyTools,
-        real_tools_confirmed: false,
+        real_tools_confirmed: conversation.tools === "real" && overrides.allow_real_tools === true,
         user_model: userModel ?? "",
         user_model_from_judge: userModel !== null && defaults.user_model === undefined,
         simulator_prompt_version: SIMULATOR_PROMPT_VERSION,

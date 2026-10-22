@@ -14,6 +14,62 @@ export type EvalResultStatus =
 
 export type EvalInterval = { low: number; high: number };
 
+export type EvalTargetKind = "stage" | "agent";
+
+export type EvalConversationMode = "script" | "simulated";
+export type EvalConversationTools = "real" | "read_only" | "mocked";
+export type EvalConversationApprovals = "deny" | "auto_approve_read" | "record_only";
+
+export type EvalConversation = {
+  mode?: EvalConversationMode;
+  max_turns?: number;
+  turn_timeout_ms?: number;
+  tools?: EvalConversationTools;
+  approvals?: EvalConversationApprovals;
+  read_only_tools?: string[];
+  allow_real_tools?: boolean;
+};
+
+export type EvalToolClass =
+  | "read"
+  | "write"
+  | "shell"
+  | "destructive"
+  | "external"
+  | "mcp_unknown"
+  | "sub_agent"
+  | "browser"
+  | "operator_only";
+
+export type EvalAgentTool = { id: string; risk: string; class: EvalToolClass };
+
+/** The live agent behind an agent eval. */
+export type EvalAgentInfo = {
+  id: string;
+  name: string;
+  model: string | null;
+  revision: number;
+  enabled: boolean;
+  archived: boolean;
+  tools: EvalAgentTool[];
+  ask_first: string[];
+  issues: string[];
+};
+
+/** One row of the agent picker (`GET /api/evals/agent-targets`). */
+export type EvalAgentTarget = {
+  id: string;
+  name: string;
+  model: string | null;
+  revision: number;
+  enabled: boolean;
+  tools: EvalAgentTool[];
+  ask_first: string[];
+  evals_count: number;
+  issues: string[];
+  unavailable_reason: "archived" | "invalid" | null;
+};
+
 export type EvalRunHeadline = {
   project_root?: string;
   eval_run_id: string;
@@ -37,13 +93,24 @@ export type EvalListItem = {
   description: string | null;
   type: string;
   path: string;
-  target: {
-    kind: "stage";
-    pipeline_path?: string;
-    stage_id?: string;
-    file?: string;
-    label: string;
-  };
+  target:
+    | {
+        kind: "stage";
+        pipeline_path?: string;
+        stage_id?: string;
+        file?: string;
+        label: string;
+      }
+    | {
+        kind: "agent";
+        agent_id: string;
+        agent_name: string;
+        model: string | null;
+        revision: number | null;
+        label: string;
+      };
+  /** Agent evals only. */
+  conversation?: { mode: EvalConversationMode; max_turns: number; tools: EvalConversationTools; approvals: EvalConversationApprovals };
   dataset_path: string;
   dataset_cases: number;
   repeats: number;
@@ -81,6 +148,9 @@ export type EvalListQuery = {
   target_pipeline?: string;
   target_stage?: string;
   target_file?: string;
+  target_kind?: EvalTargetKind;
+  /** Only the evals that test this agent. */
+  agent?: string;
   q?: string;
 };
 
@@ -90,17 +160,20 @@ export type EvalDefinition = {
   name?: string;
   description?: string;
   type?: "capability" | "regression";
-  target: { kind: "stage"; pipeline?: string; stage?: string; file?: string };
+  target: { kind: "stage"; pipeline?: string; stage?: string; file?: string } | { kind: "agent"; agent: string };
   dataset: string;
   task?: { goal?: string; context?: string; constraints?: string };
   defaults?: {
     repeats?: number;
     judge?: string;
+    user_model?: string;
     pass_threshold?: number;
     max_cost_usd?: number;
     concurrency?: number;
     model?: string;
   };
+  /** Agent evals only. */
+  conversation?: EvalConversation;
   graders: Array<Record<string, unknown> & { id: string; type: string }>;
   budget?: { latency_ms?: number; cost_usd?: number };
 };
@@ -116,6 +189,8 @@ export type EvalDetail = {
   last_run: EvalRunHeadline | null;
   target_model?: string | null;
   judge_default?: string | null;
+  /** Agent evals only: the live agent, or null when it cannot be read. */
+  agent?: EvalAgentInfo | null;
 };
 
 export type EvalValidateInput = {
@@ -165,6 +240,12 @@ export type EvalResultDetail = {
   error_code: string | null;
   error_message: string | null;
   stage_run_id: string | null;
+  /** Agent evals: the eval session id; null for stage results and for Try. */
+  subject_ref?: string | null;
+  turns?: number | null;
+  tool_call_count?: number | null;
+  /** Agent runs only; `session_id` equals `subject_ref`. */
+  agent?: { id: string; session_id: string | null } | null;
   output: unknown;
   latency_ms: number | null;
   cost_usd: number | null;
@@ -191,6 +272,8 @@ export type EvalTryInput = {
   case_id?: string;
   case?: EvalCaseInput;
   dataset_cases?: EvalCaseInput[];
+  /** Agent evals with `conversation.tools: real`. */
+  allow_real_tools?: boolean;
 };
 
 export type EvalDraftEstimateInput = {
@@ -198,7 +281,13 @@ export type EvalDraftEstimateInput = {
   definition: EvalDefinition;
   dataset_cases?: EvalCaseInput[];
   repeats?: number;
+  user_model?: string;
+  tools?: EvalSaferTools;
+  approvals?: EvalSaferApprovals;
 };
+
+export type EvalSaferTools = "read_only" | "mocked";
+export type EvalSaferApprovals = "deny" | "record_only";
 
 export type EvalRunOptions = {
   repeats?: number;
@@ -208,12 +297,20 @@ export type EvalRunOptions = {
   case_ids?: string[];
   tags?: string[];
   only_failed_from?: string;
+  /** Agent evals: overrides the model that plays the user. */
+  user_model?: string;
+  /** Agent evals, safer-only: a run may lower the tool policy, never raise it. */
+  tools?: EvalSaferTools;
+  /** Agent evals, safer-only. */
+  approvals?: EvalSaferApprovals;
 };
 
 export type EvalStartRunInput = EvalRunOptions & {
   project_root?: string;
   label?: string;
   started_via?: "console" | "cli" | "mcp";
+  /** The per-run consent to `conversation.tools: real`; without it a real-tools run fails EVAL_REAL_TOOLS_NOT_CONFIRMED. */
+  allow_real_tools?: boolean;
 };
 
 export type EvalStartRunResult = { eval_run_id: string; status: "queued"; run_number: number };
@@ -226,6 +323,10 @@ export type EvalRunEstimate = {
   estimate_seconds: number | null;
   judge_included: boolean;
   based_on_run_number: number | null;
+  /** Agent evals only. */
+  target_kind?: "agent";
+  simulator_calls?: number;
+  estimate_basis?: "previous_run" | "assumptions" | null;
 };
 
 export type EvalGraderStat = {
@@ -262,6 +363,9 @@ export type EvalStats = {
   cost_judge: number;
   cost_total: number;
   cost_per_result: number | null;
+  /** Agent runs only; null when no data. */
+  mean_turns?: number | null;
+  mean_tool_calls?: number | null;
   tokens_in: number;
   tokens_out: number;
   judge_tokens_in: number;
@@ -300,6 +404,9 @@ export type EvalRunDetail = {
     stage_version_hash: string | null;
     dataset_hash: string | null;
     grader_hashes: Record<string, string> | null;
+    /** Agent runs: what the agent is now. */
+    agent_revision?: number | null;
+    agent_definition_hash?: string | null;
   };
   live?: Array<{ case_id: string; repeat_index: number; phase: "stage_running" | "agent_running" | "grading" | "done" }>;
 };
@@ -308,6 +415,8 @@ export type EvalRunListQuery = {
   eval_id?: string;
   status?: EvalRunStatus;
   stage_run_id?: string;
+  /** The eval session or stage run id; returns the run that owns a result for it. */
+  subject_ref?: string;
   project_root?: string;
   limit?: number;
   cursor?: string;
@@ -327,6 +436,9 @@ export type EvalResultRow = {
   latency_ms_p50: number | null;
   cost_usd: number;
   failure_tags: string[];
+  /** Agent runs: mean per case. */
+  turns?: number | null;
+  tool_calls?: number | null;
 };
 
 export type EvalResultsQuery = {
@@ -389,10 +501,19 @@ export type EvalCompareResult = {
     latency_p95: EvalNumberDelta;
     flaky_cases: EvalNumberDelta;
     mean_score: EvalNumberDelta;
+    /** Both runs are agent runs. */
+    mean_turns?: EvalNumberDelta;
+    mean_tool_calls?: EvalNumberDelta;
   };
   stage_diff: {
     changed_keys: string[];
     system_prompt_diff: Array<{ op: "same" | "add" | "remove"; text: string }> | null;
+  } | null;
+  /** Agent runs. */
+  agent_diff?: {
+    changed_keys: string[];
+    instructions_diff: Array<{ op: "same" | "add" | "remove"; text: string }> | null;
+    revision: { a: number | null; b: number | null };
   } | null;
   components: Array<{ key: string; status: "same" | "changed"; a: unknown; b: unknown }>;
   same_config: boolean;
@@ -463,7 +584,7 @@ export type EvalDatasetQuery = {
   filter?: "all" | "invalid" | "tagged";
 };
 
-export type EvalDatasetTarget = { pipeline_path?: string; stage_id?: string; file?: string };
+export type EvalDatasetTarget = { pipeline_path?: string; stage_id?: string; file?: string; agent_id?: string };
 
 export type EvalUploadMapping = Record<string, { column: string; split?: string } | null>;
 
@@ -474,6 +595,8 @@ export type EvalDatasetPreviewInput = {
   delimiter?: string;
   mapping?: EvalUploadMapping;
   target?: EvalDatasetTarget;
+  /** Agent targets: the eval whose `conversation.mode` the rows are checked against (default simulated). */
+  eval_id?: string;
 };
 
 export type EvalDatasetPreview = {
@@ -496,6 +619,14 @@ export type EvalCreateDatasetInput =
     }
   | {
       project_root?: string;
+      name: string;
+      source: "sessions";
+      target: { agent_id: string };
+      session_ids: string[];
+      directory?: string;
+    }
+  | {
+      project_root?: string;
       dataset_id: string;
       mode: "append" | "replace";
       cases: EvalCaseInput[];
@@ -509,3 +640,12 @@ export type EvalCaseOp =
   | { op: "set_tags"; id: string; tags: string[] };
 
 export type EvalDatasetCandidate = { run_id: string; finished_at: string; preview: string };
+
+/** `GET /api/datasets/candidates?agent=<id>`: finished, non-eval sessions of that agent. */
+export type EvalSessionCandidate = {
+  session_id: string;
+  updated_at: string;
+  preview: string;
+  turns: number;
+  tools: string[];
+};

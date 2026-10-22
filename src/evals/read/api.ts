@@ -23,6 +23,7 @@ import { EVAL_RUN_STATUSES } from "../constants.js";
 import type { EngineStatus } from "../engine/promptfoo/status.js";
 import { PINNED_PROMPTFOO_VERSION } from "../engine/promptfoo/pinned.js";
 import { buildEvalPlan } from "../plan.js";
+import { liveAgentOf, type AgentWire } from "./agentTargets.js";
 import { buildEvalListItems, costLastSevenDays, type EvalListItem } from "./list.js";
 import { resultKey } from "../statsTypes.js";
 import type { EvalRunRow } from "../storeTypes.js";
@@ -107,6 +108,7 @@ export type EvalDetailWire = {
   last_run: ReturnType<typeof runHeadline> | null;
   target_model: string | null;
   judge_default: string | null;
+  agent?: AgentWire | null;
 };
 
 export async function buildEvalDetail(input: {
@@ -114,6 +116,7 @@ export async function buildEvalDetail(input: {
   projectRoot: string;
   absPath: string;
   isKnownModel?: IsKnownModel;
+  agents?: AgentCatalogPort;
 }): Promise<EvalDetailWire> {
   const { store, projectRoot, absPath } = input;
   const manifest = await manifestForWrite(projectRoot);
@@ -130,9 +133,16 @@ export async function buildEvalDetail(input: {
   } while (cursor !== undefined);
   const last = (await completedRunsNewestFirst(store, projectRoot, id, 1))[0];
   let targetModel: string | null = null;
+  let agent: AgentWire | null | undefined;
   if (entry?.outcome.ok) {
-    const target = await resolveEvalTarget(entry.outcome.value.file, entry.outcome.value.path, projectRoot);
-    if (target.ok) targetModel = target.value.modelResolved;
+    const file = entry.outcome.value.file;
+    if (file.target.kind === "agent") {
+      agent = await liveAgentOf(input.agents, projectRoot, file.target.agent);
+      targetModel = file.defaults?.model ?? agent?.model ?? null;
+    } else {
+      const target = await resolveEvalTarget(file, entry.outcome.value.path, projectRoot);
+      if (target.ok) targetModel = target.value.modelResolved;
+    }
   }
   return {
     id,
@@ -145,6 +155,7 @@ export async function buildEvalDetail(input: {
     last_run: last ? runHeadline(last) : null,
     target_model: targetModel,
     judge_default: entry?.outcome.ok ? (entry.outcome.value.file.defaults?.judge ?? null) : null,
+    ...(agent !== undefined ? { agent } : {}),
   };
 }
 
@@ -154,6 +165,7 @@ export async function planFindings(input: {
   evalText: string;
   datasetCases?: readonly unknown[];
   isKnownModel?: IsKnownModel;
+  agents?: AgentCatalogPort;
 }): Promise<{ ok: boolean; findings: ValidationFinding[] }> {
   const built = await buildEvalPlan({
     projectRoot: input.projectRoot,
@@ -163,6 +175,7 @@ export async function planFindings(input: {
     evalRunId: "er_validate",
     engine: { name: ENGINE_NAME, version: PINNED_PROMPTFOO_VERSION, nodeVersion: process.versions.node },
     ...(input.isKnownModel ? { isKnownModel: input.isKnownModel } : {}),
+    ...(input.agents ? { agents: input.agents } : {}),
   });
   return { ok: built.ok, findings: built.findings };
 }
@@ -173,6 +186,7 @@ export async function validateEvalText(input: {
   derived: string;
   datasetCases?: readonly unknown[];
   isKnownModel?: IsKnownModel;
+  agents?: AgentCatalogPort;
 }) {
   const { projectRoot, evalAbs, derived } = input;
   const parsed = parseEvalOutcome(derived, evalAbs, projectRoot);
@@ -182,6 +196,7 @@ export async function validateEvalText(input: {
     evalText: derived,
     ...(input.datasetCases !== undefined ? { datasetCases: input.datasetCases } : {}),
     ...(input.isKnownModel ? { isKnownModel: input.isKnownModel } : {}),
+    ...(input.agents ? { agents: input.agents } : {}),
   });
   const findings =
     checked.findings.length > 0 || parsed.ok
@@ -198,11 +213,12 @@ export async function listEvalRunsPage(
     evalId?: string;
     status?: string;
     stageRunId?: string;
+    subjectRef?: string;
     limit: number;
     cursor?: string;
   },
 ) {
-  const { projectRoot, evalId, status, stageRunId, limit, cursor } = input;
+  const { projectRoot, evalId, status, stageRunId, subjectRef, limit, cursor } = input;
   if (status !== undefined && !(EVAL_RUN_STATUSES as readonly string[]).includes(status)) {
     throw badRequest(`"status" must be one of ${EVAL_RUN_STATUSES.join(", ")}`);
   }
@@ -213,6 +229,7 @@ export async function listEvalRunsPage(
       ...(evalId !== undefined ? { evalId } : {}),
       ...(status !== undefined ? { status: status as (typeof EVAL_RUN_STATUSES)[number] } : {}),
       ...(stageRunId !== undefined ? { stageRunId } : {}),
+      ...(subjectRef !== undefined ? { subjectRef } : {}),
       limit,
       ...(cursor !== undefined ? { cursor } : {}),
     });
@@ -226,8 +243,10 @@ export async function listEvalRunsPage(
         ...runHeadline(row),
         project_root: input.wireRootOf?.(row.projectRoot) ?? row.projectRoot,
       };
-      if (stageRunId === undefined) return headline;
-      const match = (await store.listEvalResults(row.evalRunId)).find((r) => r.stageRunId === stageRunId);
+      if (stageRunId === undefined && subjectRef === undefined) return headline;
+      const match = (await store.listEvalResults(row.evalRunId)).find((r) =>
+        stageRunId !== undefined ? r.stageRunId === stageRunId : r.subjectRef === subjectRef,
+      );
       return {
         ...headline,
         ...(match ? { result: { case_id: match.caseId, repeat_index: match.repeatIndex } } : {}),

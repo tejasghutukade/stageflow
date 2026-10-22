@@ -551,6 +551,8 @@ export type HttpStartEvalRunInput = {
   repeats?: number;
   judge?: string;
   model?: string;
+  user_model?: string;
+  allow_real_tools?: boolean;
   max_cost_usd?: number;
   case_ids?: string[];
   tags?: string[];

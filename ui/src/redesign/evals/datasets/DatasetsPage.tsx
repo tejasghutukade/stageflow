@@ -56,6 +56,7 @@ function messageOf(err: unknown): string {
 
 function targetOf(item: EvalListItem | undefined): EvalDatasetTarget | undefined {
   if (!item) return undefined;
+  if (item.target.kind === "agent") return { agent_id: item.target.agent_id };
   const { pipeline_path, stage_id, file } = item.target;
   const target: EvalDatasetTarget = {
     ...(pipeline_path ? { pipeline_path } : {}),
@@ -224,7 +225,7 @@ function DatasetDetailView({
   const evalItem = evals.find((e) => e.id === effectiveEvalId);
   const target = targetOf(evalItem);
   const root = projectRoot ?? projectRootOf(evalItem);
-  const stageLabel = evalItem ? (evalItem.target.stage_id ?? evalItem.target.label) : null;
+  const stageLabel = evalItem ? ((evalItem.target.kind === "stage" ? evalItem.target.stage_id : undefined) ?? evalItem.target.label) : null;
 
   useEffect(() => {
     const t = window.setTimeout(() => {
