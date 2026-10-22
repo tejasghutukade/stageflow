@@ -52,6 +52,9 @@ export async function resolveEvalTarget(
   evalAbsPath: string,
   projectRoot: string,
 ): Promise<LoadOutcome<ResolvedEvalTarget>> {
+  if (file.target.kind !== "stage") {
+    return loadFailure([unresolved("Agent targets are resolved by resolveAgentTarget")]);
+  }
   const paths = resolveEvalPaths(file, evalAbsPath);
   const rel = (abs: string): string => path.relative(projectRoot, abs).split(path.sep).join("/");
 

@@ -65,6 +65,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 async function readStageBody(plan: EvalPlan): Promise<StageBody> {
   const { target, projectRoot } = plan;
+  if (target.kind !== "stage") throw new EngineError("Not a stage target");
   const abs = (rel: string): string => path.resolve(projectRoot, rel);
   let body: Record<string, unknown> | undefined;
   let stageId: string | undefined;

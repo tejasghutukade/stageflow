@@ -108,6 +108,7 @@ export async function buildEvalListItems(input: {
     const { file } = loaded;
     const paths = resolveEvalPaths(file, loaded.path);
     const type = file.type ?? "capability";
+    const stageId = file.target.kind === "stage" ? file.target.stage : undefined;
     const completed = await completedRunsNewestFirst(store, projectRoot, loaded.id);
     const last = completed[0];
     const previous = completed[1];
@@ -123,7 +124,7 @@ export async function buildEvalListItems(input: {
     const stageFile = paths.stageFile !== undefined ? posix(projectRoot, paths.stageFile) : undefined;
     const label =
       pipelinePath !== undefined
-        ? `${pipelineStem(pipelinePath)} · ${file.target.stage ?? ""}`
+        ? `${pipelineStem(pipelinePath)} · ${stageId ?? ""}`
         : path.basename(stageFile ?? "").replace(/\.(stage\.)?ya?ml$/, "");
     const delta =
       lastSummary?.passRate != null && previousSummary?.passRate != null
@@ -139,7 +140,7 @@ export async function buildEvalListItems(input: {
       target: {
         kind: "stage",
         ...(pipelinePath !== undefined ? { pipeline_path: pipelinePath } : {}),
-        ...(file.target.stage !== undefined ? { stage_id: file.target.stage } : {}),
+        ...(stageId !== undefined ? { stage_id: stageId } : {}),
         ...(stageFile !== undefined ? { file: stageFile } : {}),
         label,
       },
