@@ -86,3 +86,4 @@ export const EVAL_RUN_ID_PREFIX = "er_";
 
 export const RUBRIC_PROMPT_VERSION = 1;
 export const CONFIG_SNAPSHOT_VERSION = 1;
+export const SIMULATOR_PROMPT_VERSION = 1;
