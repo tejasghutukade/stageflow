@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isMap, parseDocument } from "yaml";
 import { EvalsWriteError, writeFileAtomic } from "./atomicWrite.js";
 import { ensureCatalogScanRoot, type CatalogScanKey } from "./ensureCatalogScanRoot.js";
@@ -43,17 +45,24 @@ function rewriteEvalPaths(text: string, pipelineRef: string, datasetRef: string)
   return out.endsWith("\n") ? out : `${out}\n`;
 }
 
+export function resolveEvalSampleDir(fromUrl: string = import.meta.url): string | undefined {
+  const examples = resolveSeededExamplesPath(fromUrl);
+  const here = path.dirname(fileURLToPath(fromUrl));
+  const candidates = [
+    ...(examples === undefined ? [] : [path.join(examples, "evals")]),
+    path.resolve(here, "../../examples/evals"),
+    path.resolve(here, "../../../examples/evals"),
+    path.resolve(process.cwd(), "examples/evals"),
+  ];
+  return candidates.find((dir) => existsSync(path.join(dir, EVAL_SAMPLE_FILES.eval)));
+}
+
 export async function installEvalSample(input: {
   projectRoot: string;
   sourceDir?: string;
 }): Promise<{ evalId: string }> {
   const { projectRoot } = input;
-  const sourceDir =
-    input.sourceDir ??
-    (() => {
-      const examples = resolveSeededExamplesPath();
-      return examples === undefined ? undefined : path.join(examples, "evals");
-    })();
+  const sourceDir = input.sourceDir ?? resolveEvalSampleDir();
   if (sourceDir === undefined) {
     throw new EvalsWriteError("SAMPLE_SOURCE_MISSING", "The packaged sample files were not found");
   }
