@@ -11,6 +11,7 @@ import {
   STAGEFLOW_AGENT_AUTH_PATH_ENV,
   currentExplicitAuthPath,
 } from "./credentialBinding.js";
+import { ensureWorktreeCheckout } from "./gitWorktreeCheckout.js";
 import { SF_STAGE_WORKER } from "./stageWorkerProtocol.js";
 
 export type DerivedBindingKind = "repository" | "checkout" | "unbound";
@@ -24,6 +25,14 @@ export type StageRoots = {
   attempt?: number;
   /** Durable Pi auth.json path for ModelRuntime.create({ authPath }). */
   authPath?: string;
+  /**
+   * Sandbox container `stageWorker.ts` started for this attempt, if any.
+   * When set, read/write/edit/bash run inside that container's /workspace
+   * desk. Undefined leaves those tools on the host.
+   */
+  containerName?: string;
+  /** The docker binary the container above was started with (see STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN). */
+  containerDockerBin?: string;
 };
 
 export const STAGEFLOW_CHECKOUT = "STAGEFLOW_CHECKOUT";
@@ -233,6 +242,16 @@ export function rootsForStageWorker(
   };
 }
 
+export function withContainerName(
+  roots: StageRoots,
+  containerName: string | undefined,
+  containerDockerBin?: string,
+): StageRoots {
+  return containerName === undefined
+    ? roots
+    : { ...roots, containerName, containerDockerBin };
+}
+
 export function bindPiAgentDirEnv(agentDirPath: string): () => void {
   const prev = process.env[PI_CODING_AGENT_DIR_ENV];
   process.env[PI_CODING_AGENT_DIR_ENV] = agentDirPath;
@@ -256,6 +275,14 @@ export async function resolveAndValidateCheckout(
 ): Promise<string | undefined> {
   const raw = override ?? task.checkout;
   if (raw === undefined) return undefined;
+  if (typeof raw !== "string") {
+    return ensureWorktreeCheckout({
+      projectRoot: factoryCwd,
+      branch: raw.branch,
+      base: raw.base,
+      taskId: task.id,
+    });
+  }
   if (raw.trim() === "") {
     throw new Error("Invalid checkout: path is empty or whitespace-only");
   }

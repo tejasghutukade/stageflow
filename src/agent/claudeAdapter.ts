@@ -54,6 +54,10 @@ import {
   STAGEFLOW_MCP_SERVER_NAME,
   WRITE_STAGE_ARTIFACT_TOOL_NAME,
   ASK_OPERATOR_TOOL_NAME,
+  SANDBOX_BASH_TOOL_NAME,
+  SANDBOX_EDIT_TOOL_NAME,
+  SANDBOX_READ_TOOL_NAME,
+  SANDBOX_WRITE_TOOL_NAME,
   type AskOperatorCapture,
 } from "./claudeTools.js";
 import { createClaudeActivityMapper } from "./claudeActivity.js";
@@ -300,6 +304,8 @@ async function runTurn(
   let sessionId = resumeSessionId;
   let providerError: string | undefined;
 
+  const containerName = input.roots.containerName;
+
   try {
     const mcpServer = buildStageflowMcpServer({
       capture: emitCapture,
@@ -322,6 +328,9 @@ async function runTurn(
               allowedKinds: gateKinds,
             },
           }
+        : {}),
+      ...(containerName !== undefined
+        ? { sandboxBash: { containerName, dockerBin: input.roots.containerDockerBin } }
         : {}),
     });
 
@@ -347,6 +356,16 @@ async function runTurn(
         persistSession: true,
         strictMcpConfig: true,
         ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
+        ...(containerName !== undefined
+          ? {
+              toolAliases: {
+                Bash: SANDBOX_BASH_TOOL_NAME,
+                Read: SANDBOX_READ_TOOL_NAME,
+                Write: SANDBOX_WRITE_TOOL_NAME,
+                Edit: SANDBOX_EDIT_TOOL_NAME,
+              },
+            }
+          : {}),
       },
     });
 

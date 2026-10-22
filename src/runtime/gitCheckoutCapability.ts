@@ -10,7 +10,7 @@ import type {
 
 type TrackedPath = { path: string; tracked: boolean };
 
-async function runGit(root: string, args: string[]): Promise<Buffer> {
+export async function runGit(root: string, args: string[]): Promise<Buffer> {
   const result = await execGit({
     cwd: root,
     args,

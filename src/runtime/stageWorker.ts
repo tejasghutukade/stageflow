@@ -17,6 +17,7 @@ import {
 import { buildStageEnvironment } from "./stageEnvironment.js";
 import { ensureStageCacheDirs } from "./stageCacheEnv.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
+import { openStageSandbox } from "./stageSandbox.js";
 import {
   runStage,
   type RunStageOutcome,
@@ -96,13 +97,12 @@ export async function runStageWorker(
   );
   const mode = input.mode ?? "run";
   const attempt = input.attempt ?? 1;
-  loadNamedSecretsFromAttemptDir(
-    attemptWorkspaceDir(workspaceDir, input.stageId, attempt),
-  );
+  const attemptDir = attemptWorkspaceDir(workspaceDir, input.stageId, attempt);
+  loadNamedSecretsFromAttemptDir(attemptDir);
   const attemptCtx =
     input.attempt !== undefined ? attemptContext(input.attempt) : undefined;
   const eventOptions = { attempt };
-  const roots = withResolvedAuthPath(
+  let roots = withResolvedAuthPath(
     rootsForStageWorker(
       workspaceDir,
       input.stageId,
@@ -114,7 +114,26 @@ export async function runStageWorker(
   );
   const unbindAgentDir = bindPiAgentDirEnv(roots.agentDir);
 
+  const sandbox = await openStageSandbox({
+    env: process.env,
+    roots,
+    runId: input.runId,
+    stageId: input.stageId,
+    attempt,
+    attemptDir,
+    ...(checkoutRoot !== undefined ? { checkoutRoot } : {}),
+  });
+  roots = sandbox.roots;
+  const beforeVerify = sandbox.beforeVerify;
+  let outcome: RunStageOutcome | undefined;
+  let thrown: unknown;
+
   try {
+    outcome = await (async (): Promise<RunStageOutcome> => {
+    if (sandbox.failure !== undefined) {
+      return { ok: false, reason: sandbox.failure };
+    }
+
     if (mode === "resume") {
       const opened = await openStageAttempt({
         agent,
@@ -165,6 +184,7 @@ export async function runStageWorker(
         operatorCatalog: input.operatorCatalog,
         skipGates: input.skipGates,
         stageEnv,
+        beforeVerify,
       });
       return outcome;
     }
@@ -235,6 +255,7 @@ export async function runStageWorker(
         operatorCatalog: input.operatorCatalog,
         skipGates: input.skipGates,
         stageEnv,
+        beforeVerify,
       });
     }
 
@@ -255,10 +276,21 @@ export async function runStageWorker(
       operatorCatalog: input.operatorCatalog,
       skipGates: input.skipGates,
       stageEnv,
+      beforeVerify,
     });
+    })();
+  } catch (err) {
+    thrown = err;
   } finally {
     unbindAgentDir();
+    await sandbox.close();
   }
+
+  if (thrown !== undefined) throw thrown;
+  if (outcome === undefined) {
+    throw new Error("stage worker finished without an outcome");
+  }
+  return outcome;
 }
 
 export function sendWorkerResult(result: StageWorkerResult): Promise<void> {

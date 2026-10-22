@@ -14,7 +14,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 
 | Doc | What you'll learn |
 |-----|-------------------|
-| [Quick start](quickstart.md) | Install, `sf init`, path-based run |
+| [Quick start](quickstart.md) | Recommended: pull the published image. Node install and `sf init` are the other path |
 | [YAML catalog](yaml-catalog.md) | Author dialect `io` / `verify` / `on_verify_fail` and wiring `route` / `entry` / `type: loop` / [Clone Chain](yaml-catalog.md#clone-chain) ([upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs)) |
 | [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf run-stage`, `sf validate`, `sf envelope`, `sf ui`, `sf mcp`, `sf providers` |
 | [Harness skills suite](skills-suite.md) | `npx skills add tejasghutukade/stageflow` — router + five job skills for Cursor, Claude Code, Codex, Pi, and OpenCode |
@@ -49,7 +49,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | Doc | What you'll learn |
 |-----|-------------------|
 | [Data directory](data-directory.md) | Durable root layout, keep vs disposable, image user, version support |
-| [Docker and self-hosting](docker.md) | Local Compose try (`.env.example`, control token, providers), pull/run, never mount docker.sock, browser image recipes (`Dockerfile.browser`, `Dockerfile.browser-sandbox`) and container browser host config, backup/restore, provenance, hardened egress (docs-only) |
+| [Docker and self-hosting](docker.md) | Local Compose try (`.env.example`, control token, providers), pull/run, Compose stage sandbox, browser image recipes (`Dockerfile.browser`, `Dockerfile.browser-sandbox`) and container browser host config, backup/restore, provenance, hardened egress (docs-only) |
 | [Operator console](operator-console.md) | Navigation, command palette, keyboard shortcuts and routes |
 | [Console: Overview](console-overview.md) | Control center: what needs you, what is running, system health, run trends |
 | [Console: Inbox](console-inbox.md) | Gates and agent approvals waiting on you, desktop notifications |

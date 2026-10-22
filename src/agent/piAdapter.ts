@@ -79,6 +79,12 @@ import {
   type AskOperatorWaitBridge,
 } from "../tools/askOperator.js";
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
+import {
+  createSandboxBashTool,
+  createSandboxEditTool,
+  createSandboxReadTool,
+  createSandboxWriteTool,
+} from "./sandboxPiTools.js";
 import { createSendEmailTool } from "../tools/sendEmail.js";
 import { createSendMessageTool } from "../tools/sendMessage.js";
 import { createMemoryStoreBashDenyExtension } from "../memory/bashDeny.js";
@@ -627,6 +633,7 @@ function buildUserPrompt(
 
   const attempt = input.roots.attempt ?? 1;
   const attemptArtifactsPath = `stages/${runtimeStageId(input)}/attempts/${attempt}/artifacts/`;
+  const sandboxed = input.roots.containerName !== undefined;
   const skillBaseDirs = [
     input.stage.skill !== undefined && input.skillFilePath !== undefined
       ? path.dirname(input.skillFilePath)
@@ -642,8 +649,18 @@ function buildUserPrompt(
     (input.stage.email?.length ?? 0) > 0
       ? `Large tool results are saved automatically as stage artifacts under ${attemptArtifactsPath}${TOOL_OUTPUT_ARTIFACT_DIR}/. The tool result names the path. Read or grep that file; do not copy tool output into ${artifactToolName ?? "an artifact"}.`
       : "";
-  const artifactGuidance =
-    input.roots.mode === "bound" && artifactToolName !== undefined
+  const artifactGuidance = sandboxed
+    ? [
+        "Sandbox desk: /workspace. read, bash, write, and edit run only inside that desk.",
+        input.roots.checkoutRoot
+          ? `Checkout: /workspace/checkout. The host checkout path is not mounted.`
+          : "This stage has no checkout. Scratch files go in /workspace/work.",
+        "Attempt artifacts are at /workspace/artifacts. Scratch space is /workspace/work.",
+        artifactToolName !== undefined
+          ? `Create factory stage artifacts only with ${artifactToolName} (path relative to ${attemptArtifactsPath}). Use the returned run-relative path in ${emitToolName}.`
+          : `Create factory stage artifacts under ${attemptArtifactsPath} relative to the run folder.`,
+      ].join("\n")
+    : input.roots.mode === "bound" && artifactToolName !== undefined
       ? [
           `Project checkout (agent cwd): ${input.roots.checkoutRoot}`,
           `Factory run workspace: ${input.roots.runWorkspaceDir}`,
@@ -1372,6 +1389,20 @@ async function prepareStageSessionWiring(
         customTools.push(defineTool(definition));
         tools.push(definition.name);
       }
+    }
+    if (roots.containerName !== undefined) {
+      const sandboxTools = {
+        containerName: roots.containerName,
+        ...(roots.containerDockerBin !== undefined
+          ? { dockerBin: roots.containerDockerBin }
+          : {}),
+      };
+      customTools.push(
+        defineTool(createSandboxReadTool(sandboxTools)),
+        defineTool(createSandboxWriteTool(sandboxTools)),
+        defineTool(createSandboxEditTool(sandboxTools)),
+        defineTool(createSandboxBashTool(sandboxTools)),
+      );
     }
 
     return {

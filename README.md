@@ -53,9 +53,43 @@ The scheduler owns orchestration semantics: DAG readiness, bounded parallelism, 
 
 See [Architecture](docs/architecture.md) for component boundaries, execution flow, persistence, recovery behavior, and the tradeoffs behind fresh sessions and explicit handoffs.
 
-## Installation
+## Get started
 
-Requires **Node.js ≥ 20**.
+### Docker (recommended)
+
+Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.39` is the current minor tag (`0.39.0` is that exact release).
+
+```bash
+docker run --rm --name stageflow \
+  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
+  -p 127.0.0.1:3847:3847 \
+  -v stageflow-data:/data \
+  ghcr.io/tejasghutukade/stageflow:0.39 \
+  sf ui
+```
+
+Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Connect a provider under **Settings → Providers**, then **New pipeline** on the Pipelines page. The `stageflow-data` volume keeps that state across runs.
+
+The process inside the container binds `0.0.0.0`, which is what Docker port publish needs. The `-p` address keeps the port on this machine, and the allow flag lets it start without a bearer. Do not publish the port on `0.0.0.0` with that flag set. `sf ui` is required because the image command is `sf mcp`.
+
+To show the console a project directory:
+
+```bash
+docker run --rm --name stageflow \
+  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
+  -e STAGEFLOW_ENSURE_PROJECT_ROOTS=/project \
+  -p 127.0.0.1:3847:3847 \
+  -v stageflow-data:/data \
+  -v "$PWD":/project \
+  ghcr.io/tejasghutukade/stageflow:0.39 \
+  sf ui
+```
+
+Building from this checkout, instead of pulling, is [Docker — Local try](docs/docker.md#local-try-compose).
+
+### Node
+
+Install the `sf` command on the machine when you want it in the shell. Requires **Node.js ≥ 20**.
 
 **Quick install (macOS / Linux):**
 
@@ -75,6 +109,16 @@ npm i -g ./stageflow-*.tgz
 
 `better-sqlite3` ships prebuilds for common platforms. `--ignore-scripts` is fine when a prebuild exists. Benign `node-gyp` warnings during install can be ignored if `require("better-sqlite3")` works.
 
+In a project directory (preferably a git repo):
+
+```bash
+sf init
+sf ui
+sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
+```
+
+`sf init` scaffolds `stageflow.yaml`, `pipelines/hello.pipeline.yaml`, and `tasks/hello.task.yaml`. Connect a provider before `sf run` — see below. The console is [http://127.0.0.1:3847](http://127.0.0.1:3847).
+
 **Harness skills** (Cursor, Claude Code, Codex, Pi, OpenCode) — from a consumer project:
 
 ```bash
@@ -83,28 +127,9 @@ npx skills add tejasghutukade/stageflow
 
 Then ask the agent to set up Stageflow. Details: [docs/skills-suite.md](docs/skills-suite.md).
 
-## Quick start
-
-In a project directory (preferably a git repo):
-
-```bash
-sf init
-```
-
-This scaffolds `stageflow.yaml`, `pipelines/hello.pipeline.yaml` (inline stage), and `tasks/hello.task.yaml`.
-
-Run (after connecting a provider — see below):
-
-```bash
-sf ui                          # operator console at http://127.0.0.1:3847
-sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
-```
-
 **Workshop** (**New pipeline** on the Pipelines page, or `#/workshop`; it has no rail item) drafts a pipeline in chat and saves it under `workshop/<pipeline-id>/` so it shows up on Run. Guide: [docs/workshop.md](docs/workshop.md).
 
 Expanded walkthrough: [docs/quickstart.md](docs/quickstart.md)
-
-**Docker Compose** (UI + MCP in one Host): copy [`.env.example`](.env.example) → `.env`, then `docker compose up --build -d`. The shipped compose file publishes port 3847 on localhost only and does not require a control token. Checklist: [docs/docker.md](docs/docker.md#local-try-compose).
 
 ## Connect a model provider
 

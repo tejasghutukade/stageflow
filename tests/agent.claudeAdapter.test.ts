@@ -473,6 +473,59 @@ describe("ClaudeAgentAdapter — run loop", () => {
   });
 });
 
+describe("ClaudeAgentAdapter — bash-in-a-box toolAliases", () => {
+  it("does not set toolAliases or register sandbox_bash when roots.containerName is undefined (default, unchanged behavior)", async () => {
+    queryImpl = emptyStream;
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    await adapter.runStage(baseInput());
+
+    expect(lastQueryOptions?.toolAliases).toBeUndefined();
+    expect(lastQueryOptions?.tools).toEqual(["Read", "Write", "Edit", "Bash"]);
+    const mcpServers = lastQueryOptions?.mcpServers as Record<
+      string,
+      { instance: { tools: MockToolDef[] } }
+    >;
+    const toolNames = mcpServers.stageflow.instance.tools.map((t) => t.name);
+    expect(toolNames).not.toContain("sandbox_bash");
+    expect(toolNames).not.toContain("sandbox_read");
+    expect(toolNames).not.toContain("sandbox_write");
+    expect(toolNames).not.toContain("sandbox_edit");
+  });
+
+  it("aliases Read, Write, Edit, and Bash onto sandbox tools when roots.containerName is set", async () => {
+    queryImpl = emptyStream;
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const input = baseInput();
+    await adapter.runStage({
+      ...input,
+      roots: { ...input.roots, containerName: "stageflow-run-1-review-1-abc" },
+    });
+
+    expect(lastQueryOptions?.toolAliases).toEqual({
+      Bash: "mcp__stageflow__sandbox_bash",
+      Read: "mcp__stageflow__sandbox_read",
+      Write: "mcp__stageflow__sandbox_write",
+      Edit: "mcp__stageflow__sandbox_edit",
+    });
+    expect(lastQueryOptions?.tools).toEqual(["Read", "Write", "Edit", "Bash"]);
+    const mcpServers = lastQueryOptions?.mcpServers as Record<
+      string,
+      { instance: { tools: MockToolDef[] } }
+    >;
+    const toolNames = mcpServers.stageflow.instance.tools.map((t) => t.name);
+    expect(toolNames).toEqual(
+      expect.arrayContaining([
+        "sandbox_bash",
+        "sandbox_read",
+        "sandbox_write",
+        "sandbox_edit",
+      ]),
+    );
+  });
+});
+
 describe("ClaudeAgentAdapter — MCP connect-fail", () => {
   let workspaceDir: string;
 

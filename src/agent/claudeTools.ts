@@ -49,11 +49,23 @@ import {
 } from "../tools/askOperator.js";
 import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
 import type { PreEmitCheckOptions } from "../envelope/preEmitChecks.js";
+import { execInSandboxContainer as defaultExecInSandboxContainer } from "../runtime/sandboxContainer.js";
+import {
+  editSandboxFile,
+  formatSandboxBashResult,
+  readSandboxFile,
+  sliceSandboxLines,
+  writeSandboxFile,
+} from "../runtime/sandboxFiles.js";
 
 export const STAGEFLOW_MCP_SERVER_NAME = "stageflow";
 export const EMIT_STAGE_ENVELOPE_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__emit_stage_envelope`;
 export const WRITE_STAGE_ARTIFACT_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__write_stage_artifact`;
 export const ASK_OPERATOR_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__ask_operator`;
+export const SANDBOX_BASH_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__sandbox_bash`;
+export const SANDBOX_READ_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__sandbox_read`;
+export const SANDBOX_WRITE_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__sandbox_write`;
+export const SANDBOX_EDIT_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__sandbox_edit`;
 
 export type AskOperatorCapture = { prompt?: AskOperatorPrompt };
 
@@ -105,6 +117,18 @@ const askOperatorShape = {
   id: z.string().optional(),
   questions: z.array(z.record(z.string(), z.unknown())).optional(),
   artifacts: z.array(z.string()).optional(),
+};
+
+const sandboxBashShape = {
+  command: z.string().min(1),
+};
+
+type SandboxExecFn = typeof defaultExecInSandboxContainer;
+
+export type SandboxBashOptions = {
+  containerName: string;
+  dockerBin?: string;
+  execute?: SandboxExecFn;
 };
 
 /** Adapts a `{content, details?, isError?, terminate?}` tool result to plain MCP CallToolResult. */
@@ -160,6 +184,116 @@ function buildAskOperatorTool(
   );
 }
 
+/**
+ * When a sandbox container is set, Read/Write/Edit/Bash are aliased onto
+ * these tools. They run against the attempt desk at /workspace. Other stage
+ * tools stay on the host.
+ */
+function buildSandboxBashTool(options: SandboxBashOptions) {
+  const execute = options.execute ?? defaultExecInSandboxContainer;
+  return tool(
+    "sandbox_bash",
+    "Run a shell command inside this stage attempt's sandbox. The working directory is /workspace. The host filesystem is not mounted.",
+    sandboxBashShape,
+    async (args) => {
+      let result;
+      try {
+        result = await execute({
+          containerName: options.containerName,
+          command: args.command,
+          dockerBin: options.dockerBin,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `sandbox_bash could not run: ${message}` }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: formatSandboxBashResult(result) }],
+      };
+    },
+  );
+}
+
+const sandboxReadShape = {
+  file_path: z.string().min(1),
+  offset: z.number().optional(),
+  limit: z.number().optional(),
+};
+
+const sandboxWriteShape = {
+  file_path: z.string().min(1),
+  content: z.string(),
+};
+
+const sandboxEditShape = {
+  file_path: z.string().min(1),
+  old_string: z.string(),
+  new_string: z.string(),
+};
+
+function sandboxFileError(err: unknown, label: string) {
+  const message = err instanceof Error ? err.message : String(err);
+  return {
+    content: [{ type: "text" as const, text: `${label} could not run: ${message}` }],
+    isError: true,
+  };
+}
+
+function buildSandboxReadTool(options: SandboxBashOptions) {
+  return tool(
+    "sandbox_read",
+    "Read a file inside this stage attempt's sandbox. Paths are relative to /workspace or absolute under /workspace. Host paths are rejected.",
+    sandboxReadShape,
+    async (args) => {
+      try {
+        const text = await readSandboxFile(options, args.file_path);
+        return {
+          content: [{ type: "text" as const, text: sliceSandboxLines(text, args.offset, args.limit) }],
+        };
+      } catch (err) {
+        return sandboxFileError(err, "sandbox_read");
+      }
+    },
+  );
+}
+
+function buildSandboxWriteTool(options: SandboxBashOptions) {
+  return tool(
+    "sandbox_write",
+    "Write a file inside this stage attempt's sandbox. Paths are relative to /workspace or absolute under /workspace. Host paths are rejected.",
+    sandboxWriteShape,
+    async (args) => {
+      try {
+        await writeSandboxFile(options, args.file_path, args.content);
+        return { content: [{ type: "text" as const, text: `Successfully wrote to ${args.file_path}` }] };
+      } catch (err) {
+        return sandboxFileError(err, "sandbox_write");
+      }
+    },
+  );
+}
+
+function buildSandboxEditTool(options: SandboxBashOptions) {
+  return tool(
+    "sandbox_edit",
+    "Edit a file inside this stage attempt's sandbox. old_string must match exactly once. Paths stay under /workspace.",
+    sandboxEditShape,
+    async (args) => {
+      try {
+        await editSandboxFile(options, args.file_path, [
+          { oldText: args.old_string, newText: args.new_string },
+        ]);
+        return { content: [{ type: "text" as const, text: `Successfully edited ${args.file_path}` }] };
+      } catch (err) {
+        return sandboxFileError(err, "sandbox_edit");
+      }
+    },
+  );
+}
+
 export function buildStageflowMcpServer(options: {
   capture: EmitCapture;
   payloadSchema?: unknown;
@@ -171,6 +305,7 @@ export function buildStageflowMcpServer(options: {
     capture: AskOperatorCapture;
     allowedKinds?: readonly AskOperatorKind[];
   };
+  sandboxBash?: SandboxBashOptions;
 }): McpServerConfig {
   const emitDef = createEmitStageEnvelopeTool(
     options.capture,
@@ -203,6 +338,14 @@ export function buildStageflowMcpServer(options: {
   if (options.askOperator) {
     tools.push(
       buildAskOperatorTool(options.askOperator.capture, options.askOperator.allowedKinds),
+    );
+  }
+  if (options.sandboxBash) {
+    tools.push(
+      buildSandboxReadTool(options.sandboxBash),
+      buildSandboxWriteTool(options.sandboxBash),
+      buildSandboxEditTool(options.sandboxBash),
+      buildSandboxBashTool(options.sandboxBash),
     );
   }
 
