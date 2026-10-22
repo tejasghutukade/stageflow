@@ -2,7 +2,11 @@ import { useEffect, useState } from "react";
 import { LuChevronLeft, LuChevronRight, LuCheck, LuExternalLink, LuRefreshCw, LuX } from "react-icons/lu";
 import { putEvalReview, tryEvalCase } from "../../../api";
 import type { EvalResultDetail, EvalRunDetail, EvalTryResult } from "../../../api/evalTypes";
-import { datasetPath, navigate, runStreamPath } from "../../../routes";
+import { agentRunPath, datasetPath, navigate, runStreamPath } from "../../../routes";
+import { isAgentRun } from "../agentRun";
+import { usedRealTools } from "./configModel";
+import { TranscriptList, TranscriptSection } from "./TranscriptView";
+import { errorLabel, expectedChecklist, sessionLink, transcriptView, SESSION_DELETED } from "./transcriptModel";
 import { datasetIdOf } from "../run/runDialogModel";
 import { runDatasetPath } from "../run/liveProgressModel";
 import {
@@ -33,7 +37,7 @@ import {
   type ReviewState,
 } from "./drawerModel";
 import { Chip, MONO_CLASS, TONE_TEXT } from "./ResultsParts";
-import { useCaseResults, useStageRunExists } from "./useResultsData";
+import { useAgentSession, useCaseResults, useStageRunExists } from "./useResultsData";
 
 const LABEL = "text-[11px] font-medium uppercase tracking-wide text-[var(--sf-text-3)]";
 
@@ -224,6 +228,7 @@ export function CaseDrawer({
   run,
   caseId,
   repeat,
+  drawerTab: _drawerTab,
   caseIds,
   flaky,
   vocabulary,
@@ -237,6 +242,8 @@ export function CaseDrawer({
   run: EvalRunDetail;
   caseId: string;
   repeat: number | undefined;
+  /** `?tab=transcript` opens the transcript; agent runs open it by default. */
+  drawerTab?: "transcript" | undefined;
   caseIds: string[];
   flaky: boolean;
   vocabulary: string[];
@@ -249,7 +256,12 @@ export function CaseDrawer({
 }) {
   const { data, error, loading, reload } = useCaseResults(run.eval_run_id, caseId);
   const result = data ? selectRepeat(data.repeats, repeat) : null;
-  const stageRunExists = useStageRunExists(result?.stage_run_id ?? null);
+  const agentRun = isAgentRun(run);
+  const link = result && agentRun ? sessionLink(result) : null;
+  const session = useAgentSession(link?.agentId ?? null, link?.sessionId ?? null);
+  const [section, setSection] = useState<"transcript" | "grades">("transcript");
+  const stageRunExists = useStageRunExists(agentRun ? null : (result?.stage_run_id ?? null));
+  const realTools = usedRealTools(run);
   const [rerun, setRerun] = useState<{ busy: boolean; error: string | null; result: EvalTryResult | null }>({
     busy: false,
     error: null,
@@ -259,6 +271,7 @@ export function CaseDrawer({
 
   useEffect(() => {
     setRerun({ busy: false, error: null, result: null });
+    setSection("transcript");
   }, [caseId, repeat]);
 
   useEffect(() => {
@@ -290,6 +303,9 @@ export function CaseDrawer({
   const output = result && !errored ? outputView(result) : null;
   const expected = result && !errored ? expectedFindings(result) : null;
   const panel = rerun.result ? rerunPanelView(rerun.result) : null;
+  const view = result && agentRun ? transcriptView(result) : null;
+  const rerunView = rerun.result && agentRun ? transcriptView(rerun.result.result) : null;
+  const errorInfo = result && errored ? errorView(result) : null;
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end" role="presentation">
@@ -339,6 +355,27 @@ export function CaseDrawer({
               );
             })}
           </div>
+          {agentRun && result ? (
+            <div className="flex gap-4 pt-1" role="tablist" aria-label="Case sections">
+              {(
+                [
+                  ["transcript", "Transcript"],
+                  ["grades", "Grades and review"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={section === id}
+                  onClick={() => setSection(id)}
+                  className={`border-b-2 pb-2 text-[13px] ${section === id ? "border-[var(--sf-text-1)] text-[var(--sf-text-1)]" : "border-transparent text-[var(--sf-text-2)]"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-4">
@@ -385,6 +422,7 @@ export function CaseDrawer({
                   ) : (
                     <GradeList rows={panel.grades} />
                   )}
+                  {rerunView ? <TranscriptList view={rerunView} /> : null}
                 </section>
               ) : null}
               {rerun.error ? (
@@ -393,7 +431,25 @@ export function CaseDrawer({
                 </p>
               ) : null}
 
-              {errored ? (
+              {agentRun && section === "transcript" ? (
+                <TranscriptSection
+                  view={view}
+                  expected={view ? expectedChecklist((data.case as { expected?: unknown }).expected, view.subject) : null}
+                  error={errorInfo ? { label: errorLabel(errorInfo.code), ...errorInfo } : null}
+                />
+              ) : null}
+
+              {agentRun && section === "grades" && errored ? (
+                <p className="text-[13px] text-[var(--sf-text-2)]">The conversation failed, so it was not graded.</p>
+              ) : null}
+              {agentRun && section === "grades" && !errored ? (
+                <section className="flex flex-col gap-2">
+                  <h3 className={LABEL}>Grades for repeat {result.repeat_index + 1}</h3>
+                  <GradeList rows={gradeRows(result)} />
+                </section>
+              ) : null}
+
+              {agentRun ? null : errored ? (
                 <section className="flex flex-col gap-2">
                   <h3 className={LABEL}>Result</h3>
                   <div className="rounded-lg border border-[var(--sf-fail)] bg-[var(--sf-fail-bg)] p-3 text-[13px]">
@@ -444,6 +500,7 @@ export function CaseDrawer({
                 </>
               )}
 
+              {agentRun && section === "transcript" ? null : (
               <ReviewCard
                 run={run}
                 result={result}
@@ -454,11 +511,23 @@ export function CaseDrawer({
                   reload();
                 }}
               />
+              )}
             </>
           ) : null}
         </div>
 
         <footer className="flex shrink-0 items-center gap-2 border-t border-[var(--sf-hairline)] px-5 py-3">
+          {agentRun && link && session.status === "found" ? (
+            <button
+              type="button"
+              onClick={() => navigate(agentRunPath(link.agentId, link.sessionId, session.runId))}
+              className="flex h-8 items-center gap-2 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] font-medium text-[var(--sf-text-1)]"
+            >
+              <LuExternalLink className="size-3.5" aria-hidden />
+              Open agent run
+            </button>
+          ) : null}
+          {agentRun && link && session.status === "deleted" ? <span className="text-xs text-[var(--sf-text-3)]">{SESSION_DELETED}</span> : null}
           {result && result.stage_run_id && stageRunExists ? (
             <button
               type="button"
@@ -471,7 +540,8 @@ export function CaseDrawer({
           ) : null}
           <button
             type="button"
-            disabled={rerun.busy}
+            disabled={rerun.busy || realTools}
+            title={realTools ? "This eval uses real tools. Run it from the Run dialog to confirm." : undefined}
             onClick={() => void runAgain()}
             className="flex h-8 items-center gap-2 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] font-medium text-[var(--sf-text-1)] disabled:opacity-50"
           >

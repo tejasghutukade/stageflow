@@ -9,6 +9,8 @@ import { GradersStep } from "./GradersStep";
 import { ReviewStep } from "./ReviewStep";
 import { SetupStep } from "./SetupStep";
 import { footerText } from "./graderForms";
+import { findAgent } from "./agentPickerModel";
+import { useAgentTargets } from "./useAgentTargets";
 import { useStageFields, useWizardData } from "./useWizardData";
 import { useWizardPreview } from "./useWizardPreview";
 import { createFromDraft } from "./wizardCreate";
@@ -22,8 +24,10 @@ import {
   evalFilePath,
   goBack,
   goNext,
+  agentTargetOf,
   holdsCases,
   initialDraft,
+  isAgentDraft,
   preselectRow,
   sameTarget,
   validateEvalId,
@@ -39,6 +43,8 @@ const SUBTITLES = {
   graders: "Decide what a good result looks like. Checks are exact; rubrics are judged by a model.",
   review: "Name the eval, check the summary, then create it.",
 } as const;
+
+const AGENT_SETUP_SUBTITLE = "Pick the agent to check, the scenarios to run it on and how the conversation goes. You add graders next.";
 
 function Stepper({ step }: { step: WizardDraft["step"] }) {
   const current = WIZARD_STEPS.indexOf(step);
@@ -59,25 +65,35 @@ function Stepper({ step }: { step: WizardDraft["step"] }) {
   );
 }
 
-export function NewEvalWizard({ pipeline, stage, file }: Preselect) {
+export function NewEvalWizard({ pipeline, stage, file, agent }: Preselect) {
   const data = useWizardData();
   const [draft, setDraft] = useState<WizardDraft>(initialDraft);
   const [busy, setBusy] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [datasetWritten, setDatasetWritten] = useState(false);
   const preselected = useRef(false);
+  const preselectedAgent = useRef(false);
+  const agentDraft = isAgentDraft(draft);
+  const agents = useAgentTargets(agentDraft || agent !== undefined, draft.target?.projectRoot);
   const takenEvalIds = useMemo(() => data.evals.map((e) => e.id), [data.evals]);
   const datasetPaths = useMemo(() => data.datasets.map((d) => d.path), [data.datasets]);
 
   useEffect(() => {
-    if (preselected.current || data.loading) return;
+    if (preselected.current || data.loading || agent) return;
     preselected.current = true;
     const hit = preselectRow(data.rows, { ...(pipeline ? { pipeline } : {}), ...(stage ? { stage } : {}), ...(file ? { file } : {}) });
     if (hit && !hit.row.readOnly) setDraft((d) => withTarget(d, hit.target, null, takenEvalIds));
   }, [data.loading, data.rows, pipeline, stage, file, takenEvalIds]);
 
+  useEffect(() => {
+    if (preselectedAgent.current || !agent || agents.loading || data.loading) return;
+    preselectedAgent.current = true;
+    const hit = findAgent(agents.items, agent);
+    if (hit) setDraft((d) => withTarget(d, agentTargetOf(hit), null, takenEvalIds));
+  }, [agent, agents.loading, agents.items, data.loading, takenEvalIds]);
+
   const row = data.rows.find((r) => sameTarget(r, draft.target)) ?? null;
-  const fields = useStageFields(draft.target, row);
+  const fields = useStageFields(agentDraft ? null : draft.target, row);
   const writeRoots = writeRootsFor(data.writeRoots, draft.target);
   const { preview, dirs } = useWizardPreview(draft, datasetPaths, draft.target !== null && draft.dataset !== null, writeRoots);
   const findings = visibleFindings(preview.findings, datasetWritten || holdsCases(draft));
@@ -113,14 +129,16 @@ export function NewEvalWizard({ pipeline, stage, file }: Preselect) {
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--sf-ground)]">
       <PageHeader
         title="New eval"
-        subtitle={SUBTITLES[step]}
+        subtitle={step === "setup" && agentDraft ? AGENT_SETUP_SUBTITLE : SUBTITLES[step]}
         crumbs={[{ label: "Evals", onClick: () => navigate(evalsPath()) }]}
         actions={<Stepper step={step} />}
       />
-      {step === "setup" ? <SetupStep data={data} draft={draft} setDraft={setDraft} fields={fields} preview={preview} dirs={dirs} /> : null}
-      {step === "graders" ? <GradersStep draft={draft} setDraft={setDraft} dirs={dirs} findings={findings} judgeModels={judgeModels} /> : null}
+      {step === "setup" ? <SetupStep data={data} agents={agents} draft={draft} setDraft={setDraft} fields={fields} preview={preview} dirs={dirs} /> : null}
+      {step === "graders" ? (
+        <GradersStep draft={draft} setDraft={setDraft} dirs={dirs} findings={findings} judgeModels={judgeModels} agentTools={agents.items.find((a) => a.id === draft.target?.agentId)?.tools ?? []} />
+      ) : null}
       {step === "review" ? (
-        <ReviewStep draft={draft} setDraft={setDraft} takenIds={takenEvalIds} preview={preview} dirs={dirs} datasetWritten={datasetWritten} createError={createError} />
+        <ReviewStep draft={draft} setDraft={setDraft} takenIds={takenEvalIds} preview={preview} dirs={dirs} datasetWritten={datasetWritten} createError={createError} agentTools={agents.items.find((a) => a.id === draft.target?.agentId)?.tools ?? []} />
       ) : null}
       <footer className="flex shrink-0 items-center justify-between gap-4 border-t border-t-[var(--sf-hairline)] px-7 py-3">
         <p className="min-w-0 text-[13px] text-[var(--sf-text-3)]">

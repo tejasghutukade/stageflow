@@ -20,6 +20,11 @@ import {
   buildGraderRows,
   buildKpiTiles,
   buildStageDiff,
+  buildAgentDiff,
+  isAgentCompare,
+  agentIdOfRun,
+  COMPARE_SUBTITLE_AGENT,
+  COMPARE_SUBTITLE_STAGE,
   buildStrip,
   caseCounts,
   configChip,
@@ -45,7 +50,8 @@ export function ComparePage({ evalId, a, b }: { evalId: string; a?: number; b?: 
       rows: buildCaseRows(result.cases, tab, cases),
       chip: configChip(result),
       note: footerNote(result),
-      stage: buildStageDiff(result, stageIdOf(runB), expanded),
+      stage: isAgentCompare(result) ? buildAgentDiff(result, agentIdOfRun(runB), expanded) : buildStageDiff(result, stageIdOf(runB), expanded),
+      agent: isAgentCompare(result),
     };
   }, [data, tab, expanded]);
 
@@ -64,7 +70,7 @@ export function ComparePage({ evalId, a, b }: { evalId: string; a?: number; b?: 
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--sf-ground)]">
       <PageHeader
         title="Compare runs"
-        subtitle="See what changed in the stage and what that did to the results."
+        subtitle={view?.agent ? COMPARE_SUBTITLE_AGENT : COMPARE_SUBTITLE_STAGE}
         crumbs={[
           { label: "Evals", onClick: () => navigate(evalsPath()) },
           { label: evalId, onClick: () => navigate(evalRunPath(evalId, data.status === "ready" ? data.selection.b : 1)) },
@@ -93,7 +99,7 @@ export function ComparePage({ evalId, a, b }: { evalId: string; a?: number; b?: 
               {view.stage ? (
                 <StageDiffPanel model={view.stage} expanded={expanded} onToggle={() => setExpanded((v) => !v)} />
               ) : (
-                <StageUnchanged />
+                <StageUnchanged agent={view.agent} />
               )}
               <ConstantStrip strip={view.strip} />
               <KpiStrip tiles={view.tiles} />

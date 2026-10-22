@@ -1,4 +1,7 @@
+import { LuTriangleAlert } from "react-icons/lu";
+import type { EvalAgentTool } from "../../../api/evalTypes";
 import { INPUT, TEXTAREA } from "../datasets/DialogShell";
+import { REAL_BLOCKED_NOTE, REAL_REVIEW_NOTE, REAL_CHIP, conversationSummary, stubbedHint, toConversation } from "./conversationModel";
 import { formatCost, formatPercent } from "../format";
 import { describeGrader, chipFor, weightLabel } from "./graderForms";
 import { CARD, Chip, Field, FindingsList, MONO, YamlBlock } from "./parts";
@@ -6,6 +9,7 @@ import type { WizardPreview } from "./useWizardPreview";
 import {
   estimateText,
   holdsCases,
+  isAgentDraft,
   datasetFilePath,
   datasetSummary,
   evalFilePath,
@@ -24,6 +28,7 @@ type Props = {
   dirs: WriteDirs;
   datasetWritten: boolean;
   createError: string | null;
+  agentTools?: EvalAgentTool[];
 };
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -35,11 +40,14 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-export function ReviewStep({ draft, setDraft, takenIds, preview, dirs, datasetWritten, createError }: Props) {
+export function ReviewStep({ draft, setDraft, takenIds, preview, dirs, datasetWritten, createError, agentTools = [] }: Props) {
   const idError = validateEvalId(draft.id, takenIds);
   const ds = draft.dataset;
   const d = draft.defaults;
   const findings = visibleFindings(preview.findings, datasetWritten || holdsCases(draft));
+  const agent = isAgentDraft(draft);
+  const conv = draft.conversation;
+  const stubbed = agent && conv.tools === "read_only" ? stubbedHint(agentTools, conv.readOnlyTools) : null;
 
   return (
     <div className="flex min-h-0 flex-1 justify-center overflow-y-auto px-7 py-5">
@@ -55,16 +63,37 @@ export function ReviewStep({ draft, setDraft, takenIds, preview, dirs, datasetWr
 
         <section className={`${CARD} overflow-hidden`} aria-label="Summary">
           <Row label="Target">
-            <span className={MONO}>{draft.target?.label}</span>
+            {agent ? <Chip>Agent</Chip> : null}
+            <span className={`${MONO} ${agent ? "ml-2" : ""}`}>{draft.target?.label}</span>
+            {agent && draft.target?.revision !== undefined ? <span className="ml-2 text-xs text-[var(--sf-text-3)]">r{draft.target.revision}</span> : null}
             {draft.target?.model ? <span className="ml-2 text-xs text-[var(--sf-text-3)]">{draft.target.model}</span> : null}
           </Row>
+          {agent ? (
+            <Row label="Conversation">
+              <span>{conversationSummary(toConversation(conv))}</span>
+              {conv.mode === "simulated" ? <span className="ml-2 text-xs text-[var(--sf-text-3)]">user {conv.userModel ?? "same as judge"}</span> : null}
+              {conv.readOnlyTools.length > 0 ? <p className={`${MONO} mt-1 text-xs text-[var(--sf-text-3)]`}>read-only: {conv.readOnlyTools.join(", ")}</p> : null}
+              {stubbed ? <p className="mt-1 text-xs text-[var(--sf-text-3)]">{stubbed}</p> : null}
+              {conv.tools === "real" ? (
+                <p role="alert" className="mt-2 flex items-start gap-2 rounded-lg border-l-4 border-l-[var(--sf-needs)] bg-[var(--sf-needs-bg)] px-3 py-2 text-xs text-[var(--sf-text-1)]">
+                  <LuTriangleAlert className="mt-0.5 size-3.5 shrink-0 text-[var(--sf-needs)]" aria-hidden />
+                  <span>
+                    <strong className="mr-1.5 tracking-wide text-[var(--sf-needs)]">{REAL_CHIP}</strong>
+                    {REAL_REVIEW_NOTE} {conv.allowReal ? "I understand: ticked." : REAL_BLOCKED_NOTE}
+                  </span>
+                </p>
+              ) : null}
+            </Row>
+          ) : null}
           <Row label="Dataset">
             {ds ? (
               <>
                 <span className={MONO}>{datasetFilePath(dirs, ds.name)}</span>
                 <span className="ml-2 text-xs text-[var(--sf-text-3)]">
-                  {datasetSummary(ds).title} · {ds.skipped > 0 ? `${ds.skipped} skipped` : "all match"}
-                  {ds.source === "sample" || ds.source === "runs" ? ` · from ${ds.source === "sample" ? "sample data" : "past runs"}` : ""}
+                  {datasetSummary(ds, agent).title} · {ds.skipped > 0 ? `${ds.skipped} skipped` : agent ? "all valid" : "all match"}
+                  {ds.source === "sample" || ds.source === "runs" || ds.source === "sessions"
+                    ? ` · from ${ds.source === "sample" ? "sample data" : ds.source === "sessions" ? "past sessions" : "past runs"}`
+                    : ""}
                 </span>
               </>
             ) : null}

@@ -26,6 +26,7 @@ export function datasetInput(draft: WizardDraft, dirs: WriteDirs): EvalCreateDat
   if (!ds || !t) return null;
   const common = { name: ds.name, directory: dirs.datasets, ...(t.projectRoot ? { project_root: t.projectRoot } : {}) };
   if (ds.source === "sample") return { ...common, source: "sample", target: datasetTarget(t) };
+  if (ds.source === "sessions") return { ...common, source: "sessions", target: { agent_id: t.agentId ?? t.stageId }, session_ids: ds.runIds };
   if (ds.source === "runs") return { ...common, source: "runs", target: datasetTarget(t), run_ids: ds.runIds };
   return { ...common, cases: ds.cases ?? [] };
 }

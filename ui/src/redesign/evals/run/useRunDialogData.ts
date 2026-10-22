@@ -72,6 +72,7 @@ export function useRunDialogData(target: RunDialogTarget | null): RunDialogData 
         casesTotal: casesResult?.total ?? null,
         lastCompleted,
         lastRunConfig,
+        ...(casesResult ? { cases: casesResult.cases } : {}),
       });
       return {
         status: "ready" as const,

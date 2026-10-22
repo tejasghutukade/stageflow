@@ -1,5 +1,5 @@
 import type { EvalResultRow, EvalResultsPage, EvalResultsQuery, EvalResultStatus } from "../../../api/evalTypes";
-import { formatCost, formatDuration, formatScore } from "../format";
+import { formatCost, formatDuration, formatMean, formatScore } from "../format";
 import type { Tone } from "./headerModel";
 
 export const PAGE_SIZE = 25;
@@ -16,6 +16,9 @@ export type CaseRowView = {
   failedGraders: string;
   timeText: string;
   costText: string;
+  /** Agent runs only: mean per case, from the API. */
+  turnsText?: string;
+  toolsText?: string;
 };
 
 export function dotKind(status: EvalResultStatus, passed: boolean): DotKind {
@@ -42,6 +45,9 @@ export function caseRowView(row: EvalResultRow, threshold: number): CaseRowView 
     failedGraders: row.failed_graders.length > 0 ? row.failed_graders.join(", ") : "—",
     timeText: formatDuration(row.latency_ms_p50),
     costText: formatCost(row.cost_usd),
+    ...(row.turns !== undefined || row.tool_calls !== undefined
+      ? { turnsText: formatMean(row.turns), toolsText: formatMean(row.tool_calls) }
+      : {}),
   };
 }
 

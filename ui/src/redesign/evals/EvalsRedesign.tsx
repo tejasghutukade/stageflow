@@ -44,7 +44,7 @@ function Key({ children }: { children: string }) {
   );
 }
 
-export function EvalsRedesign({ stage }: { stage?: string }) {
+export function EvalsRedesign({ stage, agent }: { stage?: string; agent?: string }) {
   const [data, setData] = useState<EvalListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,14 +58,14 @@ export function EvalsRedesign({ stage }: { stage?: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setData(await fetchEvals(stage ? { target_stage: stage } : {}));
+      setData(await fetchEvals({ ...(stage ? { target_stage: stage } : {}), ...(agent ? { agent } : {}) }));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [stage]);
+  }, [stage, agent]);
 
   useEffect(() => {
     void load();
@@ -85,8 +85,8 @@ export function EvalsRedesign({ stage }: { stage?: string }) {
   }, []);
 
   const items = data?.items ?? [];
-  const tabs = useMemo(() => evalTabs(items), [items]);
-  const visible = useMemo(() => filterEvals(items, { tab, query, stage }), [items, tab, query, stage]);
+  const tabs = useMemo(() => evalTabs(items, true), [items]);
+  const visible = useMemo(() => filterEvals(items, { tab, query, stage, ...(agent ? { agent } : {}) }), [items, tab, query, stage, agent]);
   const rows = useMemo(() => visible.map(evalRowModel), [visible]);
   const ids = useMemo(() => rows.map((row) => row.id), [rows]);
   const banner = bannerModel(data?.banner ?? null);
@@ -158,7 +158,7 @@ export function EvalsRedesign({ stage }: { stage?: string }) {
     "evals",
   );
 
-  const isEmpty = !loading && !error && items.length === 0 && !stage;
+  const isEmpty = !loading && !error && items.length === 0 && !stage && !agent;
   const noMatches = !loading && !error && rows.length === 0;
   const showTable = !loading && !error && rows.length > 0;
 
@@ -251,6 +251,22 @@ export function EvalsRedesign({ stage }: { stage?: string }) {
                   className="min-w-0 flex-1 border-none bg-transparent text-[13px] text-[var(--sf-text-1)] outline-none placeholder:text-[var(--sf-text-3)]"
                 />
               </label>
+            </div>
+          ) : null}
+
+          {agent ? (
+            <div className="flex">
+              <span className="flex h-6 items-center gap-1.5 rounded-md border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)] pl-2 pr-1 text-xs text-[var(--sf-text-2)]">
+                Showing evals for agent <span className={`${MONO} text-[var(--sf-text-1)]`}>{agent}</span>
+                <button
+                  type="button"
+                  aria-label="Show all evals"
+                  onClick={() => navigate(evalsPath())}
+                  className="flex size-4 items-center justify-center rounded-sm text-[var(--sf-text-3)] hover:text-[var(--sf-text-1)]"
+                >
+                  <LuX className="size-3" aria-hidden />
+                </button>
+              </span>
             </div>
           ) : null}
 

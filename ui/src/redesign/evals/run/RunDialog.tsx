@@ -4,13 +4,24 @@ import { LuCheck, LuChevronDown, LuPlay, LuSearch, LuX } from "react-icons/lu";
 import { fetchEvalRunEstimate, startEvalRun, fetchEvalRun } from "../../../api";
 import type { EvalRunEstimate } from "../../../api/evalTypes";
 import { evalRunPath, navigate } from "../../../routes";
+import { RealToolsPanel } from "../newEval/ConversationCard";
 import { Keycap } from "../../Keycap";
 import { MODAL_SCRIM_PT, OVERLAY_SCRIM_CLASS } from "../../overlay/overlayScrimClasses";
 import { useOverlayChrome } from "../../overlay/useOverlayChrome";
 import {
+  AGENT_JUDGE_SAME_HINT,
+  AGENT_MODEL_HELPER,
+  CONSENT_REQUIRED,
+  REAL_RUN_CONSENT,
   FOOTER_NOTE,
   JUDGE_SAME_HINT,
   STAGE_MODEL_HELPER,
+  agentDefaultLabel,
+  conversationLine,
+  needsConsent,
+  saferApprovalsOptions,
+  saferToolsOptions,
+  userModelDefaultLabel,
   buildEstimateRequest,
   buildStartRequest,
   caseLabel,
@@ -171,6 +182,11 @@ function RunDialogForm({
 
   const errors = validate(state, ctx);
   const valid = isValid(state, ctx);
+  const agent = ctx.agent;
+  const consentNeeded = needsConsent(state, ctx);
+  const conversation = conversationLine(ctx, state);
+  const toolsOptions = saferToolsOptions(ctx);
+  const approvalsOptions = saferApprovalsOptions(ctx);
   const request = useMemo(() => buildEstimateRequest(state, ctx), [state, ctx]);
   const key = estimateKey(request);
 
@@ -328,7 +344,7 @@ function RunDialogForm({
                           {checked ? <LuCheck className="size-3 text-[var(--sf-ground)]" aria-hidden /> : null}
                         </span>
                         <span className={`${MONO} w-[56px] shrink-0 truncate text-xs text-[var(--sf-text-2)]`}>{c.id}</span>
-                        <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--sf-text-1)]">{caseLabel(c)}</span>
+                        <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--sf-text-1)]">{caseLabel(c, agent !== undefined)}</span>
                       </button>
                     );
                   })
@@ -368,14 +384,14 @@ function RunDialogForm({
             {errors.costLimit ? <span className="text-xs text-[var(--sf-fail)]">{errors.costLimit}</span> : null}
           </label>
           <div className="flex flex-col gap-1.5">
-            <span className={LABEL}>Stage model</span>
+            <span className={LABEL}>{agent ? "Agent model" : "Stage model"}</span>
             <Select
-              label="Stage model"
+              label={agent ? "Agent model" : "Stage model"}
               value={state.stageModel ?? ""}
-              options={modelOptions(models, stageDefaultLabel(ctx), false)}
+              options={modelOptions(models, agent ? agentDefaultLabel(ctx) : stageDefaultLabel(ctx), false)}
               onChange={(v) => patch({ stageModel: v === "" ? null : v })}
             />
-            <span className="text-xs text-[var(--sf-text-3)]">{STAGE_MODEL_HELPER}</span>
+            <span className="text-xs text-[var(--sf-text-3)]">{agent ? AGENT_MODEL_HELPER : STAGE_MODEL_HELPER}</span>
           </div>
           <div className="flex flex-col gap-1.5">
             <span className={LABEL}>Judge model</span>
@@ -385,9 +401,58 @@ function RunDialogForm({
               options={modelOptions(models, judgeDefaultLabel(ctx), true)}
               onChange={(v) => patch({ judgeModel: v === "" ? null : v })}
             />
-            {sameHint ? <span className="text-xs text-[var(--sf-needs)]">{JUDGE_SAME_HINT}</span> : null}
+            {sameHint ? <span className="text-xs text-[var(--sf-needs)]">{agent ? AGENT_JUDGE_SAME_HINT : JUDGE_SAME_HINT}</span> : null}
           </div>
+          {agent?.anySimulated ? (
+            <div className="flex flex-col gap-1.5">
+              <span className={LABEL}>User model</span>
+              <Select
+                label="User model"
+                value={state.userModel ?? ""}
+                options={modelOptions(models, userModelDefaultLabel(ctx), true)}
+                onChange={(v) => patch({ userModel: v === "" ? null : v })}
+              />
+              <span className="text-xs text-[var(--sf-text-3)]">Plays the user. Costs tokens on every turn.</span>
+            </div>
+          ) : null}
         </section>
+
+        {agent ? (
+          <section className="flex flex-col gap-3" aria-label="Conversation">
+            <p className={`${MONO} rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-ground)] px-3 py-2 text-xs text-[var(--sf-text-2)]`}>{conversation}</p>
+            {toolsOptions.length > 1 || approvalsOptions.length > 1 ? (
+              <div className="grid grid-cols-2 gap-x-3">
+                {toolsOptions.length > 1 ? (
+                  <div className="flex flex-col gap-1.5">
+                    <span className={LABEL}>Tools for this run</span>
+                    <Select
+                      label="Tools for this run"
+                      value={state.tools ?? ""}
+                      options={toolsOptions}
+                      onChange={(v) => patch({ tools: v === "" ? null : (v as "read_only" | "mocked"), consent: false })}
+                    />
+                  </div>
+                ) : null}
+                {approvalsOptions.length > 1 ? (
+                  <div className="flex flex-col gap-1.5">
+                    <span className={LABEL}>Approvals for this run</span>
+                    <Select
+                      label="Approvals for this run"
+                      value={state.approvals ?? ""}
+                      options={approvalsOptions}
+                      onChange={(v) => patch({ approvals: v === "" ? null : (v as "deny" | "record_only") })}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {consentNeeded ? (
+              <div className="flex flex-col gap-2">
+                <RealToolsPanel checked={state.consent === true} onChange={(v) => patch({ consent: v })} label={REAL_RUN_CONSENT} blockedNote={CONSENT_REQUIRED} />
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         {compare ? (
           <label className="flex cursor-pointer items-center gap-2.5 text-[13px] text-[var(--sf-text-1)]">
@@ -413,6 +478,7 @@ function RunDialogForm({
                   {text.detail}
                   {text.notes.map((note) => ` ${note}`).join("")}
                 </p>
+                {text.footnote ? <p className="mt-1 text-xs text-[var(--sf-text-3)]">{text.footnote}</p> : null}
               </div>
               <span className={`${MONO} shrink-0 text-xs text-[var(--sf-text-2)]`}>{text.stops}</span>
             </>
@@ -443,6 +509,7 @@ function RunDialogForm({
             type="button"
             className="flex h-8 items-center gap-2 rounded-lg bg-[var(--sf-text-1)] px-3 text-[13px] font-medium text-[var(--sf-ground)] disabled:opacity-50"
             disabled={!valid || starting}
+            title={errors.consent}
             onClick={() => void submit()}
           >
             <LuPlay className="size-[13px]" aria-hidden />

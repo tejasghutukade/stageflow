@@ -1,11 +1,22 @@
 import type {
+  EvalAgentTarget,
   EvalCaseInput,
   EvalRunEstimate,
   EvalDefinition,
   EvalListItem,
 } from "../../../api/evalTypes";
 import type { PipelineListing, ValidationFinding } from "../../../api/types";
-import { GRADER_ID_PATTERN, MAX_GRADERS, graderProblems, hasRubricWithoutJudge, newGrader, type GraderConfig, type GraderType } from "./graderForms";
+import { GRADER_ID_PATTERN, MAX_GRADERS, graderProblems, graderTypesFor, hasRubricWithoutJudge, newGrader, type GraderConfig, type GraderType } from "./graderForms";
+import {
+  AGENT_DEFAULT_CONCURRENCY,
+  AGENT_DEFAULT_MAX_COST_USD,
+  conversationErrors,
+  initialConversation,
+  toConversation,
+  userModelOf,
+  type ConversationDraft,
+} from "./conversationModel";
+import { countValidScenarios, scenarioProblem } from "../datasets/scenarioModel";
 import { formatCost, formatDuration } from "../format";
 import type { StageInputField } from "./stageInput";
 
@@ -32,8 +43,12 @@ export type WriteDirs = { evals: string; datasets: string };
 export const DEFAULT_DIRS: WriteDirs = { evals: DEFAULT_EVALS_DIR, datasets: DEFAULT_DATASETS_DIR };
 
 export type WizardTarget = {
-  kind: "pipeline" | "file";
+  kind: "pipeline" | "file" | "agent";
+  /** For an agent target this is the agent id. */
   stageId: string;
+  agentId?: string;
+  revision?: number;
+  enabled?: boolean;
   pipelinePath?: string;
   pipelineId?: string;
   file?: string;
@@ -42,7 +57,7 @@ export type WizardTarget = {
   label: string;
 };
 
-export type DatasetSource = "upload" | "paste" | "runs" | "sample";
+export type DatasetSource = "upload" | "paste" | "runs" | "sessions" | "sample";
 
 export type DraftDataset = {
   source: DatasetSource;
@@ -53,6 +68,8 @@ export type DraftDataset = {
   runPreviews: string[];
   ready: number;
   skipped: number;
+  /** Agent datasets: rows the import already dropped; the rest is counted again when the conversation mode changes. */
+  importSkipped?: number;
 };
 
 export type DraftDefaults = {
@@ -62,9 +79,13 @@ export type DraftDefaults = {
   judge: string | null;
 };
 
+export type TargetKind = "stage" | "agent";
+
 export type WizardDraft = {
   step: WizardStep;
+  targetKind: TargetKind;
   target: WizardTarget | null;
+  conversation: ConversationDraft;
   targetFields: StageInputField[] | null;
   dataset: DraftDataset | null;
   defaults: DraftDefaults;
@@ -80,6 +101,8 @@ export type WizardDraft = {
 export function initialDraft(): WizardDraft {
   return {
     step: "setup",
+    targetKind: "stage",
+    conversation: initialConversation(),
     target: null,
     targetFields: null,
     dataset: null,
@@ -185,7 +208,16 @@ export function validateEvalId(id: string, takenIds: readonly string[]): string 
   return null;
 }
 
+export function isAgentTarget(target: WizardTarget | null | undefined): boolean {
+  return target?.kind === "agent";
+}
+
+export function isAgentDraft(draft: Pick<WizardDraft, "targetKind">): boolean {
+  return draft.targetKind === "agent";
+}
+
 export function targetRef(target: WizardTarget, dirs: WriteDirs): NonNullable<EvalDefinition["target"]> {
+  if (target.kind === "agent") return { kind: "agent", agent: target.agentId ?? target.stageId };
   if (target.kind === "file" && target.file !== undefined) {
     return { kind: "stage", file: posixRelative(dirs.evals, target.file) };
   }
@@ -197,6 +229,8 @@ export function buildDefinition(draft: WizardDraft, dirs: WriteDirs = DEFAULT_DI
   if (!draft.target || !draft.dataset) return null;
   const d = draft.defaults;
   const hasBudget = draft.budget.latency_ms !== undefined || draft.budget.cost_usd !== undefined;
+  const agent = isAgentTarget(draft.target);
+  const userModel = agent ? userModelOf(draft.conversation) : undefined;
   return {
     version: 1,
     id: draft.id,
@@ -208,9 +242,12 @@ export function buildDefinition(draft: WizardDraft, dirs: WriteDirs = DEFAULT_DI
     defaults: {
       repeats: d.repeats,
       ...(d.judge ? { judge: d.judge } : {}),
+      ...(userModel ? { user_model: userModel } : {}),
       pass_threshold: d.passThreshold,
       max_cost_usd: d.maxCostUsd,
+      ...(agent ? { concurrency: AGENT_DEFAULT_CONCURRENCY } : {}),
     },
+    ...(agent ? { conversation: toConversation(draft.conversation) } : {}),
     graders: draft.graders.map((g) => ({ ...g })),
     ...(hasBudget ? { budget: { ...draft.budget } } : {}),
   };
@@ -236,9 +273,13 @@ export function percentText(fraction: number): string {
 
 export function setupProblems(draft: WizardDraft): string[] {
   const out: string[] = [];
-  if (!draft.target) out.push("Pick a stage to evaluate");
-  if (!draft.dataset || draft.dataset.ready < 1) out.push("Add a dataset with at least one case that matches the stage");
+  const agent = isAgentDraft(draft);
+  if (!draft.target) out.push(agent ? "Pick an agent to evaluate" : "Pick a stage to evaluate");
+  if (!draft.dataset || draft.dataset.ready < 1) {
+    out.push(agent ? "Add a dataset with at least one valid scenario" : "Add a dataset with at least one case that matches the stage");
+  }
   out.push(...Object.values(defaultsErrors(draft.defaults)));
+  if (agent) out.push(...Object.values(conversationErrors(draft.conversation)));
   return out;
 }
 
@@ -252,6 +293,10 @@ export function gradersProblems(draft: WizardDraft): string[] {
   const ids = draft.graders.map((g) => g.id);
   if (ids.some((id, i) => !GRADER_ID_PATTERN.test(id) || ids.indexOf(id) !== i)) out.push("Grader ids must be unique");
   for (const g of draft.graders) out.push(...graderProblems(g).map((p) => `${g.id}: ${p}`));
+  const allowed = new Set<string>(graderTypesFor(isAgentDraft(draft) ? "agent" : "stage").map((t) => t.type));
+  for (const g of draft.graders) {
+    if (!allowed.has(g.type)) out.push(`${g.id}: ${g.type} graders do not apply to ${isAgentDraft(draft) ? "agents" : "stages"}`);
+  }
   if (hasRubricWithoutJudge(draft.graders) && !draft.defaults.judge) out.push("Pick a judge model for the rubric graders");
   return out;
 }
@@ -278,13 +323,98 @@ export function goBack(draft: WizardDraft): WizardDraft {
 
 export function withTarget(draft: WizardDraft, target: WizardTarget | null, fields: StageInputField[] | null, takenEvalIds: readonly string[]): WizardDraft {
   const changed = JSON.stringify(draft.target) !== JSON.stringify(target);
+  const kind: TargetKind = target ? (isAgentTarget(target) ? "agent" : "stage") : draft.targetKind;
+  const base = kind === draft.targetKind ? draft : withTargetKind(draft, kind);
   return {
-    ...draft,
+    ...base,
     target,
     targetFields: fields,
-    dataset: changed ? null : draft.dataset,
-    id: draft.idEdited || !target ? draft.id : deriveEvalId(target.stageId, takenEvalIds),
+    dataset: changed ? null : base.dataset,
+    id: base.idEdited || !target ? base.id : deriveEvalId(target.stageId, takenEvalIds),
   };
+}
+
+/** Switching Stage / Agent drops the other kind's target, dataset and inapplicable graders and resets the cost limit default. */
+export function withTargetKind(draft: WizardDraft, kind: TargetKind): WizardDraft {
+  if (kind === draft.targetKind) return draft;
+  const allowed = new Set<string>(graderTypesFor(kind).map((t) => t.type));
+  const wasDefault = draft.defaults.maxCostUsd === (draft.targetKind === "agent" ? AGENT_DEFAULT_MAX_COST_USD : DEFAULT_MAX_COST_USD);
+  return {
+    ...draft,
+    targetKind: kind,
+    target: null,
+    targetFields: null,
+    dataset: null,
+    graders: draft.graders.filter((g) => allowed.has(g.type)),
+    defaults: wasDefault ? { ...draft.defaults, maxCostUsd: kind === "agent" ? AGENT_DEFAULT_MAX_COST_USD : DEFAULT_MAX_COST_USD } : draft.defaults,
+    id: draft.idEdited ? draft.id : "",
+  };
+}
+
+/** Held scenarios are valid or not per the conversation mode, so a mode change counts them again. */
+export function recountDataset(ds: DraftDataset, mode: ConversationDraft["mode"]): DraftDataset {
+  if (!ds.cases) return ds;
+  const counts = countValidScenarios(ds.cases, mode);
+  return { ...ds, ready: counts.ready, skipped: (ds.importSkipped ?? 0) + counts.skipped };
+}
+
+export function withConversation(draft: WizardDraft, patch: Partial<ConversationDraft>): WizardDraft {
+  const conversation = { ...draft.conversation, ...patch };
+  const dataset = draft.dataset && isAgentDraft(draft) && conversation.mode !== draft.conversation.mode ? recountDataset(draft.dataset, conversation.mode) : draft.dataset;
+  return { ...draft, conversation, dataset };
+}
+
+/** An agent upload: rows valid for the draft's mode are held, the others count as skipped. */
+export function datasetFromAgentConfirm(
+  req: { candidates?: EvalCaseInput[]; cases: EvalCaseInput[]; fileName: string },
+  source: "upload" | "paste",
+  agentId: string,
+  takenNames: readonly string[],
+  mode: ConversationDraft["mode"],
+): DraftDataset {
+  const all = req.candidates ?? req.cases;
+  const valid = all.filter((c) => scenarioProblem(c, mode) === null);
+  return {
+    source,
+    fileName: req.fileName,
+    name: deriveDatasetName(source, agentId, req.fileName, takenNames),
+    cases: valid,
+    runIds: [],
+    runPreviews: [],
+    ready: valid.length,
+    skipped: all.length - valid.length,
+    importSkipped: all.length - valid.length,
+  };
+}
+
+/** Add, replace or remove held scenarios (editor, wizard preview). */
+export function datasetWithCases(
+  ds: DraftDataset | null,
+  cases: EvalCaseInput[],
+  mode: ConversationDraft["mode"],
+  agentId: string,
+  takenNames: readonly string[],
+): DraftDataset | null {
+  if (cases.length === 0 && ds === null) return null;
+  const base = ds ?? datasetFromScenarios([], mode, agentId, takenNames);
+  return recountDataset({ ...base, cases }, mode);
+}
+
+export function agentTargetOf(agent: Pick<EvalAgentTarget, "id" | "name" | "model" | "revision" | "enabled">, projectRoot?: string): WizardTarget {
+  return {
+    kind: "agent",
+    stageId: agent.id,
+    agentId: agent.id,
+    revision: agent.revision,
+    enabled: agent.enabled,
+    ...(agent.model ? { model: agent.model } : {}),
+    ...(projectRoot ? { projectRoot } : {}),
+    label: agent.name,
+  };
+}
+
+export function sameAgent(agent: Pick<EvalAgentTarget, "id">, target: WizardTarget | null): boolean {
+  return target?.kind === "agent" && target.agentId === agent.id;
 }
 
 export function withId(draft: WizardDraft, id: string): WizardDraft {
@@ -342,9 +472,10 @@ export function budgetLabel(key: "latency_ms" | "cost_usd", value: number | unde
 
 export type DatasetPreviewRow = { id: string; title: string; cells: string[] };
 
-export function datasetSummary(ds: DraftDataset): { title: string; match: string } {
-  const cases = `${ds.ready} ${ds.ready === 1 ? "case" : "cases"}`;
-  return { title: cases, match: ds.skipped > 0 ? `${ds.skipped} skipped` : "all match io.input" };
+export function datasetSummary(ds: DraftDataset, agent = false): { title: string; match: string } {
+  const noun = agent ? ["scenario", "scenarios"] : ["case", "cases"];
+  const cases = `${ds.ready} ${ds.ready === 1 ? noun[0] : noun[1]}`;
+  return { title: cases, match: ds.skipped > 0 ? `${ds.skipped} skipped` : agent ? "all valid" : "all match io.input" };
 }
 
 export function datasetSummaryLine(ds: DraftDataset): string {
@@ -400,6 +531,45 @@ export function datasetFromRuns(runIds: string[], previews: string[], stageId: s
   };
 }
 
+export function datasetFromSessions(sessionIds: string[], previews: string[], agentId: string, takenNames: readonly string[]): DraftDataset {
+  return {
+    source: "sessions",
+    fileName: "Past sessions",
+    name: deriveDatasetName("runs", agentId, "", takenNames),
+    cases: null,
+    runIds: sessionIds,
+    runPreviews: previews,
+    ready: sessionIds.length,
+    skipped: 0,
+  };
+}
+
+/** Scenarios written in the editor travel with the draft like pasted cases do. */
+export function datasetFromScenarios(
+  cases: EvalCaseInput[],
+  defaultMode: ConversationDraft["mode"],
+  agentId: string,
+  takenNames: readonly string[],
+): DraftDataset {
+  const counts = countValidScenarios(cases, defaultMode);
+  return {
+    source: "paste",
+    fileName: "Typed scenarios",
+    name: deriveDatasetName("paste", agentId, "", takenNames),
+    cases,
+    runIds: [],
+    runPreviews: [],
+    ready: counts.ready,
+    skipped: counts.skipped,
+  };
+}
+
+export const AGENT_SAMPLE_UNAVAILABLE = "The agent sample is not available yet.";
+
+export function agentSampleAvailability(): { ok: true } | { ok: false; reason: string } {
+  return { ok: false, reason: AGENT_SAMPLE_UNAVAILABLE };
+}
+
 export function datasetFromSample(stageId: string, takenNames: readonly string[]): DraftDataset {
   return {
     source: "sample",
@@ -426,6 +596,7 @@ export function sampleCompatibility(fields: readonly StageInputField[] | null): 
 }
 
 export function datasetTarget(target: WizardTarget) {
+  if (target.kind === "agent") return { agent_id: target.agentId ?? target.stageId };
   return target.kind === "file" && target.file !== undefined
     ? { file: target.file }
     : { pipeline_path: target.pipelinePath, stage_id: target.stageId };
@@ -509,7 +680,7 @@ export function evalCountFor(row: StageRow, evals: readonly EvalListItem[]): num
   }).length;
 }
 
-export type Preselect = { pipeline?: string; stage?: string; file?: string };
+export type Preselect = { pipeline?: string; stage?: string; file?: string; agent?: string };
 
 export function preselectRow(rows: readonly StageRow[], q: Preselect): { row: StageRow; target: WizardTarget } | null {
   if (q.file) {
@@ -559,14 +730,22 @@ export function blockingFindings(findings: readonly ValidationFinding[]): Valida
 export function setupChecks(draft: WizardDraft, findings: readonly ValidationFinding[]): CheckLine[] {
   const lines: CheckLine[] = [];
   const t = draft.target;
-  if (t) {
+  const agent = isAgentTarget(t);
+  if (t && agent) {
+    const unresolved = findings.some((f) => f.code === "eval.agent_not_found");
+    if (!unresolved) lines.push({ tone: "ok", text: `Agent ${t.agentId ?? t.stageId} found${t.revision !== undefined ? ` (r${t.revision})` : ""}` });
+  } else if (t) {
     const unresolved = findings.some((f) => f.code === "eval.target_unresolved");
     if (!unresolved) lines.push({ tone: "ok", text: `Stage ${t.stageId} found in ${t.kind === "file" ? t.file : t.pipelinePath}` });
   }
   const ds = draft.dataset;
   if (ds) {
     const total = ds.ready + ds.skipped;
-    lines.push({ tone: ds.skipped > 0 ? "warning" : "ok", text: `${ds.ready} of ${total} cases match the stage's io.input` });
+    lines.push(
+      agent
+        ? { tone: ds.skipped > 0 ? "warning" : "ok", text: `${ds.ready} of ${total} scenarios valid` }
+        : { tone: ds.skipped > 0 ? "warning" : "ok", text: `${ds.ready} of ${total} cases match the stage's io.input` },
+    );
   }
   const gradersPending = draft.graders.length === 0;
   for (const f of findings) {
@@ -582,6 +761,7 @@ export function judgeSameAsStage(draft: WizardDraft, judge: string | null = draf
 }
 
 export const JUDGE_SAME_HINT = "Same model as the stage. Pick another to avoid self-preference.";
+export const JUDGE_SAME_AGENT_HINT = "Same model as the agent. Pick another to avoid self-preference.";
 
 // ---- try on one case --------------------------------------------------------------------------
 
@@ -592,11 +772,14 @@ export function caseVerdictText(score: number | null, threshold: number): string
   return threshold - score <= 0.05 + 1e-9 ? `Just under the ${pct} threshold` : `Below the ${pct} threshold`;
 }
 
+export const TRY_REAL_PENDING = "Tick I understand on the Conversation card to try with real tools.";
+
 export function tryDisabledReason(draft: WizardDraft, findings: readonly ValidationFinding[]): string | null {
   if (!draft.dataset?.cases || draft.dataset.cases.length === 0) {
     return draft.dataset ? "Try needs cases in hand. Upload or paste the cases to try one." : "Add a dataset first.";
   }
   if (draft.graders.length === 0) return "Add a grader first.";
+  if (isAgentDraft(draft) && draft.conversation.tools === "real" && !draft.conversation.allowReal) return TRY_REAL_PENDING;
   if (findings.some((f) => f.severity === "error")) return "Fix the errors in the draft first.";
   return null;
 }

@@ -1,7 +1,9 @@
 import type { EvalDefinition } from "../../../api/evalTypes";
 import { INPUT } from "../datasets/DialogShell";
 import { CARD, Field, MONO, NumberField, SELECT } from "../newEval/parts";
+import { AGENT_DEFAULT_MAX_COST_USD } from "../newEval/conversationModel";
 import {
+  JUDGE_SAME_AGENT_HINT,
   JUDGE_SAME_HINT,
   DEFAULT_MAX_COST_USD,
   DEFAULT_PASS_THRESHOLD,
@@ -18,6 +20,8 @@ type Props = {
   definition: EvalDefinition;
   judgeModels: string[];
   targetModel: string | null;
+  /** Agent evals: the live agent, shown beside the target. */
+  agent?: { name: string; revision: number } | null;
   datasetLabel: string;
   onChange: (next: (d: EvalDefinition) => EvalDefinition) => void;
   onChangeTarget: () => void;
@@ -33,8 +37,9 @@ function ChangeInput({ value, label, onChange }: { value: string; label: string;
   );
 }
 
-export function DefinitionCard({ definition, judgeModels, targetModel, datasetLabel, onChange, onChangeTarget, onChangeDataset }: Props) {
-  const d = draftDefaults(definition, FALLBACK);
+export function DefinitionCard({ definition, judgeModels, targetModel, agent, datasetLabel, onChange, onChangeTarget, onChangeDataset }: Props) {
+  const isAgent = definition.target.kind === "agent";
+  const d = draftDefaults(definition, isAgent ? { ...FALLBACK, maxCostUsd: AGENT_DEFAULT_MAX_COST_USD } : FALLBACK);
   const errors = defaultsErrors(d);
   const judgeSame = !!d.judge && !!targetModel && d.judge === targetModel;
   return (
@@ -50,8 +55,8 @@ export function DefinitionCard({ definition, judgeModels, targetModel, datasetLa
         <Field label="Description">
           <input className={INPUT} value={definition.description ?? ""} onChange={(e) => onChange((x) => withText(x, "description", e.target.value))} />
         </Field>
-        <Field label="Target stage">
-          <ChangeInput value={targetSummary(definition)} label="Change target stage" onChange={onChangeTarget} />
+        <Field label={isAgent ? "Target agent" : "Target stage"}>
+          <ChangeInput value={targetSummary(definition, agent)} label={isAgent ? "Change target agent" : "Change target stage"} onChange={onChangeTarget} />
         </Field>
         <Field label="Dataset">
           <ChangeInput value={datasetLabel} label="Change dataset" onChange={onChangeDataset} />
@@ -62,7 +67,7 @@ export function DefinitionCard({ definition, judgeModels, targetModel, datasetLa
         <Field label="Pass threshold" error={errors.passThreshold}>
           <NumberField value={d.passThreshold} parse={parsePercent} show={(n) => `${percentText(n)}%`} error={errors.passThreshold} onCommit={(n) => onChange((x) => withDefault(x, "pass_threshold", n))} />
         </Field>
-        <Field label="Judge model" {...(judgeSame ? { warn: JUDGE_SAME_HINT } : {})}>
+        <Field label="Judge model" {...(judgeSame ? { warn: isAgent ? JUDGE_SAME_AGENT_HINT : JUDGE_SAME_HINT } : {})}>
           <select className={SELECT} value={d.judge ?? ""} onChange={(e) => onChange((x) => withJudge(x, e.target.value === "" ? null : e.target.value))}>
             <option value="">None</option>
             {judgeModels.map((m) => (

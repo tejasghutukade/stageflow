@@ -1,7 +1,8 @@
 import type { EvalDefinition } from "../../../api/evalTypes";
 
 export type GraderConfig = EvalDefinition["graders"][number];
-export type GraderType = "schema" | "field" | "reference" | "rubric" | "code";
+export type GraderType = "schema" | "field" | "reference" | "rubric" | "code" | "tool_calls" | "conversation_check" | "goal_reached";
+export type GraderTarget = "stage" | "agent";
 
 export const MAX_GRADERS = 20;
 export const GRADER_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -11,13 +12,28 @@ export const NOT_CALIBRATED_NOTE =
 export const CODE_HINT =
   "Function body of (output, testCase, context). Return a boolean, a number from 0 to 1, or { pass, score?, reason? }.";
 
-export const GRADER_TYPES: Array<{ type: GraderType; label: string; summary: string; chip: "Check" | "Rubric" }> = [
+export const GRADER_TYPES: Array<{ type: GraderType; label: string; summary: string; chip: "Check" | "Rubric"; agent?: boolean }> = [
   { type: "schema", label: "Schema", summary: "Output matches the stage's output schema", chip: "Check" },
   { type: "field", label: "Field check", summary: "Exact checks on fields of the output", chip: "Check" },
   { type: "reference", label: "Reference match", summary: "Compare the output with the case's expected data", chip: "Check" },
   { type: "rubric", label: "Rubric", summary: "A model judges the output against your text", chip: "Rubric" },
   { type: "code", label: "Custom code", summary: "A JavaScript function you write", chip: "Check" },
 ];
+
+export const AGENT_GRADER_TYPES: typeof GRADER_TYPES = [
+  { type: "tool_calls", label: "Tool calls", summary: "Which tools the agent called, and with what", chip: "Check", agent: true },
+  { type: "conversation_check", label: "Conversation check", summary: "Turn count, questions per turn, final reply", chip: "Check", agent: true },
+  { type: "goal_reached", label: "Goal reached", summary: "A model judges whether the goal was achieved", chip: "Rubric", agent: true },
+];
+
+/** The Add grader menu: `schema` is stage-only; the conversation types are agent-only. */
+export function graderTypesFor(target: GraderTarget): typeof GRADER_TYPES {
+  return target === "agent" ? [...GRADER_TYPES.filter((t) => t.type !== "schema"), ...AGENT_GRADER_TYPES] : GRADER_TYPES;
+}
+
+export const CONVERSATION_RUBRIC_NOTE = "The judge reads the conversation, capped in length.";
+export const GOAL_REACHED_NOTE = "Judged on the whole conversation. Uses each scenario's goal.";
+export const TOOL_CALLS_HELPER = "Leave Must call and Must not call empty to use each scenario's expected tools.";
 
 export const FIELD_OPS = [
   "exists",
@@ -41,11 +57,11 @@ export function opNeedsValue(op: string): boolean {
 }
 
 export function graderTypeInfo(type: string) {
-  return GRADER_TYPES.find((t) => t.type === type);
+  return GRADER_TYPES.find((t) => t.type === type) ?? AGENT_GRADER_TYPES.find((t) => t.type === type);
 }
 
 export function chipFor(type: string): "Check" | "Rubric" {
-  return type === "rubric" ? "Rubric" : "Check";
+  return type === "rubric" || type === "goal_reached" ? "Rubric" : "Check";
 }
 
 export function nextGraderId(existing: readonly string[]): string {
@@ -67,6 +83,12 @@ export function newGrader(type: GraderType, existingIds: readonly string[]): Gra
       return { id, type, rubric: "", scale: "pass_fail" };
     case "code":
       return { id, type, code: "return true;" };
+    case "tool_calls":
+      return { id, type };
+    case "conversation_check":
+      return { id, type, max_turns: 8 };
+    case "goal_reached":
+      return { id, type };
   }
 }
 
@@ -136,6 +158,12 @@ export function describeGrader(g: GraderConfig, outputSchemaName?: string): stri
     }
     case "code":
       return "Custom function";
+    case "tool_calls":
+      return describeToolCalls(g);
+    case "conversation_check":
+      return describeConversationCheck(g);
+    case "goal_reached":
+      return typeof g.guidance === "string" && g.guidance.trim() !== "" ? g.guidance.trim().split("\n")[0]! : GOAL_REACHED_NOTE;
     default:
       return "";
   }
@@ -148,7 +176,7 @@ export function footerText(graders: readonly GraderConfig[], threshold: number):
 }
 
 export function hasRubricWithoutJudge(graders: readonly GraderConfig[]): boolean {
-  return graders.some((g) => g.type === "rubric" && (typeof g.judge !== "string" || g.judge === ""));
+  return graders.some((g) => (g.type === "rubric" || g.type === "goal_reached") && (typeof g.judge !== "string" || g.judge === ""));
 }
 
 export type FieldCheck = { path: string; op: string; value?: unknown };
@@ -326,5 +354,160 @@ export function graderProblems(g: GraderConfig): string[] {
   if (g.type === "reference" && (typeof g.expected !== "string" || g.expected.trim() === "")) {
     out.push("Expected path is required");
   }
+  if (g.type === "tool_calls") {
+    const calls = g.max_calls;
+    if (calls !== undefined && !(Number.isInteger(calls) && (calls as number) >= 0 && (calls as number) <= MAX_CALLS_LIMIT)) {
+      out.push(`Max calls must be a whole number from 0 to ${MAX_CALLS_LIMIT}`);
+    }
+    if (argsOf(g).length > MAX_ARGS_ROWS) out.push(`At most ${MAX_ARGS_ROWS} argument checks`);
+  }
+  if (g.type === "conversation_check") {
+    const hasKey = g.max_turns !== undefined || g.max_agent_questions_per_turn !== undefined || finalReplyOf(g).length > 0;
+    if (!hasKey) out.push("Set at least one check");
+    const turns = g.max_turns;
+    if (turns !== undefined && !(Number.isInteger(turns) && (turns as number) >= 1 && (turns as number) <= 100)) out.push("Max turns must be a whole number from 1 to 100");
+    const questions = g.max_agent_questions_per_turn;
+    if (questions !== undefined && !(Number.isInteger(questions) && (questions as number) >= 0 && (questions as number) <= 10)) {
+      out.push("Max questions per agent turn must be a whole number from 0 to 10");
+    }
+    if (finalReplyOf(g).length > MAX_FINAL_REPLY_ROWS) out.push(`At most ${MAX_FINAL_REPLY_ROWS} final reply checks`);
+  }
+  if (g.type === "goal_reached" && typeof g.guidance === "string" && g.guidance.length > GUIDANCE_MAX) {
+    out.push(`Guidance is limited to ${GUIDANCE_MAX.toLocaleString("en-US")} characters`);
+  }
   return out;
+}
+
+// ---- agent graders ----------------------------------------------------------------------------
+
+export const MAX_CALLS_LIMIT = 200;
+export const MAX_ARGS_ROWS = 20;
+export const MAX_FINAL_REPLY_ROWS = 10;
+export const GUIDANCE_MAX = 2000;
+
+export type ToolListKey = "must_call" | "must_not_call" | "must_ask_first";
+
+export function stringList(g: GraderConfig, key: ToolListKey): string[] {
+  const value = g[key];
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+/** An empty list drops the key: absent means "use each scenario's expected tools" for must_call and must_not_call. */
+export function setStringList(g: GraderConfig, key: ToolListKey, list: readonly string[]): GraderConfig {
+  const { [key]: _drop, ...rest } = g;
+  void _drop;
+  return (list.length === 0 ? rest : { ...rest, [key]: [...list] }) as GraderConfig;
+}
+
+export function setOptionalInt(
+  g: GraderConfig,
+  key: "max_calls" | "max_turns" | "max_agent_questions_per_turn",
+  text: string,
+  range: { min: number; max: number },
+): { ok: true; grader: GraderConfig } | { ok: false; error: string } {
+  const { [key]: _drop, ...rest } = g;
+  void _drop;
+  const t = text.trim();
+  if (t === "") return { ok: true, grader: rest as GraderConfig };
+  const n = Number(t);
+  if (!Number.isInteger(n) || n < range.min || n > range.max) {
+    return { ok: false, error: `Enter a whole number from ${range.min} to ${range.max}` };
+  }
+  return { ok: true, grader: { ...rest, [key]: n } as GraderConfig };
+}
+
+export type ToolArg = { tool: string; path: string; op: string; value?: unknown };
+export type ToolArgRow = { tool: string; path: string; op: string; valueText: string };
+
+export function argsOf(g: GraderConfig): ToolArg[] {
+  return Array.isArray(g.args) ? (g.args as ToolArg[]) : [];
+}
+
+export function argToRow(a: ToolArg): ToolArgRow {
+  return { tool: a.tool, ...checkToRow({ path: a.path, op: a.op, ...(a.value !== undefined ? { value: a.value } : {}) }) };
+}
+
+export function rowToArg(row: ToolArgRow): { ok: true; arg: ToolArg } | { ok: false; error: string } {
+  if (row.tool.trim() === "") return { ok: false, error: "Tool is required" };
+  const parsed = rowToCheck({ path: row.path, op: row.op, valueText: row.valueText });
+  if (!parsed.ok) return parsed;
+  return { ok: true, arg: { tool: row.tool.trim(), ...parsed.check } };
+}
+
+export function setArgs(g: GraderConfig, args: readonly ToolArg[]): GraderConfig {
+  const { args: _a, ...rest } = g;
+  void _a;
+  return (args.length === 0 ? rest : { ...rest, args: [...args] }) as GraderConfig;
+}
+
+export type FinalReplyCheck = { op: string; value?: unknown };
+export type FinalReplyRow = { op: string; valueText: string };
+
+export function finalReplyOf(g: GraderConfig): FinalReplyCheck[] {
+  return Array.isArray(g.final_reply) ? (g.final_reply as FinalReplyCheck[]) : [];
+}
+
+export function finalReplyToRow(c: FinalReplyCheck): FinalReplyRow {
+  const row = checkToRow({ path: "final_reply", op: c.op, ...(c.value !== undefined ? { value: c.value } : {}) });
+  return { op: row.op, valueText: row.valueText };
+}
+
+export function rowToFinalReply(row: FinalReplyRow): { ok: true; check: FinalReplyCheck } | { ok: false; error: string } {
+  const parsed = rowToCheck({ path: "final_reply", op: row.op, valueText: row.valueText });
+  if (!parsed.ok) return parsed;
+  const { path: _p, ...rest } = parsed.check;
+  void _p;
+  return { ok: true, check: rest };
+}
+
+export function setFinalReply(g: GraderConfig, checks: readonly FinalReplyCheck[]): GraderConfig {
+  const { final_reply: _f, ...rest } = g;
+  void _f;
+  return (checks.length === 0 ? rest : { ...rest, final_reply: [...checks] }) as GraderConfig;
+}
+
+function toolGranted(name: string, toolIds: readonly string[]): boolean {
+  if (name.endsWith(".*")) {
+    const prefix = name.slice(0, -1);
+    return toolIds.some((id) => id.startsWith(prefix));
+  }
+  return toolIds.includes(name);
+}
+
+/** Tool names a `tool_calls` grader mentions that the agent is not granted (`eval.tool_not_granted`). */
+export function ungrantedToolNames(g: GraderConfig, toolIds: readonly string[]): string[] {
+  if (g.type !== "tool_calls") return [];
+  const names = [
+    ...stringList(g, "must_call"),
+    ...stringList(g, "must_not_call"),
+    ...stringList(g, "must_ask_first"),
+    ...argsOf(g).map((a) => a.tool),
+  ];
+  return [...new Set(names)].filter((n) => !toolGranted(n, toolIds));
+}
+
+function describeToolCalls(g: GraderConfig): string {
+  const parts: string[] = [];
+  const must = stringList(g, "must_call");
+  const not = stringList(g, "must_not_call");
+  const ask = stringList(g, "must_ask_first");
+  if (must.length > 0) parts.push(`must call ${must.join(", ")}`);
+  if (not.length > 0) parts.push(`must not call ${not.join(", ")}`);
+  if (ask.length > 0) parts.push(`must ask first ${ask.join(", ")}`);
+  if (typeof g.max_calls === "number") parts.push(`at most ${g.max_calls} calls`);
+  if (argsOf(g).length > 0) parts.push(`${argsOf(g).length} argument ${argsOf(g).length === 1 ? "check" : "checks"}`);
+  const text = parts.join(" · ");
+  if (text === "") return "Uses each scenario's expected tools";
+  return text.length > 90 ? `${text.slice(0, 89)}…` : text;
+}
+
+function describeConversationCheck(g: GraderConfig): string {
+  const parts: string[] = [];
+  if (typeof g.max_turns === "number") parts.push(`at most ${g.max_turns} turns`);
+  if (typeof g.max_agent_questions_per_turn === "number") {
+    parts.push(`at most ${g.max_agent_questions_per_turn} ${g.max_agent_questions_per_turn === 1 ? "question" : "questions"} per turn`);
+  }
+  const reply = finalReplyOf(g).length;
+  if (reply > 0) parts.push(`${reply} final reply ${reply === 1 ? "check" : "checks"}`);
+  return parts.length === 0 ? "No checks yet" : parts.join(" · ");
 }

@@ -1,4 +1,5 @@
 import type {
+  EvalConversationMode,
   EvalCaseInput,
   EvalCreateDatasetInput,
   EvalDatasetFormat,
@@ -8,7 +9,9 @@ import type {
   EvalUploadMapping,
 } from "../../../api/evalTypes";
 
-export type UploadFieldRole = "input" | "expected";
+import { scenarioProblem } from "./scenarioModel";
+
+export type UploadFieldRole = "input" | "expected" | "meta";
 export type UploadFieldKind = "required" | "optional" | "reference";
 
 export type UploadField = {
@@ -17,6 +20,8 @@ export type UploadField = {
   name: string;
   role: UploadFieldRole;
   kind: UploadFieldKind;
+  /** The row offers a split character (lists such as facts and tools). */
+  splittable?: boolean;
 };
 
 export type FieldChoice = { column: string | null; split?: string };
@@ -63,6 +68,42 @@ export function stageFields(
   return fields;
 }
 
+export const SCRIPT_NOTICE = "Scripts and tool mocks need a JSON or JSONL file.";
+
+/** The ten scenario fields a CSV column can fill. `script` and `tool_mocks` are JSON-only and not offered. */
+export function agentFields(): UploadField[] {
+  const input = (name: string, splittable = false): UploadField => ({
+    key: `input.${name}`,
+    name,
+    role: "input",
+    kind: "optional",
+    ...(splittable ? { splittable: true } : {}),
+  });
+  const expected = (name: string, splittable = false): UploadField => ({
+    key: `expected.${name}`,
+    name: `expected.${name}`,
+    role: "expected",
+    kind: "reference",
+    ...(splittable ? { splittable: true } : {}),
+  });
+  return [
+    input("opening"),
+    input("goal"),
+    input("persona"),
+    input("mode"),
+    input("facts", true),
+    expected("outcome"),
+    expected("tools", true),
+    expected("forbidden_tools", true),
+    { key: "title", name: "title", role: "meta", kind: "optional" },
+    { key: "tags", name: "tags", role: "meta", kind: "optional", splittable: true },
+  ];
+}
+
+export function fieldSplits(field: UploadField): boolean {
+  return field.role === "expected" || field.splittable === true;
+}
+
 /** Without a stage: one optional input field per column ("Pick fields to import"). */
 export function freeFields(columns: readonly string[]): UploadField[] {
   return columns.map((c) => ({ key: `input.${c}`, name: c, role: "input", kind: "optional" }));
@@ -106,7 +147,7 @@ export function buildMapping(fields: readonly UploadField[], state: MappingState
     } else {
       mapping[field.key] = {
         column: choice.column,
-        ...(field.role === "expected" && choice.split ? { split: choice.split } : {}),
+        ...(fieldSplits(field) && choice.split ? { split: choice.split } : {}),
       };
     }
   }
@@ -180,6 +221,8 @@ export function buildPreviewRequest(opts: {
   mapping?: EvalUploadMapping;
   target?: EvalDatasetTarget;
   projectRoot?: string | undefined;
+  /** Agent targets: the eval whose `conversation.mode` the rows are checked against. */
+  evalId?: string | undefined;
 }): EvalDatasetPreviewInput {
   return {
     format: opts.format,
@@ -188,11 +231,34 @@ export function buildPreviewRequest(opts: {
     ...(opts.mapping ? { mapping: opts.mapping } : {}),
     ...(opts.target ? { target: opts.target } : {}),
     ...(opts.projectRoot ? { project_root: opts.projectRoot } : {}),
+    ...(opts.evalId ? { eval_id: opts.evalId } : {}),
   };
 }
 
 export function hasTarget(target: EvalDatasetTarget | undefined): boolean {
-  return !!target && (!!target.stage_id || !!target.file);
+  return !!target && (!!target.stage_id || !!target.file || !!target.agent_id);
+}
+
+export function isAgentUpload(target: EvalDatasetTarget | undefined): boolean {
+  return !!target?.agent_id;
+}
+
+/** Agent previews show the opening (or first script message) and the title or goal. */
+export function agentPreviewRows(preview: Pick<EvalDatasetPreview, "rows"> | null, limit = PREVIEW_ROWS): PreviewRowView[] {
+  if (!preview) return [];
+  return preview.rows.slice(0, limit).map((row) => {
+    const input = (row.case.input ?? {}) as Record<string, unknown>;
+    const script = Array.isArray(input.script) ? input.script : [];
+    const text = oneLine(input.opening ?? script[0] ?? "");
+    const secondary = oneLine(row.case.title ?? input.goal ?? "");
+    return {
+      index: row.index,
+      text,
+      secondary: row.status === "skipped" && secondary === "" ? "(empty)" : secondary,
+      status: row.status,
+      ...(row.reason ? { reason: row.reason } : {}),
+    };
+  });
 }
 
 export function summarize(preview: Pick<EvalDatasetPreview, "rows" | "counts"> | null): string {
@@ -249,7 +315,24 @@ export type UploadConfirm = {
   skipped: number;
   fileName: string;
   format: EvalDatasetFormat;
+  /** Agent uploads: every parsed row, so the caller can check them against its own conversation mode. */
+  candidates?: EvalCaseInput[];
 };
+
+export const SCRIPTED_SWITCH_LABEL = "Scripted conversations";
+export const SCRIPTED_SWITCH_NOTE = "Scenarios without a mode are checked as scripted: each needs a script, which a JSON or JSONL file carries.";
+
+/** Agent previews: the server checks rows against the eval's mode (simulated for a new dataset); this checks them against the mode the caller means. */
+export function recheckForMode(preview: EvalDatasetPreview, mode: EvalConversationMode): EvalDatasetPreview {
+  const rows = preview.rows.map((row) => {
+    const problem = scenarioProblem(row.case, mode);
+    const { reason: _reason, ...rest } = row;
+    void _reason;
+    return problem === null ? { ...rest, status: "ready" as const } : { ...rest, status: "skipped" as const, reason: problem };
+  });
+  const ready = rows.filter((r) => r.status === "ready").length;
+  return { ...preview, rows, counts: { ready, skipped: rows.length - ready } };
+}
 
 export function readyCases(preview: Pick<EvalDatasetPreview, "rows">): Array<EvalCaseInput & { id: string }> {
   return preview.rows.filter((r) => r.status === "ready").map((r) => r.case);

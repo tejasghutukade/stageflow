@@ -154,12 +154,14 @@ export function EvalRunPage({
   tab,
   caseId,
   repeat,
+  drawerTab,
 }: {
   evalId: string;
   runNumber: number;
   tab?: EvalRunTab;
   caseId?: string;
   repeat?: number;
+  drawerTab?: "transcript";
 }) {
   const { run, results, error, refresh } = useEvalRunPolling(evalId, runNumber);
   const cases = useCases(run);
@@ -225,7 +227,7 @@ export function EvalRunPage({
     );
   }
 
-  if (!active || !model) return <RunResultsPage run={run} tab={tab} caseId={caseId} repeat={repeat} />;
+  if (!active || !model) return <RunResultsPage run={run} tab={tab} caseId={caseId} repeat={repeat} drawerTab={drawerTab} />;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--sf-ground)]">

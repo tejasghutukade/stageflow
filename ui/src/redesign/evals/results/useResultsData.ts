@@ -12,6 +12,7 @@ import type {
   EvalResultsPage,
   EvalResultsQuery,
 } from "../../../api/evalTypes";
+import { agentsApi } from "../../../api/agents";
 import { fetchRunExport, type RunExport } from "./resultsApi";
 
 type Async<T> = { data: T | null; error: string | null; loading: boolean };
@@ -148,6 +149,33 @@ export function useRunExport(evalRunId: string, enabled: boolean): Async<RunExpo
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [evalRunId, enabled]);
+  return state;
+}
+
+export type AgentSessionState = { status: "none" | "loading" | "found" | "deleted"; runId: string };
+
+/** Whether the eval session still exists, and the first turn to open on the Agent run page. */
+export function useAgentSession(agentId: string | null, sessionId: string | null): AgentSessionState {
+  const [state, setState] = useState<AgentSessionState>({ status: "none", runId: "1" });
+  useEffect(() => {
+    if (!agentId || !sessionId) {
+      setState({ status: "none", runId: "1" });
+      return;
+    }
+    let cancelled = false;
+    setState({ status: "loading", runId: "1" });
+    agentsApi.session(agentId, sessionId).then(
+      (detail) => {
+        if (!cancelled) setState({ status: "found", runId: String(detail.turns[0]?.seq ?? 1) });
+      },
+      () => {
+        if (!cancelled) setState({ status: "deleted", runId: "1" });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, sessionId]);
   return state;
 }
 
