@@ -78,7 +78,7 @@ function Row({ row }: { row: LiveRowModel }) {
       <span
         role="cell"
         className="w-[210px] shrink-0 truncate text-[13px]"
-        style={{ color: row.nowTone === "running" ? "var(--sf-running)" : "var(--sf-text-2)" }}
+        style={{ color: row.nowTone === "running" ? "var(--sf-running)" : row.nowTone === "fail" ? "var(--sf-fail)" : "var(--sf-text-2)" }}
       >
         {row.nowText}
       </span>

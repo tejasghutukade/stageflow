@@ -1,5 +1,6 @@
 import type { EvalResultRow, EvalRunDetail } from "../../../api/evalTypes";
-import { formatCost, formatDuration, formatPercent, formatScore, formatTokens } from "../format";
+import { formatCost, formatDuration, formatMean, formatPercent, formatScore, formatTokens } from "../format";
+import { isAgentRun } from "../agentRun";
 import { caseRowView, type CaseRowView, type DotKind } from "./casesModel";
 import { byGraderRows, type GraderStatView } from "./gradersModel";
 import { repeatsOf, thresholdOf, type Tone } from "./headerModel";
@@ -20,6 +21,7 @@ export function kpiTiles(run: EvalRunDetail): KpiTile[] {
   if (stats.pass_rate_ci) {
     passParts.push(`95% CI ${wholePercent(stats.pass_rate_ci.low)} to ${wholePercent(stats.pass_rate_ci.high)} (by case)`);
   }
+  const agent = isAgentRun(run);
   const passTone: Tone = stats.pass_rate === null ? "muted" : stats.pass_rate >= threshold ? "ok" : "fail";
 
   const tiles: KpiTile[] = [
@@ -48,6 +50,13 @@ export function kpiTiles(run: EvalRunDetail): KpiTile[] {
     });
   }
 
+  if (agent && stats.mean_turns !== null && stats.mean_turns !== undefined) {
+    tiles.push({ id: "turns", label: "Turns", value: formatMean(stats.mean_turns), sub: "per conversation", tone: "muted" });
+  }
+  if (agent && stats.mean_tool_calls !== null && stats.mean_tool_calls !== undefined) {
+    tiles.push({ id: "tool_calls", label: "Tool calls", value: formatMean(stats.mean_tool_calls), sub: "per conversation", tone: "muted" });
+  }
+
   tiles.push(
     {
       id: "latency",
@@ -60,7 +69,9 @@ export function kpiTiles(run: EvalRunDetail): KpiTile[] {
       id: "cost",
       label: "Cost",
       value: formatCost(stats.cost_total),
-      sub: `${formatCost(stats.cost_per_result)} per result · judge ${formatCost(stats.cost_judge)}`,
+      sub: agent
+        ? `${formatCost(stats.cost_per_result)} per result · agent and simulator ${formatCost(stats.cost_stage)} · judge ${formatCost(stats.cost_judge)}`
+        : `${formatCost(stats.cost_per_result)} per result · judge ${formatCost(stats.cost_judge)}`,
       tone: "muted",
     },
     {

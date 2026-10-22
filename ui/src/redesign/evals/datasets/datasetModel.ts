@@ -408,8 +408,12 @@ export function datasetSubtitle(opts: {
   stage: string | null;
   usedBy: string[];
   path: string;
+  /** Agent evals: scenarios for an agent instead of cases for a stage. */
+  agent?: boolean;
 }): string {
-  const parts = [`${opts.cases} ${opts.cases === 1 ? "case" : "cases"}${opts.stage ? ` for the ${opts.stage} stage` : ""}`];
+  const noun = opts.agent ? ["scenario", "scenarios"] : ["case", "cases"];
+  const kind = opts.agent ? "agent" : "stage";
+  const parts = [`${opts.cases} ${opts.cases === 1 ? noun[0] : noun[1]}${opts.stage ? ` for the ${opts.stage} ${kind}` : ""}`];
   if (opts.usedBy.length > 0) parts.push(`used by ${opts.usedBy.join(", ")}`);
   parts.push(opts.path);
   return parts.join(" · ");

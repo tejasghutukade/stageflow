@@ -6,6 +6,7 @@ import type {
 } from "../../../api/evalTypes";
 import { formatCost, formatDuration, formatPercent, formatScore } from "../format";
 import { datasetName } from "../evalListModel";
+import { agentRunLabel, isAgentRun } from "../agentRun";
 import { formatLimit } from "./runDialogModel";
 
 export const MIN_RESULTS_FOR_ESTIMATE = 3;
@@ -31,7 +32,7 @@ export type LiveRowModel = {
   scoreText: string;
   scoreTone: "ok" | "needs" | "fail" | "muted";
   nowText: string;
-  nowTone: "running" | "muted";
+  nowTone: "running" | "muted" | "fail";
 };
 
 export type BarSegment = { kind: DotState; percent: number };
@@ -73,8 +74,22 @@ export function estimatedLeftMs(elapsed: number | null, resultsDone: number, res
   return (elapsed / resultsDone) * remaining;
 }
 
-export function nowText(entry: LiveEntry | undefined, allDone: boolean): { text: string; tone: "running" | "muted" } {
-  if (allDone) return { text: "Done", tone: "muted" };
+/** What a failed agent repeat shows in the Now column. The row only carries the stored status, so a timeout reads as "Agent failed". */
+export function agentFailureLabel(statuses: readonly EvalResultStatus[]): string | null {
+  if (statuses.includes("stage_failed")) return "Agent failed";
+  if (statuses.includes("error")) return "Error";
+  return null;
+}
+
+export function nowText(
+  entry: LiveEntry | undefined,
+  allDone: boolean,
+  failure: string | null = null,
+): { text: string; tone: "running" | "muted" | "fail" } {
+  if (allDone) return failure ? { text: failure, tone: "fail" } : { text: "Done", tone: "muted" };
+  if (entry && entry.phase === "agent_running") {
+    return { text: `Agent is talking, repeat ${entry.repeat_index + 1}`, tone: "running" };
+  }
   if (entry && entry.phase === "stage_running") {
     return { text: `Stage is running repeat ${entry.repeat_index + 1}`, tone: "running" };
   }
@@ -155,7 +170,8 @@ export function buildRows(input: {
       .filter((r) => dotForStatus(r.status, r.passed) !== null && r.score !== null)
       .map((r) => r.score as number);
     const mean = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
-    const now = nowText(entries[0], finished >= total);
+    const failure = isAgentRun(run) ? agentFailureLabel((row?.repeats ?? []).map((r) => r.status)) : null;
+    const now = nowText(entries[0], finished >= total, failure);
     out.push({
       caseId: source.id,
       position: source.position,
@@ -275,6 +291,7 @@ export function runDatasetPath(run: Pick<EvalRunDetail, "config">): string | nul
 
 export function liveSubtitle(run: EvalRunDetail, now: number): string {
   const target = run.config?.target ?? {};
+  const agentLabel = agentRunLabel(run);
   const stage = target.stage_id ?? target.file ?? null;
   const pipeline =
     typeof target.pipeline_path === "string"
@@ -288,7 +305,8 @@ export function liveSubtitle(run: EvalRunDetail, now: number): string {
       ? `${cases} × ${repeats} ${repeats === 1 ? "repeat" : "repeats"}`
       : cases;
   const parts: string[] = [];
-  if (stage) parts.push(pipeline ? `Stage ${stage} in ${pipeline}` : `Stage ${stage}`);
+  if (isAgentRun(run) && agentLabel) parts.push(agentLabel);
+  else if (stage) parts.push(pipeline ? `Stage ${stage} in ${pipeline}` : `Stage ${stage}`);
   parts.push(dataset ? `${datasetName(dataset)}, ${withRepeats}` : withRepeats);
   const elapsed = elapsedMs(run, now);
   parts.push(elapsed === null ? "waiting to start" : `started ${formatDuration(elapsed)} ago`);

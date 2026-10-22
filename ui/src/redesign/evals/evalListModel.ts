@@ -31,11 +31,14 @@ export type EvalTabDef = { id: EvalFilterTab; label: string; count?: number; soo
 
 export type EvalTone = "ok" | "needs" | "fail" | "muted";
 
-export function evalTabs(items: EvalListItem[]): EvalTabDef[] {
+/** `agentsLive` turns the Agents tab from a placeholder into a counted filter. */
+export function evalTabs(items: EvalListItem[], agentsLive = false): EvalTabDef[] {
   return [
     { id: "all", label: "All", count: items.length },
     { id: "stages", label: "Stages", count: items.filter((i) => i.target.kind === "stage").length },
-    { id: "agents", label: "Agents", soon: true },
+    agentsLive
+      ? { id: "agents", label: "Agents", count: items.filter((i) => i.target.kind === "agent").length }
+      : { id: "agents", label: "Agents", soon: true },
     { id: "regressed", label: "Regressed", count: items.filter((i) => i.status === "regressed").length },
   ];
 }
@@ -61,13 +64,14 @@ function matchesQuery(item: EvalListItem, query: string): boolean {
 
 export function filterEvals(
   items: EvalListItem[],
-  opts: { tab: EvalFilterTab; query: string; stage?: string },
+  opts: { tab: EvalFilterTab; query: string; stage?: string; agent?: string },
 ): EvalListItem[] {
   return items.filter((item) => {
     if (opts.tab === "regressed" && item.status !== "regressed") return false;
     if (opts.tab === "stages" && item.target.kind !== "stage") return false;
-    if (opts.tab === "agents") return false;
+    if (opts.tab === "agents" && item.target.kind !== "agent") return false;
     if (opts.stage && (item.target.kind !== "stage" || item.target.stage_id !== opts.stage)) return false;
+    if (opts.agent && (item.target.kind !== "agent" || item.target.agent_id !== opts.agent)) return false;
     return matchesQuery(item, opts.query);
   });
 }
@@ -111,6 +115,8 @@ export type EvalRowModel = {
   id: string;
   name: string;
   description: string | null;
+  /** "Stage" or "Agent": the chip beside the target. */
+  targetKind: "Stage" | "Agent";
   targetLabel: string;
   targetPath: string;
   datasetName: string;
@@ -133,11 +139,22 @@ function plural(count: number, one: string, many: string): string {
 }
 
 function targetPath(item: EvalListItem): string {
-  return item.target.kind === "stage" ? (item.target.file ?? item.target.pipeline_path ?? "") : "";
+  if (item.target.kind === "agent") return item.target.model ?? "";
+  return item.target.file ?? item.target.pipeline_path ?? "";
+}
+
+/** `support · r4` for agents; stages keep the label the API sends. */
+export function targetLabelOf(item: EvalListItem): string {
+  if (item.target.kind !== "agent") return item.target.label;
+  const name = item.target.agent_name || item.target.agent_id;
+  return item.target.revision === null ? name : `${name} · r${item.target.revision}`;
 }
 
 function datasetMeta(item: EvalListItem): string {
   const type = item.type.charAt(0).toUpperCase() + item.type.slice(1);
+  if (item.target.kind === "agent") {
+    return `${type} · ${plural(item.dataset_cases, "scenario", "scenarios")} · ${plural(item.repeats, "repeat", "repeats")}`;
+  }
   if (item.id === EVAL_SAMPLE_ID) {
     return `${type} · ${plural(item.dataset_cases, "case", "cases")} · sample data`;
   }
@@ -152,7 +169,8 @@ export function evalRowModel(item: EvalListItem): EvalRowModel {
     id: item.id,
     name: item.name || item.id,
     description: item.description,
-    targetLabel: item.target.label,
+    targetKind: item.target.kind === "agent" ? "Agent" : "Stage",
+    targetLabel: targetLabelOf(item),
     targetPath: targetPath(item),
     datasetName: datasetName(item.dataset_path),
     datasetMeta: datasetMeta(item),

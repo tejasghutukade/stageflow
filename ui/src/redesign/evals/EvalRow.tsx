@@ -68,7 +68,7 @@ export function EvalRow({
       <div role="cell" className={`${COLUMN.target} shrink-0 min-w-0`}>
         <div className="flex items-center gap-2">
           <span className="shrink-0 rounded-sm border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)] px-1.5 text-[11px] text-[var(--sf-text-2)]">
-            Stage
+            {row.targetKind}
           </span>
           <span className={`${MONO} truncate text-xs text-[var(--sf-text-1)]`}>{row.targetLabel}</span>
         </div>

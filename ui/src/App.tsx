@@ -209,19 +209,25 @@ function ConsoleRoot() {
   } else if (route.name === "triggers") {
     content = <TriggersPage />;
   } else if (route.name === "evals") {
-    content = <EvalsRedesign stage={route.stage} />;
+    content = <EvalsRedesign stage={route.stage} agent={route.agent} />;
   } else if (route.name === "evalDetail") {
     content = <EvalDetailRedirect evalId={route.evalId} />;
   } else if (route.name === "evalRun") {
     content = <EvalRunPage evalId={route.evalId} runNumber={route.runNumber} tab={route.tab} />;
   } else if (route.name === "evalCase") {
     content = (
-      <EvalRunPage evalId={route.evalId} runNumber={route.runNumber} caseId={route.caseId} repeat={route.repeat} />
+      <EvalRunPage
+        evalId={route.evalId}
+        runNumber={route.runNumber}
+        caseId={route.caseId}
+        repeat={route.repeat}
+        drawerTab={route.drawerTab}
+      />
     );
   } else if (route.name === "evalCompare") {
     content = <ComparePage evalId={route.evalId} a={route.a} b={route.b} />;
   } else if (route.name === "evalNew") {
-    content = <NewEvalWizard pipeline={route.pipeline} stage={route.stage} file={route.file} />;
+    content = <NewEvalWizard pipeline={route.pipeline} stage={route.stage} file={route.file} agent={route.agent} />;
   } else if (route.name === "evalEdit") {
     content = <EditEvalPage evalId={route.evalId} />;
   } else if (route.name === "datasets") {

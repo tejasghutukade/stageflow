@@ -13,6 +13,7 @@ import {
 import type {
   EvalCaseOp,
   EvalCreateDatasetInput,
+  EvalDatasetCase,
   EvalDatasetDetail,
   EvalDatasetListItem,
   EvalDatasetTarget,
@@ -23,6 +24,9 @@ import { showToast } from "../../../toast";
 import { PageHeader } from "../../shell/PageHeader";
 import { CandidatesDialog } from "./CandidatesDialog";
 import { DatasetTable } from "./DatasetTable";
+import { ScenarioEditor } from "./ScenarioEditor";
+import { ScenarioTable } from "./ScenarioTable";
+import { MIXED_USE_BANNER, invalidScenarioBanner, isMixedUse } from "./scenarioModel";
 import { BTN, BTN_PRIMARY, MONO } from "./DialogShell";
 import { AddCaseDialog, ConfirmDialog, NewDatasetDialog } from "./SmallDialogs";
 import { UploadDialog } from "./UploadDialog";
@@ -34,6 +38,7 @@ import {
   datasetQuery,
   datasetSubtitle,
   datasetTabs,
+  firstInvalidReason,
   footerNote,
   invalidBanner,
   isJsonValue,
@@ -216,6 +221,8 @@ function DatasetDetailView({
   const [save, dispatchSave] = useReducer(saveReducer, INITIAL_SAVE);
   const [dialog, setDialog] = useState<"upload" | "runs" | "add" | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [editing, setEditing] = useState<EvalDatasetCase | null>(null);
+  const [toolIds, setToolIds] = useState<string[]>([]);
   const [expectedFields, setExpectedFields] = useState<string[]>([]);
   const [allIds, setAllIds] = useState<string[] | null>(null);
   const hashRef = useRef("");
@@ -225,6 +232,10 @@ function DatasetDetailView({
   const evalItem = evals.find((e) => e.id === effectiveEvalId);
   const target = targetOf(evalItem);
   const root = projectRoot ?? projectRootOf(evalItem);
+  const agentEval = evalItem?.target.kind === "agent";
+  const defaultMode = evalItem?.conversation?.mode ?? "script";
+  const kinds = useMemo(() => new Map(evals.map((e) => [e.id, e.target.kind] as const)), [evals]);
+  const mixedUse = detail ? isMixedUse(detail.used_by, kinds) : false;
   const stageLabel = evalItem ? ((evalItem.target.kind === "stage" ? evalItem.target.stage_id : undefined) ?? evalItem.target.label) : null;
 
   useEffect(() => {
@@ -266,6 +277,7 @@ function DatasetDetailView({
           .map((g) => String(g.expected).replace(/^expected\./, "").split(".")[0] ?? "")
           .filter((n) => n !== "");
         setExpectedFields([...new Set(names)]);
+        setToolIds((res.agent?.tools ?? []).map((t) => t.id));
       },
       () => {},
     );
@@ -367,7 +379,14 @@ function DatasetDetailView({
 
   const editable = detail?.editable === true;
   const columnInfo = useMemo(() => (detail ? datasetColumns(detail) : null), [detail]);
-  const banner = detail ? invalidBanner(detail) : null;
+  const scenarioBanner = detail && agentEval ? invalidScenarioBanner(detail.invalid_total, detail.cases_total) : null;
+  const banner = detail
+    ? agentEval
+      ? scenarioBanner
+        ? { ...scenarioBanner, reason: firstInvalidReason(detail) }
+        : null
+      : invalidBanner(detail)
+    : null;
   const readOnlyFormat = detail && !detail.editable ? readOnlyBanner(detail.format) : null;
   const paging = pageInfo(page, detail?.matched_total ?? 0);
   const requiredNames = useMemo(
@@ -433,7 +452,7 @@ function DatasetDetailView({
   }
 
   const subtitle = detail
-    ? datasetSubtitle({ cases: detail.cases_total, stage: stageLabel, usedBy: detail.used_by, path: detail.path })
+    ? datasetSubtitle({ cases: detail.cases_total, stage: stageLabel, usedBy: detail.used_by, path: detail.path, agent: agentEval })
     : undefined;
   const noEval = !target;
 
@@ -455,19 +474,21 @@ function DatasetDetailView({
               <LuUpload className="size-3.5" aria-hidden />
               Upload cases
             </button>
-            <button
-              type="button"
-              className={BTN}
-              disabled={!editable || noEval}
-              title={noEval ? "No eval uses this dataset, so there is no stage to read runs from" : undefined}
-              onClick={() => setDialog("runs")}
-            >
-              <LuHistory className="size-3.5" aria-hidden />
-              Add from runs
-            </button>
+            {agentEval ? null : (
+              <button
+                type="button"
+                className={BTN}
+                disabled={!editable || noEval}
+                title={noEval ? "No eval uses this dataset, so there is no stage to read runs from" : undefined}
+                onClick={() => setDialog("runs")}
+              >
+                <LuHistory className="size-3.5" aria-hidden />
+                Add from runs
+              </button>
+            )}
             <button type="button" className={BTN_PRIMARY} disabled={!editable} onClick={() => setDialog("add")}>
               <LuPlus className="size-3.5" aria-hidden />
-              Add case
+              {agentEval ? "Add scenario" : "Add case"}
             </button>
           </>
         }
@@ -493,6 +514,13 @@ function DatasetDetailView({
               Convert it to a JSONL file next to it to edit cases. The original stays.
             </span>
             <button type="button" className={BTN} onClick={() => void convert()}>Convert to JSONL</button>
+          </div>
+        ) : null}
+
+        {mixedUse ? (
+          <div role="status" className="flex items-center gap-3 rounded-lg border border-[var(--sf-needs-border)] bg-[var(--sf-needs-bg)] px-4 py-3">
+            <LuCircleAlert className="size-4 shrink-0 text-[var(--sf-needs)]" aria-hidden />
+            <span className="text-[13px] text-[var(--sf-text-1)]">{MIXED_USE_BANNER}</span>
           </div>
         ) : null}
 
@@ -586,16 +614,20 @@ function DatasetDetailView({
               </pre>
             ) : columnInfo && detail.cases.length > 0 ? (
               <div className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
-                <DatasetTable
-                  columns={columnInfo.columns}
-                  moreExpected={columnInfo.moreExpected}
-                  cases={detail.cases}
-                  offset={page * 25}
-                  editable={editable}
-                  requiredNames={requiredNames}
-                  onCommit={commit}
-                  onDelete={(c) => setDeleting(c.id)}
-                />
+                {agentEval ? (
+                  <ScenarioTable cases={detail.cases} offset={page * 25} defaultMode={defaultMode} editable={editable} onEdit={setEditing} onDelete={(c) => setDeleting(c.id)} />
+                ) : (
+                  <DatasetTable
+                    columns={columnInfo.columns}
+                    moreExpected={columnInfo.moreExpected}
+                    cases={detail.cases}
+                    offset={page * 25}
+                    editable={editable}
+                    requiredNames={requiredNames}
+                    onCommit={commit}
+                    onDelete={(c) => setDeleting(c.id)}
+                  />
+                )}
                 <div className="flex items-center justify-between border-t border-t-[var(--sf-hairline)] px-4 py-2.5 text-xs text-[var(--sf-text-3)]">
                   <span>{paging.label}</span>
                   <span className="flex items-center gap-1.5">
@@ -622,7 +654,13 @@ function DatasetDetailView({
               </div>
             ) : (
               <p className="py-8 text-center text-[13px] text-[var(--sf-text-2)]">
-                {detail.cases_total === 0 ? "No cases yet. Upload a file or add one." : "No cases match this filter."}
+                {detail.cases_total === 0
+                  ? agentEval
+                    ? "No scenarios yet. Upload a file or add one."
+                    : "No cases yet. Upload a file or add one."
+                  : agentEval
+                    ? "No scenarios match this filter."
+                    : "No cases match this filter."}
               </p>
             )}
           </>
@@ -654,6 +692,7 @@ function DatasetDetailView({
           expectedFields={expectedFields}
           existingCases={allIds.map((id) => ({ id }))}
           {...(root ? { projectRoot: root } : {})}
+          {...(agentEval ? { conversationMode: defaultMode, ...(effectiveEvalId ? { evalId: effectiveEvalId } : {}) } : {})}
           onClose={() => setDialog(null)}
           onConfirm={confirmUpload}
         />
@@ -668,7 +707,32 @@ function DatasetDetailView({
           onConfirm={(ids) => confirmRuns(ids)}
         />
       ) : null}
-      {dialog === "add" && detail && allIds ? (
+      {dialog === "add" && detail && allIds && agentEval ? (
+        <ScenarioEditor
+          defaultMode={defaultMode}
+          existingIds={allIds}
+          toolIds={toolIds}
+          onClose={() => setDialog(null)}
+          onSave={async (c) => {
+            await patch([{ op: "add", case: c }]);
+            setDialog(null);
+          }}
+        />
+      ) : null}
+      {editing ? (
+        <ScenarioEditor
+          initial={editing}
+          defaultMode={defaultMode}
+          existingIds={[]}
+          toolIds={toolIds}
+          onClose={() => setEditing(null)}
+          onSave={async (c) => {
+            await patch([{ op: "update", id: editing.id, case: c }]);
+            setEditing(null);
+          }}
+        />
+      ) : null}
+      {dialog === "add" && detail && allIds && !agentEval ? (
         <AddCaseDialog
           inputFields={inputFields}
           jsonFields={jsonFields}

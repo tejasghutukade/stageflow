@@ -3,6 +3,7 @@ import type { EvalResultRow, EvalRunDetail } from "../../../api/evalTypes";
 import { CaseRowsTable } from "./CaseRowsTable";
 import { byGraderHeader, byGraderView, failingCardHeader, failingCaseRows, failureTypesModel, flakyNote, FAILURE_TYPES_HINT, histogramModel, kpiTiles } from "./overviewModel";
 import { Bar, Card, KindChip, MONO_CLASS, TONE_BG, TONE_TEXT } from "./ResultsParts";
+import { isAgentRun } from "../agentRun";
 
 export function OverviewTab({
   run,
@@ -35,7 +36,7 @@ export function OverviewTab({
     <div className="flex flex-col gap-4 px-5 py-4">
       <div
         className="grid overflow-hidden rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-panel)]"
-        style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }}
+        style={{ gridTemplateColumns: `repeat(${tiles.length > 6 ? 4 : tiles.length}, minmax(0, 1fr))` }}
       >
         {tiles.map((tile, i) => (
           <div key={tile.id} className={`flex flex-col gap-1.5 p-4 ${i > 0 ? "border-l border-[var(--sf-hairline)]" : ""}`}>
@@ -147,7 +148,7 @@ export function OverviewTab({
         {failing.length === 0 ? (
           <p className="px-4 py-3 text-[13px] text-[var(--sf-text-2)]">No failing cases.</p>
         ) : (
-          <CaseRowsTable rows={failing} onOpen={onOpenCase} />
+          <CaseRowsTable rows={failing} onOpen={onOpenCase} agent={isAgentRun(run)} />
         )}
       </Card>
     </div>

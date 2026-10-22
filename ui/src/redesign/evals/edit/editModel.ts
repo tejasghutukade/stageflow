@@ -1,6 +1,7 @@
 import type { EvalDefinition, EvalDetail, EvalValidateResult } from "../../../api/evalTypes";
 import type { ValidationFinding } from "../../../api/types";
 import { parseHash } from "../../../routes";
+import { fromConversation, toConversation, userModelOf, type ConversationDraft } from "../newEval/conversationModel";
 import { defaultsErrors, posixRelative, targetFromRow, targetRef, type DraftDefaults, type StageRow, type WizardTarget } from "../newEval/wizardModel";
 
 export type EditMode = "form" | "yaml";
@@ -265,14 +266,42 @@ export function withTarget(def: EvalDefinition, target: WizardTarget, evalDir: s
   return { ...def, target: targetRef(target, { evals: evalDir, datasets: "" }) };
 }
 
+export function isAgentDefinition(def: EvalDefinition | null | undefined): boolean {
+  return def?.target.kind === "agent";
+}
+
+export function withAgentTarget(def: EvalDefinition, agentId: string): EvalDefinition {
+  return { ...def, target: { kind: "agent", agent: agentId } };
+}
+
+/** The Conversation card's draft for an agent definition. */
+export function conversationDraftOf(def: EvalDefinition): ConversationDraft {
+  return fromConversation(def.conversation, def.defaults?.user_model);
+}
+
+/** Writes the Conversation card back: `conversation` and `defaults.user_model`. */
+export function withConversationDraft(def: EvalDefinition, draft: ConversationDraft): EvalDefinition {
+  const { user_model: _drop, ...rest } = def.defaults ?? {};
+  void _drop;
+  const userModel = userModelOf(draft);
+  const defaults = { ...rest, ...(userModel ? { user_model: userModel } : {}) };
+  const { defaults: _d, ...others } = def;
+  void _d;
+  return {
+    ...others,
+    ...(Object.keys(defaults).length > 0 ? { defaults } : {}),
+    conversation: toConversation(draft),
+  };
+}
+
 export function evalDirOf(filePath: string): string {
   const i = filePath.lastIndexOf("/");
   return i < 0 ? "." : filePath.slice(0, i);
 }
 
-export function targetSummary(def: EvalDefinition): string {
+export function targetSummary(def: EvalDefinition, agent?: { name: string; revision: number } | null): string {
   const t = def.target;
-  if (t.kind === "agent") return `Agent ${t.agent}`;
+  if (t.kind === "agent") return agent ? `Agent ${agent.name} · r${agent.revision}` : `Agent ${t.agent}`;
   if (t.file !== undefined) return t.file;
   return `${t.pipeline ?? ""}${t.stage ? ` · ${t.stage}` : ""}`;
 }

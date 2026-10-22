@@ -21,7 +21,7 @@ import { GradersTab } from "./GradersTab";
 import { OverviewTab } from "./OverviewTab";
 import { Chip, ButtonLike, MONO_CLASS } from "./ResultsParts";
 import { EMPTY_FILTER, filterWithGrader, filterWithTag, type CasesFilter } from "./casesModel";
-import { rerunOverrides } from "./configModel";
+import { rerunOverrides, usedRealTools } from "./configModel";
 import {
   footerText,
   headerSubtitle,
@@ -41,11 +41,13 @@ export function RunResultsPage({
   tab,
   caseId,
   repeat,
+  drawerTab,
 }: {
   run: EvalRunDetail;
   tab?: EvalRunTab;
   caseId?: string;
   repeat?: number;
+  drawerTab?: "transcript";
 }) {
   const [fresh, setFresh] = useState<EvalRunDetail | null>(null);
   const run = fresh && fresh.eval_run_id === polledRun.eval_run_id ? fresh : polledRun;
@@ -84,6 +86,10 @@ export function RunResultsPage({
   }
 
   async function rerun() {
+    if (usedRealTools(run)) {
+      openRunDialog(evalId);
+      return;
+    }
     setRerunBusy(true);
     setRerunError(null);
     try {
@@ -220,6 +226,7 @@ export function RunResultsPage({
           run={run}
           caseId={caseId}
           repeat={repeat}
+          drawerTab={drawerTab}
           caseIds={caseIds}
           flaky={flakySet.has(caseId)}
           vocabulary={failureTypes.items}

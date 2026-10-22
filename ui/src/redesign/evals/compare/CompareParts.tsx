@@ -63,7 +63,7 @@ export function StageDiffPanel({
   onToggle: () => void;
 }) {
   return (
-    <section className={CARD} aria-label="What changed in the stage">
+    <section className={CARD} aria-label={model.title}>
       <div className="flex items-center gap-3 border-b border-[var(--sf-hairline)] px-4 py-3">
         <h2 className="text-[13px] font-semibold text-[var(--sf-text-1)]">{model.title}</h2>
         {model.hashes ? <span className={`${MONO} text-xs text-[var(--sf-text-3)]`}>{model.hashes}</span> : null}
@@ -105,10 +105,10 @@ export function StageDiffPanel({
   );
 }
 
-export function StageUnchanged() {
+export function StageUnchanged({ agent = false }: { agent?: boolean }) {
   return (
     <section className={`${CARD} px-4 py-3`}>
-      <p className="text-xs text-[var(--sf-text-3)]">Stage unchanged</p>
+      <p className="text-xs text-[var(--sf-text-3)]">{agent ? "Agent unchanged" : "Stage unchanged"}</p>
     </section>
   );
 }

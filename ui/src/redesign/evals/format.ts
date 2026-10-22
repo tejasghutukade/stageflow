@@ -40,6 +40,12 @@ export function formatTokens(count: number | null | undefined): string {
   return `${trimTenth(count / 1_000_000)}M`;
 }
 
+/** A plain mean from the API (turns, tool calls) with at most one decimal. */
+export function formatMean(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return String(Math.round(value * 10) / 10);
+}
+
 export function formatPoints(points: number | null | undefined): string {
   if (points === null || points === undefined || !Number.isFinite(points)) return "—";
   const rounded = Math.round(Math.abs(points) * 10) / 10;

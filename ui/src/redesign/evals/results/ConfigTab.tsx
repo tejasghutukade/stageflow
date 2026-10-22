@@ -2,6 +2,9 @@ import { useState } from "react";
 import { LuCopy, LuDownload, LuFingerprint, LuRefreshCw } from "react-icons/lu";
 import type { EvalRunDetail } from "../../../api/evalTypes";
 import {
+  agentCard,
+  agentToolRows,
+  conversationCard,
   datasetCard,
   fingerprintNote,
   gradersCard,
@@ -13,6 +16,7 @@ import {
   type ConfigRow,
 } from "./configModel";
 import { Card, Chip, ButtonLike, MONO_CLASS } from "./ResultsParts";
+import { isAgentRun } from "../agentRun";
 import { copyText, downloadRunExport } from "./resultsApi";
 
 function Rows({ rows }: { rows: ConfigRow[] }) {
@@ -55,6 +59,8 @@ export function ConfigTab({
   const dataset = datasetCard(run);
   const graders = gradersCard(run);
   const command = reproduceCommand(run);
+  const agent = isAgentRun(run);
+  const tools = agent ? agentToolRows(run) : [];
   const note = rerunNote(run);
 
   async function copy() {
@@ -80,9 +86,35 @@ export function ConfigTab({
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="flex flex-col gap-4">
-          <Card title="Stage">
-            <Rows rows={stageCard(run)} />
-          </Card>
+          {agent ? (
+            <>
+              <Card title="Agent">
+                <Rows rows={agentCard(run)} />
+              </Card>
+              <Card title="Tools" addon={String(tools.length)}>
+                {tools.length === 0 ? (
+                  <p className="px-4 py-3 text-[13px] text-[var(--sf-text-2)]">The agent had no tools.</p>
+                ) : (
+                  <div role="table">
+                    {tools.map((t) => (
+                      <div key={t.id} role="row" className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)_minmax(0,1.4fr)] items-center gap-3 border-t border-[var(--sf-hairline)] px-4 py-2 text-[13px] first:border-t-0">
+                        <span className={`${MONO_CLASS} truncate text-[var(--sf-text-1)]`} title={t.id}>{t.id}</span>
+                        <span className="text-xs text-[var(--sf-text-3)]">{t.cls}</span>
+                        <span className={`text-xs ${t.tone === "ok" ? "text-[var(--sf-ok)]" : t.tone === "needs" ? "text-[var(--sf-needs)]" : t.tone === "fail" ? "text-[var(--sf-fail)]" : "text-[var(--sf-text-2)]"}`}>{t.outcome}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+              <Card title="Conversation">
+                <Rows rows={conversationCard(run)} />
+              </Card>
+            </>
+          ) : (
+            <Card title="Stage">
+              <Rows rows={stageCard(run)} />
+            </Card>
+          )}
           <Card title="Dataset" right={<StatusChip chip={dataset.status} />}>
             <Rows rows={dataset.rows} />
           </Card>

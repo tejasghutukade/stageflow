@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LuCheck, LuCircleAlert, LuFileText } from "react-icons/lu";
 import { previewEvalDataset } from "../../../api/evalsClient";
-import type { EvalDatasetFormat, EvalDatasetPreview, EvalDatasetTarget } from "../../../api/evalTypes";
+import type { EvalConversationMode, EvalDatasetFormat, EvalDatasetPreview, EvalDatasetTarget } from "../../../api/evalTypes";
 import { BTN, BTN_PRIMARY, DialogShell, LABEL, MONO, TEXTAREA } from "./DialogShell";
 import {
   DELIMITERS,
@@ -9,7 +9,12 @@ import {
   EXTRAS_TITLE,
   FREE_MODE_HINT,
   FREE_MODE_NOTE,
+  SCRIPTED_SWITCH_LABEL,
+  SCRIPTED_SWITCH_NOTE,
+  SCRIPT_NOTICE,
   SPLIT_OPTIONS,
+  agentFields,
+  agentPreviewRows,
   autoMatch,
   buildFullMapping,
   buildPreviewRequest,
@@ -22,6 +27,8 @@ import {
   detectPastedFormat,
   dragDepth,
   firstFile,
+  fieldSplits,
+  isAgentUpload,
   extraColumns,
   extraConflicts,
   formatBytes,
@@ -33,6 +40,7 @@ import {
   patchExtra,
   previewRows,
   readyCases,
+  recheckForMode,
   rowsFoundText,
   setColumn,
   setSplit,
@@ -61,6 +69,10 @@ export type UploadDialogProps = {
   /** Cases already in the dataset. Enables the append/replace choice; omit for a new dataset. */
   existingCases?: Array<{ id: string }>;
   projectRoot?: string;
+  /** Agent targets: the eval whose conversation mode the rows are checked against. */
+  evalId?: string;
+  /** Agent targets: the mode scenarios without `input.mode` run in. Without it the dialog offers the scripted switch. */
+  conversationMode?: EvalConversationMode;
   /** Start with the paste box instead of the file picker. */
   initialMode?: "file" | "paste";
   onClose: () => void;
@@ -83,6 +95,8 @@ function UploadDialogBody({
   expectedFields = [],
   existingCases,
   projectRoot,
+  evalId,
+  conversationMode,
   initialMode = "file",
   onClose,
   onConfirm,
@@ -95,7 +109,8 @@ function UploadDialogBody({
   const [rowsFound, setRowsFound] = useState(0);
   const [mapping, setMapping] = useState<MappingState>({});
   const [extras, setExtras] = useState<ExtraState>({});
-  const [preview, setPreview] = useState<EvalDatasetPreview | null>(null);
+  const [serverPreview, setPreview] = useState<EvalDatasetPreview | null>(null);
+  const [scripted, setScripted] = useState(false);
   const [mode, setMode] = useState<UploadMode>("append");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,12 +121,19 @@ function UploadDialogBody({
   const previewSeq = useRef(0);
   const [parsed, setParsed] = useState(false);
 
-  const stageAware = hasTarget(target) && inputFields.length > 0;
+  const agent = isAgentUpload(target);
+  const scenarioMode: EvalConversationMode = conversationMode ?? (scripted ? "script" : "simulated");
+  const preview = useMemo(
+    () => (agent && serverPreview ? recheckForMode(serverPreview, scenarioMode) : serverPreview),
+    [agent, serverPreview, scenarioMode],
+  );
+  const stageAware = hasTarget(target) && (agent || inputFields.length > 0);
   const tabular = columns !== null;
   const fields: UploadField[] = useMemo(() => {
     if (!tabular) return [];
+    if (agent) return agentFields();
     return stageAware ? stageFields(inputFields, expectedFields) : freeFields(columns ?? []);
-  }, [tabular, stageAware, inputFields, expectedFields, columns]);
+  }, [tabular, agent, stageAware, inputFields, expectedFields, columns]);
   const extraCols = useMemo(
     () => (tabular && stageAware ? extraColumns(columns ?? [], fields, mapping) : []),
     [tabular, stageAware, columns, fields, mapping],
@@ -143,7 +165,7 @@ function UploadDialogBody({
         setColumns(res.columns ?? null);
         setRowsFound(res.rows.length);
         const names = res.columns ?? [];
-        const f = stageAware ? stageFields(inputFields, expectedFields) : freeFields(names);
+        const f = agent ? agentFields() : stageAware ? stageFields(inputFields, expectedFields) : freeFields(names);
         setMapping(res.columns ? autoMatch(f, names) : {});
         setExtras(res.columns ? initExtras(names, cellsByColumn(res.rows, names)) : {});
         setLoading(false);
@@ -175,6 +197,7 @@ function UploadDialogBody({
             : {}),
           ...(stageAware && target ? { target } : {}),
           projectRoot,
+          evalId,
         }),
       ).then(
         (res) => {
@@ -241,6 +264,14 @@ function UploadDialogBody({
         skipped: preview.counts.skipped,
         fileName: source.fileName,
         format: source.format,
+        ...(agent
+          ? {
+              candidates: casesForImport(
+                preview.rows.map((r) => r.case),
+                { format: source.format, mode: hasExisting ? mode : "replace", existingIds: (existingCases ?? []).map((c) => c.id) },
+              ),
+            }
+          : {}),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -249,7 +280,7 @@ function UploadDialogBody({
     }
   }
 
-  const rows = previewRows(preview, stageAware ? inputFields.map((f) => f.name) : []);
+  const rows = agent ? agentPreviewRows(preview) : previewRows(preview, stageAware ? inputFields.map((f) => f.name) : []);
   const summary = summarize(preview);
   const skipped = preview?.counts.skipped ?? 0;
   const labels = modeLabels(existing);
@@ -257,7 +288,7 @@ function UploadDialogBody({
   return (
     <DialogShell
       title={title}
-      subtitle={subtitle ?? (stageAware ? "Cases must fit the stage's input" : FREE_MODE_HINT)}
+      subtitle={subtitle ?? (agent ? "Scenarios are checked before they are added" : stageAware ? "Cases must fit the stage's input" : FREE_MODE_HINT)}
       onClose={onClose}
       footer={
         <>
@@ -408,7 +439,7 @@ function UploadDialogBody({
           {tabular ? (
             <section className="flex flex-col gap-2" aria-label="Column mapping">
               <div className="flex items-baseline justify-between">
-                <h3 className={LABEL}>{stageAware ? "Match columns to the stage's input" : FREE_MODE_HINT}</h3>
+                <h3 className={LABEL}>{agent ? "Match columns to the scenario" : stageAware ? "Match columns to the stage's input" : FREE_MODE_HINT}</h3>
                 <span className="text-xs text-[var(--sf-text-3)]">
                   {stageAware ? "Matched by name where possible" : FREE_MODE_NOTE}
                 </span>
@@ -426,6 +457,7 @@ function UploadDialogBody({
                   />
                 ))}
               </div>
+              {agent ? <p className="text-xs text-[var(--sf-text-3)]">{SCRIPT_NOTICE}</p> : null}
             </section>
           ) : null}
 
@@ -450,7 +482,15 @@ function UploadDialogBody({
           ) : null}
 
           <section className="flex flex-col gap-2" aria-label="Preview">
-            <h3 className={LABEL}>Preview</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className={LABEL}>Preview</h3>
+              {agent && conversationMode === undefined ? (
+                <label className="flex items-center gap-2 text-xs text-[var(--sf-text-2)]" title={SCRIPTED_SWITCH_NOTE}>
+                  <input type="checkbox" checked={scripted} onChange={(e) => setScripted(e.target.checked)} />
+                  {SCRIPTED_SWITCH_LABEL}
+                </label>
+              ) : null}
+            </div>
             <div className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
               {rows.length === 0 ? (
                 <p className="px-3.5 py-3 text-xs text-[var(--sf-text-3)]">{loading || !preview ? "Reading rows…" : "No rows"}</p>
@@ -542,7 +582,7 @@ function FieldRow({
           <option key={c} value={c}>{c}</option>
         ))}
       </select>
-      {field.role === "expected" ? (
+      {fieldSplits(field) ? (
         <select
           aria-label={`Split character for ${field.name}`}
           value={choice?.split ?? ""}

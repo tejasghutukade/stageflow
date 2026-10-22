@@ -5,7 +5,8 @@ import type {
   EvalRunDetail,
   EvalRunListItem,
 } from "../../../api/evalTypes";
-import { formatCost, formatDuration, formatPercent, formatScore } from "../format";
+import { formatCost, formatDuration, formatMean, formatPercent, formatScore } from "../format";
+import { agentIdOf } from "../agentRun";
 
 const MINUS = "−";
 
@@ -143,7 +144,7 @@ export function buildKpiTiles(result: EvalCompareResult): KpiTile[] {
   const costChange = percentChange(cost);
   const costTone: Tone = cost.delta === null || cost.delta === 0 ? "muted" : cost.delta > 0 ? "needs" : "ok";
 
-  return [
+  const tiles: KpiTile[] = [
     {
       key: "pass_rate",
       label: "Pass rate",
@@ -180,10 +181,72 @@ export function buildKpiTiles(result: EvalCompareResult): KpiTile[] {
       subTone: costTone,
     },
   ];
+  for (const [key, label, delta] of [
+    ["mean_turns", "Turns", deltas.mean_turns],
+    ["mean_tool_calls", "Tool calls", deltas.mean_tool_calls],
+  ] as const) {
+    if (!delta) continue;
+    tiles.push({
+      key,
+      label,
+      value: pairText(formatMean(delta.a), formatMean(delta.b)),
+      sub: delta.delta === null ? "—" : delta.delta === 0 ? "no change" : `${signed(delta.delta, formatMean(Math.abs(delta.delta)))} per conversation`,
+      subTone: "muted",
+    });
+  }
+  return tiles;
+}
+
+/** Both runs are agent runs. */
+export function isAgentCompare(result: EvalCompareResult): boolean {
+  return result.deltas.mean_turns !== undefined || result.deltas.mean_tool_calls !== undefined || (result.agent_diff ?? null) !== null;
+}
+
+const AGENT_CONVERSATION_LABELS: Array<[string, string]> = [
+  ["tools", "tool policy"],
+  ["approvals", "approvals"],
+  ["mode", "mode"],
+  ["max_turns", "max turns"],
+  ["user_model", "user model"],
+  ["turn_timeout_ms", "turn timeout"],
+  ["read_only_tools", "read-only tools"],
+  ["simulator_prompt_version", "simulator prompt"],
+];
+
+function agentObject(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function plain(value: unknown): string {
+  if (value === null || value === undefined) return "none";
+  if (Array.isArray(value)) return value.length === 0 ? "none" : value.join(", ");
+  return String(value);
+}
+
+/** Tool policy, approvals, mode, max turns and user model first: those are the conversation settings a result depends on. */
+export function agentSettingChanges(a: unknown, b: unknown): string[] {
+  const oa = agentObject(a);
+  const ob = agentObject(b);
+  return AGENT_CONVERSATION_LABELS.filter(([key]) => JSON.stringify(oa[key]) !== JSON.stringify(ob[key])).map(
+    ([key, label]) => `${label} ${plain(oa[key])} to ${plain(ob[key])}`,
+  );
+}
+
+function agentKept(value: unknown): string {
+  const o = agentObject(value);
+  const parts = [
+    o.tools !== undefined ? `tool policy ${plain(o.tools)}` : null,
+    o.approvals !== undefined ? `approvals ${plain(o.approvals)}` : null,
+    o.mode !== undefined ? `mode ${plain(o.mode)}` : null,
+    o.max_turns !== undefined ? `${plain(o.max_turns)} turns` : null,
+    o.user_model ? `user model ${plain(o.user_model)}` : null,
+  ].filter((p): p is string => p !== null);
+  return parts.length > 0 ? parts.join(" · ") : "conversation settings";
 }
 
 const COMPONENT_LABELS: Record<string, string> = {
   stage: "stage version",
+  agent: "conversation",
   model: "model",
   dataset: "dataset",
   case_ids: "case selection",
@@ -264,13 +327,25 @@ export function warningText(warning: EvalCompareResult["warnings"][number]): str
 export function buildStrip(result: EvalCompareResult): StripModel {
   const held: string[] = [];
   const changed: string[] = [];
+  const agent = isAgentCompare(result);
   for (const component of result.components) {
+    if (agent && component.key === "agent") {
+      if (component.status === "same") held.push(agentKept(component.a));
+      else changed.push(...agentSettingChanges(component.a, component.b).filter((text) => !text.startsWith("revision")));
+      continue;
+    }
+    if (agent && component.key === "stage") {
+      if (component.status === "same") held.push(`agent definition ${scalarText("stage", component.a)}`);
+      else changed.push(`agent definition ${scalarText("stage", component.a)} to ${scalarText("stage", component.b)}`);
+      continue;
+    }
     if (component.status === "same") held.push(keptText(component.key, component.a));
     else changed.push(changedText(component.key, component.a, component.b));
   }
   const differs = (key: string) => result.components.some((c) => c.key === key && c.status === "changed");
   const warnings = result.warnings.map(warningText);
-  const amber = differs("dataset") || differs("graders") || differs("engine");
+  const settingsDiffer = agent && result.components.some((c) => c.key === "agent" && c.status === "changed" && agentSettingChanges(c.a, c.b).length > 0);
+  const amber = differs("dataset") || differs("graders") || differs("engine") || settingsDiffer;
   return { held, changed, warnings, amber };
 }
 
@@ -434,6 +509,38 @@ export function buildStageDiff(
     canExpand: all.length > collapsed.length,
     summary: stageDiffSummary(diff.changed_keys),
   };
+}
+
+export type AgentDiffModel = StageDiffModel;
+
+export function agentDiffSummary(changedKeys: string[]): string {
+  if (changedKeys.length === 0) return "Agent changed";
+  const touched = (candidate: string) => changedKeys.some((k) => k === candidate || k.startsWith(`${candidate}.`));
+  const unchanged = ["model", "tools", "limits"].filter((k) => !touched(k));
+  const text = changedKeys.map((k) => (k === "instructions" ? "Instructions edited" : `${k} changed`)).join(", ");
+  return unchanged.length > 0 ? `${text} · ${listWithAnd(unchanged)} unchanged` : text;
+}
+
+export function buildAgentDiff(result: EvalCompareResult, agentId: string | null, expanded: boolean): AgentDiffModel | null {
+  const diff = result.agent_diff;
+  if (!diff) return null;
+  const revision = diff.revision.a !== null && diff.revision.b !== null ? `r${diff.revision.a} → r${diff.revision.b}` : null;
+  const all = diff.instructions_diff ?? [];
+  const collapsed = all.filter((line) => line.op !== "same").slice(0, STAGE_DIFF_COLLAPSED_LINES);
+  return {
+    title: agentId ? `What changed in agent ${agentId}` : "What changed in the agent",
+    hashes: revision,
+    lines: expanded ? all : collapsed,
+    canExpand: all.length > collapsed.length,
+    summary: agentDiffSummary(diff.changed_keys),
+  };
+}
+
+export const COMPARE_SUBTITLE_STAGE = "See what changed in the stage and what that did to the results.";
+export const COMPARE_SUBTITLE_AGENT = "See what changed in the agent and what that did to the results.";
+
+export function agentIdOfRun(run: Pick<EvalRunDetail, "config"> | null): string | null {
+  return run ? agentIdOf(run) : null;
 }
 
 export function footerNote(result: EvalCompareResult): string {

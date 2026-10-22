@@ -1,5 +1,7 @@
 import { useState } from "react";
-import type { EvalDatasetListItem, EvalListItem } from "../../../api/evalTypes";
+import type { EvalAgentTarget, EvalDatasetListItem, EvalListItem } from "../../../api/evalTypes";
+import { AgentPicker } from "../newEval/AgentPicker";
+import { agentTargetOf } from "../newEval/wizardModel";
 import { BTN, BTN_PRIMARY, DialogShell } from "../datasets/DialogShell";
 import { MONO } from "../newEval/parts";
 import { StagePicker } from "../newEval/StagePicker";
@@ -146,6 +148,53 @@ export function ChangeDatasetDialog({
           );
         })}
       </div>
+    </DialogShell>
+  );
+}
+
+export function ChangeAgentDialog({
+  items,
+  loading,
+  error,
+  currentAgent,
+  onRetry,
+  onClose,
+  onConfirm,
+}: {
+  items: EvalAgentTarget[];
+  loading: boolean;
+  error: string | null;
+  currentAgent: string | null;
+  onRetry: () => void;
+  onClose: () => void;
+  onConfirm: (agent: EvalAgentTarget) => void;
+}) {
+  const [picked, setPicked] = useState<EvalAgentTarget | null>(items.find((a) => a.id === currentAgent) ?? null);
+  const changed = picked !== null && picked.id !== currentAgent;
+  return (
+    <DialogShell
+      title="Change target agent"
+      subtitle="Pick the agent this eval checks. The scenarios are checked against it when you save."
+      onClose={onClose}
+      footer={
+        <>
+          <span className="text-xs text-[var(--sf-text-3)]">Nothing is written until you save the eval.</span>
+          <div className="flex items-center gap-2">
+            <button type="button" className={BTN} onClick={onClose}>Cancel</button>
+            <button type="button" className={BTN_PRIMARY} disabled={!changed} onClick={() => picked && onConfirm(picked)}>Use this agent</button>
+          </div>
+        </>
+      }
+    >
+      <AgentPicker
+        items={items}
+        loading={loading}
+        error={error}
+        target={picked ? agentTargetOf(picked) : null}
+        onRetry={onRetry}
+        listClass="max-h-[360px]"
+        onPick={setPicked}
+      />
     </DialogShell>
   );
 }

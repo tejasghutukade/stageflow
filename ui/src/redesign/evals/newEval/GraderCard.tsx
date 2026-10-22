@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { LuChevronDown, LuChevronRight, LuGripVertical, LuPlus, LuTrash2 } from "react-icons/lu";
 import { INPUT, TEXTAREA } from "../datasets/DialogShell";
+import { ConversationCheckForm, GoalReachedForm, ToolCallsForm } from "./AgentGraderForms";
 import { CARD, Chip, Field, MONO, SELECT } from "./parts";
 import {
   CODE_HINT,
+  CONVERSATION_RUBRIC_NOTE,
   FIELD_OPS,
   NOT_CALIBRATED,
   NOT_CALIBRATED_NOTE,
@@ -41,6 +43,9 @@ type Props = {
   judgeModels: string[];
   judgeDefault: string | null;
   outputSchemaName?: string;
+  /** Agent evals: the tool ids the agent has, for the conversation graders. */
+  agentToolIds?: readonly string[];
+  isAgent?: boolean;
   expanded: boolean;
   dragging: boolean;
   onToggle: () => void;
@@ -300,9 +305,14 @@ export function GraderCard(p: Props) {
                   </div>
                 ))}
               </div>
+              {p.isAgent ? <p className="text-xs text-[var(--sf-text-3)]">{CONVERSATION_RUBRIC_NOTE}</p> : null}
               <p className="text-xs text-[var(--sf-text-3)]">{NOT_CALIBRATED_NOTE}</p>
             </>
           ) : null}
+
+          {g.type === "tool_calls" ? <ToolCallsForm grader={g} onChange={p.onChange} toolIds={p.agentToolIds ?? []} /> : null}
+          {g.type === "conversation_check" ? <ConversationCheckForm grader={g} onChange={p.onChange} /> : null}
+          {g.type === "goal_reached" ? <GoalReachedForm grader={g} onChange={p.onChange} judgeModels={p.judgeModels} judgeDefault={p.judgeDefault} /> : null}
 
           {g.type === "code" ? (
             <Field label="Function body" hint={CODE_HINT}>

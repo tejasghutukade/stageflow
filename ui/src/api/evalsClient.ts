@@ -62,11 +62,12 @@ export function evalQueryString(query: Query = {}): string {
   return text === "" ? "" : `?${text}`;
 }
 
-async function evalRequest<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+async function evalRequest<T>(path: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const res = await fetch(path, {
     method: init.method ?? "GET",
     headers: { "Content-Type": "application/json", ...authorizationHeaders() },
     ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    ...(init.signal ? { signal: init.signal } : {}),
   });
   if (res.status === 401) notifyControlTokenRequired();
   if (res.status === 204) return undefined as T;
@@ -128,8 +129,9 @@ export function installEvalSample(projectRoot?: string): Promise<{ eval_id: stri
   });
 }
 
-export function tryEvalCase(input: EvalTryInput): Promise<EvalTryResult> {
-  return evalRequest("/api/evals/try", { method: "POST", body: input });
+/** An agent try can take minutes; pass a signal to let the author cancel it. */
+export function tryEvalCase(input: EvalTryInput, signal?: AbortSignal): Promise<EvalTryResult> {
+  return evalRequest("/api/evals/try", { method: "POST", body: input, ...(signal ? { signal } : {}) });
 }
 
 export function fetchEvalFailureTypes(id: string, projectRoot?: string): Promise<{ items: string[] }> {

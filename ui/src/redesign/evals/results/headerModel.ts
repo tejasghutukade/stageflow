@@ -2,6 +2,7 @@ import type { EvalRunDetail, EvalRunStatus } from "../../../api/evalTypes";
 import { datasetName } from "../evalListModel";
 import { elapsedMs, incompleteBanner, runDatasetPath } from "../run/liveProgressModel";
 import { formatDuration, formatPercent, formatRelativeTime } from "../format";
+import { agentRunLabel, conversationOf, isAgentRun } from "../agentRun";
 
 export type ResultsTabId = "overview" | "cases" | "graders" | "config";
 export type Tone = "ok" | "needs" | "fail" | "muted";
@@ -69,11 +70,17 @@ export function headerSubtitle(run: EvalRunDetail, now = Date.now()): string {
   const repeats = repeatsOf(run);
   const cases = run.progress.cases_total;
   const parts: string[] = [];
-  if (stage) parts.push(pipeline ? `Stage ${stage} in ${pipeline}` : `Stage ${stage}`);
-  const shape = `${cases} ${cases === 1 ? "case" : "cases"} × ${repeats} ${repeats === 1 ? "repeat" : "repeats"}`;
+  const agent = isAgentRun(run);
+  const agentLabel = agentRunLabel(run);
+  if (agent && agentLabel) parts.push(agentLabel);
+  else if (stage) parts.push(pipeline ? `Stage ${stage} in ${pipeline}` : `Stage ${stage}`);
+  const noun = agent ? (cases === 1 ? "scenario" : "scenarios") : cases === 1 ? "case" : "cases";
+  const shape = `${cases} ${noun} × ${repeats} ${repeats === 1 ? "repeat" : "repeats"}`;
   parts.push(datasetPath ? `${datasetName(datasetPath)}, ${shape}` : shape);
   const judge = settingsOf(run).judge;
   if (typeof judge === "string" && judge !== "") parts.push(`judge ${judge}`);
+  const userModel = conversationOf(run).user_model;
+  if (agent && typeof userModel === "string" && userModel !== "") parts.push(`user ${userModel}`);
   if (run.finished_at) {
     const took = elapsedMs(run, now);
     const rel = formatRelativeTime(run.finished_at, now);
@@ -106,6 +113,9 @@ export function runPosition(
 
 export function footerText(run: EvalRunDetail): string {
   const target = (run.config?.target ?? {}) as Record<string, any>;
+  if (isAgentRun(run)) {
+    return `Agent definition ${hash6(target.definition_hash)} · eval file ${run.eval_path} · stored on this machine`;
+  }
   return `Stage version ${hash6(target.stage_version_hash)} · eval file ${run.eval_path} · stored on this machine`;
 }
 

@@ -22,6 +22,7 @@ import {
 } from "./casesModel";
 import { graderDefinitions } from "./gradersModel";
 import { thresholdOf } from "./headerModel";
+import { isAgentRun } from "../agentRun";
 import { useResultsPage } from "./useResultsData";
 
 const SELECT =
@@ -121,7 +122,7 @@ export function CasesTab({
         ) : rows.length === 0 ? (
           <p className="px-4 py-3 text-[13px] text-[var(--sf-text-2)]">{loading ? "Loading cases…" : emptyText(filter)}</p>
         ) : (
-          <CaseRowsTable rows={rows} onOpen={onOpen} />
+          <CaseRowsTable rows={rows} onOpen={onOpen} agent={isAgentRun(run)} />
         )}
         <div className="flex items-center justify-between border-t border-[var(--sf-hairline)] px-4 py-2 text-xs text-[var(--sf-text-3)]">
           <span>{pageLabel(paging, rows.length, countFor(counts, filter.tab))}</span>

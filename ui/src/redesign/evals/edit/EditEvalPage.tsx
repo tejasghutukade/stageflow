@@ -7,14 +7,16 @@ import { evalEditPath, evalsPath, navigate } from "../../../routes";
 import { showToast } from "../../../toast";
 import { PageHeader } from "../../shell/PageHeader";
 import { BTN, BTN_PRIMARY, TEXTAREA } from "../datasets/DialogShell";
+import { ConversationCard } from "../newEval/ConversationCard";
 import { GradersList } from "../newEval/GradersStep";
+import { useAgentTargets } from "../newEval/useAgentTargets";
 import { CARD, FindingsList, MONO } from "../newEval/parts";
 import { useWizardData } from "../newEval/useWizardData";
 import type { GradersDraft } from "../newEval/wizardModel";
 import { openRunDialog } from "../run/runDialogStore";
 import { DefinitionCard } from "./DefinitionCard";
 import { DiffPanel } from "./DiffPanel";
-import { ChangeDatasetDialog, ChangeTargetDialog, ConfirmDialog } from "./EditDialogs";
+import { ChangeAgentDialog, ChangeDatasetDialog, ChangeTargetDialog, ConfirmDialog } from "./EditDialogs";
 import {
   BLOCKED_SAVE_REASON,
   EXTERNAL_BANNER_TITLE,
@@ -22,6 +24,7 @@ import {
   NO_RUNS_BANNER,
   afterSave,
   buildSaveBody,
+  conversationDraftOf,
   definitionProblems,
   discard,
   discardNeedsConfirm,
@@ -29,6 +32,7 @@ import {
   evalDirOf,
   footerNote,
   isDirty,
+  isAgentDefinition,
   isFileChangedError,
   keepEditing,
   loadState,
@@ -46,6 +50,8 @@ import {
   targetFromDefinition,
   unsavedCount,
   unsavedLabel,
+  withAgentTarget,
+  withConversationDraft,
   withDatasetFile,
   withTarget,
   type EditState,
@@ -101,6 +107,8 @@ export function EditEvalPage({ evalId }: { evalId: string }) {
   const [switchFindings, setSwitchFindings] = useState<ValidationFinding[] | null>(null);
   const data = useWizardData();
   const preview = useEditPreview(state);
+  const isAgent = isAgentDefinition(state?.draft);
+  const agents = useAgentTargets(isAgent);
 
   useEffect(() => {
     let cancelled = false;
@@ -364,13 +372,24 @@ export function EditEvalPage({ evalId }: { evalId: string }) {
               <DefinitionCard
                 definition={draft}
                 judgeModels={judgeModels}
-                targetModel={detail.target_model ?? currentTarget?.model ?? null}
+                targetModel={detail.target_model ?? detail.agent?.model ?? currentTarget?.model ?? null}
+                agent={detail.agent ? { name: detail.agent.name, revision: detail.agent.revision } : null}
                 datasetLabel={dataset ? `${dataset.id} · ${dataset.cases} ${dataset.cases === 1 ? "case" : "cases"}` : draft.dataset}
                 onChange={change}
                 onChangeTarget={() => setDialog("target")}
                 onChangeDataset={() => setDialog("dataset")}
               />
+              {isAgent ? (
+                <ConversationCard
+                  value={conversationDraftOf(draft)}
+                  onChange={(next) => change((d) => withConversationDraft(d, next))}
+                  agentTools={detail.agent?.tools ?? []}
+                  judgeModels={judgeModels}
+                />
+              ) : null}
               <GradersList
+                target={isAgent ? "agent" : "stage"}
+                agentToolIds={(detail.agent?.tools ?? []).map((t) => t.id)}
                 draft={gradersView}
                 judgeModels={judgeModels}
                 judgeDefault={draft.defaults?.judge ?? detail.judge_default ?? null}
@@ -431,7 +450,21 @@ export function EditEvalPage({ evalId }: { evalId: string }) {
         </div>
       </footer>
 
-      {dialog === "target" && draft ? (
+      {dialog === "target" && draft && isAgent ? (
+        <ChangeAgentDialog
+          items={agents.items}
+          loading={agents.loading}
+          error={agents.error}
+          currentAgent={draft.target.kind === "agent" ? draft.target.agent : null}
+          onRetry={agents.reload}
+          onClose={() => setDialog(null)}
+          onConfirm={(a) => {
+            change((d) => withAgentTarget(d, a.id));
+            setDialog(null);
+          }}
+        />
+      ) : null}
+      {dialog === "target" && draft && !isAgent ? (
         <ChangeTargetDialog
           rows={data.rows}
           evals={data.evals}
