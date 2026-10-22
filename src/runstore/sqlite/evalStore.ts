@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type Database from "better-sqlite3";
-import { EVAL_LIMITS, EVAL_RUN_ID_PREFIX, type EvalBudgetWarning } from "../../evals/constants.js";
+import { EVAL_LIMITS, EVAL_RUN_ID_PREFIX, type EvalBudgetWarning, type EvalTargetKind } from "../../evals/constants.js";
 import { EvalStoreError } from "../../evals/storeError.js";
 import type {
   CreateEvalRunInput,
@@ -66,6 +66,9 @@ type EvalResultDbRow = {
   error_code: string | null;
   error_message: string | null;
   stage_run_id: string | null;
+  subject_ref: string | null;
+  turns: number | null;
+  tool_call_count: number | null;
   output_json: string | null;
   latency_ms: number | null;
   cost_usd: number | null;
@@ -151,6 +154,9 @@ function resultFromDb(row: EvalResultDbRow): EvalResultRow {
     errorCode: row.error_code,
     errorMessage: row.error_message,
     stageRunId: row.stage_run_id,
+    subjectRef: row.subject_ref,
+    turns: row.turns,
+    toolCallCount: row.tool_call_count,
     output: parse<EvalResultRow["output"]>(row.output_json),
     latencyMs: row.latency_ms,
     costUsd: row.cost_usd,
@@ -287,14 +293,15 @@ export function upsertEvalResult(db: Database.Database, input: EvalResultInput):
   db.transaction(() => {
     db.prepare(
       `INSERT INTO eval_results
-         (eval_run_id, case_id, repeat_index, status, error_code, error_message, stage_run_id, output_json, latency_ms,
+         (eval_run_id, case_id, repeat_index, status, error_code, error_message, stage_run_id, subject_ref, turns, tool_call_count, output_json, latency_ms,
           cost_usd, tokens_in, tokens_out, score, passed, has_grader_errors, budget_warnings_json, started_at, finished_at)
        VALUES
-         (@eval_run_id, @case_id, @repeat_index, @status, @error_code, @error_message, @stage_run_id, @output_json, @latency_ms,
+         (@eval_run_id, @case_id, @repeat_index, @status, @error_code, @error_message, @stage_run_id, @subject_ref, @turns, @tool_call_count, @output_json, @latency_ms,
           @cost_usd, @tokens_in, @tokens_out, @score, @passed, @has_grader_errors, @budget_warnings_json, @started_at, @finished_at)
        ON CONFLICT (eval_run_id, case_id, repeat_index) DO UPDATE SET
          status = excluded.status, error_code = excluded.error_code, error_message = excluded.error_message,
-         stage_run_id = excluded.stage_run_id, output_json = excluded.output_json, latency_ms = excluded.latency_ms,
+         stage_run_id = excluded.stage_run_id, subject_ref = excluded.subject_ref, turns = excluded.turns,
+         tool_call_count = excluded.tool_call_count, output_json = excluded.output_json, latency_ms = excluded.latency_ms,
          cost_usd = excluded.cost_usd, tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out,
          score = excluded.score, passed = excluded.passed, has_grader_errors = excluded.has_grader_errors,
          budget_warnings_json = excluded.budget_warnings_json, started_at = excluded.started_at,
@@ -307,6 +314,9 @@ export function upsertEvalResult(db: Database.Database, input: EvalResultInput):
       error_code: input.errorCode ?? null,
       error_message: input.errorMessage ?? null,
       stage_run_id: input.stageRunId ?? null,
+      subject_ref: input.subjectRef ?? input.stageRunId ?? null,
+      turns: input.turns ?? null,
+      tool_call_count: input.toolCallCount ?? null,
       output_json: json(input.output),
       latency_ms: input.latencyMs ?? null,
       cost_usd: input.costUsd ?? null,
@@ -414,6 +424,10 @@ export function listEvalRuns(db: Database.Database, query: ListEvalRunsQuery): E
   if (query.stageRunId !== undefined) {
     clauses.push("eval_run_id IN (SELECT eval_run_id FROM eval_results WHERE stage_run_id = ?)");
     params.push(query.stageRunId);
+  }
+  if (query.subjectRef !== undefined) {
+    clauses.push("eval_run_id IN (SELECT eval_run_id FROM eval_results WHERE subject_ref = ?)");
+    params.push(query.subjectRef);
   }
   if (query.cursor !== undefined) {
     const [createdAt, id] = JSON.parse(Buffer.from(query.cursor, "base64url").toString("utf8")) as [string, string];
@@ -699,6 +713,18 @@ export function recordGraderVersions(
     }
   })();
   return out;
+}
+
+export function listEvalSubjectRefs(db: Database.Database, evalRunId: string, targetKind: EvalTargetKind): string[] {
+  const run = getEvalRun(db, evalRunId);
+  if (!run || run.targetKind !== targetKind) return [];
+  return (
+    db
+      .prepare(
+        `SELECT DISTINCT subject_ref FROM eval_results WHERE eval_run_id = ? AND subject_ref IS NOT NULL ORDER BY subject_ref`,
+      )
+      .all(evalRunId) as Array<{ subject_ref: string }>
+  ).map((row) => row.subject_ref);
 }
 
 export function deleteEvalRun(db: Database.Database, evalRunId: string): string[] {

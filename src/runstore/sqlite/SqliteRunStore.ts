@@ -17,6 +17,7 @@ import type {
   FinishEvalRunInput,
   ListEvalRunsQuery,
 } from "../../evals/storeTypes.js";
+import type { EvalTargetKind } from "../../evals/constants.js";
 import type { StageEnvelope } from "../../types/envelope.js";
 import type { StageUsage } from "../../types/usage.js";
 import type { FeedbackLoopConfig, InlinePipelineDefinition } from "../../types/pipeline.js";
@@ -1419,6 +1420,11 @@ export class SqliteRunStore implements RunStore {
   ): Promise<Record<string, number>> {
     await this.ready();
     return evalStore.recordGraderVersions(this.db, projectRoot, evalId, graders);
+  }
+
+  async listEvalSubjectRefs(evalRunId: string, targetKind: EvalTargetKind): Promise<string[]> {
+    await this.ready();
+    return evalStore.listEvalSubjectRefs(this.db, evalRunId, targetKind);
   }
 
   async deleteEvalRun(evalRunId: string): Promise<string[]> {

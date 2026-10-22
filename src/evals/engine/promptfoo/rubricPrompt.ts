@@ -1,6 +1,6 @@
 import type { RubricExample } from "../../types.js";
 
-export const RUBRIC_PROMPT_VERSION = 1;
+export { RUBRIC_PROMPT_VERSION } from "../../constants.js";
 
 export const RUBRIC_PROMPT_TEMPLATE = `You are an impartial evaluator. You judge one output of an automated workflow stage against a rubric.
 

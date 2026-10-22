@@ -103,6 +103,7 @@ export type ListEvalRunsQuery = {
   evalId?: string;
   status?: EvalRunStatus;
   stageRunId?: string;
+  subjectRef?: string;
   limit: number;
   cursor?: string;
 };
@@ -161,6 +162,9 @@ export type EvalResultRow = {
   errorCode: string | null;
   errorMessage: string | null;
   stageRunId: string | null;
+  subjectRef: string | null;
+  turns: number | null;
+  toolCallCount: number | null;
   output: EvalJson | null;
   latencyMs: number | null;
   costUsd: number | null;
@@ -184,6 +188,9 @@ export type EvalResultInput = {
   errorCode?: string | null;
   errorMessage?: string | null;
   stageRunId?: string | null;
+  subjectRef?: string | null;
+  turns?: number | null;
+  toolCallCount?: number | null;
   output?: EvalJson | null;
   latencyMs?: number | null;
   costUsd?: number | null;
