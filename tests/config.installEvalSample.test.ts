@@ -24,6 +24,22 @@ afterEach(async () => {
 });
 
 describe("installEvalSample", () => {
+  it("sets a pipeline-level model on the sample when the project has no default model", async () => {
+    const root = await project();
+    await installEvalSample({ projectRoot: root, sourceDir: SAMPLE_DIR });
+    const pipeline = parseYaml(await readFile(path.join(root, "pipelines", "eval-sample.pipeline.yaml"), "utf8"));
+    expect(typeof pipeline.model).toBe("string");
+  });
+
+  it("leaves the pipeline model unset when the project manifest has a default model", async () => {
+    const root = await project(
+      "version: 1\nmodel: anthropic/claude-sonnet-4-5\ncatalog:\n  pipelines: [pipelines]\n  tasks: [tasks]\n",
+    );
+    await installEvalSample({ projectRoot: root, sourceDir: SAMPLE_DIR });
+    const pipeline = parseYaml(await readFile(path.join(root, "pipelines", "eval-sample.pipeline.yaml"), "utf8"));
+    expect(pipeline.model).toBeUndefined();
+  });
+
   it("copies the three files into the default roots, rewriting the eval's paths", async () => {
     const root = await project();
     const result = await installEvalSample({ projectRoot: root, sourceDir: SAMPLE_DIR });

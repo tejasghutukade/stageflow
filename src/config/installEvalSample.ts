@@ -12,6 +12,8 @@ import {
   resolveWriteDir,
   type WriteRootKind,
 } from "./evalWriteRoots.js";
+import { peekDefaultModel } from "../models/catalog.js";
+import { loadStageflowManifestOutcome } from "./loadStageflowManifest.js";
 import { resolveSeededExamplesPath } from "./seededCatalog.js";
 
 export const EVAL_SAMPLE_FILES = {
@@ -105,7 +107,12 @@ export async function installEvalSample(input: {
     relativeRef(dirs.eval.absDir, targets.pipeline),
     relativeRef(dirs.eval.absDir, targets.dataset),
   );
-  await writeFileAtomic(targets.pipeline, texts.pipeline);
+  const projectManifest = await loadStageflowManifestOutcome(projectRoot);
+  const hasDefaultModel = projectManifest.ok && projectManifest.value.manifest.model !== undefined;
+  const pipelineText = hasDefaultModel
+    ? texts.pipeline
+    : texts.pipeline.replace(/^id: .*\n/m, (line) => `${line}model: ${peekDefaultModel()}\n`);
+  await writeFileAtomic(targets.pipeline, pipelineText);
   await writeFileAtomic(targets.dataset, texts.dataset);
   await writeFileAtomic(targets.eval, evalText);
 
