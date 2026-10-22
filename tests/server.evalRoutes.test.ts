@@ -554,9 +554,24 @@ describe("eval routes: evals", () => {
       const shape = await h.post("/api/evals/validate", {
         project_root: h.root,
         definition,
-        dataset_cases: [{ input: { diff: "x" } }],
+        dataset_cases: [{ id: "x" }],
       });
       expect(shape.body.findings.map((f: any) => f.code)).toContain("eval.dataset_invalid");
+
+      const noIds = await h.post("/api/evals/validate", {
+        project_root: h.root,
+        definition,
+        dataset_cases: [1, 2, 3, 4, 5].map((n) => ({ input: { diff: `change ${n}` } })),
+      });
+      expect(noIds.body.findings.filter((f: any) => f.severity === "error")).toEqual([]);
+      const tried = await h.post("/api/evals/try", {
+        project_root: h.root,
+        definition,
+        dataset_cases: [{ input: { diff: "a" } }, { input: { diff: "b" } }],
+        case_id: "c002",
+      });
+      expect(tried.status).toBe(200);
+      expect(tried.body.result).toMatchObject({ case_id: "c002" });
 
       const notArray = await h.post("/api/evals/validate", { project_root: h.root, definition, dataset_cases: {} });
       expect(notArray.status).toBe(400);

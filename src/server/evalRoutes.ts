@@ -1,3 +1,4 @@
+import { formatId, nextIdNumber } from "../config/datasetImport.js";
 import { readFile, stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -356,7 +357,16 @@ function optDatasetCases(body: Record<string, unknown>): unknown[] | undefined {
   const value = body.dataset_cases;
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw bad(`"dataset_cases" must be an array`);
-  return value;
+  return withAssignedIds(value);
+}
+
+function withAssignedIds(cases: unknown[]): unknown[] {
+  const isObject = (c: unknown): c is Record<string, unknown> =>
+    c !== null && typeof c === "object" && !Array.isArray(c);
+  const hasId = (c: unknown): boolean => isObject(c) && typeof c.id === "string" && c.id !== "";
+  const existing = cases.filter(hasId).map((c) => (c as { id: string }).id);
+  let next = nextIdNumber(existing);
+  return cases.map((c) => (isObject(c) && !hasId(c) ? { ...c, id: formatId(next++) } : c));
 }
 
 function parseDefinitionOrYaml(body: Record<string, unknown>): { definition?: unknown; yaml?: string } {
