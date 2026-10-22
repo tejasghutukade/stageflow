@@ -1,6 +1,10 @@
-import type { Subject } from "./types.js";
+import type { ConversationSubject, EnvelopeSubject, Subject } from "./types.js";
 
-export function subjectEnvelope(subject: Subject): Record<string, unknown> {
+export function isConversation(subject: Subject): subject is ConversationSubject {
+  return subject.kind === "conversation";
+}
+
+export function subjectEnvelope(subject: EnvelopeSubject): Record<string, unknown> {
   const env: Record<string, unknown> = {
     status: subject.status,
     summary: subject.summary,
@@ -8,6 +12,14 @@ export function subjectEnvelope(subject: Subject): Record<string, unknown> {
   };
   if (subject.payload !== undefined) env.payload = subject.payload;
   return env;
+}
+
+export function subjectRoot(subject: Subject): Record<string, unknown> {
+  if (isConversation(subject)) {
+    const { transcript: _transport, ...root } = subject;
+    return root;
+  }
+  return subjectEnvelope(subject);
 }
 
 export function truncate(text: string, max = 200): string {

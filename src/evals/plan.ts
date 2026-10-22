@@ -143,9 +143,9 @@ function withOverrides(loaded: LoadedEval, overrides: EvalOverrides): LoadedEval
     ...(overrides.max_cost_usd !== undefined ? { max_cost_usd: overrides.max_cost_usd } : {}),
   };
   const graders = loaded.graders.map((grader): ResolvedGrader => {
-    if (grader.type !== "rubric" || overrides.judge === undefined) return grader;
+    if ((grader.type !== "rubric" && grader.type !== "goal_reached") || overrides.judge === undefined) return grader;
     const raw = loaded.file.graders.find((g) => g.id === grader.id);
-    if (raw?.type === "rubric" && raw.judge !== undefined) return grader;
+    if ((raw?.type === "rubric" || raw?.type === "goal_reached") && raw.judge !== undefined) return grader;
     const { hash: _old, ...rest } = { ...grader, judge: overrides.judge };
     return { ...rest, hash: graderHash(rest) };
   });

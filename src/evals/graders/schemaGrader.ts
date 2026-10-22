@@ -1,6 +1,7 @@
 import { payloadInstanceMismatch } from "../../envelope/payloadSchema.js";
 import type { ResolvedGrader } from "../types.js";
-import { truncate } from "./subject.js";
+import { notApplicable } from "./notApplicable.js";
+import { isConversation, truncate } from "./subject.js";
 import type { GradeData, GraderContext, Subject } from "./types.js";
 
 export function gradeSchema(
@@ -9,6 +10,7 @@ export function gradeSchema(
   _testCase: unknown,
   context: GraderContext,
 ): GradeData {
+  if (isConversation(subject)) return notApplicable(grader, "conversation");
   const base = { graderId: grader.id, graderType: "schema" } as const;
   const fail = (reason: string): GradeData => ({
     ...base,

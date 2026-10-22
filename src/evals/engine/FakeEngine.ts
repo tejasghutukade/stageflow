@@ -1,4 +1,4 @@
-import { gradeDeterministic, isDeterministicGrader } from "../graders/index.js";
+import { caseGoal, goalRubricText, gradeDeterministic, isDeterministicGrader } from "../graders/index.js";
 import type { GraderContext, Subject } from "../graders/types.js";
 import type {
   CaseOutput,
@@ -58,7 +58,8 @@ function sleep(ms: number): Promise<void> {
 
 function toSubject(output: CaseOutput): Subject {
   if (output.kind === "conversation") {
-    return { status: output.status, summary: output.summary, artifacts: [] };
+    const { transcript: _transport, ...subject } = output;
+    return subject;
   }
   return {
     status: output.status,
@@ -131,15 +132,36 @@ export class FakeEngine implements EvalEngine {
           for (const grader of plan.graders) {
             if (grader.type === "rubric") {
               grades.push(this.gradeRubric(grader, testCase, run.output, io));
+            } else if (grader.type === "goal_reached") {
+              const goal = caseGoal(testCase);
+              grades.push(
+                goal === undefined
+                  ? {
+                      graderId: grader.id,
+                      graderType: "goal_reached",
+                      status: "error",
+                      errorCode: "EVAL_CASE_MISSING_EXPECTED",
+                      reason: "case has no input.goal or expected.outcome",
+                    }
+                  : {
+                      ...this.gradeRubric(
+                        {
+                          ...grader,
+                          type: "rubric",
+                          rubric: goalRubricText(goal, grader.guidance),
+                          scale: "pass_fail",
+                          passAt: 1,
+                          examples: [],
+                        },
+                        testCase,
+                        run.output,
+                        io,
+                      ),
+                      graderType: "goal_reached",
+                    },
+              );
             } else if (isDeterministicGrader(grader)) {
               grades.push(gradeDeterministic(grader, toSubject(run.output), testCase, ctx));
-            } else {
-              grades.push({
-                graderId: grader.id,
-                graderType: grader.type,
-                status: "error",
-                errorCode: "EVAL_GRADER_NOT_APPLICABLE",
-              });
             }
           }
         } else if (run.code === "EVAL_BUDGET_EXCEEDED") {

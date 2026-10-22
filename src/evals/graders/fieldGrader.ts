@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { FieldCheck, ResolvedGrader } from "../types.js";
 import { evaluatePath } from "./path.js";
-import { show, subjectEnvelope, truncate } from "./subject.js";
+import { show, subjectRoot, truncate } from "./subject.js";
 import type { GradeData, GraderContext, Subject } from "./types.js";
 
 function isEmptyValue(v: unknown): boolean {
@@ -63,9 +63,9 @@ function opHolds(check: FieldCheck, v: unknown): boolean {
   }
 }
 
-type CheckOutcome = { passed: boolean; found: string };
+export type CheckOutcome = { passed: boolean; found: string };
 
-function runCheck(check: FieldCheck, envelope: Record<string, unknown>): CheckOutcome {
+export function runCheck(check: FieldCheck, envelope: Record<string, unknown>): CheckOutcome {
   const r = evaluatePath(envelope, check.path);
   const isLength = check.op === "length_gte" || check.op === "length_lte";
   if (r.emptyWildcard) {
@@ -84,7 +84,7 @@ function runCheck(check: FieldCheck, envelope: Record<string, unknown>): CheckOu
   };
 }
 
-function describe(check: FieldCheck): string {
+export function describeCheck(check: FieldCheck): string {
   return check.value === undefined
     ? `${check.path} ${check.op}`
     : `${check.path} ${check.op} ${show(check.value)}`;
@@ -96,7 +96,7 @@ export function gradeField(
   _testCase: unknown,
   _context?: GraderContext,
 ): GradeData {
-  const envelope = subjectEnvelope(subject);
+  const envelope = subjectRoot(subject);
   const checks = grader.checks.map((check) => {
     const outcome = runCheck(check, envelope);
     return {
@@ -118,7 +118,7 @@ export function gradeField(
     ...(passed
       ? {}
       : {
-          reason: truncate(`${describe(grader.checks[firstFail])}: found ${checks[firstFail].found}`),
+          reason: truncate(`${describeCheck(grader.checks[firstFail])}: found ${checks[firstFail].found}`),
         }),
     details: { checks },
   };

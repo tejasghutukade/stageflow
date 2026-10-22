@@ -1,6 +1,6 @@
 import vm from "node:vm";
 import type { ResolvedGrader } from "../types.js";
-import { subjectEnvelope, truncate } from "./subject.js";
+import { subjectRoot, truncate } from "./subject.js";
 import type { GradeCase, GradeData, GraderContext, Subject } from "./types.js";
 
 export const CODE_GRADER_TIMEOUT_MS = 5_000;
@@ -37,7 +37,7 @@ export function gradeCode(
   try {
     const sandbox = vm.createContext({
       __args: JSON.stringify([
-        subjectEnvelope(subject),
+        subjectRoot(subject),
         testCase,
         { evalId: context.evalId, runId: context.runId, repeat: context.repeat },
       ]),
