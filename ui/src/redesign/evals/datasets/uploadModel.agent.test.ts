@@ -50,6 +50,13 @@ describe("agent mapping rows", () => {
     expect(state["input.persona"]?.column).toBeNull();
   });
 
+  it("also matches columns named expected_<field>", () => {
+    const state = autoMatch(agentFields(), ["Expected Tools", "expected_outcome", "expected_forbidden_tools"]);
+    expect(state["expected.tools"]?.column).toBe("Expected Tools");
+    expect(state["expected.outcome"]?.column).toBe("expected_outcome");
+    expect(state["expected.forbidden_tools"]?.column).toBe("expected_forbidden_tools");
+  });
+
   it("builds a mapping with splits on the list fields only", () => {
     let state = autoMatch(agentFields(), ["opening", "facts", "tools", "tags"]);
     state = setColumn(state, "expected.tools", "tools");

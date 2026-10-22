@@ -276,7 +276,9 @@ export function buildEstimateRequest(
   state: RunDialogState,
   ctx: RunDialogContext,
 ): (EvalRunOptions & { project_root?: string }) | null {
-  if (!isValid(state, ctx)) return null;
+  const { consent: _consent, ...errors } = validate(state, ctx);
+  void _consent;
+  if (Object.keys(errors).length > 0) return null;
   return { ...buildOptions(state, ctx), ...(ctx.projectRoot ? { project_root: ctx.projectRoot } : {}) };
 }
 

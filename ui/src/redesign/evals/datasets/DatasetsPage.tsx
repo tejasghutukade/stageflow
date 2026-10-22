@@ -452,7 +452,7 @@ function DatasetDetailView({
   }
 
   const subtitle = detail
-    ? datasetSubtitle({ cases: detail.cases_total, stage: stageLabel, usedBy: detail.used_by, path: detail.path })
+    ? datasetSubtitle({ cases: detail.cases_total, stage: stageLabel, usedBy: detail.used_by, path: detail.path, agent: agentEval })
     : undefined;
   const noEval = !target;
 

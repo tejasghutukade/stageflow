@@ -108,6 +108,12 @@ describe("real tools consent", () => {
     expect(isValid({ ...s, consent: true }, c)).toBe(true);
   });
 
+  it("still estimates before the box is ticked", () => {
+    const c = real();
+    expect(buildEstimateRequest(initialState(c), c)).toEqual({});
+    expect(buildEstimateRequest({ ...initialState(c), repeats: "0" }, c)).toBeNull();
+  });
+
   it("sends allow_real_tools only with the consent", () => {
     const c = real();
     expect(buildStartRequest({ ...initialState(c), consent: true }, c).allow_real_tools).toBe(true);

@@ -5,7 +5,7 @@ import { caseIsInvalid, checkLabel } from "./datasetModel";
 import { modeLabel, scenarioRow } from "./scenarioModel";
 
 const HEAD = "text-xs text-[var(--sf-text-3)]";
-const GRID = "grid grid-cols-[40px_84px_minmax(0,1fr)_minmax(0,1.6fr)_minmax(0,1fr)_120px_130px_52px] items-start gap-4 px-4";
+const GRID = "grid grid-cols-[32px_72px_minmax(0,1fr)_minmax(0,1.6fr)_minmax(0,1fr)_88px_104px_44px] items-start gap-3 px-4";
 
 type Props = {
   cases: EvalDatasetCase[];

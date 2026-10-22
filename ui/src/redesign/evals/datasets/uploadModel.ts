@@ -22,6 +22,8 @@ export type UploadField = {
   kind: UploadFieldKind;
   /** The row offers a split character (lists such as facts and tools). */
   splittable?: boolean;
+  /** Other column names that fill this row, normalized (`expected_tools` for `expected.tools`). */
+  aliases?: string[];
 };
 
 export type FieldChoice = { column: string | null; split?: string };
@@ -84,6 +86,7 @@ export function agentFields(): UploadField[] {
     name: `expected.${name}`,
     role: "expected",
     kind: "reference",
+    aliases: [`expected_${name}`],
     ...(splittable ? { splittable: true } : {}),
   });
   return [
@@ -118,8 +121,8 @@ export function autoMatch(fields: readonly UploadField[], columns: readonly stri
   const used = new Set<string>();
   const state: MappingState = {};
   for (const field of fields) {
-    const want = normalizeName(fieldBaseName(field));
-    const column = columns.find((c) => !used.has(c) && normalizeName(c) === want) ?? null;
+    const wants = [normalizeName(fieldBaseName(field)), ...(field.aliases ?? [])];
+    const column = columns.find((c) => !used.has(c) && wants.includes(normalizeName(c))) ?? null;
     if (column !== null) used.add(column);
     state[field.key] = { column };
   }

@@ -78,8 +78,8 @@ export function AgentPicker({ items, loading, error, target, onPick, onRetry, li
                 <span className={`${MONO} truncate text-[11px] text-[var(--sf-text-3)]`}>{row.id}</span>
               </span>
               <span className="flex min-w-0 flex-col gap-1">
-                <span className="flex items-center gap-1.5">
-                  <span className={`${MONO} truncate text-xs text-[var(--sf-text-2)]`}>{row.model}</span>
+                <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                  <span className={`${MONO} break-all text-xs text-[var(--sf-text-2)]`}>{row.model}</span>
                   <span className={`${MONO} rounded bg-[var(--sf-raised)] px-1.5 text-[11px] text-[var(--sf-text-2)]`}>{row.revision}</span>
                 </span>
                 {row.chip ? (

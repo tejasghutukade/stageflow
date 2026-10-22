@@ -36,7 +36,7 @@ export function OverviewTab({
     <div className="flex flex-col gap-4 px-5 py-4">
       <div
         className="grid overflow-hidden rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-panel)]"
-        style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }}
+        style={{ gridTemplateColumns: `repeat(${tiles.length > 6 ? 4 : tiles.length}, minmax(0, 1fr))` }}
       >
         {tiles.map((tile, i) => (
           <div key={tile.id} className={`flex flex-col gap-1.5 p-4 ${i > 0 ? "border-l border-[var(--sf-hairline)]" : ""}`}>
