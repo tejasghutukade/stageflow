@@ -160,7 +160,7 @@ describe("definition conversion", () => {
 describe("held scenarios", () => {
   it("counts valid and skipped scenarios under the conversation mode and again when it changes", () => {
     const mixed: EvalCaseInput[] = [...scripts, { id: "s003", input: { opening: "o", persona: "p", goal: "g" } }];
-    let d = { ...agentDraft(), dataset: datasetFromScenarios(mixed, "script", "support", []) };
+    let d: WizardDraft = { ...agentDraft(), dataset: datasetFromScenarios(mixed, "script", "support", []) };
     expect(d.dataset).toMatchObject({ ready: 2, skipped: 1 });
     d = withConversation(d, { mode: "simulated" });
     expect(d.dataset).toMatchObject({ ready: 1, skipped: 2 });
