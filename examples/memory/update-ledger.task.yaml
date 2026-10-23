@@ -1,0 +1,23 @@
+id: update-ledger
+goal: Replace the refund ledger after the customer confirmed the payout
+context: orders/4412/ledger already exists on new-notebook. This replaces that card and leaves the previous copy for the operator.
+constraints: The card body is the note exactly. Do not change the cover. Do not add a second card.
+input:
+  key: orders/4412/ledger
+  note: |
+    # Refund ledger — order 4412
+
+    Closed. The customer confirmed the payout.
+
+    | When | Who | Action | Amount |
+    | --- | --- | --- | --- |
+    | 2026-10-18 09:12 | grace@example.com | Request opened | 86.40 USD |
+    | 2026-10-18 11:04 | TICKET-2040 | Store credit declined | — |
+    | 2026-10-19 16:22 | payments | Paid to original card | 86.40 USD |
+    | 2026-10-20 09:03 | customer | Confirmed payout | 86.40 USD |
+
+    Still open:
+
+    - [x] Customer confirmed the payout
+    - [x] Reviewer recorded the decline
+    - [x] Receipt attached to the ticket

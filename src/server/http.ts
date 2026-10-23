@@ -201,6 +201,7 @@ import { handleAgentAuthorRoutes } from "./agentAuthorRoutes.js";
 import { handleAgentRoutes } from "./agentRoutes.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
+import { handleMemoryRoutes } from "./memoryRoutes.js";
 import { EmailTriggers } from "../email/triggers.js";
 import {
   bootstrapStageflowHost,
@@ -605,6 +606,11 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             }
           }
           if (await handleAgentRoutes(req, method, pathname, agentHost, agentProjectRoot, res, json)) return true;
+        }
+        if (pathname === "/api/memories" || pathname.startsWith("/api/memories/")) {
+          if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
+          if (!boot.memories) { json(res, 503, { code: "memory.unavailable" }); return true; }
+          if (await handleMemoryRoutes(req, method, pathname, boot.memories, res, json)) return true;
         }
         if (pathname === "/api/connections" || pathname.startsWith("/api/connections/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;

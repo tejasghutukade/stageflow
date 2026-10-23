@@ -1,0 +1,3 @@
+id: probe-bash
+goal: See whether bash can find memory files on the host.
+input: {}

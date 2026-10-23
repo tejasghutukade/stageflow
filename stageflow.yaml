@@ -24,3 +24,4 @@ catalog:
     - examples/stage-mcp/stage-mcp-dead.task.yaml
     - examples/channels-smoke
     - examples/evals/support-sample.eval.yaml
+    - examples/memory

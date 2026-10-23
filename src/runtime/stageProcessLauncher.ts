@@ -33,6 +33,8 @@ import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import { emailHostFor, emailWorkerEnvironment, stageEmail, validateStageEmailAccounts } from "../email/host.js";
 import { ChannelError } from "../channels/errors.js";
 import { channelFault, channelHostFor, channelsWorkerEnvironment, stageChannels, validateStageChannelConnections, type ChannelSendInput } from "../channels/host.js";
+import { MemoryError, memoryHostFor } from "../memory/host.js";
+import { isMemoryVerb, runMemoryRequest } from "../memory/access.js";
 import { EmailError, type SendEmailInput, type ReplyToEmailInput, type SearchEmailsInput, type EmailMessageRef, type DownloadEmailAttachmentInput } from "../email/port.js";
 import type { StageConfig } from "../types/stage.js";
 import {
@@ -568,6 +570,23 @@ export class StageProcessLauncher {
               response = { error: { code: fault.code, retryable: fault.retryable, ...(fault.unsupportedFields ? { unsupportedFields: fault.unsupportedFields } : {}) } };
             }
             if (child.connected && !settled) child.send({ type: "email.response", requestId: request.requestId, ...response });
+          })();
+          return;
+        }
+        const memoryVerb = request?.type;
+        if (!settled && isMemoryVerb(memoryVerb)) {
+          void (async () => {
+            if (typeof request.requestId !== "string" || request.requestId.length > 100) return;
+            let response: object;
+            try {
+              const stage = input.stage;
+              if (!stage || settled) throw new MemoryError("MEMORY_NOT_ATTACHED");
+              response = await runMemoryRequest(memoryHostFor(), stage.memories ?? [], memoryVerb, request.input);
+            } catch (error) {
+              const code = error instanceof MemoryError ? error.code : "MEMORY_UNREADABLE";
+              response = { error: { code } };
+            }
+            if (child.connected && !settled) child.send({ type: "memory.response", requestId: request.requestId, ...response });
           })();
           return;
         }

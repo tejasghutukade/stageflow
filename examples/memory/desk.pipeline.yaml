@@ -1,0 +1,192 @@
+id: desk
+memories:
+  - new-notebook
+stages:
+  - id: file-batch
+    entry: true
+    route:
+      - to: decide
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      The task input has "focus", "decision", "query", and "cards". "cards" is a list of objects with "key" and "note".
+      Do these steps in order, then stop:
+      1. Call read_memory with memory "new-notebook". Keep that text. Do not call replace_memory.
+      2. For each card, in order, call add_memory_card with memory "new-notebook", that key, and content set to that note. A key may contain "/", spaces, or "@". Pass it through unchanged.
+      3. For each card, call read_memory_card with memory "new-notebook" and that key. The body must equal the note you just wrote.
+      4. Call emit_stage_envelope once with status success, a one-line summary, artifacts [], and payload {"cover":"<the exact read_memory text>","filed":"<a JSON array of {key, note} for every card, in the same order>","focus":"<focus>","decision":"<decision>","query":"<query>"}.
+      Do not call update_memory_card. Do not call any memory id other than new-notebook. Do not write files. If any add_memory_card fails, stop and emit status failure. Do not keep filing after a failure.
+    io:
+      input:
+        schema:
+          type: object
+          required:
+            - focus
+            - decision
+            - query
+            - cards
+          properties:
+            focus:
+              type: string
+            decision:
+              type: string
+            query:
+              type: string
+            cards:
+              type: array
+              minItems: 2
+              items:
+                type: object
+                required:
+                  - key
+                  - note
+                properties:
+                  key:
+                    type: string
+                  note:
+                    type: string
+                additionalProperties: false
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required:
+            - cover
+            - filed
+            - focus
+            - decision
+            - query
+          properties:
+            cover:
+              type: string
+            filed:
+              type: string
+            focus:
+              type: string
+            decision:
+              type: string
+            query:
+              type: string
+          additionalProperties: false
+  - id: decide
+    route:
+      - to: audit
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      The input has "cover", "filed", "focus", "decision", and "query".
+      Do these steps in order, then stop:
+      1. Call search_memory_cards with memory "new-notebook" and the query. Do not treat a short hit list as permission to skip a card. There may be more matches than the tool returns.
+      2. Call read_memory_card with memory "new-notebook" and the focus key.
+      3. Call update_memory_card with memory "new-notebook", the focus key, and content set to the decision. This replaces the whole card. Do not update any other key.
+      4. Call read_memory_card again with memory "new-notebook" and the focus key.
+      5. Call emit_stage_envelope once with status success, a one-line summary, artifacts [], and payload {"cover":"<the cover you were given, unchanged>","filed":"<the filed text you were given, unchanged>","focus":"<focus>","decision":"<decision>","query":"<query>","before":"<the first read of the focus card>","after":"<the second read of the focus card>","hits":"<the search result as JSON text>"}.
+      Do not call add_memory_card or replace_memory. Do not call any memory id other than new-notebook. Do not write files. If the focus card is missing, emit status failure.
+    io:
+      input:
+        schema:
+          type: object
+          required:
+            - cover
+            - filed
+            - focus
+            - decision
+            - query
+          properties:
+            cover:
+              type: string
+            filed:
+              type: string
+            focus:
+              type: string
+            decision:
+              type: string
+            query:
+              type: string
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required:
+            - cover
+            - filed
+            - focus
+            - decision
+            - query
+            - before
+            - after
+            - hits
+          properties:
+            cover:
+              type: string
+            filed:
+              type: string
+            focus:
+              type: string
+            decision:
+              type: string
+            query:
+              type: string
+            before:
+              type: string
+            after:
+              type: string
+            hits:
+              type: string
+          additionalProperties: false
+  - id: audit
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      The input has "cover", "filed", "focus", "decision", "before", and "after".
+      "filed" is a JSON array of objects with "key" and "note".
+      Do these steps in order, then stop:
+      1. Call read_memory with memory "new-notebook".
+      2. Call read_memory_card with memory "new-notebook" and the focus key.
+      3. For every other key in "filed", call read_memory_card with memory "new-notebook" and that key.
+      4. Call emit_stage_envelope once with status success, a one-line summary, artifacts [], and payload {"focus":"<focus>","after":"<the focus card body you just read>","untouched":"<one line per other key, as key then a tab then the body>","page":"<the exact cover you just read>","cover_same":"yes or no"}.
+      Set cover_same to yes only when the cover you just read is exactly the "cover" you were given. Set it to no otherwise.
+      The focus body should equal "decision". Each other body should equal the note in "filed" for that key. Do not call add_memory_card, update_memory_card, or replace_memory. Do not write files.
+    io:
+      input:
+        schema:
+          type: object
+          required:
+            - cover
+            - filed
+            - focus
+            - decision
+            - before
+            - after
+          properties:
+            cover:
+              type: string
+            filed:
+              type: string
+            focus:
+              type: string
+            decision:
+              type: string
+            before:
+              type: string
+            after:
+              type: string
+          additionalProperties: true
+      output:
+        schema:
+          type: object
+          required:
+            - focus
+            - after
+            - untouched
+            - page
+            - cover_same
+          properties:
+            focus:
+              type: string
+            after:
+              type: string
+            untouched:
+              type: string
+            page:
+              type: string
+            cover_same:
+              type: string
+          additionalProperties: false

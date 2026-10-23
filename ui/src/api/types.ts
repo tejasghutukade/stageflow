@@ -600,6 +600,7 @@ export type DraftPackagePayload = {
     schemas?: unknown;
     requires?: unknown;
     channels?: unknown;
+    memories?: unknown;
   };
   stages?: Array<{ path: string; body: Record<string, unknown> }>;
   task?: { filename: string; body: Record<string, unknown> };
@@ -1299,6 +1300,14 @@ export type CreateTriggerInput = {
 export type CreateTriggerResult =
   | { ok: true; trigger: TriggerListItem }
   | { ok: false; status: number; error: string };
+
+export type MemorySummary = { id: string; description: string; cardCount: number };
+
+export type MemoryDetail = MemorySummary & { body: string };
+
+export type MemoryCardList = { keys: string[] };
+
+export type MemoryCardBody = { body: string };
 
 export type OverviewRange = "24h" | "7d" | "30d";
 

@@ -1,0 +1,15 @@
+id: desk-refund
+goal: File a refund, the order path, and the reviewer, then record the payout on the order path only
+context: The memory new-notebook already exists. None of these card keys exist yet. Run this only if desk-outage has not already used these keys.
+constraints: Do not delete a card. Do not replace the cover. Update only the focus key.
+input:
+  focus: orders/4412/refund
+  decision: Store credit was declined. The refund was paid to the original card.
+  query: reviewer
+  cards:
+    - key: TICKET-2040
+      note: Customer asked for store credit on order 4412.
+    - key: orders/4412/refund
+      note: Refund is waiting on a reviewer.
+    - key: grace@example.com
+      note: Refund reviewer for order 4412.

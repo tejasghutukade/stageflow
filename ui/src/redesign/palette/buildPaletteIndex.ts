@@ -25,6 +25,7 @@ const NAV_ITEMS: PaletteNavDef[] = [
   { id: "evals-new", label: "New eval", path: "/evals/new" },
   { id: "datasets", label: "Datasets", path: "/datasets" },
   { id: "triggers", label: "Triggers", path: "/triggers" },
+  { id: "memories", label: "Memories", path: "/memories" },
   { id: "settings", label: "Settings", path: "/settings" },
 ];
 

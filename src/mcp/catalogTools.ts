@@ -77,7 +77,17 @@ const taskFileSchema = z.object({
   goal: z.string(),
   context: z.string().optional(),
   constraints: z.string().optional(),
-  checkout: z.string().optional(),
+  checkout: z
+    .union([
+      z.string(),
+      z
+        .object({
+          branch: z.string().optional(),
+          base: z.string().optional(),
+        })
+        .strict(),
+    ])
+    .optional(),
   repository: z.string().optional(),
   ref: z.string().optional(),
   run_branch_template: z.string().optional(),

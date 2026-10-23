@@ -302,6 +302,41 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     expect(lastLoaderOptions()).not.toHaveProperty("eventBus");
     expect(lastSessionTools()).toEqual(expectedSealedTools);
     expect(lastLoaderExtensionPaths()).not.toContain(mcpInlinePath);
+    const customNames = (
+      piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
+        | { customTools?: Array<{ name: string }> }
+        | undefined
+    )?.customTools?.map((tool) => tool.name);
+    expect(customNames).not.toContain("read");
+    expect(customNames).not.toContain("bash");
+  });
+
+  it("overwrites read, write, edit, and bash with /workspace tools when a sandbox container is set", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-sandbox-tools-"));
+    const roots = {
+      ...buildStageRoots(runWs, "clarify"),
+      containerName: "stageflow-run-clarify-1-abc",
+      containerDockerBin: "/fake/docker",
+    };
+    await new PiAgentAdapter().runStage(wiringInput(runWs, { roots }));
+
+    expect(lastSessionTools()).toEqual(expectedSealedTools);
+    expect(lastLoaderOptions().extensionFactories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: STAGEFLOW_PATH_DENY_EXTENSION_NAME }),
+      ]),
+    );
+    const customTools = (
+      piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
+        | { customTools?: Array<{ name: string; description: string }> }
+        | undefined
+    )?.customTools;
+    const byName = new Map((customTools ?? []).map((tool) => [tool.name, tool]));
+    for (const name of ["read", "write", "edit", "bash"]) {
+      expect(byName.get(name)?.description).toContain("/workspace");
+    }
+    expect(byName.has("write_stage_artifact")).toBe(true);
+    expect(byName.has("emit_stage_envelope")).toBe(true);
   });
 
   it("empty resolvedMcpServers matches omitted", async () => {

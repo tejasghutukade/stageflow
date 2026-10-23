@@ -5,15 +5,17 @@ title: Docker and self-hosting
 
 # Docker and self-hosting
 
-This page describes Stageflow’s data-safety and ops contracts for self-hosted Hosts (including containers). A multi-stage `Dockerfile` at the repo root builds the image. On each unpublished `package.json` version published from `main`, `.github/workflows/publish.yml` pushes a multi-arch image to **`ghcr.io/tejasghutukade/stageflow`** (amd64 + arm64), then cosign-signs the digest keylessly. Local try still works with Compose or `docker build`.
+Docker is the recommended way to run Stageflow. Pull **`ghcr.io/tejasghutukade/stageflow`** and start the console with the command in [Pull and run](#pull-and-run-ghcr). The same page covers data-safety and ops for a self-hosted Host. A multi-stage `Dockerfile` at the repo root builds the image. On each unpublished `package.json` version published from `main`, `.github/workflows/publish.yml` pushes a multi-arch image to that registry (amd64 + arm64), then cosign-signs the digest keylessly. Building from a checkout still works with Compose or `docker build`.
 
 See also [Data directory](data-directory.md), [CLI reference](cli-reference.md), and [MCP](mcp.md) (including [CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [docker exec commands](#cli-via-docker-exec) below).
 
-## Never mount the Docker socket
+## Stage sandbox in Compose
 
-**Never mount `/var/run/docker.sock` (or any Docker API socket) into a Stageflow container.** Mounting the socket is a host-root escape: the process inside the container can control the Docker daemon as root on the host. Stageflow does not need Docker-in-Docker; do not use `--privileged` or grant extra capabilities for that purpose either.
+The shipped [`docker-compose.yml`](../docker-compose.yml) sets `STAGEFLOW_STAGE_CONTAINER_IMAGE=stageflow-bash:local` and mounts `/var/run/docker.sock`. `read`, `write`, `edit`, and `bash` then run in a sibling container built from [`docker/Dockerfile.bash-sandbox`](../docker/Dockerfile.bash-sandbox). The Stageflow process still runs as the `stageflow` user. Compose starts that service as root only so [`docker/stageflow-entry.sh`](../docker/stageflow-entry.sh) can join the socket's group, then drops to `stageflow`. There is no `privileged` and no extra capabilities.
 
-The shipped root [`docker-compose.yml`](../docker-compose.yml) has no socket mount, no `privileged`, and no extra caps. The [hardened egress reference](#hardened-egress-reference-compose) below is documentation only — it is not a second product compose file.
+That mount lets this container create and remove those sandbox containers on the host daemon. A plain `docker run` of the published image does not set the variable and does not mount the socket, so sandboxing stays off. To run Compose the same way, delete `STAGEFLOW_STAGE_CONTAINER_IMAGE` and the socket mount.
+
+The [hardened egress reference](#hardened-egress-reference-compose) below is documentation only. It does not mount the socket.
 
 ## Local try (Compose)
 
@@ -113,9 +115,24 @@ Automated gate that the image boots and becomes live — **not** `sf doctor`. Fr
 
 Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--check-build-sha` (asserts `/api/health` `build_sha` matches the baked SHA when the control token is sent). CI runs the same script from the `docker-smoke` job in `.github/workflows/ci.yml` when packaging-related paths change on a PR (always on `main`).
 
-## Pull and run (GHCR)
+## Pull and run (GHCR) {#pull-and-run-ghcr}
 
-Published image: **`ghcr.io/tejasghutukade/stageflow`**. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). Prefer a digest pin for production:
+Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.39`.
+
+This starts the console on this machine. The `stageflow-data` volume keeps providers and pipelines you save in the console. Pass `sf ui` because the image command is `sf mcp`. This command does not mount the Docker socket, so stage file tools run in the Stageflow container. [Compose from a checkout](#local-try-compose) is what turns the stage sandbox on.
+
+```bash
+docker run --rm --name stageflow \
+  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
+  -p 127.0.0.1:3847:3847 \
+  -v stageflow-data:/data \
+  ghcr.io/tejasghutukade/stageflow:0.39 \
+  sf ui
+```
+
+Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Keep the published port on `127.0.0.1`. The allow flag is only for that localhost publish: the process inside the container binds `0.0.0.0`.
+
+Prefer a digest pin and a control token when the port is not limited to this machine:
 
 ```bash
 export STAGEFLOW_CONTROL_TOKEN="$(openssl rand -hex 32)"
@@ -194,7 +211,7 @@ Notes:
 - **Permission prompts.** The Host also adds `--deny-permission-prompts` ahead of `launch_args` (see [browser.md](browser.md#permission-requests-are-denied-by-default)); do not list it yourself. A headed browser with no screen would otherwise leave location or notification requests pending.
 - **`--no-sandbox`.** Chromium's own sandbox needs privileges a default non-root container lacks. The container is the sandbox: do not add `--privileged` or capabilities to get Chromium's sandbox back. Keep `--no-sandbox` out of Hosts that run outside a container.
 - **No screen needed.** With Xvfb on `PATH` and no `DISPLAY`, agent-browser starts its own virtual display and runs the browser headed, so a human login stage opens its page and shows it to the operator through the [live view](browser.md#live-view) in the console. Run `sf ui` (or `sf mcp`) so the Host serves the live view; a CLI-only run still fails with the no-screen error.
-- **Never mount a container runtime socket.** The rule [above](#never-mount-the-docker-socket) applies unchanged. The browser runs inside the Stageflow container; nothing needs the daemon.
+- **The browser does not need its own socket.** It runs inside the Stageflow container. The Compose socket mount is only for the [stage sandbox](#stage-sandbox-in-compose).
 - **Resources.** Spikes measured about 230 to 420 MB of memory for an idle browser, more on heavy pages. Budget at least 1 GB per concurrent browser run and set a container memory limit. Chromium also needs shared memory: add `--shm-size=1g` to `docker run` (or `shm_size` in Compose) if pages crash.
 - **Limits.** Passkeys, hardware keys and native OS prompts cannot be driven through the live view. See [Browser sessions](browser.md).
 
@@ -242,7 +259,7 @@ browser:
 
 Constraints:
 
-- **Never mount the Docker socket into a Stageflow container.** The development orchestrator shells out to the local `docker` CLI, so the Host must run directly on a machine with a Docker daemon, not inside a Stageflow container. A production deployment uses a different orchestrator behind the same port (not built; see below).
+- **Container browser host uses the Docker CLI.** On a machine, that is the local daemon. In Compose, that is the socket mounted for the [stage sandbox](#stage-sandbox-in-compose). A production deployment uses a different orchestrator behind the same port (not built; see below).
 - The orchestrator starts each container read-only with a tmpfs `/tmp`, `--cap-drop ALL`, `no-new-privileges`, process and memory limits, and publishes the debugging port on `127.0.0.1` only. Users never reach that port.
 - The profile is a named Docker volume (`sf-profile-<scope>-<profile>`), mounted at `/profile`. The Host closes the browser over the debugging protocol before removing the container so the newest cookies are flushed.
 - Containers carry labels for scope, run, stage and profile. At Host start, containers of runs that are gone are removed. The sweep is per Docker daemon: run one Host per daemon.
@@ -263,6 +280,7 @@ STAGEFLOW_DOCKER_SMOKE=1 npx vitest run tests/docker.containerBrowserHost.smoke.
 | `agent/auth.json` | **Irreplaceable** | Operator auth file. The image sets `STAGEFLOW_CREDENTIAL_HOME` to this data directory. |
 | `settings.json` | **Irreplaceable** | Concurrency and credential-source choice. |
 | `connections.yaml`, `channel-secrets.json` | **Irreplaceable** | [Channel](channels.md) connections and the secrets typed into the console. Not covered by `sf backup`; copy them yourself and keep the secrets file private (`0600`). |
+| `memories/` | **Irreplaceable** | [Memory](yaml-catalog.md#memories) pages created in the console. Not covered by `sf backup`; copy the directory yourself. |
 | `mcp/.mcp.json`, `secrets/mcp-secrets.json` | **Irreplaceable** | Servers and tokens added in Settings → Project MCP. Not covered by `sf backup`; copy them yourself and keep the secrets file private (`0600`). |
 | `secrets/mcp-oauth.key`, `agent/mcp-oauth-encrypted` | **Irreplaceable** | OAuth sign-ins for MCP servers. Keep the key and the store **together**; one without the other is useless. Not covered by `sf backup`. |
 | `agent/mcp-cache.json` | Disposable | Tool lists cached from the last successful connect; rebuilt by Check. |

@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Agent evals are read-only by default.** Tool calls run under `conversation.tools`: `read_only` (default; only read-only tools run, write and shell tools are blocked and recorded), `mocked` (answers come from the scenario's `tool_mocks`) or `real`. `real` needs `allow_real_tools: true` in the eval file and `--allow-real-tools` (or `allow_real_tools` in the API and MCP) on the run, and shows a warning. Calls that would ask for approval are denied and recorded; no approval is created, nothing reaches Inbox, and eval sessions do not appear in agent lists, Inbox counts or OTLP exports. Overrides on a run can only make the policy safer.
 - **Agent evals call three models, and send the conversation to their providers.** Every run calls the agent's own model, a user simulator model in simulated mode (`user_model`) and the judge for `rubric` and `goal_reached` graders. The simulator and the judge read the conversation, including a bounded view of tool arguments and results, so they send it to their providers. Scripted evals with only deterministic graders send nothing beyond the agent's own model calls. Costs from the agent, the simulator and the judge count against `max_cost_usd`. The engine never contacts promptfoo servers. See [Evals: privacy](docs/evals.md#privacy-and-trust).
 - **`sf eval` and MCP accept agents.** `sf eval run` takes `--user-model` and `--allow-real-tools`, `sf eval list` and `show` print the agent and revision, `--json` adds `target_kind`, `agent_id`, `agent_revision`, `mean_turns` and `mean_tool_calls`, and the MCP tools `run_eval`, `get_eval_run` and `compare_eval_runs` accept the same fields. Stage evals, their results, fingerprints and exit codes are unchanged.
+## [0.40.0] - 2026-10-21
+
+### Added
+
+- **Stage file tools can run in a sandbox container.** Set `STAGEFLOW_STAGE_CONTAINER_IMAGE` and `read`, `write`, `edit`, and `bash` run in a per-attempt container at `/workspace`. The stage process, memory tools, and credentials stay on the host. A stage can use the memories it was granted and cannot list the rest of `$STAGEFLOW_HOME` from bash. Leave the variable unset and those tools stay on the host.
+- **Compose turns that sandbox on.** `docker-compose.yml` builds `stageflow-bash`, sets the image variable, and mounts the Docker socket. The entrypoint joins the socket's group, then drops to the `stageflow` user. Delete the variable and the socket mount to keep the tools in the Stageflow container.
+- **A checkout object creates the worktree.** `checkout: { branch?, base? }` creates or reuses a git worktree. A string path still selects a checkout you already have.
+- **Getting started recommends the published image.** `docker run` of `ghcr.io/tejasghutukade/stageflow:0.39` opens the console. The Node install remains available when you want `sf` on the machine.
+
+## [0.39.0] - 2026-10-21
+
+### Added
+
+- **Memories.** A memory is a host folder (`$STAGEFLOW_HOME/memories/<id>/`): a cover page and cards beside it, each card filed by a key. Create it in the console first, then list its id under `memories` on a pipeline or an agent. Every stage in that pipeline, and every session of that agent, can read and replace the cover and add, update, read, and search cards. The prompt lists the ids and descriptions only. A stage or session cannot delete a card or open the previous copy. One previous copy is kept for the cover and for each card. In **Memories** the operator can edit the cover, open a card, correct it, restore the previous copy, or delete the card. See [YAML catalog — Memories](docs/yaml-catalog.md#memories).
 
 ## [0.38.0] - 2026-10-20
 

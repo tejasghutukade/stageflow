@@ -1,0 +1,16 @@
+id: missing-memory
+memories:
+  - does-not-exist
+stages:
+  - id: blocked
+    entry: true
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      This pipeline must not start. The memory it names does not exist.
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

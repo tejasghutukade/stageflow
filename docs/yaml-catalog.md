@@ -63,6 +63,7 @@ Optional top-level fields:
 | `browser` | object | Browser session settings (see [Stage browser](#stage-browser)); adds the `agent-browser` requirement |
 | `requires` | array | Toolchain declarations `{ tool, version? }` checked before start (see [Toolchain requires](#toolchain-requires)) |
 | `channels` | array | Default communication channels every stage inherits unless it overrides them (see [Stage channels](#stage-channels)) |
+| `memories` | array | Ids of [memories](#memories) every stage can use. A stage does not list memories of its own |
 
 Bare string stage refs are rejected.
 
@@ -827,6 +828,31 @@ Settings can list the project `.mcp.json` and console servers and Check whether 
 
 Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md). Adding servers and secrets from the console, OAuth and the routes: [MCP servers](mcp-servers.md).
 
+### Memories {#memories}
+
+A memory is a named folder the host keeps (`$STAGEFLOW_HOME/memories/<id>/`). Create it in the console first (**Memories**). A pipeline stores the memory id, not the folder and not a card key.
+
+`memory.yaml` stays version 1: `id`, `version`, and `description`. `body.md` is the cover page. Cards live beside that page. Replacing the cover does not delete cards. The stage never receives a filesystem path.
+
+```yaml
+memories:
+  - candidate-pool
+```
+
+An id is `[a-z][a-z0-9_-]{0,63}`. An empty list is the same as omitting the key. A duplicate id is `pipeline.invalid_memories`. A missing, unreadable, or mismatched memory is `pipeline.memory_unavailable`: `sf validate` and run start both fail, and the run does not start.
+
+Every stage in the pipeline receives that list. `memories` on a stage entry is rejected (`pipeline.invalid_shape`). There is no per-stage override.
+
+On the Pi backend each attached stage gets `read_memory` and `replace_memory` for the cover, and `add_memory_card`, `update_memory_card`, `read_memory_card`, and `search_memory_cards` for cards. The prompt lists the memory ids and their descriptions. It does not include the cover or any card body. Pi stages with memories block shell access to the memory store; use the memory tools instead. The Claude backend does not provide the memory tools, so a pipeline that lists memories fails at stage start there, the same way a stage with `channels:` does.
+
+The cover and each card body are capped at 64,000 characters. A write over the cap is refused. A memory holds at most 200 cards. Two cover replacements that overlap are last-write-wins.
+
+A card is a keyed note for one subject: a person, a ticket, a release, or a path. The key is that subject's own id (an email, a ticket id, a version, or a path), 1–1024 characters after trim. The file name is a hash of the key; the key is stored in the card. A key may contain `/`, spaces, and `..` because it is not a path segment. A memory id is not a card key.
+
+`add_memory_card` refuses a key that already exists. `update_memory_card` refuses a key that is missing. `read_memory_card` returns the current body. `search_memory_cards` is a case-insensitive word scan of the current keys and bodies, at most 20 hits, each a key and a snippet. A stage cannot delete a card and cannot read the previous copy.
+
+In the Memories console the operator can list keys, open a card, correct it, and delete it. Delete removes the current card and the previous copy and cannot be undone. That screen shows the previous card copy and the previous cover text when they exist. The operator can edit the cover. The operator does not create cards; a session adds them. There is one previous copy, not a full history, and no restore action.
+
 ### Stage channels {#stage-channels}
 
 > **Status: built for AgentMail, Slack, Telegram, iMessage and WhatsApp.** Connections are defined in the console or in `connections.yaml`; see [Communication channels](channels.md). `channels:` loads, merges and validates. A stage that declares a `send` channel gets a `send_message` tool on the Pi backend, delivered by the Host with the target pinned here, and the Host refuses to start the stage if the connection no longer matches. The Claude backend does not provide `send_message`, so a stage with `channels:` fails at start there (`email:` still has the older gap). Run start (and the MCP `preflight` tool and `sf doctor`) runs a live check of each declared connection and blocks the run with `channel_check_failed` if one fails, naming the connection and the reason; see [MCP `preflight`](mcp.md#preflight). The pipeline editor edits stage channels in its inspector.
@@ -1052,6 +1078,7 @@ An agent is a project-owned definition. The file name is the agent id: `agents/<
 | `evals` | no | `{ groundedness: bool }` |
 | `observability` | no | `{ capture: off\|metadata\|full, otlp: bool }` |
 | `channel` | no | `{ connection_id, allow_from: [email \| +phone \| @domain \| *] }` — the one connection the agent answers on; an empty `allow_from` lets nobody in. The old `channels: [{ connection_id }]` list still loads as one `channel` |
+| `memories` | no | Ids of [memories](#memories) every session of this agent can use (cover and cards). A missing id is `agent.memory_unavailable` and blocks save and enable. Sub-agents do not inherit the list |
 | `web_chat` | no | `{ enabled, slug?, rate_limit_per_minute (1-120, default 10), max_message_chars (1-20000, default 4000) }` — the public chat page at `/chat/<slug>`; see [Agents](agents.md#web-chat-public-page). Agents created through the console, API, CLI or MCP start with it on and a generated `slug` (the link is the credential); a save that omits the block keeps the current one |
 | `schedule` | no | `{ cron, timezone?, message? }` |
 | `limits` | no | `{ session_minutes, max_turns, cost_usd: number\|null, long_context: summarize\|truncate, always_on: bool }` — `always_on` ends no session by time or turns and counts `cost_usd` per day |

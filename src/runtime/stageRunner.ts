@@ -80,6 +80,11 @@ export type RunStageOptions = {
   stageEnv?: Record<string, string>;
   /** Test seam for the Host login check run by a `browser_login` verify item. */
   browser?: Pick<StageBrowserSupport, "runner" | "loginCheck">;
+  /**
+   * Runs after the agent turn and before completion verification records a
+   * verdict. Used to copy a sandbox desk back onto the host tree.
+   */
+  beforeVerify?: () => Promise<void>;
 };
 
 const LIFECYCLE_EVENTS = new Set([
@@ -127,6 +132,18 @@ async function appendLifecycleEventAndPatchExecution(options: {
     await store.updateStageExecution(runId, stageId, attemptNum, patch);
   } catch {
     // no execution row yet
+  }
+}
+
+async function runBeforeVerify(
+  beforeVerify: (() => Promise<void>) | undefined,
+): Promise<string | undefined> {
+  if (beforeVerify === undefined) return undefined;
+  try {
+    await beforeVerify();
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
   }
 }
 
@@ -264,6 +281,7 @@ export async function runStage(
     resumeToken,
     stageEnv,
     browser: browserSeams,
+    beforeVerify,
   } = options;
   const stageId = options.stageId ?? stage.id;
   const attemptOpt = attemptCtx?.eventOptions();
@@ -391,20 +409,44 @@ export async function runStage(
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
+    const synced = await runBeforeVerify(beforeVerify);
+    const fullReason = synced === undefined ? reason : `${reason}; ${synced}`;
     await activityChain;
     hitl?.clearLiveWait(runId, stageId);
     await appendLifecycleEventAndPatchExecution({
       store,
       runId,
       stageId,
-      event: { event: "failed", reason },
+      event: { event: "failed", reason: fullReason },
       attemptCtx,
     });
-    console.error(`Stage ${stageId} failed: ${reason}`);
+    console.error(`Stage ${stageId} failed: ${fullReason}`);
     await handle
       .close(isStageTimeoutReason(reason) ? { park: true } : undefined)
       .catch(() => undefined);
-    return { ok: false, reason };
+    return { ok: false, reason: fullReason };
+  }
+
+  const syncError = await runBeforeVerify(beforeVerify);
+  if (syncError !== undefined) {
+    const reason = syncError;
+    if (isRunStageWaiting(outcome)) {
+      await activityChain;
+      hitl?.clearLiveWait(runId, stageId);
+      await appendLifecycleEventAndPatchExecution({
+        store,
+        runId,
+        stageId,
+        event: { event: "failed", reason },
+        attemptCtx,
+      });
+      console.error(`Stage ${stageId} failed: ${reason}`);
+      await handle.close().catch(() => undefined);
+      return { ok: false, reason };
+    }
+    outcome = outcome.ok
+      ? { ok: false, reason }
+      : { ok: false, reason: `${outcome.reason}; ${reason}` };
   }
 
   if (isRunStageWaiting(outcome)) {

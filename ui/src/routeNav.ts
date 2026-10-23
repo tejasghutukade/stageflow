@@ -16,6 +16,8 @@ const RAIL_ID: Partial<Record<RouteName, string>> = {
   task: "tasks",
   trigger: "triggers",
   connection: "connections",
+  memories: "memories",
+  memory: "memories",
   agentSessions: "agent-sessions",
   agents: AGENTS,
   agentCreate: AGENTS,

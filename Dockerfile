@@ -24,6 +24,8 @@ RUN npm run build \
   && npm prune --omit=dev \
   && npm cache clean --force
 
+FROM docker:29-cli@sha256:2a146f3eb1ee1015c482756624bbff3a94a1b0531cad6fca03be55943373cf95 AS dockercli
+
 FROM ${NODE_IMAGE} AS runtime
 ARG STAGEFLOW_BUILD_SHA=unknown
 RUN apt-get update \
@@ -59,6 +61,9 @@ RUN node ./scripts/generate-toolchain-manifest.mjs /etc/stageflow/toolchain.json
   && ln -sf /opt/stageflow/dist/cli.js /usr/local/bin/sf \
   && ln -sf /opt/stageflow/dist/cli.js /usr/local/bin/stageflow \
   && chmod 755 /opt/stageflow/dist/cli.js
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+COPY docker/stageflow-entry.sh /usr/local/bin/stageflow-entry.sh
+RUN chmod 755 /usr/local/bin/docker /usr/local/bin/stageflow-entry.sh
 
 ENV STAGEFLOW_HOME=/data \
   STAGEFLOW_CREDENTIAL_HOME=/data \
@@ -78,5 +83,5 @@ USER stageflow:stageflow
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
   CMD curl -fsS http://127.0.0.1:3847/livez || exit 1
 
-ENTRYPOINT ["/usr/bin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/stageflow-entry.sh"]
 CMD ["sf", "mcp"]

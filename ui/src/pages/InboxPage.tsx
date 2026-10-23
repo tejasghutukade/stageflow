@@ -288,6 +288,7 @@ export function InboxPage({
   );
 
   const showZero = tab === "needs" && needs.length === 0 && !loading;
+  const awaitingNeeds = tab === "needs" && needs.length === 0 && loading;
 
   const retrying =
     Boolean(selectedRun?.failed_stage_id) &&
@@ -311,7 +312,7 @@ export function InboxPage({
           {retryError}
         </div>
       ) : null}
-      {showZero ? (
+      {awaitingNeeds ? null : showZero ? (
         <InboxZero
           tab={tab}
           onTabChange={onTabChange}

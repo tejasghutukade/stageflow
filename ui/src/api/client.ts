@@ -93,6 +93,10 @@ import type {
   UpdateWorkshopSessionActiveBuildResult,
   WorkshopBuildRecord,
   WorkshopPickerRow,
+  MemoryCardBody,
+  MemoryCardList,
+  MemoryDetail,
+  MemorySummary,
 } from "./types";
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 
@@ -2271,3 +2275,100 @@ export async function writeCatalogFile(input: {
 }
 
 export * from "./evalsClient";
+export function fetchMemories(): Promise<{ memories: MemorySummary[] }> {
+  return api("/api/memories");
+}
+
+export function fetchMemory(id: string): Promise<MemoryDetail> {
+  return api(`/api/memories/${encodeURIComponent(id)}`);
+}
+
+export async function createMemory(input: { id: string; description: string }): Promise<MemoryDetail> {
+  try {
+    return await api("/api/memories", { method: "POST", body: JSON.stringify(input) });
+  } catch (error) {
+    const code = (error as MemoryRequestError).code;
+    if (code === "MEMORY_TOO_LARGE") {
+      throw Object.assign(new Error("That text is too long."), { code }) as MemoryRequestError;
+    }
+    if (code === "MEMORY_INVALID_DESCRIPTION") {
+      throw Object.assign(new Error("Add a short description so you can spot this memory later."), { code }) as MemoryRequestError;
+    }
+    throw error;
+  }
+}
+
+export type MemoryRequestError = Error & { code?: string };
+
+export function memoryCardReadPath(id: string, key: string, previous = false): string {
+  const leaf = previous ? "cards/previous" : "cards";
+  return `/api/memories/${encodeURIComponent(id)}/${leaf}?${new URLSearchParams({ key }).toString()}`;
+}
+
+async function memoryRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...authorizationHeaders(),
+      ...(init?.headers ?? {}),
+    },
+  });
+  const body = (await res.json().catch(() => ({}))) as T & { code?: unknown; error?: unknown };
+  if (res.status === 401) notifyControlTokenRequired();
+  if (!res.ok) {
+    const code = typeof body.code === "string" ? body.code : undefined;
+    const error = new Error(typeof body.error === "string" ? body.error : code ?? `Request failed (${res.status})`) as MemoryRequestError;
+    if (code) error.code = code;
+    throw error;
+  }
+  return body;
+}
+
+export function fetchMemoryCards(id: string): Promise<MemoryCardList> {
+  return memoryRequest(`/api/memories/${encodeURIComponent(id)}/cards`);
+}
+
+export function fetchMemoryCard(id: string, key: string): Promise<MemoryCardBody> {
+  return memoryRequest(memoryCardReadPath(id, key));
+}
+
+async function optionalMemoryBody(path: string): Promise<string | null> {
+  try {
+    const body = await memoryRequest<MemoryCardBody>(path);
+    return body.body;
+  } catch (error) {
+    const code = (error as MemoryRequestError).code;
+    if (code === "MEMORY_NOT_FOUND" || code === "MEMORY_CARD_NOT_FOUND" || code === "MEMORY_NO_PREVIOUS") return null;
+    throw error;
+  }
+}
+
+export function fetchPreviousMemoryCard(id: string, key: string): Promise<string | null> {
+  return optionalMemoryBody(memoryCardReadPath(id, key, true));
+}
+
+export function updateMemoryCard(id: string, key: string, body: string): Promise<MemoryCardBody> {
+  return memoryRequest(`/api/memories/${encodeURIComponent(id)}/cards`, {
+    method: "PATCH",
+    body: JSON.stringify({ key, body }),
+  });
+}
+
+export function deleteMemoryCard(id: string, key: string): Promise<{ removed: true }> {
+  return memoryRequest(`/api/memories/${encodeURIComponent(id)}/cards`, {
+    method: "DELETE",
+    body: JSON.stringify({ key }),
+  });
+}
+
+export function replaceMemoryCover(id: string, body: string): Promise<MemoryDetail> {
+  return memoryRequest(`/api/memories/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ body }),
+  });
+}
+
+export function fetchPreviousMemoryCover(id: string): Promise<string | null> {
+  return optionalMemoryBody(`/api/memories/${encodeURIComponent(id)}/previous`);
+}
