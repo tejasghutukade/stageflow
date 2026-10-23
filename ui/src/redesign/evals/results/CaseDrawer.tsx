@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { LuChevronLeft, LuChevronRight, LuCheck, LuExternalLink, LuRefreshCw, LuX } from "react-icons/lu";
-import { putEvalReview, tryEvalCase } from "../../../api";
-import type { EvalResultDetail, EvalRunDetail, EvalTryResult } from "../../../api/evalTypes";
+import { acceptEvalSuggestions, dismissEvalSuggestions, putEvalReview, tryEvalCase } from "../../../api";
+import { suggestionLine } from "./triageModel";
+import type { EvalSuggestion, EvalResultDetail, EvalRunDetail, EvalTryResult } from "../../../api/evalTypes";
 import { agentRunPath, datasetPath, navigate, runStreamPath } from "../../../routes";
 import { isAgentRun } from "../agentRun";
 import { usedRealTools } from "./configModel";
@@ -66,6 +67,77 @@ function GradeList({ rows }: { rows: GradeRowView[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function SuggestionLine({
+  evalRunId,
+  suggestion,
+  onChanged,
+}: {
+  evalRunId: string;
+  suggestion: EvalSuggestion;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const view = suggestionLine(suggestion);
+  if (suggestion.status === "dismissed") return null;
+
+  async function act(kind: "accept" | "dismiss") {
+    setBusy(true);
+    setError(null);
+    try {
+      if (kind === "accept") await acceptEvalSuggestions(evalRunId, { ids: [suggestion.id] });
+      else await dismissEvalSuggestions(evalRunId, [suggestion.id]);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section
+      className={`flex flex-col gap-2 rounded-lg border bg-[var(--sf-panel)] px-3 py-2.5 ${
+        view.low ? "border-dashed border-[var(--sf-text-3)]" : "border-[var(--sf-hairline)]"
+      }`}
+      aria-label="Suggested failure sort"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-col gap-0.5">
+          <span className={`${MONO_CLASS} text-[13px] text-[var(--sf-text-1)]`}>{view.text}</span>
+          {view.lowText ? <span className="text-xs italic text-[var(--sf-text-2)]">{view.lowText}</span> : null}
+          {view.acceptedNote ? <span className="text-xs text-[var(--sf-text-2)]">{view.acceptedNote}</span> : null}
+        </div>
+        {view.pending ? (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void act("accept")}
+              className="h-7 rounded-lg bg-[var(--sf-text-1)] px-3 text-xs font-medium text-[var(--sf-ground)] disabled:opacity-50"
+            >
+              Accept
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void act("dismiss")}
+              className="h-7 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-xs font-medium text-[var(--sf-text-1)] disabled:opacity-50"
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+      </div>
+      {error ? (
+        <p role="alert" className="text-xs text-[var(--sf-fail)]">
+          {error}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -238,6 +310,7 @@ export function CaseDrawer({
   onOpenCase,
   onRepeat,
   onReviewSaved,
+  onSuggestionChanged,
 }: {
   run: EvalRunDetail;
   caseId: string;
@@ -253,6 +326,7 @@ export function CaseDrawer({
   onOpenCase: (caseId: string) => void;
   onRepeat: (index: number) => void;
   onReviewSaved: () => void;
+  onSuggestionChanged?: () => void;
 }) {
   const { data, error, loading, reload } = useCaseResults(run.eval_run_id, caseId);
   const result = data ? selectRepeat(data.repeats, repeat) : null;
@@ -501,6 +575,19 @@ export function CaseDrawer({
               )}
 
               {agentRun && section === "transcript" ? null : (
+              <>
+              {result.suggestion && !result.passed ? (
+                <SuggestionLine
+                  evalRunId={run.eval_run_id}
+                  suggestion={result.suggestion}
+                  onChanged={() => {
+                    onVocabularyChanged();
+                    onReviewSaved();
+                    onSuggestionChanged?.();
+                    reload();
+                  }}
+                />
+              ) : null}
               <ReviewCard
                 run={run}
                 result={result}
@@ -511,6 +598,7 @@ export function CaseDrawer({
                   reload();
                 }}
               />
+              </>
               )}
             </>
           ) : null}

@@ -1,5 +1,6 @@
 import { LuChevronRight } from "react-icons/lu";
 import type { CaseRowView } from "./casesModel";
+import { BucketChip } from "./TriageParts";
 import { Dots, MONO_CLASS, TONE_TEXT } from "./ResultsParts";
 
 const GRID = "grid grid-cols-[56px_minmax(160px,1.4fr)_90px_60px_minmax(160px,1.2fr)_70px_70px_24px] items-center gap-3 px-4";
@@ -38,7 +39,10 @@ export function CaseRowsTable({
           className={`${grid} h-10 w-full border-t border-[var(--sf-hairline)] text-left text-[13px] hover:bg-[var(--sf-active)]`}
         >
           <span className={`${MONO_CLASS} text-[var(--sf-text-2)]`}>{row.position}</span>
-          <span className="truncate text-[var(--sf-text-1)]">{row.title}</span>
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-[var(--sf-text-1)]">{row.title}</span>
+            {row.bucket ? <BucketChip chip={row.bucket} /> : null}
+          </span>
           <Dots dots={row.dots} />
           <span className={`${MONO_CLASS} ${TONE_TEXT[row.scoreTone]}`}>{row.scoreText}</span>
           <span className={`${MONO_CLASS} truncate text-xs text-[var(--sf-text-2)]`}>{row.failedGraders}</span>

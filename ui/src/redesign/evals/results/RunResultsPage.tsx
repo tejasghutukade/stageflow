@@ -21,7 +21,8 @@ import { ConfigTab } from "./ConfigTab";
 import { GradersTab } from "./GradersTab";
 import { OverviewTab } from "./OverviewTab";
 import { Chip, ButtonLike, MONO_CLASS } from "./ResultsParts";
-import { EMPTY_FILTER, filterWithGrader, filterWithTag, type CasesFilter } from "./casesModel";
+import { useTriage } from "./useTriage";
+import { EMPTY_FILTER, filterNeedsReview, filterWithSuggestedType, filterWithGrader, filterWithTag, type CasesFilter } from "./casesModel";
 import { rerunOverrides, usedRealTools } from "./configModel";
 import {
   footerText,
@@ -66,6 +67,10 @@ export function RunResultsPage({
   const runNumbers = useRunNumbers(evalId);
   const allRows = useAllRows(run.eval_run_id);
   const failureTypes = useFailureTypes(evalId);
+  const triage = useTriage(run.eval_run_id, () => {
+    failureTypes.reload();
+    fetchEvalRunByNumber(evalId, runNumber).then(setFresh, () => undefined);
+  });
 
   const previous = previousRunNumber(runNumbers, runNumber);
   const position = runPosition(runNumbers, runNumber);
@@ -172,6 +177,9 @@ export function RunResultsPage({
             onOpenCase={(id) => openCase(id)}
             onTag={(tag) => showCases(filterWithTag(tag))}
             onAllCases={() => showCases(EMPTY_FILTER)}
+            triage={triage}
+            onFilterType={(type) => showCases(filterWithSuggestedType(type))}
+            onReview={() => showCases(filterNeedsReview())}
           />
         ) : null}
         {activeTab === "cases" ? (
@@ -181,6 +189,7 @@ export function RunResultsPage({
             onFilter={setFilter}
             vocabulary={failureTypes.items}
             allRows={rows}
+            suggestions={triage.suggestions?.items ?? []}
             onOpen={(id) => openCase(id)}
           />
         ) : null}
@@ -232,6 +241,7 @@ export function RunResultsPage({
           flaky={flakySet.has(caseId)}
           vocabulary={failureTypes.items}
           onVocabularyChanged={failureTypes.reload}
+          onSuggestionChanged={triage.reload}
           onClose={closeDrawer}
           onOpenCase={(id) => openCase(id)}
           onRepeat={(i) => openCase(caseId, i)}

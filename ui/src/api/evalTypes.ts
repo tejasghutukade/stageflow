@@ -267,6 +267,8 @@ export type EvalResultDetail = {
   budget_warnings: string[];
   review: { label: "pass" | "fail" | null; note: string | null } | null;
   tags: string[];
+  /** Failure sorting: the suggestion for this repeat, when one exists. */
+  suggestion?: EvalSuggestion | null;
 };
 
 export type EvalTryResult = {
@@ -661,4 +663,57 @@ export type EvalSessionCandidate = {
   preview: string;
   turns: number;
   tools: string[];
+};
+
+export type EvalBucket = "agent_wrong" | "grader_wrong" | "case_wrong" | "unclear";
+export type EvalSuggestionStatus = "pending" | "accepted" | "dismissed";
+export type EvalClassifierName = "jev" | "judge";
+
+export type EvalSuggestion = {
+  id: string;
+  case_id: string;
+  repeat_index: number;
+  source: EvalClassifierName;
+  bucket: EvalBucket;
+  failure_type: string | null;
+  confidence: number;
+  bucket_probabilities: Record<EvalBucket, number>;
+  grader_false_alarms: Array<{ grader_id: string; probability: number }>;
+  model: string;
+  prompt_version: string;
+  status: EvalSuggestionStatus;
+  created_at: string;
+};
+
+export type EvalSuggestionSummary = {
+  by_bucket: Record<EvalBucket, number>;
+  by_type: Record<string, number>;
+  pending: number;
+  accepted: number;
+  dismissed: number;
+  low_confidence: number;
+};
+
+export type EvalSuggestionsResponse = { items: EvalSuggestion[]; summary: EvalSuggestionSummary };
+
+export type EvalSortInput = { classifier?: "auto" | EvalClassifierName; only_unsorted?: boolean; limit?: number };
+
+export type EvalSortResult = {
+  batch_id: string;
+  classifier: EvalClassifierName;
+  model: string;
+  sorted: number;
+  skipped: number;
+  failed: number;
+  triage_cost_usd: number;
+  suggestions: EvalSuggestion[];
+};
+
+export type EvalAcceptInput = { ids?: string[]; min_confidence?: number; bucket?: EvalBucket };
+
+export type EvalClassifierAvailability = { available: boolean; model: string | null; reason?: string };
+
+export type EvalClassifierStatus = {
+  classifiers: Record<EvalClassifierName, EvalClassifierAvailability>;
+  default: EvalClassifierName | null;
 };

@@ -85,6 +85,33 @@ export function useResultsPage(evalRunId: string, query: EvalResultsQuery, nonce
   return state;
 }
 
+/** Every page of results for a query, for client-side filters the API does not know (suggestion buckets). */
+export function useAllResultsFor(evalRunId: string, query: EvalResultsQuery, enabled: boolean): Async<EvalResultRow[]> {
+  const key = JSON.stringify(query);
+  const [state, setState] = useState<Async<EvalResultRow[]>>({ data: null, error: null, loading: false });
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+    (async () => {
+      const all: EvalResultRow[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await fetchEvalResults(evalRunId, { ...(JSON.parse(key) as EvalResultsQuery), limit: 200, ...(cursor ? { cursor } : {}) });
+        all.push(...page.items);
+        cursor = page.next_cursor ?? undefined;
+      } while (cursor);
+      if (!cancelled) setState({ data: all, error: null, loading: false });
+    })().catch((err) => {
+      if (!cancelled) setState({ data: null, error: message(err), loading: false });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [evalRunId, key, enabled]);
+  return state;
+}
+
 export function useCaseResults(evalRunId: string, caseId: string | null) {
   const [state, setState] = useState<Async<EvalCaseResults>>({ data: null, error: null, loading: false });
   const [nonce, setNonce] = useState(0);
