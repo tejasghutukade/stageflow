@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-10-23
+
 ### Added
 
 - **Evals: measure whether a stage still works.** An eval is a YAML file (`*.eval.yaml`) that points at one pipeline stage and a dataset of cases (JSONL or JSON), runs every case several times (`repeats`) in a fresh stage session, grades each output, and reports a pass rate with a confidence interval, reliability across repeats, flaky cases, latency, cost and failure tags. The console has an Evals page (list, results, case drawer with review and tags, Edit with a dataset editor, and a new-eval wizard), an installable sample (`POST /api/evals/sample`, `examples/evals/`), and `GET`/`POST` routes under `/api/evals`, `/api/eval-runs`, `/api/eval-compare` and `/api/datasets`. Results live in `state.db`; eval stage runs do not appear in Runs or Inbox. See [Evals](docs/evals.md) and [Console: Evals](docs/console-evals.md).
