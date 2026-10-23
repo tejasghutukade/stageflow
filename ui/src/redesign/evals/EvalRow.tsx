@@ -1,4 +1,5 @@
 import { LuChevronRight, LuPlay } from "react-icons/lu";
+import { evalRunPath, navigate } from "../../routes";
 import type { EvalRowModel, EvalTone, TrendDot } from "./evalListModel";
 
 const MONO = "font-['Geist_Mono',monospace]";
@@ -8,6 +9,7 @@ export const TONE_COLOR: Record<EvalTone | "empty", string> = {
   needs: "var(--sf-needs)",
   fail: "var(--sf-fail)",
   muted: "var(--sf-text-3)",
+  running: "var(--sf-running)",
   empty: "var(--sf-track-empty)",
 };
 
@@ -20,17 +22,27 @@ export const COLUMN = {
   status: "w-[104px]",
 } as const;
 
-function TrendDots({ dots }: { dots: TrendDot[] }) {
+function TrendDots({ dots, evalId }: { dots: TrendDot[]; evalId: string }) {
   return (
     <span className="flex items-center gap-[3px]" aria-label="Last runs, oldest to newest">
-      {dots.map((dot, index) => (
-        <span
-          key={index}
-          title={dot.title || undefined}
-          className="block h-[14px] w-[7px] rounded-[2px]"
-          style={{ background: TONE_COLOR[dot.tone] }}
-        />
-      ))}
+      {dots.map((dot, index) =>
+        dot.runNumber !== undefined ? (
+          <button
+            key={index}
+            type="button"
+            title={dot.title || undefined}
+            aria-label={`Open ${dot.title}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(evalRunPath(evalId, dot.runNumber!));
+            }}
+            className="block h-[14px] w-[7px] rounded-[2px] p-0"
+            style={{ background: TONE_COLOR[dot.tone] }}
+          />
+        ) : (
+          <span key={index} className="block h-[14px] w-[7px] rounded-[2px]" style={{ background: TONE_COLOR[dot.tone] }} />
+        ),
+      )}
     </span>
   );
 }
@@ -81,6 +93,16 @@ export function EvalRow({
         <p className="mt-0.5 text-xs leading-[1.4] text-[var(--sf-text-3)]">{row.datasetMeta}</p>
       </div>
       <div role="cell" className={`${COLUMN.lastRun} shrink-0`}>
+        {row.activeRun ? (
+          <a
+            href={`#${row.activeRun.href}`}
+            onClick={(e) => e.stopPropagation()}
+            className={`${MONO} mb-1 flex items-center gap-1.5 truncate text-[11px] text-[var(--sf-running)] hover:underline`}
+          >
+            <span className="block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--sf-running)]" />
+            <span className="truncate">{row.activeRun.text}</span>
+          </a>
+        ) : null}
         {row.hasRun ? (
           <>
             <p className="flex items-baseline gap-2">
@@ -108,7 +130,16 @@ export function EvalRow({
         )}
       </div>
       <div role="cell" className={`${COLUMN.trend} shrink-0`}>
-        <TrendDots dots={row.trend} />
+        <TrendDots dots={row.trend} evalId={row.id} />
+        {row.runsHref ? (
+          <a
+            href={`#${row.runsHref}`}
+            onClick={(e) => e.stopPropagation()}
+            className="mt-1 block text-[11px] text-[var(--sf-text-3)] hover:text-[var(--sf-text-1)] hover:underline"
+          >
+            Runs
+          </a>
+        ) : null}
       </div>
       <div role="cell" className={`${COLUMN.cost} ${MONO} shrink-0 text-xs text-[var(--sf-text-2)]`}>
         {row.costText}

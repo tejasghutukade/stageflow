@@ -636,7 +636,7 @@ function DatasetDetailView({
                 {jsonl ?? "Loading…"}
               </pre>
             ) : columnInfo && detail.cases.length > 0 ? (
-              <div className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
+              <div className="shrink-0 overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
                 {agentEval ? (
                   <ScenarioTable cases={detail.cases} offset={page * 25} defaultMode={defaultMode} editable={editable} onEdit={setEditing} onDelete={(c) => setDeleting(c.id)} />
                 ) : (

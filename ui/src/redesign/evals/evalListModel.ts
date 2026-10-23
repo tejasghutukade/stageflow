@@ -5,7 +5,8 @@ import type {
   EvalListStatus,
   EvalRegressionBanner,
 } from "../../api";
-import { evalComparePath, evalEditPath, evalPath } from "../../routes";
+import { evalComparePath, evalEditPath, evalPath, evalRunPath } from "../../routes";
+import { activeRunText } from "./run/runSwitcherModel";
 import { formatCost, formatPercent, formatPoints } from "./format";
 
 export const EVAL_SAMPLE_ID = "critique-sample";
@@ -29,7 +30,7 @@ export type EvalFilterTab = "all" | "stages" | "agents" | "regressed";
 
 export type EvalTabDef = { id: EvalFilterTab; label: string; count?: number; soon?: boolean };
 
-export type EvalTone = "ok" | "needs" | "fail" | "muted";
+export type EvalTone = "ok" | "needs" | "fail" | "muted" | "running";
 
 /** `agentsLive` turns the Agents tab from a placeholder into a counted filter. */
 export function evalTabs(items: EvalListItem[], agentsLive = false): EvalTabDef[] {
@@ -81,6 +82,7 @@ export const STATUS_LABEL: Record<EvalListStatus | "invalid", string> = {
   saturated: "Saturated",
   regressed: "Regressed",
   failing: "Failing",
+  running: "Running",
   never_run: "Never run",
   invalid: "Needs fixing",
 };
@@ -90,6 +92,7 @@ const STATUS_TONE: Record<EvalListStatus | "invalid", EvalTone> = {
   saturated: "needs",
   regressed: "fail",
   failing: "fail",
+  running: "running",
   never_run: "muted",
   invalid: "needs",
 };
@@ -99,13 +102,13 @@ export function statusOf(item: EvalListItem): { label: string; tone: EvalTone } 
   return { label: STATUS_LABEL[key], tone: STATUS_TONE[key] };
 }
 
-export type TrendDot = { tone: EvalTone | "empty"; title: string };
+export type TrendDot = { tone: EvalTone | "empty"; title: string; runNumber?: number };
 
 export function trendDots(item: EvalListItem): TrendDot[] {
   const dots: TrendDot[] = item.trend.slice(-TREND_SLOTS).map((point) => {
     const near = point.pass_rate !== null && point.pass_rate >= point.pass_threshold - 0.05;
     const tone: TrendDot["tone"] = point.passed ? "ok" : near ? "needs" : "fail";
-    return { tone, title: `Run #${point.run_number} · ${formatPercent(point.pass_rate)}` };
+    return { tone, title: `Run #${point.run_number} · ${formatPercent(point.pass_rate)}`, runNumber: point.run_number };
   });
   while (dots.length < TREND_SLOTS) dots.push({ tone: "empty", title: "" });
   return dots;
@@ -132,6 +135,10 @@ export type EvalRowModel = {
   status: { label: string; tone: EvalTone };
   href: string;
   canRun: boolean;
+  /** A queued or running run: the text and a link straight to its live page. */
+  activeRun: { text: string; href: string } | null;
+  /** Opens the newest run (the live one when a run is active). */
+  runsHref: string | null;
 };
 
 function plural(count: number, one: string, many: string): string {
@@ -185,6 +192,16 @@ export function evalRowModel(item: EvalListItem): EvalRowModel {
     status: statusOf(item),
     href: item.valid ? evalPath(item.id) : evalEditPath(item.id),
     canRun: item.valid,
+    activeRun: item.active_run
+      ? { text: activeRunText(item.active_run), href: evalRunPath(item.id, item.active_run.run_number) }
+      : null,
+    runsHref: item.valid
+      ? item.active_run
+        ? evalRunPath(item.id, item.active_run.run_number)
+        : last
+          ? evalRunPath(item.id, last.run_number)
+          : null
+      : null,
   };
 }
 

@@ -1,6 +1,6 @@
 import type { ValidationFinding } from "./types";
 
-export type EvalListStatus = "never_run" | "passing" | "saturated" | "regressed" | "failing";
+export type EvalListStatus = "running" | "never_run" | "passing" | "saturated" | "regressed" | "failing";
 
 export type EvalRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "budget_stopped";
 
@@ -86,6 +86,14 @@ export type EvalRunHeadline = {
   label: string | null;
 };
 
+export type EvalActiveRun = {
+  run_number: number;
+  eval_run_id: string;
+  status: "queued" | "running";
+  results_done: number;
+  results_total: number;
+};
+
 export type EvalListItem = {
   project_root?: string;
   id: string;
@@ -119,6 +127,7 @@ export type EvalListItem = {
   valid: boolean;
   finding_count: number;
   status: EvalListStatus;
+  active_run?: EvalActiveRun | null;
   last_run: EvalRunHeadline | null;
   last_run_delta_pts: number | null;
   trend: Array<{ run_number: number; passed: boolean; pass_rate: number | null; pass_threshold: number }>;
@@ -186,6 +195,7 @@ export type EvalDetail = {
   yaml: string;
   findings: ValidationFinding[];
   runs_count: number;
+  active_run?: EvalActiveRun | null;
   last_run: EvalRunHeadline | null;
   target_model?: string | null;
   judge_default?: string | null;
@@ -422,7 +432,10 @@ export type EvalRunListQuery = {
   cursor?: string;
 };
 
-export type EvalRunListItem = EvalRunHeadline & { result?: { case_id: string; repeat_index: number } };
+export type EvalRunListItem = EvalRunHeadline & {
+  created_at?: string;
+  started_at?: string | null;
+  results_total?: number; result?: { case_id: string; repeat_index: number } };
 
 export type EvalResultRow = {
   case_id: string;

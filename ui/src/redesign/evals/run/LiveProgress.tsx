@@ -90,7 +90,7 @@ export function LiveProgress({ model, runNumber }: { model: LiveModel; runNumber
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
-        <section className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
+        <section className="shrink-0 overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
           <div className="flex flex-col gap-3 px-5 pb-4 pt-4">
             <div className="flex items-center justify-between gap-3 text-[13px]">
               <span className="font-medium text-[var(--sf-text-1)]">{model.headline}</span>
@@ -130,7 +130,7 @@ export function LiveProgress({ model, runNumber }: { model: LiveModel; runNumber
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]" role="table" aria-label="Results as they arrive">
+        <section className="shrink-0 overflow-hidden rounded-lg border border-[var(--sf-hairline)]" role="table" aria-label="Results as they arrive">
           <div className="flex items-center justify-between gap-3 border-b border-b-[var(--sf-hairline)] px-4 py-3">
             <h2 className="text-[13px] font-medium text-[var(--sf-text-1)]">Results as they arrive</h2>
             <span className="text-xs text-[var(--sf-text-3)]">{LEAVE_NOTE}</span>

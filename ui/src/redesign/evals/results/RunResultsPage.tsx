@@ -13,6 +13,7 @@ import {
 } from "../../../routes";
 import { FilterTabs } from "../../shell/FilterTabs";
 import { PageHeader } from "../../shell/PageHeader";
+import { RunSwitcher } from "../run/RunSwitcher";
 import { openRunDialog } from "../run/runDialogStore";
 import { CaseDrawer } from "./CaseDrawer";
 import { CasesTab } from "./CasesTab";
@@ -110,7 +111,7 @@ export function RunResultsPage({
         subtitle={headerSubtitle(run)}
         titleAddon={
           <>
-            <Chip mono>Run #{runNumber}</Chip>
+            <RunSwitcher evalId={evalId} runNumber={runNumber} tab={activeTab} />
             <Chip tone="running" >{suiteTypeLabel(run)}</Chip>
             <Chip tone={chip.tone}>{chip.text}</Chip>
           </>

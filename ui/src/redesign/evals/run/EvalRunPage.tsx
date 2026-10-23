@@ -6,6 +6,7 @@ import { evalComparePath, evalsPath, navigate, type EvalRunTab } from "../../../
 import { MODAL_SCRIM_PT, OVERLAY_SCRIM_CLASS } from "../../overlay/overlayScrimClasses";
 import { useOverlayChrome } from "../../overlay/useOverlayChrome";
 import { PageHeader } from "../../shell/PageHeader";
+import { RunSwitcher } from "./RunSwitcher";
 import { LiveProgress, StopButton } from "./LiveProgress";
 import { RunResultsPage } from "../results/RunResultsPage";
 import {
@@ -28,6 +29,22 @@ type PollState = {
   error: string | null;
 };
 
+async function fetchAllResults(evalRunId: string): Promise<EvalResultRow[] | null> {
+  try {
+    const all: EvalResultRow[] = [];
+    let cursor: string | undefined;
+    for (let pages = 0; pages < 50; pages += 1) {
+      const page = await fetchEvalResults(evalRunId, { limit: 200, ...(cursor ? { cursor } : {}) });
+      all.push(...page.items);
+      if (!page.next_cursor) break;
+      cursor = page.next_cursor;
+    }
+    return all;
+  } catch {
+    return null;
+  }
+}
+
 function useEvalRunPolling(evalId: string, runNumber: number, projectRoot?: string) {
   const [state, setState] = useState<PollState>({ run: null, results: [], error: null });
   const [nonce, setNonce] = useState(0);
@@ -47,10 +64,7 @@ function useEvalRunPolling(evalId: string, runNumber: number, projectRoot?: stri
         lastActive = isActiveStatus(run.status);
         let results: EvalResultRow[] | null = null;
         if (isActiveStatus(run.status)) {
-          results = await fetchEvalResults(run.eval_run_id, { limit: 200 }).then(
-            (page) => page.items,
-            () => null,
-          );
+          results = await fetchAllResults(run.eval_run_id);
         } else {
           again = false;
         }
@@ -237,9 +251,7 @@ export function EvalRunPage({
         subtitle={liveSubtitle(run, now)}
         titleAddon={
           <>
-            <span className={`rounded-md border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)] px-2 py-0.5 text-xs text-[var(--sf-text-1)] font-['Geist_Mono',monospace]`}>
-              Run #{run.run_number}
-            </span>
+            <RunSwitcher evalId={run.eval_id} runNumber={run.run_number} />
             <StatusChip status={run.status} />
           </>
         }

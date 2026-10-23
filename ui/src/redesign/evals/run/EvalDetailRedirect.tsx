@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { fetchEval } from "../../../api";
+import { fetchEval, fetchEvalRuns } from "../../../api";
 import { evalEditPath, evalRunPath, evalsPath, navigate } from "../../../routes";
+import { evalLandingTarget, newestRunNumber } from "./runSwitcherModel";
 import { PageHeader } from "../../shell/PageHeader";
 
 export function EvalDetailRedirect({ evalId }: { evalId: string }) {
@@ -8,11 +9,21 @@ export function EvalDetailRedirect({ evalId }: { evalId: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    const go = (hash: string) => {
+      if (!cancelled) window.location.replace(`#${hash}`);
+    };
     fetchEval(evalId).then(
-      (detail) => {
+      async (detail) => {
         if (cancelled) return;
-        const hash = detail.runs_count > 0 && detail.last_run ? evalRunPath(evalId, detail.last_run.run_number) : evalEditPath(evalId);
-        window.location.replace(`#${hash}`);
+        let newest: number | null = null;
+        if (!detail.active_run && detail.runs_count > 0) {
+          newest = await fetchEvalRuns({ eval_id: evalId, limit: 200 }).then(
+            (page) => newestRunNumber(page.items.map((item) => item.run_number)),
+            () => null,
+          );
+        }
+        const target = evalLandingTarget({ ...detail, newestRunNumber: newest });
+        go(target.kind === "run" ? evalRunPath(evalId, target.runNumber) : evalEditPath(evalId));
       },
       (err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));

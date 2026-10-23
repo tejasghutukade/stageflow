@@ -13,7 +13,9 @@ import {
 } from "../listStatus.js";
 import type { EvalRunRow } from "../storeTypes.js";
 import {
+  activeRunOf,
   completedRunsNewestFirst,
+  type ActiveRun,
   runHeadline,
   statsOfRun,
   type ReadStore,
@@ -53,7 +55,8 @@ export type EvalListItem = {
   rubric_count: number;
   valid: boolean;
   finding_count: number;
-  status: ListStatus;
+  status: ListStatus | "running";
+  active_run: ActiveRun | null;
   last_run: RunHeadline | null;
   last_run_delta_pts: number | null;
   trend: Array<{ run_number: number; passed: boolean; pass_rate: number | null; pass_threshold: number }>;
@@ -155,6 +158,7 @@ export async function buildEvalListItems(input: {
         valid: false,
         finding_count: findingCount,
         status: "never_run",
+        active_run: null,
         last_run: null,
         last_run_delta_pts: null,
         trend: [],
@@ -176,6 +180,7 @@ export async function buildEvalListItems(input: {
       [lastSummary, previousSummary].filter((s): s is ListRunSummary => s !== null),
       type,
     );
+    const activeRun = await activeRunOf(store, projectRoot, loaded.id);
     bannerInputs.push({ evalId: loaded.id, status, last: lastSummary, previous: previousSummary });
 
     const agentTarget =
@@ -218,7 +223,8 @@ export async function buildEvalListItems(input: {
       rubric_count: loaded.graders.filter((g) => g.type === "rubric").length,
       valid,
       finding_count: findingCount,
-      status,
+      status: activeRun ? "running" : status,
+      active_run: activeRun,
       last_run: last ? runHeadline(last) : null,
       last_run_delta_pts: delta,
       trend: completed

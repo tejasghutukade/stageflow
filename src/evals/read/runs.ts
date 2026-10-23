@@ -167,6 +167,36 @@ export function runHeadline(row: EvalRunRow): RunHeadline {
   };
 }
 
+export type ActiveRun = {
+  run_number: number;
+  eval_run_id: string;
+  status: "queued" | "running";
+  results_done: number;
+  results_total: number;
+};
+
+/** The newest queued or running run of an eval, or null. */
+export async function activeRunOf(
+  store: Pick<ReadStore, "listEvalRuns">,
+  projectRoot: string,
+  evalId: string,
+): Promise<ActiveRun | null> {
+  const found: EvalRunRow[] = [];
+  for (const status of ["running", "queued"] as const) {
+    const page = await store.listEvalRuns({ projectRoot, evalId, status, limit: 50 });
+    found.push(...page.items);
+  }
+  const row = found.sort((a, b) => b.runNumber - a.runNumber)[0];
+  if (!row || (row.status !== "queued" && row.status !== "running")) return null;
+  return {
+    run_number: row.runNumber,
+    eval_run_id: row.evalRunId,
+    status: row.status,
+    results_done: row.resultsDone,
+    results_total: row.resultsTotal,
+  };
+}
+
 export function graderRefsOf(row: Pick<EvalRunRow, "config">): GraderRef[] {
   const graders = asRecord(row.config).graders;
   if (!Array.isArray(graders)) return [];

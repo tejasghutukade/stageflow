@@ -831,6 +831,38 @@ describe("eval routes: eval runs", () => {
     expect(rubric.body.results_total).toBe(2);
   });
 
+  it("reports the active run on the list and detail reads while a run is queued or running", async () => {
+    const h = await setup();
+    h.runner.state.delayMs = 300;
+    const idle = await h.get(`/api/evals/review?${q(h)}`);
+    expect(idle.body.active_run).toBeNull();
+
+    const started = await h.post("/api/evals/review/runs", { project_root: h.root });
+    const id = started.body.eval_run_id as string;
+
+    const detail = await h.get(`/api/evals/review?${q(h)}`);
+    expect(detail.body.runs_count).toBe(1);
+    expect(detail.body.last_run).toBeNull();
+    expect(detail.body.active_run).toMatchObject({ run_number: 1, eval_run_id: id, results_total: 10 });
+    expect(["queued", "running"]).toContain(detail.body.active_run.status);
+
+    const list = await h.get(`/api/evals?${q(h)}`);
+    const item = list.body.items.find((i: any) => i.id === "review");
+    expect(item.status).toBe("running");
+    expect(item.active_run).toMatchObject({ run_number: 1, eval_run_id: id });
+
+    const runs = await h.get(`/api/eval-runs?eval_id=review&${q(h)}`);
+    expect(runs.body.items[0]).toMatchObject({ run_number: 1, results_total: 10 });
+
+    await h.manager.awaitFinished(id, 15_000);
+    const after = await h.get(`/api/evals/review?${q(h)}`);
+    expect(after.body.active_run).toBeNull();
+    const listAfter = await h.get(`/api/evals?${q(h)}`);
+    const itemAfter = listAfter.body.items.find((i: any) => i.id === "review");
+    expect(itemAfter.status).not.toBe("running");
+    expect(itemAfter.active_run).toBeNull();
+  });
+
   it("lists eval runs with filters, pagination and the stage_run_id filter", async () => {
     const h = await setup();
     await writeFile(path.join(h.root, "evals", "other.eval.yaml"), evalYaml("other"));

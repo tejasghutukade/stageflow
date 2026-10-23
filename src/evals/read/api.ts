@@ -29,7 +29,7 @@ import { resultKey } from "../statsTypes.js";
 import type { EvalRunRow } from "../storeTypes.js";
 import { regressionBanner, type BannerEvalInput } from "../listStatus.js";
 import { buildResultRows, RESULT_ROW_STATUSES, type ResultRowStatus } from "./results.js";
-import { completedRunsNewestFirst, resultToWire, runHeadline } from "./runs.js";
+import { activeRunOf, completedRunsNewestFirst, resultToWire, runHeadline, type ActiveRun } from "./runs.js";
 
 export const DEFAULT_LIMIT = 50;
 export const MAX_LIMIT = 200;
@@ -105,6 +105,7 @@ export type EvalDetailWire = {
   yaml: string;
   findings: ValidationFinding[];
   runs_count: number;
+  active_run: ActiveRun | null;
   last_run: ReturnType<typeof runHeadline> | null;
   target_model: string | null;
   judge_default: string | null;
@@ -152,6 +153,7 @@ export async function buildEvalDetail(input: {
     yaml: bytes.toString("utf8"),
     findings: entry?.findings ?? [],
     runs_count: runsCount,
+    active_run: await activeRunOf(store, projectRoot, id),
     last_run: last ? runHeadline(last) : null,
     target_model: targetModel,
     judge_default: entry?.outcome.ok ? (entry.outcome.value.file.defaults?.judge ?? null) : null,
@@ -241,6 +243,9 @@ export async function listEvalRunsPage(
     page.items.map(async (row) => {
       const headline = {
         ...runHeadline(row),
+        created_at: row.createdAt,
+        started_at: row.startedAt,
+        results_total: row.resultsTotal,
         project_root: input.wireRootOf?.(row.projectRoot) ?? row.projectRoot,
       };
       if (stageRunId === undefined && subjectRef === undefined) return headline;

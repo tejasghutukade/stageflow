@@ -305,7 +305,7 @@ export function EvalsRedesign({ stage, agent }: { stage?: string; agent?: string
             <div
               role="grid"
               aria-label="Evals"
-              className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]"
+              className="shrink-0 overflow-hidden rounded-lg border border-[var(--sf-hairline)]"
             >
               <div
                 role="row"

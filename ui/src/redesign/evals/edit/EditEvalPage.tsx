@@ -3,7 +3,7 @@ import { LuCode, LuLayoutList, LuPlay } from "react-icons/lu";
 import { EvalApiError, fetchEval, updateEval, validateEval } from "../../../api/evalsClient";
 import type { EvalDefinition, EvalDetail } from "../../../api/evalTypes";
 import type { ValidationFinding } from "../../../api/types";
-import { evalEditPath, evalsPath, navigate } from "../../../routes";
+import { evalEditPath, evalRunPath, evalsPath, navigate } from "../../../routes";
 import { showToast } from "../../../toast";
 import { PageHeader } from "../../shell/PageHeader";
 import { BTN, BTN_PRIMARY, TEXTAREA } from "../datasets/DialogShell";
@@ -316,6 +316,18 @@ export function EditEvalPage({ evalId }: { evalId: string }) {
         title="Edit eval"
         subtitle={`Everything in ${detail.path} can be changed here. The form and the YAML stay in sync.`}
         crumbs={[...crumbs, { label: evalId, onClick: () => navigate(evalEditPath(evalId)) }]}
+        titleAddon={
+          detail.active_run ? (
+            <button
+              type="button"
+              onClick={() => navigate(evalRunPath(evalId, detail.active_run!.run_number))}
+              className="flex items-center gap-1.5 rounded-md bg-[var(--sf-running-bg)] px-2 py-0.5 text-xs text-[var(--sf-running)] hover:underline"
+            >
+              <span className="block size-1.5 animate-pulse rounded-full bg-[var(--sf-running)]" />
+              Run in progress
+            </button>
+          ) : null
+        }
         actions={
           <>
             {label ? <span className="rounded-md bg-[var(--sf-needs-bg)] px-2 py-1 text-xs text-[var(--sf-needs)]">{label}</span> : null}
