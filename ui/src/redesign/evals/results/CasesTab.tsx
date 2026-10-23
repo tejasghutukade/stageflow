@@ -23,7 +23,9 @@ import {
 import { graderDefinitions } from "./gradersModel";
 import { thresholdOf } from "./headerModel";
 import { isAgentRun } from "../agentRun";
-import { useResultsPage } from "./useResultsData";
+import { useAllResultsFor, useResultsPage } from "./useResultsData";
+import { BUCKETS, BUCKET_LABEL, bucketChip, caseIdsForSuggestionFilter, suggestionByCase, suggestionFilterActive } from "./triageModel";
+import type { EvalBucket, EvalSuggestion } from "../../../api/evalTypes";
 
 const SELECT =
   "h-8 rounded-lg border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)] px-2 text-[13px] text-[var(--sf-text-1)]";
@@ -35,6 +37,7 @@ export function CasesTab({
   vocabulary,
   allRows,
   onOpen,
+  suggestions,
 }: {
   run: EvalRunDetail;
   filter: CasesFilter;
@@ -42,6 +45,7 @@ export function CasesTab({
   vocabulary: string[];
   allRows: EvalResultRow[];
   onOpen: (caseId: string) => void;
+  suggestions: EvalSuggestion[];
 }) {
   const [paging, setPaging] = useState<Paging>(FIRST_PAGE);
   const [search, setSearch] = useState(filter.q);
@@ -59,9 +63,21 @@ export function CasesTab({
   }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const query = useMemo(() => buildResultsQuery(filter, currentCursor(paging)), [filter, paging]);
-  const { data, error, loading } = useResultsPage(run.eval_run_id, query);
+  const bySuggestion = suggestionFilterActive(filter);
+  const paged = useResultsPage(run.eval_run_id, query);
+  const everything = useAllResultsFor(run.eval_run_id, { ...buildResultsQuery(filter, null), limit: 200 }, bySuggestion);
+  const { data, error: pagedError, loading: pagedLoading } = paged;
+  const error = bySuggestion ? everything.error : pagedError;
+  const loading = bySuggestion ? everything.loading || everything.data === null : pagedLoading;
   const threshold = thresholdOf(run);
-  const rows = (data?.items ?? []).map((row) => caseRowView(row, threshold));
+  const byCase = suggestionByCase(suggestions);
+  const matching = bySuggestion ? caseIdsForSuggestionFilter(suggestions, filter) : null;
+  const sourceRows = bySuggestion ? (everything.data ?? []).filter((r) => matching!.has(r.case_id)) : (data?.items ?? []);
+  const rows = sourceRows.map((row) => {
+    const view = caseRowView(row, threshold);
+    const s = byCase.get(row.case_id);
+    return s ? { ...view, bucket: bucketChip(s) } : view;
+  });
   const graderIds = graderDefinitions(run).map((g) => String(g.id));
   const tags = tagOptions(vocabulary, allRows);
   const counts = data?.counts ?? null;
@@ -101,6 +117,37 @@ export function CasesTab({
             </option>
           ))}
         </select>
+        <select
+          aria-label="Filter by suggested bucket"
+          className={SELECT}
+          value={filter.bucket ?? ""}
+          onChange={(e) => onFilter({ ...filter, bucket: (e.target.value || null) as EvalBucket | null })}
+        >
+          <option value="">All buckets</option>
+          {BUCKETS.map((b) => (
+            <option key={b} value={b}>
+              {BUCKET_LABEL[b]}
+            </option>
+          ))}
+        </select>
+        <label className="flex h-8 items-center gap-1.5 text-[13px] text-[var(--sf-text-1)]">
+          <input
+            type="checkbox"
+            checked={filter.needsReview === true}
+            onChange={(e) => onFilter({ ...filter, needsReview: e.target.checked })}
+          />
+          Needs review
+        </label>
+        {filter.suggestedType ? (
+          <button
+            type="button"
+            className="flex h-8 items-center gap-1 rounded-lg border border-[var(--sf-hairline-strong)] px-2 text-[13px] text-[var(--sf-text-1)]"
+            onClick={() => onFilter({ ...filter, suggestedType: null })}
+            aria-label={`Remove suggested type filter ${filter.suggestedType}`}
+          >
+            Suggested type: {filter.suggestedType} ×
+          </button>
+        ) : null}
         <input
           aria-label="Search cases"
           placeholder="Search by id, title or input"
@@ -125,8 +172,8 @@ export function CasesTab({
           <CaseRowsTable rows={rows} onOpen={onOpen} agent={isAgentRun(run)} />
         )}
         <div className="flex items-center justify-between border-t border-[var(--sf-hairline)] px-4 py-2 text-xs text-[var(--sf-text-3)]">
-          <span>{pageLabel(paging, rows.length, countFor(counts, filter.tab))}</span>
-          <span className="flex gap-2">
+          <span>{bySuggestion ? `${rows.length} ${rows.length === 1 ? "case" : "cases"}` : pageLabel(paging, rows.length, countFor(counts, filter.tab))}</span>
+          <span className={`flex gap-2 ${bySuggestion ? "hidden" : ""}`}>
             <button
               type="button"
               disabled={paging.index === 0}

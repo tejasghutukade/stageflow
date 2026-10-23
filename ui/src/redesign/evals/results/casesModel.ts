@@ -1,6 +1,7 @@
-import type { EvalResultRow, EvalResultsPage, EvalResultsQuery, EvalResultStatus } from "../../../api/evalTypes";
+import type { EvalBucket, EvalResultRow, EvalResultsPage, EvalResultsQuery, EvalResultStatus } from "../../../api/evalTypes";
 import { formatCost, formatDuration, formatMean, formatScore } from "../format";
 import type { Tone } from "./headerModel";
+import { suggestionFilterActive, type BucketChipView } from "./triageModel";
 
 export const PAGE_SIZE = 25;
 
@@ -19,6 +20,8 @@ export type CaseRowView = {
   /** Agent runs only: mean per case, from the API. */
   turnsText?: string;
   toolsText?: string;
+  /** Failure sorting: the suggested bucket chip, when this case has a live suggestion. */
+  bucket?: BucketChipView;
 };
 
 export function dotKind(status: EvalResultStatus, passed: boolean): DotKind {
@@ -58,6 +61,9 @@ export type CasesFilter = {
   grader: string | null;
   tag: string | null;
   q: string;
+  bucket?: EvalBucket | null;
+  needsReview?: boolean;
+  suggestedType?: string | null;
 };
 
 export const EMPTY_FILTER: CasesFilter = { tab: "all", grader: null, tag: null, q: "" };
@@ -66,12 +72,20 @@ export function filterWithTag(tag: string): CasesFilter {
   return { ...EMPTY_FILTER, tag };
 }
 
+export function filterWithSuggestedType(suggestedType: string): CasesFilter {
+  return { ...EMPTY_FILTER, tab: "failed", suggestedType };
+}
+
+export function filterNeedsReview(): CasesFilter {
+  return { ...EMPTY_FILTER, tab: "failed", needsReview: true };
+}
+
 export function filterWithGrader(grader: string): CasesFilter {
   return { ...EMPTY_FILTER, tab: "failed", grader };
 }
 
 export function isFiltered(filter: CasesFilter): boolean {
-  return filter.tab !== "all" || filter.grader !== null || filter.tag !== null || filter.q.trim() !== "";
+  return filter.tab !== "all" || filter.grader !== null || filter.tag !== null || filter.q.trim() !== "" || suggestionFilterActive(filter);
 }
 
 export function caseTabs(counts: EvalResultsPage["counts"] | null): Array<{ id: CasesTabId; label: string; count?: number }> {

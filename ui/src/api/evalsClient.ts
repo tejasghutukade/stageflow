@@ -1,6 +1,12 @@
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 import type {
+  EvalAcceptInput,
   EvalAgentTarget,
+  EvalClassifierStatus,
+  EvalSortInput,
+  EvalSortResult,
+  EvalSuggestionStatus,
+  EvalSuggestionsResponse,
   EvalCaseOp,
   EvalCaseResults,
   EvalCompareResult,
@@ -249,4 +255,33 @@ export function fetchEvalDatasetCandidates(
   options: { project_root?: string; limit?: number } = {},
 ): Promise<{ items: EvalDatasetCandidate[] }> {
   return evalRequest(`/api/datasets/candidates${evalQueryString({ ...target, ...options })}`);
+}
+
+export function sortEvalFailures(evalRunId: string, input: EvalSortInput = {}): Promise<EvalSortResult> {
+  return evalRequest(`/api/eval-runs/${enc(evalRunId)}/failures/sort`, { method: "POST", body: input });
+}
+
+export function fetchEvalSuggestions(
+  evalRunId: string,
+  status?: EvalSuggestionStatus,
+): Promise<EvalSuggestionsResponse> {
+  return evalRequest(`/api/eval-runs/${enc(evalRunId)}/failures/suggestions${evalQueryString({ status })}`);
+}
+
+export function acceptEvalSuggestions(
+  evalRunId: string,
+  input: EvalAcceptInput = {},
+): Promise<{ accepted: number; tagged: number }> {
+  return evalRequest(`/api/eval-runs/${enc(evalRunId)}/failures/suggestions/accept`, { method: "POST", body: input });
+}
+
+export function dismissEvalSuggestions(evalRunId: string, ids: string[]): Promise<{ dismissed: number }> {
+  return evalRequest(`/api/eval-runs/${enc(evalRunId)}/failures/suggestions/dismiss`, {
+    method: "POST",
+    body: { ids },
+  });
+}
+
+export function fetchEvalClassifierStatus(evalRunId: string): Promise<EvalClassifierStatus> {
+  return evalRequest(`/api/eval-runs/${enc(evalRunId)}/failures/status`);
 }

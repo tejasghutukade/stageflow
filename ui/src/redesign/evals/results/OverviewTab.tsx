@@ -4,6 +4,9 @@ import { CaseRowsTable } from "./CaseRowsTable";
 import { byGraderHeader, byGraderView, failingCardHeader, failingCaseRows, failureTypesModel, flakyNote, FAILURE_TYPES_HINT, histogramModel, kpiTiles } from "./overviewModel";
 import { Bar, Card, KindChip, MONO_CLASS, TONE_BG, TONE_TEXT } from "./ResultsParts";
 import { isAgentRun } from "../agentRun";
+import { SortFailuresButton, SuggestedSection } from "./TriageParts";
+import { bucketChip, suggestionByCase } from "./triageModel";
+import type { Triage } from "./useTriage";
 
 export function OverviewTab({
   run,
@@ -12,6 +15,9 @@ export function OverviewTab({
   onOpenCase,
   onTag,
   onAllCases,
+  triage,
+  onFilterType,
+  onReview,
 }: {
   run: EvalRunDetail;
   rows: EvalResultRow[];
@@ -19,6 +25,9 @@ export function OverviewTab({
   onOpenCase: (caseId: string) => void;
   onTag: (tag: string) => void;
   onAllCases: () => void;
+  triage: Triage;
+  onFilterType: (type: string) => void;
+  onReview: () => void;
 }) {
   if (!run.stats) {
     return <p className="px-5 py-4 text-[13px] text-[var(--sf-text-2)]">No results were executed in this run.</p>;
@@ -29,8 +38,14 @@ export function OverviewTab({
   const histogram = histogramModel(run);
   const flaky = flakyNote(run);
   const failure = failureTypesModel(run);
-  const failing = failingCaseRows(run, rows);
+  const byCase = suggestionByCase(triage.suggestions?.items ?? []);
+  const failing = failingCaseRows(run, rows).map((row) => {
+    const s = byCase.get(row.caseId);
+    return s ? { ...row, bucket: bucketChip(s) } : row;
+  });
+  const runActive = run.status === "queued" || run.status === "running";
   const failingHeader = failingCardHeader(run);
+  const failedCount = run.stats.results_executed - run.stats.results_passed;
 
   return (
     <div className="flex flex-col gap-4 px-5 py-4">
@@ -107,7 +122,17 @@ export function OverviewTab({
       </div>
 
       {failure ? (
-        <Card title="Failure types" addon={failure.failedText} right={FAILURE_TYPES_HINT}>
+        <Card
+          title="Failure types"
+          addon={failure.failedText}
+          right={
+            <span className="flex items-center gap-3">
+              <span className="hidden xl:inline">{FAILURE_TYPES_HINT}</span>
+              <SortFailuresButton triage={triage} runActive={runActive} failed={failedCount} />
+            </span>
+          }
+        >
+          <SuggestedSection triage={triage} failed={failedCount} runActive={runActive} onFilterType={onFilterType} onReview={onReview} />
           {failure.emptyText ? <p className="px-4 py-3 text-[13px] text-[var(--sf-text-2)]">{failure.emptyText}</p> : null}
           {failure.rows.map((row) => {
             const inner = (
