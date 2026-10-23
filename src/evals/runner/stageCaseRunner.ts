@@ -31,6 +31,8 @@ export interface StageCaseRunner {
   cancelAll(evalRunId: string): Promise<void>;
   spend(evalRunId: string): number;
   addSpend(evalRunId: string, usd: number): void;
+  /** Set once the runner wants the whole run stopped (for example repeated provider failures). */
+  stopReason?(evalRunId: string): string | undefined;
 }
 
 type StopReason = "needs_input" | "timeout" | "cancelled";

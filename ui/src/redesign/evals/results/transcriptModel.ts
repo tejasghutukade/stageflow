@@ -201,6 +201,7 @@ export function truncationNotes(subject: ConversationSubject): string[] {
 
 export const ERROR_LABELS: Record<string, string> = {
   EVAL_AGENT_FAILED: "Agent failed",
+  EVAL_AGENT_EMPTY_REPLY: "Empty reply",
   EVAL_AGENT_TIMEOUT: "Timed out",
   EVAL_SIMULATOR_ERROR: "Simulator error",
   EVAL_ENGINE_ERROR: "Engine error",

@@ -341,6 +341,32 @@ describe("EvalRunManager: budget", () => {
   });
 });
 
+describe("EvalRunManager: provider failure stop", () => {
+  it("ends the run failed with the runner's stop reason and cancels the rest", async () => {
+    await writeEval(evalYaml({ maxCost: 10 }));
+    const base = fakeRunner();
+    const reason = "Stopped after 5 consecutive provider failures; check your provider key or rate limit";
+    let failures = 0;
+    const runner: StageCaseRunner = {
+      ...base,
+      async runCase(plan, req) {
+        if (failures >= 2) return { ok: false, code: "EVAL_CANCELLED", message: reason };
+        failures += 1;
+        return { ok: false, code: "EVAL_AGENT_EMPTY_REPLY", message: "empty" };
+      },
+      stopReason: () => (failures >= 2 ? reason : undefined),
+    };
+    const manager = makeManager(fake(), runner);
+    const { evalRunId } = await start(manager);
+    const { run } = await manager.awaitFinished(evalRunId, 10_000);
+    expect(run).toMatchObject({ status: "failed", passed: false, statusReason: reason });
+    const results = await store.listEvalResults(evalRunId);
+    expect(results).toHaveLength(8);
+    expect(results.filter((r) => r.errorCode === "EVAL_AGENT_EMPTY_REPLY").every((r) => r.status === "error")).toBe(true);
+    expect(results.filter((r) => r.status === "cancelled").length).toBeGreaterThan(0);
+  });
+});
+
 describe("EvalRunManager.cancel", () => {
   it("cancels in-flight work and marks undone results cancelled", async () => {
     const runner = fakeRunner({ delayMs: 5_000 });

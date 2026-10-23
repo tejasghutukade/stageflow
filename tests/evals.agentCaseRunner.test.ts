@@ -170,6 +170,34 @@ describe("agentCaseRunner", () => {
     expect(backend.released).toContain(result.subjectRef);
   });
 
+  it("records an empty reply with zero output tokens as EVAL_AGENT_EMPTY_REPLY", async () => {
+    const backend = new FakeAgentBackend([{ text: "  ", usage: { inputTokens: 10, outputTokens: 0, costUsd: 0 } }]);
+    const { fx, host, detail } = await setup(backend);
+    const result = await createAgentCaseRunner({ host: () => host }).runCase(planFor(fx, detail, [scriptCase(["a"])]), req);
+    expect(result).toMatchObject({ ok: false, code: "EVAL_AGENT_EMPTY_REPLY" });
+    if (result.ok) return;
+    expect(result.message).toMatch(/rate limit|provider/i);
+    expect(result.output?.stop_reason).toBe("error");
+  });
+
+  it("stops the run after consecutive provider failures and resets on success", async () => {
+    const empty = { text: "", usage: { inputTokens: 10, outputTokens: 0, costUsd: 0 } };
+    const backend = new FakeAgentBackend([empty, empty, { text: "fine", usage }, empty, empty, empty, empty, empty, { text: "never", usage }]);
+    const { fx, host, detail } = await setup(backend);
+    const runner = createAgentCaseRunner({ host: () => host });
+    const plan = planFor(fx, detail, [scriptCase(["a"])]);
+    const codes: string[] = [];
+    for (let i = 0; i < 9; i++) {
+      const r = await runner.runCase(plan, { ...req, repeatIndex: i });
+      codes.push(r.ok ? "ok" : r.code);
+      if (i < 7) expect(runner.stopReason?.("er_1")).toBeUndefined();
+    }
+    expect(codes.slice(0, 3)).toEqual(["EVAL_AGENT_EMPTY_REPLY", "EVAL_AGENT_EMPTY_REPLY", "ok"]);
+    expect(runner.stopReason?.("er_1")).toMatch(/5 consecutive provider failures/);
+    expect(codes.slice(8)).toEqual(["EVAL_CANCELLED"]);
+    expect(backend.inputs).toHaveLength(8);
+  });
+
   it("maps a backend failure to EVAL_AGENT_FAILED", async () => {
     const backend = new FakeAgentBackend([{ error: new Error("provider body secret") }]);
     const { fx, host, detail } = await setup(backend);

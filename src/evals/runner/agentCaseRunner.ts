@@ -3,6 +3,7 @@ import { createEvalGate, type EvalGate } from "../../agents/evalGate.js";
 import type { AgentHostContext } from "../../agents/hostContext.js";
 import type { AgentSessionDetail } from "../../agents/service.js";
 import type { AgentDefinition } from "../../config/loadAgent.js";
+import { EVAL_MAX_CONSECUTIVE_PROVIDER_FAILURES } from "../constants.js";
 import { buildConversationSubject } from "./conversationSubject.js";
 import {
   createBackendSimulatorModel,
@@ -53,6 +54,8 @@ type EvalRunState = {
   spend: number;
   cancelled: boolean;
   abort: AbortController;
+  providerFailures: number;
+  stopReason?: string;
 };
 
 type CaseEnd =
@@ -103,6 +106,11 @@ function sumTurns(detail: AgentSessionDetail): { costUsd: number; tokensIn: numb
   return { costUsd, tokensIn, tokensOut, modelCalls: modelSpans > 0 ? modelSpans : detail.turns.length };
 }
 
+function isEmptyReply(detail: AgentSessionDetail, turn: AgentSessionDetail["turns"][number]): boolean {
+  if ((turn.outputTokens ?? 0) > 0) return false;
+  return !detail.messages.some((m) => m.turnId === turn.id && m.role === "assistant" && m.text.trim() !== "");
+}
+
 function errorText(error: unknown): string {
   if (isAgentError(error)) return error.message === error.code ? error.code : `${error.code}: ${error.message}`;
   return "agent.backend_failed";
@@ -117,7 +125,7 @@ export function createAgentCaseRunner(deps: AgentCaseRunnerDeps): StageCaseRunne
   const stateFor = (evalRunId: string): EvalRunState => {
     let state = states.get(evalRunId);
     if (state === undefined) {
-      state = { active: new Map(), spend: 0, cancelled: false, abort: new AbortController() };
+      state = { active: new Map(), spend: 0, cancelled: false, abort: new AbortController(), providerFailures: 0 };
       states.set(evalRunId, state);
     }
     return state;
@@ -137,6 +145,20 @@ export function createAgentCaseRunner(deps: AgentCaseRunnerDeps): StageCaseRunne
   }
 
   async function runCase(plan: EvalPlan, req: RunCaseRequest): Promise<RunCaseResult> {
+    const state = stateFor(req.evalRunId);
+    if (state.stopReason !== undefined) return failure("EVAL_CANCELLED", state.stopReason);
+    const result = await runCaseInner(plan, req);
+    if (result.ok) state.providerFailures = 0;
+    else if (result.code === "EVAL_AGENT_EMPTY_REPLY" || result.code === "EVAL_AGENT_FAILED") {
+      state.providerFailures += 1;
+      if (state.providerFailures >= EVAL_MAX_CONSECUTIVE_PROVIDER_FAILURES && state.stopReason === undefined) {
+        state.stopReason = `Stopped after ${EVAL_MAX_CONSECUTIVE_PROVIDER_FAILURES} consecutive provider failures; check your provider key or rate limit`;
+      }
+    }
+    return result;
+  }
+
+  async function runCaseInner(plan: EvalPlan, req: RunCaseRequest): Promise<RunCaseResult> {
     const state = stateFor(req.evalRunId);
     if (state.cancelled) return failure("EVAL_CANCELLED", "Eval run was cancelled");
     if (state.spend >= plan.maxCostUsd) {
@@ -295,6 +317,14 @@ export function createAgentCaseRunner(deps: AgentCaseRunnerDeps): StageCaseRunne
         if (latest !== undefined && latest.status !== "succeeded") {
           return { kind: "failed", code: "EVAL_AGENT_FAILED", message: latest.errorCode ?? "agent.backend_failed", stopReason: "error" };
         }
+        if (latest !== undefined && isEmptyReply(detail, latest)) {
+          return {
+            kind: "failed",
+            code: "EVAL_AGENT_EMPTY_REPLY",
+            message: "The agent returned an empty reply with no output tokens. The model provider may be rate limiting or failing; check your provider key and limits",
+            stopReason: "error",
+          };
+        }
         transcript.splice(0, transcript.length, ...detail.messages.map((m) => ({ role: m.role, text: m.text })));
         if (step.endAfter !== undefined) return { kind: "done", stopReason: step.endAfter };
       }
@@ -409,6 +439,7 @@ export function createAgentCaseRunner(deps: AgentCaseRunnerDeps): StageCaseRunne
       );
     },
     spend: (evalRunId) => states.get(evalRunId)?.spend ?? 0,
+    stopReason: (evalRunId) => states.get(evalRunId)?.stopReason,
     addSpend(evalRunId, usd) {
       stateFor(evalRunId).spend += usd;
     },

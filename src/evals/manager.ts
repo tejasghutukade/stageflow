@@ -185,6 +185,7 @@ type Live = {
   persistError?: unknown;
   cancelRequested: boolean;
   skippedBudget: boolean;
+  providerStop?: string;
   resultsDone: number;
   finished: Promise<EvalRunRow>;
 };
@@ -209,6 +210,7 @@ const RESULT_STATUS_BY_CODE: Record<RunCaseFailureCode, EvalResultStatus> = {
   EVAL_CANCELLED: "cancelled",
   EVAL_ENGINE_ERROR: "error",
   EVAL_AGENT_FAILED: "stage_failed",
+  EVAL_AGENT_EMPTY_REPLY: "error",
   EVAL_AGENT_TIMEOUT: "stage_failed",
   EVAL_SIMULATOR_ERROR: "error",
 };
@@ -506,6 +508,12 @@ export class EvalRunManager {
     live.phases.delete(k);
     const input = this.resultInput(live.plan, result);
     if (input.status === "skipped_budget") live.skippedBudget = true;
+    const stopReason = this.runner.stopReason?.(live.evalRunId);
+    if (stopReason !== undefined && live.providerStop === undefined && !live.cancelRequested) {
+      live.providerStop = stopReason;
+      live.abort.abort();
+      void this.runner.cancelAll(live.evalRunId).catch(() => undefined);
+    }
     live.writes = live.writes.then(async () => {
       if (live.persistError !== undefined) return;
       try {
@@ -636,12 +644,12 @@ export class EvalRunManager {
     };
   }
 
-  private async fillRemainder(live: Live, kind: "cancelled" | "skipped_budget" | "error"): Promise<void> {
+  private async fillRemainder(live: Live, kind: "cancelled" | "skipped_budget" | "error", message?: string): Promise<void> {
     const { plan } = live;
     const finishedAt = this.now().toISOString();
     const detail =
       kind === "cancelled"
-        ? { errorCode: "EVAL_CANCELLED", errorMessage: "Eval run was cancelled" }
+        ? { errorCode: "EVAL_CANCELLED", errorMessage: message ?? "Eval run was cancelled" }
         : kind === "skipped_budget"
           ? { errorCode: "EVAL_BUDGET_EXCEEDED", errorMessage: `Eval spend reached the $${plan.maxCostUsd} limit` }
           : { errorCode: "EVAL_ENGINE_ERROR", errorMessage: "Engine finished without a result for this case" };
@@ -676,6 +684,10 @@ export class EvalRunManager {
     } else if (crashed) {
       status = "failed";
       reason = safeMessage(crash);
+    } else if (live.providerStop !== undefined && !live.cancelRequested) {
+      status = "failed";
+      reason = live.providerStop;
+      await this.fillRemainder(live, "cancelled", live.providerStop);
     } else if (live.cancelRequested) {
       status = "cancelled";
       reason = "Cancelled";

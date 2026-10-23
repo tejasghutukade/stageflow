@@ -1,3 +1,6 @@
+/** Consecutive empty-reply or backend-failed agent cases after which a run stops early. */
+export const EVAL_MAX_CONSECUTIVE_PROVIDER_FAILURES = 5;
+
 export const EVAL_RUN_STATUSES = [
   "queued",
   "running",
@@ -51,6 +54,7 @@ export const EVAL_RESULT_ERROR_CODES = [
   "EVAL_GRADER_CODE_ERROR",
   "EVAL_CASE_MISSING_EXPECTED",
   "EVAL_AGENT_FAILED",
+  "EVAL_AGENT_EMPTY_REPLY",
   "EVAL_AGENT_TIMEOUT",
   "EVAL_SIMULATOR_ERROR",
   "EVAL_GRADER_NOT_APPLICABLE",

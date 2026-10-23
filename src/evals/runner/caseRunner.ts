@@ -17,5 +17,6 @@ export function createEvalCaseRunner(deps: { stage: StageCaseRunner; agent: Stag
     },
     spend: (evalRunId) => deps.stage.spend(evalRunId) + deps.agent.spend(evalRunId),
     addSpend: (evalRunId, usd) => runnerOf(evalRunId).addSpend(evalRunId, usd),
+    stopReason: (evalRunId) => runnerOf(evalRunId).stopReason?.(evalRunId),
   };
 }
