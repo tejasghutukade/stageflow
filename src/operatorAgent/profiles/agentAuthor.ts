@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { parse as parseYaml } from "yaml";
 import {
   agentAuthorContextAdapter,
   emptyAgentAuthorDraft,
@@ -17,6 +18,11 @@ import type {
   OperatorAgentToolContext,
 } from "../types.js";
 import { AGENT_AUTHOR_PLAYBOOK } from "./agentAuthorPlaybook.js";
+import { authorReadRefusal } from "./authorReadable.js";
+import { connectionsFilePath } from "../../channels/registry.js";
+import { loadConnectionsFile } from "../../channels/config.js";
+import { listSkills } from "../../config/listSkills.js";
+import { globalStageflowHome } from "../../project/globalHome.js";
 
 export const AGENT_AUTHOR_PROFILE_ID = "agent-author";
 
@@ -57,6 +63,58 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function coercePlainObject(value: unknown): Record<string, unknown> | null {
+  if (isPlainObject(value)) return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (isPlainObject(parsed)) return parsed;
+  } catch {
+    /* not JSON */
+  }
+  try {
+    const parsed = parseYaml(trimmed) as unknown;
+    if (isPlainObject(parsed)) return parsed;
+  } catch {
+    /* not YAML */
+  }
+  return null;
+}
+
+export function formatAgentAuthorTurnPrompt(
+  message: string,
+  contextSnapshot: unknown,
+): string {
+  const draft = readAgentAuthorDraft(contextSnapshot);
+  const draftJson = JSON.stringify(draft, null, 2);
+  return [
+    "Current agent draft JSON. Ask until the job is clear. Call update_agent_draft only when you draft or revise; do not reply with YAML instead:",
+    draftJson,
+    "",
+    "Operator message:",
+    message.trim(),
+  ].join("\n");
+}
+
+export function agentAuthorBridgeHint(toolNames: readonly string[]): string {
+  return [
+    "Agent author: a thin first request is not a spec. Ask what you still need, or offer one suggestion when the answer is vague. Do not call update_agent_draft until they confirm the job or tell you to go ahead.",
+    "When you do change the draft, call update_agent_draft before you finish. Chat YAML does not update the panel.",
+    "You may read only docs/, policies/, AGENTS.md, and README.md. Do not grant a connection, MCP server, or skill that list_author_catalog or list_mcp_servers did not return. Do not set tools.browser.",
+    `Tools: ${toolNames.join(", ")}`,
+  ].join("\n");
+}
+
+function patchFromToolArgs(args: Record<string, unknown>): Record<string, unknown> | null {
+  const patch = coercePlainObject(args.patch);
+  if (patch) return patch;
+  const { summary: _summary, patch: _patch, ...rest } = args;
+  if (Object.keys(rest).length === 0) return null;
+  return coercePlainObject(rest) ?? (isPlainObject(rest) ? rest : null);
+}
+
 /** Objects merge key by key; arrays and scalars replace; `null` removes the key. */
 export function mergeDraftPatch(draft: AgentAuthorDraft, patch: Record<string, unknown>): AgentAuthorDraft {
   const next: AgentAuthorDraft = structuredClone(draft);
@@ -91,6 +149,8 @@ const readProjectFile: OperatorAgentTool = {
     if (!rel) return { ok: false, content: null, error: "path is required" };
     const rejected = rejectEscape(root, rel);
     if (rejected) return { ok: false, content: null, error: rejected };
+    const docsOnly = authorReadRefusal(rel);
+    if (docsOnly) return { ok: false, content: null, error: docsOnly };
     try {
       const bytes = await readFile(path.resolve(root, rel));
       if (bytes.includes(0)) return { ok: false, content: null, error: "file is not text" };
@@ -111,26 +171,55 @@ const readProjectFile: OperatorAgentTool = {
 const listProjectFiles: OperatorAgentTool = {
   name: "list_project_files",
   description:
-    "List readable project files: AGENTS.md when present, and YAML files under agents/. Does not write.",
+    "List documentation the author may read: docs/ and policies/ (.md and .txt), plus AGENTS.md and README.md at the project root. Does not list source code.",
   async handler(_args, ctx) {
     const root = projectRootOf(ctx);
     if (!root) return { ok: false, content: null, error: "project root is not set" };
     const files: string[] = [];
-    try {
-      await readFile(path.join(root, "AGENTS.md"));
-      files.push("AGENTS.md");
-    } catch {
-      /* absent */
-    }
-    try {
-      const entries = await readdir(path.join(root, "agents"), { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isFile() && /\.ya?ml$/i.test(entry.name)) files.push(`agents/${entry.name}`);
+    for (const name of ["AGENTS.md", "README.md"]) {
+      try {
+        await readFile(path.join(root, name));
+        files.push(name);
+      } catch {
+        /* absent */
       }
-    } catch {
-      /* no agents dir */
     }
+    async function walk(rel: string): Promise<void> {
+      let entries;
+      try {
+        entries = await readdir(path.join(root!, rel), { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+        const child = `${rel}/${entry.name}`;
+        if (entry.isDirectory()) await walk(child);
+        else if (!authorReadRefusal(child)) files.push(child);
+      }
+    }
+    await walk("docs");
+    await walk("policies");
+    files.sort();
     return { ok: true, content: { files } };
+  },
+};
+
+const readAgentDraft: OperatorAgentTool = {
+  name: "read_agent_draft",
+  description:
+    "Read the current unsaved agent draft (agents/<id>.agent.yaml shape). Use before update_agent_draft when you need the latest fields.",
+  handler(_args, ctx) {
+    const draft = readAgentAuthorDraft(ctx.getContext());
+    const context = ctx.getContext();
+    const projectRoot = isAgentAuthorContext(context) ? context.projectRoot : undefined;
+    return {
+      ok: true,
+      content: {
+        ...(projectRoot ? { projectRoot } : {}),
+        draft,
+      },
+    };
   },
 };
 
@@ -145,6 +234,31 @@ const listMcpServers: OperatorAgentTool = {
   },
 };
 
+const listAuthorCatalog: OperatorAgentTool = {
+  name: "list_author_catalog",
+  description:
+    "List host connections (id and provider only) and installed skill names. No secrets. Use these ids in channel.connection_id and tools.skills. If a name is not listed, do not grant it.",
+  async handler(_args, ctx) {
+    const root = projectRootOf(ctx);
+    if (!root) return { ok: false, content: null, error: "project root is not set" };
+    let connections: Array<{ id: string; provider: string }> = [];
+    try {
+      const loaded = loadConnectionsFile(connectionsFilePath(root));
+      connections = loaded.connections.map((entry) => ({ id: entry.id, provider: entry.provider }));
+    } catch {
+      connections = [];
+    }
+    let skills: string[] = [];
+    try {
+      const catalog = await listSkills({ cwd: root, agentDir: path.join(globalStageflowHome(), "workshop", "agent") });
+      skills = catalog.skills.map((skill) => skill.name);
+    } catch {
+      skills = [];
+    }
+    return { ok: true, content: { connections, skills } };
+  },
+};
+
 const updateAgentDraft: OperatorAgentTool = {
   name: "update_agent_draft",
   description: [
@@ -153,8 +267,8 @@ const updateAgentDraft: OperatorAgentTool = {
     "The result lists validation issues; fix them in a follow-up patch. Does not write YAML.",
   ].join(" "),
   handler(args, ctx) {
-    const patch = args.patch;
-    if (!isPlainObject(patch)) return { ok: false, content: null, error: "patch must be an object" };
+    const patch = patchFromToolArgs(args);
+    if (!patch) return { ok: false, content: null, error: "patch must be an object (JSON or YAML)" };
     const currentContext = ctx.getContext();
     const current = readAgentAuthorDraft(currentContext);
     const next = mergeDraftPatch(current, patch);
@@ -184,15 +298,22 @@ const updateAgentDraft: OperatorAgentTool = {
   },
 };
 
-export const AGENT_AUTHOR_TOOL_NAMES = ["read_project_file", "list_project_files", "list_mcp_servers", "update_agent_draft"] as const;
+export const AGENT_AUTHOR_TOOL_NAMES = [
+  "read_agent_draft",
+  "read_project_file",
+  "list_project_files",
+  "list_mcp_servers",
+  "list_author_catalog",
+  "update_agent_draft",
+] as const;
 
 export function createAgentAuthorProfile(): OperatorAgentProfile {
   return {
     id: AGENT_AUTHOR_PROFILE_ID,
     title: "Agent author",
     playbook: AGENT_AUTHOR_PLAYBOOK,
-    greeting: "What should this agent do?",
-    tools: [readProjectFile, listProjectFiles, listMcpServers, updateAgentDraft],
+    greeting: "Who is this agent for, and what does a good result look like? I'll ask a few questions before I fill the config.",
+    tools: [readAgentDraft, readProjectFile, listProjectFiles, listMcpServers, listAuthorCatalog, updateAgentDraft],
     contextAdapter: agentAuthorContextAdapter(),
   };
 }

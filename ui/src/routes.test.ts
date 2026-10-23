@@ -225,6 +225,10 @@ describe("agent routes", () => {
     expect(parseHash(`#${agentsPath()}`)).toEqual({ name: "agents" });
     expect(parseHash(`#${agentSessionsPath()}`)).toEqual({ name: "agentSessions" });
     expect(parseHash(`#${agentCreatePath()}`)).toEqual({ name: "agentCreate" });
+    expect(parseHash(`#${agentCreatePath({ session: "draft-1" })}`)).toEqual({
+      name: "agentCreate",
+      authorSessionId: "draft-1",
+    });
   });
 
   it("opens detail, edit, and a missing agent id", () => {

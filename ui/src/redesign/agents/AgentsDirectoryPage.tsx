@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { LuChevronRight, LuClock, LuCopy, LuGlobe, LuMessageSquare, LuCircle, LuPlus, LuSearch, LuTriangleAlert } from "react-icons/lu";
-import { agentsApi, type AgentSummary } from "../../api/agents";
-import { agentPath } from "../../routes";
+import { agentsApi, listAuthorDrafts, type AgentSummary } from "../../api/agents";
+import { agentCreatePath, agentPath } from "../../routes";
 import { loadChannelMeta } from "../connections/channelMeta";
 import { fetchChannelConnections } from "../../api";
 import {
@@ -254,8 +254,55 @@ function DirectoryRowView({
   );
 }
 
+function draftWhen(iso: string): string {
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return "";
+  const minutes = Math.max(0, Math.round((Date.now() - then) / 60000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+function DraftsSection({
+  drafts,
+}: {
+  drafts: Array<{ id: string; name: string; updatedAt: string; messages: number }>;
+}) {
+  if (drafts.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-2" data-testid="agent-drafts">
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="text-[13px] font-medium leading-normal text-[var(--sf-text-1)]">Drafts</h2>
+        <span className="text-xs text-[var(--sf-text-3)]">Not saved to the project yet</span>
+      </div>
+      <div className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
+        {drafts.map((draft) => (
+          <a
+            key={draft.id}
+            href={`#${agentCreatePath({ session: draft.id })}`}
+            className="flex items-center gap-3 border-b border-b-[var(--sf-hairline)] px-4 py-3 last:border-b-0 hover:bg-[var(--sf-panel)]"
+          >
+            <LuCircle aria-hidden className="size-3 shrink-0 text-[var(--sf-text-3)]" />
+            <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--sf-text-1)]">{draft.name}</span>
+            <span className={`text-xs text-[var(--sf-text-3)] ${NOWRAP}`}>
+              {draft.messages > 0 ? `${draft.messages} message${draft.messages === 1 ? "" : "s"}` : "Config only"}
+              {" · "}
+              {draftWhen(draft.updatedAt)}
+            </span>
+            <LuChevronRight aria-hidden className="size-3.5 shrink-0 text-[var(--sf-text-3)]" />
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function AgentsDirectoryPage({ onNewAgent }: { onNewAgent: () => void }) {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
+  const [drafts, setDrafts] = useState<Array<{ id: string; name: string; updatedAt: string; messages: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -269,9 +316,14 @@ export function AgentsDirectoryPage({ onNewAgent }: { onNewAgent: () => void }) 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, approvals] = await Promise.all([agentsApi.list(), agentsApi.pendingApprovals().catch(() => [])]);
+      const [list, approvals, authorDrafts] = await Promise.all([
+        agentsApi.list(),
+        agentsApi.pendingApprovals().catch(() => []),
+        listAuthorDrafts().catch(() => ({ drafts: [] })),
+      ]);
       setAgents(list);
       setPending(approvals.length);
+      setDrafts(authorDrafts.drafts);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -348,6 +400,8 @@ export function AgentsDirectoryPage({ onNewAgent }: { onNewAgent: () => void }) 
         <p className="text-[13px] leading-normal text-[var(--sf-text-2)]">
           Agents defined in this project. Each one runs sealed, with only the tools and approvals you give it.
         </p>
+
+        <DraftsSection drafts={drafts} />
 
         {pending > 0 ? (
           <div

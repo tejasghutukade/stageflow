@@ -12,7 +12,7 @@ export const PROFILE_GRANTS: Readonly<Record<string, { prefix: string; tools: re
   },
   "agent-author": {
     prefix: "agent_author.",
-    tools: ["read_project_file", "list_project_files", "list_mcp_servers", "update_agent_draft"],
+    tools: ["read_agent_draft", "read_project_file", "list_project_files", "list_mcp_servers", "list_author_catalog", "update_agent_draft"],
   },
 };
 

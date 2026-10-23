@@ -535,7 +535,12 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
       try {
         if (await liveView.handle(req, res)) return true;
 
-        if (pathname === "/api/agent-author/chat" || pathname === "/api/agent-author/undo") {
+        if (
+          pathname === "/api/agent-author/chat" ||
+          pathname === "/api/agent-author/undo" ||
+          pathname === "/api/agent-author/sessions" ||
+          pathname.startsWith("/api/agent-author/sessions/")
+        ) {
           if (await handleAgentAuthorRoutes(req, method, pathname, cwd, operatorHost, res, json)) return true;
         }
         if (PublicWebChat.owns(pathname)) {

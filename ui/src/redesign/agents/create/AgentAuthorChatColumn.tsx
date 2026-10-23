@@ -1,6 +1,8 @@
-import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { LuArrowUp, LuCheck, LuCpu, LuRotateCcw } from "react-icons/lu";
 import { AgentApiError, sendAgentAuthorTurn, undoAgentAuthorTurn, type AgentDefinition } from "../../../api/agents";
+import { fetchSettings } from "../../../api/client";
+import { ModelPicker } from "../../../components/ModelPicker";
 import { completeDefinition } from "../model/definition";
 
 type ChatMessage =
@@ -8,7 +10,21 @@ type ChatMessage =
   | { id: string; role: "assistant"; text: string; changes?: Array<{ label: string; value: string }>; failed?: boolean };
 
 const GREETING =
-  "What should this agent do? Tell me the job, the tools it needs, and anything it must never do without asking.";
+  "Who is this agent for, and what does a good result look like? I'll ask a few questions before I fill the config.";
+
+export function authorMessagesFromTranscript(
+  transcript: Array<{ id: string; role: "user" | "assistant"; text: string; summaryLines?: Array<{ label: string; value: string }> }>,
+): ChatMessage[] {
+  return [
+    { id: "greeting", role: "assistant", text: GREETING },
+    ...transcript.map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      ...(message.summaryLines && message.summaryLines.length > 0 ? { changes: message.summaryLines } : {}),
+    })),
+  ];
+}
 
 function ChangeCard({
   changes,
@@ -64,16 +80,47 @@ function ChangeCard({
 export function AgentAuthorChatColumn({
   definition,
   onDefinitionChange,
+  sessionId,
+  initialMessages,
+  initialModel,
+  onSessionId,
 }: {
   definition: AgentDefinition;
   onDefinitionChange: (next: AgentDefinition, source: "author") => void;
+  sessionId?: string;
+  initialMessages?: ChatMessage[];
+  initialModel?: string;
+  onSessionId?: (sessionId: string) => void;
 }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([{ id: "greeting", role: "assistant", text: GREETING }]);
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? [{ id: "greeting", role: "assistant", text: GREETING }]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [chatModel, setChatModel] = useState(initialModel ?? "");
+  const [defaultModel, setDefaultModel] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const sessionRef = useRef<string | undefined>(undefined);
+  const sessionRef = useRef<string | undefined>(sessionId);
+  const modelRef = useRef(initialModel ?? "");
+  modelRef.current = chatModel;
+
+  useEffect(() => {
+    if (sessionId) sessionRef.current = sessionId;
+  }, [sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        const next = settings.defaultModel?.trim() ?? "";
+        setDefaultModel(next || null);
+        setChatModel((current) => current || next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function append(message: ChatMessage) {
     setMessages((prev) => [...prev, message]);
@@ -93,8 +140,10 @@ export function AgentAuthorChatColumn({
         message: text,
         ...(sessionRef.current ? { sessionId: sessionRef.current } : {}),
         draft: definition,
+        ...(modelRef.current ? { model: modelRef.current } : {}),
       });
       sessionRef.current = result.sessionId;
+      onSessionId?.(result.sessionId);
       const id = `a-${Date.now()}`;
       if (result.summaryLines.length > 0) {
         onDefinitionChange(completeDefinition(result.draft), "author");
@@ -195,7 +244,19 @@ export function AgentAuthorChatColumn({
             aria-label="Message the agent author"
             className="w-full resize-none border-0 bg-transparent p-0 text-[13px] leading-normal text-[var(--sf-text-1)] outline-none placeholder:text-[var(--sf-text-3)]"
           />
-          <div className="flex items-center justify-end">
+          <div className="flex items-center gap-1.5">
+            <ModelPicker
+              variant="chip"
+              placement="up"
+              ariaLabel="Agent author model"
+              value={chatModel || null}
+              defaultModel={defaultModel}
+              onChange={(next) => next && setChatModel(next)}
+            />
+            {chatModel && chatModel === defaultModel ? (
+              <span className="whitespace-nowrap text-[11px] leading-normal text-[var(--sf-text-3)]">Default</span>
+            ) : null}
+            <span className="flex-1" />
             <button
               type="submit"
               aria-label="Send"

@@ -90,6 +90,12 @@ describe("POST /api/agent-author/chat", () => {
       { label: "Approvals", value: "asks before slack.post_message" },
     ]);
 
+    const stored = await fetch(`${base}/api/agent-author/sessions/${body.sessionId}`, { headers });
+    const record = (await stored.json()) as { draft: { name?: string }; transcript: unknown[] };
+    expect(stored.status).toBe(200);
+    expect(record.draft.name).toBe("Research assistant");
+    expect(record.transcript).toHaveLength(2);
+
     const undo = await fetch(`${base}/api/agent-author/undo`, {
       method: "POST",
       headers,

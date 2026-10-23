@@ -38,7 +38,12 @@ import {
   type OperatorAgentModel,
   type OperatorAgentModelTurn,
 } from "./host.js";
-import { createAgentAuthorProfile } from "./profiles/agentAuthor.js";
+import {
+  AGENT_AUTHOR_PROFILE_ID,
+  agentAuthorBridgeHint,
+  createAgentAuthorProfile,
+  formatAgentAuthorTurnPrompt,
+} from "./profiles/agentAuthor.js";
 import {
   createWorkshopAuthorProfile,
   type WorkshopAuthorProfileOptions,
@@ -651,7 +656,7 @@ export function createPiOperatorAgentModel(
       state.replayed = true;
     },
 
-    async complete({ profile, message, tools, onDelta, onActivity, modelId }) {
+    async complete({ profile, message, contextSnapshot, tools, onDelta, onActivity, modelId }) {
       let state: BoundPiState;
       try {
         state = await ensureBound(profile, tools, modelId);
@@ -696,14 +701,17 @@ export function createPiOperatorAgentModel(
         }
       });
 
+      const toolNames = profile.tools.map((tool) => tool.name);
+      let prompt = message;
+      if (profile.id === AGENT_AUTHOR_PROFILE_ID) {
+        prompt = formatAgentAuthorTurnPrompt(message, contextSnapshot);
+        prompt = `${prompt}\n\n${agentAuthorBridgeHint(toolNames)}`;
+      } else {
+        prompt = cursorBridgePrompt(prompt, modelId, toolNames);
+      }
+
       try {
-        await state.handle.session.prompt(
-          cursorBridgePrompt(
-            message,
-            modelId,
-            profile.tools.map((tool) => tool.name),
-          ),
-        );
+        await state.handle.session.prompt(prompt);
       } catch (err) {
         unsubscribe();
         const msg = err instanceof Error ? err.message : String(err);

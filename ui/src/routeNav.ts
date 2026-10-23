@@ -46,7 +46,13 @@ export function railActiveId(route: Route, redesignOn: boolean): string {
   return RAIL_ID[route.name] ?? (redesignOn ? REDESIGN_RAIL_ID : LEGACY_RAIL_ID)[route.name] ?? route.name;
 }
 
-export type AgentsRouteProps = { screen: AgentsScreen; agentId?: string; sessionId?: string; runId?: string };
+export type AgentsRouteProps = {
+  screen: AgentsScreen;
+  agentId?: string;
+  sessionId?: string;
+  runId?: string;
+  authorSessionId?: string;
+};
 
 /** Props for the Agents area when `route` belongs to it (every agent route except the sessions list), else null. */
 export function agentsRouteProps(route: Route): AgentsRouteProps | null {
@@ -54,7 +60,7 @@ export function agentsRouteProps(route: Route): AgentsRouteProps | null {
     case "agents":
       return { screen: "directory" };
     case "agentCreate":
-      return { screen: "create" };
+      return { screen: "create", ...(route.authorSessionId ? { authorSessionId: route.authorSessionId } : {}) };
     case "agent":
       return { screen: route.screen, agentId: route.agentId };
     case "agentSession":

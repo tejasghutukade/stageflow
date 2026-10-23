@@ -1,21 +1,28 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LuCheck, LuCircle, LuCode, LuTriangleAlert } from "react-icons/lu";
-import { AgentApiError, agentsApi, type AgentDefinition, type AgentIssue } from "../../../api/agents";
-import { agentPath, agentsPath, navigate } from "../../../routes";
+import { AgentApiError, agentsApi, createAuthorSession, getAuthorSession, saveAuthorDraft, type AgentDefinition, type AgentIssue } from "../../../api/agents";
+import { agentCreatePath, agentPath, agentsPath, navigate } from "../../../routes";
 import { NOWRAP, PAGE_BG } from "../agentsTokens";
 import { AgentDefinitionForm, CREATE_SECTIONS } from "../config/AgentDefinitionForm";
 import { YamlDialog } from "../editor/Dialogs";
 import { useSectionSpy } from "../editor/useSectionSpy";
-import { newAgentDefinition } from "../model/definition";
+import { completeDefinition, newAgentDefinition } from "../model/definition";
 import { useDefinitionValidation, useEditorOptions } from "../model/hooks";
 import { markAgentCreated } from "../useAgent";
 import { Button, PageFooter } from "../ui"
 import { PageHeader } from "../../shell/PageHeader";;
-import { AgentAuthorChatColumn } from "./AgentAuthorChatColumn";
+import { AgentAuthorChatColumn, authorMessagesFromTranscript } from "./AgentAuthorChatColumn";
 
-export function AgentCreatePage() {
+export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string }) {
+  const openedWith = useRef(authorSessionId);
+  const sessionRef = useRef<string | undefined>(authorSessionId);
+  const [sessionId, setSessionId] = useState<string | undefined>(authorSessionId);
   const [definition, setDefinition] = useState<AgentDefinition>(newAgentDefinition);
   const [authorWroteInstructions, setAuthorWroteInstructions] = useState(false);
+  const [boot, setBoot] = useState<"loading" | "ready">(authorSessionId ? "loading" : "ready");
+  const [seedMessages, setSeedMessages] = useState<ReturnType<typeof authorMessagesFromTranscript> | undefined>(undefined);
+  const [seedModel, setSeedModel] = useState<string | undefined>(undefined);
+  const skipSave = useRef(Boolean(authorSessionId));
   const [saving, setSaving] = useState(false);
   const [saveIssues, setSaveIssues] = useState<AgentIssue[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -24,6 +31,68 @@ export function AgentCreatePage() {
   const options = useEditorOptions();
   const validation = useDefinitionValidation(definition);
   const spy = useSectionSpy(CREATE_SECTIONS);
+
+  useEffect(() => {
+    const id = openedWith.current;
+    if (!id) return;
+    let cancelled = false;
+    void getAuthorSession(id)
+      .then((record) => {
+        if (cancelled) return;
+        const next = completeDefinition(record.draft);
+        setDefinition(next);
+        setAuthorWroteInstructions(Boolean(next.instructions.trim()));
+        setSeedMessages(authorMessagesFromTranscript(record.transcript));
+        if (record.model) setSeedModel(record.model);
+        setSessionId(record.id);
+        sessionRef.current = record.id;
+        setBoot("ready");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        sessionRef.current = undefined;
+        setSessionId(undefined);
+        navigate(agentCreatePath());
+        setBoot("ready");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (boot !== "ready") return;
+    if (skipSave.current) {
+      skipSave.current = false;
+      return;
+    }
+    const id = sessionRef.current;
+    if (!id) return;
+    const draft = definition;
+    const timer = setTimeout(() => {
+      void saveAuthorDraft(id, draft).catch(() => undefined);
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      void saveAuthorDraft(id, draft).catch(() => undefined);
+    };
+  }, [definition, boot]);
+
+  async function ensureSession(draft: AgentDefinition): Promise<string> {
+    if (sessionRef.current) return sessionRef.current;
+    const created = await createAuthorSession(draft);
+    sessionRef.current = created.id;
+    setSessionId(created.id);
+    navigate(agentCreatePath({ session: created.id }));
+    return created.id;
+  }
+
+  function rememberSession(id: string) {
+    if (sessionRef.current === id) return;
+    sessionRef.current = id;
+    setSessionId(id);
+    navigate(agentCreatePath({ session: id }));
+  }
 
   const allIssues = validation.pending && saveIssues.length > 0 ? saveIssues : validation.issues;
   // Empty required fields aren't errors until the operator tries to save.
@@ -36,6 +105,7 @@ export function AgentCreatePage() {
     setSaveError(null);
     if (next.instructions !== definition.instructions) setAuthorWroteInstructions(false);
     setDefinition(next);
+    void ensureSession(next);
   }
 
   function onAuthorChange(next: AgentDefinition) {
@@ -107,7 +177,18 @@ export function AgentCreatePage() {
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div className="flex min-h-[420px] w-full min-w-0 flex-col border-b border-b-[var(--sf-hairline)] lg:w-[400px] lg:shrink-0 lg:border-b-0 lg:border-r lg:border-r-[var(--sf-hairline)]">
-          <AgentAuthorChatColumn definition={definition} onDefinitionChange={onAuthorChange} />
+          {boot === "loading" ? (
+            <p className="px-5 py-4 text-[13px] text-[var(--sf-text-3)]">Loading draft…</p>
+          ) : (
+            <AgentAuthorChatColumn
+              definition={definition}
+              onDefinitionChange={onAuthorChange}
+              sessionId={sessionId}
+              initialMessages={seedMessages}
+              initialModel={seedModel}
+              onSessionId={rememberSession}
+            />
+          )}
         </div>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex h-11 shrink-0 items-center justify-between gap-4 border-b border-b-[var(--sf-hairline)] px-7">

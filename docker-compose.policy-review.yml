@@ -1,0 +1,24 @@
+services:
+  stageflow:
+    user: "10001:10001"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/tejasghutukade/stageflow:local
+    depends_on:
+      stageflow-bash:
+        condition: service_completed_successfully
+    ports: !override
+      - "127.0.0.1:3849:3847"
+    environment: !override
+      STAGEFLOW_HOME: /data
+      STAGEFLOW_CREDENTIAL_HOME: /data
+      TMPDIR: /data/tmp
+      STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND: "1"
+      STAGEFLOW_MIN_FREE_DISK_BYTES: "1073741824"
+      STAGEFLOW_PROVIDER_OPENROUTER_API_KEY: ${STAGEFLOW_PROVIDER_OPENROUTER_API_KEY:-${OPENROUTER_API_KEY:-}}
+      STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY: ${STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY:-}
+      STAGEFLOW_ENSURE_PROJECT_ROOTS: /catalog/document-policy-review
+    volumes: !override
+      - stageflow-data:/data
+      - ./examples/document-policy-review:/catalog/document-policy-review:ro
