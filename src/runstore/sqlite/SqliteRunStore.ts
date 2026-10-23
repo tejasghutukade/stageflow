@@ -70,6 +70,9 @@ import {
 } from "../workspaceLayout.js";
 import { importDiskRunsIfEmpty } from "./migrateFromDisk.js";
 import * as evalStore from "./evalStore.js";
+import * as suggestionStore from "./suggestionStore.js";
+import type { SuggestionStatus } from "../../evals/triage/constants.js";
+import type { SuggestionInput, SuggestionRow } from "../../evals/triage/types.js";
 import {
   applyPendingMigrations,
   assertSchemaVersion,
@@ -1425,6 +1428,26 @@ export class SqliteRunStore implements RunStore {
   async listEvalSubjectRefs(evalRunId: string, targetKind: EvalTargetKind): Promise<string[]> {
     await this.ready();
     return evalStore.listEvalSubjectRefs(this.db, evalRunId, targetKind);
+  }
+
+  async upsertEvalSuggestions(evalRunId: string, inputs: SuggestionInput[]): Promise<SuggestionRow[]> {
+    await this.ready();
+    return suggestionStore.upsertEvalSuggestions(this.db, evalRunId, inputs);
+  }
+
+  async listEvalSuggestions(evalRunId: string, status?: SuggestionStatus): Promise<SuggestionRow[]> {
+    await this.ready();
+    return suggestionStore.listEvalSuggestions(this.db, evalRunId, status);
+  }
+
+  async dismissEvalSuggestions(evalRunId: string, ids: string[]): Promise<number> {
+    await this.ready();
+    return suggestionStore.dismissEvalSuggestions(this.db, evalRunId, ids);
+  }
+
+  async acceptEvalSuggestions(evalRunId: string, ids: string[]): Promise<{ accepted: number; tagged: number }> {
+    await this.ready();
+    return suggestionStore.acceptEvalSuggestions(this.db, evalRunId, ids);
   }
 
   async deleteEvalRun(evalRunId: string): Promise<string[]> {

@@ -583,6 +583,22 @@ export async function httpCancelEvalRun(
   return status === 200 ? { ok: true, body: body as Record<string, any> } : evalFailure(status, body);
 }
 
+export async function httpSortEvalFailures(
+  base: string,
+  evalRunId: string,
+  input: { classifier?: "auto" | "jev" | "judge"; only_unsorted?: boolean; limit?: number },
+): Promise<HttpEvalResult<Record<string, any>>> {
+  const { status, body } = await postJson(base, `/api/eval-runs/${enc(evalRunId)}/failures/sort`, input);
+  return status === 200 ? { ok: true, body: body as Record<string, any> } : evalFailure(status, body);
+}
+
+export function httpListEvalSuggestions(base: string, evalRunId: string, status?: string) {
+  return evalGet<{ items: Array<Record<string, any>>; summary: Record<string, any> }>(
+    base,
+    `/api/eval-runs/${enc(evalRunId)}/failures/suggestions${evalQuery({ status })}`,
+  );
+}
+
 export function httpListEvalRuns(
   base: string,
   query: { eval_id?: string; project_root?: string; limit?: number; cursor?: string } = {},

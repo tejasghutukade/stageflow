@@ -142,7 +142,10 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   get_eval_results: t("evals.read", "read"),
   get_eval_result: t("evals.read", "read"),
   compare_eval_runs: t("evals.read", "read"),
+  get_eval_failure_suggestions: t("evals.read", "read"),
+  get_eval_failure_sort_status: t("evals.read", "read"),
   run_eval: t("evals.run", "external"),
+  sort_eval_failures: t("evals.run", "external"),
   cancel_eval_run: t("evals.run", "write"),
 };
 

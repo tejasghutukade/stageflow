@@ -277,6 +277,33 @@ The result page has four tabs: **Overview**, **Cases**, **Graders** and **Config
 
 **By grader** shows each grader's pass rate, mean, range, errors and the change against the previous completed run (shown as "grader changed" when the grader's definition changed, because the two are not comparable). The case drawer shows the input, each repeat's output, every grade with its reason, and a **review**: mark the result Pass or Fail, add failure-type tags (tags are only for results that failed) and a one-sentence note. Reviews and tags are stored and summarized in the **Failure types** card. They are for your own triage; nothing uses them to check the judge.
 
+### Sort failures automatically {#sort-failures}
+
+After a run you can ask a small, fast classifier to sort every failed or errored result, so you do not read each transcript. Press **Sort failures** in the console, run `sf eval sort <evalRunId>`, call `POST /api/eval-runs/:id/failures/sort`, or use the MCP tool `sort_eval_failures`. **Sorting is manual only: nothing sorts after a run on its own.**
+
+Each failed result gets a **suggested bucket**, a **suggested failure type** and a confidence:
+
+| Bucket | Meaning | What you do |
+|---|---|---|
+| `agent_wrong` | A careful human would say the target did something wrong | Change the agent or stage |
+| `grader_wrong` | The output was fine, a grader failed it by mistake (false alarm, too literal, judge noise) | Fix the grader |
+| `case_wrong` | The scenario or its expected values are wrong or ambiguous | Fix the dataset |
+| `unclear` | Not enough signal | Read it |
+
+Failure types are fixed lists, not YAML. Agent evals: `missing_tool_call`, `unneeded_tool_call`, `wrong_or_missing_fact`, `policy_violation`, `tone`, `ungrounded_claim`, `off_topic`, `no_handoff`, `other`. Stage evals: `wrong_value`, `missing_field`, `schema_invalid`, `policy_violation`, `ungrounded_claim`, `tone`, `other`. For each failing `code` or `rubric` grader the classifier also gives the probability that its failure is a **false alarm**.
+
+**Suggestions, not tags.** Nothing is tagged until you accept. Accepting writes the failure type as the usual failure-type tag and a `bucket:<bucket>` tag through the same path as a hand review, then marks the suggestion accepted; dismissing hides it. A suggestion with a bucket confidence below 70% or the bucket `unclear` is **low confidence** and is left out of bulk accept (`accept` with no `ids` takes pending suggestions at or above `min_confidence`, default 0.7). Sorting again replaces pending suggestions and keeps accepted and dismissed ones; by default (`only_unsorted`) results that already have a suggestion are skipped.
+
+**Classifiers.** `classifier` is `auto`, `jev` or `judge`.
+
+- `jev` calls TypeSafe **Jev** (System One) at `POST https://api.typesafe.ai/v1/systemone` with the pinned model `jev-1.13.0`, which is recorded on every suggestion. Cost is about $0.04 per million input tokens; one request per result takes about half a second. It never explains itself and always picks an answer, which is why `unclear` is an explicit choice and the confidence decides what you trust. Sorting cost is tracked separately as `triage_cost_usd` and is **not** part of the run's cost limit.
+- `judge` uses the run's judge model through the same one-shot model call as the agent simulator, with a fixed prompt and a JSON reply. It costs model tokens and needs a Host with an agent backend.
+- `auto` uses `jev` when a TypeSafe key exists, else `judge` when the run has a judge model, else answers `422 EVAL_CLASSIFIER_UNAVAILABLE` with `missing: "typesafe_key"` or `"judge_model"`.
+
+**TypeSafe key.** The first one found wins: the stored provider credential `typesafe` (Settings, Providers, TypeSafe; see [Providers](providers.md)), then the environment variables `STAGEFLOW_PROVIDER_TYPESAFE_API_KEY`, `TYPESAFE_API_KEY`, `JEV_API_KEY`. The key is never logged or returned; `GET /api/eval-runs/:id/failures/status` reports only the **names** of the sources that hold one (for example `["JEV_API_KEY"]`).
+
+What each result sends is one bounded JSON state of at most 24,000 characters (redacted, truncation recorded): the case title, tags, input and expected value, the output (for an agent, the transcript and tool calls with policy outcomes), each failed grader with its reason and definition, and the ids of the graders that passed. See [Privacy and trust](#privacy-and-trust).
+
 ### Compare
 
 Compare two runs of the same eval (`sf eval compare <a> <b>`, or the Compare page). `a` is the baseline, `b` the candidate. The comparison is **paired by case**: both runs saw the same cases, so case difficulty cancels out. The verdict:
@@ -566,6 +593,8 @@ The judge's key comes from a Pi `auth.json` entry of type `api_key` for that pro
 - **`code` graders run JavaScript on your machine with your permissions**, the same trust level as `verify: command`.
 - Results, outputs and your reviews are stored in the local run store ([Data directory](data-directory.md)). Stage runs started by evals are retained and purged like other runs.
 
+**Sorting failures** is opt-in per click (console, `sf eval sort`, the API or MCP) and never runs after a run. It sends each failed result's case, output and grader reasons (a bounded, redacted state) to **TypeSafe (Jev)** or, with the `judge` classifier, to **the judge model's provider**. TypeSafe states that it does not train on customer requests; Stageflow does not rely on that statement. Sorting does not use promptfoo.
+
 For **agent evals**, in addition:
 
 - A **simulator model** and the **judge** read the conversation (the scenario, the agent's replies and a bounded view of tool arguments and results), so they send it to their providers.
@@ -619,10 +648,14 @@ The console uses these routes (all under the Host's `/api`, with the same auth a
 | `GET /api/eval-runs`, `GET /api/eval-runs/:id`, `DELETE /api/eval-runs/:id` | List, read, delete runs (`?subject_ref=<session or stage run id>` finds the run that owns a session) |
 | `GET /api/eval-runs/:id/results`, `…/results/:caseId`, `PUT …/results/:caseId/:repeat/review` | Result rows, one case, a review |
 | `POST /api/eval-runs/:id/cancel`, `GET /api/eval-runs/:id/export` | Cancel; export |
+| `POST /api/eval-runs/:id/failures/sort` | Sort failed results (body `classifier`, `only_unsorted`, `limit`); answers `{ batch_id, classifier, model, sorted, skipped, failed, triage_cost_usd, suggestions }`; `409 EVAL_RUN_ACTIVE`, `422 EVAL_CLASSIFIER_UNAVAILABLE` |
+| `GET /api/eval-runs/:id/failures/suggestions?status=` | Suggestions and a `summary` (counts by bucket, by type, by status, low confidence) |
+| `POST /api/eval-runs/:id/failures/suggestions/accept`, `…/dismiss` | Accept (by `ids`, or in bulk by `min_confidence` and `bucket`) or dismiss suggestions |
+| `GET /api/eval-runs/:id/failures/status` | Which classifiers can run and which `auto` would use |
 | `GET /api/eval-compare?a=&b=` | Compare two runs |
 | `GET /api/datasets`, `POST /api/datasets`, `GET /api/datasets/:id`, `PATCH /api/datasets/:id/cases`, `POST /api/datasets/:id/convert`, `POST /api/datasets/preview`, `GET /api/datasets/candidates` | Datasets (`GET /api/datasets/:id?eval_id=` checks scenarios against an agent eval; `candidates?agent=<id>` lists finished sessions to turn into scenarios) |
 
-For agent targets, `POST /api/evals/:id/runs` also takes `user_model`, `allow_real_tools`, and the safer-only `tools` and `approvals`; the estimate route takes the same options; a run that needs real tools without consent answers `422 EVAL_REAL_TOOLS_NOT_CONFIRMED`. Result detail carries the stored conversation (`output`), `turns`, `tool_call_count` and `agent: { id, session_id }`; run stats carry `mean_turns` and `mean_tool_calls`.
+For agent targets, `POST /api/evals/:id/runs` also takes `user_model`, `allow_real_tools`, and the safer-only `tools` and `approvals`; the estimate route takes the same options; a run that needs real tools without consent answers `422 EVAL_REAL_TOOLS_NOT_CONFIRMED`. Result detail carries the stored conversation (`output`), `turns`, `tool_call_count` and `agent: { id, session_id }`; run stats carry `mean_turns` and `mean_tool_calls`. Result detail also carries `repeats[].suggestion` (the result's current suggestion, or `null`).
 
 ## Not built {#not-built}
 

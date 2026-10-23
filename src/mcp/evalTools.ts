@@ -30,6 +30,8 @@ import {
 import { buildCompare } from "../evals/read/compare.js";
 import { buildRunDetail } from "../evals/read/runs.js";
 import { EvalStoreError } from "../evals/storeError.js";
+import { SUGGESTION_STATUSES, TRIAGE_MAX_LIMIT } from "../evals/triage/constants.js";
+import { TriageService } from "../evals/triage/service.js";
 import type { EvalRunRow } from "../evals/storeTypes.js";
 import { writeAudit } from "../logging/audit.js";
 import { logger as rootLogger } from "../logging/logger.js";
@@ -299,6 +301,60 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     async ({ eval_run_id, case_id }) => {
       manager();
       return buildResultDetail(store, eval_run_id, case_id);
+    },
+  );
+
+  const triage = (): TriageService =>
+    new TriageService({
+      store,
+      judgeBackend: () => deps.agentConversationBackend,
+      ...(deps.triage ?? {}),
+    });
+
+  tool(
+    "sort_eval_failures",
+    "Sort the failed and errored results of a finished eval run into suggested buckets (agent_wrong, grader_wrong, case_wrong, unclear) and failure types, each with a confidence. This sends each failed result's case, output and grader reasons to an external classifier: TypeSafe Jev (about $0.04 per million input tokens; needs a TypeSafe key) or the run's judge model (a model call per result, real cost). It is manual only and never runs on its own. Nothing is tagged: suggestions are reviewed and accepted by the author in the console or API. Eval sessions of the run stay hidden. classifier auto uses jev when a key exists, else judge, else fails EVAL_CLASSIFIER_UNAVAILABLE. By default results that already have a suggestion are skipped (only_unsorted). Fails EVAL_RUN_ACTIVE while the run is running. Same as POST /api/eval-runs/:id/failures/sort.",
+    z.object({
+      eval_run_id: z.string(),
+      classifier: z.enum(["auto", "jev", "judge"]).optional().describe("Default auto"),
+      only_unsorted: z.boolean().optional().describe("Skip results that already have a suggestion (default true)"),
+      limit: z.number().int().min(1).max(TRIAGE_MAX_LIMIT).optional().describe("Most results to sort (default 200)"),
+    }),
+    async ({ eval_run_id, classifier, only_unsorted, limit }) => {
+      manager();
+      const row = await runByIdOr404(store, eval_run_id);
+      try {
+        const result = await triage().sort(row, {
+          classifier: classifier ?? "auto",
+          ...(only_unsorted !== undefined ? { onlyUnsorted: only_unsorted } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+        });
+        audit("eval_failures_sort", "ok", eval_run_id);
+        return result;
+      } catch (err) {
+        audit("eval_failures_sort", "error", eval_run_id, err instanceof EvalApiError ? err.code : "internal_error");
+        throw err;
+      }
+    },
+  );
+
+  tool(
+    "get_eval_failure_suggestions",
+    "List the suggested buckets and failure types for an eval run's failed results, with a summary (counts by bucket, by failure type, by status, low confidence). Read-only, free, calls no model. Filter by status (pending, accepted, dismissed). Same as GET /api/eval-runs/:id/failures/suggestions.",
+    z.object({ eval_run_id: z.string(), status: z.enum(SUGGESTION_STATUSES).optional() }),
+    async ({ eval_run_id, status }) => {
+      manager();
+      return triage().list(await runByIdOr404(store, eval_run_id), status);
+    },
+  );
+
+  tool(
+    "get_eval_failure_sort_status",
+    "Report which failure classifiers can run for an eval run: jev (needs a TypeSafe key; reports only the names of the sources that hold one, never the key) and judge (the run's judge model), and which one auto would use. Read-only, free. Same as GET /api/eval-runs/:id/failures/status.",
+    z.object({ eval_run_id: z.string() }),
+    async ({ eval_run_id }) => {
+      manager();
+      return triage().status(await runByIdOr404(store, eval_run_id));
     },
   );
 

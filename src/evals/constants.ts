@@ -67,6 +67,7 @@ export const EVAL_REQUEST_ERROR_CODES = [
   "EVAL_RUN_NOT_FOUND",
   "EVAL_TAGS_ON_PASSED_RESULT",
   "EVAL_REAL_TOOLS_NOT_CONFIRMED",
+  "EVAL_CLASSIFIER_UNAVAILABLE",
 ] as const;
 
 export const EVAL_ERROR_CODES = [
@@ -94,6 +95,8 @@ export const CONFIG_SNAPSHOT_VERSION = 1;
 
 export const SIMULATOR_PROMPT_VERSION = 1;
 export const CONVERSATION_RUBRIC_PROMPT_VERSION = 1;
+/** Bump when the failure-sorting questions, bucket criteria or judge prompt text change. */
+export const TRIAGE_PROMPT_VERSION = 1;
 
 export const EVAL_CONVERSATION_LIMITS = {
   maxMessageChars: 4_000,

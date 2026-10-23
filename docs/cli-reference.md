@@ -803,6 +803,8 @@ sf eval runs [<evalId>] [--json]
 sf eval runs show <evalRunId> [--json]
 sf eval runs cancel <evalRunId>
 sf eval runs delete <evalRunId>
+sf eval sort <evalRunId> [--classifier auto|jev|judge] [--limit <n>] [--resort] [--json]
+sf eval suggestions <evalRunId> [--status pending|accepted|dismissed] [--json]
 sf eval compare <evalRunIdA> <evalRunIdB> [--json]
 sf eval datasets [--json]
 sf eval engine status [--json]
@@ -880,6 +882,10 @@ Errors with `--json` are `{ "error", "code"?, "status"? }` on stdout, with exit 
 ### `sf eval runs`, `compare`, `datasets`
 
 `sf eval runs` prints one tab-separated line per run: eval id, `#run_number`, status, pass rate, cost, `eval_run_id`. Filter by eval id. `sf eval runs show` prints the run's id and status, the reason when it stopped early, pass rate, progress, cost and fingerprint; with `--json` it is the full run detail (status, progress, stats, config snapshot, per-grader summary). `cancel` and `delete` print one line and have no `--json`. `sf eval compare --json` and the default output are the comparison document (verdict, per-grader and per-case changes, stage diff, warnings). `sf eval datasets` lists dataset files with their case counts.
+
+### `sf eval sort`, `suggestions`
+
+`sf eval sort <evalRunId>` sorts the failed and errored results of a finished run into suggested buckets and failure types. It is manual only, sends each failed result to TypeSafe Jev or the run's judge model (see [Evals: Sort failures automatically](evals.md#sort-failures)), and tags nothing. `--classifier` is `auto` (default), `jev` or `judge`; `--limit` caps results sorted (default 200); `--resort` also re-sorts results that already have a pending suggestion. It prints a summary line (sorted, skipped, failed, classifier and model, sorting cost) then one tab-separated line per new suggestion: case id, `#repeat`, bucket, failure type, confidence, status. `--json` prints the API document. `sf eval suggestions <evalRunId>` lists them (`--status` filters) and ends with the counts per bucket and status. Exit `0` on success, `1` on any error (`EVAL_RUN_ACTIVE`, `EVAL_CLASSIFIER_UNAVAILABLE`, an unknown run, bad usage); see [CI](ci.md#sorting-failures-in-ci). Accept or dismiss suggestions in the console or with the API.
 
 For agent evals, `sf eval show` first prints `Agent <id> r<revision> (<model>)` and the conversation settings; `sf eval runs show` prints the agent, the conversation settings from the snapshot, and `mean turns` and `mean tool calls`. `sf eval compare` of two agent runs adds an `agent_diff` (changed definition keys and an instructions line diff) in place of `stage_diff`; runs of different targets fail with `EVAL_COMPARE_MISMATCH`. There is no `sf eval new`: write agent evals in the console or by hand.
 

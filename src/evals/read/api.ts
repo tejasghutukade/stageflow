@@ -30,6 +30,7 @@ import type { EvalRunRow } from "../storeTypes.js";
 import { regressionBanner, type BannerEvalInput } from "../listStatus.js";
 import { buildResultRows, RESULT_ROW_STATUSES, type ResultRowStatus } from "./results.js";
 import { activeRunOf, completedRunsNewestFirst, resultToWire, runHeadline, type ActiveRun } from "./runs.js";
+import { suggestionFor } from "./suggestions.js";
 
 export const DEFAULT_LIMIT = 50;
 export const MAX_LIMIT = 200;
@@ -299,10 +300,11 @@ export async function buildResultsPage(
 
 export async function buildResultDetail(store: RunStore, id: string, caseId: string) {
   const row = await runByIdOr404(store, id);
-  const [cases, results, reviews] = await Promise.all([
+  const [cases, results, reviews, suggestions] = await Promise.all([
     store.getEvalCases(row.evalRunId),
     store.getEvalResultsForCase(row.evalRunId, caseId),
     store.getEvalReviews(row.evalRunId),
+    store.listEvalSuggestions(row.evalRunId),
   ]);
   const caseRow = cases.find((x) => x.caseId === caseId);
   if (!caseRow || results.length === 0) {
@@ -313,13 +315,14 @@ export async function buildResultDetail(store: RunStore, id: string, caseId: str
     case: { ...caseRow.case, position: caseRow.position },
     repeats: [...results]
       .sort((a, b) => a.repeatIndex - b.repeatIndex)
-      .map((r) =>
-        resultToWire(
+      .map((r) => ({
+        ...resultToWire(
           r,
           reviewByKey.get(resultKey(r.caseId, r.repeatIndex)),
           row.targetKind === "agent" ? (row.targetRef.agent_id ?? "") : undefined,
         ),
-      ),
+        suggestion: suggestionFor(suggestions, r.caseId, r.repeatIndex),
+      })),
   };
 }
 

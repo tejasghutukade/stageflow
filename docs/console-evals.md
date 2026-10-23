@@ -94,7 +94,7 @@ The header has the breadcrumb, a result chip (**Passed** or **Below threshold** 
 - A strip of KPI tiles: **Pass rate** (with the 95% interval by case), **Mean score** (with spread across repeats), **Reliability (pass^k)** (with pass@k and how many cases flip; hidden when repeats is 1), **Latency p50**, **Cost** and **Tokens**. **Agent:** two more tiles, **Turns** and **Tool calls** (means per conversation), and Cost splits into agent, simulator and judge.
 - **By grader:** each grader's pass rate, mean, range and change against the previous run ("grader changed" when its definition changed).
 - **Score per result:** a histogram with the threshold marked, and a note naming flaky cases.
-- **Failure types:** counts of your failure-type tags on failed results, plus "Not reviewed yet". Click a tag to see those cases.
+- **Failure types:** counts of your failure-type tags on failed results, plus "Not reviewed yet". Click a tag to see those cases. **Sort failures** asks a classifier to suggest a bucket and failure type for every failed result; you review and accept the suggestions (nothing is tagged on its own). See [Evals: Sort failures automatically](evals.md#sort-failures).
 - **Failing and flaky cases:** the first five, with repeat dots, score, failed graders, time and cost; **All n cases** opens the Cases tab.
 
 ### Cases

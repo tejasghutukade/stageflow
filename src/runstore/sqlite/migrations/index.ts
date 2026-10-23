@@ -16,6 +16,7 @@ import { MIGRATION_013 } from "./013-agents.js";
 import { MIGRATION_014 } from "./014-agent-deliveries.js";
 import { MIGRATION_015 } from "./015-evals.js";
 import { MIGRATION_016 } from "./016-eval-subject-ref.js";
+import { MIGRATION_017 } from "./017-eval-result-suggestions.js";
 
 export type SqliteMigration = {
   version: number;
@@ -41,6 +42,7 @@ const DEFAULT_MIGRATIONS: SqliteMigration[] = [
   MIGRATION_014,
   MIGRATION_015,
   MIGRATION_016,
+  MIGRATION_017,
 ];
 
 export const CURRENT_SCHEMA_VERSION =

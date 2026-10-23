@@ -15,7 +15,7 @@ export type JudgePriceLoader = (
   projectRoot: string,
 ) => Promise<Map<string, JudgePrice>>;
 
-function readAuthKey(authPath: string, provider: string): string | undefined {
+export function readAuthKey(authPath: string, provider: string): string | undefined {
   try {
     if (!existsSync(authPath)) return undefined;
     const parsed: unknown = JSON.parse(readFileSync(authPath, "utf8"));

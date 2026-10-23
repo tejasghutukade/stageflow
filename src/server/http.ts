@@ -3421,6 +3421,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             engineStatus: () => promptfooEngineStatus({ home: globalStageflowHome() }),
             agents: () => agentHost?.service,
             loadPrices: defaultLoadJudgePrices,
+            triage: { judgeBackend: () => agentHost?.backend },
           })
         ) {
           return true;

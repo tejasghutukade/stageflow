@@ -26,6 +26,8 @@ import {
   httpGetEvalRun,
   httpListDatasets,
   httpListEvalRuns,
+  httpListEvalSuggestions,
+  httpSortEvalFailures,
   httpListEvals,
   httpStartEvalRun,
   type HttpEvalResult,
@@ -47,6 +49,8 @@ export const EVAL_USAGE = `Usage:
   sf eval runs show <evalRunId> [--json]
   sf eval runs cancel <evalRunId>
   sf eval runs delete <evalRunId>
+  sf eval sort <evalRunId> [--classifier auto|jev|judge] [--limit <n>] [--resort] [--json]
+  sf eval suggestions <evalRunId> [--status pending|accepted|dismissed] [--json]
   sf eval compare <evalRunIdA> <evalRunIdB> [--json]
   sf eval datasets [--json]
   sf eval engine status [--json]
@@ -106,6 +110,8 @@ const FLAGS: Record<string, Record<string, FlagSpec>> = {
     "--no-wait": {},
   },
   runs: {},
+  sort: { "--classifier": { value: true }, "--limit": { value: true }, "--resort": {} },
+  suggestions: { "--status": { value: true } },
   compare: {},
   datasets: {},
   engine: {},
@@ -124,6 +130,10 @@ type Parsed = {
   model?: string;
   maxCost?: number;
   label?: string;
+  classifier?: "auto" | "jev" | "judge";
+  limit?: number;
+  resort: boolean;
+  status?: string;
   cases: string[];
   tags: string[];
   positionals: string[];
@@ -139,6 +149,7 @@ function parseArgs(command: string, rest: string[]): Parsed {
     strict: false,
     noWait: false,
     allowRealTools: false,
+    resort: false,
     cases: [],
     tags: [],
     positionals: [],
@@ -194,6 +205,27 @@ function parseArgs(command: string, rest: string[]): Parsed {
       case "--case":
         parsed.cases.push(value!);
         break;
+      case "--classifier":
+        if (value !== "auto" && value !== "jev" && value !== "judge") {
+          throw new UsageError("--classifier must be auto, jev or judge");
+        }
+        parsed.classifier = value;
+        break;
+      case "--limit": {
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < 1) throw new UsageError("--limit must be a positive integer");
+        parsed.limit = n;
+        break;
+      }
+      case "--resort":
+        parsed.resort = true;
+        break;
+      case "--status":
+        if (value !== "pending" && value !== "accepted" && value !== "dismissed") {
+          throw new UsageError("--status must be pending, accepted or dismissed");
+        }
+        parsed.status = value;
+        break;
       case "--tag":
         parsed.tags.push(value!);
         break;
@@ -230,6 +262,17 @@ function usd(value: number | null | undefined): string {
 }
 
 type AgentTarget = { agent_id?: unknown; id?: unknown; revision?: unknown };
+
+function suggestionLine(s: Record<string, any>): string {
+  return [
+    s.case_id,
+    `#${s.repeat_index}`,
+    s.bucket,
+    s.failure_type ?? "-",
+    `${Math.round((s.confidence as number) * 100)}%`,
+    s.status,
+  ].join("\t");
+}
 
 function agentLabel(target: AgentTarget): string {
   const id = String(target.agent_id ?? target.id ?? "");
@@ -441,7 +484,9 @@ export async function runEvalCommand(
           ? expectArgs(1, 1, "<id|path>")
           : command === "compare"
             ? expectArgs(2, 2, "<evalRunIdA> <evalRunIdB>")
-            : null;
+            : command === "sort" || command === "suggestions"
+              ? expectArgs(1, 1, "<evalRunId>")
+              : null;
   if (argError) return usageError(argError);
 
   let runsSub: string | undefined;
@@ -584,6 +629,31 @@ export async function runEvalCommand(
 
     case "run":
       return runEval();
+
+    case "sort": {
+      const result = await httpSortEvalFailures(base, positionals[0], {
+        classifier: parsed.classifier ?? "auto",
+        ...(parsed.resort ? { only_unsorted: false } : {}),
+        ...(parsed.limit !== undefined ? { limit: parsed.limit } : {}),
+      });
+      return show(result, (b) => {
+        out.log(
+          `Sorted ${b.sorted}, skipped ${b.skipped}, failed ${b.failed} with ${b.classifier} (${b.model}); sorting cost ${usd(b.triage_cost_usd)}`,
+        );
+        for (const s of b.suggestions as Array<Record<string, any>>) out.log(suggestionLine(s));
+        out.log(`Review and accept in the console, or POST /api/eval-runs/${positionals[0]}/failures/suggestions/accept`);
+      });
+    }
+
+    case "suggestions":
+      return show(await httpListEvalSuggestions(base, positionals[0], parsed.status), (b) => {
+        for (const s of b.items) out.log(suggestionLine(s));
+        const sum = b.summary;
+        out.log(
+          `agent_wrong ${sum.by_bucket.agent_wrong}\tgrader_wrong ${sum.by_bucket.grader_wrong}\tcase_wrong ${sum.by_bucket.case_wrong}\tunclear ${sum.by_bucket.unclear}\t` +
+            `pending ${sum.pending}\taccepted ${sum.accepted}\tdismissed ${sum.dismissed}\tlow confidence ${sum.low_confidence}`,
+        );
+      });
 
     default:
       return usageError(`Unknown eval subcommand: ${command}`);

@@ -318,6 +318,17 @@ An eval whose target is an agent runs the same way, with the same exit codes. Th
 
 (Fields shown trimmed; the full document also has `pass_rate_ci`, `reliability` and `url`.) Conversations vary more than single outputs, so use `--repeats` of 3 or more and read `reliability` (pass^k) before trusting a green run. See [Evals: Evals for agents](evals.md#evals-for-agents).
 
+### Sorting failures in CI {#sorting-failures-in-ci}
+
+`sf eval sort <evalRunId>` and `sf eval suggestions <evalRunId>` read a finished run and need the same Host as other `sf eval` commands. Sorting is **manual only**: no run starts it, and it tags nothing. It sends each failed result to TypeSafe Jev (needs a key in `STAGEFLOW_PROVIDER_TYPESAFE_API_KEY`, `TYPESAFE_API_KEY` or `JEV_API_KEY`, or a stored `typesafe` provider login) or, with `--classifier judge`, to the run's judge model; it costs a little and is not part of the run's cost limit.
+
+| Exit | Meaning |
+|------|---------|
+| `0` | Sorted (or listed); nothing failed to sort is still `0`, check `failed` in the JSON |
+| `1` | Any error: unknown run, `EVAL_RUN_ACTIVE`, `EVAL_CLASSIFIER_UNAVAILABLE` (no key and no judge model), bad usage |
+
+`sf eval sort --json` prints `{ batch_id, classifier, model, sorted, skipped, failed, triage_cost_usd, suggestions: [...] }`, where each suggestion has `case_id`, `repeat_index`, `bucket` (`agent_wrong`, `grader_wrong`, `case_wrong`, `unclear`), `failure_type`, `confidence`, `status`, `source` and `model`. `sf eval suggestions --json` prints `{ items, summary }` with counts by bucket and status and `low_confidence`. Errors are `{ "error", "code"?, "status"? }` with exit `1`, like `sf eval run`. See [Evals: Sort failures automatically](evals.md#sort-failures).
+
 ## Extensions in CI
 
 Only provider-level hooks are supported today — for example `STAGEFLOW_CURSOR_EXTENSION` for Cursor-backed models. Per-stage extension YAML in the catalog is not supported in headless CI yet.

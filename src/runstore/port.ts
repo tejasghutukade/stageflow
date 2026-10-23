@@ -29,6 +29,8 @@ import type {
   FinishEvalRunInput,
   ListEvalRunsQuery,
 } from "../evals/storeTypes.js";
+import type { SuggestionStatus } from "../evals/triage/constants.js";
+import type { SuggestionInput, SuggestionRow } from "../evals/triage/types.js";
 
 export type { ConfigOriginRecord };
 
@@ -678,6 +680,13 @@ export interface RunStore {
   deleteEvalRun(evalRunId: string): Promise<string[]>;
   /** Distinct non-null result subject refs (stage run ids or agent session ids) when the run's target kind matches. */
   listEvalSubjectRefs(evalRunId: string, targetKind: EvalTargetKind): Promise<string[]>;
+  /** Inserts or replaces pending suggestions (accepted and dismissed are kept); returns the rows written. */
+  upsertEvalSuggestions(evalRunId: string, inputs: SuggestionInput[]): Promise<SuggestionRow[]>;
+  listEvalSuggestions(evalRunId: string, status?: SuggestionStatus): Promise<SuggestionRow[]>;
+  /** Pending only; returns how many changed. */
+  dismissEvalSuggestions(evalRunId: string, ids: string[]): Promise<number>;
+  /** Pending only; adds the failure type and `bucket:` tags through the review write path. */
+  acceptEvalSuggestions(evalRunId: string, ids: string[]): Promise<{ accepted: number; tagged: number }>;
   /** Idempotent upsert; returns the realpath/resolve-normalized absolute key. */
   ensureProject(absPath: string): Promise<string>;
   /** Absolute roots from the durable projects registry. */
