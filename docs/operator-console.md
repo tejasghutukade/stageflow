@@ -118,11 +118,11 @@ Hash-based routing (`ui/src/routes.ts`). A hash that matches no route falls back
 | `#/extensions/packages/<scope>/<source>`, `#/extensions/files/<path>` | Extension package and file viewers |
 | `#/evals` | [Evals](console-evals.md) list (`?stage=<id>` filters to one stage) |
 | `#/evals/new` | New eval wizard (`?pipeline=<path>&stage=<id>` or `?file=<path>` preselects the target) |
-| `#/evals/<id>` | Opens the eval's latest run, or the edit page if it has none |
+| `#/evals/<id>` | Opens the eval's live run, else its newest run, or the edit page if it has none |
 | `#/evals/<id>/runs/<n>` | Run results (`?tab=overview\|cases\|graders\|config`) or live progress |
 | `#/evals/<id>/runs/<n>/case/<caseId>` | Run results with the case drawer open (`?repeat=<i>`) |
 | `#/evals/<id>/compare?a=<n>&b=<m>` | Compare two runs |
-| `#/evals/<id>/edit` | Edit eval (not built yet) |
+| `#/evals/<id>/edit` | Edit eval |
 | `#/datasets`, `#/datasets/<id>` | Datasets |
 | `#/connections`, `#/connections/<id>` | [Connections](console-connections.md) |
 | `#/memories`, `#/memories/<id>` | Memory list and one memory. Create from the list. The operator can edit the cover. The page shows the previous cover text when it exists. List keys, open a card, and correct it. The page shows the previous card copy when it exists. Delete removes the current card and the previous copy and cannot be undone. There is one previous copy, not a full history, and no restore action. A session adds cards; the console does not. Attach memory ids in the pipeline inspector or the agent editor |

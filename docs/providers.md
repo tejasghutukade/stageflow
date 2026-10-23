@@ -47,7 +47,7 @@ At Host boot (`sf ui` / `sf mcp`), Stageflow configures providers from:
 - `STAGEFLOW_PROVIDER_<ID>_API_KEY`
 - `STAGEFLOW_PROVIDER_<ID>_API_KEY_FILE` (trims one trailing newline)
 
-Do not set both. Unreadable files soft-fail by default (Host still starts). `STAGEFLOW_REQUIRE_PROVIDERS=id1,id2` makes missing providers fatal. OAuth remains interactive via `sf providers login … --type oauth`.
+Do not set both. The Host re-reads these variables **at every boot** and writes the key into the auth file again, so a key supplied this way comes back after a restart even if you replaced it or disconnected the provider in the console; remove the variable to stop that. Unreadable files soft-fail by default (Host still starts). `STAGEFLOW_REQUIRE_PROVIDERS=id1,id2` makes missing providers fatal. OAuth remains interactive via `sf providers login … --type oauth`.
 
 The run store and Host Pi agent directory live under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`). Project settings (`<git-root>/.stageflow/settings.json`) are separate from global auth and are not the run store. See [Data directory](data-directory.md).
 
@@ -134,7 +134,13 @@ One catalog supplies every model list and the default model: the stage, pipeline
 
 ## Console
 
-**Settings → Providers** — list providers, connection status, login/logout actions.
+**Settings → Providers** lists providers and their connection status. A connected provider has a **Provider actions** menu (the vertical dots):
+
+- **Replace API key** (providers that take a key) opens the key field.
+- **Sign in again** (providers that use OAuth) restarts the browser sign-in.
+- **Disconnect** asks first ("Disconnect <provider>? Agents and evals that use it will stop working.") and removes the stored credential only after you confirm.
+
+A provider whose key comes from `STAGEFLOW_PROVIDER_<ID>_API_KEY` is configured again at the next Host boot (see above). The TypeSafe row holds the key that [failure sorting](evals.md#sort-failures) uses.
 
 **Connect** (`#/connect`) — guided provider setup from the rail footer link when disconnected.
 

@@ -35,6 +35,7 @@ The same pipeline runs three ways without rewriting anything:
 - **Verified stage execution** — after-phase `verify` checks with durable evidence, plus `on_verify_fail` repair or manual operator recovery ([guide](docs/verified-stage-execution.md))
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
 - **Agents** — project-owned, revisioned agents (`agents/*.agent.yaml`) with granted tools, ask-first approvals, traces, channels, schedules and a public web chat page ([guide](docs/agents.md))
+- **Evals** — check a stage or an agent against a dataset: graders, repeats, honest statistics, compare two runs, and sort failures into what to fix ([guide](docs/evals.md))
 - **Operator console** — an Inbox for gates and agent approvals, pipeline runs, agents and their sessions, connections, MCP servers and settings at `http://127.0.0.1:3847` ([guide](docs/operator-console.md))
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running
 - **MCP servers for agents and stages** — add servers, secrets and OAuth sign-in from Settings → Project MCP, or in the project `.mcp.json` ([guide](docs/mcp-servers.md))
@@ -288,7 +289,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/hosted.md](docs/hosted.md) | Embed Stageflow from another application and receive ordered run events |
 | [docs/quickstart.md](docs/quickstart.md) | Expanded quick start |
 | [docs/yaml-catalog.md](docs/yaml-catalog.md) | Pipelines, stages, tasks schema |
-| [docs/cli-reference.md](docs/cli-reference.md) | `sf init`, `sf run`, `sf run-stage`, `sf graph`, `sf validate`, `sf ui`, `sf mcp`, `sf envelope`, `sf export-run`, `sf artifact`, `sf skills`, `sf providers` |
+| [docs/cli-reference.md](docs/cli-reference.md) | `sf init`, `sf run`, `sf run-stage`, `sf graph`, `sf validate`, `sf ui`, `sf mcp`, `sf envelope`, `sf export-run`, `sf artifact`, `sf skills`, `sf providers`, `sf eval` |
 | [docs/envelopes.md](docs/envelopes.md) | Handoff envelope contract |
 | [docs/verified-stage-execution.md](docs/verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [docs/hitl.md](docs/hitl.md) | Gate kinds, `--skip-gates`, exit code `2` |
@@ -298,6 +299,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/docker.md](docs/docker.md) | Docker Compose local try, image pull/run, backup, self-hosting |
 | [docs/operator-console.md](docs/operator-console.md) | Console navigation, command palette, shortcuts and routes; one page per area ([Inbox](docs/console-inbox.md), [Runs](docs/console-runs.md), [Agents](docs/console-agents.md), [Connections](docs/console-connections.md), [Settings](docs/console-settings.md)) |
+| [docs/evals.md](docs/evals.md) | Evals for stages and agents: datasets, graders, runs, compare, failure sorting, the engine |
 | [docs/agents.md](docs/agents.md) | Agents: definition, runtime, approvals, channels, schedules, web chat |
 | [docs/mcp-servers.md](docs/mcp-servers.md) | Add MCP servers, secrets and OAuth; use them from agents and stages |
 | [docs/channels.md](docs/channels.md) | Connections and communication channels |

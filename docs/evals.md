@@ -236,7 +236,7 @@ JSON files hold an array of cases or `{ "cases": [...] }`. CSV files use a heade
 
 Only **one eval run is active per Host**. A second start fails with `EVAL_RUN_ACTIVE`. Eval stage runs use the normal admission queue with no priority, so a large eval shares capacity with real runs; the default `concurrency` of 4 keeps that bounded.
 
-- **Console.** Evals, then **Run** on a row (or **Run again** on a result). The dialog picks cases (all, failed last time, or hand-picked), repeats, cost limit, stage model and judge, and shows an estimate. Live progress shows results as they arrive; **Stop run** keeps the results so far. See [Console: Evals](console-evals.md).
+- **Console.** Evals, then **Run** on a row (or **Run again** on a result). The dialog picks cases (all, failed last time, or hand-picked), repeats, cost limit, stage model and judge (searchable dropdowns), which earlier completed run to compare with when it finishes, and shows an estimate. Live progress shows results as they arrive; **Stop run** keeps the results so far. A run that is still going can be reopened at any time: its Evals row shows "Run #n running" and opening the eval lands on the live page. See [Console: Evals](console-evals.md).
 - **CLI.** `sf eval run <id|path>`; see [CLI reference](cli-reference.md#sf-eval) and [CI](ci.md#evals-in-ci).
 - **MCP.** `run_eval`, `get_eval_run`, `cancel_eval_run` and others; see [MCP](mcp.md#eval-tools).
 
@@ -292,7 +292,7 @@ Each failed result gets a **suggested bucket**, a **suggested failure type** and
 
 Failure types are fixed lists, not YAML. Agent evals: `missing_tool_call`, `unneeded_tool_call`, `wrong_or_missing_fact`, `policy_violation`, `tone`, `ungrounded_claim`, `off_topic`, `no_handoff`, `other`. Stage evals: `wrong_value`, `missing_field`, `schema_invalid`, `policy_violation`, `ungrounded_claim`, `tone`, `other`. For each failing `code` or `rubric` grader the classifier also gives the probability that its failure is a **false alarm**.
 
-**Suggestions, not tags.** Nothing is tagged until you accept. Accepting writes the failure type as the usual failure-type tag and a `bucket:<bucket>` tag through the same path as a hand review, then marks the suggestion accepted; dismissing hides it. A suggestion with a bucket confidence below 70% or the bucket `unclear` is **low confidence** and is left out of bulk accept (`accept` with no `ids` takes pending suggestions at or above `min_confidence`, default 0.7). Sorting again replaces pending suggestions and keeps accepted and dismissed ones; by default (`only_unsorted`) results that already have a suggestion are skipped.
+**Suggestions, not tags.** Nothing is tagged until you accept. Accepting writes the failure type as the usual failure-type tag and a `bucket:<bucket>` tag through the same path as a hand review, then marks the suggestion accepted; dismissing hides it. A suggestion with a bucket confidence below 70% or the bucket `unclear` is **low confidence** and is left out of bulk accept (`accept` with no `ids` takes pending suggestions at or above `min_confidence`, default 0.7). Sorting again replaces pending suggestions and keeps accepted and dismissed ones; by default (`only_unsorted`; `--resort` on the CLI, `only_unsorted: false` in the API and MCP) results that already have a suggestion are skipped, and `--resort` re-sorts pending ones only (accepted and dismissed are never replaced).
 
 **Classifiers.** `classifier` is `auto`, `jev` or `judge`.
 
@@ -306,7 +306,7 @@ What each result sends is one bounded JSON state of at most 24,000 characters (r
 
 ### Compare
 
-Compare two runs of the same eval (`sf eval compare <a> <b>`, or the Compare page). `a` is the baseline, `b` the candidate. The comparison is **paired by case**: both runs saw the same cases, so case difficulty cancels out. The verdict:
+Compare two runs of the same eval (`sf eval compare <a> <b>`, or the Compare page). `a` is the baseline, `b` the candidate. The console's Compare page has a picker for each side, and a run's **Compare with** (in the Run dialog) can use any earlier completed run as the baseline, not only the previous one. The comparison is **paired by case**: both runs saw the same cases, so case difficulty cancels out. The verdict:
 
 | Verdict | Meaning |
 |---------|---------|
@@ -319,7 +319,7 @@ An inconclusive result is not "no change"; it means this dataset cannot tell. Th
 
 ### Capability and regression evals
 
-`type: capability` asks "can the stage do this?" and starts with a pass rate well under 100%. `type: regression` guards behavior that already works. The type is guidance only and changes no behavior. On the Evals list, a capability eval whose last run passed with a pass rate of 98% or more is **saturated**: it can no longer show improvement, so keep it as a regression eval and add harder cases to a new capability eval. Other list statuses are `never_run`, `passing`, `failing` and `regressed` (the last run failed and the one before passed).
+`type: capability` asks "can the stage do this?" and starts with a pass rate well under 100%. `type: regression` guards behavior that already works. The type is guidance only and changes no behavior. On the Evals list, a capability eval whose last run passed with a pass rate of 98% or more is **saturated**: it can no longer show improvement, so keep it as a regression eval and add harder cases to a new capability eval. Other list statuses are `never_run`, `running` (a run is queued or running), `passing`, `failing` and `regressed` (the last run failed and the one before passed).
 
 ## Evals for agents {#evals-for-agents}
 
@@ -558,11 +558,22 @@ Each conversation runs in an **eval session**: a real agent session marked `sour
 | `eval.real_tools_not_allowed` / `EVAL_REAL_TOOLS_NOT_CONFIRMED` | `tools: real` needs `allow_real_tools: true` in the file and the per-run consent (`--allow-real-tools`, the API or MCP flag, or the dialog checkbox) |
 | The run shows "edited since" on the agent | The agent changed after the run started. The run used the revision it recorded; run again to test the new one |
 | Results `EVAL_AGENT_TIMEOUT` | A turn ran past `turn_timeout_ms`, or the scenario past its wall clock. Raise `turn_timeout_ms` or simplify the scenario |
-| Results `EVAL_AGENT_EMPTY_REPLY` | The agent replied with no text and no output tokens. Usually the provider rate-limited or failed (for example a free-model daily limit). Check the provider key and limits, then rerun |
+| Results `EVAL_AGENT_EMPTY_REPLY` | The agent replied with no text and no output tokens. Usually the provider rate-limited or failed. These results are `error`: they are not graded and are left out of the pass rate. Check the provider key and limits, then rerun the failed cases |
+| Run ends `failed` with "Stopped after 5 consecutive provider failures" | Five agent cases in a row ended `EVAL_AGENT_EMPTY_REPLY` or `EVAL_AGENT_FAILED` (constant `EVAL_MAX_CONSECUTIVE_PROVIDER_FAILURES`), so the run stopped and the cases not yet started are `cancelled`. Fix the key, quota or model, then rerun; completed results are kept |
+| Many empty replies on an OpenRouter `:free` model | Free models have a daily request limit, and once it is used up the provider answers with nothing. Wait for the limit to reset, switch the agent or `--model` to a paid model, or lower `concurrency`. Rerun with **Failed last time** to repeat only the cases that errored |
 | Results `EVAL_AGENT_FAILED` | An agent turn failed; the message carries the agent error code (for example `agent.guardrail_blocked` or `agent.limit_reached`). Open the agent run from the partial transcript |
 | Results `EVAL_SIMULATOR_ERROR` | The simulator model failed or returned nothing usable. Check its key and model, or switch to script mode |
 | A scenario was skipped | Its `input` fails the mode's check. The dataset page lists the reason |
 | Every `tool_calls` grade is `EVAL_CASE_MISSING_EXPECTED` | The grader has no rule and the scenarios have no `expected.tools` or `expected.forbidden_tools`. Add rules to the grader or `expected` to the scenarios |
+
+### Writing a good agent eval {#writing-a-good-agent-eval}
+
+- **Start with script scenarios and rule graders.** `tool_calls` and `conversation_check` are free and repeatable. Add `goal_reached` or `rubric` for what rules cannot say.
+- **Baseline first.** Run the unchanged agent with `repeats: 3` (more for few scenarios) and keep that run as the baseline. One conversation is closer to a coin flip than a measurement.
+- **Sort failures before editing anything.** Press **Sort failures** ([above](#sort-failures)) and read the buckets: `agent_wrong` means change the agent; `grader_wrong` means fix the grader (loosen a literal check, tighten a vague rubric); `case_wrong` means fix the scenario or its `expected`. Editing the agent for a failure that belongs to a grader or a scenario makes the next comparison meaningless.
+- **Change one thing per run.** Edit the instructions, the model, one grader or the dataset, then run again and use **Compare with** the baseline. If the verdict is inconclusive, add scenarios (about how many are needed is shown) rather than repeats.
+- **Keep the setup comparable.** The same simulator model, scenarios and graders; Compare warns when they differ.
+- **Move on when it passes.** An eval that passes 98% or more is saturated: keep it as a regression eval and write harder scenarios.
 
 ## The engine
 
@@ -633,6 +644,52 @@ For **agent evals**, in addition:
 
 Agent evals have their own table in [Troubleshooting agent evals](#troubleshooting-agent-evals). Validation findings are listed in [YAML catalog: Evals](yaml-catalog.md#eval-validation-findings).
 
+## Error codes {#error-codes}
+
+**On a result** (shown in the case drawer and stored with the result):
+
+| Code | Result status | Meaning |
+|------|---------------|---------|
+| `EVAL_STAGE_FAILED` | `stage_failed` | The stage run failed |
+| `EVAL_STAGE_TIMEOUT` | `stage_failed` | The stage ran past its `timeout_ms` plus 60 seconds |
+| `EVAL_STAGE_NEEDS_INPUT` | `needs_input` | The stage stopped at a HITL gate |
+| `EVAL_AGENT_FAILED` | `stage_failed` | An agent turn failed; the message has the agent error code |
+| `EVAL_AGENT_TIMEOUT` | `stage_failed` | A turn passed `turn_timeout_ms` or the conversation passed its wall clock |
+| `EVAL_AGENT_EMPTY_REPLY` | `error` | The agent answered with no text and no output tokens; not graded |
+| `EVAL_SIMULATOR_ERROR` | `error` | The simulator model failed or returned nothing usable |
+| `EVAL_ENGINE_ERROR` | `error` | The engine finished without a result for the case, or the case cannot run (for example an approval wait) |
+| `EVAL_BUDGET_EXCEEDED` | `skipped_budget` | The cost limit was reached before the case started |
+| `EVAL_CANCELLED` | `cancelled` | The run was stopped, or stopped early after 5 consecutive provider failures |
+| `EVAL_JUDGE_ERROR` | grade `error` | The judge call failed or did not reply with JSON; left out of the score |
+| `EVAL_GRADER_CODE_ERROR` | grade `error` | A `code` grader threw, returned a bad value or ran past 5 seconds |
+| `EVAL_CASE_MISSING_EXPECTED` | grade `error` | A grader needs `expected` (or tool rules) the case does not have |
+| `EVAL_GRADER_NOT_APPLICABLE` | grade `error` | The grader type cannot read this subject; validation reports `eval.grader_not_applicable` first |
+
+**On a request** (HTTP, CLI and MCP):
+
+| Code | HTTP | Meaning |
+|------|------|---------|
+| `EVAL_INVALID` | 422 | The definition has errors (`findings` lists them), or a run override is not allowed |
+| `EVAL_NOT_FOUND`, `EVAL_RUN_NOT_FOUND`, `DATASET_NOT_FOUND` | 404 | No such eval, run or dataset |
+| `EVAL_AMBIGUOUS`, `DATASET_AMBIGUOUS` | 409 | The id exists in more than one project; pass `project_root` |
+| `EVAL_EXISTS`, `DATASET_EXISTS`, `SAMPLE_EXISTS` | 409 | Creating something that already exists |
+| `EVAL_RUN_ACTIVE` | 409 | Another eval run is active on this Host (also returned when sorting a run that is still running) |
+| `FILE_CHANGED` | 409 | The file changed on disk since it was loaded |
+| `DATASET_READ_ONLY` | 409 | `.json` and `.csv` datasets are read-only; convert to JSONL first |
+| `EVAL_DEFINITION_ID_MISMATCH` | 422 | The saved definition's `id` differs from the file's |
+| `DATASET_INVALID`, `DATASET_CASE_OP_INVALID` | 422 | The dataset or a case edit is invalid (duplicate id, unknown run, bad format) |
+| `DATASET_NAME_INVALID` | 400 | The dataset name does not match the name pattern |
+| `EVAL_TAGS_ON_PASSED_RESULT` | 400 | Failure-type tags apply only to results marked failed |
+| `EVAL_REAL_TOOLS_NOT_CONFIRMED` | 422 | `tools: real` without the per-run consent |
+| `EVAL_CLASSIFIER_UNAVAILABLE` | 422 | No failure classifier can run (`missing: "typesafe_key"` or `"judge_model"`) |
+| `EVAL_COMPARE_MISMATCH` | 400 | The two runs have different targets |
+| `EVAL_ENGINE_UNAVAILABLE`, `EVAL_NODE_TOO_OLD` | 503 | The engine is not installed, or Node is older than 22.22.0 |
+| `SAMPLE_NO_DEFAULT_MODEL` | 422 | The sample needs a default `model:` in `stageflow.yaml` |
+| `SAMPLE_AGENTS_UNAVAILABLE` | 503 | This Host cannot create agents, so the agent sample cannot be installed |
+| `SAMPLE_SOURCE_MISSING` | 500 | The packaged sample files were not found |
+
+Validation findings (`eval.*`, `dataset.*`) are listed in [YAML catalog: Evals](yaml-catalog.md#eval-validation-findings).
+
 ## HTTP API
 
 The console uses these routes (all under the Host's `/api`, with the same auth as other routes). Eval runs are addressed by `eval_run_id` (`er_` plus 12 hex characters) or by eval id and run number.
@@ -666,7 +723,6 @@ These are not part of this release:
 - **Judge calibration.** Rubrics are shown as "Not calibrated": nothing checks the judge against your labels, and reviews are not used for that.
 - **Pipeline evals** (evaluating a whole pipeline end to end).
 - **CI triggers or scheduled eval runs.** `sf eval run` works in CI, but nothing starts evals on a schedule.
-- **Editing an eval in the console.** The Edit page is not built yet; edit the YAML file directly.
 - Synthetic data generation, production monitoring, red-teaming and deleting an eval from the console.
 
 Not built for **agent evals**:

@@ -98,6 +98,8 @@ A task with `repository` + `ref` (or `sf run --repository` / `--ref`) materializ
 
 The image installs the pinned eval engine (promptfoo `0.124.0`, build arg `PROMPTFOO_VERSION`) at build time into `/data/eval-engine/0.124.0` (`$STAGEFLOW_HOME/eval-engine/<version>`). It adds about **1.2 GB** to the image. A new named volume is seeded from the image on first mount. An existing volume or a bind mount over `/data` hides the baked-in copy; run `sf eval engine install` inside the container to install it there. The engine is only used by evals and never contacts promptfoo servers (a network guard blocks `*.promptfoo.app` and `*.promptfoo.dev`). It needs Node 22.22.0 or newer; `sf eval engine status` inside the container shows the Node it sees. Run evals with `sf eval run` through `docker exec`, the console, or the MCP `run_eval` tool. A judge model for rubric graders must be `anthropic/…`, `openai/…` or `openrouter/…`; its key is read from the container's auth file (an `api_key` entry for that provider) or the environment variable of the same name. See [Evals](evals.md#the-engine).
 
+**Entrypoint and `HOME`.** The container starts as root only long enough for the entrypoint (`/usr/local/bin/stageflow-entry.sh`) to join the Docker socket's group when it is mounted, then it drops to the `stageflow` user (uid 10001) and sets `HOME` to that user's home directory, `/data`. Anything that writes under `$HOME` (the email store, npm during `sf eval engine install`) therefore writes to the data volume, not to `/root`. Started as a non-root user, the entrypoint runs the command unchanged.
+
 ### Named volume
 
 Compose mounts the named volume `stageflow-data` at `/data`. That volume holds the durable store (`state.db`, credentials, settings). Deleting the volume **wipes** irreplaceable state — use `sf backup` before destructive resets. See [Precious vs disposable](#precious-vs-disposable).
@@ -459,6 +461,10 @@ STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
 ```
 
 See [Providers — Non-interactive Host boot credentials](providers.md#non-interactive-host-boot-credentials).
+
+The Host re-reads these variables on every start, so a restart restores a key supplied this way even after you replaced it or disconnected the provider in **Settings → Providers**. Remove the variable to keep a console change.
+
+**Failure sorting key.** [Sorting failed eval results](evals.md#sort-failures) uses TypeSafe Jev. Pass `STAGEFLOW_PROVIDER_TYPESAFE_API_KEY` (or `_FILE`) like any provider key, or `TYPESAFE_API_KEY` / `JEV_API_KEY`. `docker-compose.yml` forwards only the OpenRouter and Anthropic keys by name, so add the variable under its `environment:` block, or use `docker run -e`. Without a key, sorting can still use the run's judge model.
 
 ### Worktree escape hatch {#worktree-escape-hatch}
 

@@ -55,6 +55,7 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_LEGACY_YAML` | `0` rejects legacy authoring keys |
 | `STAGEFLOW_ACTIVITY_TEXT_LIMIT`, `STAGEFLOW_ACTIVITY_VERBOSE` | Transcript truncation and verbosity |
 | `STAGEFLOW_EVALS_KEEP_WORKDIR` | `1` keeps the eval engine's work directory (`$STAGEFLOW_HOME/eval-runs/<evalRunId>/`: generated config, results, logs) after a run, for debugging. Otherwise it is removed when the run ends. See [Evals](evals.md#troubleshooting) |
+| `TYPESAFE_API_KEY`, `JEV_API_KEY` | TypeSafe key for [sorting failed eval results](evals.md#sort-failures), read after the stored `typesafe` provider credential and `STAGEFLOW_PROVIDER_TYPESAFE_API_KEY`. Not `STAGEFLOW_` variables, so the boot check ignores them |
 | `STAGEFLOW_EVALS_SMOKE` | Test only, not read by the Host: `1` enables the opt-in real-engine test `tests/evals.promptfoo.smoke.test.ts` (needs the engine installed and network access). See [Evals](evals.md#the-engine) |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | Judge key for rubric graders when the credential file has no `api_key` entry for that provider. See [Evals: Judge models](evals.md#judge-models) |
 | `STAGEFLOW_GC_INTERVAL_MS` | Garbage-collection interval (default 1 h, `0` disables) |
