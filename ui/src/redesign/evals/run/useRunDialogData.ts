@@ -8,7 +8,7 @@ import {
   type CatalogModel,
 } from "../../../api";
 import type { EvalDatasetCase } from "../../../api/evalTypes";
-import { buildContext, datasetIdOf, type LastCompletedRun, type RunDialogContext } from "./runDialogModel";
+import { baselineRuns, buildContext, datasetIdOf, type LastCompletedRun, type RunDialogContext } from "./runDialogModel";
 import type { RunDialogTarget } from "./runDialogStore";
 
 const PAGE = 200;
@@ -50,12 +50,15 @@ export function useRunDialogData(target: RunDialogTarget | null): RunDialogData 
       const datasetId = detail.definition ? datasetIdOf(detail.definition.dataset) : null;
       const [casesResult, lastRuns, models] = await Promise.all([
         datasetId ? loadCases(datasetId, evalId, projectRoot).catch(() => null) : Promise.resolve(null),
-        fetchEvalRuns({ eval_id: evalId, status: "completed", limit: 1, project_root: projectRoot }).catch(() => null),
+        fetchEvalRuns({ eval_id: evalId, limit: 200, project_root: projectRoot }).catch(() => null),
         fetchModels().catch(() => null),
       ]);
       let lastCompleted: LastCompletedRun | null = null;
       let lastRunConfig: Record<string, any> | null = null;
-      const headline = lastRuns?.items[0];
+      const earlierRuns = baselineRuns(lastRuns?.items ?? []);
+      const headline = (lastRuns?.items ?? [])
+        .filter((i) => i.status === "completed")
+        .sort((a, b) => b.run_number - a.run_number)[0];
       if (headline) {
         const lastRun = await fetchEvalRunByNumber(evalId, headline.run_number, projectRoot).catch(() => null);
         lastRunConfig = lastRun?.config ?? null;
@@ -71,6 +74,7 @@ export function useRunDialogData(target: RunDialogTarget | null): RunDialogData 
         detail,
         casesTotal: casesResult?.total ?? null,
         lastCompleted,
+        earlierRuns,
         lastRunConfig,
         ...(casesResult ? { cases: casesResult.cases } : {}),
       });

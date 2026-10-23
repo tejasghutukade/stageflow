@@ -1,4 +1,5 @@
 import type {
+  EvalRunListItem,
   EvalConversation,
   EvalConversationApprovals,
   EvalConversationTools,
@@ -11,7 +12,8 @@ import type {
   EvalStartRunInput,
 } from "../../../api/evalTypes";
 import { datasetName } from "../evalListModel";
-import { formatDuration } from "../format";
+import { formatDuration, formatPercent, formatRelativeTime } from "../format";
+import { sortRunsNewestFirst, statusOf, type SwitcherTone } from "./runSwitcherModel";
 import { conversationSummary, ROUGH_ESTIMATE } from "../newEval/conversationModel";
 import { modeOfCase } from "../datasets/scenarioModel";
 
@@ -47,6 +49,47 @@ export type CasesMode = "all" | "failed" | "pick";
 
 export type LastCompletedRun = { evalRunId: string; runNumber: number; failedCases: number | null };
 
+export type BaselineRun = {
+  runNumber: number;
+  /** Only a completed run can be compared with. */
+  selectable: boolean;
+  /** Why a run cannot be picked. */
+  reason: string | null;
+  statusText: string;
+  tone: SwitcherTone;
+  passRate: string;
+  timeText: string;
+  label: string | null;
+};
+
+export const BASELINE_NOT_COMPLETED = "Only completed runs can be compared";
+
+export function baselineRuns(items: readonly EvalRunListItem[], now = Date.now()): BaselineRun[] {
+  return sortRunsNewestFirst(items).map((item) => {
+    const status = statusOf(item);
+    const selectable = item.status === "completed";
+    return {
+      runNumber: item.run_number,
+      selectable,
+      reason: selectable ? null : `${status.text}. ${BASELINE_NOT_COMPLETED}`,
+      statusText: status.text,
+      tone: status.tone,
+      passRate: item.status === "completed" ? formatPercent(item.pass_rate) : "—",
+      timeText: formatRelativeTime(item.finished_at ?? item.started_at ?? item.created_at ?? null, now),
+      label: item.label,
+    };
+  });
+}
+
+/** The newest completed earlier run, or null. */
+export function defaultBaseline(runs: readonly BaselineRun[]): number | null {
+  return runs.find((r) => r.selectable)?.runNumber ?? null;
+}
+
+export function baselineSublabel(run: BaselineRun): string {
+  return [run.timeText, run.label].filter((p): p is string => !!p && p !== "—").join(" · ");
+}
+
 export type RunDialogContext = {
   evalId: string;
   projectRoot?: string;
@@ -55,6 +98,8 @@ export type RunDialogContext = {
   casesTotal: number;
   defaults: { repeats: number; maxCostUsd: number; stageModel: string | null; judge: string | null };
   lastCompleted: LastCompletedRun | null;
+  /** Earlier runs of this eval, newest first. */
+  earlierRuns: BaselineRun[];
   /** Present for agent evals. */
   agent?: RunAgentInfo;
 };
@@ -67,6 +112,8 @@ export type RunDialogState = {
   stageModel: string | null;
   judgeModel: string | null;
   compare: boolean;
+  /** The earlier run to compare with; `null` until chosen means the default. */
+  compareWith: number | null;
   /** Agent evals: `null` is the eval's setting. */
   userModel?: string | null;
   tools?: EvalSaferTools | null;
@@ -90,6 +137,7 @@ export function buildContext(input: {
   detail: EvalDetail;
   casesTotal: number | null;
   lastCompleted: LastCompletedRun | null;
+  earlierRuns?: BaselineRun[];
   lastRunConfig?: Record<string, any> | null;
   cases?: ReadonlyArray<Pick<EvalDatasetCase, "input">>;
 }): RunDialogContext {
@@ -132,6 +180,7 @@ export function buildContext(input: {
       judge: typeof judge === "string" && judge !== "" ? judge : null,
     },
     lastCompleted: input.lastCompleted,
+    earlierRuns: input.earlierRuns ?? [],
     ...(agent ? { agent } : {}),
   };
 }
@@ -145,6 +194,7 @@ export function initialState(ctx: RunDialogContext): RunDialogState {
     stageModel: null,
     judgeModel: null,
     compare: ctx.lastCompleted !== null,
+    compareWith: compareBaseline({ compareWith: null }, ctx),
     ...(ctx.agent ? { userModel: null, tools: null, approvals: null, consent: false } : {}),
   };
 }
@@ -300,6 +350,18 @@ export function judgeDefaultLabel(ctx: RunDialogContext): string {
   return ctx.defaults.judge ? `Eval default · ${ctx.defaults.judge}` : "Eval default";
 }
 
+/** The run number the finished run is compared with: the chosen one if still valid, else the default. */
+export function compareBaseline(state: Pick<RunDialogState, "compareWith">, ctx: RunDialogContext): number | null {
+  const chosen = ctx.earlierRuns.find((r) => r.runNumber === state.compareWith && r.selectable);
+  if (chosen) return chosen.runNumber;
+  return defaultBaseline(ctx.earlierRuns) ?? ctx.lastCompleted?.runNumber ?? null;
+}
+
+/** The chooser shows only when there is more than one earlier run to pick from. */
+export function showBaselineChooser(ctx: RunDialogContext): boolean {
+  return ctx.earlierRuns.length > 1 && ctx.earlierRuns.some((r) => r.selectable);
+}
+
 export function compareLabel(ctx: RunDialogContext): string | null {
   return ctx.lastCompleted ? `Compare with Run #${ctx.lastCompleted.runNumber} when it finishes` : null;
 }
@@ -382,4 +444,71 @@ export function modelOptions(
 ): Array<{ value: string; label: string }> {
   const list = models.filter((m) => !forJudge || m.judge_capable !== false);
   return [{ value: "", label: defaultLabel }, ...list.map((m) => ({ value: m.id, label: m.id }))];
+}
+
+export type PickerOption = {
+  value: string;
+  label: string;
+  group?: string;
+  /** Muted text after the label. */
+  sublabel?: string;
+  chip?: { text: string; tone: SwitcherTone };
+  meta?: string;
+  disabled?: boolean;
+  reason?: string;
+  /** The first option that stands for "no override". */
+  isDefault?: boolean;
+};
+
+export const JUDGE_ONLY_HINT = "Judge-capable models only";
+
+export function modelPickerOptions(
+  models: Array<{ id: string; provider?: string; name?: string; judge_capable?: boolean }>,
+  defaultLabel: string,
+  forJudge: boolean,
+): PickerOption[] {
+  const list = models.filter((m) => !forJudge || m.judge_capable !== false);
+  const providerOf = (m: { id: string; provider?: string }) => m.provider ?? (m.id.includes("/") ? m.id.slice(0, m.id.indexOf("/")) : "other");
+  const tail = (id: string) => (id.indexOf("/") > 0 ? id.slice(id.indexOf("/") + 1) : id);
+  const sorted = [...list].sort((a, b) => providerOf(a).localeCompare(providerOf(b)));
+  return [
+    { value: "", label: defaultLabel, isDefault: true },
+    ...sorted.map((m) => ({
+      value: m.id,
+      label: m.name && m.name !== "" ? m.name : tail(m.id),
+      group: providerOf(m),
+      sublabel: tail(m.id),
+    })),
+  ];
+}
+
+export function filterPickerOptions(options: readonly PickerOption[], query: string): PickerOption[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return [...options];
+  return options.filter(
+    (o) => !o.isDefault && [o.label, o.sublabel ?? "", o.value, o.group ?? ""].join("\n").toLowerCase().includes(needle),
+  );
+}
+
+export function baselinePickerOptions(runs: readonly BaselineRun[]): PickerOption[] {
+  return runs.map((r) => ({
+    value: String(r.runNumber),
+    label: `Run #${r.runNumber}`,
+    sublabel: baselineSublabel(r),
+    chip: { text: r.statusText, tone: r.tone },
+    meta: r.passRate,
+    disabled: !r.selectable,
+    ...(r.reason ? { reason: r.reason } : {}),
+  }));
+}
+
+export function nextEnabled(options: readonly PickerOption[], from: number, step: 1 | -1): number {
+  for (let i = from + step; i >= 0 && i < options.length; i += step) if (!options[i]!.disabled) return i;
+  return from;
+}
+
+export function edgeEnabled(options: readonly PickerOption[], end: "first" | "last"): number {
+  const order = options.map((_, i) => i);
+  if (end === "last") order.reverse();
+  return order.find((i) => !options[i]!.disabled) ?? -1;
 }

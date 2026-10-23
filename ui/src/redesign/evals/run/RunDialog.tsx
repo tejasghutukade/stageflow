@@ -34,7 +34,11 @@ import {
   isValid,
   judgeDefaultLabel,
   judgeSameAsStage,
-  modelOptions,
+  modelPickerOptions,
+  baselinePickerOptions,
+  compareBaseline,
+  showBaselineChooser,
+  JUDGE_ONLY_HINT,
   parseCostLimit,
   stageDefaultLabel,
   togglePicked,
@@ -44,6 +48,7 @@ import {
   startErrorText,
 } from "./runDialogModel";
 import { closeRunDialog, saveCompareIntent, useRunDialogTarget } from "./runDialogStore";
+import { RunPicker } from "./RunPicker";
 import { useRunDialogData } from "./useRunDialogData";
 
 const MONO = "font-['Geist_Mono',monospace]";
@@ -225,7 +230,10 @@ function RunDialogForm({
       const started = await startEvalRun(ctx.evalId, buildStartRequest(state, ctx));
       let runNumber = started.run_number;
       if (runNumber === undefined) runNumber = (await fetchEvalRun(started.eval_run_id)).run_number;
-      if (state.compare && ctx.lastCompleted) saveCompareIntent(ctx.evalId, runNumber, ctx.lastCompleted.runNumber);
+      if (state.compare) {
+        const picked = compareBaseline(state, ctx);
+        if (picked !== null) saveCompareIntent(ctx.evalId, runNumber, picked);
+      }
       closeRunDialog();
       navigate(evalRunPath(ctx.evalId, runNumber));
     } catch (err) {
@@ -254,6 +262,8 @@ function RunDialogForm({
   const text = estimate && limit !== null ? estimateText(estimate, limit) : null;
   const compare = compareLabel(ctx);
   const sameHint = judgeSameAsStage(state, ctx);
+  const chooser = showBaselineChooser(ctx);
+  const baseline = compareBaseline(state, ctx);
 
   return (
     <>
@@ -385,20 +395,23 @@ function RunDialogForm({
           </label>
           <div className="flex flex-col gap-1.5">
             <span className={LABEL}>{agent ? "Agent model" : "Stage model"}</span>
-            <Select
-              label={agent ? "Agent model" : "Stage model"}
+            <RunPicker
+              searchable
+              ariaLabel={agent ? "Agent model" : "Stage model"}
               value={state.stageModel ?? ""}
-              options={modelOptions(models, agent ? agentDefaultLabel(ctx) : stageDefaultLabel(ctx), false)}
+              options={modelPickerOptions(models, agent ? agentDefaultLabel(ctx) : stageDefaultLabel(ctx), false)}
               onChange={(v) => patch({ stageModel: v === "" ? null : v })}
             />
             <span className="text-xs text-[var(--sf-text-3)]">{agent ? AGENT_MODEL_HELPER : STAGE_MODEL_HELPER}</span>
           </div>
           <div className="flex flex-col gap-1.5">
             <span className={LABEL}>Judge model</span>
-            <Select
-              label="Judge model"
+            <RunPicker
+              searchable
+              ariaLabel="Judge model"
+              hint={JUDGE_ONLY_HINT}
               value={state.judgeModel ?? ""}
-              options={modelOptions(models, judgeDefaultLabel(ctx), true)}
+              options={modelPickerOptions(models, judgeDefaultLabel(ctx), true)}
               onChange={(v) => patch({ judgeModel: v === "" ? null : v })}
             />
             {sameHint ? <span className="text-xs text-[var(--sf-needs)]">{agent ? AGENT_JUDGE_SAME_HINT : JUDGE_SAME_HINT}</span> : null}
@@ -406,10 +419,12 @@ function RunDialogForm({
           {agent?.anySimulated ? (
             <div className="flex flex-col gap-1.5">
               <span className={LABEL}>User model</span>
-              <Select
-                label="User model"
+              <RunPicker
+                searchable
+                ariaLabel="User model"
+                hint={JUDGE_ONLY_HINT}
                 value={state.userModel ?? ""}
-                options={modelOptions(models, userModelDefaultLabel(ctx), true)}
+                options={modelPickerOptions(models, userModelDefaultLabel(ctx), true)}
                 onChange={(v) => patch({ userModel: v === "" ? null : v })}
               />
               <span className="text-xs text-[var(--sf-text-3)]">Plays the user. Costs tokens on every turn.</span>
@@ -455,15 +470,29 @@ function RunDialogForm({
         ) : null}
 
         {compare ? (
-          <label className="flex cursor-pointer items-center gap-2.5 text-[13px] text-[var(--sf-text-1)]">
-            <input
-              type="checkbox"
-              checked={state.compare}
-              onChange={(e) => patch({ compare: e.target.checked })}
-              className="size-4 accent-[var(--sf-text-1)]"
-            />
-            {compare}
-          </label>
+          <div className="flex flex-wrap items-center gap-2.5 text-[13px] text-[var(--sf-text-1)]">
+            <label className="flex cursor-pointer items-center gap-2.5">
+              <input
+                type="checkbox"
+                checked={state.compare}
+                onChange={(e) => patch({ compare: e.target.checked })}
+                className="size-4 accent-[var(--sf-text-1)]"
+              />
+              {chooser ? "Compare with" : compare}
+            </label>
+            {chooser ? (
+              <>
+                <RunPicker
+                  compact
+                  ariaLabel="Run to compare with"
+                  value={String(baseline ?? "")}
+                  options={baselinePickerOptions(ctx.earlierRuns)}
+                  onChange={(v) => patch({ compareWith: Number(v), compare: true })}
+                />
+                <span>when it finishes</span>
+              </>
+            ) : null}
+          </div>
         ) : null}
 
         <section

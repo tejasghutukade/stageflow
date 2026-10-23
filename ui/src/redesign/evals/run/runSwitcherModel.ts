@@ -18,7 +18,7 @@ export function sortRunsNewestFirst<T extends { run_number: number }>(items: rea
   return [...items].sort((a, b) => b.run_number - a.run_number);
 }
 
-function statusOf(item: EvalRunListItem): { text: string; tone: SwitcherTone } {
+export function statusOf(item: EvalRunListItem): { text: string; tone: SwitcherTone } {
   switch (item.status) {
     case "queued":
       return { text: "Queued", tone: "running" };
