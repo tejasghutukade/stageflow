@@ -110,44 +110,27 @@ import {
   type WireResultDetail,
 } from "../evals/read/runs.js";
 import { EvalStoreError } from "../evals/storeError.js";
-import { SUGGESTION_STATUSES, TRIAGE_BUCKETS, TRIAGE_MAX_LIMIT } from "../evals/triage/constants.js";
-import { isTriageBucket, TriageService, type ClassifierRequest, type TriageDeps } from "../evals/triage/service.js";
 import type { EvalRunRow } from "../evals/storeTypes.js";
 import type { EvalFile, EvalPlan } from "../evals/types.js";
 import { writeAudit } from "../logging/audit.js";
 import type { Logger } from "../logging/logger.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
-import { callerIdFromRequestAuth, getRequestAuth } from "./requestAuthContext.js";
+import {
+  audit,
+  bad,
+  isRecord,
+  optStringArray,
+  readOptionalBody,
+  runByIdOr404,
+  type Ctx,
+  type EvalRoutesDeps,
+  type RouteAgents,
+} from "./evalRouteContext.js";
+import { matchEvalTriageRoute } from "./evalTriageRoutes.js";
+import { callerIdFromRequestAuth } from "./requestAuthContext.js";
 
-export type EvalRoutesDeps = {
-  cwd: string;
-  store: RunStore;
-  manager: RunManager;
-  evalRunManager: EvalRunManager | undefined;
-  json: (res: ServerResponse, status: number, body: unknown) => void;
-  readJsonBody: (req: IncomingMessage) => Promise<unknown>;
-  auditLog: Logger;
-  engineStatus: () => EngineStatus;
-  isKnownModel?: (id: string) => Promise<boolean>;
-  sampleSourceDir?: string;
-  now?: () => Date;
-  /** Lazy view of the agent service; absent or undefined means agents are unavailable on this host. */
-  agents?: () => RouteAgents | undefined;
-  /** Model prices (USD per million tokens) for the agent cost estimate; unknown models are simply absent. */
-  loadPrices?: (modelIds: string[], projectRoot: string) => Promise<Map<string, TokenPrice>>;
-  /** Failure sorting: the Host's agent backend (judge classifier) and test seams (fetch, key lookup, base URL). */
-  triage?: Omit<TriageDeps, "store">;
-};
-
-type Ctx = EvalRoutesDeps & {
-  req: IncomingMessage;
-  res: ServerResponse;
-  url: URL;
-  method: string;
-  pathname: string;
-  evalRunManager: EvalRunManager;
-};
+export type { EvalRoutesDeps };
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const CANCEL_WAIT_MS = 5000;
@@ -179,31 +162,8 @@ const RUN_ERROR_STATUS: Record<string, number> = {
   EVAL_TAGS_ON_PASSED_RESULT: 400,
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function bad(message: string, code = "invalid_request"): EvalApiError {
-  return badRequest(message, code);
-}
-
 function sendError(c: Ctx, status: number, code: string, message: string, extra: Record<string, unknown> = {}): void {
   c.json(c.res, status, { error: message, code, ...extra });
-}
-
-function surface() {
-  return getRequestAuth()?.surface ?? "rest";
-}
-
-function audit(c: Ctx, action: string, outcome: "ok" | "error", target?: string, code?: string): void {
-  writeAudit(c.auditLog, {
-    caller_id: callerIdFromRequestAuth(),
-    surface: surface(),
-    action,
-    outcome,
-    ...(target !== undefined ? { target_run_id: target } : {}),
-    ...(code !== undefined ? { error_code: code } : {}),
-  });
 }
 
 async function readBody(c: Ctx): Promise<Record<string, unknown>> {
@@ -217,29 +177,11 @@ async function readBody(c: Ctx): Promise<Record<string, unknown>> {
   return body;
 }
 
-async function readOptionalBody(c: Ctx): Promise<Record<string, unknown>> {
-  try {
-    const body = await c.readJsonBody(c.req);
-    return isRecord(body) ? body : {};
-  } catch {
-    return {};
-  }
-}
-
 function optString(body: Record<string, unknown>, key: string): string | undefined {
   const value = body[key];
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value === "") throw bad(`"${key}" must be a non-empty string`);
   return value;
-}
-
-function optStringArray(body: Record<string, unknown>, key: string): string[] | undefined {
-  const value = body[key];
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.some((v) => typeof v !== "string" || v === "")) {
-    throw bad(`"${key}" must be an array of non-empty strings`);
-  }
-  return value as string[];
 }
 
 function intParam(url: URL, name: string, fallback: number, min: number, max: number): number {
@@ -299,7 +241,6 @@ async function exists(abs: string): Promise<boolean> {
   }
 }
 
-type RouteAgents = EvalAgentsPort & SessionsSource & Partial<Pick<EvalSampleAgents, "create" | "setEnabled">>;
 
 function agentsOf(c: Ctx): RouteAgents | undefined {
   return c.agents?.();
@@ -312,10 +253,6 @@ function agentsInput(c: Ctx): { agents?: EvalAgentsPort & SessionsSource } {
 
 function engineCheck(c: Ctx): void {
   engineCheckStatus(c.engineStatus());
-}
-
-async function runByIdOr404(c: Ctx, id: string): Promise<EvalRunRow> {
-  return runByIdOr404Shared(c.store, id);
 }
 
 function catalogOptions(c: Ctx) {
@@ -1014,82 +951,6 @@ async function handleReviewPut(c: Ctx, id: string, caseId: string, repeat: numbe
   }
 }
 
-function triageOf(c: Ctx): TriageService {
-  return new TriageService({ store: c.store, ...(c.triage ?? {}), loadPrices: c.triage?.loadPrices ?? c.loadPrices });
-}
-
-async function handleSort(c: Ctx, id: string): Promise<void> {
-  const body = await readOptionalBody(c);
-  const row = await runByIdOr404(c, id);
-  const classifier = body.classifier ?? "auto";
-  if (classifier !== "auto" && classifier !== "jev" && classifier !== "judge") {
-    throw bad(`"classifier" must be auto, jev or judge`);
-  }
-  if (body.only_unsorted !== undefined && typeof body.only_unsorted !== "boolean") throw bad(`"only_unsorted" must be a boolean`);
-  if (
-    body.limit !== undefined &&
-    (typeof body.limit !== "number" || !Number.isInteger(body.limit) || body.limit < 1 || body.limit > TRIAGE_MAX_LIMIT)
-  ) {
-    throw bad(`"limit" must be an integer from 1 to ${TRIAGE_MAX_LIMIT}`);
-  }
-  try {
-    const result = await triageOf(c).sort(row, {
-      classifier: classifier as ClassifierRequest,
-      ...(body.only_unsorted !== undefined ? { onlyUnsorted: body.only_unsorted as boolean } : {}),
-      ...(body.limit !== undefined ? { limit: body.limit as number } : {}),
-    });
-    audit(c, "eval_failures_sort", "ok", id);
-    c.json(c.res, 200, result);
-  } catch (err) {
-    audit(c, "eval_failures_sort", "error", id, err instanceof EvalApiError ? err.code : "internal_error");
-    throw err;
-  }
-}
-
-async function handleSuggestionsList(c: Ctx, id: string): Promise<void> {
-  const row = await runByIdOr404(c, id);
-  const status = c.url.searchParams.get("status") ?? undefined;
-  if (status !== undefined && !(SUGGESTION_STATUSES as readonly string[]).includes(status)) {
-    throw bad(`"status" must be one of ${SUGGESTION_STATUSES.join(", ")}`);
-  }
-  c.json(c.res, 200, await triageOf(c).list(row, status as (typeof SUGGESTION_STATUSES)[number] | undefined));
-}
-
-function idsOf(body: Record<string, unknown>, required: boolean): string[] | undefined {
-  const ids = optStringArray(body, "ids");
-  if (ids === undefined && required) throw bad(`"ids" is required`);
-  return ids;
-}
-
-async function handleSuggestionsAccept(c: Ctx, id: string): Promise<void> {
-  const body = await readOptionalBody(c);
-  const row = await runByIdOr404(c, id);
-  const ids = idsOf(body, false);
-  if (body.min_confidence !== undefined && (typeof body.min_confidence !== "number" || body.min_confidence < 0 || body.min_confidence > 1)) {
-    throw bad(`"min_confidence" must be a number from 0 to 1`);
-  }
-  if (body.bucket !== undefined && !isTriageBucket(body.bucket)) throw bad(`"bucket" must be one of ${TRIAGE_BUCKETS.join(", ")}`);
-  const result = await triageOf(c).accept(row, {
-    ...(ids !== undefined ? { ids } : {}),
-    ...(typeof body.min_confidence === "number" ? { minConfidence: body.min_confidence } : {}),
-    ...(isTriageBucket(body.bucket) ? { bucket: body.bucket } : {}),
-  });
-  audit(c, "eval_suggestions_accept", "ok", id);
-  c.json(c.res, 200, result);
-}
-
-async function handleSuggestionsDismiss(c: Ctx, id: string): Promise<void> {
-  const body = await readOptionalBody(c);
-  const row = await runByIdOr404(c, id);
-  const result = await triageOf(c).dismiss(row, idsOf(body, true) as string[]);
-  audit(c, "eval_suggestions_dismiss", "ok", id);
-  c.json(c.res, 200, result);
-}
-
-async function handleSortStatus(c: Ctx, id: string): Promise<void> {
-  c.json(c.res, 200, await triageOf(c).status(await runByIdOr404(c, id)));
-}
-
 async function handleFailureTypes(c: Ctx, id: string): Promise<void> {
   const root = await locateEvalRoot(rootOptions(c), wireFromQuery(c), id);
   c.json(c.res, 200, { items: await c.store.listFailureTypes(root.path, id), next_cursor: null });
@@ -1621,16 +1482,8 @@ export async function handleEvalRoutes(
   if (method === "PUT" && match) {
     return run(() => handleReviewPut(c, seg(match![1]), seg(match![2]), Number(match![3])));
   }
-  match = m(/^\/api\/eval-runs\/([^/]+)\/failures\/sort$/);
-  if (method === "POST" && match) return run(() => handleSort(c, seg(match![1])));
-  match = m(/^\/api\/eval-runs\/([^/]+)\/failures\/suggestions$/);
-  if (method === "GET" && match) return run(() => handleSuggestionsList(c, seg(match![1])));
-  match = m(/^\/api\/eval-runs\/([^/]+)\/failures\/suggestions\/accept$/);
-  if (method === "POST" && match) return run(() => handleSuggestionsAccept(c, seg(match![1])));
-  match = m(/^\/api\/eval-runs\/([^/]+)\/failures\/suggestions\/dismiss$/);
-  if (method === "POST" && match) return run(() => handleSuggestionsDismiss(c, seg(match![1])));
-  match = m(/^\/api\/eval-runs\/([^/]+)\/failures\/status$/);
-  if (method === "GET" && match) return run(() => handleSortStatus(c, seg(match![1])));
+  const triageRoute = matchEvalTriageRoute(c, seg);
+  if (triageRoute) return run(triageRoute);
   match = m(/^\/api\/eval-runs\/([^/]+)\/results\/([^/]+)$/);
   if (method === "GET" && match) return run(() => handleResultDetail(c, seg(match![1]), seg(match![2])));
   match = m(/^\/api\/eval-runs\/([^/]+)\/results$/);
