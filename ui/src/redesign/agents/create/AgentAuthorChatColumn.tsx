@@ -83,13 +83,19 @@ export function AgentAuthorChatColumn({
   sessionId,
   initialMessages,
   initialModel,
+  ensureSession,
   onSessionId,
 }: {
   definition: AgentDefinition;
-  onDefinitionChange: (next: AgentDefinition, source: "author") => void;
+  onDefinitionChange: (
+    next: AgentDefinition,
+    source: "author" | ReadonlyArray<{ label: string; value?: string }>,
+    sent?: AgentDefinition,
+  ) => void;
   sessionId?: string;
   initialMessages?: ChatMessage[];
   initialModel?: string;
+  ensureSession: () => Promise<string>;
   onSessionId?: (sessionId: string) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? [{ id: "greeting", role: "assistant", text: GREETING }]);
@@ -100,6 +106,12 @@ export function AgentAuthorChatColumn({
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<string | undefined>(sessionId);
+  const definitionRef = useRef(definition);
+  const ensureRef = useRef(ensureSession);
+  const onChangeRef = useRef(onDefinitionChange);
+  definitionRef.current = definition;
+  ensureRef.current = ensureSession;
+  onChangeRef.current = onDefinitionChange;
   const modelRef = useRef(initialModel ?? "");
   modelRef.current = chatModel;
 
@@ -136,17 +148,20 @@ export function AgentAuthorChatColumn({
     append({ id: `u-${Date.now()}`, role: "user", text });
     setSending(true);
     try {
+      const idForTurn = await ensureRef.current();
+      sessionRef.current = idForTurn;
+      const sent = definitionRef.current;
       const result = await sendAgentAuthorTurn({
         message: text,
-        ...(sessionRef.current ? { sessionId: sessionRef.current } : {}),
-        draft: definition,
+        sessionId: idForTurn,
+        draft: sent,
         ...(modelRef.current ? { model: modelRef.current } : {}),
       });
       sessionRef.current = result.sessionId;
       onSessionId?.(result.sessionId);
       const id = `a-${Date.now()}`;
       if (result.summaryLines.length > 0) {
-        onDefinitionChange(completeDefinition(result.draft), "author");
+        onChangeRef.current(result.draft as AgentDefinition, result.summaryLines, sent);
         setPendingId(id);
       }
       append({

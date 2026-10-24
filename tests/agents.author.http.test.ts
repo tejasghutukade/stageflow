@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { resetAgentAuthorSessionsForTests } from "../src/agents/authorChat.js";
+import { readAuthorSession } from "../src/agents/authorSessionStore.js";
 import { createWorkshopOperatorHost } from "../src/operatorAgent/index.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { loadControlTokens } from "../src/server/controlToken.js";
@@ -104,5 +105,79 @@ describe("POST /api/agent-author/chat", () => {
     const undone = (await undo.json()) as { draft: Record<string, unknown> };
     expect(undo.status).toBe(200);
     expect(undone.draft).toEqual({ greeting: "What should I look into?" });
+  });
+
+  it("replaces the draft and keeps the transcript already on disk", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-agent-author-put-"));
+    const project = await mkdtemp(path.join(tmpdir(), "sf-agent-author-put-project-"));
+    bindStageflowHomeForTests(home);
+    const store = createRunStore({ rootDir: home });
+    const started = await startUiServer({
+      agent: scriptedFakeAgent([]),
+      cwd: project,
+      rootDir: home,
+      store,
+      port: 0,
+      uiDistDir: path.join(home, "missing-ui"),
+      controlTokens: loadControlTokens({ STAGEFLOW_CONTROL_TOKEN: DRIVE }),
+      workshopOperatorHost: createWorkshopOperatorHost({
+        model: {
+          async complete() {
+            return { events: [{ type: "message", role: "assistant", text: "Who is it for?" }] };
+          },
+        },
+      }),
+    });
+    servers.push(started.server);
+    const address = started.server.address();
+    if (!address || typeof address === "string") throw new Error("expected a port");
+    const base = `http://127.0.0.1:${address.port}`;
+    const headers = {
+      Authorization: `Bearer ${DRIVE}`,
+      "Content-Type": "application/json",
+    };
+    const first = await fetch(`${base}/api/agent-author/chat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        message: "A scout.",
+        draft: { name: "Scout", instructions: "Search." },
+      }),
+    });
+    const opened = (await first.json()) as { sessionId: string };
+    expect(first.status).toBe(200);
+    expect(readAuthorSession(opened.sessionId)?.transcript).toHaveLength(2);
+
+    const second = await fetch(`${base}/api/agent-author/chat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        message: "For operators.",
+        sessionId: opened.sessionId,
+        draft: { name: "Scout", instructions: "Search." },
+      }),
+    });
+    expect(second.status).toBe(200);
+    expect(readAuthorSession(opened.sessionId)?.transcript).toHaveLength(4);
+
+    const formDraft = { name: "From the form", instructions: "Saved from the form." };
+    const put = await fetch(`${base}/api/agent-author/sessions/${opened.sessionId}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ draft: formDraft }),
+    });
+    const saved = (await put.json()) as { draft: Record<string, unknown>; transcript: unknown[] };
+    expect(put.status).toBe(200);
+    expect(saved.draft).toEqual(formDraft);
+    expect(saved.transcript).toHaveLength(4);
+    const onDisk = readAuthorSession(opened.sessionId);
+    expect(onDisk?.draft).toEqual(formDraft);
+    expect(onDisk?.transcript).toHaveLength(4);
+    expect(onDisk?.transcript.map((entry) => entry.text)).toEqual([
+      "A scout.",
+      "Who is it for?",
+      "For operators.",
+      "Who is it for?",
+    ]);
   });
 });

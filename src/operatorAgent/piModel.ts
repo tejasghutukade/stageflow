@@ -22,7 +22,7 @@ import {
   createSealedResourceLoader,
   resolveWorkshopToolNames,
 } from "../agent/piSessionFactory.js";
-import { bindCursorApiKey, cursorBridgePrompt } from "../agent/cursorProvider.js";
+import { bindCursorApiKey, cursorBridgePrompt, isCursorModelRef } from "../agent/cursorProvider.js";
 import { findProviderSupport } from "../agent/providerSupport.js";
 import "../agent/cursorProvider.js";
 import { logger as rootLogger } from "../logging/logger.js";
@@ -706,6 +706,12 @@ export function createPiOperatorAgentModel(
       if (profile.id === AGENT_AUTHOR_PROFILE_ID) {
         prompt = formatAgentAuthorTurnPrompt(message, contextSnapshot);
         prompt = `${prompt}\n\n${agentAuthorBridgeHint(toolNames)}`;
+        if (modelId && isCursorModelRef(modelId) && toolNames.length > 0) {
+          const aliasLines = toolNames.map(
+            (name) => `- pi__${name} (playbook name: ${name})`,
+          );
+          prompt = `${prompt}\n${aliasLines.join("\n")}`;
+        }
       } else {
         prompt = cursorBridgePrompt(prompt, modelId, toolNames);
       }

@@ -20,6 +20,8 @@ import {
   type PiOperatorSessionHandle,
 } from "../src/operatorAgent/piModel.js";
 import {
+  AGENT_AUTHOR_PROFILE_ID,
+  createAgentAuthorContext,
   createWorkshopDraftContext,
   emptyDraftPackage,
   readDraftFromContext,
@@ -631,12 +633,42 @@ describe("createPiOperatorAgentModel", () => {
     await session.send("make a research stage", { modelId: "cursor/auto" });
     expect(prompted).toContain("make a research stage");
     expect(prompted).toContain("pi__create_stage");
+    expect(prompted).toContain("do not finish without");
     expect(mock.getOpened()?.modelId).toBe("cursor/auto");
 
     await session.send("make a research stage", {
       modelId: "anthropic/claude-sonnet-4-5",
     });
     expect(prompted).toBe("make a research stage");
+    session.close();
+  });
+
+  it("names author tools as pi__ aliases for cursor models without requiring a tool call", async () => {
+    let prompted = "";
+    const mock = createMockPiHandle(async (text) => {
+      prompted = text;
+    });
+    const host = createLiveWorkshopOperatorHost({
+      cwd: process.cwd(),
+      openPiSession: mock.openPiSession,
+      resolveModelId: () => "anthropic/claude-sonnet-4-5",
+    });
+    const session = host.openSession({
+      profileId: AGENT_AUTHOR_PROFILE_ID,
+      context: createAgentAuthorContext({ projectRoot: process.cwd() }),
+    });
+
+    await session.send("who is this for?", { modelId: "cursor/auto" });
+    expect(prompted).toContain("pi__update_agent_draft");
+    expect(prompted).toContain("(playbook name: update_agent_draft)");
+    expect(prompted).not.toContain("do not finish without");
+    expect(prompted).toContain("Ask what you still need");
+
+    await session.send("who is this for?", {
+      modelId: "anthropic/claude-sonnet-4-5",
+    });
+    expect(prompted).toContain("Ask what you still need");
+    expect(prompted).not.toContain("pi__");
     session.close();
   });
 

@@ -27,6 +27,48 @@ export type AgentAuthorTurnResult = {
 
 const sessions = new Map<string, OperatorAgentSession>();
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function sameDraftValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Objects walk key by key; arrays and scalars are wholes. Turn changes win, including removals. */
+function mergeTurnDraft(start: AgentAuthorDraft, end: AgentAuthorDraft, disk: AgentAuthorDraft): AgentAuthorDraft {
+  const keys = new Set([...Object.keys(start), ...Object.keys(end), ...Object.keys(disk)]);
+  const next: AgentAuthorDraft = {};
+  for (const key of keys) {
+    const startHas = Object.prototype.hasOwnProperty.call(start, key);
+    const endHas = Object.prototype.hasOwnProperty.call(end, key);
+    const diskHas = Object.prototype.hasOwnProperty.call(disk, key);
+    if (startHas && !endHas) continue;
+    if (!endHas) {
+      if (diskHas) next[key] = structuredClone(disk[key]);
+      continue;
+    }
+    if (!startHas) {
+      next[key] = structuredClone(end[key]);
+      continue;
+    }
+    const startVal = start[key];
+    const endVal = end[key];
+    const diskVal = disk[key];
+    if (isPlainObject(startVal) && isPlainObject(endVal) && (!diskHas || isPlainObject(diskVal))) {
+      if (!diskHas && sameDraftValue(startVal, endVal)) continue;
+      next[key] = mergeTurnDraft(startVal, endVal, diskHas && isPlainObject(diskVal) ? diskVal : {});
+      continue;
+    }
+    if (sameDraftValue(startVal, endVal)) {
+      if (diskHas) next[key] = structuredClone(diskVal);
+    } else {
+      next[key] = structuredClone(endVal);
+    }
+  }
+  return next;
+}
+
 export function resetAgentAuthorSessionsForTests(): void {
   for (const session of sessions.values()) session.close();
   sessions.clear();
@@ -94,13 +136,16 @@ export async function runAgentAuthorTurn(input: {
   const error = events.find((event) => event.type === "error");
   const draft = readAgentAuthorDraft(session.getContext());
   const summaryLines = describeChanges(before, draft);
+  const latest = readAuthorSession(sessionId);
+  if (!latest) throw new Error("agent.session_not_found");
+  const merged = mergeTurnDraft(before, draft, latest.draft);
   const now = new Date().toISOString();
   const saved = saveAuthorSession({
-    ...record,
-    draft,
+    ...latest,
+    draft: merged,
     ...(input.model?.trim() ? { model: input.model.trim() } : {}),
     transcript: [
-      ...record.transcript,
+      ...latest.transcript,
       { id: randomUUID(), role: "user", text: message, createdAt: now },
       {
         id: randomUUID(),
@@ -114,7 +159,7 @@ export async function runAgentAuthorTurn(input: {
   return {
     sessionId: saved.id,
     text: saved.transcript.at(-1)?.text ?? "",
-    draft,
+    draft: merged,
     summaryLines,
   };
 }

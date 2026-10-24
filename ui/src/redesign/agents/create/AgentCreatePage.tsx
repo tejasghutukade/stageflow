@@ -12,12 +12,20 @@ import { markAgentCreated } from "../useAgent";
 import { Button, PageFooter } from "../ui"
 import { PageHeader } from "../../shell/PageHeader";;
 import { AgentAuthorChatColumn, authorMessagesFromTranscript } from "./AgentAuthorChatColumn";
+import { createAuthorCreateClaim, mergeAuthorTurnIntoForm } from "./authorCreateSession";
 
 export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string }) {
   const openedWith = useRef(authorSessionId);
   const sessionRef = useRef<string | undefined>(authorSessionId);
+  const claimRef = useRef(createAuthorCreateClaim({
+    create: (draft) => createAuthorSession(draft).then((created) => created.id),
+    save: (id, draft) => saveAuthorDraft(id, draft),
+  }));
   const [sessionId, setSessionId] = useState<string | undefined>(authorSessionId);
   const [definition, setDefinition] = useState<AgentDefinition>(newAgentDefinition);
+  const definitionRef = useRef(definition);
+  definitionRef.current = definition;
+  claimRef.current.note(definition);
   const [authorWroteInstructions, setAuthorWroteInstructions] = useState(false);
   const [boot, setBoot] = useState<"loading" | "ready">(authorSessionId ? "loading" : "ready");
   const [seedMessages, setSeedMessages] = useState<ReturnType<typeof authorMessagesFromTranscript> | undefined>(undefined);
@@ -46,6 +54,7 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
         if (record.model) setSeedModel(record.model);
         setSessionId(record.id);
         sessionRef.current = record.id;
+        claimRef.current.adopt(record.id);
         setBoot("ready");
       })
       .catch(() => {
@@ -68,26 +77,29 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
     }
     const id = sessionRef.current;
     if (!id) return;
+    claimRef.current.adopt(id);
     const draft = definition;
     const timer = setTimeout(() => {
-      void saveAuthorDraft(id, draft).catch(() => undefined);
+      void claimRef.current.writeIfCurrent(draft).catch(() => undefined);
     }, 300);
     return () => {
       clearTimeout(timer);
-      void saveAuthorDraft(id, draft).catch(() => undefined);
+      void claimRef.current.writeIfCurrent(draft).catch(() => undefined);
     };
   }, [definition, boot]);
 
-  async function ensureSession(draft: AgentDefinition): Promise<string> {
-    if (sessionRef.current) return sessionRef.current;
-    const created = await createAuthorSession(draft);
-    sessionRef.current = created.id;
-    setSessionId(created.id);
-    navigate(agentCreatePath({ session: created.id }));
-    return created.id;
+  async function ensureSession(): Promise<string> {
+    const id = await claimRef.current.ensure(definitionRef.current, sessionRef.current);
+    if (sessionRef.current !== id) {
+      sessionRef.current = id;
+      setSessionId(id);
+      navigate(agentCreatePath({ session: id }));
+    }
+    return id;
   }
 
   function rememberSession(id: string) {
+    claimRef.current.adopt(id);
     if (sessionRef.current === id) return;
     sessionRef.current = id;
     setSessionId(id);
@@ -104,13 +116,25 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
     setSaveIssues([]);
     setSaveError(null);
     if (next.instructions !== definition.instructions) setAuthorWroteInstructions(false);
+    definitionRef.current = next;
+    claimRef.current.note(next);
     setDefinition(next);
-    void ensureSession(next);
+    void ensureSession().catch(() => undefined);
   }
 
-  function onAuthorChange(next: AgentDefinition) {
-    if (next.instructions !== definition.instructions) setAuthorWroteInstructions(true);
-    setDefinition(next);
+  function onAuthorChange(
+    next: AgentDefinition,
+    source: "author" | ReadonlyArray<{ label: string; value?: string }>,
+    sent?: AgentDefinition,
+  ) {
+    const summaryLines = typeof source === "string" ? undefined : source;
+    const merged = summaryLines && summaryLines.length > 0
+      ? mergeAuthorTurnIntoForm(definitionRef.current, next, summaryLines, sent)
+      : next;
+    if (merged.instructions !== definitionRef.current.instructions) setAuthorWroteInstructions(true);
+    definitionRef.current = merged;
+    claimRef.current.note(merged);
+    setDefinition(merged);
   }
 
   async function onSave() {
@@ -186,6 +210,7 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
               sessionId={sessionId}
               initialMessages={seedMessages}
               initialModel={seedModel}
+              ensureSession={ensureSession}
               onSessionId={rememberSession}
             />
           )}

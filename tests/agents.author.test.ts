@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resetAgentAuthorSessionsForTests, runAgentAuthorTurn } from "../src/agents/authorChat.js";
-import { createAuthorSession, listAuthorDrafts, readAuthorSession } from "../src/agents/authorSessionStore.js";
-import type { OperatorAgentModel } from "../src/operatorAgent/host.js";
+import { createAuthorSession, listAuthorDrafts, readAuthorSession, saveAuthorSession } from "../src/agents/authorSessionStore.js";
+import { invokeProfileTool, type OperatorAgentModel } from "../src/operatorAgent/host.js";
 import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
 import {
   formatAgentAuthorTurnPrompt,
@@ -189,4 +189,175 @@ describe("agent author", () => {
     expect(listed.map((draft) => draft.id)).toEqual([named.id]);
     expect(listed[0]).toMatchObject({ name: "Scout", messages: 0 });
   });
+
+  it("keeps a disk edit made during a question-only turn and appends both transcript lines", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-agent-author-overlap-"));
+    bindStageflowHomeForTests(home);
+    const created = createAuthorSession({ draft: { name: "Scout", instructions: "Search." } });
+    const model: OperatorAgentModel = {
+      async complete() {
+        const current = readAuthorSession(created.id);
+        if (!current) throw new Error("session missing");
+        saveAuthorSession({
+          ...current,
+          draft: { ...current.draft, instructions: "Operator rewrote this." },
+        });
+        return { events: [{ type: "message", role: "assistant", text: "Who is it for?" }] };
+      },
+    };
+    const host = createWorkshopOperatorHost({ model });
+    const result = await runAgentAuthorTurn({
+      host,
+      projectRoot: "/tmp/project",
+      message: "What should it do?",
+      sessionId: created.id,
+    });
+    const saved = readAuthorSession(created.id);
+    expect(saved?.draft).toEqual({ name: "Scout", instructions: "Operator rewrote this." });
+    expect(saved?.transcript.map((entry) => entry.text)).toEqual(["What should it do?", "Who is it for?"]);
+    expect(result.draft).toEqual({ name: "Scout", instructions: "Operator rewrote this." });
+    expect(result.summaryLines).toEqual([]);
+    resetAgentAuthorSessionsForTests();
+  });
+
+  it("writes the turn's name and keeps instructions changed on disk during the turn", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-agent-author-name-"));
+    bindStageflowHomeForTests(home);
+    const created = createAuthorSession({
+      draft: { id: "scout", name: "Old", instructions: "Search." },
+    });
+    const host = createWorkshopOperatorHost({
+      model: {
+        async complete(input) {
+          writeDiskDraft(created.id, { id: "scout", name: "Old", instructions: "Disk instructions." });
+          await invokeProfileTool(
+            input.profile,
+            "update_agent_draft",
+            { patch: { name: "Scout" }, summary: "Named it" },
+            input.tools,
+          );
+          return { events: [{ type: "message", role: "assistant", text: "Named Scout." }] };
+        },
+      },
+    });
+    const result = await runAgentAuthorTurn({
+      host,
+      projectRoot: "/tmp/project",
+      message: "Call it Scout.",
+      sessionId: created.id,
+    });
+    const saved = readAuthorSession(created.id);
+    expect(saved?.draft).toEqual({ id: "scout", name: "Scout", instructions: "Disk instructions." });
+    expect(result.draft).toEqual({ id: "scout", name: "Scout", instructions: "Disk instructions." });
+    expect(result.summaryLines).toEqual([{ label: "Identity", value: "Scout · scout" }]);
+    expect(saved?.transcript.at(-1)?.summaryLines).toEqual([{ label: "Identity", value: "Scout · scout" }]);
+    resetAgentAuthorSessionsForTests();
+  });
+
+  it("keeps the turn's name when the operator also changed the name", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-agent-author-both-name-"));
+    bindStageflowHomeForTests(home);
+    const created = createAuthorSession({ draft: { id: "scout", name: "Old", instructions: "Search." } });
+    const host = createWorkshopOperatorHost({
+      model: {
+        async complete(input) {
+          writeDiskDraft(created.id, { id: "scout", name: "Operator", instructions: "Search." });
+          await invokeProfileTool(
+            input.profile,
+            "update_agent_draft",
+            { patch: { name: "Scout" }, summary: "Named it" },
+            input.tools,
+          );
+          return { events: [{ type: "message", role: "assistant", text: "Named Scout." }] };
+        },
+      },
+    });
+    const result = await runAgentAuthorTurn({
+      host,
+      projectRoot: "/tmp/project",
+      message: "Call it Scout.",
+      sessionId: created.id,
+    });
+    const saved = readAuthorSession(created.id);
+    expect(saved?.draft).toEqual({ id: "scout", name: "Scout", instructions: "Search." });
+    expect(result.draft).toEqual(saved?.draft);
+    resetAgentAuthorSessionsForTests();
+  });
+
+  it("drops a field the turn removed even if disk still has it", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-agent-author-remove-"));
+    bindStageflowHomeForTests(home);
+    const created = createAuthorSession({
+      draft: { id: "scout", name: "Scout", greeting: "hi", instructions: "Search." },
+    });
+    const host = createWorkshopOperatorHost({
+      model: {
+        async complete(input) {
+          writeDiskDraft(created.id, {
+            id: "scout",
+            name: "Scout",
+            greeting: "operator hello",
+            instructions: "Disk instructions.",
+          });
+          await invokeProfileTool(
+            input.profile,
+            "update_agent_draft",
+            { patch: { greeting: null }, summary: "Removed the greeting" },
+            input.tools,
+          );
+          return { events: [{ type: "message", role: "assistant", text: "Removed the greeting." }] };
+        },
+      },
+    });
+    const result = await runAgentAuthorTurn({
+      host,
+      projectRoot: "/tmp/project",
+      message: "Drop the greeting.",
+      sessionId: created.id,
+    });
+    const saved = readAuthorSession(created.id);
+    expect(saved?.draft).toEqual({ id: "scout", name: "Scout", instructions: "Disk instructions." });
+    expect(result.draft).toEqual(saved?.draft);
+    resetAgentAuthorSessionsForTests();
+  });
+
+  it("appends the user line and the error text and still merges the disk draft", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-agent-author-error-"));
+    bindStageflowHomeForTests(home);
+    const created = createAuthorSession({
+      draft: { id: "scout", name: "Old", instructions: "Search." },
+    });
+    const host = createWorkshopOperatorHost({
+      model: {
+        async complete(input) {
+          writeDiskDraft(created.id, { id: "scout", name: "Old", instructions: "Disk instructions." });
+          await invokeProfileTool(
+            input.profile,
+            "update_agent_draft",
+            { patch: { name: "Scout" }, summary: "Named it" },
+            input.tools,
+          );
+          return { events: [{ type: "error", message: "provider down" }] };
+        },
+      },
+    });
+    const result = await runAgentAuthorTurn({
+      host,
+      projectRoot: "/tmp/project",
+      message: "Call it Scout.",
+      sessionId: created.id,
+    });
+    const saved = readAuthorSession(created.id);
+    expect(saved?.draft).toEqual({ id: "scout", name: "Scout", instructions: "Disk instructions." });
+    expect(result.draft).toEqual(saved?.draft);
+    expect(saved?.transcript.map((entry) => entry.text)).toEqual(["Call it Scout.", "provider down"]);
+    expect(result.summaryLines).toEqual([{ label: "Identity", value: "Scout · scout" }]);
+    resetAgentAuthorSessionsForTests();
+  });
 });
+
+function writeDiskDraft(sessionId: string, draft: Record<string, unknown>): void {
+  const current = readAuthorSession(sessionId);
+  if (!current) throw new Error("session missing");
+  saveAuthorSession({ ...current, draft });
+}
