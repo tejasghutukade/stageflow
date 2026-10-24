@@ -9,6 +9,7 @@
  * (e.g. MCP) may still be waiting for this result, and abort-while-running
  * deadlocks waitForIdle so later pipeline stages never start.
  */
+import { EMIT_STAGE_ENVELOPE_TOOL_NAME } from "./stageToolNames.js";
 import { Type } from "typebox";
 import type { TSchema } from "typebox/type";
 import {
@@ -104,7 +105,7 @@ export function createEmitStageEnvelopeTool(
       : undefined;
 
   return {
-    name: "emit_stage_envelope",
+    name: EMIT_STAGE_ENVELOPE_TOOL_NAME,
     label: "Emit stage envelope",
     description:
       "Emit the shared stage handoff envelope. Call exactly once when the stage is complete. The pipeline cannot advance until this tool succeeds.",

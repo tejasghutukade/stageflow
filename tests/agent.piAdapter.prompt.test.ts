@@ -3,6 +3,8 @@ import { cursorProviderSupport } from "../src/agent/cursorProvider.js";
 import type { FeedbackLoopContext } from "../src/agent/port.js";
 import {
   composeFeedbackResumePrompt,
+  composeStagePiKickoffPrompt,
+  composeStagePiSystemPrompt,
   composeStageUserPrompt,
 } from "../src/agent/piAdapter.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
@@ -192,5 +194,29 @@ describe("composeFeedbackResumePrompt", () => {
     expect(() => composeFeedbackResumePrompt(baseInput())).toThrow(
       /feedback_resume requires feedbackLoopContext/,
     );
+  });
+});
+
+describe("Pi stage system prompt", () => {
+  it("carries the assignment and envelope contract, not the kickoff message", () => {
+    const input = {
+      ...baseInput(),
+      stage: {
+        ...baseInput().stage,
+        system_prompt: "You are the planner.",
+        payload_schema: { type: "object", properties: { plan: { type: "string" } } },
+      },
+    } as ReturnType<typeof baseInput>;
+    const system = composeStagePiSystemPrompt(input, "emit_stage_envelope", undefined, "write_stage_artifact");
+    expect(system.startsWith("You are the planner.")).toBe(true);
+    expect(system).toContain("# Working state");
+    expect(system).toContain("working_state");
+    expect(system).toContain(`Goal: ${input.task.goal}`);
+    expect(system).toContain("Required final action: call emit_stage_envelope");
+    expect(system).toContain('"plan"');
+    const kickoff = composeStagePiKickoffPrompt(input);
+    expect(kickoff).not.toContain(input.task.goal);
+    expect(kickoff).not.toContain("emit_stage_envelope");
+    expect(kickoff).toContain("Stage assignment");
   });
 });

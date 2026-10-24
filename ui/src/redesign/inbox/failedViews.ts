@@ -7,6 +7,8 @@ const HIDDEN_INBOX_ACTIVITY_EVENTS = new Set([
   "agent_end",
   "turn_start",
   "tool_progress",
+  "context_usage",
+  "context_compacted",
 ]);
 
 export function isInterruptedFailedRun(run: RunSummary): boolean {

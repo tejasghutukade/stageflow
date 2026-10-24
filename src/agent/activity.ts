@@ -94,6 +94,26 @@ export type StageActivityEvent =
       text?: string;
     }
   | {
+      event: "context_usage";
+      /** Estimated tokens in the model's context after the latest response. */
+      tokens: number;
+      contextWindow: number;
+      /** Whole-number share of the window, 0-100. */
+      percent: number;
+    }
+  | {
+      event: "context_compacted";
+      reason: "manual" | "threshold" | "overflow";
+      tokensBefore: number;
+      /** Best estimate after compaction; null if unknown. */
+      tokensAfter: number | null;
+      summaryChars: number;
+      costUsd: number;
+      willRetry: boolean;
+      aborted: boolean;
+      error?: string;
+    }
+  | {
       event: "operator_prompt";
       prompt: AskOperatorPrompt;
     }

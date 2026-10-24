@@ -1,0 +1,141 @@
+id: compaction-stress
+model: openrouter/deepseek/deepseek-chat-v3.1
+schemas:
+  evidence-report:
+    type: object
+    required:
+      - incident_id
+      - timeline
+      - shards_reviewed
+      - suspected_change
+      - impact
+      - ruled_out
+    properties:
+      incident_id:
+        type: string
+        pattern: "^INC-[0-9]+$"
+      shards_reviewed:
+        type: array
+        minItems: 12
+        items:
+          type: string
+          pattern: "^logs/[a-z-]+/[a-z-]+-0[1-2]\\.log$"
+      timeline:
+        type: array
+        minItems: 8
+        items:
+          type: object
+          required: [ts, service, event]
+          properties:
+            ts:
+              type: string
+              pattern: "^2026-03-14T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+            service:
+              type: string
+            event:
+              type: string
+      suspected_change:
+        type: object
+        required: [build, flag, retry_policy]
+        properties:
+          flag:
+            type: string
+          retry_policy:
+            type: string
+            pattern: "^max_attempts=[0-9]+ backoff=[a-z]+ jitter=[a-z]+$"
+          build:
+            type: string
+            pattern: "^[0-9a-f]{7}$"
+      impact:
+        type: object
+        required: [failed_checkouts, duration_min, recovery_ts]
+        properties:
+          failed_checkouts:
+            type: integer
+          duration_min:
+            type: integer
+          recovery_ts:
+            type: string
+            pattern: "^2026-03-14T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+      ruled_out:
+        type: array
+        items:
+          type: string
+  root-cause:
+    type: object
+    required: [incident_id, root_cause, contributing_factors, policy_violations, evidence_refs, impact]
+    properties:
+      impact:
+        type: object
+        required: [failed_checkouts, duration_min, recovery_ts]
+        properties:
+          failed_checkouts:
+            type: integer
+          duration_min:
+            type: integer
+          recovery_ts:
+            type: string
+            pattern: "^2026-03-14T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+      incident_id:
+        type: string
+        pattern: "^INC-[0-9]+$"
+      root_cause:
+        type: string
+      contributing_factors:
+        type: array
+        items:
+          type: string
+      policy_violations:
+        type: array
+        minItems: 1
+        items:
+          type: string
+          pattern: "^runbooks/[a-z-]+\\.md: "
+      evidence_refs:
+        type: array
+        minItems: 3
+        items:
+          type: string
+          pattern: "^logs/[a-z-]+/[a-z-]+-0[1-2]\\.log$"
+  postmortem:
+    type: object
+    required: [incident_id, action_items, postmortem_artifact, failed_checkouts, duration_min, recovery_ts]
+    properties:
+      failed_checkouts:
+        type: integer
+      duration_min:
+        type: integer
+      recovery_ts:
+        type: string
+        pattern: "^2026-03-14T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+      incident_id:
+        type: string
+        pattern: "^INC-[0-9]+$"
+      postmortem_artifact:
+        type: string
+      action_items:
+        type: array
+        items:
+          type: object
+          required: [title, owner, due]
+          properties:
+            title:
+              type: string
+            owner:
+              type: string
+              pattern: "^[a-z-]+$"
+            due:
+              type: string
+              pattern: "^2026-0[34]-[0-9]{2}$"
+stages:
+  - id: collect-evidence
+    entry: true
+    route:
+      - to: root-cause
+    uses: ./collect-evidence.yaml
+  - id: root-cause
+    route:
+      - to: write-postmortem
+    uses: ./root-cause.yaml
+  - id: write-postmortem
+    uses: ./write-postmortem.yaml

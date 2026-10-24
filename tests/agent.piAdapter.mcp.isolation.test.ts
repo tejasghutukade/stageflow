@@ -20,6 +20,7 @@ import {
 } from "../src/runtime/stageRoots.js";
 import { TOOL_OUTPUT_HARD_CEILING_BYTES } from "../src/agent/toolOutputBudget.js";
 import { STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME } from "../src/agent/toolOutputBudgetExtension.js";
+import { WORKING_STATE_TOOL_NAME } from "../src/compaction/types.js";
 import { withIsolatedHome } from "./helpers/projectContext.js";
 
 const piSdkMocks = vi.hoisted(() => {
@@ -273,7 +274,8 @@ function registeredToolNames(loader: {
 }): string[] {
   return loader
     .getExtensions()
-    .extensions.flatMap((ext) => [...ext.tools.keys()]);
+    .extensions.flatMap((ext) => [...ext.tools.keys()])
+    .filter((name) => name !== WORKING_STATE_TOOL_NAME);
 }
 
 function extensionErrorBlob(loader: {
@@ -546,6 +548,9 @@ describe("ambient MCP isolation", () => {
           name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
           factory: expect.any(Function),
         }),
+        expect.objectContaining({ name: "stageflow-openrouter-routing", factory: expect.any(Function) }),
+      expect.objectContaining({ name: "stageflow-compaction", factory: expect.any(Function) }),
+        expect.objectContaining({ name: "stageflow-working-state", factory: expect.any(Function) }),
       ]);
 
       const loader = sessionResourceLoader();
@@ -557,6 +562,9 @@ describe("ambient MCP isolation", () => {
       expect(loader.getExtensions().extensions.map((ext) => ext.path)).toEqual([
         `<inline:${STAGEFLOW_PATH_DENY_EXTENSION_NAME}>`,
         `<inline:${STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME}>`,
+        "<inline:stageflow-openrouter-routing>",
+        "<inline:stageflow-compaction>",
+        "<inline:stageflow-working-state>",
       ]);
       expect(registeredToolNames(loader)).toEqual([]);
       expect(recordedServerNames()).not.toContain("github");

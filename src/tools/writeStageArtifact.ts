@@ -7,6 +7,7 @@
  * Parameter schemas use `typebox` (Pi's `defineTool` TSchema), not
  * `@sinclair/typebox`. Unlike emit, this tool does not terminate the turn.
  */
+import { WRITE_STAGE_ARTIFACT_TOOL_NAME } from "./stageToolNames.js";
 import { Type } from "typebox";
 import { resolveArtifactTarget } from "../runstore/workspaceLayout.js";
 import { writeContainedArtifact } from "../runstore/writeContainedArtifact.js";
@@ -33,7 +34,7 @@ export function createWriteStageArtifactTool(options: WriteStageArtifactOptions)
   const { runWorkspaceDir, stageId, attempt } = options;
 
   return {
-    name: "write_stage_artifact",
+    name: WRITE_STAGE_ARTIFACT_TOOL_NAME,
     label: "Write stage artifact",
     description:
       "Write a factory artifact file under this stage attempt's artifacts directory in the run workspace. Pass a path relative to stages/<stageId>/attempts/<attempt>/artifacts/ and the file content. Returns the run-relative path to include in emit_stage_envelope artifacts.",

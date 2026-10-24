@@ -1,0 +1,9 @@
+version: 1
+catalog:
+  pipelines:
+    - .
+  tasks:
+    - .
+  patterns:
+    pipeline: "*.pipeline.yaml"
+    task: "*.task.yaml"

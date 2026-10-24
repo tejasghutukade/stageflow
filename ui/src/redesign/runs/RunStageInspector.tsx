@@ -22,6 +22,7 @@ import {
   formatTokenCount,
   formatWaitDuration,
   runSlotLabel,
+  stageContextUsage,
   stagePrimaryModel,
   stageStartedClock,
   stageTokenTotals,
@@ -173,6 +174,7 @@ export function RunStageInspector({
 
   const model = stagePrimaryModel(stage);
   const tokens = stageTokenTotals(stage);
+  const context = stageContextUsage(stage);
   const startedClock = stageStartedClock(stage);
   const elapsed = startedClock ? formatDurationMs(stageRowDurationMs(stage, now)) : null;
   const waitingMs = waiting ? stageWaitingMs(stage, now) : null;
@@ -197,6 +199,26 @@ export function RunStageInspector({
           {tokens ? (
             <PropRow label="Tokens in / out">
               {formatTokenCount(tokens.input)} / {formatTokenCount(tokens.output)}
+            </PropRow>
+          ) : null}
+          {context ? (
+            <PropRow label="Context">
+              <span
+                className="h-1.5 w-16 overflow-hidden rounded-full bg-[#ffffff14]"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={context.percent}
+                aria-label="Context window used"
+              >
+                <span
+                  className={`block h-full rounded-full ${context.percent >= 80 ? "bg-[#f5b544]" : "bg-[#6ca6ff]"}`}
+                  style={{ width: `${context.percent}%` }}
+                />
+              </span>
+              <span>
+                {formatTokenCount(context.tokens)} / {formatTokenCount(context.contextWindow)} · {context.percent}%
+              </span>
             </PropRow>
           ) : null}
           <PropRow label="Cost">{formatRunCost(stage.cost_usd)}</PropRow>

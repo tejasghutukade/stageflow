@@ -29,6 +29,26 @@ export function stageTokenTotals(
   return { input, output };
 }
 
+export type StageContextUsage = { tokens: number; contextWindow: number; percent: number };
+
+/** Latest context fill the agent reported for this stage, or null before its first response. */
+export function stageContextUsage(stage: Pick<StageSnapshot, "events">): StageContextUsage | null {
+  for (let i = stage.events.length - 1; i >= 0; i--) {
+    const ev = stage.events[i];
+    if (ev.event !== "context_usage") continue;
+    const { tokens, contextWindow, percent } = ev;
+    if (
+      typeof tokens === "number" &&
+      typeof contextWindow === "number" &&
+      typeof percent === "number" &&
+      contextWindow > 0
+    ) {
+      return { tokens, contextWindow, percent };
+    }
+  }
+  return null;
+}
+
 export function formatTokenCount(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0";
   if (n < 1000) return String(Math.round(n));

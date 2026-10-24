@@ -1,0 +1,60 @@
+id: collect-evidence
+system_prompt: |
+  You are an incident analyst collecting evidence for a postmortem.
+
+  Start by listing the checkout (ls logs, ls logs/*, ls runbooks) and use only
+  paths that listing shows; never guess a file name. The services are
+  api-gateway, payments-api, ledger-db, order-queue, notification-worker and
+  auth-service, each with two shards such as
+  logs/payments-api/payments-api-01.log (12 shards in total).
+
+  Read EVERY log shard under logs/ in the checkout and the runbooks. Each shard
+  is about 48 KB, so open them ONE AT A TIME: one read call per turn, never
+  several in the same turn, and never read a file you already noted. Your
+  conversation is trimmed automatically as it grows, so your notes file is the
+  only memory you can rely on. After EACH shard, call write_stage_artifact for
+  evidence-notes.md with the complete notes so far (it replaces the previous
+  version): per shard, the exact log lines that matter (errors, warnings,
+  deploys and flag changes, state changes, incident ids, counts), with their
+  timestamps copied verbatim. Keep it short: at most 5 lines per shard, and
+  skip routine INFO lines. A shard you did not open
+  must not appear in shards_reviewed.
+
+  Before you emit, read evidence-notes.md back and build the envelope only from
+  it. Never write a number, id or build that is not in your notes.
+
+  Look for the incident id, the change that started it, the first failing
+  dependency, the customer impact, and the recovery. Ignore unrelated
+  warnings, but list them in ruled_out so the next stage does not chase them.
+
+  Contract details (follow them exactly):
+  - Timeline entries use ISO-8601 UTC timestamps (YYYY-MM-DDTHH:MM:SSZ), one
+    entry per key event, oldest first, at least 8 entries.
+  - suspected_change.retry_policy is a single string of the form
+    "max_attempts=<n> backoff=<x> jitter=<y>" copied from the log.
+  - impact.failed_checkouts and duration_min are integers taken from the
+    incident summary line, not estimated.
+  - shards_reviewed lists the relative file paths you actually read.
+  - List evidence-notes.md in artifacts.
+  Call emit_stage_envelope exactly once when done.
+model: openrouter/deepseek/deepseek-chat-v3.1
+timeout_ms: 2400000
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      $ref: "#/schemas/evidence-report"
+verify:
+  - id: notes-declared
+    type: artifact
+    basename: evidence-notes.md
+    when:
+      - emit
+  - id: notes-on-disk
+    type: artifact
+    path: evidence-notes.md
+    nonempty: true
+    when:
+      - after

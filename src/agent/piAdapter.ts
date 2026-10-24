@@ -42,7 +42,7 @@ import {
   ModelRuntime,
   resolveCliModel,
   SessionManager,
-  SettingsManager,
+  type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { StageMcpError } from "../config/resolveStageMcpServers.js";
 import {
@@ -111,6 +111,11 @@ import type {
 } from "./port.js";
 import { DEFAULT_STAGE_TIMEOUT_MS, runtimeStageId, runStageViaOpen } from "./port.js";
 import type { StageGateKind } from "../types/stage.js";
+import {
+  addCompactionUsage,
+  compactionActivityEvent,
+  type CompactionEndSessionEvent,
+} from "./compactionEvents.js";
 import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
 import {
   TIMEOUT_ABORT_TOOL_RESULT,
@@ -129,6 +134,10 @@ import {
 } from "../runstore/workspaceLayout.js";
 
 export { STAGEFLOW_PATH_DENIED };
+import { createPiSettingsManager } from "./piSettings.js";
+import { createSessionContextWiring } from "../compaction/sessionWiring.js";
+import { ASK_OPERATOR_TOOL_NAME } from "../tools/stageToolNames.js";
+import { WORKING_STATE_GUIDANCE } from "../compaction/workingState.js";
 export { createSealedResourceLoader } from "./piSessionFactory.js";
 
 export const STAGEFLOW_PATH_DENY_EXTENSION_NAME = "stageflow-path-deny";
@@ -179,7 +188,7 @@ export function createDurableRootPathDenyExtension(options: {
 export function resolveStageToolNames(
   emitToolName: string,
   artifactToolName?: string,
-  askOperatorToolName = "ask_operator",
+  askOperatorToolName = ASK_OPERATOR_TOOL_NAME,
   gateKinds?: StageGateKind[],
 ): string[] {
   const tools = [
@@ -579,12 +588,34 @@ function attachStageProgress(
     writeStderr: true,
   });
   const verbose = readActivityVerbose();
+  let lastContextPercent = -1;
 
   const unsubscribe = session.subscribe((event) => {
-    routeSessionEventToProgress(event as unknown as Record<string, unknown>, {
-      observer,
-      verbose,
-      usage,
+    const raw = event as unknown as Record<string, unknown>;
+    routeSessionEventToProgress(raw, { observer, verbose, usage });
+    if (raw.type === "compaction_end") {
+      lastContextPercent = -1;
+      const end = raw as unknown as CompactionEndSessionEvent;
+      if (usage) addCompactionUsage(usage, session.model?.id, end);
+      observer.onActivity(compactionActivityEvent(end, session.getContextUsage()?.tokens ?? null));
+      const after = end.result?.estimatedTokensAfter;
+      const window = session.getContextUsage()?.contextWindow ?? 0;
+      if (session.getContextUsage()?.tokens == null && typeof after === "number" && Number.isFinite(after) && window > 0) {
+        lastContextPercent = Math.min(100, Math.round((after / window) * 100));
+        observer.onActivity({ event: "context_usage", tokens: after, contextWindow: window, percent: lastContextPercent });
+      }
+    }
+    if (raw.type !== "message_end" && raw.type !== "compaction_end") return;
+    const context = session.getContextUsage();
+    if (context?.tokens == null || context.contextWindow <= 0) return;
+    const percent = Math.min(100, Math.round((context.tokens / context.contextWindow) * 100));
+    if (percent === lastContextPercent) return;
+    lastContextPercent = percent;
+    observer.onActivity({
+      event: "context_usage",
+      tokens: context.tokens,
+      contextWindow: context.contextWindow,
+      percent,
     });
   });
 
@@ -757,6 +788,37 @@ export function composeStageUserPrompt(
   if (input.stage.skill !== undefined) {
     return `/skill:${input.stage.skill} ${body}`;
   }
+  if (input.browserSkillFilePath !== undefined && input.stage.browser !== undefined) {
+    return `/skill:${BROWSER_SKILL_NAME} ${body}`;
+  }
+  return body;
+}
+
+/**
+ * Pi stages carry the whole assignment (task, prior envelopes, envelope
+ * contract, guidance) in the system prompt: compaction never summarizes it.
+ */
+export function composeStagePiSystemPrompt(
+  input: StageRunInput,
+  emitToolName: string,
+  emitHintOverride?: string,
+  artifactToolName?: string,
+): string {
+  return [
+    input.stage.system_prompt,
+    "",
+    "# Working state",
+    WORKING_STATE_GUIDANCE,
+    "",
+    "# Stage assignment",
+    buildUserPrompt(input, emitToolName, emitHintOverride, artifactToolName),
+  ].join("\n");
+}
+
+export function composeStagePiKickoffPrompt(input: StageRunInput): string {
+  const body =
+    "Begin this stage. Your task, inputs, constraints and the required final action are in your system prompt under \"Stage assignment\".";
+  if (input.stage.skill !== undefined) return `/skill:${input.stage.skill} ${body}`;
   if (input.browserSkillFilePath !== undefined && input.stage.browser !== undefined) {
     return `/skill:${BROWSER_SKILL_NAME} ${body}`;
   }
@@ -979,7 +1041,7 @@ export async function repairPrematureAskOperatorClosure(
     if ((entry as { type?: string }).type !== "message") continue;
     const message = (entry as { message?: Record<string, unknown> }).message;
     if (!message || message.role !== "toolResult") continue;
-    if (message.toolName !== "ask_operator" || message.isError !== true) continue;
+    if (message.toolName !== ASK_OPERATOR_TOOL_NAME || message.isError !== true) continue;
     const content = message.content;
     if (!Array.isArray(content)) continue;
     const first = content[0] as { text?: string } | undefined;
@@ -1133,7 +1195,6 @@ type StageSessionWiring = {
   emitDefName: string;
   askOperatorDefName?: string;
   artifactDefName?: string;
-  providerEmitHint?: string;
   restoreProvider?: () => void;
   capture: EmitCapture;
   usage: StageUsage;
@@ -1244,9 +1305,7 @@ async function prepareStageSessionWiring(
           }
         : undefined,
     );
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: false },
-    });
+    const settingsManager = createPiSettingsManager();
     attached = await attachIsolatedMcp(input.resolvedMcpServers, {
       lifecycle: "eager",
     });
@@ -1255,6 +1314,7 @@ async function prepareStageSessionWiring(
       restoreProvider?.();
       return { ok: false, reason };
     };
+    const contextWiring = createSessionContextWiring({ workingState: true });
     const extensionFactories: InlineExtension[] = [
       {
         name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
@@ -1278,22 +1338,30 @@ async function prepareStageSessionWiring(
           runWorkspaceDir: roots.runWorkspaceDir,
           stageId: runtimeStageId(input),
           attempt: roots.attempt ?? 1,
+          turnCapped: new Set(["read", "bash"]),
           exempt: new Set([
             "read",
             "bash",
+            ...contextWiring.budgetExemptNames,
             emitDef.name,
             artifactDef.name,
-            askDef?.name ?? "ask_operator",
+            askDef?.name ?? ASK_OPERATOR_TOOL_NAME,
           ]),
         }),
       },
+      ...contextWiring.extensions,
       ...(attached.extensionFactories ?? []),
     ];
     const loader = createSealedResourceLoader({
       cwd: roots.cwd,
       agentDir: roots.agentDir,
       settingsManager,
-      systemPrompt: input.stage.system_prompt,
+      systemPrompt: composeStagePiSystemPrompt(
+        input,
+        emitDef.name,
+        provider?.emitToolHint?.(emitDef.name),
+        artifactDef.name,
+      ),
       additionalExtensionPaths,
       ...(additionalSkillPaths.length > 0 ? { additionalSkillPaths } : {}),
       extensionFactories,
@@ -1353,9 +1421,10 @@ async function prepareStageSessionWiring(
     const tools = resolveStageToolNames(
       emitDef.name,
       artifactDef.name,
-      askDef?.name ?? "ask_operator",
+      askDef?.name ?? ASK_OPERATOR_TOOL_NAME,
       gateKinds,
     );
+    tools.push(...contextWiring.toolNames);
     if (attached.extensionFactories !== undefined) {
       const mcpTools = collectMcpExtensionToolNames(loader);
       if (!mcpTools.ok) {
@@ -1415,7 +1484,6 @@ async function prepareStageSessionWiring(
       emitDefName: emitDef.name,
       ...(askDef ? { askOperatorDefName: askDef.name } : {}),
       artifactDefName: artifactDef.name,
-      providerEmitHint: provider?.emitToolHint?.(emitDef.name),
       restoreProvider,
       capture,
       usage,
@@ -1845,13 +1913,7 @@ export class PiAgentAdapter implements StagePort {
             await session!.prompt(composeTimeoutResumePrompt());
             return;
           }
-          const userPrompt = composeStageUserPrompt(
-            input,
-            wiring!.emitDefName,
-            wiring!.providerEmitHint,
-            wiring!.artifactDefName,
-          );
-          await session!.prompt(userPrompt);
+          await session!.prompt(composeStagePiKickoffPrompt(input));
         });
       },
       resume: resumeWaiting

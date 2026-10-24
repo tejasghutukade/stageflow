@@ -14,7 +14,6 @@ import {
   ModelRuntime,
   resolveCliModel,
   SessionManager,
-  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
@@ -22,6 +21,8 @@ import {
   createSealedResourceLoader,
   resolveWorkshopToolNames,
 } from "../agent/piSessionFactory.js";
+import { createPiSettingsManager } from "../agent/piSettings.js";
+import { createSessionContextWiring } from "../compaction/sessionWiring.js";
 import { bindCursorApiKey, cursorBridgePrompt, isCursorModelRef } from "../agent/cursorProvider.js";
 import { findProviderSupport } from "../agent/providerSupport.js";
 import "../agent/cursorProvider.js";
@@ -402,14 +403,14 @@ async function openDefaultPiSession(
     authPath: input.authPath,
     modelsPath: path.join(path.dirname(input.authPath), "models.json"),
   });
-  const settingsManager = SettingsManager.inMemory({
-    compaction: { enabled: false },
-  });
+  const settingsManager = createPiSettingsManager();
+  const contextWiring = createSessionContextWiring({ workingState: true });
   const loader = createSealedResourceLoader({
     cwd: input.cwd,
     agentDir: input.agentDir,
     settingsManager,
-    systemPrompt: input.systemPrompt,
+    systemPrompt: contextWiring.guidance ? `${input.systemPrompt}\n\n${contextWiring.guidance}` : input.systemPrompt,
+    extensionFactories: contextWiring.extensions,
     ...(additionalExtensionPaths.length > 0
       ? { additionalExtensionPaths }
       : {}),
@@ -439,7 +440,7 @@ async function openDefaultPiSession(
       sessionManager,
       settingsManager,
       resourceLoader: loader,
-      tools: input.toolNames,
+      tools: [...input.toolNames, ...contextWiring.toolNames],
       customTools: input.customTools,
     });
     session = created.session;

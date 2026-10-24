@@ -3,6 +3,7 @@ import {
   formatTokenCount,
   formatWaitDuration,
   runSlotLabel,
+  stageContextUsage,
   stagePrimaryModel,
   stageTokenTotals,
 } from "./stageUsage";
@@ -36,6 +37,17 @@ describe("stageUsage", () => {
   it("sums tokens with cache on the input side", () => {
     expect(stageTokenTotals({ usage })).toEqual({ input: 16900, output: 2100 });
     expect(stageTokenTotals({})).toBeNull();
+  });
+
+  it("reports the latest context fill, ignoring malformed events", () => {
+    const events = [
+      { event: "context_usage", tokens: 10000, contextWindow: 128000, percent: 8 },
+      { event: "context_usage", tokens: "bad" },
+      { event: "context_usage", tokens: 64000, contextWindow: 128000, percent: 50 },
+      { event: "tool_end" },
+    ];
+    expect(stageContextUsage({ events })).toEqual({ tokens: 64000, contextWindow: 128000, percent: 50 });
+    expect(stageContextUsage({ events: [{ event: "tool_end" }] })).toBeNull();
   });
 
   it("formats token counts", () => {
