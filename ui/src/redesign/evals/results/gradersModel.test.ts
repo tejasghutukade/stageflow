@@ -86,11 +86,15 @@ describe("gradersModel", () => {
       fixtureResult({ case_id: "c", repeat_index: 0, grades: [grade(null, "error")] }),
       fixtureResult({ case_id: "d", repeat_index: 0, grades: [] }),
     ];
-    expect(lowestCases(results, "g")).toEqual([
+    const lowest = [
+      { case_id: "b", mean_score: 0.2, worst_repeat_index: 0 },
+      { case_id: "a", mean_score: 0.75, worst_repeat_index: 1 },
+    ];
+    expect(lowestCases(results, "g", lowest)).toEqual([
       { caseId: "b", repeatIndex: 0, scoreText: "0.20", reason: "r0.2" },
       { caseId: "a", repeatIndex: 1, scoreText: "0.75", reason: "r0.5" },
     ]);
-    expect(lowestCases(results, "g", 1)).toHaveLength(1);
+    expect(lowestCases(results, "g")).toEqual([]);
   });
 
   it("summarises the judge for rubric graders", () => {

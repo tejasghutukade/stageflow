@@ -341,6 +341,8 @@ export type EvalRunEstimate = {
   estimate_basis?: "previous_run" | "assumptions" | null;
 };
 
+export type EvalLowestCase = { case_id: string; mean_score: number; worst_repeat_index: number };
+
 export type EvalGraderStat = {
   grader_id: string;
   type: string;
@@ -412,6 +414,7 @@ export type EvalRunDetail = {
   fingerprint: string;
   components: Record<string, unknown>;
   stats: EvalStats | null;
+  lowest_cases_by_grader?: Record<string, EvalLowestCase[]>;
   current: {
     stage_version_hash: string | null;
     dataset_hash: string | null;
@@ -493,7 +496,12 @@ export type EvalCompareCase = {
   graders_changed: string[];
 };
 
-export type EvalNumberDelta = { a: number | null; b: number | null; delta: number | null };
+export type EvalNumberDelta = {
+  a: number | null;
+  b: number | null;
+  delta: number | null;
+  percent_change: number | null;
+};
 
 export type EvalCompareResult = {
   shared_cases: number;

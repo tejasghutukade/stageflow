@@ -8,7 +8,7 @@ export type { FakeEngineOptions, FakeJudgeReply } from "./FakeEngine.js";
 export { PromptfooEngine } from "./promptfoo/PromptfooEngine.js";
 export type { PromptfooEngineOptions } from "./promptfoo/PromptfooEngine.js";
 export { RunTokenRegistry } from "./promptfoo/runTokens.js";
-export { judgeCapableModels, mapJudge } from "./promptfoo/judgeProviders.js";
+export { judgeCapableModels, mapJudge } from "../judgeProviders.js";
 
 const factories = new Map<string, (options?: unknown) => EvalEngine>([
   ["fake", (options) => new FakeEngine(options as FakeEngineOptions | undefined)],

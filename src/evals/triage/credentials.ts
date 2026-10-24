@@ -1,5 +1,5 @@
 import { resolveCredentialBinding } from "../../runtime/credentialBinding.js";
-import { readAuthKey } from "../engine/promptfoo/judgeServices.js";
+import { readAuthKey } from "../providerKeys.js";
 import { TYPESAFE_KEY_ENV_NAMES, TYPESAFE_PROVIDER_ID } from "./constants.js";
 
 export const STORED_KEY_SOURCE = `stored:${TYPESAFE_PROVIDER_ID}`;

@@ -5,7 +5,7 @@ import { resolveAgentTarget, type AgentCatalogPort } from "../../config/resolveA
 import { resolveEvalTarget } from "../../config/resolveEvalTarget.js";
 import type { RunStore } from "../../runstore/port.js";
 import type { EvalLiveState } from "../manager.js";
-import { computeStats, type Stats } from "../stats.js";
+import { computeStats, lowestCases, type LowestCase, type Stats } from "../stats.js";
 import { toGradeRecords, toResultRecord } from "../statsAdapter.js";
 import { resultKey, type GraderRef, type PreviousRunLite } from "../statsTypes.js";
 import type {
@@ -132,6 +132,7 @@ export type EvalRunDetail = {
   fingerprint: string;
   components: Record<string, unknown>;
   stats: Stats | null;
+  lowest_cases_by_grader: Record<string, LowestCase[]>;
   current: RunCurrent;
   live?: Array<{ case_id: string; repeat_index: number; phase: string }>;
 };
@@ -387,6 +388,7 @@ export async function buildRunDetail(input: {
     store.getEvalReviews(row.evalRunId),
   ]);
   const graders = graderRefsOf(row);
+  const grades = results.flatMap(toGradeRecords);
   const executed = results.some((r) => ["completed", "stage_failed", "needs_input", "error"].includes(r.status));
   const stats = executed
     ? statsOfRun(row, results, { reviews, previousRun: await previousRunLite(store, row, graders) })
@@ -415,6 +417,11 @@ export async function buildRunDetail(input: {
     fingerprint: row.configFingerprint,
     components: row.configComponents,
     stats,
+    lowest_cases_by_grader: executed
+      ? Object.fromEntries(
+          graders.map((g) => [g.id, lowestCases(grades.filter((x) => x.graderId === g.id))]),
+        )
+      : {},
     current: await currentHashes(row, input.agents),
   };
   if (input.live && (row.status === "running" || row.status === "queued")) {

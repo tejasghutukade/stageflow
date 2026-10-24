@@ -77,6 +77,7 @@ export interface NumberDelta {
   a: number | null;
   b: number | null;
   delta: number | null;
+  percent_change: number | null;
 }
 
 export interface CompareResult {
@@ -134,7 +135,12 @@ function sortKeys(value: unknown): unknown {
 }
 
 function delta(a: number | null, b: number | null): NumberDelta {
-  return { a, b, delta: a !== null && b !== null ? b - a : null };
+  return {
+    a,
+    b,
+    delta: a !== null && b !== null ? b - a : null,
+    percent_change: a !== null && b !== null && a !== 0 ? ((b - a) / a) * 100 : null,
+  };
 }
 
 function passRateOver(grades: GradeRecord[], graderId: string, cases: Set<string>): number | null {

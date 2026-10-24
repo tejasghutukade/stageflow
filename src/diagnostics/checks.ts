@@ -82,7 +82,7 @@ function checkHomeWritable(home: string): boolean {
 
 async function checkStoreOpenable(store: RunStore): Promise<boolean> {
   try {
-    await store.listRuns();
+    await store.listRuns({ origin: "any" });
     return true;
   } catch {
     return false;

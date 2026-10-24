@@ -1,6 +1,6 @@
 import type { RunStore } from "../runstore/port.js";
 import { listModelsMultiProject } from "../config/multiProjectCatalog.js";
-import { judgeCapableModels } from "../evals/engine/promptfoo/judgeProviders.js";
+import { judgeCapableModels } from "../evals/judgeProviders.js";
 import { getModelCatalog, type CatalogModel, type CatalogProvider } from "./catalog.js";
 
 export type ModelsResponseProvider = Omit<CatalogProvider, "models"> & {

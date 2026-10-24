@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeStats, percentile } from "../../src/evals/stats.js";
+import { computeStats, lowestCases, passFraction, percentile } from "../../src/evals/stats.js";
 import { tQuantile } from "../../src/evals/tTable.js";
 import { mkGrade, mkResults } from "./helpers.js";
 
@@ -174,5 +174,34 @@ describe("computeStats edge cases", () => {
     ];
     const s = computeStats({ ...base, results, repeats: 1 });
     expect(s.failing_cases.map((c) => c.case_id)).toEqual(["b", "z", "a"]);
+  });
+});
+
+describe("passFraction", () => {
+  it("is passed over executed, null with nothing executed", () => {
+    expect(passFraction(1, 2)).toBe(0.5);
+    expect(passFraction(3, 3)).toBe(1);
+    expect(passFraction(0, 0)).toBeNull();
+  });
+});
+
+describe("lowestCases", () => {
+  it("orders cases by mean grade score, names the worst repeat, skips errors and null scores", () => {
+    const g = (c: string, r: number, score: number | null, status: "graded" | "error" = "graded") =>
+      mkGrade(c, r, "g", true, { score, status });
+    const grades = [
+      g("a", 0, 1),
+      g("a", 1, 0.5),
+      g("b", 0, 0.2),
+      g("c", 0, null, "error"),
+      g("d", 0, 0.25),
+      g("d", 1, 0.25),
+    ];
+    expect(lowestCases(grades)).toEqual([
+      { case_id: "b", mean_score: 0.2, worst_repeat_index: 0 },
+      { case_id: "d", mean_score: 0.25, worst_repeat_index: 0 },
+      { case_id: "a", mean_score: 0.75, worst_repeat_index: 1 },
+    ]);
+    expect(lowestCases(grades, 1)).toHaveLength(1);
   });
 });

@@ -34,13 +34,14 @@ function run(overrides: Partial<EvalRunDetail> = {}): EvalRunDetail {
     fingerprint: "f",
     components: {},
     stats: null,
+    lowest_cases_by_grader: {},
     current: { stage_version_hash: null, dataset_hash: null, grader_hashes: null },
     live: [],
     ...overrides,
   };
 }
 
-function row(caseId: string, position: number, repeats: Array<[number, "completed" | "error", boolean, number | null]>, title: string | null = null): EvalResultRow {
+function row(caseId: string, position: number, repeats: Array<[number, "completed" | "error", boolean, number | null]>, title: string | null = null, meanScore: number | null = null): EvalResultRow {
   return {
     case_id: caseId,
     position,
@@ -48,7 +49,7 @@ function row(caseId: string, position: number, repeats: Array<[number, "complete
     tags: [],
     repeats: repeats.map(([repeat_index, status, passed, score]) => ({ repeat_index, status, passed, score })),
     pass_fraction: null,
-    mean_score: null,
+    mean_score: meanScore,
     failed_graders: [],
     latency_ms_p50: null,
     cost_usd: 0,
@@ -151,8 +152,8 @@ describe("live model", () => {
 
 describe("rows", () => {
   const results = [
-    row("c1", 1, [[0, "completed", true, 1], [1, "completed", true, 0.5], [2, "completed", true, 0.9]], "First"),
-    row("c2", 2, [[0, "completed", true, 0.9], [1, "completed", false, 0.3]]),
+    row("c1", 1, [[0, "completed", true, 1], [1, "completed", true, 0.5], [2, "completed", true, 0.9]], "First", 0.8),
+    row("c2", 2, [[0, "completed", true, 0.9], [1, "completed", false, 0.3]], null, 0.6),
   ];
   const r = run({
     live: [
@@ -180,7 +181,7 @@ describe("rows", () => {
     expect(rows[3]!.nowTone).toBe("muted");
   });
 
-  it("averages finished repeats for the score", () => {
+  it("shows the server mean score", () => {
     expect(rows[0]!.scoreText).toBe("0.80");
     expect(rows[1]!.scoreText).toBe("0.60");
     expect(rows[3]!.scoreText).toBe("—");

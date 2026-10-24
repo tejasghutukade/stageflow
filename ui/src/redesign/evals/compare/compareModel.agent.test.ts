@@ -23,13 +23,13 @@ function result(overrides: Partial<EvalCompareResult> = {}): EvalCompareResult {
     cases: [],
     graders: [],
     deltas: {
-      cost_per_result: { a: 0.01, b: 0.012, delta: 0.002 },
-      latency_p50: { a: 3000, b: 3500, delta: 500 },
-      latency_p95: { a: 6000, b: 7000, delta: 1000 },
-      flaky_cases: { a: 4, b: 3, delta: -1 },
-      mean_score: { a: 0.8, b: 0.84, delta: 0.04 },
-      mean_turns: { a: 3.2, b: 4.1, delta: 0.9 },
-      mean_tool_calls: { a: 2, b: 2, delta: 0 },
+      cost_per_result: { a: 0.01, b: 0.012, delta: 0.002, percent_change: null },
+      latency_p50: { a: 3000, b: 3500, delta: 500, percent_change: null },
+      latency_p95: { a: 6000, b: 7000, delta: 1000, percent_change: null },
+      flaky_cases: { a: 4, b: 3, delta: -1, percent_change: null },
+      mean_score: { a: 0.8, b: 0.84, delta: 0.04, percent_change: null },
+      mean_turns: { a: 3.2, b: 4.1, delta: 0.9, percent_change: null },
+      mean_tool_calls: { a: 2, b: 2, delta: 0, percent_change: null },
     },
     stage_diff: null,
     agent_diff: {
@@ -149,7 +149,7 @@ describe("held constant and changed strip", () => {
   it("is untouched for stage compares", () => {
     const stage: EvalCompareResult = result({
       agent_diff: null,
-      deltas: { cost_per_result: { a: 1, b: 1, delta: 0 }, latency_p50: { a: 1, b: 1, delta: 0 }, latency_p95: { a: 1, b: 1, delta: 0 }, flaky_cases: { a: 0, b: 0, delta: 0 }, mean_score: { a: 1, b: 1, delta: 0 } },
+      deltas: { cost_per_result: { a: 1, b: 1, delta: 0, percent_change: null }, latency_p50: { a: 1, b: 1, delta: 0, percent_change: null }, latency_p95: { a: 1, b: 1, delta: 0, percent_change: null }, flaky_cases: { a: 0, b: 0, delta: 0, percent_change: null }, mean_score: { a: 1, b: 1, delta: 0, percent_change: null } },
       components: [{ key: "stage", status: "changed", a: "3f9a1c0000", b: "a82e07ffff" }],
     });
     expect(buildStrip(stage).changed).toEqual(["stage version 3f9a1c to a82e07"]);

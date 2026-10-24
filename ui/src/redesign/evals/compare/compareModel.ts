@@ -101,8 +101,8 @@ function pairText(a: string, b: string): string {
 }
 
 function percentChange(delta: EvalNumberDelta): string | null {
-  if (delta.a === null || delta.b === null || delta.a === 0) return null;
-  const pct = Math.round(((delta.b - delta.a) / delta.a) * 100);
+  if (delta.percent_change === null) return null;
+  const pct = Math.round(delta.percent_change);
   return `${signed(pct, String(Math.abs(pct)))}%`;
 }
 

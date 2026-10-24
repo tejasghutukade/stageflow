@@ -74,7 +74,7 @@ export function GradersTab({
                     {exported.loading ? <p className="text-xs text-[var(--sf-text-3)]">Loading…</p> : null}
                     {exported.error ? <p className="text-xs text-[var(--sf-fail)]">{exported.error}</p> : null}
                     {exported.data
-                      ? lowestCases(results, row.id).map((c) => (
+                      ? lowestCases(results, row.id, run.lowest_cases_by_grader?.[row.id]).map((c) => (
                           <button
                             key={c.caseId}
                             type="button"
