@@ -140,7 +140,7 @@ Evals check a stage or an agent over a dataset of cases, grade every output (for
 Rules every change must keep:
 
 - **Numbers are computed in three files only:** `src/evals/stats.ts`, `scoring.ts` and `compare.ts`. The UI formats what the API returns and never computes a statistic. A change to a formula needs a hand-computed test.
-- **Nothing outside `src/evals/engine/promptfoo/` imports or names promptfoo types.** The engine sits behind the `EvalEngine` interface; `FakeEngine` is what tests use.
+- **Nothing outside `src/evals/engine/promptfoo/` imports or names promptfoo types.** The engine sits behind the `EvalEngine` interface; `FakeEngine` is what tests use. Engine status, install, pinned-version and run-token modules in that folder are wiring that the CLI, doctor and server may import; shared helpers (`src/evals/judgeProviders.ts`, `providerKeys.ts`) live outside it.
 - **The engine never touches the store.** It reports results through callbacks; `EvalRunManager` persists them, owns the cost limit, cancel and one-run-at-a-time.
 - **Graders read a normalized subject** (`src/evals/graders/subject.ts`), never the stage envelope or an agent session directly. There are two kinds of subject, `envelope` (stage) and `conversation` (agent, built by `runner/conversationSubject.ts`); a grader that cannot apply to a kind is `EVAL_GRADER_NOT_APPLICABLE` at validation.
 - **The target is a tagged reference** (`kind`). Result tables are target-neutral: no stage-only columns; stage details live in JSON columns and the config snapshot.
