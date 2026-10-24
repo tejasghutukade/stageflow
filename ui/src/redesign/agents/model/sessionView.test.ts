@@ -93,3 +93,15 @@ describe("isRunActive", () => {
     expect(isRunActive({ ...detail, deliveries: [{ ...delivery, state: "delivered" } as typeof delivery] }, "1")).toBe(false);
   });
 });
+
+describe("composerMode", () => {
+  it("is read only for eval sessions, even when the agent is disabled", () => {
+    expect(composerMode("eval", true)).toBe("eval_readonly");
+    expect(composerMode("eval", false)).toBe("eval_readonly");
+  });
+  it("follows whether the agent is enabled for other sessions", () => {
+    expect(composerMode("console", true)).toBe("open");
+    expect(composerMode(undefined, true)).toBe("open");
+    expect(composerMode("console", false)).toBe("disabled");
+  });
+});
