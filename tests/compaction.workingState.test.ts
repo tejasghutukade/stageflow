@@ -14,6 +14,15 @@ import {
 const at = "2026-01-01T00:00:00Z";
 
 describe("WorkingStateStore", () => {
+  it("deletes an entry whose key was altered by scrubbing", () => {
+    const s = new WorkingStateStore();
+    const key = "Authorization: Bearer abcdefghijklmnop1234";
+    const set = s.set({ key, kind: "fact", value: "x" });
+    expect(set.ok && set.redacted).toBe(true);
+    expect(s.delete(key)).toBe(true);
+    expect(s.size).toBe(0);
+  });
+
   it("sets, replaces, deletes and lists", () => {
     const s = new WorkingStateStore();
     expect(s.set({ key: "a", kind: "fact", value: "1" })).toMatchObject({ ok: true, replaced: false });

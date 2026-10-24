@@ -10,6 +10,8 @@ import type { OtlpSink } from "./otlpSink.js";
 import { isToolGranted, requiresAskFirst } from "./policy.js";
 import type { ConversationBackend, GateDecision, RuntimeUsage, ToolCall, TurnHooks } from "./runtime/types.js";
 import type { AgentService, AgentSessionDetail } from "./service.js";
+import { scrubSecrets } from "../compaction/scrub.js";
+import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
 import { prepareSpan, type SpanKind } from "./trace.js";
 
 export type { ConversationBackend, ConversationMessage } from "./runtime/types.js";
@@ -234,7 +236,7 @@ export class AgentConversation {
             ...(isEvalSession(active.session) ? { "gen_ai.tool.call.id": call.id } : {}),
             ...(childSessionOf(call) ? { "stageflow.sub_agent.session_id": childSessionOf(call)! } : {}),
           },
-          input: toJson(call.input),
+          input: call.tool === WORKING_STATE_TOOL_NAME ? scrubSecrets(toJson(call.input)) : toJson(call.input),
           output: result.output,
         });
       },

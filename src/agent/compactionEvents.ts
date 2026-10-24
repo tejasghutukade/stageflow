@@ -1,4 +1,5 @@
 import type { StageActivityEvent } from "./activity.js";
+import { redactSecrets } from "./streamLogRedact.js";
 import { addModelUsage, type StageUsage } from "../types/usage.js";
 
 export type CompactionEndSessionEvent = {
@@ -32,9 +33,9 @@ export type CompactionCost = {
 export function compactionUsageCost(event: CompactionEndSessionEvent): CompactionCost {
   const u = event.result?.usage;
   return {
-    inputTokens: u?.input ?? 0,
-    outputTokens: u?.output ?? 0,
-    costUsd: u?.cost?.total ?? 0,
+    inputTokens: Number.isFinite(u?.input) ? u!.input! : 0,
+    outputTokens: Number.isFinite(u?.output) ? u!.output! : 0,
+    costUsd: Number.isFinite(u?.cost?.total) ? u!.cost!.total! : 0,
   };
 }
 
@@ -52,7 +53,7 @@ export function compactionActivityEvent(
     costUsd: compactionUsageCost(event).costUsd,
     willRetry: event.willRetry ?? false,
     aborted: event.aborted ?? false,
-    ...(event.errorMessage ? { error: event.errorMessage } : {}),
+    ...(event.errorMessage ? { error: redactSecrets(event.errorMessage) } : {}),
   };
 }
 
@@ -62,12 +63,13 @@ export function addCompactionUsage(
   event: CompactionEndSessionEvent,
 ): void {
   const u = event.result?.usage;
-  if (!u || !model) return;
-  addModelUsage(usage, model, {
-    inputTokens: u.input,
-    outputTokens: u.output,
-    cacheReadInputTokens: u.cacheRead,
-    cacheCreationInputTokens: u.cacheWrite,
-    costUsd: u.cost?.total ?? 0,
+  if (!u) return;
+  const finite = (n: number | undefined) => (typeof n === "number" && Number.isFinite(n) ? n : 0);
+  addModelUsage(usage, model ?? "unknown", {
+    inputTokens: finite(u.input),
+    outputTokens: finite(u.output),
+    cacheReadInputTokens: finite(u.cacheRead),
+    cacheCreationInputTokens: finite(u.cacheWrite),
+    costUsd: finite(u.cost?.total),
   });
 }

@@ -16,16 +16,16 @@ function convo() {
     { role: "user", content: "go" },
     call("a", "read", { path: "logs/a.log" }),
     result("a", "read"),
-    call("b", "bash", { command: "ls -la" }),
-    result("b", "bash", big, { details: { stageflowToolOutput: { spilled: true, path: "tool-output/b-bash.txt" } } }),
+    call("b", "grep", { command: "ls -la" }),
+    result("b", "grep", big, { details: { stageflowToolOutput: { spilled: true, path: "tool-output/b-grep.txt" } } }),
     call("c", "ask_operator", { q: "?" }),
     result("c", "ask_operator"),
     call("d", "emit_stage_envelope", {}),
     result("d", "emit_stage_envelope"),
     call("e", "grep", { pattern: "foo", path: "src" }),
     result("e", "grep", big, { isError: true }),
-    call("f", "bash", { command: "cat x" }),
-    result("f", "bash", "tiny"),
+    call("f", "grep", { command: "cat x" }),
+    result("f", "grep", "tiny"),
     call("g", "read", { path: "logs/recent.log" }),
     result("g", "read"),
     call("h", "read", { path: "logs/newest.log" }),
@@ -39,12 +39,14 @@ describe("classifyForClearing", () => {
   it("clears only re-fetchable read results", () => {
     expect(classifyForClearing("read", false)).toBe("clearable");
     expect(classifyForClearing("grep", false)).toBe("clearable");
+    expect(classifyForClearing("bash", false)).toBe("keep");
     expect(classifyForClearing("ls", false)).toBe("clearable");
-    expect(classifyForClearing("bash", false)).toBe("clearable");
+    expect(classifyForClearing("grep", false)).toBe("clearable");
+    expect(classifyForClearing("bash", false)).toBe("keep");
     expect(classifyForClearing("stageflow_list_pipelines", false)).toBeDefined();
   });
   it("keeps errors, writes, operator, envelope, working_state, unknown, mcp", () => {
-    expect(classifyForClearing("bash", true)).toBe("keep");
+    expect(classifyForClearing("grep", true)).toBe("keep");
     expect(classifyForClearing("read", true)).toBe("keep");
     for (const t of ["ask_operator", "emit_stage_envelope", "write_stage_artifact", "write", "edit", "working_state", "mystery", "", "github_create_issue", "browser"]) {
       expect(classifyForClearing(t, false)).toBe("keep");
@@ -70,10 +72,10 @@ describe("planClearing / applyClearing", () => {
   it("builds recover hints", () => {
     const { cleared } = planClearing(convo(), policy);
     expect(cleared.find((c) => c.toolCallId === "a")!.recoverHint).toBe("read logs/a.log (offset/limit as before)");
-    expect(cleared.find((c) => c.toolCallId === "b")!.recoverHint).toBe("read tool-output/b-bash.txt");
-    const noSpill = [call("z", "bash", { command: "ls" }), result("z", "bash"), call("y", "read", {}), result("y", "read"), call("w", "bash", {}), result("w", "bash")];
+    expect(cleared.find((c) => c.toolCallId === "b")!.recoverHint).toBe("read tool-output/b-grep.txt");
+    const noSpill = [call("z", "grep", { command: "ls" }), result("z", "grep"), call("y", "read", {}), result("y", "read"), call("w", "grep", {}), result("w", "grep")];
     const plan = planClearing(noSpill, { keepRecentTurns: 1, minBytes: 1 });
-    expect(plan.cleared.find((c) => c.toolCallId === "z")!.recoverHint).toBe("re-run bash with the same arguments");
+    expect(plan.cleared.find((c) => c.toolCallId === "z")!.recoverHint).toBe("re-run grep with the same arguments");
     const custom = planClearing(noSpill, { keepRecentTurns: 1, minBytes: 1, recoverHintFor: () => "custom" });
     expect(custom.cleared[0]!.recoverHint).toBe("custom");
   });
@@ -108,9 +110,16 @@ describe("planClearing / applyClearing", () => {
     expect(applyClearing(once, planClearing(msgs, policy))).toEqual(once);
   });
 
+  it("scrubs secrets from the stored descriptor and hint", () => {
+    const secret = "Bearer abcdefghijklmnop1234";
+    const msgs = [call("s", "grep", { pattern: `Authorization: ${secret}` }), result("s", "grep", "x".repeat(600)), call("t", "read", {}), call("u", "read", {})];
+    const { cleared } = planClearing(msgs, { keepRecentTurns: 1, minBytes: 1 });
+    expect(JSON.stringify(cleared)).not.toContain("abcdefghijklmnop1234");
+  });
+
   it("counts bytes as utf8", () => {
     const text = "é".repeat(600);
-    const plan = planClearing([result("u", "read", text), call("n", "bash", {}), call("m", "bash", {})], { keepRecentTurns: 1, minBytes: 1 });
+    const plan = planClearing([result("u", "read", text), call("n", "grep", {}), call("m", "grep", {})], { keepRecentTurns: 1, minBytes: 1 });
     expect(plan.cleared[0]!.bytes).toBe(1200);
   });
 });
@@ -119,7 +128,7 @@ describe("renderClearedIndex", () => {
   it("is bounded and reports omitted", () => {
     const msgs: any[] = [];
     for (let i = 0; i < 40; i++) msgs.push(call(`k${i}`, "read", { path: `logs/file-${i}.log` }), result(`k${i}`, "read"));
-    msgs.push(call("last", "bash", {}));
+    msgs.push(call("last", "grep", {}));
     const { cleared } = planClearing(msgs, { keepRecentTurns: 1, minBytes: 1 });
     expect(cleared).toHaveLength(40);
     const out = renderClearedIndex(cleared, 600);

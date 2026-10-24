@@ -114,7 +114,10 @@ export function createToolOutputBudgetExtension(
         turnLedgerTokens += resultTokens;
         return undefined;
       }
-      const notice = `[${event.toolName} output not returned: this turn's tool results already fill the context budget (this one is ~${resultTokens} tokens). Nothing was lost. Call ${event.toolName} again for this one on its own, in a later turn, and keep to one large ${event.toolName} call per turn.]`;
+      const notice =
+        event.toolName === "bash"
+          ? `[bash output not returned: this turn's tool results already fill the context budget (this one is ~${resultTokens} tokens). The command already ran; do not run it again. Re-read its output with a read-only command (for example write it to a file earlier, or use grep/head/tail on the files it produced) in a later turn, and keep to one large call per turn.]`
+          : `[${event.toolName} output not returned: this turn's tool results already fill the context budget (this one is ~${resultTokens} tokens). Nothing was lost. Call ${event.toolName} again for this one on its own, in a later turn, and keep to one large ${event.toolName} call per turn.]`;
       turnLedgerTokens += estimateTokens(utf8ByteLength(notice));
       options.onSpill?.({
         toolName: event.toolName,

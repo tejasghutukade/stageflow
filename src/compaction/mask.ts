@@ -1,4 +1,5 @@
 import type { LooseMessage } from "./pin.js";
+import { scrubSecrets } from "./scrub.js";
 import { classifyForClearing } from "./toolPolicy.js";
 import type { ClearedResult } from "./types.js";
 
@@ -117,8 +118,8 @@ export function planClearing(messages: readonly LooseMessage[], policy: Clearing
       toolName,
       toolCallId,
       bytes,
-      descriptor: describe(toolName, args),
-      recoverHint: custom && custom.trim().length > 0 ? oneLine(custom, 300) : defaultHint(m, toolName, args),
+      descriptor: scrubSecrets(describe(toolName, args)),
+      recoverHint: scrubSecrets(custom && custom.trim().length > 0 ? oneLine(custom, 300) : defaultHint(m, toolName, args)),
     });
     clearIds.add(toolCallId);
   }

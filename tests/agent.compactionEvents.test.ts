@@ -60,6 +60,28 @@ describe("addCompactionUsage", () => {
   });
 });
 
+describe("compaction usage edge cases", () => {
+  const withUsage = (cost: number): CompactionEndSessionEvent => ({ type: "compaction_end", reason: "threshold", result: { summary: "s", tokensBefore: 10, usage: { input: 5, output: 2, cost: { total: cost } } } });
+
+  it("charges the cost when the model id is missing", () => {
+    const stage = emptyStageUsage();
+    addCompactionUsage(stage, undefined, withUsage(0.01));
+    expect(stage.costUsd).toBeCloseTo(0.01);
+  });
+
+  it("ignores a NaN cost", () => {
+    const stage = emptyStageUsage();
+    addCompactionUsage(stage, "m", withUsage(Number.NaN));
+    expect(Number.isFinite(stage.costUsd)).toBe(true);
+    expect(compactionUsageCost(withUsage(Number.NaN)).costUsd).toBe(0);
+  });
+
+  it("redacts the error text", () => {
+    const event = { ...withUsage(0), errorMessage: "401 Authorization: Bearer abcdefghijklmnop1234" };
+    expect(JSON.stringify(compactionActivityEvent(event, null))).not.toContain("abcdefghijklmnop1234");
+  });
+});
+
 describe("compaction_end shapes agree across consumers", () => {
   const usage = { input: 1000, output: 200, cacheRead: 5, cacheWrite: 7, cost: { total: 0.004 } };
   const shapes: Array<{ name: string; event: CompactionEndSessionEvent; cost: number; inputTokens: number }> = [

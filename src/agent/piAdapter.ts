@@ -598,6 +598,12 @@ function attachStageProgress(
       const end = raw as unknown as CompactionEndSessionEvent;
       if (usage) addCompactionUsage(usage, session.model?.id, end);
       observer.onActivity(compactionActivityEvent(end, session.getContextUsage()?.tokens ?? null));
+      const after = end.result?.estimatedTokensAfter;
+      const window = session.getContextUsage()?.contextWindow ?? 0;
+      if (session.getContextUsage()?.tokens == null && typeof after === "number" && Number.isFinite(after) && window > 0) {
+        lastContextPercent = Math.min(100, Math.round((after / window) * 100));
+        observer.onActivity({ event: "context_usage", tokens: after, contextWindow: window, percent: lastContextPercent });
+      }
     }
     if (raw.type !== "message_end" && raw.type !== "compaction_end") return;
     const context = session.getContextUsage();

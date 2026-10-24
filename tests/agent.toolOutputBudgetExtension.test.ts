@@ -153,6 +153,20 @@ describe("tool output budget extension", () => {
     expect(await read("r4")).toBeUndefined();
   });
 
+  it("tells the model a deferred bash command already ran", async () => {
+    const h = await harness({
+      usage: { tokens: 10_000, contextWindow: 128_000 },
+      exempt: ["bash"], turnCapped: ["bash"],
+    });
+    const out = [{ type: "text", text: "x".repeat(60_000) }];
+    const bash = (toolCallId: string) => h.toolResult({ toolName: "bash", toolCallId, content: out });
+    await bash("b1");
+    await bash("b2");
+    const deferred = await bash("b3");
+    expect(deferred?.content[0]?.text).toContain("already ran");
+    expect(deferred?.content[0]?.text).not.toContain("Nothing was lost");
+  });
+
   it("always lets the first read of a turn through, even in a nearly full window", async () => {
     const h = await harness({
       usage: { tokens: 120_000, contextWindow: 128_000 },

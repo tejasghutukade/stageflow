@@ -29,7 +29,7 @@ function describeContextCompacted(event: StageLogEvent): string | undefined {
   if (typeof before !== "number") return undefined;
   const after = typeof event.tokensAfter === "number" ? formatTokenCount(event.tokensAfter) : "?";
   const chars = typeof event.summaryChars === "number" ? `, summary ${formatTokenCount(event.summaryChars)} chars` : "";
-  const cost = typeof event.costUsd === "number" ? `, $${event.costUsd.toFixed(3)}` : "";
+  const cost = typeof event.costUsd === "number" && Number.isFinite(event.costUsd) ? `, $${event.costUsd.toFixed(3)}` : "";
   return `${formatTokenCount(before)} -> ${after} tokens${chars}${cost}`;
 }
 

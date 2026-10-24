@@ -11,7 +11,8 @@ export const DIRECTIVE_MAX_CHARS = 600;
 export const USER_DIRECTIVE_MAX_CHARS = 280;
 export const DIRECTIVES_CARRY_MAX = 60;
 
-const NOISE_USER = /^(?:Begin this stage\b|Reminder \d+ of \d+|Continue this stage after feedback-loop)/i;
+const NOISE_USER = /^(?:Begin this stage\b|Reminder \d+ of \d+)/i;
+const FEEDBACK_RESUME_PREFIX = /^Continue this stage after feedback-loop send-back\.\s*Incorporate the operator\/source feedback below[^\n]*\n*/i;
 const OPERATOR_TOOLS = new Set([ASK_OPERATOR_TOOL_NAME]);
 const ENVELOPE_TOOLS = new Set([EMIT_STAGE_ENVELOPE_TOOL_NAME]);
 
@@ -37,7 +38,7 @@ export function extractDirectives(messages: readonly LooseMessage[]): Directive[
   const out: Directive[] = [];
   for (const m of messages) {
     if (m.role === "user") {
-      const text = blocksText(m.content);
+      const text = blocksText(m.content).trim().replace(FEEDBACK_RESUME_PREFIX, "");
       if (!text.trim() || NOISE_USER.test(text.trim())) continue;
       out.push({ source: "user", text: clip(scrubSecrets(text), USER_DIRECTIVE_MAX_CHARS) });
     } else if (m.role === "toolResult") {

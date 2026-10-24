@@ -15,7 +15,7 @@ The Claude backend (`agent: claude`) uses the Claude SDK's own auto-compaction, 
 |-----------|--------------|
 | Assignment in the system prompt | The task, prior envelopes and the envelope contract are in the system prompt, which compaction never rewrites. |
 | Spilled tool output | A large result from any tool except `read` and `bash` is written to a stage artifact; the model sees a path and a preview. See [Large results](yaml-catalog.md). |
-| Per-turn cap | `read` and `bash` results share a per-turn token cap. The first result of a turn always returns. Later ones in the same turn are replaced by a short notice, and the model repeats the call in a later turn. |
+| Per-turn cap | `read` and `bash` results share a per-turn token cap. The first result of a turn always returns. Later ones in the same turn are replaced by a short notice. A deferred `read` is repeated in a later turn; a deferred `bash` has already run, so the notice tells the model not to rerun it. |
 | `working_state` tool | The model keeps keyed entries (facts, decisions, progress, to-dos, blockers). They are saved with the session, survive resume, and are re-injected after every compaction. |
 | Compaction | When the window fills, old messages become a structured summary. |
 

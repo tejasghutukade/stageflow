@@ -128,7 +128,8 @@ export class WorkingStateStore {
   }
 
   delete(key: string): boolean {
-    return this.entries.delete(oneLine(String(key ?? "")));
+    const raw = oneLine(String(key ?? ""));
+    return this.entries.delete(raw) || this.entries.delete(oneLine(scrubSecrets(raw)));
   }
 
   list(): WorkingStateEntry[] {

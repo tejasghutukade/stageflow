@@ -14,6 +14,16 @@ const messages = [
   { role: "user", content: text("Also keep Authorization: Bearer abcdefghijklmnop out of the notes") },
 ];
 
+describe("feedback-loop resume", () => {
+  it("keeps the operator feedback and drops the boilerplate", () => {
+    const body = "Continue this stage after feedback-loop send-back.\n\nIncorporate the operator/source feedback below, then complete the stage (emit an envelope when done).\n\nFeedback: use the staging database only.";
+    const out = extractDirectives([{ role: "user", content: [{ type: "text", text: body }] }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.text).toContain("use the staging database only");
+    expect(out[0]!.text).not.toContain("Incorporate the operator");
+  });
+});
+
 describe("directives", () => {
   it("keeps operator answers, rejected emits and user messages; skips kickoff and reminder noise", () => {
     const out = extractDirectives(messages);
