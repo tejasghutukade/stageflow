@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-10-23
+
+### Added
+
+- **Agent author keeps a draft.** The create page interviews before it fills the config, shows the chat model, and stores the draft and transcript. Leave the page and open the draft again from **Drafts** on Agents.
+- **The author reads documentation only.** `read_project_file` and `list_project_files` allow `docs/`, `policies/`, `AGENTS.md`, and `README.md`, and only `.md` and `.txt`. Source files are refused.
+- **The author can see what is already connected.** `list_author_catalog` returns connection ids with provider labels and installed skill names. It does not return secrets, and it does not grant a name that is not listed.
+- **Document policy review example.** `examples/document-policy-review/` is a generic agent that compares a document to company policies, with a public chat page. `docker-compose.policy-review.yml` publishes that host on port 3849.
+- **Agent author on Cursor keeps one draft.** A Cursor composer lists the `pi__` tool names, the create page uses one session, and an edit made while the author is still replying is not overwritten.
+
 ## [0.41.0] - 2026-10-23
 
 ### Added
@@ -26,11 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Agent evals: empty replies and provider limits no longer produce graded results.** An agent turn with no reply text and no output tokens is now an `error` result with `EVAL_AGENT_EMPTY_REPLY` (not scored), and a run stops early as `failed` after 5 consecutive empty-reply or agent-failed cases ("check your provider key or rate limit").
 - **Evals console: reopen a running eval, switch runs, pick the comparison.** An eval with a queued or running run shows "Run #n running" on the Evals list and opens on its live page (`active_run` on the list and detail reads); each trend dot opens its run. The run header has a run switcher listing up to 200 runs with status and pass rate, and the live page scrolls on short windows. The Run dialog's model fields are searchable dropdowns grouped by provider, and "Compare with" can take any earlier completed run, not only the previous one.
 - **Provider actions menu in Settings.** The dots button on a connected provider opens a menu with Replace API key, Sign in again and Disconnect. Disconnect asks for confirmation ("Agents and evals that use it will stop working") in the redesigned and the legacy Settings cards. A key supplied through `STAGEFLOW_PROVIDER_<ID>_API_KEY` is written again at every Host boot, so a restart restores it after a replace or disconnect.
-- **Agent author keeps a draft.** The create page interviews before it fills the config, shows the chat model, and stores the draft and transcript. Leave the page and open the draft again from **Drafts** on Agents.
-- **The author reads documentation only.** `read_project_file` and `list_project_files` allow `docs/`, `policies/`, `AGENTS.md`, and `README.md`, and only `.md` and `.txt`. Source files are refused.
-- **The author can see what is already connected.** `list_author_catalog` returns connection ids with provider labels and installed skill names. It does not return secrets, and it does not grant a name that is not listed.
-- **Document policy review example.** `examples/document-policy-review/` is a generic agent that compares a document to company policies, with a public chat page. `docker-compose.policy-review.yml` publishes that host on port 3849.
-- **Agent author on Cursor keeps one draft.** A Cursor composer lists the `pi__` tool names, the create page uses one session, and an edit made while the author is still replying is not overwritten.
 
 ### Changed
 
