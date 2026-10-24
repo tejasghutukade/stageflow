@@ -27,8 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Evals console: reopen a running eval, switch runs, pick the comparison.** An eval with a queued or running run shows "Run #n running" on the Evals list and opens on its live page (`active_run` on the list and detail reads); each trend dot opens its run. The run header has a run switcher listing up to 200 runs with status and pass rate, and the live page scrolls on short windows. The Run dialog's model fields are searchable dropdowns grouped by provider, and "Compare with" can take any earlier completed run, not only the previous one.
 - **Provider actions menu in Settings.** The dots button on a connected provider opens a menu with Replace API key, Sign in again and Disconnect. Disconnect asks for confirmation ("Agents and evals that use it will stop working") in the redesigned and the legacy Settings cards. A key supplied through `STAGEFLOW_PROVIDER_<ID>_API_KEY` is written again at every Host boot, so a restart restores it after a replace or disconnect.
 
+### Changed
+
+- **`sf validate --strict` now fails on eval warnings.** Under `--strict`, every warning on an `*.eval.yaml` file (for example `eval.tool_not_granted`, `eval.tools_unstubbed_list`, `eval.agent_disabled`) counts as an error. Existing projects with evals may now see these and exit `1` with `--strict`; without `--strict` nothing changes. The new error `eval.read_only_tools_not_mcp` (see Fixed) applies in both modes.
+
 ### Fixed
 
+- **Security: `read_only_tools` could make `write` or `bash` run in an agent eval.** Listing a built-in or Stageflow tool there treated it as read-only, so it ran under `read_only`. Only MCP tools can be declared read-only now; `write`, `edit`, `bash`, browser and non-read Stageflow tools stay stubbed. `sf validate` reports `eval.read_only_tools_not_mcp` (error) for such entries.
+- **Eval sessions are read only for operators.** Chat and approve/deny on an eval session (HTTP, MCP `agent_chat`) are refused with `agent.session_eval_readonly`, and the console hides the composer.
+- **Eval tool gate also blocks `sort_eval_failures` and `cancel_eval_run`,** even under `tools: real`.
 - **Docker: the Host runs with `HOME` set to the `stageflow` user's home.** The entrypoint dropped from root to `stageflow` but left `HOME=/root`, which that user cannot write, so the email store failed and the Host restarted in a loop. The entrypoint now sets `HOME` to `/data`.
 
 ## [0.40.0] - 2026-10-21

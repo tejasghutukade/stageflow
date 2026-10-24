@@ -56,7 +56,7 @@ describe("eval sessions: opening", () => {
     expect(real.revision).toBe(current);
     const backend = capturing();
     const chat = new AgentChatController({ service: fx.service, backend });
-    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: eval_.id, text: "hi" });
+    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: eval_.id, text: "hi", source: "eval" });
     expect(backend.seen[0]!.definition.instructions).toBe("v-original");
   });
 
@@ -72,7 +72,7 @@ describe("eval sessions: opening", () => {
     await expect(fx.service.openSession(fx.project, "helper", { source: "console" })).rejects.toMatchObject({ code: "agent.disabled" });
     const session = await fx.service.openSession(fx.project, "helper", { source: "eval", eval: {} });
     const chat = new AgentChatController({ service: fx.service, backend: scriptedBackend() });
-    const detail = await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "hi" });
+    const detail = await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "hi", source: "eval" });
     expect(detail.turns[0]!.status).toBe("succeeded");
     await expect(chat.send({ projectRoot: fx.project, agentId: "helper", text: "hi" })).rejects.toMatchObject({ code: "agent.disabled" });
     await fx.service.archive(fx.project, "other");
@@ -88,7 +88,7 @@ describe("eval sessions: overrides", () => {
       eval: { definition: { model: { id: "openrouter/some-model" } } },
     });
     const backend = capturing();
-    const detail = await new AgentChatController({ service: fx.service, backend }).send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "hi" });
+    const detail = await new AgentChatController({ service: fx.service, backend }).send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "hi", source: "eval" });
     const definition = backend.seen[0]!.definition;
     expect(definition.model.id).toBe("openrouter/some-model");
     expect(definition.observability).toMatchObject({ capture: "full", otlp: false });
@@ -106,7 +106,7 @@ describe("eval sessions: overrides", () => {
     const backend = scriptedBackend(async (_m, ctx) => (await ctx.tool("read", { path: "a.md" }, () => "file body")).output);
     const evalGates = new EvalGateRegistry();
     evalGates.set(session.id, createEvalGate({ policy: { tools: "read_only", approvals: "record_only", readOnlyTools: [], mocks: {} }, definition: (await fx.service.get(fx.project, "helper")).definition! }));
-    const detail = await new AgentChatController({ service: fx.service, backend, evalGates }).send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "go" });
+    const detail = await new AgentChatController({ service: fx.service, backend, evalGates }).send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "go", source: "eval" });
     const tool = detail.spans.find((span) => span.kind === "tool")!;
     expect(tool).toMatchObject({ outputText: "file body" });
     expect(tool.inputText).toContain("a.md");
@@ -117,26 +117,26 @@ describe("eval sessions: overrides", () => {
     const fx = await setup({ helper: { limits: { max_turns: 1, session_minutes: 1 } } });
     const chat = new AgentChatController({ service: fx.service, backend: scriptedBackend() });
     const roomy = await fx.service.openSession(fx.project, "helper", { source: "eval", eval: { limits: { max_turns: 3, session_minutes: 30 } } });
-    for (let i = 0; i < 3; i += 1) await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: roomy.id, text: `t${i}` });
-    await expect(chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: roomy.id, text: "t3" })).rejects.toMatchObject({ code: "agent.limit_reached" });
+    for (let i = 0; i < 3; i += 1) await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: roomy.id, text: `t${i}`, source: "eval" });
+    await expect(chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: roomy.id, text: "t3", source: "eval" })).rejects.toMatchObject({ code: "agent.limit_reached" });
     const slow = await fx.service.openSession(fx.project, "helper", { source: "eval", eval: { limits: { max_turns: 10, session_minutes: 2 } } });
     fx.clock.advance(3 * 60_000);
-    await expect(chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: slow.id, text: "late" })).rejects.toMatchObject({ code: "agent.limit_reached" });
+    await expect(chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: slow.id, text: "late", source: "eval" })).rejects.toMatchObject({ code: "agent.limit_reached" });
     const real = await fx.service.openSession(fx.project, "helper", { source: "console" });
-    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: real.id, text: "one" });
-    await expect(chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: real.id, text: "two" })).rejects.toMatchObject({ code: "agent.limit_reached" });
+    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: real.id, text: "one", source: "eval" });
+    await expect(chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: real.id, text: "two", source: "eval" })).rejects.toMatchObject({ code: "agent.limit_reached" });
   });
 
   it("enforces eval cost_usd only when given; null lifts the agent's cost limit", async () => {
     const fx = await setup({ helper: { limits: { cost_usd: 0.0005 } } });
     const chat = new AgentChatController({ service: fx.service, backend: scriptedBackend() });
     const lifted = await fx.service.openSession(fx.project, "helper", { source: "eval", eval: { limits: { max_turns: 5, session_minutes: 10, cost_usd: null } } });
-    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: lifted.id, text: "a" });
-    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: lifted.id, text: "b" });
+    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: lifted.id, text: "a", source: "eval" });
+    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: lifted.id, text: "b", source: "eval" });
     const capped = await fx.service.openSession(fx.project, "helper", { source: "eval", eval: { limits: { max_turns: 5, session_minutes: 10, cost_usd: 0.0015 } } });
-    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: capped.id, text: "a" });
-    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: capped.id, text: "b" });
-    await expect(chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: capped.id, text: "c" })).rejects.toMatchObject({ code: "agent.limit_reached" });
+    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: capped.id, text: "a", source: "eval" });
+    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: capped.id, text: "b", source: "eval" });
+    await expect(chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: capped.id, text: "c", source: "eval" })).rejects.toMatchObject({ code: "agent.limit_reached" });
   });
 });
 
@@ -146,7 +146,7 @@ describe("eval sessions: hidden from operators", () => {
     const chat = new AgentChatController({ service: fx.service, backend: scriptedBackend() });
     const real = await chat.send({ projectRoot: fx.project, agentId: "helper", text: "real" });
     const session = await fx.service.openSession(fx.project, "helper", { source: "eval", sourceRef: "evr_1", eval: {} });
-    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "eval" });
+    await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "eval", source: "eval" });
 
     const own = await fx.service.listSessions(fx.project, "helper", { limit: 10 });
     expect(own.sessions.map((s) => s.id)).toEqual([real.session.id]);
@@ -196,7 +196,7 @@ describe("eval sessions: side effects", () => {
     const backend = scriptedBackend(async (_m, ctx) => `answer ${(await ctx.tool("read", { path: "a" }, () => "facts")).output}`, undefined, { judge });
     const chat = new AgentChatController({ service: fx.service, backend, otlpSink: sink });
     const session = await fx.service.openSession(fx.project, "helper", { source: "eval", eval: {} });
-    const detail = await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "q" });
+    const detail = await chat.send({ projectRoot: fx.project, agentId: "helper", sessionId: session.id, text: "q", source: "eval" });
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(judge).not.toHaveBeenCalled();
     expect(sink).not.toHaveBeenCalled();
@@ -230,7 +230,7 @@ describe("eval sessions: sub-agents", () => {
     };
     const chat = new AgentChatController({ service: fx.service, backend });
     const session = await fx.service.openSession(fx.project, "boss", { source: "eval", sourceRef: "evr_9", eval: { definition: { model: { id: "openrouter/x" } } } });
-    const detail = await chat.send({ projectRoot: fx.project, agentId: "boss", sessionId: session.id, text: "go" });
+    const detail = await chat.send({ projectRoot: fx.project, agentId: "boss", sessionId: session.id, text: "go", source: "eval" });
     expect(detail.messages.at(-1)!.text).toBe("got child reply");
 
     const children = fx.service.listChildSessions(session.id);
@@ -262,7 +262,7 @@ describe("eval sessions: sub-agents", () => {
     };
     const chat = new AgentChatController({ service: fx.service, backend });
     const session = await fx.service.openSession(fx.project, "boss", { source: "eval", sourceRef: "evr_9", eval: {} });
-    const detail = await chat.send({ projectRoot: fx.project, agentId: "boss", sessionId: session.id, text: "go" });
+    const detail = await chat.send({ projectRoot: fx.project, agentId: "boss", sessionId: session.id, text: "go", source: "eval" });
     const child = fx.service.listChildSessions(session.id)[0]!;
     const span = detail.spans.find((s) => s.kind === "sub_agent")!;
     expect(span.attributes).toMatchObject({ "stageflow.sub_agent.session_id": child.id, "gen_ai.tool.call.id": "call_x" });
@@ -330,7 +330,7 @@ describe("eval sessions: cleanup", () => {
     const chat = new AgentChatController({ service: fx.service, backend: { ...backend, release } });
     const real = await chat.send({ projectRoot: fx.project, agentId: "worker", text: "real" });
     const session = await fx.service.openSession(fx.project, "boss", { source: "eval", sourceRef: "evr_1", eval: {} });
-    await chat.send({ projectRoot: fx.project, agentId: "boss", sessionId: session.id, text: "go" });
+    await chat.send({ projectRoot: fx.project, agentId: "boss", sessionId: session.id, text: "go", source: "eval" });
     const child = fx.service.listChildSessions(session.id)[0]!;
 
     await expect(fx.service.deleteEvalSessions(fx.project, [real.session.id])).rejects.toMatchObject({ code: "agent.invalid" });

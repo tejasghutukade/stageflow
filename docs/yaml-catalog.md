@@ -1357,7 +1357,7 @@ An agent target is `target: { kind: agent, agent: <id> }`, where `<id>` is an ag
 | `turn_timeout_ms` | integer | 120000 | 5000 to 600000, one user turn |
 | `tools` | `real` \| `read_only` \| `mocked` | `read_only` | The [tool policy](evals.md#tool-policy) |
 | `approvals` | `deny` \| `auto_approve_read` \| `record_only` | `record_only` | The [approval policy](evals.md#approval-policy) |
-| `read_only_tools` | string array | `[]` | Up to 50 tool ids you declare read-only (`server.tool`, `server.*`) |
+| `read_only_tools` | string array | `[]` | Up to 50 MCP tool ids you declare read-only (`server.tool`, `server.*`). Built-in and Stageflow tools cannot be declared read-only |
 | `allow_real_tools` | boolean | `false` | Your consent to `tools: real`. Only valid with `tools: real` |
 
 Omitting `conversation` means script mode, 8 turns, `read_only`, `record_only`. Unknown keys are `eval.unknown_key`; a bad value is `eval.conversation_invalid`. Key order when Stageflow writes the file: `version, id, name, description, type, target, dataset, task, defaults, conversation, graders, budget`.
@@ -1417,6 +1417,7 @@ On an agent target, `field` and `reference` paths start at the conversation (for
 | `eval.task_not_applicable` | error | `task` on an agent target |
 | `eval.grader_not_applicable` | error | A grader type that does not apply to the target kind |
 | `eval.tool_not_granted` | warning | A tool named in `tool_calls`, `read_only_tools` or a scenario's `tool_mocks` is not granted to the agent |
+| `eval.read_only_tools_not_mcp` | error | `read_only_tools` lists a built-in or Stageflow tool (`write`, `bash`, ...). Only MCP tools can be declared read-only; the entry has no effect |
 | `eval.tools_real` | warning | `tools: real`: real tools can change files and call services from this machine |
 | `eval.real_tools_not_allowed` | error | `tools: real` without `allow_real_tools: true` |
 | `eval.tools_unstubbed_list` | warning | `read_only` and some granted tools are not read-only; they are stubbed and recorded, not executed |

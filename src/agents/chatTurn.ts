@@ -1,5 +1,5 @@
 import { AgentError } from "./errors.js";
-import { isEvalSession } from "./evalSession.js";
+import { EVAL_SESSION_SOURCE, isEvalSession } from "./evalSession.js";
 import type { AgentService, AgentSessionDetail } from "./service.js";
 import { AgentConversation, type ConversationOptions, type SendTurnInput } from "./sessions.js";
 
@@ -29,7 +29,11 @@ export class AgentChatController {
     return run;
   }
 
-  send(input: SendTurnInput): Promise<AgentSessionDetail> {
+  async send(input: SendTurnInput): Promise<AgentSessionDetail> {
+    if (input.sessionId && input.source !== EVAL_SESSION_SOURCE) {
+      const { session } = await this.options.service.getSession(input.projectRoot, input.sessionId);
+      if (isEvalSession(session)) throw new AgentError("agent.session_eval_readonly", "Eval sessions are read only");
+    }
     return this.runExclusive(input.sessionId ?? `agent:${input.agentId}`, async () => {
       const chat = new AgentConversation(this.options);
       if (input.sessionId) this.activeBySession.set(input.sessionId, chat);

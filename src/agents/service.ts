@@ -1237,6 +1237,7 @@ export class AgentService {
     return this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const session = this.sessionInProject(projectRoot, sessionId);
+      if (isEvalSession(session)) throw new AgentError("agent.session_eval_readonly", "Eval sessions are read only");
       const definition = await this.effectiveDefinition(projectRoot, session);
       if (!canApprove(definition, actor)) throw new AgentError("agent.approval_forbidden");
       const pending = this.store.getPendingApproval(sessionId);

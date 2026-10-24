@@ -1,6 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { mapJudge } from "../evals/engine/promptfoo/judgeProviders.js";
+import { classifyTool } from "../agents/toolRisk.js";
 import { checkDatasetAgainstAgent } from "./datasetAgentCheck.js";
 import { checkDatasetAgainstStage } from "./datasetStageCheck.js";
 import {
@@ -307,9 +308,7 @@ function toolGranted(target: ResolvedAgentTarget, name: string): boolean {
 }
 
 function isReadClass(tool: ResolvedAgentTarget["tools"][number], listed: readonly string[]): boolean {
-  if (tool.risk === "read") return true;
-  const dot = tool.id.indexOf(".");
-  return listed.some((name) => name === tool.id || (dot > 0 && name === `${tool.id.slice(0, dot)}.*`));
+  return tool.risk === "read" || classifyTool(undefined, tool.id, listed).readOnly;
 }
 
 function nameList(names: readonly string[]): string {
@@ -404,6 +403,17 @@ async function validateAgentEval(
       );
     }
     grantWarn(conversation.readOnlyTools, "conversation.read_only_tools");
+    const ineffective = [...new Set(conversation.readOnlyTools)].filter((name) => {
+      const cls = classifyTool(undefined, name).class;
+      return cls !== "mcp_unknown" && cls !== "read";
+    });
+    if (ineffective.length > 0) {
+      add(
+        "error",
+        "eval.read_only_tools_not_mcp",
+        `conversation.read_only_tools can only declare MCP tools read-only; these built-in or Stageflow tools stay stubbed: ${nameList(ineffective)}`,
+      );
+    }
     if (conversation.tools === "read_only") {
       const stubbed = resolved.tools
         .filter((tool) => !isReadClass(tool, conversation.readOnlyTools))

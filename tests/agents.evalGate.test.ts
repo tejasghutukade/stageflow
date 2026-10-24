@@ -52,7 +52,7 @@ async function converse(fx: Setup, policy: EvalGatePolicy, calls: Array<[string,
   if (options.register !== false) evalGates.set(session.id, gate);
   const statuses: string[] = [];
   const watcher = setInterval(() => void fx.service.getSession(fx.project, session.id).then((d) => statuses.push(d.session.status)), 1);
-  const detail = await chat.send({ projectRoot: fx.project, agentId: "support", sessionId: session.id, text: "go" });
+  const detail = await chat.send({ projectRoot: fx.project, agentId: "support", sessionId: session.id, text: "go", source: options.source ?? "eval" });
   clearInterval(watcher);
   const approvalRows = fx.connection.prepare("SELECT COUNT(*) AS n FROM agent_approvals").get() as { n: number };
   return { gate, bodies, outputs, detail, statuses, approvalRows: approvalRows.n, pending: await fx.service.pendingApprovals(fx.project, { includeEval: true }), session };
@@ -132,6 +132,29 @@ describe("eval gate: read_only", () => {
       { policyOutcome: "mocked", status: "ok", result: '{"total":42}' },
       { policyOutcome: "mocked", status: "error", result: "disk full" },
     ]);
+  });
+});
+
+describe("eval gate: declared read-only cannot upgrade builtin or Stageflow tools", () => {
+  it("classifies declared write, shell, destructive and external tools as not read-only", () => {
+    const definition = { tools: { builtin: [], mcp: {}, stageflow: { groups: [], tools: [] } }, sub_agents: [] } as never;
+    for (const tool of ["write", "edit", "bash", "browser", "stageflow.archive_agent", "stageflow.fire_trigger", "stageflow.create_agent"]) {
+      expect(classifyTool(definition, tool, [tool]).readOnly).toBe(false);
+    }
+  });
+
+  it("stubs write and bash under read_only and auto_approve_read even when declared", async () => {
+    const fx = await setup();
+    const run = await converse(fx, policyOf({ approvals: "auto_approve_read", readOnlyTools: ["write", "bash", "stageflow.archive_agent"] }), [["write"], ["bash"], ["stageflow.archive_agent"]]);
+    expect(run.bodies).toEqual([]);
+    expect(outcomes(run.gate)).toMatchObject({ write: "stubbed", bash: expect.stringMatching(/stubbed|would_ask_first/), "stageflow.archive_agent": "stubbed" });
+  });
+
+  it("blocks sort_eval_failures and cancel_eval_run even under real", async () => {
+    const fx = await setup();
+    const run = await converse(fx, policyOf({ tools: "real" }), [["stageflow.sort_eval_failures"], ["stageflow.cancel_eval_run"]]);
+    expect(run.bodies).toEqual([]);
+    expect(run.gate.records().every((r) => r.policyOutcome === "denied")).toBe(true);
   });
 });
 
@@ -232,5 +255,22 @@ describe("eval gate: registry wiring", () => {
     const run = await converse(fx, policyOf(), [["read"], ["write"]], { source: "console" });
     expect(run.bodies).toEqual(["read", "write"]);
     expect(run.gate.records()).toEqual([]);
+  });
+});
+
+describe("eval sessions are read only for operators", () => {
+  it("refuses a console or mcp chat turn on an eval session", async () => {
+    const fx = await setup();
+    const run = await converse(fx, policyOf(), [["read"]]);
+    const chat = new AgentChatController({ service: fx.service, backend: scriptedBackend(), evalGates: new EvalGateRegistry() });
+    for (const source of ["console", "mcp"]) {
+      await expect(chat.send({ projectRoot: fx.project, agentId: "support", sessionId: run.session.id, text: "hi", source })).rejects.toMatchObject({ code: "agent.session_eval_readonly" });
+    }
+  });
+
+  it("refuses an approval decision on an eval session", async () => {
+    const fx = await setup();
+    const run = await converse(fx, policyOf(), [["read"]]);
+    await expect(fx.service.decideApproval(fx.project, run.session.id, "approve", { kind: "operator" })).rejects.toMatchObject({ code: "agent.session_eval_readonly" });
   });
 });

@@ -21,7 +21,7 @@ import { AgentLoadError } from "../AgentLoadState";
 import { MONO, NOWRAP, PAGE_BG } from "../agentsTokens";
 import { clockTime, formatCost, formatDuration, formatTokens, shortSessionId, sourceLabel } from "../model/format";
 import { useAgentDetail, useResource } from "../model/hooks";
-import { runViews, sessionRollups, sessionTimeline, spanColor, type RunView } from "../model/sessionView";
+import { composerMode, runViews, sessionRollups, sessionTimeline, spanColor, type RunView } from "../model/sessionView";
 import { Breadcrumb, Button, PageFooter } from "../ui";
 import { AgentSessionEvalBanner } from "../../evals/AgentSessionEvalBanner";
 import { AddSessionCaseDialog } from "./AddSessionCaseDialog";
@@ -569,7 +569,9 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
               <div ref={bottomRef} />
             </div>
             <div className="shrink-0 border-t border-t-[var(--sf-hairline)] px-7 py-4">
-              {agent.agent.enabled ? (
+              {composerMode(session?.source, agent.agent.enabled) === "eval_readonly" ? (
+                <p className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">Eval session: read only.</p>
+              ) : agent.agent.enabled ? (
                 <form
                   onSubmit={(event) => {
                     event.preventDefault();

@@ -31,7 +31,7 @@ function baseClass(toolId: string): ToolClass {
 
 /**
  * What an eval may assume about a tool. `readOnly` is true only for what is provably read-only (builtin read tools,
- * Stageflow tools with risk `read`) or declared so by the eval author in `read_only_tools`. Sub-agents and
+ * Stageflow tools with risk `read`) or an MCP tool the eval author declares in `read_only_tools` (a declaration never changes a builtin or Stageflow tool). Sub-agents and
  * operator-only tools are never read-only.
  */
 export function classifyTool(_definition: Grants | undefined, toolId: string, readOnlyExtra: readonly string[] = []): ToolClassification {
@@ -39,7 +39,7 @@ export function classifyTool(_definition: Grants | undefined, toolId: string, re
   if (cls === "operator_only" || cls === "sub_agent") return { class: cls, readOnly: false };
   const declared = listed(toolId, readOnlyExtra);
   if (declared && cls === "mcp_unknown") cls = "read";
-  return { class: cls, readOnly: cls === "read" || declared };
+  return { class: cls, readOnly: cls === "read" };
 }
 
 export type ToolRiskEntry = { tool: string; class: ToolClass; readOnly: boolean };

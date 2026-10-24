@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSessionDetail } from "../../../api/agents";
-import { isRunActive, runViews, sessionRollups, sessionTimeline } from "./sessionView";
+import { composerMode, isRunActive, runViews, sessionRollups, sessionTimeline } from "./sessionView";
 
 const t = (seconds: number) => new Date(Date.parse("2026-10-15T12:00:00Z") + seconds * 1000).toISOString();
 

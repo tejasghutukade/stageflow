@@ -41,7 +41,13 @@ export type EvalGate = {
 export const APPROVAL_NOT_GRANTED = (tool: string) => `Approval for ${tool} was not granted in this evaluation. Continue without it.`;
 export const STUB_RESULT = (tool: string) => `${tool} was not executed in this evaluation.`;
 
-const ALWAYS_BLOCKED = new Set(["stageflow.run_eval", "stageflow.agent_chat", "stageflow.fire_trigger"]);
+const ALWAYS_BLOCKED = new Set([
+  "stageflow.run_eval",
+  "stageflow.agent_chat",
+  "stageflow.fire_trigger",
+  "stageflow.sort_eval_failures",
+  "stageflow.cancel_eval_run",
+]);
 const BLOCKED_UNLESS_REAL = new Set(["stageflow.probe_project_mcp"]);
 
 function redactedArgs(input: Record<string, unknown>): Record<string, unknown> {

@@ -267,6 +267,16 @@ describe("validateEval: tools, simulator and conversation findings", () => {
     expect(codes(findings)).not.toContain("eval.tools_unstubbed_list");
   });
 
+  it("read_only_tools naming a builtin tool is an error and does not make it read-only", async () => {
+    const findings = await validate(evalYaml({ conversation: "  read_only_tools: [write, bash, billing.lookup_invoice]" }));
+    const finding = find(findings, "eval.read_only_tools_not_mcp");
+    expect(finding?.severity).toBe("error");
+    expect(finding?.message).toContain("write, bash");
+    expect(finding?.message).not.toContain("billing");
+    const clean = await validate(evalYaml({ conversation: "  read_only_tools: [billing.lookup_invoice]" }));
+    expect(codes(clean)).not.toContain("eval.read_only_tools_not_mcp");
+  });
+
   it("names the agent is not granted give eval.tool_not_granted", async () => {
     const graders = [
       "graders:",

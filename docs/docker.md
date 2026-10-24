@@ -88,7 +88,7 @@ Agents and Check fill `${NAME}` from console secrets only. To use a variable tha
 
 ### Catalog in the container
 
-The image does **not** ship the repo `examples/` tree. Workshop saves and the default writable **workspace** catalog live under `/data` (`$STAGEFLOW_HOME/workspace`). For an external catalog, bind-mount it into the container and **register / ensure** that absolute path with the Host (`STAGEFLOW_ENSURE_PROJECT_ROOTS`, `POST /api/projects`, or local `sf run` ensure-then-start). Remotes cannot invent unknown absolute `project_root` values. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root). Compose has a commented volume-mount pattern in [`docker-compose.yml`](../docker-compose.yml).
+The image ships only `examples/evals` (the sample eval sources that `POST /api/evals/sample` installs), not the rest of the repo `examples/` tree. Workshop saves and the default writable **workspace** catalog live under `/data` (`$STAGEFLOW_HOME/workspace`). For an external catalog, bind-mount it into the container and **register / ensure** that absolute path with the Host (`STAGEFLOW_ENSURE_PROJECT_ROOTS`, `POST /api/projects`, or local `sf run` ensure-then-start). Remotes cannot invent unknown absolute `project_root` values. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root). Compose has a commented volume-mount pattern in [`docker-compose.yml`](../docker-compose.yml).
 
 ### Repo-bound run (brief) {#repo-bound-run}
 
