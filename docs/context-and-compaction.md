@@ -52,4 +52,4 @@ The summarizer reads the same transcript the stage's model already read, through
 - A project agent session that restarts from its transcript starts with an empty `working_state`.
 - The Claude backend does not report context usage and has no `working_state` tool.
 
-Contributors: see the "Context and compaction" rules in [AGENTS.md](../AGENTS.md) and the evaluation harness in `scripts/compaction-eval/`.
+Contributors: see the "Context and compaction" rules in [AGENTS.md](../AGENTS.md) and the `examples/compaction-stress` pipeline, which exercises compaction end to end.

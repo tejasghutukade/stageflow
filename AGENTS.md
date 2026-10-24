@@ -110,7 +110,7 @@ Real Chrome smoke test (opt-in, needs `agent-browser` on `PATH`): `STAGEFLOW_BRO
 
 ### Context and compaction
 
-Pi stage sessions, project agents and the operator agent compact their own context. Code: `src/compaction/`, `src/tools/workingState.ts`, `src/agent/piSettings.ts`, `src/agent/toolOutputBudget*.ts`, `src/agent/compactionEvents.ts`; the harness is `scripts/compaction-eval/`. User docs: **[docs/context-and-compaction.md](docs/context-and-compaction.md)**. Read it and `docs/plans/compaction-strategy.md` (local-only) before changing any of it.
+Pi stage sessions, project agents and the operator agent compact their own context. Code: `src/compaction/`, `src/tools/workingState.ts`, `src/agent/piSettings.ts`, `src/agent/toolOutputBudget*.ts`, `src/agent/compactionEvents.ts`; the evaluation harness is kept outside this repository (ask a maintainer). User docs: **[docs/context-and-compaction.md](docs/context-and-compaction.md)**. Read it and `docs/plans/compaction-strategy.md` (local-only) before changing any of it.
 
 Rules every change must keep:
 
@@ -123,7 +123,7 @@ Rules every change must keep:
 - **The hook falls back to Pi's default compaction on any failure**, never to nothing; an abort is rethrown.
 - **`working_state` is internal**: it bypasses the agent tool gate and approvals (eval sessions included: it only touches the session's own state), is exempt from the tool-output budget, and its guidance (`WORKING_STATE_GUIDANCE`) is in every stage, agent and operator system prompt. `createSessionContextWiring` (`src/compaction/sessionWiring.ts`) owns all of that for stages, project agents and the operator agent; do not hand-list these extensions, tool names or exemptions in an adapter.
 - **One scrubber for compaction text** (`src/compaction/scrub.ts`): pinned facts, directives, summarizer input and output, the rendered sections and `working_state` values all go through `scrubSecrets`. It can over-redact (`token_count=5`), so `working_state` tells the model when it redacted a value.
-- **Bump `COMPACTION_PROMPT_VERSION`** (`src/compaction/types.ts`) when the focus prompt or the summary section layout changes, and re-run `scripts/compaction-eval/` before and after.
+- **Bump `COMPACTION_PROMPT_VERSION`** (`src/compaction/types.ts`) when the focus prompt or the summary section layout changes, and re-run the compaction evaluation harness (kept outside this repository) before and after.
 - **OpenRouter routing is a Host concern.** `createOpenRouterRoutingExtension` only adds `require_parameters` to tool requests and never overrides routing set in `models.json`; do not put a provider in YAML.
 - **A leaked tool call ends the stage with a clear provider error** (`LEAKED_TOOL_CALL_ERROR`), not `missing emit_stage_envelope`.
 - **No test calls a real model.** The harness's real-model runs are manual and capped (`--max-cost-usd`).
