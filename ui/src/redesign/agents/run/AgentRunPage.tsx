@@ -14,6 +14,7 @@ import { Breadcrumb, Button, PageFooter } from "../ui";
 import { ApprovalPane, Configuration, Logs, Messages, Steps } from "./otherTabs";
 import { defaultSpanId, filterCounts, KIND_LABEL, kindGroup, type FilterId } from "./runModel";
 import { SpanPanel } from "./SpanPanel";
+import { AgentSessionEvalBanner } from "../../evals/AgentSessionEvalBanner";
 import { Waterfall } from "./traceViews";
 
 type Tab = "steps" | "waterfall" | "messages" | "logs" | "config";
@@ -212,6 +213,7 @@ export function AgentRunPage({ agentId, sessionId, runId }: { agentId: string; s
           </div>
         </div>
       </header>
+      <AgentSessionEvalBanner sessionId={detail.session.id} source={detail.session.source} />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {notice ? (

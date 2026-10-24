@@ -17,6 +17,13 @@ import {
 } from "../../providers/helpers";
 import { providerSupportsOauthConnect } from "../../providers/oauthSession";
 import { Keycap } from "../Keycap";
+import {
+  disconnectConfirmText,
+  initialProviderActionsState,
+  providerActions,
+  reduceProviderActions,
+  type ProviderActionsEvent,
+} from "./providerActionsModel";
 import type { IconType } from "react-icons";
 import {
   LuCheck,
@@ -543,7 +550,65 @@ function ProviderRow({
   const canOauth = providerSupportsOauthConnect(provider);
   const letter = provider.name.slice(0, 1).toUpperCase();
 
-  const expanded = connecting || oauthing;
+  const [actions, setActions] = useState(initialProviderActionsState);
+  const [focus, setFocus] = useState(0);
+  const menuRoot = useRef<HTMLSpanElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const items = providerActions({ canKey, canOauth });
+
+  function dispatch(event: ProviderActionsEvent) {
+    const result = reduceProviderActions(actions, event);
+    setActions(result.state);
+    if (result.effect === "replace-key") onSetConnecting(provider.id);
+    else if (result.effect === "sign-in-again") onSetOauthing(provider.id);
+    if (event.type === "escape" || event.type === "cancel") {
+      menuButton.current?.focus();
+    }
+  }
+
+  useEffect(() => {
+    if (actions.menuOpen) setFocus(0);
+  }, [actions.menuOpen]);
+
+  useEffect(() => {
+    if (actions.menuOpen) itemRefs.current[focus]?.focus();
+  }, [actions.menuOpen, focus]);
+
+  useEffect(() => {
+    if (!actions.menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRoot.current && !menuRoot.current.contains(e.target as Node)) {
+        setActions((s) => reduceProviderActions(s, { type: "close-menu" }).state);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [actions.menuOpen]);
+
+  function onMenuKeyDown(e: React.KeyboardEvent) {
+    if (!actions.menuOpen) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      dispatch({ type: "escape" });
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setFocus((f) => Math.min(items.length - 1, f + 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setFocus((f) => Math.max(0, f - 1));
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setFocus(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setFocus(items.length - 1);
+    } else if (e.key === "Tab") {
+      dispatch({ type: "close-menu" });
+    }
+  }
+
+  const expanded = connecting || oauthing || actions.confirming;
   return (
     <div
       className={`flex flex-col px-3.5${
@@ -578,15 +643,45 @@ function ProviderRow({
                 Connected
               </span>
             </span>
-            <button
-              type="button"
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-[var(--sf-text-2)] hover:bg-[var(--sf-raised)] disabled:opacity-50"
-              disabled={rowBusy}
-              aria-label="Disconnect"
-              onClick={() => onDisconnect(provider.id)}
-            >
-              <LuEllipsisVertical className="size-4" aria-hidden="true" />
-            </button>
+            <span ref={menuRoot} className="relative inline-flex" onKeyDown={onMenuKeyDown}>
+              <button
+                ref={menuButton}
+                type="button"
+                className="flex size-8 shrink-0 items-center justify-center rounded-lg text-[var(--sf-text-2)] hover:bg-[var(--sf-raised)] disabled:opacity-50"
+                disabled={rowBusy}
+                aria-label="Provider actions"
+                aria-haspopup="menu"
+                aria-expanded={actions.menuOpen}
+                onClick={() => dispatch({ type: "toggle-menu" })}
+              >
+                <LuEllipsisVertical className="size-4" aria-hidden="true" />
+              </button>
+              {actions.menuOpen ? (
+                <div
+                  role="menu"
+                  aria-label={`${provider.id} actions`}
+                  className="absolute right-0 top-full z-50 mt-1 flex w-[180px] flex-col rounded-lg border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)] py-1 shadow-[0px_16px_48px_rgba(0,0,0,0.5)]"
+                >
+                  {items.map((item, index) => (
+                    <button
+                      key={item.id}
+                      ref={(el) => {
+                        itemRefs.current[index] = el;
+                      }}
+                      type="button"
+                      role="menuitem"
+                      tabIndex={index === focus ? 0 : -1}
+                      onClick={() => dispatch({ type: "choose", action: item.id })}
+                      className={`px-3 py-2 text-left font-sans text-[13px] hover:bg-[var(--sf-active)] focus:bg-[var(--sf-active)] focus:outline-none ${
+                        item.destructive ? "text-[var(--sf-fail)]" : "text-[var(--sf-text-1)]"
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </span>
           </>
         ) : (
           <button
@@ -604,6 +699,42 @@ function ProviderRow({
           </button>
         )}
       </div>
+      {actions.confirming ? (
+        <div
+          role="alertdialog"
+          aria-label={`Confirm disconnect ${provider.id}`}
+          className="flex flex-wrap items-center gap-2 pl-10"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              dispatch({ type: "escape" });
+            }
+          }}
+        >
+          <span className="font-sans text-[13px] text-[var(--sf-text-2)]">
+            {disconnectConfirmText(provider.id)}
+          </span>
+          <button
+            type="button"
+            autoFocus
+            className="font-sans text-[13px] text-[var(--sf-text-2)]"
+            onClick={() => dispatch({ type: "cancel" })}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="rounded-lg bg-[var(--sf-fail)] px-3 py-1.5 font-sans text-[13px] font-medium text-[var(--sf-ground)] disabled:opacity-50"
+            disabled={rowBusy}
+            onClick={() => {
+              setActions(initialProviderActionsState);
+              onDisconnect(provider.id);
+            }}
+          >
+            Disconnect
+          </button>
+        </div>
+      ) : null}
       {connecting && canKey ? (
         <div className="flex flex-wrap items-center gap-2 pl-10">
           <LuKey className="size-3.5 text-[var(--sf-text-3)]" aria-hidden="true" />

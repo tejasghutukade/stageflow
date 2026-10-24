@@ -1,0 +1,8 @@
+{"id":"c001","title":"Session token never expires","input":{"draft":"Users sign in with email and password. The server returns a session token that stays valid until the user signs out."},"expected":{"issues":["expir"]},"tags":["security"]}
+{"id":"c002","title":"Search without paging","input":{"draft":"The search endpoint returns every matching record in one response."},"expected":{"issues":["paginat"]},"tags":["api"]}
+{"id":"c003","title":"Clear export spec","input":{"draft":"The export button downloads the current table as a CSV file. The file name is the table name plus the date. Rows keep the on-screen order. An empty table downloads a file with only the header row."},"expected":{"issues":[]},"tags":["no-issue"]}
+{"id":"c004","title":"Retry without backoff","input":{"draft":"When a webhook delivery fails, retry immediately until it succeeds."},"expected":{"issues":["backoff","limit"]},"tags":["reliability"]}
+{"id":"c005","title":"Vague quality goal","input":{"draft":"The dashboard should load fast and look modern."},"expected":{"issues":["measur"]},"tags":["clarity"]}
+{"id":"c006","title":"Upload without limits","input":{"draft":"Users can upload a profile photo. The photo is shown on their profile page."},"expected":{"issues":["size","format"]},"tags":["validation"]}
+{"id":"c007","title":"Conflicting shipping rules","input":{"draft":"Orders over 100 dollars ship free. All orders pay a flat shipping fee of 5 dollars."},"expected":{"issues":["conflict"]},"tags":["consistency"]}
+{"id":"c008","title":"Clear rename spec","input":{"draft":"A user can rename a project from its settings page. Names are 1 to 60 characters. Saving an empty or too long name shows an inline error and keeps the old name."},"expected":{"issues":[]},"tags":["no-issue"]}

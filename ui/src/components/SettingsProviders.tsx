@@ -11,6 +11,7 @@ import {
 } from "../api";
 import { ProviderConnectRow } from "./ProviderConnectRow";
 import { PROVIDERS_PI_COPY } from "../providers/helpers";
+import { disconnectConfirmText } from "../redesign/settings/providerActionsModel";
 
 type StatusMap = Record<string, ProviderAuthStatus | undefined>;
 
@@ -90,6 +91,7 @@ export function SettingsProviders() {
   }
 
   async function onDisconnect(providerId: string) {
+    if (!window.confirm(disconnectConfirmText(providerId))) return;
     setRowBusy(providerId);
     setRowError(null);
     const result = await postProviderLogout(providerId);

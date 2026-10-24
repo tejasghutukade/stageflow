@@ -18,6 +18,7 @@ import { ApprovalBroker } from "./approvalBroker.js";
 import { deliveryLedger, scheduleLedger, type DeliveryLedger, type ScheduleLedger } from "./ledgers.js";
 import { TurnLifecycle, type FinishInput } from "./turnLifecycle.js";
 import { AgentError } from "./errors.js";
+import { applyEvalOverrides, EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
 import { agentMemoryIssues } from "../memory/agentIssues.js";
 import { diffLines, type DiffLine } from "./lineDiff.js";
 import { exportTurnsToOtlp } from "./otlpExport.js";
@@ -144,6 +145,8 @@ export class AgentService {
   private readonly environment: AgentEnvironment;
   private readonly now: () => Date;
   private readonly tails = new Map<string, Promise<unknown>>();
+  /** Overrides of open eval sessions. Memory only: eval sessions do not survive a Host restart. */
+  private readonly evalOverrides = new Map<string, EvalSessionOverrides>();
   /** Wakes a turn paused at an ask-first tool when its approval is decided. */
   readonly approvalBroker = new ApprovalBroker();
   /** Owns every legal change of a turn, its session and its approval. */
@@ -441,6 +444,62 @@ export class AgentService {
     const found = this.store.getRevision(agentProjectKey(projectRoot), agentId, revision);
     if (!found) throw new AgentError("agent.revision_not_found");
     return found.definition;
+  }
+
+  /** The pinned definition, with an eval session's overrides applied. Real sessions get it unchanged. */
+  private async effectiveDefinition(projectRoot: string, session: AgentSession): Promise<AgentDefinition> {
+    const base = await this.definitionAt(projectRoot, session.agentId, session.revision);
+    return isEvalSession(session) ? applyEvalOverrides(base, this.evalOverrides.get(session.id) ?? {}) : base;
+  }
+
+  /** The overrides an eval session was opened with (sub-agent sessions inherit them), or undefined for a real session. */
+  evalOverridesOf(sessionId: string): EvalSessionOverrides | undefined {
+    return this.evalOverrides.get(sessionId);
+  }
+
+  /** Every eval session below this one (sub-agents and theirs). */
+  listChildSessions(sessionId: string): AgentSession[] {
+    return this.store.listChildSessions(sessionId);
+  }
+
+  /** Delete eval sessions and everything below them. Refuses a session that is not an eval session. */
+  async deleteEvalSessions(projectRoot: string, sessionIds: string[]): Promise<string[]> {
+    const roots = sessionIds.map((sessionId) => this.sessionInProject(projectRoot, sessionId));
+    const refused = roots.find((session) => !isEvalSession(session));
+    if (refused) throw new AgentError("agent.invalid", `Session ${refused.id} is not an eval session`);
+    const all = new Set<string>(roots.map((session) => session.id));
+    for (const root of roots) for (const child of this.store.listChildSessions(root.id)) all.add(child.id);
+    const ids = [...all];
+    this.store.deleteSessions(ids);
+    for (const sessionId of ids) this.evalOverrides.delete(sessionId);
+    return ids;
+  }
+
+  /**
+   * Boot cleanup of eval sessions: those of the given (recovered) eval runs, and older root sessions no eval result
+   * references. Returns how many sessions were deleted, descendants included.
+   */
+  async sweepEvalSessions(input: { runIds: string[]; olderThanMs: number; isReferenced: (sessionId: string) => Promise<boolean> | boolean }): Promise<number> {
+    const roots = new Map<string, AgentSession>();
+    for (const session of this.store.listEvalRootSessions({ sourceRefs: input.runIds })) roots.set(session.id, session);
+    const cutoff = new Date(this.clockMs() - input.olderThanMs).toISOString();
+    for (const session of this.store.listEvalRootSessions({ createdBefore: cutoff })) {
+      if (!roots.has(session.id) && !(await input.isReferenced(session.id))) roots.set(session.id, session);
+    }
+    const all = new Set<string>();
+    for (const root of roots.values()) {
+      all.add(root.id);
+      for (const child of this.store.listChildSessions(root.id)) all.add(child.id);
+    }
+    const ids = [...all];
+    this.store.deleteSessions(ids);
+    for (const sessionId of ids) this.evalOverrides.delete(sessionId);
+    return ids.length;
+  }
+
+  /** Forget a finished eval session's in-memory overrides. The rows stay readable. */
+  forgetEvalSession(sessionId: string): void {
+    this.evalOverrides.delete(sessionId);
   }
 
   /* ---------- validation ---------- */
@@ -781,12 +840,20 @@ export class AgentService {
   async openSession(
     projectRoot: string,
     agentId: string,
-    input: { source: string; sourceRef?: string | null; threadKey?: string | null; title?: string | null },
+    input: { source: string; sourceRef?: string | null; threadKey?: string | null; title?: string | null; eval?: EvalSessionOverrides },
   ): Promise<AgentSession> {
+    if (input.eval && input.source !== EVAL_SESSION_SOURCE) throw new AgentError("agent.invalid", "Eval overrides need an eval session");
     return this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
-      const { revision } = this.currentRevision(projectRoot, agentId);
-      if (!revision.definition.enabled) throw new AgentError("agent.disabled");
+      const isEval = input.source === EVAL_SESSION_SOURCE;
+      const { revision: current } = this.currentRevision(projectRoot, agentId);
+      let revision = current;
+      if (input.eval?.revision !== undefined && input.eval.revision !== current.revision) {
+        const pinned = this.store.getRevision(agentProjectKey(projectRoot), agentId, input.eval.revision);
+        if (!pinned) throw new AgentError("agent.revision_not_found");
+        revision = pinned;
+      }
+      if (!isEval && !revision.definition.enabled) throw new AgentError("agent.disabled");
       const now = this.iso();
       const session: AgentSession = {
         id: id("ses"),
@@ -802,6 +869,7 @@ export class AgentService {
         updatedAt: now,
       };
       this.store.insertSession(agentProjectKey(projectRoot), session);
+      if (isEval) this.evalOverrides.set(session.id, input.eval ?? {});
       return session;
     });
   }
@@ -811,8 +879,8 @@ export class AgentService {
     return this.store.listApprovals(sessionId).find((approval) => approval.status === "pending")?.id ?? null;
   }
 
-  listSessionsForRef(projectRoot: string, agentId: string, source: string, sourceRef: string, limit: number): AgentSession[] {
-    return this.store.listSessionsForRef(agentProjectKey(projectRoot), agentId, source, sourceRef, limit);
+  listSessionsForRef(projectRoot: string, agentId: string, source: string, sourceRef: string, limit: number, includeEval?: boolean): AgentSession[] {
+    return this.store.listSessionsForRef(agentProjectKey(projectRoot), agentId, source, sourceRef, limit, includeEval);
   }
 
   private sessionInProject(projectRoot: string, sessionId: string): AgentSession {
@@ -852,7 +920,7 @@ export class AgentService {
       const since = new Date(this.now().getTime() - RECENT_WINDOW_MS).toISOString();
       return {
         ...this.store.listSessions(projectKey, agentId, query),
-        stats: this.store.sessionStats(projectKey, agentId, since),
+        stats: this.store.sessionStats(projectKey, agentId, since, query.includeEval),
       };
     });
   }
@@ -870,7 +938,7 @@ export class AgentService {
       const since = new Date(this.now().getTime() - RECENT_WINDOW_MS).toISOString();
       return {
         ...this.store.listSessions(projectKey, agentId, query),
-        stats: this.store.sessionStats(projectKey, agentId, since),
+        stats: this.store.sessionStats(projectKey, agentId, since, query.includeEval),
       };
     });
   }
@@ -915,9 +983,9 @@ export class AgentService {
       await this.sync(projectRoot);
       const session = this.sessionInProject(projectRoot, sessionId);
       const { revision: live } = this.currentRevision(projectRoot, session.agentId);
-      if (!live.definition.enabled) throw new AgentError("agent.disabled");
+      if (!live.definition.enabled && !isEvalSession(session)) throw new AgentError("agent.disabled");
       if (session.status === "running" || session.status === "waiting") throw new AgentError("agent.session_busy");
-      const definition = await this.definitionAt(projectRoot, session.agentId, session.revision);
+      const definition = await this.effectiveDefinition(projectRoot, session);
       this.assertWithinLimits(definition, session);
       const now = this.iso();
       return this.store.transaction(() => {
@@ -1123,8 +1191,8 @@ export class AgentService {
       this.expireApprovals();
       const session = this.sessionInProject(projectRoot, sessionId);
       const { revision: live } = this.currentRevision(projectRoot, session.agentId);
-      if (!live.definition.enabled) throw new AgentError("agent.disabled");
-      const definition = await this.definitionAt(projectRoot, session.agentId, session.revision);
+      if (!live.definition.enabled && !isEvalSession(session)) throw new AgentError("agent.disabled");
+      const definition = await this.effectiveDefinition(projectRoot, session);
       if (!isToolGranted(definition, input.tool)) throw new AgentError("agent.tool_not_granted");
       if (!requiresAskFirst(definition, input.tool)) throw new AgentError("agent.approval_not_required");
       const payloadHash = hashApprovalPayload(input.payload);
@@ -1169,7 +1237,8 @@ export class AgentService {
     return this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const session = this.sessionInProject(projectRoot, sessionId);
-      const definition = await this.definitionAt(projectRoot, session.agentId, session.revision);
+      if (isEvalSession(session)) throw new AgentError("agent.session_eval_readonly", "Eval sessions are read only");
+      const definition = await this.effectiveDefinition(projectRoot, session);
       if (!canApprove(definition, actor)) throw new AgentError("agent.approval_forbidden");
       const pending = this.store.getPendingApproval(sessionId);
       if (!pending) throw new AgentError("agent.approval_not_pending");
@@ -1188,9 +1257,9 @@ export class AgentService {
     });
   }
 
-  async pendingApprovals(projectRoot: string): Promise<Array<AgentApproval & { agentId: string }>> {
+  async pendingApprovals(projectRoot: string, options: { includeEval?: boolean } = {}): Promise<Array<AgentApproval & { agentId: string }>> {
     this.expireApprovals();
-    return this.store.listPendingApprovals(agentProjectKey(projectRoot));
+    return this.store.listPendingApprovals(agentProjectKey(projectRoot), options.includeEval);
   }
 
   /* ---------- communications ---------- */

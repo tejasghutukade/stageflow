@@ -1,0 +1,11 @@
+version: 1
+id: unknown-key
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+graders:
+  - id: output-schema
+    type: schema
+colour: blue

@@ -39,6 +39,22 @@ describe("export --all", () => {
     });
   });
 
+  it("includes eval stage runs and keeps the header filter unchanged", async () => {
+    await withIsolatedHome(async () => {
+      const store = createRunStore({ rootDir: globalStageflowHome(), openerMode: "migrate" });
+      const plain = await store.createRun({ pipelineId: "p", taskYaml: "id: t\ngoal: g\n" });
+      const evalRun = await store.createRun({ pipelineId: "p", taskYaml: "id: t\ngoal: g\n", origin: "eval" });
+      const lines: string[] = [];
+      for await (const line of iterateExportNdjson({ store, filter: { pipeline: "p" } })) {
+        lines.push(line.trimEnd());
+      }
+      expect(JSON.parse(lines[0]!).filter).toEqual({ pipeline: "p" });
+      const ids = lines.slice(1).map((l) => JSON.parse(l).run.run_id);
+      expect(ids).toEqual(expect.arrayContaining([plain.runId, evalRun.runId]));
+      await store.close();
+    });
+  });
+
   it("refuses worktree outs", () => {
     const home = "/tmp/sf-home";
     expect(() =>

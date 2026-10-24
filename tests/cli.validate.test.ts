@@ -293,7 +293,7 @@ describe("formatValidationJson and exitCodeForValidation", () => {
     expect(parsed.ok).toBe(false);
     expect(parsed.scope).toBe("full");
     expect(parsed.checks).toMatch(
-      /catalog YAML \(pipelines, stages, tasks as selected by flags\)/,
+      /catalog YAML \(pipelines, stages, tasks, evals as selected by flags\)/,
     );
     expect(parsed.summary).toEqual({ errors: 1, warnings: 0 });
     expect(parsed.findings[0]).toEqual({

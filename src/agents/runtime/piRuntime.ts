@@ -57,7 +57,7 @@ export type OpenSessionInput = {
   toolNames: string[];
   /** Runs before each tool call; the session wires it to `pi.on("tool_call")`. */
   gate: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }) => Promise<{ block: true; reason: string; terminate?: boolean } | undefined>;
-  delegateTool?: (agentId: string, message: string) => Promise<string>;
+  delegateTool?: (agentId: string, message: string, callId: string) => Promise<string>;
   /** Stageflow tools this agent is granted. */
   stageflowTools?: ToolkitTool[];
   memory?: StageMemory;
@@ -206,8 +206,8 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
             label: `Ask ${agentId}`,
             description: `Hand a task to the "${agentId}" agent and get its reply.`,
             parameters: Type.Object({ message: Type.String({ description: "The task or question for the agent." }) }),
-            execute: async (_id: string, args: { message: string }) => {
-              const reply = await input.delegateTool!(agentId, args.message);
+            execute: async (callId: string, args: { message: string }) => {
+              const reply = await input.delegateTool!(agentId, args.message, callId);
               return { content: [{ type: "text" as const, text: reply }], details: {} };
             },
           }),
@@ -367,7 +367,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       hooks: () => state.hooks,
       ...(memory ? { memory } : {}),
       ...(stageflowTools.length > 0 ? { stageflowTools } : {}),
-      ...(subAgents.length > 0 ? { delegateTool: (agentId, message) => state.hooks!.delegate(agentId, message) } : {}),
+      ...(subAgents.length > 0 ? { delegateTool: (agentId, message, callId) => state.hooks!.delegate(agentId, message, callId) } : {}),
       gate: async (call) => {
         const hooks = state.hooks;
         if (!hooks) return { block: true, reason: "No turn is active" };
@@ -503,7 +503,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       const opened = await open({
         projectRoot: input.projectRoot,
         definition: { ...input.definition, tools: { ...input.definition.tools, builtin: [], builtin_tools: [], mcp: {}, skills: [] }, sub_agents: [] },
-        systemPrompt: "You are a strict evaluator. Answer only with the requested number.",
+        systemPrompt: input.systemPrompt ?? "You are a strict evaluator. Answer only with the requested number.",
         toolNames: [],
         gate: async () => ({ block: true, reason: "No tools" }),
         hooks: () => undefined,

@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
 import { isLoopbackHostname } from "./allowedHosts.js";
+import { isEvalInternalPath } from "./evalInternalRoutes.js";
 import { matchLiveViewRoute } from "./liveViewPath.js";
 
 export type ControlScope = "read" | "drive";
@@ -255,6 +256,7 @@ export function requiredScopeFor(
   if (isAgentInboundRoute(method, pathname)) return null;
   if (pathname.startsWith("/api/public/chat/")) return null;
   if (isLiveViewRoute(pathname)) return null;
+  if (isEvalInternalPath(pathname)) return null;
   if (pathname === "/api/backup" || pathname.startsWith("/api/backup/")) {
     return "drive";
   }

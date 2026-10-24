@@ -1,0 +1,24 @@
+# Sample eval installed by the console
+version: 1
+id: critique-sample
+name: Critique sample
+description: "Sample eval: does the critique stage find the planted problems?"
+type: capability
+target:
+  kind: stage
+  pipeline: ./eval-sample.pipeline.yaml
+  stage: critique
+dataset: ./critique-sample.dataset.jsonl
+defaults:
+  repeats: 2
+  pass_threshold: 0.8
+  max_cost_usd: 1
+  concurrency: 4
+graders:
+  - id: output-schema
+    type: schema
+    must_pass: true
+  - id: valid-verdict
+    type: field
+    checks:
+      - { path: "payload.verdict", op: in, value: [ok, needs_work] }

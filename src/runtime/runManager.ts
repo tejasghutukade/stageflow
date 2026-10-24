@@ -31,6 +31,7 @@ import {
   deriveStatusFromStages,
   findUnhandledFailedStage,
   type RunMeta,
+  type RunOrigin,
   type RunStore,
   type RunPipelineDagSnapshot,
 } from "../runstore/port.js";
@@ -872,7 +873,7 @@ export class RunManager {
     Array<{ runId: string; stageId: string }>
   > {
     const found: Array<{ runId: string; stageId: string }> = [];
-    const runs = await this.options.store.listRuns();
+    const runs = await this.options.store.listRuns({ origin: "any" });
     for (const summary of runs) {
       if (summary.status !== "running") continue;
       let detail;
@@ -991,7 +992,7 @@ export class RunManager {
       stageId: string;
       reason: string;
     }> = [];
-    const runs = await this.options.store.listRuns();
+    const runs = await this.options.store.listRuns({ origin: "any" });
 
     for (const summary of runs) {
       let meta;
@@ -1223,7 +1224,7 @@ export class RunManager {
 
   async resumeStalledSchedules(): Promise<Array<{ runId: string }>> {
     const resumed: Array<{ runId: string }> = [];
-    const runs = await this.options.store.listRuns();
+    const runs = await this.options.store.listRuns({ origin: "any" });
     for (const summary of runs) {
       if (summary.status !== "running") continue;
       const runId = summary.run_id;
@@ -1248,7 +1249,7 @@ export class RunManager {
 
   /** Rebuild in-memory admission queue from persisted `queued` rows (R27). */
   async reenqueuePersistedQueuedRuns(): Promise<void> {
-    const queued = await this.options.store.listRuns({ status: "queued" });
+    const queued = await this.options.store.listRuns({ status: "queued", origin: "any" });
     const ordered = [...queued].sort((a, b) =>
       a.created_at.localeCompare(b.created_at),
     );
@@ -1725,6 +1726,7 @@ export class RunManager {
       projectRoot?: string;
       /** Attribution from auth only — never from request body/query. */
       callerId?: string | null;
+      origin?: RunOrigin;
       skills?: SkillsPayload;
     },
     submission?: RunSubmission,
@@ -1810,6 +1812,7 @@ export class RunManager {
       input.callerId,
       input.skills,
       input.dispatchKey,
+      input.origin,
     );
   }
 
@@ -2990,6 +2993,7 @@ export class RunManager {
     callerId?: string | null,
     skills?: SkillsPayload,
     dispatchKey?: string,
+    origin?: RunOrigin,
   ): Promise<StartRunResult> {
     const persistence = pipelinePersistenceForStart(pipeline);
     if (!persistence.ok) {
@@ -3215,6 +3219,7 @@ export class RunManager {
         ...(callerId !== undefined && callerId !== null
           ? { callerId }
           : {}),
+        ...(origin !== undefined ? { origin } : {}),
         runManifest,
         skipGates,
       });
@@ -3305,6 +3310,7 @@ export class RunManager {
         skipGates,
         schedulingHalt,
         callerId,
+        ...(origin !== undefined ? { origin } : {}),
         ...(hasSkills ? { skills: validatedSkills } : {}),
       });
       if (started.created === false) this.clearReservation(admitted.provisionalId);

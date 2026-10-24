@@ -250,6 +250,85 @@ The service defaults to `{ cwd: process.cwd(), agentDir: getAgentDir() }` captur
 
 Stages that declare [`channels:`](yaml-catalog.md#stage-channels) work in CI. Put a `connections.yaml` in the workspace and supply every `env:NAME` secret it references as an environment variable (or `NAME_FILE`) on the Host; secrets are never written to run state or logs. Run start checks each connection live and fails with `channel_check_failed` when one does not work (bad token, missing secret, unreachable provider), with the provider-neutral `channelCode` in the preflight output. Run `sf doctor --pipeline <file>` as an earlier CI step to see the same result without starting a run. See [Communication channels](channels.md).
 
+## Evals in CI {#evals-in-ci}
+
+`sf eval run` works in a CI job the same way `sf run` does: it needs a Host (auto-started), the pinned eval engine (`sf eval engine install`, Node 22.22.0 or newer, about 1.2 GB; cache `$STAGEFLOW_HOME/eval-engine/`) and a provider login. It **calls models and costs money**, bounded by the eval's `max_cost_usd` (override with `--max-cost`), so run it on a schedule you choose or on changes to a stage, not on every push. Nothing in Stageflow starts evals for you in CI.
+
+```bash
+sf validate --strict --json            # includes eval files and datasets
+sf eval engine install                  # once per runner (cache $STAGEFLOW_HOME/eval-engine)
+sf eval run review-findings --repeats 3 --max-cost 2 --json
+```
+
+| Code | `outcome` | When |
+|------|-----------|------|
+| `0` | `passed` | The run completed and its pass rate is at or above the threshold |
+| `1` | `below_threshold` | The run completed with a pass rate under the threshold |
+| `1` | `failed` | The run could not finish, or the eval is invalid, the engine is missing, or the Host refused the start |
+| `1` | `cancelled` | The run was cancelled (including Ctrl+C or SIGINT in the job) |
+| `1` | `budget_stopped` | The run hit its cost limit; results are partial |
+
+`sf eval run` never exits `2` (there is no waiting state). With `--json` stdout is one document:
+
+```json
+{
+  "outcome": "below_threshold",
+  "eval_run_id": "er_4f1c9a02b7d3",
+  "eval_id": "review-findings",
+  "pass_rate": 0.75,
+  "pass_rate_ci": { "low": 0.52, "high": 0.98 },
+  "threshold": 0.8,
+  "results": { "executed": 72, "passed": 54, "errored": 0 },
+  "reliability": 0.625,
+  "cost_total": 1.2312,
+  "fingerprint": "9b41c0aa",
+  "url": "http://127.0.0.1:3847/#/evals/review-findings/runs/3"
+}
+```
+
+`pass_rate`, `pass_rate_ci`, `threshold` and `reliability` are `null` when they cannot be computed. Errors (a missing eval, `EVAL_ENGINE_UNAVAILABLE`, `EVAL_RUN_ACTIVE`, an invalid eval) are `{ "error", "code"?, "status"? }` with exit `1`; an invalid eval prints the validation result instead. `sf eval validate --json` exits `0` or `1` like `sf validate`. To start a run and read it later, use `--no-wait` (prints `{ "eval_run_id", "status" }`) and then `sf eval runs show <evalRunId> --json`. Compare against an earlier run with `sf eval compare <a> <b> --json`. Details: [CLI reference: `sf eval`](cli-reference.md#sf-eval) and [Evals](evals.md).
+
+### Agent evals in CI
+
+An eval whose target is an agent runs the same way, with the same exit codes. The differences:
+
+- **Cost.** A run pays for agent turns, a simulator model when a scenario is `simulated`, and the judge. A conversation of several turns costs several times a stage case, so keep `max_cost_usd` low (the default for agents is 1). A conversation that has started always finishes, so the spend can pass the limit by a little.
+- **The agent must exist in the job's checkout.** The eval resolves `agents/<id>.agent.yaml` from the project, so run the job in a checkout that has the agent file. It does not need to be enabled (a warning, not an error).
+- **Real tools need two consents.** An eval with `conversation.tools: real` also needs `conversation.allow_real_tools: true` in the file and `--allow-real-tools` on the command; without the flag `sf eval run` exits `1` with `EVAL_REAL_TOOLS_NOT_CONFIRMED` (`--json`: `{ "ok": false, "code": "EVAL_REAL_TOOLS_NOT_CONFIRMED", "message": … }`). Do not pass the flag in CI unless the job runs in a throwaway checkout. The default `read_only` stubs write, shell and unlisted tools.
+- **Additive JSON.** The `--json` document gains `target_kind: "agent"`, `agent_id`, `agent_revision`, `mean_turns`, `mean_tool_calls` and `tools_policy`. Every key above is unchanged, and stage documents are byte-for-byte the same. Exit codes and `outcome` values are unchanged.
+
+```json
+{
+  "outcome": "passed",
+  "eval_run_id": "er_7a02c9d41b5e",
+  "eval_id": "support-sample",
+  "pass_rate": 0.92,
+  "threshold": 0.8,
+  "results": { "executed": 12, "passed": 11, "errored": 0 },
+  "cost_total": 0.1184,
+  "fingerprint": "c3d90b17",
+  "target_kind": "agent",
+  "agent_id": "support_sample",
+  "agent_revision": 2,
+  "mean_turns": 1.3,
+  "mean_tool_calls": 0.2,
+  "tools_policy": "read_only"
+}
+```
+
+(Fields shown trimmed; the full document also has `pass_rate_ci`, `reliability` and `url`.) Conversations vary more than single outputs, so use `--repeats` of 3 or more and read `reliability` (pass^k) before trusting a green run. See [Evals: Evals for agents](evals.md#evals-for-agents).
+
+### Sorting failures in CI {#sorting-failures-in-ci}
+
+`sf eval sort <evalRunId>` and `sf eval suggestions <evalRunId>` read a finished run and need the same Host as other `sf eval` commands. Sorting is **manual only**: no run starts it, and it tags nothing. It sends each failed result to TypeSafe Jev (needs a key in `STAGEFLOW_PROVIDER_TYPESAFE_API_KEY`, `TYPESAFE_API_KEY` or `JEV_API_KEY`, or a stored `typesafe` provider login) or, with `--classifier judge`, to the run's judge model; it costs a little and is not part of the run's cost limit.
+
+| Exit | Meaning |
+|------|---------|
+| `0` | Sorted (or listed); nothing failed to sort is still `0`, check `failed` in the JSON |
+| `1` | Any error: unknown run, `EVAL_RUN_ACTIVE`, `EVAL_CLASSIFIER_UNAVAILABLE` (no key and no judge model), bad usage |
+
+`sf eval sort --json` prints `{ batch_id, classifier, model, sorted, skipped, failed, triage_cost_usd, suggestions: [...] }`, where each suggestion has `case_id`, `repeat_index`, `bucket` (`agent_wrong`, `grader_wrong`, `case_wrong`, `unclear`), `failure_type`, `confidence`, `status`, `source` and `model`. `sf eval suggestions --json` prints `{ items, summary }` with counts by bucket and status and `low_confidence`. Errors are `{ "error", "code"?, "status"? }` with exit `1`, like `sf eval run`. See [Evals: Sort failures automatically](evals.md#sort-failures).
+
 ## Extensions in CI
 
 Only provider-level hooks are supported today — for example `STAGEFLOW_CURSOR_EXTENSION` for Cursor-backed models. Per-stage extension YAML in the catalog is not supported in headless CI yet.
@@ -390,3 +469,4 @@ example README.
 - [HITL](hitl.md) — exit `2` and `--skip-gates`
 - [Providers](providers.md) — non-interactive login
 - [MCP](mcp.md) — not required for CI
+- [Evals](evals.md) — datasets, graders, cost limits and `sf eval run`

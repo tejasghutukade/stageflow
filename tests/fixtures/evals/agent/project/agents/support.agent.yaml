@@ -1,0 +1,12 @@
+id: support
+name: Support
+enabled: true
+instructions: Help customers with billing questions. Look invoices up before answering.
+model:
+  id: anthropic/claude-haiku-4-5
+tools:
+  builtin: [read]
+  mcp:
+    billing: [lookup_invoice, refund]
+approvals:
+  ask_first: [billing.refund]

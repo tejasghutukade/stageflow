@@ -1,0 +1,11 @@
+version: 1
+id: grader-invalid
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+graders:
+  - id: has-findings
+    type: field
+    checks: []

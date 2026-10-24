@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSessionDetail } from "../../../api/agents";
-import { isRunActive, runViews, sessionRollups, sessionTimeline } from "./sessionView";
+import { composerMode, isRunActive, runViews, sessionRollups, sessionTimeline } from "./sessionView";
 
 const t = (seconds: number) => new Date(Date.parse("2026-10-15T12:00:00Z") + seconds * 1000).toISOString();
 
@@ -91,5 +91,17 @@ describe("isRunActive", () => {
     expect(isRunActive({ ...detail, deliveries: [{ ...delivery, state: "failed", retryable: true } as typeof delivery] }, "1")).toBe(true);
     expect(isRunActive({ ...detail, deliveries: [{ ...delivery, state: "failed", retryable: false } as typeof delivery] }, "1")).toBe(false);
     expect(isRunActive({ ...detail, deliveries: [{ ...delivery, state: "delivered" } as typeof delivery] }, "1")).toBe(false);
+  });
+});
+
+describe("composerMode", () => {
+  it("is read only for eval sessions, even when the agent is disabled", () => {
+    expect(composerMode("eval", true)).toBe("eval_readonly");
+    expect(composerMode("eval", false)).toBe("eval_readonly");
+  });
+  it("follows whether the agent is enabled for other sessions", () => {
+    expect(composerMode("console", true)).toBe("open");
+    expect(composerMode(undefined, true)).toBe("open");
+    expect(composerMode("console", false)).toBe("disabled");
   });
 });

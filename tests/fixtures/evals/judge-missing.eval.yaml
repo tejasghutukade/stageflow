@@ -1,0 +1,11 @@
+version: 1
+id: judge-missing
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+graders:
+  - id: clear
+    type: rubric
+    rubric: Is it clear?

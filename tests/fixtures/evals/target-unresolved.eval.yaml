@@ -1,0 +1,10 @@
+version: 1
+id: target-unresolved
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: nope
+dataset: ../datasets/review-diffs.dataset.jsonl
+graders:
+  - id: output-schema
+    type: schema

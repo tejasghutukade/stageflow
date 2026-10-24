@@ -2,6 +2,22 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type {
+  CreateEvalRunInput,
+  EvalCaseInput,
+  EvalCaseRow,
+  EvalGraderVersionInput,
+  EvalResultInput,
+  EvalResultWithGrades,
+  EvalReviewPatch,
+  EvalReviewRow,
+  EvalRunPage,
+  EvalRunProgress,
+  EvalRunRow,
+  FinishEvalRunInput,
+  ListEvalRunsQuery,
+} from "../../evals/storeTypes.js";
+import type { EvalTargetKind } from "../../evals/constants.js";
 import type { StageEnvelope } from "../../types/envelope.js";
 import type { StageUsage } from "../../types/usage.js";
 import type { FeedbackLoopConfig, InlinePipelineDefinition } from "../../types/pipeline.js";
@@ -53,6 +69,10 @@ import {
   stageDir,
 } from "../workspaceLayout.js";
 import { importDiskRunsIfEmpty } from "./migrateFromDisk.js";
+import * as evalStore from "./evalStore.js";
+import * as suggestionStore from "./suggestionStore.js";
+import type { SuggestionStatus } from "../../evals/triage/constants.js";
+import type { SuggestionInput, SuggestionRow } from "../../evals/triage/types.js";
 import {
   applyPendingMigrations,
   assertSchemaVersion,
@@ -95,6 +115,7 @@ type RunRow = {
   pipeline_source: string | null;
   pipeline_body: string | null;
   caller_id: string | null;
+  origin: string | null;
   run_manifest: string | null;
   skip_gates: number | null;
 };
@@ -447,9 +468,9 @@ export class SqliteRunStore implements RunStore {
       const inserted = this.db
       .prepare(
         `INSERT INTO runs
-          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates, dispatch_key)
+          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, pipeline_source, pipeline_body, caller_id, origin, run_manifest, skip_gates, dispatch_key)
          VALUES
-          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root, @repository, @ref, @resolved_sha, @run_branch, @git_author_name, @git_author_email, @pipeline_source, @pipeline_body, @caller_id, @run_manifest, @skip_gates, @dispatch_key)
+          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root, @repository, @ref, @resolved_sha, @run_branch, @git_author_name, @git_author_email, @pipeline_source, @pipeline_body, @caller_id, @origin, @run_manifest, @skip_gates, @dispatch_key)
           ON CONFLICT(dispatch_key) DO NOTHING`,
       )
       .run({
@@ -480,6 +501,7 @@ export class SqliteRunStore implements RunStore {
         pipeline_source: pipelineSource,
         pipeline_body: pipelineBody,
         caller_id: input.callerId ?? null,
+        origin: input.origin ?? null,
         run_manifest:
           input.runManifest !== undefined
             ? JSON.stringify(input.runManifest)
@@ -1262,12 +1284,17 @@ export class SqliteRunStore implements RunStore {
       clauses.push("caller_id = ?");
       params.push(filter.caller_id);
     }
+    if (filter?.origin === "eval") {
+      clauses.push("origin = 'eval'");
+    } else if (filter?.origin !== "any") {
+      clauses.push("origin IS NOT 'eval'");
+    }
 
     const where =
       clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json, pipeline_source, pipeline_body, caller_id, origin, run_manifest, skip_gates
          FROM runs ${where} ORDER BY created_at DESC`,
       )
       .all(...params) as RunRow[];
@@ -1293,7 +1320,7 @@ export class SqliteRunStore implements RunStore {
         `SELECT r.run_id, r.pipeline_id, r.status, r.created_at, r.finished_at,
                 (SELECT SUM(e.cost_usd) FROM stage_executions e WHERE e.run_id = r.run_id) AS cost_usd
          FROM runs r
-         WHERE r.created_at >= ?
+         WHERE r.created_at >= ? AND r.origin IS NOT 'eval'
          ORDER BY r.created_at DESC`,
       )
       .all(since) as Array<{
@@ -1312,6 +1339,120 @@ export class SqliteRunStore implements RunStore {
       ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
       ...(row.cost_usd != null ? { cost_usd: row.cost_usd } : {}),
     }));
+  }
+
+  async createEvalRun(input: CreateEvalRunInput): Promise<EvalRunRow> {
+    await this.ready();
+    return evalStore.createEvalRun(this.db, input);
+  }
+
+  async insertEvalCases(evalRunId: string, cases: EvalCaseInput[]): Promise<void> {
+    await this.ready();
+    evalStore.insertEvalCases(this.db, evalRunId, cases);
+  }
+
+  async upsertEvalResult(result: EvalResultInput): Promise<void> {
+    await this.ready();
+    evalStore.upsertEvalResult(this.db, result);
+  }
+
+  async updateEvalRunProgress(evalRunId: string, progress: EvalRunProgress): Promise<void> {
+    await this.ready();
+    evalStore.updateEvalRunProgress(this.db, evalRunId, progress);
+  }
+
+  async finishEvalRun(evalRunId: string, input: FinishEvalRunInput): Promise<void> {
+    await this.ready();
+    evalStore.finishEvalRun(this.db, evalRunId, input);
+  }
+
+  async getEvalRun(evalRunId: string): Promise<EvalRunRow | null> {
+    await this.ready();
+    return evalStore.getEvalRun(this.db, evalRunId);
+  }
+
+  async getEvalRunByNumber(projectRoot: string, evalId: string, runNumber: number): Promise<EvalRunRow | null> {
+    await this.ready();
+    return evalStore.getEvalRunByNumber(this.db, projectRoot, evalId, runNumber);
+  }
+
+  async listEvalRuns(query: ListEvalRunsQuery): Promise<EvalRunPage> {
+    await this.ready();
+    return evalStore.listEvalRuns(this.db, query);
+  }
+
+  async listEvalResults(evalRunId: string): Promise<EvalResultWithGrades[]> {
+    await this.ready();
+    return evalStore.listEvalResults(this.db, evalRunId);
+  }
+
+  async getEvalResultsForCase(evalRunId: string, caseId: string): Promise<EvalResultWithGrades[]> {
+    await this.ready();
+    return evalStore.getEvalResultsForCase(this.db, evalRunId, caseId);
+  }
+
+  async getEvalCases(evalRunId: string): Promise<EvalCaseRow[]> {
+    await this.ready();
+    return evalStore.getEvalCases(this.db, evalRunId);
+  }
+
+  async putEvalReview(
+    evalRunId: string,
+    caseId: string,
+    repeatIndex: number,
+    patch: EvalReviewPatch,
+  ): Promise<EvalReviewRow> {
+    await this.ready();
+    return evalStore.putEvalReview(this.db, evalRunId, caseId, repeatIndex, patch);
+  }
+
+  async getEvalReviews(evalRunId: string): Promise<EvalReviewRow[]> {
+    await this.ready();
+    return evalStore.getEvalReviews(this.db, evalRunId);
+  }
+
+  async listFailureTypes(projectRoot: string, evalId: string): Promise<string[]> {
+    await this.ready();
+    return evalStore.listFailureTypes(this.db, projectRoot, evalId);
+  }
+
+  async recordGraderVersions(
+    projectRoot: string,
+    evalId: string,
+    graders: EvalGraderVersionInput[],
+  ): Promise<Record<string, number>> {
+    await this.ready();
+    return evalStore.recordGraderVersions(this.db, projectRoot, evalId, graders);
+  }
+
+  async listEvalSubjectRefs(evalRunId: string, targetKind: EvalTargetKind): Promise<string[]> {
+    await this.ready();
+    return evalStore.listEvalSubjectRefs(this.db, evalRunId, targetKind);
+  }
+
+  async upsertEvalSuggestions(evalRunId: string, inputs: SuggestionInput[]): Promise<SuggestionRow[]> {
+    await this.ready();
+    return suggestionStore.upsertEvalSuggestions(this.db, evalRunId, inputs);
+  }
+
+  async listEvalSuggestions(evalRunId: string, status?: SuggestionStatus): Promise<SuggestionRow[]> {
+    await this.ready();
+    return suggestionStore.listEvalSuggestions(this.db, evalRunId, status);
+  }
+
+  async dismissEvalSuggestions(evalRunId: string, ids: string[]): Promise<number> {
+    await this.ready();
+    return suggestionStore.dismissEvalSuggestions(this.db, evalRunId, ids);
+  }
+
+  async acceptEvalSuggestions(evalRunId: string, ids: string[]): Promise<{ accepted: number; tagged: number }> {
+    await this.ready();
+    return suggestionStore.acceptEvalSuggestions(this.db, evalRunId, ids);
+  }
+
+  async deleteEvalRun(evalRunId: string): Promise<string[]> {
+    await this.ready();
+    return evalStore.deleteEvalRun(this.db, evalRunId);
   }
 
   async ensureProject(absPath: string): Promise<string> {
@@ -2023,6 +2164,7 @@ export class SqliteRunStore implements RunStore {
         ? { pipeline_source: row.pipeline_source }
         : {}),
       ...(row.caller_id != null ? { caller_id: row.caller_id } : {}),
+      ...(row.origin === "eval" ? { origin: "eval" as const } : {}),
       ...(row.run_manifest
         ? { run_manifest: JSON.parse(row.run_manifest) as unknown }
         : {}),
@@ -2041,7 +2183,7 @@ export class SqliteRunStore implements RunStore {
   private getRunRow(runId: string): RunRow {
     const row = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json, pipeline_source, pipeline_body, caller_id, origin, run_manifest, skip_gates
          FROM runs WHERE run_id = ?`,
       )
       .get(runId) as RunRow | undefined;

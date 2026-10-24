@@ -1,0 +1,2 @@
+{"id":"c001","title":"Missing success criteria","input":{"draft":"Add a login page. No success criteria given."},"expected":{"issues":["success criteria"]},"tags":["has-issue"]}
+{"id":"c002","title":"Clean draft","input":{"draft":"Add a logout button to the header. It ends the session and returns to the login page."},"expected":{"issues":[]},"tags":["no-issue"]}

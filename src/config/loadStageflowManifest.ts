@@ -14,6 +14,8 @@ import { parseModelField } from "./modelField.js";
 const DEFAULT_PIPELINE_PATTERN = "*.pipeline.yaml";
 const DEFAULT_TASK_PATTERN = "*.task.yaml";
 const DEFAULT_TRIGGER_PATTERN = "*.trigger.yaml";
+const DEFAULT_EVAL_PATTERN = "*.eval.yaml";
+const DEFAULT_DATASET_PATTERNS = ["*.dataset.jsonl", "*.dataset.json", "*.dataset.csv"];
 
 export function manifestPathForProject(projectRoot: string): string {
   return path.join(projectRoot, "stageflow.yaml");
@@ -62,14 +64,31 @@ function parseStringArray(
   return entries;
 }
 
+function parseDatasetPattern(raw: unknown): string[] | null {
+  const entries = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : null;
+  if (entries === null || entries.length === 0) {
+    return null;
+  }
+  const parsed: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      return null;
+    }
+    parsed.push(entry.trim());
+  }
+  return parsed;
+}
+
 function parsePatterns(
   raw: unknown,
   issues: LoadIssue[],
-): { pipeline: string; task: string; trigger: string } {
+): { pipeline: string; task: string; trigger: string; eval: string; dataset: string[] } {
   const defaults = {
     pipeline: DEFAULT_PIPELINE_PATTERN,
     task: DEFAULT_TASK_PATTERN,
     trigger: DEFAULT_TRIGGER_PATTERN,
+    eval: DEFAULT_EVAL_PATTERN,
+    dataset: DEFAULT_DATASET_PATTERNS,
   };
   if (raw === undefined || raw === null) {
     return defaults;
@@ -99,6 +118,14 @@ function parsePatterns(
       : typeof record.trigger === "string" && record.trigger.trim().length > 0
         ? record.trigger.trim()
         : null;
+  const evalPattern =
+    record.eval === undefined
+      ? defaults.eval
+      : typeof record.eval === "string" && record.eval.trim().length > 0
+        ? record.eval.trim()
+        : null;
+  const dataset =
+    record.dataset === undefined ? defaults.dataset : parseDatasetPattern(record.dataset);
   if (pipeline === null) {
     issues.push(
       catalogIssue("catalog.manifest_invalid", "catalog.patterns.pipeline must be a string"),
@@ -114,10 +141,25 @@ function parsePatterns(
       catalogIssue("catalog.manifest_invalid", "catalog.patterns.trigger must be a string"),
     );
   }
+  if (evalPattern === null) {
+    issues.push(
+      catalogIssue("catalog.manifest_invalid", "catalog.patterns.eval must be a string"),
+    );
+  }
+  if (dataset === null) {
+    issues.push(
+      catalogIssue(
+        "catalog.manifest_invalid",
+        "catalog.patterns.dataset must be a non-empty string or an array of non-empty strings",
+      ),
+    );
+  }
   return {
     pipeline: pipeline ?? defaults.pipeline,
     task: task ?? defaults.task,
     trigger: trigger ?? defaults.trigger,
+    eval: evalPattern ?? defaults.eval,
+    dataset: dataset ?? defaults.dataset,
   };
 }
 
@@ -184,6 +226,24 @@ export function parseStageflowManifestOutcome(
     }
   }
 
+  const evalsRaw = catalogRecord.evals;
+  let evals: string[] | undefined;
+  if (evalsRaw !== undefined) {
+    const parsed = parseStringArray(evalsRaw, "evals", issues);
+    if (parsed !== null) {
+      evals = parsed;
+    }
+  }
+
+  const datasetsRaw = catalogRecord.datasets;
+  let datasets: string[] | undefined;
+  if (datasetsRaw !== undefined) {
+    const parsed = parseStringArray(datasetsRaw, "datasets", issues);
+    if (parsed !== null) {
+      datasets = parsed;
+    }
+  }
+
   const patterns = parsePatterns(catalogRecord.patterns, issues);
 
   let agent: string | undefined;
@@ -217,6 +277,12 @@ export function parseStageflowManifestOutcome(
   if (triggers !== undefined) {
     catalog.triggers = triggers;
   }
+  if (evals !== undefined) {
+    catalog.evals = evals;
+  }
+  if (datasets !== undefined) {
+    catalog.datasets = datasets;
+  }
   if (catalogRecord.patterns !== undefined) {
     catalog.patterns = {};
     if (typeof (catalogRecord.patterns as Record<string, unknown>).pipeline === "string") {
@@ -227,6 +293,15 @@ export function parseStageflowManifestOutcome(
     }
     if (typeof (catalogRecord.patterns as Record<string, unknown>).trigger === "string") {
       catalog.patterns.trigger = patterns.trigger;
+    }
+    if (typeof (catalogRecord.patterns as Record<string, unknown>).eval === "string") {
+      catalog.patterns.eval = patterns.eval;
+    }
+    const datasetRaw = (catalogRecord.patterns as Record<string, unknown>).dataset;
+    if (typeof datasetRaw === "string") {
+      catalog.patterns.dataset = patterns.dataset[0];
+    } else if (Array.isArray(datasetRaw)) {
+      catalog.patterns.dataset = patterns.dataset;
     }
   }
 

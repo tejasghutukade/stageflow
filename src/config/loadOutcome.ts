@@ -46,6 +46,12 @@ export type LoadIssue =
       triggerId?: string;
     } & LoadIssueLocation)
   | ({
+      code: string;
+      message: string;
+      category: "eval";
+      severity?: "error" | "warning";
+    } & LoadIssueLocation)
+  | ({
       code: ValidationFindingCode | string;
       message: string;
       category: "catalog";

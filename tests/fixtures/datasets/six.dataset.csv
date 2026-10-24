@@ -1,0 +1,12 @@
+﻿id,title,tags,input.diff,input.plan,input.files:json,expected.verdict,expected.findings:json
+c001,null dereference in auth.ts,bug;auth,"--- a/auth.ts
++++ b/auth.ts
+@@ user.name",Fix null check,"[""auth.ts"", ""login.ts""]",reject,"[""null-deref""]"
+c002,clean rename,refactor,"rename foo -> bar, with ""quotes"", and commas",Rename helper,"[""util.ts""]",approve,[]
+c003,,refactor;docs,"line one
+line two
+line three",Multi-line diff,,approve,[]
+c004,missing test,,"+function add(a,b){return a+b}",Add helper,[],reject,"[""no-tests""]"
+c005,,security,+SELECT * FROM users WHERE id = ' + id,Add query,,reject,"[""sql-injection""]"
+c006,comment typo,docs,"- // teh
++ // the",Fix typo,,approve,[]

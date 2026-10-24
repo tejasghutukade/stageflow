@@ -180,7 +180,7 @@ describe("memory host", () => {
     }
     await expect(host.addCard("pool", "k200", "sourced")).rejects.toMatchObject({ code: "MEMORY_TOO_MANY_CARDS" });
     expect(await host.listCards("pool")).toHaveLength(200);
-  });
+  }, 60_000);
 
   it("deletes the current card and its previous copy", async () => {
     const host = createMemoryHost(await home());

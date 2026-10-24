@@ -19,13 +19,14 @@ import { useAgentDetail, useEditorOptions } from "../model/hooks";
 import { sessionStatusView } from "../model/sessionStatus";
 import { consumeAgentCreated } from "../useAgent";
 import { ConfirmDialog } from "../editor/Dialogs";
+import { AgentEvalsSection, agentEvaluateTarget, useAgentEvals } from "./AgentEvalsSection";
 import { Button, KeyValue, PageFooter, SelectField, Tabs } from "../ui"
 import { PageHeader } from "../../shell/PageHeader";;
 
 const SESSION_GRID = "grid grid-cols-[minmax(0,1fr)_96px_130px_50px_70px_70px_96px] items-center gap-4 px-7 min-w-[880px]";
 const PAGE_SIZE = 25;
 
-type DetailTab = "sessions" | "configuration";
+type DetailTab = "sessions" | "evals" | "configuration";
 
 function AvailabilityStatus({ enabled }: { enabled: boolean }) {
   return enabled ? (
@@ -319,6 +320,7 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
   const [busy, setBusy] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState(false);
   const options = useEditorOptions();
+  const evals = useAgentEvals(agentId);
 
   if (!detail) return <AgentLoadError loading={loading} error={error} missing={missing} />;
   if (!detail.definition) return <AgentLoadError loading={false} error={null} invalid={detail} />;
@@ -340,6 +342,7 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
   }
 
   const hasSessions = agent.stats.total > 0;
+  const evalsHref = agentEvaluateTarget(agent.id, evals);
 
   return (
     <div className={PAGE_BG}>
@@ -355,6 +358,7 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
                 <Button disabled={busy} onClick={() => setConfirmDisable(true)}>
                   Disable agent
                 </Button>
+                <Button onClick={() => navigate(evalsHref)}>Evaluate</Button>
                 <Button onClick={() => navigate(agentPath(agent.id, "edit"))}>Edit agent</Button>
                 <Button variant="primary" onClick={() => navigate(agentSessionPath(agent.id, "new"))}>
                   New session
@@ -362,6 +366,7 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
               </>
             ) : (
               <>
+                <Button onClick={() => navigate(evalsHref)}>Evaluate</Button>
                 <Button onClick={() => navigate(agentPath(agent.id, "edit"))}>Edit agent</Button>
                 <Button variant="primary" disabled={busy || agent.issues.length > 0} onClick={() => void onToggle()}>
                   Enable agent
@@ -374,6 +379,7 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
       <Tabs<DetailTab>
         tabs={[
           { id: "sessions", label: "Sessions" },
+          { id: "evals", label: evals.status === "ok" ? `Evals ${evals.model.total}` : "Evals" },
           { id: "configuration", label: "Configuration" },
         ]}
         value={tab}
@@ -415,6 +421,12 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
         ) : (
           <EmptySessions detail={detail} onReview={() => setTab("configuration")} />
         )
+      ) : tab === "evals" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto p-7">
+          <div className="max-w-[560px]">
+            <AgentEvalsSection agentId={agent.id} state={evals} />
+          </div>
+        </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
           <AgentDefinitionForm

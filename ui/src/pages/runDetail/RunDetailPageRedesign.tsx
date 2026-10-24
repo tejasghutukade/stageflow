@@ -48,6 +48,7 @@ import { RunTimelineGantt } from "../../redesign/runs/RunTimelineGantt";
 import { RunDetailTranscriptBody } from "../../redesign/runs/RunDetailTranscriptBody";
 import { RunDetailTranscriptTurns } from "../../redesign/runs/RunDetailTranscriptTurns";
 import { buildRunTrackView } from "../../runs/buildRunTrackView";
+import { StageRunEvalBanner } from "../../redesign/evals/StageRunEvalBanner";
 import { RunDetailPaneDivider } from "./RunDetailPaneDivider";
 import { useRunDetailWorkSplit } from "./runDetailPaneSplit";
 
@@ -582,6 +583,7 @@ export function RunDetailPageRedesign({
         abandoning={abandoningStageId === stage?.stage_id}
         now={now}
       />
+      <StageRunEvalBanner runId={runId} />
       {banner ? <div className="banner banner--error">{banner}</div> : null}
       <div
         ref={paneRef}

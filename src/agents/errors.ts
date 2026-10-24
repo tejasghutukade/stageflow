@@ -10,6 +10,7 @@ export type AgentErrorCode =
   | "agent.revision_not_found"
   | "agent.session_not_found"
   | "agent.session_busy"
+  | "agent.session_eval_readonly"
   | "agent.tool_not_granted"
   | "agent.approval_not_required"
   | "agent.approval_not_pending"
@@ -38,6 +39,7 @@ const STATUS: Partial<Record<AgentErrorCode, number>> = {
   "agent.disabled": 409,
   "agent.conflict": 409,
   "agent.session_busy": 409,
+  "agent.session_eval_readonly": 403,
   "agent.limit_reached": 409,
   "agent.model_timeout": 504,
   "agent.approval_forbidden": 403,

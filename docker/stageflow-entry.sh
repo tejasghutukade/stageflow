@@ -9,6 +9,7 @@ if [ "$(id -u)" = "0" ]; then
     gname="$(getent group "$gid" | cut -d: -f1)"
     usermod -aG "$gname" stageflow
   fi
-  exec setpriv --reuid=stageflow --regid=stageflow --init-groups --inh-caps=-all "$@"
+  home="$(getent passwd stageflow | cut -d: -f6)"
+  exec setpriv --reuid=stageflow --regid=stageflow --init-groups --inh-caps=-all env HOME="${home:-/data}" "$@"
 fi
 exec "$@"

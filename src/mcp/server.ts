@@ -75,6 +75,7 @@ function toolDepsFrom(deps: McpHttpDeps): McpToolDeps {
     ...(deps.agentConversationBackend !== undefined
       ? { agentConversationBackend: deps.agentConversationBackend }
       : {}),
+    ...(deps.evalRunManager !== undefined ? { evalRunManager: deps.evalRunManager } : {}),
   };
 }
 

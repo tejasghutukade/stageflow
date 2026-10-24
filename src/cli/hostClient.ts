@@ -488,6 +488,150 @@ export async function httpGetTrigger(
   return { ok: true, trigger: body as TriggerListItem };
 }
 
+export type HttpEvalResult<T> =
+  | { ok: true; body: T }
+  | {
+      ok: false;
+      reason: string;
+      status: number;
+      code?: string;
+      findings?: unknown[];
+    };
+
+function evalFailure(status: number, body: unknown): Extract<HttpEvalResult<never>, { ok: false }> {
+  const rec = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  return {
+    ok: false,
+    reason: extractError(body, status),
+    status,
+    ...(typeof rec.code === "string" ? { code: rec.code } : {}),
+    ...(Array.isArray(rec.findings) ? { findings: rec.findings } : {}),
+  };
+}
+
+function evalQuery(params: Record<string, string | number | undefined>): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === "") continue;
+    parts.push(`${key}=${enc(String(value))}`);
+  }
+  return parts.length > 0 ? `?${parts.join("&")}` : "";
+}
+
+async function evalGet<T>(
+  base: string,
+  urlPath: string,
+  expected = 200,
+): Promise<HttpEvalResult<T>> {
+  const { status, body } = await getJson(base, urlPath);
+  return status === expected ? { ok: true, body: body as T } : evalFailure(status, body);
+}
+
+export function httpListEvals(base: string, projectRoot?: string) {
+  return evalGet<Record<string, unknown>>(base, `/api/evals${evalQuery({ project_root: projectRoot })}`);
+}
+
+export function httpGetEval(base: string, evalId: string, projectRoot?: string) {
+  return evalGet<Record<string, unknown>>(
+    base,
+    `/api/evals/${enc(evalId)}${evalQuery({ project_root: projectRoot })}`,
+  );
+}
+
+export async function httpValidateEval(
+  base: string,
+  input: { project_root?: string; yaml?: string; path?: string },
+): Promise<HttpEvalResult<Record<string, unknown>>> {
+  const { status, body } = await postJson(base, "/api/evals/validate", input);
+  return status === 200 ? { ok: true, body: body as Record<string, unknown> } : evalFailure(status, body);
+}
+
+export type HttpStartEvalRunInput = {
+  project_root?: string;
+  repeats?: number;
+  judge?: string;
+  model?: string;
+  user_model?: string;
+  allow_real_tools?: boolean;
+  max_cost_usd?: number;
+  case_ids?: string[];
+  tags?: string[];
+  label?: string;
+  started_via?: "console" | "cli" | "mcp";
+};
+
+export async function httpStartEvalRun(
+  base: string,
+  evalId: string,
+  input: HttpStartEvalRunInput,
+): Promise<HttpEvalResult<{ eval_run_id: string; status: string; run_number?: number }>> {
+  const { status, body } = await postJson(base, `/api/evals/${enc(evalId)}/runs`, input);
+  return status === 202
+    ? { ok: true, body: body as { eval_run_id: string; status: string; run_number?: number } }
+    : evalFailure(status, body);
+}
+
+export function httpGetEvalRun(base: string, evalRunId: string) {
+  return evalGet<Record<string, any>>(base, `/api/eval-runs/${enc(evalRunId)}`);
+}
+
+export async function httpCancelEvalRun(
+  base: string,
+  evalRunId: string,
+): Promise<HttpEvalResult<Record<string, any>>> {
+  const { status, body } = await postJson(base, `/api/eval-runs/${enc(evalRunId)}/cancel`, {});
+  return status === 200 ? { ok: true, body: body as Record<string, any> } : evalFailure(status, body);
+}
+
+export async function httpSortEvalFailures(
+  base: string,
+  evalRunId: string,
+  input: { classifier?: "auto" | "jev" | "judge"; only_unsorted?: boolean; limit?: number },
+): Promise<HttpEvalResult<Record<string, any>>> {
+  const { status, body } = await postJson(base, `/api/eval-runs/${enc(evalRunId)}/failures/sort`, input);
+  return status === 200 ? { ok: true, body: body as Record<string, any> } : evalFailure(status, body);
+}
+
+export function httpListEvalSuggestions(base: string, evalRunId: string, status?: string) {
+  return evalGet<{ items: Array<Record<string, any>>; summary: Record<string, any> }>(
+    base,
+    `/api/eval-runs/${enc(evalRunId)}/failures/suggestions${evalQuery({ status })}`,
+  );
+}
+
+export function httpListEvalRuns(
+  base: string,
+  query: { eval_id?: string; project_root?: string; limit?: number; cursor?: string } = {},
+) {
+  return evalGet<{ items: Array<Record<string, unknown>>; next_cursor: string | null }>(
+    base,
+    `/api/eval-runs${evalQuery(query)}`,
+  );
+}
+
+export async function httpDeleteEvalRun(
+  base: string,
+  evalRunId: string,
+): Promise<HttpEvalResult<null>> {
+  const res = await fetch(`${base}/api/eval-runs/${enc(evalRunId)}`, {
+    method: "DELETE",
+    headers: { ...clientAuthorizationHeaders("DELETE") },
+  });
+  if (res.status === 204) return { ok: true, body: null };
+  return evalFailure(res.status, await parseJsonBody(res));
+}
+
+export function httpCompareEvalRuns(base: string, a: string, b: string) {
+  return evalGet<Record<string, unknown>>(base, `/api/eval-compare${evalQuery({ a, b })}`);
+}
+
+export function httpListDatasets(base: string, projectRoot?: string) {
+  return evalGet<{ items: Array<Record<string, unknown>> }>(
+    base,
+    `/api/datasets${evalQuery({ project_root: projectRoot })}`,
+  );
+}
+
 export function resolveAbsolute(cwd: string, maybeRelative: string): string {
   return path.resolve(cwd, maybeRelative);
 }
