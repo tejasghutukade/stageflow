@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-10-24
+
+### Added
+
+- **Long Pi sessions compact themselves, and compaction keeps what matters.** Pipeline stages, project agents and the operator agent now compact their context when the window fills. This is always on and has no setting. The summary is written by the same model the stage or agent uses, with a prompt that asks for exact values, failures and dead ends, in-flight state and the next step. Stageflow appends four sections it builds itself: pinned facts (ids, numbers, timestamps, URLs, paths, errors), operator and user directives copied verbatim, an index of cleared tool results, and the working state. Secrets are removed before the summarizer reads the transcript and from its output. If building the summary fails, Pi's default compaction runs. See [Context and compaction](docs/context-and-compaction.md).
+- **`working_state` tool.** Stages and project agents can keep keyed entries (facts, decisions, progress, to-dos, blockers). They are saved with the session, survive resume, and are shown again after every compaction. Its guidance is in every stage and agent system prompt.
+- **Context size and compactions in the console.** The stage inspector has a Context row (tokens used of the window) that falls after a compaction, and the events list shows **Context compacted** with tokens before and after, summary size and cost. The compaction call is charged to the stage's usage and to an agent's `limits.cost_usd` like any other model call.
+- **`compaction-stress` example and `scripts/compaction-eval`.** A three-stage incident postmortem that reads about 1 MB of logs through a context window that forces a compaction, with a checker (`check-run.mjs`), and an offline harness that scores compaction strategies on seven scenario types.
+
+### Changed
+
+- **A Pi stage's assignment and envelope contract are in the system prompt.** The task, prior envelopes, `payload_schema`, checklist and guidance used to be the first user message, which compaction could summarize. The first user message is now a one-line kickoff.
+- **`read` and `bash` share a per-turn token cap.** The first result of a turn always returns. Later results in the same turn (parallel calls) are replaced by a short notice once the turn would pass 40% of the window or the space left after the reserve, and the model repeats the call in a later turn.
+- **Emit reminders reset on progress.** A stage is reminded twice in a row without a tool call in between; a reminder turn that runs a tool call resets the count, with a ceiling of 20. A stage that ends on a tool call the model wrote out as plain text now fails with a provider error that says so, instead of `missing emit_stage_envelope`.
+- **OpenRouter requests that carry tools ask for providers that support them** (`require_parameters`), unless routing is set in `models.json`. See [Providers](docs/providers.md#openrouter-routing).
+- **The Claude backend pins the SDK's auto-compaction on.**
+
 ## [0.42.0] - 2026-10-23
 
 ### Added
