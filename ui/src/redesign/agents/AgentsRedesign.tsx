@@ -12,14 +12,16 @@ export function AgentsRedesign({
   agentId,
   sessionId,
   runId,
+  authorSessionId,
   screen,
 }: {
   agentId?: string;
   sessionId?: string;
   runId?: string;
+  authorSessionId?: string;
   screen: AgentsScreen;
 }) {
-  if (screen === "create") return <AgentCreatePage />;
+  if (screen === "create") return <AgentCreatePage authorSessionId={authorSessionId} />;
   if (!agentId || screen === "directory") {
     return <AgentsDirectoryPage onNewAgent={() => navigate(agentCreatePath())} />;
   }

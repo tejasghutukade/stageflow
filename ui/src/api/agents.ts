@@ -413,8 +413,33 @@ export function sendAgentAuthorTurn(input: {
   message: string;
   sessionId?: string;
   draft: AgentAuthorDraft;
+  /** Chosen chat model. Blank lets the host use its default. */
+  model?: string;
 }): Promise<AgentAuthorTurnResult> {
   return request("/api/agent-author/chat", "POST", input);
+}
+
+export type AuthorSessionRecord = {
+  id: string;
+  draft: AgentAuthorDraft;
+  model?: string;
+  transcript: Array<{ id: string; role: "user" | "assistant"; text: string; summaryLines?: { label: string; value: string }[] }>;
+};
+
+export function createAuthorSession(draft: AgentAuthorDraft, model?: string): Promise<AuthorSessionRecord> {
+  return request("/api/agent-author/sessions", "POST", { draft, ...(model ? { model } : {}) });
+}
+
+export function getAuthorSession(sessionId: string): Promise<AuthorSessionRecord> {
+  return request(`/api/agent-author/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export function listAuthorDrafts(): Promise<{ drafts: Array<{ id: string; name: string; updatedAt: string; messages: number }> }> {
+  return request("/api/agent-author/sessions");
+}
+
+export function saveAuthorDraft(sessionId: string, draft: AgentAuthorDraft): Promise<AuthorSessionRecord> {
+  return request(`/api/agent-author/sessions/${encodeURIComponent(sessionId)}`, "PUT", { draft });
 }
 
 export function undoAgentAuthorTurn(sessionId: string): Promise<{ draft: AgentAuthorDraft }> {

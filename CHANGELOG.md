@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-10-23
+
+### Added
+
+- **Agent author keeps a draft.** The create page interviews before it fills the config, shows the chat model, and stores the draft and transcript. Leave the page and open the draft again from **Drafts** on Agents.
+- **The author reads documentation only.** `read_project_file` and `list_project_files` allow `docs/`, `policies/`, `AGENTS.md`, and `README.md`, and only `.md` and `.txt`. Source files are refused.
+- **The author can see what is already connected.** `list_author_catalog` returns connection ids with provider labels and installed skill names. It does not return secrets, and it does not grant a name that is not listed.
+- **Document policy review example.** `examples/document-policy-review/` is a generic agent that compares a document to company policies, with a public chat page. `docker-compose.policy-review.yml` publishes that host on port 3849.
+- **Agent author on Cursor keeps one draft.** A Cursor composer lists the `pi__` tool names, the create page uses one session, and an edit made while the author is still replying is not overwritten.
+
 ## [0.41.0] - 2026-10-23
 
 ### Added

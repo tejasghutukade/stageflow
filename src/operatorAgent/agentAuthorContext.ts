@@ -14,7 +14,7 @@ export type AgentAuthorContext = {
 };
 
 export const AGENT_AUTHOR_GREETING =
-  "What should this agent do? Tell me the job, the tools it needs, and anything it must never do without asking.";
+  "Who is this agent for, and what does a good result look like? I'll ask a few questions before I fill the config.";
 
 export function emptyAgentAuthorDraft(): AgentAuthorDraft {
   return {};

@@ -52,7 +52,7 @@ services:
       GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
       EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
-      STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness,/catalog/memory
+      STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness,/catalog/memory,/catalog/document-policy-review
       STAGEFLOW_STAGE_CONTAINER_IMAGE: stageflow-bash:local
       # Agents (all safe when empty). Not passed on purpose: STAGEFLOW_AGENT_SESSION_IDLE_MINUTES and
       # STAGEFLOW_AGENT_STALL_SECONDS, because an empty value parses as 0 and turns them off.
@@ -64,6 +64,7 @@ services:
     volumes:
       - stageflow-data:/data
       - ./examples/memory:/catalog/memory:ro
+      - ./examples/document-policy-review:/catalog/document-policy-review:ro
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 

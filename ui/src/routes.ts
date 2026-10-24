@@ -28,7 +28,7 @@ export type Route =
   | { name: "memory"; memoryId: string }
   | { name: "agents" }
   | { name: "agentSessions" }
-  | { name: "agentCreate" }
+  | { name: "agentCreate"; authorSessionId?: string }
   | { name: "agent"; agentId: string; screen: "detail" | "edit" }
   | { name: "agentSession"; agentId: string; sessionId: string }
   | { name: "agentRun"; agentId: string; sessionId: string; runId: string }
@@ -192,8 +192,9 @@ export function agentSessionsPath(): string {
   return "/agent-sessions";
 }
 
-export function agentCreatePath(): string {
-  return "/agents/new";
+export function agentCreatePath(opts?: { session?: string }): string {
+  if (!opts?.session) return "/agents/new";
+  return `/agents/new?session=${encodeURIComponent(opts.session)}`;
 }
 
 export function agentPath(agentId: string, screen: "detail" | "edit" = "detail"): string {
@@ -301,6 +302,11 @@ export function newRunPath(opts?: {
   if (opts?.project_root) params.set("project_root", opts.project_root);
   const query = params.toString();
   return query ? `/new?${query}` : "/new";
+}
+
+function agentCreateRoute(params: URLSearchParams): Route {
+  const authorSessionId = params.get("session")?.trim() || undefined;
+  return { name: "agentCreate", ...(authorSessionId ? { authorSessionId } : {}) };
 }
 
 function splitHash(hash: string): { path: string; params: URLSearchParams } {
@@ -451,13 +457,13 @@ export function parseHash(hash = window.location.hash): Route {
   }
   if (path === "agent-sessions" || path === "agents/sessions") return { name: "agentSessions" };
   if (path === "agents") return { name: "agents" };
-  if (path === "agents/new") return { name: "agentCreate" };
+  if (path === "agents/new") return agentCreateRoute(params);
   if (path.startsWith("agents/")) {
     const rest = path.slice("agents/".length);
     const slash = rest.indexOf("/");
     const agentId = decodeURIComponent(slash < 0 ? rest : rest.slice(0, slash));
     const tail = slash < 0 ? "" : rest.slice(slash + 1);
-    if (agentId === "new") return { name: "agentCreate" };
+    if (agentId === "new") return agentCreateRoute(params);
     if (!agentId) return { name: "agents" };
     if (tail === "edit") return { name: "agent", agentId, screen: "edit" };
     const session = /^sessions\/([^/]+)(?:\/runs\/([^/]+))?$/.exec(tail);
