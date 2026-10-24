@@ -548,7 +548,8 @@ describe("ambient MCP isolation", () => {
           name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
           factory: expect.any(Function),
         }),
-        expect.objectContaining({ name: "stageflow-compaction", factory: expect.any(Function) }),
+        expect.objectContaining({ name: "stageflow-openrouter-routing", factory: expect.any(Function) }),
+      expect.objectContaining({ name: "stageflow-compaction", factory: expect.any(Function) }),
         expect.objectContaining({ name: "stageflow-working-state", factory: expect.any(Function) }),
       ]);
 
@@ -561,6 +562,7 @@ describe("ambient MCP isolation", () => {
       expect(loader.getExtensions().extensions.map((ext) => ext.path)).toEqual([
         `<inline:${STAGEFLOW_PATH_DENY_EXTENSION_NAME}>`,
         `<inline:${STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME}>`,
+        "<inline:stageflow-openrouter-routing>",
         "<inline:stageflow-compaction>",
         "<inline:stageflow-working-state>",
       ]);

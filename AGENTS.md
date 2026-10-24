@@ -123,6 +123,8 @@ Rules every change must keep:
 - **The hook falls back to Pi's default compaction on any failure**, never to nothing; an abort is rethrown.
 - **`working_state` is internal**: it bypasses the agent tool gate and approvals, is exempt from the tool-output budget, and its guidance (`WORKING_STATE_GUIDANCE`) is in every stage and agent system prompt.
 - **Bump `COMPACTION_PROMPT_VERSION`** (`src/compaction/types.ts`) when the focus prompt or the summary section layout changes, and re-run `scripts/compaction-eval/` before and after.
+- **OpenRouter routing is a Host concern.** `createOpenRouterRoutingExtension` only adds `require_parameters` to tool requests and never overrides routing set in `models.json`; do not put a provider in YAML.
+- **A leaked tool call ends the stage with a clear provider error** (`LEAKED_TOOL_CALL_ERROR`), not `missing emit_stage_envelope`.
 - **No test calls a real model.** The harness's real-model runs are manual and capped (`--max-cost-usd`).
 
 ### Tests

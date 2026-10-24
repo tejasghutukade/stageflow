@@ -150,3 +150,28 @@ A provider whose key comes from `STAGEFLOW_PROVIDER_<ID>_API_KEY` is configured 
 - [Quick start](quickstart.md) — first provider connection
 - [CI / headless](ci.md) — `--api-key-env` in GitHub Actions
 - [Operator console](operator-console.md) — Settings and Connect pages
+
+## OpenRouter routing
+
+OpenRouter serves one model from several providers and load-balances between them, weighted by price. Providers differ in quantization and in how well they return tool calls, so the same model id can behave differently from one request to the next. Two things are worth knowing:
+
+- **Stageflow asks OpenRouter to skip providers that cannot honour the request's tools** (`require_parameters`) on every stage and agent request that carries tools. Routing you set yourself wins.
+- **OpenRouter's own Auto Exacto** reorders providers by tool-call reliability on tool requests for models it covers. Setting `order` or `sort` turns that off.
+
+If a model returns its tool call as plain text, the stage fails with `provider error: the model wrote its tool call out as plain text…` instead of a generic missing-envelope error. Run again, choose another model, or pin the providers for that model in `$STAGEFLOW_HOME/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "openrouter": {
+      "modelOverrides": {
+        "deepseek/deepseek-chat-v3.1": {
+          "compat": { "openRouterRouting": { "order": ["SiliconFlow", "CoreWeave"], "allow_fallbacks": false } }
+        }
+      }
+    }
+  }
+}
+```
+
+Pinning gives up fallback: if the pinned providers are down, requests fail. Provider routing is a Host setting, not part of pipeline YAML.

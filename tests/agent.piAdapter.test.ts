@@ -299,6 +299,7 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
         name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
         factory: expect.any(Function),
       }),
+      expect.objectContaining({ name: "stageflow-openrouter-routing", factory: expect.any(Function) }),
       expect.objectContaining({ name: "stageflow-compaction", factory: expect.any(Function) }),
       expect.objectContaining({ name: "stageflow-working-state", factory: expect.any(Function) }),
     ]);
@@ -363,6 +364,7 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
         name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
         factory: expect.any(Function),
       }),
+      expect.objectContaining({ name: "stageflow-openrouter-routing", factory: expect.any(Function) }),
       expect.objectContaining({ name: "stageflow-compaction", factory: expect.any(Function) }),
       expect.objectContaining({ name: "stageflow-working-state", factory: expect.any(Function) }),
     ]);

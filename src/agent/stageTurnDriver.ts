@@ -12,6 +12,9 @@ export const MAX_TOTAL_EMIT_REMINDERS = 20;
 
 const PROVIDER_ERROR_MAX_CHARS = 500;
 
+export const LEAKED_TOOL_CALL_ERROR =
+  "the model wrote its tool call out as plain text instead of making it, even after reminders. This is usually a provider-side tool-call parsing problem (for example one OpenRouter backend serving the model). Run again, pin a different provider for this model, or choose another model.";
+
 /** The slice of a Pi session the driver needs; a fake in tests. */
 export type StageTurnSession = {
   prompt(text: string): Promise<void>;
@@ -131,13 +134,9 @@ export async function remindUntilEmitted(
     if (capture.envelope) return { reminders };
     const providerError = lastTurnProviderError(session.messages);
     if (providerError !== undefined) return { reminders, providerError };
-    if (
-      options.shouldStop() ||
-      lastTurnAborted(session.messages) ||
-      withoutProgress >= max ||
-      reminders >= MAX_TOTAL_EMIT_REMINDERS
-    ) {
-      return { reminders };
+    if (options.shouldStop() || lastTurnAborted(session.messages)) return { reminders };
+    if (withoutProgress >= max || reminders >= MAX_TOTAL_EMIT_REMINDERS) {
+      return lastTurnLeakedToolCall(session.messages) ? { reminders, providerError: LEAKED_TOOL_CALL_ERROR } : { reminders };
     }
     reminders++;
     withoutProgress++;

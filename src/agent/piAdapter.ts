@@ -136,6 +136,7 @@ import {
 export { STAGEFLOW_PATH_DENIED };
 import { createPiSettingsManager } from "./piSettings.js";
 import { createCompactionExtension } from "../compaction/extension.js";
+import { createOpenRouterRoutingExtension } from "./openRouterRouting.js";
 import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
 import { WORKING_STATE_GUIDANCE } from "../compaction/workingState.js";
 import { createWorkingStateExtension } from "../tools/workingState.js";
@@ -1343,6 +1344,7 @@ async function prepareStageSessionWiring(
           ]),
         }),
       },
+      { name: "stageflow-openrouter-routing", factory: createOpenRouterRoutingExtension() },
       { name: "stageflow-compaction", factory: createCompactionExtension({ onWarn: (m) => console.error(m) }) },
       { name: "stageflow-working-state", factory: createWorkingStateExtension() },
       ...(attached.extensionFactories ?? []),

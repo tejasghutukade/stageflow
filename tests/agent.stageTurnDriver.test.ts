@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_EMIT_REMINDERS,
   emitReminderPrompt,
+  LEAKED_TOOL_CALL_ERROR,
   lastTurnLeakedToolCall,
   lastTurnProviderError,
   MAX_TOTAL_EMIT_REMINDERS,
@@ -191,6 +192,17 @@ describe("remindUntilEmitted progress", () => {
       Array.from({ length: MAX_TOTAL_EMIT_REMINDERS + 5 }, () => toolTurn),
     );
     expect(await remindUntilEmitted(session, capture, opts)).toEqual({ reminders: MAX_TOTAL_EMIT_REMINDERS });
+  });
+
+  it("fails with a clear provider error when the budget ends on a leaked tool call", async () => {
+    const leaked = { role: "assistant", stopReason: "stop", content: [{ type: "thinking", thinking: "x<｜tool▁calls▁begin｜>read" }] };
+    const capture: EmitCapture = {};
+    const { session } = fakeSession(capture, [(m) => m.push(leaked), (m) => m.push(leaked)], [leaked]);
+    const out = await remindUntilEmitted(session, capture, opts);
+    expect(out.providerError).toBe(LEAKED_TOOL_CALL_ERROR);
+    expect(out.providerError).toContain("provider");
+    const plain = fakeSession({}, [], [ok]);
+    expect((await remindUntilEmitted(plain.session, {}, opts)).providerError).toBeUndefined();
   });
 
   it("tells the agent when its last tool call was written out as text", async () => {

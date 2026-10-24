@@ -16,6 +16,7 @@ import { warmIsolatedMcpMetadata } from "../../agent/piIsolatedMcpProbe.js";
 import { createPiAgentSession, createSealedResourceLoader } from "../../agent/piSessionFactory.js";
 import { createPiSettingsManager } from "../../agent/piSettings.js";
 import { createCompactionExtension } from "../../compaction/extension.js";
+import { createOpenRouterRoutingExtension } from "../../agent/openRouterRouting.js";
 import { WORKING_STATE_TOOL_NAME } from "../../compaction/types.js";
 import { WORKING_STATE_GUIDANCE } from "../../compaction/workingState.js";
 import { createWorkingStateExtension } from "../../tools/workingState.js";
@@ -169,6 +170,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
     const withWorkingState = input.workingState !== false;
     const extensionFactories: InlineExtension[] = [
       { name: "stageflow-agent-gate", factory: gateExtension },
+      { name: "stageflow-openrouter-routing", factory: createOpenRouterRoutingExtension() },
       { name: "stageflow-compaction", factory: createCompactionExtension({ onWarn: (m) => console.error(m) }) },
       ...(withWorkingState ? [{ name: "stageflow-working-state", factory: createWorkingStateExtension() }] : []),
       ...(attached.extensionFactories ?? []),
