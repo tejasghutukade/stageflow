@@ -1,5 +1,6 @@
 import { ASK_OPERATOR_TOOL_NAME, EMIT_STAGE_ENVELOPE_TOOL_NAME } from "../tools/stageToolNames.js";
-import { scrubSecrets, type LooseMessage } from "./pin.js";
+import type { LooseMessage } from "./pin.js";
+import { scrubSecrets } from "./scrub.js";
 
 export type DirectiveSource = "operator" | "user" | "rejection";
 

@@ -135,12 +135,9 @@ import {
 
 export { STAGEFLOW_PATH_DENIED };
 import { createPiSettingsManager } from "./piSettings.js";
-import { createCompactionExtension } from "../compaction/extension.js";
-import { createOpenRouterRoutingExtension } from "./openRouterRouting.js";
+import { createSessionContextWiring } from "../compaction/sessionWiring.js";
 import { ASK_OPERATOR_TOOL_NAME } from "../tools/stageToolNames.js";
-import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
 import { WORKING_STATE_GUIDANCE } from "../compaction/workingState.js";
-import { createWorkingStateExtension } from "../tools/workingState.js";
 export { createSealedResourceLoader } from "./piSessionFactory.js";
 
 export const STAGEFLOW_PATH_DENY_EXTENSION_NAME = "stageflow-path-deny";
@@ -1311,6 +1308,7 @@ async function prepareStageSessionWiring(
       restoreProvider?.();
       return { ok: false, reason };
     };
+    const contextWiring = createSessionContextWiring({ workingState: true });
     const extensionFactories: InlineExtension[] = [
       {
         name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
@@ -1338,16 +1336,14 @@ async function prepareStageSessionWiring(
           exempt: new Set([
             "read",
             "bash",
-            WORKING_STATE_TOOL_NAME,
+            ...contextWiring.budgetExemptNames,
             emitDef.name,
             artifactDef.name,
             askDef?.name ?? ASK_OPERATOR_TOOL_NAME,
           ]),
         }),
       },
-      { name: "stageflow-openrouter-routing", factory: createOpenRouterRoutingExtension() },
-      { name: "stageflow-compaction", factory: createCompactionExtension({ onWarn: (m) => console.error(m) }) },
-      { name: "stageflow-working-state", factory: createWorkingStateExtension() },
+      ...contextWiring.extensions,
       ...(attached.extensionFactories ?? []),
     ];
     const loader = createSealedResourceLoader({
@@ -1422,7 +1418,7 @@ async function prepareStageSessionWiring(
       askDef?.name ?? ASK_OPERATOR_TOOL_NAME,
       gateKinds,
     );
-    tools.push(WORKING_STATE_TOOL_NAME);
+    tools.push(...contextWiring.toolNames);
     if (attached.extensionFactories !== undefined) {
       const mcpTools = collectMcpExtensionToolNames(loader);
       if (!mcpTools.ok) {

@@ -38,7 +38,7 @@ If building the summary fails, Pi's default compaction runs instead.
 
 ## Privacy
 
-The summarizer reads the same transcript the stage's model already read, through the same provider and credentials. Pinned facts, cleared-result placeholders and `working_state` values are scrubbed of secrets before they are stored. The full history stays in the session file on the Host.
+The summarizer reads the same transcript the stage's model already read, through the same provider and credentials. Pinned facts, directives, cleared-result placeholders and `working_state` values are scrubbed of secrets before they are stored, and the whole summary is scrubbed again at the end. The scrubber can also remove harmless text that looks like a secret (for example `token_count=5`); when it changes a `working_state` value the tool says so. The full history stays in the session file on the Host.
 
 ## Writing stages that compact well
 

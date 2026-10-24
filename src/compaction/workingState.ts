@@ -1,4 +1,4 @@
-import { redactString } from "../logging/redact.js";
+import { scrubSecrets } from "./scrub.js";
 import type { WorkingStateEntry, WorkingStateKind } from "./types.js";
 
 export const WORKING_STATE_CUSTOM_TYPE = "stageflow.working_state";
@@ -28,7 +28,7 @@ export type WorkingStateEvent =
   | { op: "delete"; key: string; at: string };
 
 export type WorkingStateSetResult =
-  | { ok: true; dropped: string[]; replaced: boolean; entry: WorkingStateEntry }
+  | { ok: true; dropped: string[]; replaced: boolean; redacted: boolean; entry: WorkingStateEntry }
   | { ok: false; error: string };
 
 export type WorkingStateInput = {
@@ -85,8 +85,11 @@ export class WorkingStateStore {
         error: `kind must be one of ${WORKING_STATE_KINDS.join(", ")}`,
       };
     }
-    const key = oneLine(redactString(String(input.key ?? "")));
-    const value = oneLine(redactString(String(input.value ?? "")));
+    const rawKey = oneLine(String(input.key ?? ""));
+    const rawValue = oneLine(String(input.value ?? ""));
+    const key = oneLine(scrubSecrets(rawKey));
+    const value = oneLine(scrubSecrets(rawValue));
+    const redacted = key !== rawKey || value !== rawValue;
     if (key.length === 0) return { ok: false, error: "key is required" };
     if (key.length > WORKING_STATE_MAX_KEY) {
       return {
@@ -121,7 +124,7 @@ export class WorkingStateStore {
       updatedAt: input.updatedAt ?? new Date().toISOString(),
     };
     this.entries.set(key, entry);
-    return { ok: true, dropped, replaced, entry };
+    return { ok: true, dropped, replaced, redacted, entry };
   }
 
   delete(key: string): boolean {

@@ -99,8 +99,11 @@ export function createWorkingStateTool(options: WorkingStateToolOptions) {
           outcome.dropped.length > 0
             ? ` State was full; dropped oldest progress: ${outcome.dropped.join(", ")}.`
             : "";
+        const redacted = outcome.redacted
+          ? " Part of it looked like a secret and was redacted; reword the entry if that removed a fact you need."
+          : "";
         return result(
-          `${outcome.replaced ? "Updated" : "Saved"} ${outcome.entry.key} (${store.size} entries).${dropped}`,
+          `${outcome.replaced ? "Updated" : "Saved"} ${outcome.entry.key} (${store.size} entries).${dropped}${redacted}`,
         );
       }
       return result("operation must be set, delete or list", true);

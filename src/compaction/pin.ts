@@ -1,4 +1,4 @@
-import { redactString } from "../logging/redact.js";
+import { scrubSecrets, SECRET_KEY_RE } from "./scrub.js";
 import type { PinnedFact, PinnedFactKind } from "./types.js";
 
 /** Minimal message shape (Pi session messages); only role and content are read. */
@@ -68,28 +68,6 @@ const UNIT_RE =
 const CURRENCY_RE = /(?<![\w])[$€£]\s?\d[\d,]*(?:\.\d+)?(?:[kKmMbB]\b)?|\b\d[\d,]*(?:\.\d+)?\s?(?:USD|EUR|GBP)\b/g;
 const PERCENT_RE = /(?<![\w.])\d+(?:\.\d+)?%/g;
 const ID_KEY_RE = /(?:^|[_.-])(?:id|uuid|key|ref|no|number|num|sha|hash|rev|build|ticket|incident|order|user|account|customer|request|trace)$/i;
-const SECRET_KEY_RE = /secret|token|passw|pwd|api[_-]?key|auth|credential|bearer|cookie|private|session|\bsid\b|csrf|xsrf|jwt|signature/i;
-const EXTRA_SECRET_RES: RegExp[] = [
-  /\b(?:api[_-]?key|secret|token|password|passwd|authorization|bearer)\b["']?\s*[:=]\s*["']?[^\s"',;]+/gi,
-  /\bBearer\s+[A-Za-z0-9\-._~+/]{8,}=*/gi,
-  /\b(?:Set-)?Cookie:[^\n]*/gi,
-  /\b(?:session|sess|sid|csrf|xsrf|jsessionid|phpsessid)[\w-]*=[^\s;,"']+/gi,
-  /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bxox[abprs]-[\w-]{8,}/g,
-  /\b(?:sk|pk|rk)[-_](?:live|test|proj|ant)?[-_]?[A-Za-z0-9_-]{16,}/g,
-  /[?&](?:token|key|api_?key|access_token|auth|signature|sig)=[^\s&"']+/gi,
-];
-
-export function scrubSecrets(text: string): string {
-  let out = redactString(text);
-  for (const re of EXTRA_SECRET_RES) {
-    re.lastIndex = 0;
-    out = out.replace(re, "[redacted]");
-  }
-  return out;
-}
-
 function messageText(message: LooseMessage): string | undefined {
   const role = message.role;
   if (role !== "user" && role !== "toolResult") return undefined;

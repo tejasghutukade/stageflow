@@ -15,11 +15,7 @@ import { attachIsolatedMcp } from "../../agent/piIsolatedMcp.js";
 import { warmIsolatedMcpMetadata } from "../../agent/piIsolatedMcpProbe.js";
 import { createPiAgentSession, createSealedResourceLoader } from "../../agent/piSessionFactory.js";
 import { createPiSettingsManager } from "../../agent/piSettings.js";
-import { createCompactionExtension } from "../../compaction/extension.js";
-import { createOpenRouterRoutingExtension } from "../../agent/openRouterRouting.js";
-import { WORKING_STATE_TOOL_NAME } from "../../compaction/types.js";
-import { WORKING_STATE_GUIDANCE } from "../../compaction/workingState.js";
-import { createWorkingStateExtension } from "../../tools/workingState.js";
+import { createSessionContextWiring } from "../../compaction/sessionWiring.js";
 import { bindCursorApiKey, isCursorModelRef } from "../../agent/cursorProvider.js";
 import { findProviderSupport } from "../../agent/providerSupport.js";
 import { grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
@@ -78,6 +74,16 @@ export type OpenedSession = {
   toolNames: string[];
   shutdown(): Promise<void>;
 };
+
+/** Runs the agent tool gate before every call, except for tools the session wiring marks as internal. */
+export function createAgentGateExtension(gate: OpenSessionInput["gate"], isInternalTool: (toolName: string) => boolean): ExtensionFactory {
+  return (pi) => {
+    pi.on("tool_call", async (event) => {
+      if (isInternalTool(event.toolName)) return undefined;
+      return gate({ toolCallId: event.toolCallId, toolName: event.toolName, input: event.input as Record<string, unknown> });
+    });
+  };
+}
 
 function piToolNames(definition: AgentDefinition): string[] {
   return grantedBuiltinTools(definition);
@@ -160,26 +166,18 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
       skillPaths.push(skill.filePath);
     }
 
-    const gateExtension: ExtensionFactory = (pi) => {
-      pi.on("tool_call", async (event) => {
-        if (event.toolName === WORKING_STATE_TOOL_NAME) return undefined;
-        const outcome = await input.gate({ toolCallId: event.toolCallId, toolName: event.toolName, input: event.input as Record<string, unknown> });
-        return outcome;
-      });
-    };
-    const withWorkingState = input.workingState !== false;
+    const contextWiring = createSessionContextWiring({ workingState: input.workingState !== false });
+    const gateExtension = createAgentGateExtension(input.gate, contextWiring.isInternalTool);
     const extensionFactories: InlineExtension[] = [
       { name: "stageflow-agent-gate", factory: gateExtension },
-      { name: "stageflow-openrouter-routing", factory: createOpenRouterRoutingExtension() },
-      { name: "stageflow-compaction", factory: createCompactionExtension({ onWarn: (m) => console.error(m) }) },
-      ...(withWorkingState ? [{ name: "stageflow-working-state", factory: createWorkingStateExtension() }] : []),
+      ...contextWiring.extensions,
       ...(attached.extensionFactories ?? []),
     ];
     const loader = createSealedResourceLoader({
       cwd: projectRoot,
       agentDir: options.agentDir,
       settingsManager,
-      systemPrompt: input.systemPrompt,
+      systemPrompt: contextWiring.guidance ? `${input.systemPrompt}\n\n${contextWiring.guidance}` : input.systemPrompt,
       additionalExtensionPaths: extensionPaths,
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
       extensionFactories,
@@ -199,7 +197,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
     }
 
     const toolNames = [...input.toolNames];
-    if (withWorkingState) toolNames.push(WORKING_STATE_TOOL_NAME);
+    toolNames.push(...contextWiring.toolNames);
     if (attached.extensionFactories) {
       const mcp = collectMcpExtensionToolNames(loader);
       if (!mcp.ok) throw new AgentError("agent.backend_unavailable", `MCP adapter registered unrequested tool(s): ${mcp.unrequested.join(", ")}`);
@@ -375,7 +373,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         throw new AgentError("agent.invalid", `Memory could not be opened (${code})`);
       }
     }
-    const systemPrompt = `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}\n\n${WORKING_STATE_GUIDANCE}`;
+    const systemPrompt = `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}`;
     state.opened = await open({
       projectRoot,
       definition,

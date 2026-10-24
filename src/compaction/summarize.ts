@@ -1,6 +1,7 @@
 import { applyClearing, planClearing, renderClearedIndex, type ClearingPolicy } from "./mask.js";
 import { extractDirectives, mergeDirectives, renderDirectives, type Directive } from "./directives.js";
-import { extractPinnedFacts, renderPinned, scrubSecrets, type LooseMessage } from "./pin.js";
+import { extractPinnedFacts, renderPinned, type LooseMessage } from "./pin.js";
+import { scrubSecrets } from "./scrub.js";
 import { COMPACTION_PROMPT_VERSION, type ClearedResult, type PinnedFact, type WorkingStateEntry } from "./types.js";
 import { WorkingStateStore } from "./workingState.js";
 
@@ -223,6 +224,6 @@ export async function composeCompactionSummary<R extends { summary: string }>(in
     previousSummary: input.previousSummary !== undefined ? splitSummary(input.previousSummary).core : undefined,
   });
   const core = scrubSecrets(result.summary).split(SECTIONS_MARKER).join("").trimEnd();
-  const sections = renderSections({ pinned: prepared.pinned, cleared: prepared.cleared, state: input.state, directives: prepared.directives });
+  const sections = scrubSecrets(renderSections({ pinned: prepared.pinned, cleared: prepared.cleared, state: input.state, directives: prepared.directives }));
   return { summary: sections ? `${core}\n\n${sections}` : core, result, prepared };
 }

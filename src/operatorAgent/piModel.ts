@@ -22,7 +22,7 @@ import {
   resolveWorkshopToolNames,
 } from "../agent/piSessionFactory.js";
 import { createPiSettingsManager } from "../agent/piSettings.js";
-import { createCompactionExtension } from "../compaction/extension.js";
+import { createSessionContextWiring } from "../compaction/sessionWiring.js";
 import { bindCursorApiKey, cursorBridgePrompt, isCursorModelRef } from "../agent/cursorProvider.js";
 import { findProviderSupport } from "../agent/providerSupport.js";
 import "../agent/cursorProvider.js";
@@ -404,12 +404,13 @@ async function openDefaultPiSession(
     modelsPath: path.join(path.dirname(input.authPath), "models.json"),
   });
   const settingsManager = createPiSettingsManager();
+  const contextWiring = createSessionContextWiring({ workingState: true });
   const loader = createSealedResourceLoader({
     cwd: input.cwd,
     agentDir: input.agentDir,
     settingsManager,
-    systemPrompt: input.systemPrompt,
-    extensionFactories: [{ name: "stageflow-compaction", factory: createCompactionExtension({ onWarn: (m) => console.error(m) }) }],
+    systemPrompt: contextWiring.guidance ? `${input.systemPrompt}\n\n${contextWiring.guidance}` : input.systemPrompt,
+    extensionFactories: contextWiring.extensions,
     ...(additionalExtensionPaths.length > 0
       ? { additionalExtensionPaths }
       : {}),
@@ -439,7 +440,7 @@ async function openDefaultPiSession(
       sessionManager,
       settingsManager,
       resourceLoader: loader,
-      tools: input.toolNames,
+      tools: [...input.toolNames, ...contextWiring.toolNames],
       customTools: input.customTools,
     });
     session = created.session;
