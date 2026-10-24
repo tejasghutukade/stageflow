@@ -33,6 +33,14 @@ export interface Interval {
   high: number;
 }
 
+export const LOWEST_CASES_LIMIT = 5;
+
+export interface LowestCase {
+  case_id: string;
+  mean_score: number;
+  worst_repeat_index: number;
+}
+
 export interface GraderStat {
   grader_id: string;
   type: string;
@@ -104,6 +112,30 @@ export function sampleSd(values: number[]): number | null {
   return Math.sqrt(ss / (values.length - 1));
 }
 
+export function passFraction(passed: number, executed: number): number | null {
+  return executed > 0 ? passed / executed : null;
+}
+
+export function lowestCases(grades: GradeRecord[], limit: number = LOWEST_CASES_LIMIT): LowestCase[] {
+  const byCase = new Map<string, Array<{ repeat: number; score: number }>>();
+  for (const g of grades) {
+    if (g.status !== "graded" || g.score === null) continue;
+    const list = byCase.get(g.caseId);
+    if (list) list.push({ repeat: g.repeatIndex, score: g.score });
+    else byCase.set(g.caseId, [{ repeat: g.repeatIndex, score: g.score }]);
+  }
+  const rows = [...byCase.entries()].map(([caseId, list]) => {
+    const worst = [...list].sort((a, b) => a.score - b.score || a.repeat - b.repeat)[0]!;
+    return {
+      case_id: caseId,
+      mean_score: mean(list.map((item) => item.score)) as number,
+      worst_repeat_index: worst.repeat,
+    };
+  });
+  rows.sort((a, b) => a.mean_score - b.mean_score || (a.case_id < b.case_id ? -1 : a.case_id > b.case_id ? 1 : 0));
+  return rows.slice(0, limit);
+}
+
 export function percentile(sorted: number[], q: number): number | null {
   if (sorted.length === 0) return null;
   const rank = Math.ceil(Math.round(q * sorted.length * 1e9) / 1e9);
@@ -144,7 +176,7 @@ export function buildCaseStats(results: ResultRecord[]): CaseStat[] {
       caseId,
       executed: list.length,
       passed,
-      p: passed / list.length,
+      p: passFraction(passed, list.length) as number,
       flags: list.map((r) => r.passed === 1),
       meanScore: mean(scores),
     });

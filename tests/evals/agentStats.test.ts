@@ -86,8 +86,8 @@ describe("agent compare", () => {
     const a = agentResults();
     const b = agentResults().map((r) => ({ ...r, turns: r.turns === null ? null : r.turns + 1, toolCalls: r.toolCalls }));
     const r = compareRuns(agent(a), agent(b));
-    expect(r.deltas.mean_turns).toEqual({ a: 4, b: 5, delta: 1 });
-    expect(r.deltas.mean_tool_calls).toEqual({ a: 3, b: 3, delta: 0 });
+    expect(r.deltas.mean_turns).toEqual({ a: 4, b: 5, delta: 1, percent_change: 25 });
+    expect(r.deltas.mean_tool_calls).toEqual({ a: 3, b: 3, delta: 0, percent_change: 0 });
     expect(r.stage_diff).toBeNull();
   });
 

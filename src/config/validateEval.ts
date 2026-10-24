@@ -1,6 +1,6 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { mapJudge } from "../evals/engine/promptfoo/judgeProviders.js";
+import { mapJudge } from "../evals/judgeProviders.js";
 import { classifyTool } from "../agents/toolRisk.js";
 import { checkDatasetAgainstAgent } from "./datasetAgentCheck.js";
 import { checkDatasetAgainstStage } from "./datasetStageCheck.js";

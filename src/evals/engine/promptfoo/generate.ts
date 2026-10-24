@@ -1,6 +1,6 @@
 import { GUARD_FILENAME, GUARD_SOURCE } from "./guard.js";
 import { EngineError } from "./errors.js";
-import { mapJudge, unsupportedJudgeMessage } from "./judgeProviders.js";
+import { mapJudge, unsupportedJudgeMessage } from "../../judgeProviders.js";
 import { caseGoal, goalRubricText } from "../../graders/goal.js";
 import { escapeTemplate, renderConversationRubricPrompt, renderRubricPrompt } from "./rubricPrompt.js";
 import type { EvalPlan, PlanCase, ResolvedGrader } from "../../types.js";
@@ -324,8 +324,8 @@ function judgeAssertion(
     rubricPrompt: prompt,
     provider:
       options.judgeProviderConfig === undefined
-        ? mapping.promptfooProvider
-        : { id: mapping.promptfooProvider, config: options.judgeProviderConfig },
+        ? mapping.providerSpec
+        : { id: mapping.providerSpec, config: options.judgeProviderConfig },
   };
 }
 

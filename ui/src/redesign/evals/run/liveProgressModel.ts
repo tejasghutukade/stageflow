@@ -166,10 +166,7 @@ export function buildRows(input: {
         dots.push("queued");
       }
     }
-    const scores = (row?.repeats ?? [])
-      .filter((r) => dotForStatus(r.status, r.passed) !== null && r.score !== null)
-      .map((r) => r.score as number);
-    const mean = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+    const mean = row?.mean_score ?? null;
     const failure = isAgentRun(run) ? agentFailureLabel((row?.repeats ?? []).map((r) => r.status)) : null;
     const now = nowText(entries[0], finished >= total, failure);
     out.push({

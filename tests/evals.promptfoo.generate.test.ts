@@ -12,11 +12,8 @@ import {
   buildConfig,
   generateFiles,
 } from "../src/evals/engine/promptfoo/generate.js";
-import {
-  assertJudgesSupported,
-  judgeCapableModels,
-  mapJudge,
-} from "../src/evals/engine/promptfoo/judgeProviders.js";
+import { assertJudgesSupported } from "../src/evals/engine/promptfoo/judgeProviders.js";
+import { judgeCapableModels, mapJudge } from "../src/evals/judgeProviders.js";
 import { recordFromPromptfooResult } from "../src/evals/engine/promptfoo/normalize.js";
 import {
   RUBRIC_PROMPT_TEMPLATE,
@@ -219,13 +216,13 @@ describe("generated assertions", () => {
 describe("judge provider mapping", () => {
   it("maps the three verified providers", () => {
     expect(mapJudge("anthropic/claude-sonnet-4-5")).toEqual({
-      promptfooProvider: "anthropic:messages:claude-sonnet-4-5",
+      providerSpec: "anthropic:messages:claude-sonnet-4-5",
       envVar: "ANTHROPIC_API_KEY",
       stageflowProvider: "anthropic",
     });
-    expect(mapJudge("openai/gpt-5")).toMatchObject({ promptfooProvider: "openai:chat:gpt-5", envVar: "OPENAI_API_KEY" });
+    expect(mapJudge("openai/gpt-5")).toMatchObject({ providerSpec: "openai:chat:gpt-5", envVar: "OPENAI_API_KEY" });
     expect(mapJudge("openrouter/anthropic/claude-sonnet-4-5")).toMatchObject({
-      promptfooProvider: "openrouter:anthropic/claude-sonnet-4-5",
+      providerSpec: "openrouter:anthropic/claude-sonnet-4-5",
       envVar: "OPENROUTER_API_KEY",
     });
   });

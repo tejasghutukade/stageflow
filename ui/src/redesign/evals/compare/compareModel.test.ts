@@ -34,11 +34,11 @@ function result(overrides: Partial<EvalCompareResult> = {}): EvalCompareResult {
     cases: [],
     graders: [],
     deltas: {
-      cost_per_result: { a: 0.58, b: 0.638, delta: 0.058 },
-      latency_p50: { a: 3600, b: 3900, delta: 300 },
-      latency_p95: { a: 1, b: 1, delta: 0 },
-      flaky_cases: { a: 5, b: 3, delta: -2 },
-      mean_score: { a: 0.83, b: 0.86, delta: 0.03 },
+      cost_per_result: { a: 0.58, b: 0.638, delta: 0.058, percent_change: 10 },
+      latency_p50: { a: 3600, b: 3900, delta: 300, percent_change: null },
+      latency_p95: { a: 1, b: 1, delta: 0, percent_change: null },
+      flaky_cases: { a: 5, b: 3, delta: -2, percent_change: null },
+      mean_score: { a: 0.83, b: 0.86, delta: 0.03, percent_change: null },
     },
     stage_diff: null,
     components: [
@@ -112,7 +112,7 @@ describe("kpi tiles", () => {
   });
 
   it("handles null deltas", () => {
-    const nulls = { a: null, b: null, delta: null };
+    const nulls = { a: null, b: null, delta: null, percent_change: null };
     const tiles = buildKpiTiles(result({ deltas: { ...result().deltas, cost_per_result: nulls, mean_score: nulls, flaky_cases: nulls, latency_p50: nulls } }));
     expect(tiles[1].sub).toBe("—");
     expect(tiles[4].sub).toBe("—");

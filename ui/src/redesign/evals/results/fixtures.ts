@@ -175,6 +175,7 @@ export function fixtureRun(overrides: Partial<EvalRunDetail> = {}): EvalRunDetai
     fingerprint: "5d2e9a71",
     components: { case_ids: null },
     stats: fixtureStats(),
+    lowest_cases_by_grader: {},
     current: {
       stage_version_hash: "3f9a1c0000000000",
       dataset_hash: "9b41c0ffff",

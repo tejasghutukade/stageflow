@@ -107,7 +107,7 @@ describe("compareRuns", () => {
     expect(r.stage_diff?.changed_keys).toEqual(["system_prompt"]);
     expect(r.components.map((c) => [c.key, c.status])).toEqual([["stage", "changed"], ["engine", "changed"]]);
     expect(r.warnings.map((w) => w.code)).toContain("engine_differs");
-    expect(r.deltas.flaky_cases).toEqual({ a: 0, b: 0, delta: 0 });
+    expect(r.deltas.flaky_cases).toEqual({ a: 0, b: 0, delta: 0, percent_change: null });
     expect(r.deltas.latency_p50.delta).toBeNull();
     expect(compareRuns(run(all(5, true)), run(all(5, true))).stage_diff).toBeNull();
   });
@@ -178,5 +178,15 @@ describe("stageDiff", () => {
   it("handles added keys and io input", () => {
     const d = stageDiff({ io: { input: 1 } }, { io: { input: 2 }, model: "m" });
     expect(d.changed_keys).toEqual(["io.input", "model"]);
+  });
+});
+
+describe("percent_change", () => {
+  it("is (b - a) / a * 100, null when a is 0 or a side is missing", () => {
+    const withCost = (costs: number[]) =>
+      run({}, { results: mkResults("c", [true, true]).map((r, i) => ({ ...r, costUsd: costs[i] ?? 0 })) });
+    expect(compareRuns(withCost([1, 1]), withCost([1.25, 1.25])).deltas.cost_per_result.percent_change).toBeCloseTo(25, 9);
+    expect(compareRuns(withCost([1, 1]), withCost([0.5, 0.5])).deltas.cost_per_result.percent_change).toBeCloseTo(-50, 9);
+    expect(compareRuns(withCost([0, 0]), withCost([1, 1])).deltas.cost_per_result.percent_change).toBeNull();
   });
 });

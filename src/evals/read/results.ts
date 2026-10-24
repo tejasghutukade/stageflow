@@ -1,4 +1,4 @@
-import { mean, percentile } from "../stats.js";
+import { mean, passFraction, percentile } from "../stats.js";
 import { EXECUTED_RESULT_STATUSES, resultKey } from "../statsTypes.js";
 import type { EvalCaseRow, EvalResultWithGrades, EvalReviewRow } from "../storeTypes.js";
 
@@ -91,7 +91,7 @@ function buildFacts(
         passed: r.passed,
         score: r.score,
       })),
-      pass_fraction: executedResults.length > 0 ? passed / executedResults.length : null,
+      pass_fraction: passFraction(passed, executedResults.length),
       mean_score: mean(completed.filter((r) => r.score !== null).map((r) => r.score as number)),
       failed_graders: [...failedGraders].sort(),
       latency_ms_p50: percentile(latencies, 0.5),

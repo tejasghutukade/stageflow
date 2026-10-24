@@ -1,4 +1,4 @@
-import type { EvalGraderStat, EvalResultDetail, EvalRunDetail } from "../../../api/evalTypes";
+import type { EvalGraderStat, EvalLowestCase, EvalResultDetail, EvalRunDetail } from "../../../api/evalTypes";
 import { formatCost, formatPoints, formatScore, formatTokens } from "../format";
 import { thresholdOf, type Tone } from "./headerModel";
 
@@ -155,30 +155,26 @@ export function graderRows(run: EvalRunDetail): GraderRowView[] {
 
 export type LowestCase = { caseId: string; repeatIndex: number; scoreText: string; reason: string | null };
 
-export function lowestCases(results: EvalResultDetail[], graderId: string, limit = 5): LowestCase[] {
-  const byCase = new Map<string, Array<{ repeat: number; score: number; reason: string | null }>>();
-  for (const result of results) {
-    const grade = result.grades.find((g) => g.grader_id === graderId);
-    if (!grade || grade.status !== "graded" || grade.score === null) continue;
-    const list = byCase.get(result.case_id) ?? [];
-    list.push({ repeat: result.repeat_index, score: grade.score, reason: grade.reason });
-    byCase.set(result.case_id, list);
-  }
-  const rows = [...byCase.entries()].map(([caseId, list]) => {
-    const worst = [...list].sort((a, b) => a.score - b.score || a.repeat - b.repeat)[0]!;
-    const mean = list.reduce((sum, item) => sum + item.score, 0) / list.length;
-    return { caseId, mean, worst };
-  });
-  rows.sort((a, b) => a.mean - b.mean || (a.caseId < b.caseId ? -1 : a.caseId > b.caseId ? 1 : 0));
-  return rows.slice(0, limit).map(({ caseId, mean, worst }) => ({
-    caseId,
-    repeatIndex: worst.repeat,
-    scoreText: formatScore(mean),
-    reason: worst.reason,
-  }));
-}
-
 export type JudgeSummary = { model: string; tokensText: string; costText: string } | null;
+
+export function lowestCases(
+  results: EvalResultDetail[],
+  graderId: string,
+  lowest: readonly EvalLowestCase[] = [],
+): LowestCase[] {
+  return lowest.map((entry) => {
+    const result = results.find(
+      (r) => r.case_id === entry.case_id && r.repeat_index === entry.worst_repeat_index,
+    );
+    const grade = result?.grades.find((x) => x.grader_id === graderId);
+    return {
+      caseId: entry.case_id,
+      repeatIndex: entry.worst_repeat_index,
+      scoreText: formatScore(entry.mean_score),
+      reason: grade?.reason ?? null,
+    };
+  });
+}
 
 export function judgeSummary(results: EvalResultDetail[], graderId: string): JudgeSummary {
   let model: string | null = null;

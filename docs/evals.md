@@ -715,6 +715,8 @@ The console uses these routes (all under the Host's `/api`, with the same auth a
 
 For agent targets, `POST /api/evals/:id/runs` also takes `user_model`, `allow_real_tools`, and the safer-only `tools` and `approvals`; the estimate route takes the same options; a run that needs real tools without consent answers `422 EVAL_REAL_TOOLS_NOT_CONFIRMED`. Result detail carries the stored conversation (`output`), `turns`, `tool_call_count` and `agent: { id, session_id }`; run stats carry `mean_turns` and `mean_tool_calls`. Result detail also carries `repeats[].suggestion` (the result's current suggestion, or `null`).
 
+The console formats numbers and never computes them. Run detail carries `lowest_cases_by_grader` (per grader id, up to five `{ case_id, mean_score, worst_repeat_index }` ordered by mean grade score); result rows carry `pass_fraction` and `mean_score`; every compare delta (`deltas.*`) is `{ a, b, delta, percent_change }`, where `percent_change` is `(b - a) / a * 100`, or `null` when `a` is 0 or a side is missing.
+
 ## Not built {#not-built}
 
 These are not part of this release:

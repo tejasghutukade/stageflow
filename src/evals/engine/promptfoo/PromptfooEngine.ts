@@ -20,7 +20,8 @@ import {
   generateFiles,
 } from "./generate.js";
 import { GUARD_FILENAME } from "./guard.js";
-import { mapJudge, assertJudgesSupported, type JudgeMapping } from "./judgeProviders.js";
+import { mapJudge, type JudgeMapping } from "../../judgeProviders.js";
+import { assertJudgesSupported } from "./judgeProviders.js";
 import {
   defaultLoadJudgePrices,
   defaultResolveJudgeKey,
