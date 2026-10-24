@@ -1,6 +1,7 @@
 import type { IconType } from "react-icons";
 import {
   LuBot,
+  LuFlaskConical,
   LuInbox,
   LuLayers,
   LuLayoutDashboard,
@@ -48,6 +49,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "agents", label: "Agents", href: "#/agents", icon: LuBot },
       { id: "tasks", label: "Tasks", href: "#/tasks", icon: LuList },
       { id: "catalog", label: "Catalog", href: "#/catalog?tab=stages", icon: LuSparkles },
+      { id: "evals", label: "Evals", href: "#/evals", icon: LuFlaskConical },
     ],
   },
   {

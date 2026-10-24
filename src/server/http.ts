@@ -18,7 +18,11 @@ import {
 import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
+import type { EvalRunManager } from "../evals/manager.js";
 import { handleTriggerRoutes } from "./triggerRoutes.js";
+import { handleEvalRoutes } from "./evalRoutes.js";
+import { defaultLoadJudgePrices } from "../evals/engine/promptfoo/judgeServices.js";
+import { engineStatus as promptfooEngineStatus } from "../evals/engine/promptfoo/status.js";
 import {
   readCatalogFileForHttp,
   writeCatalogFileForHttp,
@@ -196,6 +200,7 @@ import type { ConversationBackend } from "../agents/sessions.js";
 import { handleAgentAuthorRoutes } from "./agentAuthorRoutes.js";
 import { handleAgentRoutes } from "./agentRoutes.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
+import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
 import { handleMemoryRoutes } from "./memoryRoutes.js";
 import { EmailTriggers } from "../email/triggers.js";
 import {
@@ -428,6 +433,9 @@ export type OperatorRouteDeps = {
   agentConversationBackend?: ConversationBackend;
   /** Shared with MCP when set by bootstrap. */
   agentHost?: AgentHostContext;
+  evalRunManager?: EvalRunManager;
+  /** Wired by the eval manager; until then the internal eval callback answers 404. */
+  evalServices?: EvalServices;
 };
 
 /**
@@ -454,6 +462,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
     workshopOperatorHost,
     agentConversationBackend,
     agentHost: injectedHost,
+    evalServices,
   } = deps;
   const agentConnection = injectedHost ? undefined : sqliteConnectionFromStore(store);
   const agentHost =
@@ -534,6 +543,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
       async function handleOperatorRequest(): Promise<boolean> {
       try {
         if (await liveView.handle(req, res)) return true;
+        if (isEvalInternalPath(pathname) && (await handleEvalInternalRoutes(req, method, pathname, evalServices, res, json))) return true;
 
         if (pathname === "/api/agent-author/chat" || pathname === "/api/agent-author/undo") {
           if (await handleAgentAuthorRoutes(req, method, pathname, cwd, operatorHost, res, json)) return true;
@@ -624,6 +634,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (since !== null) filter.since = since;
           if (pipeline !== null) filter.pipeline = pipeline;
           if (callerId !== null) filter.caller_id = callerId;
+          const origin = url.searchParams.get("origin");
+          if (origin === "eval" || origin === "any") filter.origin = origin;
           json(res, 200, {
             runs: await store.listRuns(
               Object.keys(filter).length > 0 ? filter : undefined,
@@ -3398,6 +3410,24 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         }
 
         if (
+          await handleEvalRoutes(req, res, {
+            cwd,
+            store,
+            manager,
+            evalRunManager: deps.evalRunManager,
+            json,
+            readJsonBody,
+            auditLog,
+            engineStatus: () => promptfooEngineStatus({ home: globalStageflowHome() }),
+            agents: () => agentHost?.service,
+            loadPrices: defaultLoadJudgePrices,
+            triage: { judgeBackend: () => agentHost?.backend },
+          })
+        ) {
+          return true;
+        }
+
+        if (
           await handleTriggerRoutes(req, res, {
             cwd,
             manager,
@@ -3706,6 +3736,8 @@ export async function startUiServer(
             ? { workshopOperatorHost: options.workshopOperatorHost }
             : {}),
           ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
+          ...(boot.evalRunManager ? { evalRunManager: boot.evalRunManager } : {}),
+          ...(boot.evalServices ? { evalServices: boot.evalServices } : {}),
           ...(options.agentConversationBackend
             ? { agentConversationBackend: options.agentConversationBackend }
             : {}),
@@ -3718,6 +3750,7 @@ export async function startUiServer(
     controlTokens,
     routes,
   });
+  boot.setEvalCallbackBase?.(envelope.url);
   const closeServer = envelope.server.close.bind(envelope.server);
   envelope.server.close = ((callback?: (error?: Error) => void) => closeServer(error => {
     void (boot.email?.stop() ?? Promise.resolve()).then(() => callback?.(error), () => callback?.(error ?? new Error("Email host shutdown failed")));

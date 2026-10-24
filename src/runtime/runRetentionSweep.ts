@@ -324,7 +324,7 @@ export async function runRetentionSweep(
     options.artifactMaxBytes ?? slimArtifactMaxBytesFromEnv(env);
   const bareCacheTtlMs = options.bareCacheTtlMs ?? bareCacheTtlFromEnv(env);
 
-  const runs = await store.listRuns();
+  const runs = await store.listRuns({ origin: "any" });
   const slimmed: string[] = [];
   const purged: string[] = [];
 
@@ -381,7 +381,7 @@ export async function runRetentionSweep(
   }
 
   // Re-list for bare-cache decisions after PURGE removed rows when execute.
-  const runsForBare = execute ? await store.listRuns() : runs;
+  const runsForBare = execute ? await store.listRuns({ origin: "any" }) : runs;
   const bareCachesEvicted = await evictBareCaches({
     runs: runsForBare,
     now,

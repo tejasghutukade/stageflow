@@ -1,0 +1,193 @@
+{
+  "stats": {
+    "cases_counted": 4,
+    "results_executed": 8,
+    "results_passed": 3,
+    "errored": 0,
+    "pass_rate": 0.375,
+    "pass_rate_ci": {
+      "low": 0,
+      "high": 1
+    },
+    "mean_score": 0.6333333333333333,
+    "score_spread": 0.1414213562373095,
+    "reliability": 0.25,
+    "pass_any": 0.5,
+    "flaky_cases": [
+      "c2"
+    ],
+    "latency_p50": 200,
+    "latency_p95": 330,
+    "latency_max": 330,
+    "cost_stage": 0.09200000000000001,
+    "cost_judge": 0.012,
+    "cost_total": 0.10400000000000001,
+    "cost_per_result": 0.013000000000000001,
+    "tokens_in": 800,
+    "tokens_out": 160,
+    "judge_tokens_in": 300,
+    "judge_tokens_out": 30,
+    "by_grader": [
+      {
+        "grader_id": "shape",
+        "type": "schema",
+        "hash": "h-shape",
+        "graded": 6,
+        "passed": 3,
+        "pass_rate": 0.5,
+        "mean_raw": 0.5,
+        "min_raw": 0,
+        "max_raw": 1,
+        "errors": 0,
+        "delta": null,
+        "grader_changed": false
+      },
+      {
+        "grader_id": "quality",
+        "type": "rubric",
+        "hash": "h-quality",
+        "graded": 6,
+        "passed": 3,
+        "pass_rate": 0.5,
+        "mean_raw": 3.5,
+        "min_raw": 2,
+        "max_raw": 5,
+        "errors": 0,
+        "delta": null,
+        "grader_changed": false
+      }
+    ],
+    "score_histogram": {
+      "bins": [
+        0,
+        0,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        3
+      ],
+      "threshold": 0.8
+    },
+    "failure_types": {
+      "by_tag": {},
+      "untagged": 5
+    },
+    "failing_cases": [
+      {
+        "case_id": "c3",
+        "pass_rate": 0,
+        "mean_score": null,
+        "passes": [
+          false,
+          false
+        ]
+      },
+      {
+        "case_id": "c4",
+        "pass_rate": 0,
+        "mean_score": 0.25,
+        "passes": [
+          false,
+          false
+        ]
+      },
+      {
+        "case_id": "c2",
+        "pass_rate": 0.5,
+        "mean_score": 0.65,
+        "passes": [
+          true,
+          false
+        ]
+      }
+    ]
+  },
+  "components": {
+    "stage": "stagehash",
+    "model": "anthropic/claude-sonnet-4-5",
+    "dataset": "datasethash",
+    "case_ids": [
+      "c1",
+      "c2",
+      "c3",
+      "c4"
+    ],
+    "graders": {
+      "quality": "h-quality",
+      "shape": "h-shape"
+    },
+    "judge": "anthropic/claude-sonnet-4-5",
+    "repeats": 2,
+    "pass_threshold": 0.8,
+    "engine": {
+      "name": "promptfoo",
+      "version": "0.124.0"
+    },
+    "rubric_prompt_version": 1
+  },
+  "fingerprint": "fcdf8458",
+  "snapshot": {
+    "snapshot_version": 1,
+    "eval": {
+      "id": "regression",
+      "path": "evals/regression.eval.yaml",
+      "hash": "evalhash",
+      "definition": {
+        "id": "regression"
+      }
+    },
+    "overrides": {
+      "repeats": null,
+      "judge": null,
+      "model": null,
+      "max_cost_usd": null,
+      "case_ids": null,
+      "tags": null,
+      "only_failed_from": null
+    },
+    "target": {
+      "kind": "stage",
+      "pipeline_path": "pipelines/p.pipeline.yaml",
+      "stage_id": "review",
+      "file": null,
+      "stage_version_hash": "stagehash",
+      "stage_definition": {
+        "id": "review"
+      },
+      "model": "anthropic/claude-sonnet-4-5",
+      "model_tier": "standard",
+      "input_schema_hash": "in",
+      "output_schema_hash": "out"
+    },
+    "dataset": {
+      "path": "datasets/d.jsonl",
+      "hash": "datasethash",
+      "format": "jsonl",
+      "case_count": 4,
+      "cases_run": 4,
+      "cases_skipped": 0,
+      "skipped_case_ids": []
+    },
+    "graders": [],
+    "settings": {
+      "repeats": 2,
+      "pass_threshold": 0.8,
+      "judge": "anthropic/claude-sonnet-4-5",
+      "judge_same_as_stage": true,
+      "max_cost_usd": 1,
+      "concurrency": 2,
+      "suite_type": "capability"
+    },
+    "engine": {
+      "name": "promptfoo",
+      "version": "0.124.0",
+      "rubric_prompt_version": 1,
+      "node_version": "22.22.0"
+    },
+    "stageflow_version": "0.40.0"
+  }
+}

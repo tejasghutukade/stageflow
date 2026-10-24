@@ -54,9 +54,12 @@ function isCovered(entries: readonly string[], root: string): boolean {
  * Make sure `stageflow.yaml` scans `directory` for both pipelines and tasks.
  * Returns true when the manifest changed. Missing or unreadable manifests are left alone.
  */
+export type CatalogScanKey = "pipelines" | "tasks" | "evals" | "datasets";
+
 export async function ensureCatalogScanRoot(
   projectRoot: string,
   directory: string,
+  keys: readonly CatalogScanKey[] = ["pipelines", "tasks"],
 ): Promise<boolean> {
   const root = catalogScanRootForDirectory(directory);
   if (!root || root.split("/").includes("..")) return false;
@@ -71,7 +74,7 @@ export async function ensureCatalogScanRoot(
 
   const doc = parseDocument(text);
   let changed = false;
-  for (const key of ["pipelines", "tasks"] as const) {
+  for (const key of keys) {
     const seq = doc.getIn(["catalog", key]);
     if (!isSeq(seq)) continue;
     const values = seq.toJSON();

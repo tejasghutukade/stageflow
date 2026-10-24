@@ -17,6 +17,7 @@ COPY scripts ./scripts
 COPY skills ./skills
 COPY builtin-skills ./builtin-skills
 COPY examples/triggers-readiness ./examples/triggers-readiness
+COPY examples/evals ./examples/evals
 COPY README.md LICENSE ./
 RUN npm run build \
   && npm run ui:build \
@@ -35,6 +36,16 @@ RUN apt-get update \
   && mkdir -p /data/tmp /etc/stageflow /opt/stageflow \
   && chown stageflow:stageflow /data /data/tmp
 
+ARG PROMPTFOO_VERSION=0.124.0
+USER stageflow:stageflow
+RUN mkdir -p /data/eval-engine/${PROMPTFOO_VERSION} \
+  && cd /data/eval-engine/${PROMPTFOO_VERSION} \
+  && printf '{"name":"stageflow-eval-engine","private":true}\n' > package.json \
+  && npm install --no-audit --no-fund promptfoo@${PROMPTFOO_VERSION} \
+  && node -e 'require("fs").writeFileSync(".stageflow-installed", JSON.stringify({version: process.argv[1], node: process.versions.node, installedAt: new Date().toISOString(), integrity: null}) + "\n")' ${PROMPTFOO_VERSION} \
+  && npm cache clean --force
+USER root
+
 WORKDIR /opt/stageflow
 COPY --from=build --chown=stageflow:stageflow /src/package.json /src/package-lock.json ./
 COPY --from=build --chown=stageflow:stageflow /src/node_modules ./node_modules
@@ -42,6 +53,7 @@ COPY --from=build --chown=stageflow:stageflow /src/dist ./dist
 COPY --from=build --chown=stageflow:stageflow /src/skills ./skills
 COPY --from=build --chown=stageflow:stageflow /src/builtin-skills ./builtin-skills
 COPY --from=build --chown=stageflow:stageflow /src/examples/triggers-readiness ./catalog/triggers-readiness
+COPY --from=build --chown=stageflow:stageflow /src/examples/evals ./examples/evals
 COPY --from=build --chown=stageflow:stageflow /src/README.md /src/LICENSE ./
 COPY --from=build /src/scripts/generate-toolchain-manifest.mjs ./scripts/generate-toolchain-manifest.mjs
 RUN node ./scripts/generate-toolchain-manifest.mjs /etc/stageflow/toolchain.json \

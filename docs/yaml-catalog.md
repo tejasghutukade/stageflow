@@ -19,6 +19,8 @@ my-project/
     hello.pipeline.yaml       # inline or uses: stage entries
   tasks/
     hello.task.yaml
+  evals/                      # optional: *.eval.yaml (see Evals)
+  datasets/                   # optional: *.dataset.jsonl|json|csv
   workshop/                   # Workshop Author saves (scan root; created on the first save)
   .stageflow/                 # per-project settings only
 ```
@@ -36,6 +38,8 @@ Runnable examples live under [`examples/`](../examples/). This repo's manifest i
 | Pipeline | `*.pipeline.yaml` | `hello.pipeline.yaml` |
 | Task | `*.task.yaml` | `my-task.task.yaml` |
 | Trigger | `*.trigger.yaml` | `manual-hello-world.trigger.yaml` |
+| Eval | `*.eval.yaml` | `review-findings.eval.yaml` |
+| Dataset | `*.dataset.jsonl`, `*.dataset.json`, `*.dataset.csv` | `review-diffs.dataset.jsonl` |
 | Stage (external) | any `*.yaml` beside pipeline or under shared pool | `research.yaml`, `../stages/clarify.yaml` |
 
 CLI **`--pipeline` and `--task` require filesystem paths** — there is no bare-id fallback.
@@ -1254,6 +1258,206 @@ See [`tests/fixtures/triggers/dynamic-hello.trigger.yaml`](../tests/fixtures/tri
 
 See [`tests/fixtures/triggers/manual-dangling-refs.trigger.yaml`](../tests/fixtures/triggers/manual-dangling-refs.trigger.yaml) — a trigger whose `pipeline`/`task` reference ids that don't exist in the catalog.
 
+## Evals (`*.eval.yaml`) {#evals-eval-yaml}
+
+An eval names one target (a stage or an agent), a dataset of cases, graders and run defaults. How to use evals, read results and what they cost: [Evals](evals.md). Samples: [`examples/evals/`](../examples/evals/). The agent-specific keys are in [Agent evals](#agent-evals) below.
+
+```yaml
+version: 1
+id: review-findings
+name: Review findings
+description: Review flags real defects
+type: capability
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+task:
+  goal: Review the change and list defects.
+defaults:
+  repeats: 3
+  judge: anthropic/claude-sonnet-4-5
+  pass_threshold: 0.8
+  max_cost_usd: 2
+  concurrency: 4
+graders:
+  - id: output-schema
+    type: schema
+    must_pass: true
+  - id: clear-and-actionable
+    type: rubric
+    rubric: A developer could act on each finding without asking questions.
+    scale: 1_to_5
+    pass_at: 4
+budget:
+  latency_ms: 300000
+  cost_usd: 0.3
+```
+
+Unknown keys at any level are an error (`eval.unknown_key`).
+
+| Key | Type | Required | Rule |
+|-----|------|----------|------|
+| `version` | `1` | yes | Only `1` is accepted |
+| `id` | string | yes | `^[a-z0-9][a-z0-9-]{0,62}$`. Must equal the filename stem. Unique in the project |
+| `name` | string | no | 1 to 80 characters. Default: `id` |
+| `description` | string | no | Up to 500 characters |
+| `type` | `capability` \| `regression` | no | Default `capability`. Display and guidance only |
+| `target` | object | yes | A stage (below) or an agent ([Agent evals](#agent-evals)) |
+| `dataset` | string | yes | Path to a dataset file, **relative to the eval file's directory**, inside the project root |
+| `task` | object | no | `{ goal?, context?, constraints? }`, all strings. Template for each case's task. Stage targets only (`eval.task_not_applicable` on an agent target) |
+| `defaults` | object | no | See below |
+| `graders` | array | yes | 1 to 20 graders with unique ids |
+| `conversation` | object | no | Agent targets only. See [Agent evals](#agent-evals) |
+| `budget` | object | no | `{ latency_ms?, cost_usd? }`, positive numbers. Per-result warnings, never failures |
+
+**Target.** `kind` is required and is `stage` or `agent` (`eval.target_kind_unsupported` otherwise). A stage target has exactly one of two forms. Paths are relative to the eval file.
+
+| Form | Keys | Meaning |
+|------|------|---------|
+| Pipeline stage | `pipeline: <path>`, `stage: <stage id>` | A stage of a pipeline (`uses:` or inline), materialized by the normal loader with the pipeline's model default |
+| Stage file | `file: <path>` | A standalone stage YAML file. Model resolves stage, then the manifest default |
+
+**Defaults.**
+
+| Key | Type | Default | Rule |
+|-----|------|---------|------|
+| `repeats` | integer | 3 | 1 to 10 |
+| `judge` | string | none | A model id `provider/model`. Required when a `rubric` grader has none of its own. Judge-capable providers: `anthropic`, `openai`, `openrouter` |
+| `pass_threshold` | number | 0.8 | `0 < x <= 1` |
+| `max_cost_usd` | number | 2 (agents: 1) | `> 0`. Stage runs plus judge calls; for agents, agent turns, simulator calls and judge calls |
+| `concurrency` | integer | 4 (agents: 2) | 1 to 8 |
+| `model` | string | none | Replaces the stage's model for every case (the agent's model for an agent target) |
+| `user_model` | string | the effective `judge` | Agent targets only: the model that plays the user in `simulated` scenarios. Judge-capable providers only |
+
+**Graders.** Common keys: `id` (same pattern as the eval id, unique), `type`, `description` (up to 200 characters), `weight` (number above 0, default 1) and `must_pass` (default `false`; a failing `must_pass` grader fails the result and its weight is ignored).
+
+| `type` | Keys | Notes |
+|--------|------|-------|
+| `schema` | none | Envelope `status` is `success` and the payload validates against the stage's `io.output.schema` (required) |
+| `field` | `checks`: non-empty array of `{ path, op, value? }` | All checks must hold. `path` is a dotted path over `{ status, summary, artifacts, payload }`, with `[n]` and `[*]`. `op`: `exists`, `not_empty`, `equals`, `not_equals`, `contains`, `matches`, `gte`, `lte`, `between`, `in`, `length_gte`, `length_lte` |
+| `reference` | `mode`: `each_mentioned` \| `equals` (required); `path` (default `payload`); `expected` (path into the case, required); `pass_at` (0 to 1, default 1) | `each_mentioned` needs an array of strings and scores the share found, case-insensitively |
+| `rubric` | `rubric` (1 to 4,000 characters, required); `scale`: `pass_fail` (default) \| `1_to_5`; `pass_at` (integer 1 to 5, default 4, only with `1_to_5`); `judge`; `examples` (up to 6) | Judged by a model. Examples are `{ verdict: pass\|fail, output, reason? }` for `pass_fail` and `{ score: 1-5, output, reason? }` for `1_to_5` |
+| `code` | `code`: body of a JavaScript function (required) | Receives `(output, testCase, context)`; returns a boolean, a number 0 to 1, or `{ pass, score?, reason? }`. 5 second limit. Runs on the author's machine with the author's permissions. On an agent target `output` is the conversation |
+| `tool_calls` | `must_call`, `must_not_call`, `must_ask_first`: string arrays; `max_calls`: 0 to 200; `args`: up to 20 of `{ tool, path, op, value? }` | Agent targets only. Reads the recorded tool calls. A call counts whatever its outcome. `must_call` and `must_not_call` default to the case's `expected.tools` and `expected.forbidden_tools`; `[]` opts out |
+| `conversation_check` | `max_turns` (1 to 100), `max_agent_questions_per_turn` (0 to 10), `final_reply`: up to 10 of `{ op, value? }` | Agent targets only. At least one key. Deterministic |
+| `goal_reached` | `judge` (optional), `guidance` (up to 2,000 characters) | Agent targets only. A judge reads the conversation and the case's `input.goal` (else `expected.outcome`). Pass or fail |
+
+`command` and `groundedness` graders are not available. `schema` applies to stage targets only; `tool_calls`, `conversation_check` and `goal_reached` apply to agent targets only (`eval.grader_not_applicable` otherwise). The grader types, scoring and statistics are explained in [Evals](evals.md#writing-an-eval).
+
+### Agent evals
+
+An agent target is `target: { kind: agent, agent: <id> }`, where `<id>` is an agent in the project's `agents/` directory. `pipeline`, `stage`, `file` and `revision` are not allowed on it (`eval.target_invalid`): a run uses the agent's current revision and records it. The `conversation` block says how the conversation is played and how tools are treated:
+
+| Key | Type | Default | Rule |
+|-----|------|---------|------|
+| `mode` | `script` \| `simulated` | `script` | Default for all scenarios; a scenario overrides it with `input.mode` |
+| `max_turns` | integer | 8 | 1 to 30 user turns per scenario. Reaching it is a normal end |
+| `turn_timeout_ms` | integer | 120000 | 5000 to 600000, one user turn |
+| `tools` | `real` \| `read_only` \| `mocked` | `read_only` | The [tool policy](evals.md#tool-policy) |
+| `approvals` | `deny` \| `auto_approve_read` \| `record_only` | `record_only` | The [approval policy](evals.md#approval-policy) |
+| `read_only_tools` | string array | `[]` | Up to 50 MCP tool ids you declare read-only (`server.tool`, `server.*`). Built-in and Stageflow tools cannot be declared read-only |
+| `allow_real_tools` | boolean | `false` | Your consent to `tools: real`. Only valid with `tools: real` |
+
+Omitting `conversation` means script mode, 8 turns, `read_only`, `record_only`. Unknown keys are `eval.unknown_key`; a bad value is `eval.conversation_invalid`. Key order when Stageflow writes the file: `version, id, name, description, type, target, dataset, task, defaults, conversation, graders, budget`.
+
+```yaml
+target: { kind: agent, agent: support }
+dataset: ../datasets/support-scenarios.dataset.jsonl
+defaults: { repeats: 3, pass_threshold: 0.8, max_cost_usd: 1, concurrency: 2 }
+conversation: { mode: script, max_turns: 4, tools: read_only, approvals: record_only }
+graders:
+  - { id: no-forbidden-tools, type: tool_calls, must_pass: true }
+  - { id: one-question, type: conversation_check, max_agent_questions_per_turn: 1 }
+```
+
+On an agent target, `field` and `reference` paths start at the conversation (for example `final_reply`, `turns`, `stop_reason`, `messages[*].text`, `tool_calls[*].name`, `tool_calls[0].args.invoice_id`) and `reference` defaults to `path: final_reply`. The full chapter, with the conversation shape, is [Evals for agents](evals.md#evals-for-agents). A complete example: [`examples/evals/support-sample.eval.yaml`](../examples/evals/support-sample.eval.yaml).
+
+### Eval validation findings {#eval-validation-findings}
+
+`sf validate`, `sf eval validate` and the console report these with `category: "eval"`.
+
+| Code | Severity | When |
+|------|----------|------|
+| `eval.load_error` | error | YAML does not parse |
+| `eval.not_object` | error | The document is not a mapping |
+| `eval.invalid_version` | error | `version` is not `1` |
+| `eval.unknown_key` | error | A key that is not listed |
+| `eval.invalid_id` | error | `id` does not match the pattern |
+| `eval.id_filename_mismatch` | error | `id` differs from the filename stem |
+| `eval.duplicate_id` | error | Two evals in the project share an `id` |
+| `eval.invalid_field` | error | Wrong type or range |
+| `eval.target_kind_unsupported` | error | `target.kind` is neither `stage` nor `agent` |
+| `eval.target_invalid` | error | Not exactly one target form |
+| `eval.target_unresolved` | error | The pipeline, stage or file is not found or does not load (for example no resolvable `model`) |
+| `eval.dataset_unresolved` | error | The dataset file is not found or is outside the project |
+| `eval.dataset_invalid` | error | The dataset file fails its own validation |
+| `eval.cases_skipped` | warning | Some cases fail the stage's `io.input.schema`; they are skipped when a run starts |
+| `eval.no_valid_cases` | error | No case remains after skipping |
+| `eval.grader_duplicate_id` | error | A repeated grader id |
+| `eval.grader_type_unsupported` | error | A type other than `schema`, `field`, `reference`, `rubric`, `code`, `tool_calls`, `conversation_check`, `goal_reached` (`command` has its own message) |
+| `eval.grader_invalid` | error | A type-specific rule is broken |
+| `eval.schema_grader_without_output_schema` | error | A `schema` grader on a stage with no `io.output.schema` |
+| `eval.judge_missing` | error | A rubric needs a judge and none is set |
+| `eval.judge_unknown_model` | warning | The judge id is not in the model catalog (the catalog may be offline) |
+| `eval.judge_same_as_stage` | warning | The effective judge is the stage's own model |
+| `eval.stage_has_gates` | warning | The target stage declares `gate_kinds` |
+| `eval.stage_needs_checkout` | warning | The stage `requires` a repository |
+| `eval.cases_missing_expected` | warning | A `reference` grader and some cases lack the `expected` path |
+| `eval.large_run` | warning | Cases x repeats is above 500 |
+| `eval.too_large_run` | error | Cases x repeats is above 5,000 |
+| `eval.agent_not_found` | error | The agent target names an agent the project does not have |
+| `eval.agent_archived` | error | The agent is archived |
+| `eval.agent_disabled` | warning | The agent is disabled. Eval sessions run anyway |
+| `eval.agent_invalid` | error | The agent file has problems (the message names the first) |
+| `eval.agents_unavailable` | error | A run starts on a Host with no agent service |
+| `eval.conversation_invalid` | error | A bad `conversation` value (the message names the key) |
+| `eval.conversation_not_applicable` | error | `conversation` or `defaults.user_model` on a stage target |
+| `eval.task_not_applicable` | error | `task` on an agent target |
+| `eval.grader_not_applicable` | error | A grader type that does not apply to the target kind |
+| `eval.tool_not_granted` | warning | A tool named in `tool_calls`, `read_only_tools` or a scenario's `tool_mocks` is not granted to the agent |
+| `eval.read_only_tools_not_mcp` | error | `read_only_tools` lists a built-in or Stageflow tool (`write`, `bash`, ...). Only MCP tools can be declared read-only; the entry has no effect |
+| `eval.tools_real` | warning | `tools: real`: real tools can change files and call services from this machine |
+| `eval.real_tools_not_allowed` | error | `tools: real` without `allow_real_tools: true` |
+| `eval.tools_unstubbed_list` | warning | `read_only` and some granted tools are not read-only; they are stubbed and recorded, not executed |
+| `eval.tools_mocked_no_mocks` | warning | `tools: mocked` and no scenario has `tool_mocks` |
+| `eval.user_model_missing` | error | A scenario is `simulated` and neither `user_model` nor `judge` is set |
+| `eval.simulator_unsupported` | error | `user_model` is not an `anthropic`, `openai` or `openrouter` model |
+| `eval.simulator_unknown_model` | warning | `user_model` is not in the model catalog |
+| `eval.simulator_same_as_agent` | warning | The simulator model is the agent's own model |
+| `eval.cases_missing_goal` | warning | A `goal_reached` grader and some scenarios have neither `input.goal` nor `expected.outcome` |
+
+## Datasets (`*.dataset.jsonl`) {#datasets-dataset-jsonl}
+
+A dataset is a file of cases. The loader checks only the case shape; matching `input` to a stage, or reading it as a scenario for an agent, happens when an eval uses the dataset.
+
+| Key | Type | Required | Rule |
+|-----|------|----------|------|
+| `id` | string | yes | `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, unique in the file |
+| `input` | object | yes | Becomes `task.input`; must match the stage's `io.input.schema` |
+| `title` | string | no | Up to 120 characters |
+| `expected` | any JSON | no | Reference data for `reference` graders and rubric judges |
+| `tags` | string[] | no | Up to 10, each `^[a-z0-9][a-z0-9-]{0,31}$` |
+| `goal` | string | no | Replaces the eval's `task.goal` for this case |
+| `metadata` | object | no | Free-form, never read by Stageflow |
+
+Formats: JSONL (one object per line, blank lines ignored), JSON (an array or `{ "cases": [...] }`) and CSV (header `id`, `title`, `goal`, `tags` split on `;`, `input.<name>`, `expected.<name>`, any header ending `:json` parsed as JSON). Limits: 5,000 cases, 1 MB per case, 50 MB per uploaded file. Dataset findings use `category: "dataset"`: `dataset.load_error`, `dataset.empty`, `dataset.not_object`, `dataset.invalid_shape`, `dataset.unknown_key`, `dataset.case_missing_id`, `dataset.case_invalid_id`, `dataset.duplicate_id`, `dataset.case_missing_input`, `dataset.invalid_field`, `dataset.csv_unknown_column`, `dataset.too_many_cases`, `dataset.case_too_large`, `dataset.file_too_large` (errors) and `dataset.input_mismatch`, `dataset.few_cases` (warnings). See [Evals: Datasets](evals.md#datasets).
+
+**Scenarios (agent evals).** For an agent target `input` is a scenario, checked per case in the effective mode (`input.mode`, else `conversation.mode`):
+
+| `input` key | Mode | Rule |
+|-------------|------|------|
+| `mode` | both | `script` or `simulated`; overrides `conversation.mode` for this case |
+| `script` | script | Required. 1 to 40 user messages of 1 to 4,000 characters |
+| `opening` | simulated | Required. The first user message, 1 to 2,000 characters |
+| `persona` | simulated | Required. 1 to 1,000 characters |
+| `goal` | simulated | Required. 1 to 1,000 characters; also read by `goal_reached` |
+| `facts` | simulated | Optional. Up to 30 strings of 300 characters, revealed when asked |
+| `tool_mocks` | both | Optional. Up to 50 tool ids, each `{ "result": ... }` or `{ "error": "..." }` |
+
+`expected` keys with a meaning for agents: `outcome` (string), `tools` and `forbidden_tools` (string arrays). Scenario findings: `dataset.input_mismatch` (warning; the message starts "scenario"; the case is skipped when a run starts), `dataset.scenario_unknown_field` (warning; the case still runs), `dataset.expected_invalid` (warning) and `dataset.mapping_unsupported_field` (error: a CSV mapping cannot target `input.script` or `input.tool_mocks`). See [Evals for agents](evals.md#scenarios-and-datasets).
+
 ## Manifest (`stageflow.yaml`)
 
 Declares catalog roots for **`sf validate`** (manifest-all) and operator-console browse. Optional top-level `model` is the global default LLM id for stages that omit both stage and pipeline `model` (see [Model defaults and precedence](#model-defaults-and-precedence)). Optional top-level `agent` selects the default execution backend and is independent of `model`.
@@ -1270,10 +1474,14 @@ catalog:
     - examples/hello-world
     - examples/plan-review
   triggers: []
+  evals: [evals]            # optional; default [evals]
+  datasets: [datasets]      # optional; default [datasets]
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
     trigger: "*.trigger.yaml"
+    eval: "*.eval.yaml"
+    dataset: ["*.dataset.jsonl", "*.dataset.json", "*.dataset.csv"]
   exclude:
     - tests/fixtures
 ```
@@ -1283,6 +1491,7 @@ catalog:
 - **`exclude`**: paths omitted from console browse (fixtures may still be loaded by explicit CLI path in tests).
 - **`patterns`**: glob for directory scans (defaults shown above).
 - **`triggers`**: catalog roots scanned for `*.trigger.yaml` — see [Triggers](#triggers-trigger-yaml).
+- **`evals`** and **`datasets`**: catalog roots scanned for `*.eval.yaml` and dataset files — see [Evals](#evals-eval-yaml). When a key is absent the loader scans `evals/` and `datasets/` under the project root; a key that is present replaces that default. `patterns.dataset` accepts a string or an array. `exclude` applies to both.
 
 Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (with an inline stage in `hello.pipeline.yaml`), and `tasks/`. The manifest lists `pipelines`, `tasks`, and `workshop` as scan roots. `workshop/` is created on the first Workshop save. There is no global `stages/` pool.
 

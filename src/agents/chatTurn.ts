@@ -1,3 +1,5 @@
+import { AgentError } from "./errors.js";
+import { EVAL_SESSION_SOURCE, isEvalSession } from "./evalSession.js";
 import type { AgentService, AgentSessionDetail } from "./service.js";
 import { AgentConversation, type ConversationOptions, type SendTurnInput } from "./sessions.js";
 
@@ -27,7 +29,11 @@ export class AgentChatController {
     return run;
   }
 
-  send(input: SendTurnInput): Promise<AgentSessionDetail> {
+  async send(input: SendTurnInput): Promise<AgentSessionDetail> {
+    if (input.sessionId && input.source !== EVAL_SESSION_SOURCE) {
+      const { session } = await this.options.service.getSession(input.projectRoot, input.sessionId);
+      if (isEvalSession(session)) throw new AgentError("agent.session_eval_readonly", "Eval sessions are read only");
+    }
     return this.runExclusive(input.sessionId ?? `agent:${input.agentId}`, async () => {
       const chat = new AgentConversation(this.options);
       if (input.sessionId) this.activeBySession.set(input.sessionId, chat);
@@ -67,6 +73,15 @@ export class AgentChatController {
     } catch (error) {
       this.options.logError?.(`releasing agent session ${sessionId} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  /** An eval conversation is over: stop any running turn, release the runtime session, drop its in-memory overrides. */
+  async closeEvalSession(projectRoot: string, sessionId: string): Promise<void> {
+    const { session } = await this.options.service.getSession(projectRoot, sessionId);
+    if (!isEvalSession(session)) throw new AgentError("agent.invalid", `Session ${sessionId} is not an eval session`);
+    this.stop(sessionId);
+    await this.release(sessionId);
+    this.options.service.forgetEvalSession(sessionId);
   }
 
   /** Stop a turn that is still opening its session (client left before the session id arrived). */

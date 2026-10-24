@@ -21,8 +21,11 @@ import { AgentLoadError } from "../AgentLoadState";
 import { MONO, NOWRAP, PAGE_BG } from "../agentsTokens";
 import { clockTime, formatCost, formatDuration, formatTokens, shortSessionId, sourceLabel } from "../model/format";
 import { useAgentDetail, useResource } from "../model/hooks";
-import { runViews, sessionRollups, sessionTimeline, spanColor, type RunView } from "../model/sessionView";
+import { composerMode, runViews, sessionRollups, sessionTimeline, spanColor, type RunView } from "../model/sessionView";
 import { Breadcrumb, Button, PageFooter } from "../ui";
+import { AgentSessionEvalBanner } from "../../evals/AgentSessionEvalBanner";
+import { AddSessionCaseDialog } from "./AddSessionCaseDialog";
+import { addAsCaseDisabledReason, canOfferAddAsCase } from "./sessionCaseModel";
 
 const POLL_MS = 3000;
 
@@ -304,6 +307,7 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
   // A first message opens its session before the reply ends; an approval can park the turn meanwhile.
   const [openedId, setOpenedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "errors" | "waiting">("all");
+  const [addCase, setAddCase] = useState(false);
   const [now, setNow] = useState(Date.now());
   const abort = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -436,6 +440,7 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
     .reverse();
   const canChat = agent.agent.enabled && !busy && session?.status !== "running" && session?.status !== "waiting";
   const title = session?.title ?? (streaming?.prompt || "New session");
+  const addCaseReason = detail ? addAsCaseDisabledReason(detail) : null;
 
   return (
     <div className={PAGE_BG}>
@@ -477,6 +482,13 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
                 <span className={`text-xs font-medium leading-[1.33333] text-[var(--sf-needs)] ${NOWRAP}`}>Run #{pendingRun.turn.seq} waiting on you</span>
               </span>
             ) : null}
+            {session && canOfferAddAsCase(detail) && detail ? (
+              <span className="ml-2">
+                <Button onClick={() => setAddCase(true)} disabled={addCaseReason !== null} title={addCaseReason ?? undefined}>
+                  Add as eval case
+                </Button>
+              </span>
+            ) : null}
             {session ? (
               <span className="ml-2">
                 <Button icon={<LuDownload aria-hidden className="text-[var(--sf-text-2)]" />} onClick={() => void exportTraces()} disabled={detail?.spans.length === 0}>
@@ -487,6 +499,8 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
           </div>
         </div>
       </header>
+      {session ? <AgentSessionEvalBanner sessionId={session.id} source={session.source} /> : null}
+      {addCase && detail ? <AddSessionCaseDialog agentId={agentId} detail={detail} onClose={() => setAddCase(false)} /> : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {rollups && rollups.runs > 0 ? (
@@ -555,7 +569,9 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
               <div ref={bottomRef} />
             </div>
             <div className="shrink-0 border-t border-t-[var(--sf-hairline)] px-7 py-4">
-              {agent.agent.enabled ? (
+              {composerMode(session?.source, agent.agent.enabled) === "eval_readonly" ? (
+                <p className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">Eval session: read only.</p>
+              ) : agent.agent.enabled ? (
                 <form
                   onSubmit={(event) => {
                     event.preventDefault();

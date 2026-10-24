@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import type { AgentDefinition } from "../config/loadAgent.js";
 import { assertDelegateAllowed } from "./delegate.js";
 import { AgentError, isAgentError } from "./errors.js";
+import type { EvalGateRegistry } from "./evalGate.js";
+import { EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
 import { guardedStream } from "./guardrails.js";
 import { fitHistory } from "./historyFit.js";
 import type { OtlpSink } from "./otlpSink.js";
@@ -21,6 +23,10 @@ export type SendTurnInput = {
   author?: string | null;
   /** Where a new session came from: console, cli, mcp, schedule, or a provider id. */
   source?: string;
+  /** Where a new session points to; defaults to the author. Eval sessions point at their eval run or parent session. */
+  sourceRef?: string | null;
+  /** Overrides for a new eval session (needs `source: "eval"`). */
+  eval?: EvalSessionOverrides;
   onDelta?: (text: string) => void;
   onSessionOpened?: (sessionId: string) => void;
   /** Retry this earlier, interrupted turn: its user message is reused, not asked again. */
@@ -31,6 +37,8 @@ export type ConversationOptions = {
   service: AgentService;
   backend: ConversationBackend;
   otlpSink?: OtlpSink | undefined;
+  /** Eval tool gates by session id. An eval session without one is denied every tool. */
+  evalGates?: EvalGateRegistry;
   logError?: (message: string) => void;
 };
 
@@ -83,7 +91,8 @@ export class AgentConversation {
       if (!sessionId) {
         const opened = await service.openSession(input.projectRoot, input.agentId, {
           source: input.source ?? "console",
-          sourceRef: input.author ?? null,
+          sourceRef: input.sourceRef !== undefined ? input.sourceRef : (input.author ?? null),
+          ...(input.eval ? { eval: input.eval } : {}),
         });
         sessionId = opened.id;
         input.onSessionOpened?.(sessionId);
@@ -132,10 +141,31 @@ export class AgentConversation {
       if (span) service.recordSpan(input.projectRoot, span);
     };
     const toolStarts = new Map<string, Date>();
+    const childSessions = new Map<string, string>();
+    const childSessionOf = (call: ToolCall) => (isEvalSession(active.session) ? (childSessions.get(call.id) ?? childSessions.get(call.tool)) : undefined);
     let stopReason: { code: string; message: string } | undefined;
     let gateChain: Promise<unknown> = Promise.resolve();
 
     const gateOne = async (call: ToolCall): Promise<GateDecision> => {
+      if (active.session.source === EVAL_SESSION_SOURCE) {
+        const gate = this.options.evalGates?.get(sessionId);
+        if (!gate) return { allow: false, reason: "No eval policy is registered for this session." };
+        const decision = gate.decide(call, definition);
+        if (gate.recordOf(call.id)?.policyOutcome === "would_ask_first") {
+          const at = new Date();
+          record({
+            turnId: turn.id,
+            parentSpanId: rootId,
+            name: `approval ${call.tool}`,
+            kind: "gate",
+            status: "error",
+            startedAt: at,
+            endedAt: at,
+            attributes: { "stageflow.approval.outcome": "would_ask_first", "gen_ai.tool.name": call.tool },
+          });
+        }
+        return decision;
+      }
       if (!isToolGranted(definition, call.tool)) {
         return { allow: false, reason: `Tool ${call.tool} is not granted to this agent.` };
       }
@@ -189,6 +219,7 @@ export class AgentConversation {
         toolStarts.set(call.id, new Date());
       },
       toolFinished: (call, result) => {
+        if (active.session.source === EVAL_SESSION_SOURCE) this.options.evalGates?.get(sessionId)?.observeFinished(call, result);
         const isAgent = call.tool.startsWith("agent:");
         record({
           turnId: turn.id,
@@ -198,7 +229,11 @@ export class AgentConversation {
           status: result.ok ? "ok" : "error",
           startedAt: toolStarts.get(call.id) ?? new Date(),
           endedAt: new Date(),
-          attributes: { "gen_ai.tool.name": call.tool },
+          attributes: {
+            "gen_ai.tool.name": call.tool,
+            ...(isEvalSession(active.session) ? { "gen_ai.tool.call.id": call.id } : {}),
+            ...(childSessionOf(call) ? { "stageflow.sub_agent.session_id": childSessionOf(call)! } : {}),
+          },
           input: toJson(call.input),
           output: result.output,
         });
@@ -220,16 +255,25 @@ export class AgentConversation {
           },
         });
       },
-      delegate: async (agentId, message) => {
+      delegate: async (agentId, message, callId) => {
         assertDelegateAllowed(definition, agentId, this.depth);
         const child = new AgentConversation(this.options, this.depth + 1, controller.signal);
+        const inEval = isEvalSession(active.session);
+        const inherited: EvalSessionOverrides = { ...service.evalOverridesOf(active.session.id) };
+        delete inherited.revision;
         try {
           const detail = await child.send({
             projectRoot: input.projectRoot,
             agentId,
             text: message,
-            source: "agent",
+            source: inEval ? EVAL_SESSION_SOURCE : "agent",
             author: active.session.agentId,
+            ...(inEval ? { sourceRef: active.session.id, eval: inherited } : {}),
+            onSessionOpened: (childId) => {
+              childSessions.set(callId ?? `agent:${agentId}`, childId);
+              const parentGate = inEval ? this.options.evalGates?.get(sessionId) : undefined;
+              if (parentGate) this.options.evalGates!.set(childId, parentGate);
+            },
           });
           return [...detail.messages].reverse().find((m) => m.role === "assistant")?.text ?? "(no reply)";
         } catch (error) {
@@ -256,7 +300,7 @@ export class AgentConversation {
       const code = isAgentError(error) ? error.code : "agent.backend_failed";
       record({ turnId: turn.id, name: `invoke_agent ${definition.id}`, kind: "agent", status: "error", startedAt, endedAt: new Date(), attributes: { "error.type": code } });
       await service.completeTurn(input.projectRoot, turn.id, { status: "failed", errorCode: code });
-      this.exportLive(input.projectRoot, definition, turn.id);
+      this.exportLive(input.projectRoot, active.session, definition, turn.id);
       throw error;
     }
 
@@ -291,11 +335,11 @@ export class AgentConversation {
         errorCode: "agent.guardrail_blocked",
         ...(usage ? { usage, costUsd: usage.costUsd } : {}),
       });
-      this.exportLive(input.projectRoot, definition, turn.id);
+      this.exportLive(input.projectRoot, active.session, definition, turn.id);
       throw new AgentError("agent.guardrail_blocked", `Reply blocked by guardrail ${guard.pattern}`);
     }
 
-    const evalScores = await this.score(input.projectRoot, definition, turn.id, rootId, result, controller.signal, cancelled || stopReason !== undefined);
+    const evalScores = await this.score(input.projectRoot, definition, turn.id, rootId, result, controller.signal, cancelled || stopReason !== undefined || isEvalSession(active.session));
     const failed = stopReason !== undefined;
     endRoot(cancelled ? "cancelled" : failed ? "error" : "ok");
     const detail = await service.completeTurn(input.projectRoot, turn.id, {
@@ -305,7 +349,7 @@ export class AgentConversation {
       ...(usage ? { usage, costUsd: usage.costUsd } : {}),
       ...(evalScores.length > 0 ? { evalScores } : {}),
     });
-    this.exportLive(input.projectRoot, definition, turn.id);
+    this.exportLive(input.projectRoot, active.session, definition, turn.id);
     return detail;
   }
 
@@ -339,9 +383,9 @@ export class AgentConversation {
   }
 
   /** Best-effort push to the configured OTLP collector; a collector outage never fails a turn. */
-  private exportLive(projectRoot: string, definition: AgentDefinition, turnId: string): void {
+  private exportLive(projectRoot: string, session: { source: string }, definition: AgentDefinition, turnId: string): void {
     const sink = this.options.otlpSink;
-    if (!sink || !definition.observability.otlp || definition.observability.capture === "off") return;
+    if (!sink || isEvalSession(session) || !definition.observability.otlp || definition.observability.capture === "off") return;
     void (async () => {
       try {
         await sink(this.options.service.exportTurnOtlp(projectRoot, turnId));

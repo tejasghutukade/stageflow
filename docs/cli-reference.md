@@ -763,7 +763,7 @@ With `--json`, errors print `{ "error", "code" }` on stdout with the same exit c
 
 ## `sf validate`
 
-Validate catalog YAML (pipelines, their stages, and tasks).
+Validate catalog YAML (pipelines, their stages, tasks, and eval files).
 
 ```bash
 sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
@@ -789,6 +789,113 @@ Example:
 ```bash
 sf validate --strict --json
 ```
+
+## `sf eval` {#sf-eval}
+
+Validate, run and inspect [evals](evals.md). Like `sf run` and `sf runs`, `sf eval` is an HTTP client of the shared global Stageflow service (auto-started if nothing is listening), except `validate` and `engine`, which run locally.
+
+```bash
+sf eval list [--json]
+sf eval show <id|path> [--json]
+sf eval validate [<id|path>] [--json] [--strict]
+sf eval run <id|path> [--repeats <n>] [--judge <model>] [--model <id>] [--user-model <model>] [--allow-real-tools] [--max-cost <usd>] [--case <id> ...] [--tag <tag> ...] [--label <text>] [--no-wait] [--json]
+sf eval runs [<evalId>] [--json]
+sf eval runs show <evalRunId> [--json]
+sf eval runs cancel <evalRunId>
+sf eval runs delete <evalRunId>
+sf eval sort <evalRunId> [--classifier auto|jev|judge] [--limit <n>] [--resort] [--json]
+sf eval suggestions <evalRunId> [--status pending|accepted|dismissed] [--json]
+sf eval compare <evalRunIdA> <evalRunIdB> [--json]
+sf eval datasets [--json]
+sf eval engine status [--json]
+sf eval engine install
+```
+
+`<id|path>` is an eval id (the filename stem of `*.eval.yaml`) or a path to the file (anything containing `/` or `\` or ending in `.yaml`). Every subcommand also accepts `--project-root <id-or-path>` to pick the catalog project (default: the current directory). `--help` prints the usage and exits `0`; a usage error prints it and exits `1`.
+
+| Subcommand | Role |
+|------------|------|
+| `list` | One line per eval: `id`, status, valid or invalid, last pass rate, target |
+| `show` | The eval's YAML (`--json`: the full eval detail with findings) |
+| `validate` | Runs the eval and dataset checks locally. No Host, no model calls, free. See [YAML catalog: Evals](yaml-catalog.md#eval-validation-findings) |
+| `run` | Starts an eval run and, unless `--no-wait`, waits for it and prints the outcome |
+| `runs` | Lists eval runs (newest first), shows one, cancels one or deletes one |
+| `compare` | Compares two runs of the same eval; `a` is the baseline, `b` the candidate |
+| `datasets` | One line per dataset: `id`, format, cases, path |
+| `engine status` | Whether the eval engine is installed, its version, the pinned version and the Node check |
+| `engine install` | Installs the pinned engine (needs Node 22.22.0 or newer and network). Not available with `--json` |
+
+### `sf eval validate`
+
+With no argument, validates every eval in the catalog (`catalog.evals`, default `evals/`), including its dataset and target. With one argument, validates that eval. It uses the same output as `sf validate`: findings with `severity`, `code`, `file`, `message` and `category`, or `--json` for the machine-readable result.
+
+**Exit codes:** `0` no errors, `1` errors (or, with `--strict`, warnings that `--strict` promotes) or an eval that cannot be found.
+
+### `sf eval run`
+
+| Flag | Description |
+|------|-------------|
+| `--repeats <n>` | Executions per case (a positive integer; the allowed range is 1 to 10) |
+| `--judge <model>` | Judge model for rubric graders |
+| `--model <id>` | Replace the stage's model for this run. For an agent eval, replaces the agent's model |
+| `--user-model <model>` | Agent evals: the model that plays the user in `simulated` scenarios. Must be an `anthropic/…`, `openai/…` or `openrouter/…` model |
+| `--allow-real-tools` | Agent evals: your consent, for this run only, to an eval whose `conversation.tools` is `real`. Has no effect on other policies |
+| `--max-cost <usd>` | Cost limit in USD (a positive number) |
+| `--case <id>` | Run only this case. Repeat the flag for several |
+| `--tag <tag>` | Run only cases with this tag. Repeat the flag for several. Cannot be combined with `--case` |
+| `--label <text>` | Free-text label (up to 80 characters) |
+| `--no-wait` | Print the run id and return at once. The run continues on the Host |
+| `--json` | Machine-readable output |
+
+Overrides are recorded in the run's config snapshot. A run costs real money (stage calls plus judge calls; for an agent eval, agent turns, simulator calls and judge calls), bounded by the cost limit.
+
+**Real tools.** When the effective tool policy of an agent eval is `real` and `--allow-real-tools` is missing, the command exits `1` without starting a run: `EVAL_REAL_TOOLS_NOT_CONFIRMED: … Re-run with --allow-real-tools to confirm.` (`--json`: `{ "ok": false, "code": "EVAL_REAL_TOOLS_NOT_CONFIRMED", "message": … }`). With the flag, a `real` eval starts and prints `Warning: real tools can change files and call services from this machine.` to stderr. The eval file must also carry `conversation.allow_real_tools: true`. The safer-only overrides for `tools` and `approvals` are API and MCP fields; there is no CLI flag for them. Only one eval run is active per Host.
+
+While waiting, a terminal prints progress (`n/N results, $cost`) to stderr. **Ctrl+C cancels the run** on the Host (completed results are kept) and prints the final outcome.
+
+The outcome is one of `passed`, `below_threshold`, `failed`, `cancelled` or `budget_stopped`. With `--json` the document is:
+
+```json
+{
+  "outcome": "below_threshold",
+  "eval_run_id": "er_4f1c9a02b7d3",
+  "eval_id": "critique-sample",
+  "pass_rate": 0.75,
+  "pass_rate_ci": { "low": 0.52, "high": 0.98 },
+  "threshold": 0.8,
+  "results": { "executed": 16, "passed": 12, "errored": 0 },
+  "reliability": 0.625,
+  "cost_total": 0.2312,
+  "fingerprint": "9b41c0aa",
+  "url": "http://127.0.0.1:3847/#/evals/critique-sample/runs/3"
+}
+```
+
+For an **agent eval** the document also carries `target_kind: "agent"`, `agent_id`, `agent_revision`, `mean_turns`, `mean_tool_calls` and `tools_policy` (the effective tool policy). Stage documents do not have these keys. In human output the same facts print as two extra lines. See [Evals: Evals for agents](evals.md#evals-for-agents).
+
+`pass_rate`, `pass_rate_ci`, `threshold` and `reliability` are `null` when not available (for example no executed results, fewer than two cases, or one repeat). With `--no-wait --json` the document is `{ "eval_run_id", "status" }`. An invalid eval prints the same findings as `sf eval validate` (human or `--json`) and exits `1`.
+
+**Exit codes:** `0` the run completed and passed (pass rate at or above the threshold); `1` anything else: below threshold, failed, cancelled, stopped by the cost limit, an invalid eval, a missing engine or a Host error. `sf eval run` never exits `2`.
+
+Errors with `--json` are `{ "error", "code"?, "status"? }` on stdout, with exit `1`. Without `--json`, errors go to stderr as `CODE: message`. See [Evals: Troubleshooting](evals.md#troubleshooting) and [CI: evals](ci.md#evals-in-ci).
+
+### `sf eval runs`, `compare`, `datasets`
+
+`sf eval runs` prints one tab-separated line per run: eval id, `#run_number`, status, pass rate, cost, `eval_run_id`. Filter by eval id. `sf eval runs show` prints the run's id and status, the reason when it stopped early, pass rate, progress, cost and fingerprint; with `--json` it is the full run detail (status, progress, stats, config snapshot, per-grader summary). `cancel` and `delete` print one line and have no `--json`. `sf eval compare --json` and the default output are the comparison document (verdict, per-grader and per-case changes, stage diff, warnings). `sf eval datasets` lists dataset files with their case counts.
+
+### `sf eval sort`, `suggestions`
+
+`sf eval sort <evalRunId>` sorts the failed and errored results of a finished run into suggested buckets and failure types. It is manual only, sends each failed result to TypeSafe Jev or the run's judge model (see [Evals: Sort failures automatically](evals.md#sort-failures)), and tags nothing. `--classifier` is `auto` (default), `jev` or `judge`; `--limit` caps results sorted (default 200); `--resort` also re-sorts results that already have a pending suggestion. It prints a summary line (sorted, skipped, failed, classifier and model, sorting cost) then one tab-separated line per new suggestion: case id, `#repeat`, bucket, failure type, confidence, status. `--json` prints the API document. `sf eval suggestions <evalRunId>` lists them (`--status` filters) and ends with the counts per bucket and status. Exit `0` on success, `1` on any error (`EVAL_RUN_ACTIVE`, `EVAL_CLASSIFIER_UNAVAILABLE`, an unknown run, bad usage); see [CI](ci.md#sorting-failures-in-ci). Accept or dismiss suggestions in the console or with the API.
+
+For agent evals, `sf eval show` first prints `Agent <id> r<revision> (<model>)` and the conversation settings; `sf eval runs show` prints the agent, the conversation settings from the snapshot, and `mean turns` and `mean tool calls`. `sf eval compare` of two agent runs adds an `agent_diff` (changed definition keys and an instructions line diff) in place of `stage_diff`; runs of different targets fail with `EVAL_COMPARE_MISMATCH`. There is no `sf eval new`: write agent evals in the console or by hand.
+
+### `sf eval engine status`
+
+```json
+{ "installed": true, "version": "0.124.0", "pinned": "0.124.0", "node": "22.22.0", "node_ok": true, "install_command": "sf eval engine install" }
+```
+
+Exit `0` whether or not the engine is installed. `sf eval engine install` exits `0` on success (`Installed promptfoo 0.124.0`, or "already installed") and `1` with `EVAL_NODE_TOO_OLD` or an install error.
 
 ## `sf doctor`
 

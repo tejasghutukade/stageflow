@@ -14,6 +14,8 @@ import type { LoadIssue } from "./loadOutcome.js";
 import { loadStageOutcome } from "./loadStage.js";
 import { loadTaskOutcome } from "./loadTask.js";
 import { loadTriggerOutcome } from "./loadTrigger.js";
+import { loadEvalCatalog } from "./evalCatalog.js";
+import { evalFindingsFromIssues } from "./validateEval.js";
 import { readYamlObject } from "./readYamlObject.js";
 import { resolveCatalogContext } from "./resolveCatalogContext.js";
 import { getCatalogScanPaths } from "./browseCatalog.js";
@@ -36,7 +38,7 @@ import { inspectMemorySync, memoryHome } from "../memory/host.js";
 
 export type ValidationSeverity = "error" | "warning";
 
-export type ValidationCategory = "pipeline" | "stage" | "catalog" | "task" | "trigger";
+export type ValidationCategory = "pipeline" | "stage" | "catalog" | "task" | "trigger" | "eval" | "dataset";
 
 export type ValidationFindingCode =
   | "pipeline.invalid_shape"
@@ -177,7 +179,7 @@ export function effectiveSeverity(
   if (
     strict &&
     finding.severity === "warning" &&
-    STRICT_CATALOG_WARNINGS.has(finding.code)
+    (STRICT_CATALOG_WARNINGS.has(finding.code) || finding.category === "eval")
   ) {
     return "error";
   }
@@ -417,6 +419,9 @@ export function findingsFromLoadIssues(
           issue,
         ),
       ];
+    }
+    if (issue.category === "eval") {
+      return evalFindingsFromIssues(relPath(cwd, absPath), [issue]);
     }
     if (issue.category === "catalog") {
       const code = issue.code as ValidationFindingCode;
@@ -1117,6 +1122,10 @@ async function validateManifestAll(
         }),
       );
     }
+  }
+
+  for (const entry of await loadEvalCatalog(manifest)) {
+    findings.push(...entry.findings);
   }
 
   return findings;

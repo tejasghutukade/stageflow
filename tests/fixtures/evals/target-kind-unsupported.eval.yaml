@@ -1,0 +1,9 @@
+version: 1
+id: target-kind-unsupported
+target:
+  kind: team
+  name: reviewer
+dataset: ../datasets/review-diffs.dataset.jsonl
+graders:
+  - id: output-schema
+    type: schema

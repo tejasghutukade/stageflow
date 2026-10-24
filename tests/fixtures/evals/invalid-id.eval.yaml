@@ -1,0 +1,10 @@
+version: 1
+id: Bad_Id
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+dataset: ../datasets/review-diffs.dataset.jsonl
+graders:
+  - id: output-schema
+    type: schema

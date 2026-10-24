@@ -55,6 +55,8 @@ export type CatalogScanPaths = {
   pipelinePaths: string[];
   taskPaths: string[];
   triggerPaths: string[];
+  evalPaths: string[];
+  datasetPaths: string[];
 };
 
 function repoRelPath(projectRoot: string, absPath: string): string {
@@ -103,12 +105,14 @@ export async function getCatalogScanPaths(
   if (!catalogReady(ctx)) {
     return null;
   }
-  const [pipelinePaths, taskPaths, triggerPaths] = await Promise.all([
+  const [pipelinePaths, taskPaths, triggerPaths, evalPaths, datasetPaths] = await Promise.all([
     scanCatalogPaths(ctx.manifest, "pipeline"),
     scanCatalogPaths(ctx.manifest, "task"),
     scanCatalogPaths(ctx.manifest, "trigger"),
+    scanCatalogPaths(ctx.manifest, "eval"),
+    scanCatalogPaths(ctx.manifest, "dataset"),
   ]);
-  return { pipelinePaths, taskPaths, triggerPaths };
+  return { pipelinePaths, taskPaths, triggerPaths, evalPaths, datasetPaths };
 }
 
 async function listTasksFromManifest(

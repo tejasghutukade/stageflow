@@ -34,7 +34,9 @@ Each session keeps one Pi model session on the revision it started with, and eve
 
 ## Traces and evals
 
-Every turn records a span tree, and `evals.groundedness` can score replies. See [Agent observability](agent-observability.md). The **Agent sessions** page in the sidebar lists sessions across all agents (`GET /api/agents/sessions`, same filters as the per-agent list plus `agent`); an agent's own page lists only its sessions.
+Every turn records a span tree, and `evals.groundedness` can score replies. See [Agent observability](agent-observability.md).
+
+You can also **evaluate an agent**: play scripted or simulated users against it, grade the conversations and tool calls, and compare a change to its instructions, model or tools before you save it. See [Evals for agents](evals.md#evals-for-agents). Each eval conversation runs in a hidden **eval session** with tools read-only by default; eval sessions do not appear in the lists below, the Inbox or counts ([Agent observability: eval sessions](agent-observability.md#eval-sessions)). An agent's page shows its evals and an **Evaluate** button. The **Agent sessions** page in the sidebar lists sessions across all agents (`GET /api/agents/sessions`, same filters as the per-agent list plus `agent`); an agent's own page lists only its sessions.
 
 ## Channels (inbound)
 

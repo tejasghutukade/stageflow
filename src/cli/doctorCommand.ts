@@ -16,6 +16,8 @@ import {
 } from "../preflight/pipelinePreflight.js";
 import { loadPipelineOutcome } from "../config/loadPipeline.js";
 import { MCP_CATALOG_FILENAME } from "../config/resolveStageMcpServers.js";
+import { MIN_NODE } from "../evals/engine/promptfoo/pinned.js";
+import { engineStatus } from "../evals/engine/promptfoo/status.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { createRunStore } from "../runstore/createStore.js";
 import {
@@ -184,6 +186,30 @@ function nodeVersionCheck(): DoctorCheck {
     id: "node",
     status: "warn",
     message: `Node ${process.version}; engines floor may differ from Pi/better-sqlite3 (not bumping engines.node)`,
+  };
+}
+
+function evalEngineCheck(home: string): DoctorCheck {
+  const status = engineStatus({ home });
+  if (!status.installed) {
+    return {
+      id: "eval_engine",
+      status: "skipped",
+      message: `Eval engine not installed (optional; promptfoo ${status.pinned}). Run \`${status.installCommand}\``,
+    };
+  }
+  if (!status.nodeOk) {
+    return {
+      id: "eval_engine",
+      status: "warn",
+      code: "EVAL_NODE_TOO_OLD",
+      message: `Eval engine promptfoo ${status.version} installed, but Node ${status.node} is below the ${MIN_NODE} evals need`,
+    };
+  }
+  return {
+    id: "eval_engine",
+    status: "pass",
+    message: `Eval engine promptfoo ${status.version}`,
   };
 }
 
@@ -422,6 +448,7 @@ export async function runDoctorChecks(options?: {
   checks.push(tlsCheck(env));
   checks.push(await freeDiskCheck(home, env));
   checks.push(...(await mcpCommandsCheck(cwd)));
+  checks.push(evalEngineCheck(home));
 
   let preflight: PipelinePreflightResult | undefined;
   if (options?.pipeline !== undefined) {

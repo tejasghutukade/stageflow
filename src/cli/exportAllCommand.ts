@@ -194,7 +194,7 @@ export async function* iterateExportNdjson(options: {
   now?: Date;
 }): AsyncGenerator<string> {
   yield `${JSON.stringify(buildExportHeader(options.filter, options.now ?? new Date()))}\n`;
-  const runs = await options.store.listRuns(options.filter);
+  const runs = await options.store.listRuns({ ...options.filter, origin: "any" });
   for (const summary of runs) {
     const detail = await options.store.readRun(summary.run_id);
     const pipelineBody = await options.store.readPipelineBody(summary.run_id);

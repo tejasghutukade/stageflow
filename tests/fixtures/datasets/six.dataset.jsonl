@@ -1,0 +1,11 @@
+{"tags": ["bug", "auth"], "expected": {"findings": ["null-deref"], "verdict": "reject"}, "input": {"files": ["auth.ts", "login.ts"], "plan": "Fix null check", "diff": "--- a/auth.ts\n+++ b/auth.ts\n@@ user.name"}, "title": "null dereference in auth.ts", "id": "c001"}
+
+{"tags": ["refactor"], "expected": {"findings": [], "verdict": "approve"}, "input": {"files": ["util.ts"], "plan": "Rename helper", "diff": "rename foo -> bar, with \"quotes\", and commas"}, "title": "clean rename", "id": "c002"}
+
+{"tags": ["refactor", "docs"], "expected": {"findings": [], "verdict": "approve"}, "input": {"plan": "Multi-line diff", "diff": "line one\nline two\nline three"}, "id": "c003"}
+
+{"expected": {"findings": ["no-tests"], "verdict": "reject"}, "input": {"files": [], "plan": "Add helper", "diff": "+function add(a,b){return a+b}"}, "title": "missing test", "id": "c004"}
+
+{"tags": ["security"], "expected": {"findings": ["sql-injection"], "verdict": "reject"}, "input": {"plan": "Add query", "diff": "+SELECT * FROM users WHERE id = ' + id"}, "id": "c005"}
+
+{"tags": ["docs"], "expected": {"findings": [], "verdict": "approve"}, "input": {"plan": "Fix typo", "diff": "- // teh\n+ // the"}, "title": "comment typo", "id": "c006"}

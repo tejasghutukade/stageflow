@@ -1,0 +1,11 @@
+version: 1
+id: target-invalid
+target:
+  kind: stage
+  pipeline: ../pipelines/feature-ship.pipeline.yaml
+  stage: review
+  file: ../stages/review.yaml
+dataset: ../datasets/review-diffs.dataset.jsonl
+graders:
+  - id: output-schema
+    type: schema

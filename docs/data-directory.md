@@ -19,7 +19,7 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 
 | Path under `$STAGEFLOW_HOME` | Keep / disposable | Notes |
 |------------------------------|-------------------|-------|
-| `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode), including the durable **projects registry** and the agent tables ([agent](agents.md#storage)): `agent_definitions`, `agent_revisions`, `agent_sessions`, `agent_messages`, `agent_turns`, `agent_spans`, `agent_eval_scores`, `agent_approvals`, `agent_executed_payloads`, `agent_outbound_sends`, `agent_inbound_events`, `agent_deliveries`, `agent_schedules`. Agent YAML stays in the project; only history is here |
+| `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode), including the durable **projects registry** and the agent tables ([agent](agents.md#storage)): `agent_definitions`, `agent_revisions`, `agent_sessions` (eval conversations are rows here with `source = 'eval'`, hidden from agent lists and removed with their eval run), `agent_messages`, `agent_turns`, `agent_spans`, `agent_eval_scores`, `agent_approvals`, `agent_executed_payloads`, `agent_outbound_sends`, `agent_inbound_events`, `agent_deliveries`, `agent_schedules`, and the eval tables (`eval_runs`, `eval_cases`, `eval_results`, `eval_grades`, `eval_result_reviews`, `eval_result_tags` and their support tables). Agent YAML stays in the project; only history is here |
 | `settings.json` | **keep** | Global settings (credential source, concurrency, …) |
 | `agent/auth.json` | **keep** | Operator auth file when this directory is the credential root |
 | `connections.yaml` | **keep** | Host-level [communication channel](channels.md) connections (provider settings, `env:`/`store:` secret references; never a secret value). A project-root `connections.yaml` or `STAGEFLOW_CONNECTIONS_FILE` can replace it. **Not included in `sf backup`.** |
@@ -33,6 +33,8 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `secrets/mcp-secrets.json` | **keep** | Write-only store for the values behind those `${NAME}` references (directory `0700`, file `0600`, plaintext at the same trust level as `channel-secrets.json`) |
 | `secrets/mcp-oauth.key` | **keep** | Host key for the encrypted OAuth store (`0600`); `PI_MCP_ADAPTER_OAUTH_FILE_KEY` overrides it |
 | `runs/` | disposable | Per-run workspaces, stage attempts, artifacts |
+| `eval-engine/` | disposable | The eval engine installed by `sf eval engine install`: `eval-engine/<promptfoo-version>/` (about 1.2 GB, pinned version `0.124.0`). Re-installable. The Docker image bakes it in. See [Evals](evals.md#the-engine) |
+| `eval-runs/` | disposable | Work directory of an eval run in progress (`eval-runs/<evalRunId>/`: generated engine config, results, logs). Removed when the run ends unless `STAGEFLOW_EVALS_KEEP_WORKDIR=1`. Eval results themselves are in `state.db` |
 | `a2a-artifacts/` | disposable | A2A artifact bytes |
 | `repos/` | disposable | Shared bare-clone cache (`repos/<host>/<owner>/<repo>.git`); Host-owned, used for repository-bound runs |
 | `worktrees/` | disposable | Per-run checkouts (`worktrees/<runId>`); Host-owned, created on repository-bound start. When a run reaches `succeeded`, Stageflow may reclaim the worktree (keeping `run_branch`); the `checkout_root` column can still be recorded after the directory is gone. Failed/cancelled runs keep their worktrees until retention SLIM. |

@@ -417,6 +417,8 @@ export type CatalogModel = {
   reasoning?: boolean;
   /** The provider runs its own file and shell tools, so agent grants cannot hold. */
   nativeTools: boolean;
+  /** The eval engine can use this model as a judge. */
+  judge_capable?: boolean;
 };
 
 export type CatalogProvider = {
@@ -2272,6 +2274,7 @@ export async function writeCatalogFile(input: {
   };
 }
 
+export * from "./evalsClient";
 export function fetchMemories(): Promise<{ memories: MemorySummary[] }> {
   return api("/api/memories");
 }

@@ -17,6 +17,7 @@ import { createPiAgentRuntime } from "./runtime/piRuntime.js";
 import { AgentService, type AgentEnvironment } from "./service.js";
 import type { ConversationBackend } from "./sessions.js";
 import { getModelCatalog } from "../models/catalog.js";
+import { EvalGateRegistry } from "./evalGate.js";
 import { defaultAgentProjectRoot } from "./projectRoot.js";
 import { PublicWebChat } from "./webChat/publicChat.js";
 import { AgentStore } from "./store.js";
@@ -26,6 +27,8 @@ export type AgentHostContext = {
   inbound: AgentInboundRouter;
   publicChat: PublicWebChat;
   chat: AgentChatController;
+  /** Eval tool gates by session id; the eval runner registers a gate for each eval session it opens. */
+  evalGates: EvalGateRegistry;
   backend: ConversationBackend;
   /** Streams held open to AgentMail and iMessage; absent unless the Host listens (not in tests). */
   channelListeners?: ChannelSupervisor;
@@ -121,9 +124,11 @@ export function createAgentHostContext(options: {
           }
         : {}),
     });
+  const evalGates = new EvalGateRegistry();
   const chat = new AgentChatController({
     service,
     backend,
+    evalGates,
     otlpSink: "otlpSink" in options ? options.otlpSink : otlpSinkFromEnv(),
     logError: (message) => console.error(message),
   });
@@ -181,7 +186,7 @@ export function createAgentHostContext(options: {
   channelListeners?.start();
   if (options.listenOnChannels) delivery.start();
   if (options.listenOnChannels) void inbound.resumeInterrupted().catch((error) => console.error(`agent resume failed: ${String(error)}`));
-  return { service, chat, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), delivery, stop: async () => {
+  return { service, chat, evalGates, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), delivery, stop: async () => {
       delivery.stop();
       await channelListeners?.stop();
       // The Host owns every runtime session's lifetime: nothing outlives it.

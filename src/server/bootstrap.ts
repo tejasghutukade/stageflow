@@ -28,6 +28,13 @@ import {
 import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { consoleStageBrowserSupport } from "../browser/stageBrowserEnv.js";
 import { RunManager } from "../runtime/runManager.js";
+import { EvalRunManager } from "../evals/manager.js";
+import { createStageCaseRunner } from "../evals/runner/stageCaseRunner.js";
+import { getEngine } from "../evals/engine/index.js";
+import { RunTokenRegistry } from "../evals/engine/promptfoo/runTokens.js";
+import { EVAL_DEFAULT_ENGINE } from "../evals/manager.js";
+import type { EvalInternalServices } from "./evalInternalRoutes.js";
+import { PACKAGE_VERSION } from "../package-meta.js";
 import { PI_CODING_AGENT_DIR_ENV } from "../runtime/stageRoots.js";
 import {
   ScheduleSource,
@@ -69,6 +76,9 @@ import {
 import { assertTmpdirUsable } from "../runstore/assertTmpdir.js";
 import { logger as rootLogger } from "../logging/logger.js";
 import { getModelCatalog } from "../models/catalog.js";
+import { createAgentCaseRunner } from "../evals/runner/agentCaseRunner.js";
+import { createEvalCaseRunner } from "../evals/runner/caseRunner.js";
+import { defaultLoadJudgePrices } from "../evals/engine/promptfoo/judgeServices.js";
 import { createAgentHostContext, type AgentHostContext } from "../agents/hostContext.js";
 import type { ConversationBackend } from "../agents/sessions.js";
 
@@ -105,6 +115,12 @@ export type StageflowHostBootstrap = {
   store?: RunStore;
   /** Absent when `serveBlocked` — no RunManager lifecycle/resume. */
   manager?: RunManager;
+  /** Eval runs: shared with HTTP routes and MCP. Absent when `manager` is. */
+  evalRunManager?: EvalRunManager;
+  /** Services for the internal eval callback route; absent when `evalRunManager` is. */
+  evalServices?: EvalInternalServices;
+  /** Set once the HTTP host is listening so the promptfoo provider knows where to call back. */
+  setEvalCallbackBase?: (baseUrl: string) => void;
   runChangeBus: RunChangeBus;
   mcpStateless: boolean;
   providerAuthContext: ProviderAuthContext | undefined;
@@ -400,6 +416,51 @@ export async function bootstrapStageflowHost(
   await manager.autoResumeInterruptedStages();
   await manager.resumeStalledSchedules();
   await manager.reenqueuePersistedQueuedRuns();
+  const evalLog = rootLogger.child({ component: "evals" });
+  const evalStageRunner = createStageCaseRunner({ manager, store });
+  const evalAgentRunner = createAgentCaseRunner({
+    host: () => agentHost,
+    loadPrices: defaultLoadJudgePrices,
+  });
+  const evalRunner = createEvalCaseRunner({ stage: evalStageRunner, agent: evalAgentRunner });
+  const evalTokens = new RunTokenRegistry();
+  let evalCallbackBase = "";
+  const evalRunManager = new EvalRunManager({
+    store,
+    stageRunner: evalRunner,
+    agents: () => agentHost?.service,
+    engines: (name, engineOptions) =>
+      getEngine(
+        name,
+        name === EVAL_DEFAULT_ENGINE
+          ? {
+              tokens: evalTokens,
+              callbackUrl: () => `${evalCallbackBase}/api/evals/internal/run-case`,
+              home: ctx.globalHome,
+              ...(engineOptions as Record<string, unknown> | undefined),
+            }
+          : engineOptions,
+      ),
+    stageflowVersion: PACKAGE_VERSION,
+    workDirRoot: path.join(ctx.globalHome, "eval-runs"),
+    logger: {
+      info: (event, msg) => evalLog.info(event, msg),
+      warn: (event, msg) => evalLog.warn(event, msg),
+      error: (event, msg) => evalLog.error(event, msg),
+    },
+  });
+  const recoveredEvalRuns = await evalRunManager.recoverOnBoot().catch((err: unknown): string[] => {
+    evalLog.warn("eval.recover_failed", err instanceof Error ? err.message : String(err));
+    return [];
+  });
+  const evalServices: EvalInternalServices = {
+    tokens: evalTokens,
+    runner: evalRunner,
+    isRunning: (evalRunId) => evalRunManager.isExecuting(evalRunId),
+  };
+  const setEvalCallbackBase = (baseUrl: string): void => {
+    evalCallbackBase = baseUrl.replace(/\/+$/, "");
+  };
   await warnDurableRootDiskIfNeeded(ctx.globalHome, { env });
   const gcInterval = startPeriodicRunGc(manager, gcIntervalMsFromEnv(env));
   const stopGcInterval = () => {
@@ -510,6 +571,7 @@ export async function bootstrapStageflowHost(
           },
         })
       : undefined;
+  if (agentHost) void evalRunManager.sweepAgentSessions(recoveredEvalRuns);
   const mcpStateless = resolveMcpStateless({
     mcpStateless: options.mcpStateless,
   });
@@ -522,6 +584,7 @@ export async function bootstrapStageflowHost(
       runChangeBus,
       providerAuthContext: options.providerAuthContext,
       projectRoot: rootDir,
+      evalRunManager,
       ...(agentHost
         ? {
             agentService: agentHost.service,
@@ -550,6 +613,9 @@ export async function bootstrapStageflowHost(
     isGitProject,
     store,
     manager,
+    evalRunManager,
+    evalServices,
+    setEvalCallbackBase,
     runChangeBus,
     mcpStateless,
     providerAuthContext: options.providerAuthContext,

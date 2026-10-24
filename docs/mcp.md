@@ -208,6 +208,36 @@ A session id only opens under the agent it belongs to: `get_agent_session`, `sto
 
 See [Agents](agents.md). The REST, CLI and MCP surfaces side by side are in [Agent API](agent-api.md#cli-mcp-and-rest-side-by-side).
 
+### Eval tools {#eval-tools}
+
+Ten tools cover [evals](evals.md). They use the same service as the REST routes in [Evals: HTTP API](evals.md#http-api). Every tool takes an optional `project_root` where it names an eval (omit it to use the Host default; see [Catalog roots](#catalog-roots-and-project_root)).
+
+**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "error", "code", "findings"? }`. Branch on `code`: `EVAL_NOT_FOUND`, `EVAL_RUN_NOT_FOUND`, `EVAL_INVALID` (with `findings`), `EVAL_RUN_ACTIVE`, `EVAL_REAL_TOOLS_NOT_CONFIRMED`, `EVAL_ENGINE_UNAVAILABLE`, `EVAL_NODE_TOO_OLD`, `invalid_request`, and the catalog path codes in [Error codes](#error-codes). A Host that does not run evals answers `EVAL_ENGINE_UNAVAILABLE`.
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `list_evals` | `{ project_root? }` | `{ items }`: one per eval with target, dataset size, validity, status, last-run headline and trend |
+| `get_eval` | `{ eval_id, project_root? }` | Parsed definition, raw YAML, file hash, validation findings, run count and last run |
+| `validate_eval` | `{ eval_id?, yaml?, project_root? }` | `{ findings }`. Exactly one of `eval_id` (a file in the catalog) or `yaml` (unsaved text). Calls no model and writes no files |
+| `run_eval` | `{ eval_id, repeats?, judge?, model?, user_model?, allow_real_tools?, tools?, approvals?, max_cost_usd?, case_ids?, tags?, label?, wait?, timeout_ms?, project_root? }` | `{ eval_run_id }`, or with `wait: true` the finished run detail, or `{ eval_run_id, status: "timeout" }` |
+| `get_eval_run` | `{ eval_run_id }` | Status, progress, stats, cost, config snapshot and per-grader summary |
+| `list_eval_runs` | `{ eval_id?, status?, limit? }` | `{ items }`: run headlines (status, pass rate, cost), newest first |
+| `get_eval_results` | `{ eval_run_id, status?, grader?, limit?, cursor? }` | `{ items, next_cursor }`: one row per case with pass state, score and failing graders |
+| `get_eval_result` | `{ eval_run_id, case_id }` | One case in full: input, expected, and every repeat's output, grades, cost and review |
+| `cancel_eval_run` | `{ eval_run_id }` | The run detail once it has stopped (waits up to 5 seconds) |
+| `compare_eval_runs` | `{ a, b }` | The comparison: verdict, per-grader and per-case changes, stage diff, warnings. `a` is the baseline |
+| `sort_eval_failures` | `{ eval_run_id, classifier?, only_unsorted?, limit? }` | `{ batch_id, classifier, model, sorted, skipped, failed, triage_cost_usd, suggestions }`. External and costs money; see below |
+| `get_eval_failure_suggestions` | `{ eval_run_id, status? }` | `{ items, summary }`: suggested bucket and failure type per failed result, with counts |
+| `get_eval_failure_sort_status` | `{ eval_run_id }` | Which classifiers can run (`jev`, `judge`), the names (never values) of the key sources, and the `auto` default |
+
+`sort_eval_failures` is an **external, manual-only action** like `run_eval`: it sends each failed result's case, output and grader reasons to TypeSafe Jev (about $0.04 per million input tokens, needs a TypeSafe key) or to the run's judge model (real model cost). It tags nothing; suggestions are accepted by the author in the console or API. It fails `EVAL_RUN_ACTIVE` while the run is running and `EVAL_CLASSIFIER_UNAVAILABLE` when neither classifier is available. See [Evals: Sort failures automatically](evals.md#sort-failures).
+
+`run_eval` **calls models and may cost real money** (stage calls plus judge calls), bounded by `max_cost_usd` (default 2). Only one eval run is active per Host; a second start fails `EVAL_RUN_ACTIVE`. `repeats` is 1 to 10, `label` up to 80 characters, `timeout_ms` up to 1,800,000 (default 600,000). With `wait: false` (the default) poll `get_eval_run` until `status` is `completed`, `failed`, `cancelled` or `budget_stopped`. A run that finished is passed when `passed` is true; for a CI-style verdict read `stats.pass_rate` against `config.settings.pass_threshold`. `list_evals`, `get_eval`, `validate_eval`, `get_eval_run`, `list_eval_runs`, `get_eval_results`, `get_eval_result` and `compare_eval_runs` are read-only and free; `run_eval` and `cancel_eval_run` change state. Installing the eval engine is CLI-only (see [CLI-only capabilities](#cli-only-capabilities-decision-table)).
+
+**Agent evals.** The same ten tools take an eval whose target is an agent; `list_evals` and `get_eval` return the agent variant of the target (`agent_id`, name, model, revision) and the conversation settings, `get_eval_run` carries `mean_turns` and `mean_tool_calls` in its stats, and `get_eval_result` returns the stored conversation (messages, tool calls with their outcome, final reply, stop reason, usage). For an agent eval `model` replaces the agent's model. `run_eval` adds four inputs: `user_model` (the model that plays the user), `allow_real_tools` (your consent, per run, to `conversation.tools: real`; the eval file must also carry `allow_real_tools: true`, else `EVAL_REAL_TOOLS_NOT_CONFIRMED` or `EVAL_INVALID`), and the safer-only `tools` (`read_only` or `mocked`) and `approvals` (`deny` or `record_only`); an override that would be less safe than the file is `EVAL_INVALID`. An agent run calls the agent's model, a simulator model and the judge, so it can cost much more than a stage run, and tools are read-only by default. MCP still writes no eval or dataset files, and agents that run inside an eval are never granted `run_eval`. See [Evals: Evals for agents](evals.md#evals-for-agents).
+
+**Toolkit groups.** For [agent tool grants](agent-runtime.md#stageflow-tools): `evals.read` (the ten read-only tools, including `get_eval_failure_suggestions` and `get_eval_failure_sort_status`) and `evals.run` (`run_eval`, `sort_eval_failures`, `cancel_eval_run`). Granting `evals.run` lets an agent spend money, so it is separate from reading.
+
 ### Pipeline authoring tools {#pipeline-authoring-tools}
 
 Edit pipelines and tasks straight on disk, with the Workshop's builders and validation: the tool loads the package, applies the same builder the Workshop uses, and writes it back through the Workshop's publish path. Nothing is written when validation fails unless `allow_invalid` is set. Paths are relative to the Host's project root and POSIX style (for example `workshop/release/release.pipeline.yaml`).
@@ -1141,6 +1171,7 @@ Network errors from `/mcp` and `/api/*` include a stable snake_case `code` along
 | `command_not_on_path` | Doctor / MCP command missing |
 | `not_ready` | `/readyz` failing check |
 | `busy_capacity` / `busy_checkout` / `aborted` | Unchanged admission codes |
+| `EVAL_*`, `FILE_CHANGED`, `DATASET_NOT_FOUND` | Eval request errors (`EVAL_INVALID`, `EVAL_RUN_ACTIVE`, `EVAL_ENGINE_UNAVAILABLE`, `EVAL_NODE_TOO_OLD`, `EVAL_NOT_FOUND`, `EVAL_RUN_NOT_FOUND`). See [Eval tools](#eval-tools) |
 | `internal_error` | Uncoded internal failure |
 
 ## CLI-only capabilities (decision table)
@@ -1152,6 +1183,7 @@ In a container, anything that is CLI-only means `docker exec`. A remote harness 
 | `sf graph` | **Not MCP.** Use `describe_pipeline` (definition DAG) or `get_run` / `pipeline_track` (per-run shape). | `sf graph` is a human terminal ASCII render of the same resolved DAG. A second rendering tool would spend MCP context on data the harness already has as JSON. |
 | `sf migrate-yaml` | **`docker exec` / laptop only.** | Rewrites checkout YAML in place and shells `git status` to refuse dirty trees. An API that mutates a caller's repository from a request crosses the "repository content is untrusted input" line. Authors migrate before commit. |
 | `sf skills install` | **`docker exec` / image bake only** for durable host skills. Prefer **run-scoped skills** on `start_run` (`skills` param) for harnesses. | Install copies into `.pi/skills` on disk (operator or derived-image path). Harnesses should ship skill bytes with the start call — not install into the container. Use `list_skills` to inspect resolution (run \| checkout \| host). |
+| `sf eval engine install` | **`docker exec` / laptop only** (the Docker image bakes the engine in). | It runs `npm install` of a ~1.2 GB package into `$STAGEFLOW_HOME/eval-engine/`. A network call that installs software is not something a tool request should trigger. A missing engine makes `run_eval` fail `EVAL_ENGINE_UNAVAILABLE`. |
 | `sf a2a validate` / `list` / `add-caller` | **`docker exec` only** for mutate/validate. Read surface: `GET /api/a2a/status` (`read` scope). | A2A config is read once at Host boot by design (no hot reload). A mutating API for config that only applies after restart is a trap; `add-caller` writes deployment config (`a2a.yaml`), not a runtime call. |
 | Provider login — API key | **No MCP login tool.** Configure at Host boot via `STAGEFLOW_PROVIDER_<ID>_API_KEY` / `_FILE` ([Providers](providers.md#non-interactive-host-boot-credentials)). | Container path is env/file at boot (Slot 7), not an interactive MCP call. `list_providers` remains read-only inspect. |
 | Provider login — OAuth | **`docker exec` only.** | Terminal- or browser-driven flow; no headless paste-code API. Once-per-deployment operator action. |

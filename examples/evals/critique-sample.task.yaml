@@ -1,0 +1,4 @@
+id: critique-sample
+goal: Review a draft specification
+input:
+  draft: Users sign in with email and password. The server returns a session token that stays valid until the user signs out.

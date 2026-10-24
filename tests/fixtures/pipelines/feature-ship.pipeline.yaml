@@ -1,0 +1,4 @@
+id: feature-ship
+stages:
+  - id: review
+    uses: ../stages/review.yaml

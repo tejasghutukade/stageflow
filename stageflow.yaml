@@ -9,6 +9,10 @@ catalog:
     - workshop
   triggers:
     - examples
+  evals:
+    - examples/evals
+  datasets:
+    - examples/evals
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
@@ -19,4 +23,5 @@ catalog:
     - examples/stage-mcp/stage-mcp-dead.pipeline.yaml
     - examples/stage-mcp/stage-mcp-dead.task.yaml
     - examples/channels-smoke
+    - examples/evals/support-sample.eval.yaml
     - examples/memory

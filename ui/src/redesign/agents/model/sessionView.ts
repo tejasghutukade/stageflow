@@ -141,3 +141,11 @@ export function spanColor(span: Pick<AgentSpan, "kind" | "status">): string {
   if (span.status === "error") return "bg-[var(--sf-fail)]";
   return SPAN_COLOR[span.kind] ?? "bg-[var(--sf-text-3)]";
 }
+
+export type ComposerMode = "eval_readonly" | "disabled" | "open";
+
+/** Eval sessions are read only for operators; otherwise the composer follows whether the agent is enabled. */
+export function composerMode(source: string | undefined, agentEnabled: boolean): ComposerMode {
+  if (source === "eval") return "eval_readonly";
+  return agentEnabled ? "open" : "disabled";
+}

@@ -24,7 +24,7 @@ The **Workshop model** (see [Workshop Author, Model](workshop.md#model)) and how
 
 ## Providers
 
-Connect, disconnect and inspect Pi model providers (`pi_home` vs `sf_owned`). See [Providers](providers.md).
+Connect and inspect Pi model providers. A connected provider's **Provider actions** menu has Replace API key, Sign in again and Disconnect (which asks for confirmation). See [Providers](providers.md#console).
 
 ## Concurrency
 

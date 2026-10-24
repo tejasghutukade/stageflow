@@ -18,7 +18,7 @@ export type TurnHooks = {
   toolFinished(call: ToolCall, result: { ok: boolean; output: string }): void;
   modelFinished(info: { startedAt: Date; endedAt: Date; inputTokens: number; outputTokens: number; costUsd: number; model?: string }): void;
   /** Run another agent for a `agent:<id>` call and return its reply. */
-  delegate(agentId: string, message: string): Promise<string>;
+  delegate(agentId: string, message: string, callId?: string): Promise<string>;
 };
 
 export type CompleteInput = {
@@ -38,7 +38,14 @@ export type ConversationBackend = {
   id: "pi" | "claude";
   complete(input: CompleteInput): Promise<CompleteResult>;
   /** One-shot judgement with no tools (groundedness scoring). */
-  judge?(input: { projectRoot: string; definition: AgentDefinition; prompt: string; signal: AbortSignal }): Promise<string>;
+  judge?(input: {
+    projectRoot: string;
+    definition: AgentDefinition;
+    prompt: string;
+    /** Replaces the default "strict evaluator" system prompt. */
+    systemPrompt?: string;
+    signal: AbortSignal;
+  }): Promise<string>;
   /** Drop any cached model session for a conversation session. */
   release?(sessionId: string): Promise<void>;
   dispose?(): Promise<void>;
