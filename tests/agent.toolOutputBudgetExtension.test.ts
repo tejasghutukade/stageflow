@@ -12,7 +12,7 @@ type Handler = (event: unknown, ctx: unknown) => Promise<unknown>;
 
 type Usage = { tokens: number | null; contextWindow: number } | undefined;
 
-async function harness(options: { usage?: Usage; exempt?: string[] } = {}) {
+async function harness(options: { usage?: Usage; exempt?: string[]; turnCapped?: string[] } = {}) {
   const runWorkspaceDir = await mkdtemp(path.join(tmpdir(), "sf-tool-output-"));
   const handlers = new Map<string, Handler[]>();
   const spills: ToolOutputSpillEvent[] = [];
@@ -28,6 +28,7 @@ async function harness(options: { usage?: Usage; exempt?: string[] } = {}) {
     stageId: "enrich",
     attempt: 1,
     exempt: new Set(options.exempt ?? ["read"]),
+    ...(options.turnCapped !== undefined ? { turnCapped: new Set(options.turnCapped) } : {}),
     onSpill: (event) => spills.push(event),
   })(api);
   const ctx = { getContextUsage: () => usage };
@@ -132,6 +133,43 @@ describe("tool output budget extension", () => {
     expect(
       await h.toolResult({ parentToolCallId: "outer", content: big }),
     ).toBeUndefined();
+  });
+
+  it("defers parallel read results once the turn total passes the cap, and resets next turn", async () => {
+    const h = await harness({
+      usage: { tokens: 10_000, contextWindow: 128_000 },
+      turnCapped: ["read"],
+    });
+    const shard = [{ type: "text", text: "x".repeat(60_000) }];
+    const read = (toolCallId: string) => h.toolResult({ toolName: "read", toolCallId, content: shard });
+    expect(await read("r1")).toBeUndefined();
+    expect(await read("r2")).toBeUndefined();
+    const deferred = await read("r3");
+    expect(deferred?.content[0]?.text).toContain("read output not returned");
+    expect(deferred?.content[0]?.text).toContain("one large read call per turn");
+    expect(deferred?.details).toMatchObject({ stageflowToolOutput: { deferred: true } });
+    expect(h.spills.map((e) => e.reason)).toEqual(["turn_cap_deferred"]);
+    await h.assistantMessageEnd();
+    expect(await read("r4")).toBeUndefined();
+  });
+
+  it("always lets the first read of a turn through, even in a nearly full window", async () => {
+    const h = await harness({
+      usage: { tokens: 120_000, contextWindow: 128_000 },
+      turnCapped: ["read"],
+    });
+    const shard = [{ type: "text", text: "x".repeat(60_000) }];
+    expect(await h.toolResult({ toolName: "read", content: shard })).toBeUndefined();
+    const second = await h.toolResult({ toolName: "read", toolCallId: "r2", content: shard });
+    expect(second?.content[0]?.text).toContain("output not returned");
+  });
+
+  it("does not cap control tools or reads when usage is unknown", async () => {
+    const h = await harness({ usage: undefined, turnCapped: ["read"] });
+    const shard = [{ type: "text", text: "x".repeat(60_000) }];
+    for (let i = 0; i < 4; i += 1) {
+      expect(await h.toolResult({ toolName: "read", content: shard })).toBeUndefined();
+    }
   });
 
   it("spills a later parallel result once earlier ones fill the turn", async () => {

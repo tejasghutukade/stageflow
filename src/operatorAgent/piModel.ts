@@ -14,7 +14,6 @@ import {
   ModelRuntime,
   resolveCliModel,
   SessionManager,
-  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
@@ -22,6 +21,8 @@ import {
   createSealedResourceLoader,
   resolveWorkshopToolNames,
 } from "../agent/piSessionFactory.js";
+import { createPiSettingsManager } from "../agent/piSettings.js";
+import { createCompactionExtension } from "../compaction/extension.js";
 import { bindCursorApiKey, cursorBridgePrompt, isCursorModelRef } from "../agent/cursorProvider.js";
 import { findProviderSupport } from "../agent/providerSupport.js";
 import "../agent/cursorProvider.js";
@@ -402,14 +403,13 @@ async function openDefaultPiSession(
     authPath: input.authPath,
     modelsPath: path.join(path.dirname(input.authPath), "models.json"),
   });
-  const settingsManager = SettingsManager.inMemory({
-    compaction: { enabled: false },
-  });
+  const settingsManager = createPiSettingsManager();
   const loader = createSealedResourceLoader({
     cwd: input.cwd,
     agentDir: input.agentDir,
     settingsManager,
     systemPrompt: input.systemPrompt,
+    extensionFactories: [{ name: "stageflow-compaction", factory: createCompactionExtension({ onWarn: (m) => console.error(m) }) }],
     ...(additionalExtensionPaths.length > 0
       ? { additionalExtensionPaths }
       : {}),

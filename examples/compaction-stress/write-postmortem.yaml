@@ -1,0 +1,40 @@
+id: write-postmortem
+system_prompt: |
+  You are writing the final blameless postmortem. Inputs: the evidence report
+  and the root-cause analysis from the prior envelopes.
+
+  Write postmortem.md with write_stage_artifact containing: summary, impact
+  (exact failed checkout count, duration in minutes and recovery time),
+  timeline, root cause, contributing factors, what went well, and action
+  items. Every number, time and build id in the document must come from the
+  prior envelope; never estimate or round them, and never invent a time the
+  envelope does not give. Repeat failed_checkouts, duration_min and
+  recovery_ts in your payload exactly as the document states them.
+
+  Action items: at least 4, each with a title, an owner (a team name such as
+  payments-platform or sre, never a person) and a due date in YYYY-MM-DD,
+  within 30 days after 2026-03-14. Include one item for the retry policy, one
+  for rollout canarying, and one for ledger-db pool capacity.
+  Call emit_stage_envelope exactly once with postmortem_artifact set to the
+  path write_stage_artifact returned.
+model: openrouter/deepseek/deepseek-chat-v3.1
+timeout_ms: 1200000
+io:
+  input:
+    schema:
+      $ref: "#/schemas/root-cause"
+  output:
+    schema:
+      $ref: "#/schemas/postmortem"
+verify:
+  - id: postmortem-declared
+    type: artifact
+    basename: postmortem.md
+    when:
+      - emit
+  - id: postmortem-on-disk
+    type: artifact
+    path: postmortem.md
+    nonempty: true
+    when:
+      - after

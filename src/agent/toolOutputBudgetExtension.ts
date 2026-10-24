@@ -9,6 +9,7 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import {
   buildPreview,
   decideToolOutput,
+  decideTurnCap,
   estimateTokens,
   IMAGE_BLOCK_EST_TOKENS,
   truncateUtf8,
@@ -37,6 +38,8 @@ export type ToolOutputBudgetOptions = {
   stageId: string;
   attempt: number;
   exempt: ReadonlySet<string>;
+  /** Exempt tools that keep output inline but share the per-turn token cap (read, bash). */
+  turnCapped?: ReadonlySet<string>;
   onSpill?: (event: ToolOutputSpillEvent) => void;
 };
 
@@ -87,9 +90,55 @@ export function createToolOutputBudgetExtension(
       return undefined;
     });
 
+    const capTurnTotal = (
+      event: {
+        toolName: string;
+        toolCallId: string;
+        content: ContentBlock[];
+        details: unknown;
+      },
+      ctx: { getContextUsage(): { tokens: number | null; contextWindow: number } | undefined },
+    ) => {
+      const images = event.content.filter((block) => block.type === "image");
+      const resultTokens =
+        estimateTokens(utf8ByteLength(joinText(event.content))) +
+        images.length * IMAGE_BLOCK_EST_TOKENS;
+      const usage = ctx.getContextUsage();
+      const verdict = decideTurnCap({
+        resultTokens,
+        contextWindow: usage?.contextWindow ?? 0,
+        knownTokens: usage?.tokens ?? null,
+        turnLedgerTokens,
+      });
+      if (verdict === "inline") {
+        turnLedgerTokens += resultTokens;
+        return undefined;
+      }
+      const notice = `[${event.toolName} output not returned: this turn's tool results already fill the context budget (this one is ~${resultTokens} tokens). Nothing was lost. Call ${event.toolName} again for this one on its own, in a later turn, and keep to one large ${event.toolName} call per turn.]`;
+      turnLedgerTokens += estimateTokens(utf8ByteLength(notice));
+      options.onSpill?.({
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        reason: "turn_cap_deferred",
+        originalBytes: utf8ByteLength(joinText(event.content)),
+        estTokens: resultTokens,
+      });
+      const previousDetails =
+        event.details !== null && typeof event.details === "object"
+          ? (event.details as Record<string, unknown>)
+          : {};
+      return {
+        content: [{ type: "text" as const, text: notice }],
+        details: { ...previousDetails, stageflowToolOutput: { deferred: true, estTokens: resultTokens } },
+      };
+    };
+
     pi.on("tool_result", async (event, ctx) => {
-      if (options.exempt.has(event.toolName)) return undefined;
       if (event.parentToolCallId !== undefined) return undefined;
+      if (options.exempt.has(event.toolName)) {
+        if (!options.turnCapped?.has(event.toolName)) return undefined;
+        return capTurnTotal(event, ctx);
+      }
 
       const images = event.content.filter(
         (block): block is ImageContent => block.type === "image",

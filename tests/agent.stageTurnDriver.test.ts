@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_EMIT_REMINDERS,
   emitReminderPrompt,
+  lastTurnLeakedToolCall,
   lastTurnProviderError,
+  MAX_TOTAL_EMIT_REMINDERS,
   remindUntilEmitted,
   type StageTurnSession,
 } from "../src/agent/stageTurnDriver.js";
@@ -151,6 +153,59 @@ describe("lastTurnProviderError", () => {
     const text = lastTurnProviderError([{ role: "assistant", stopReason: "error", errorMessage: "x".repeat(900) }]);
     expect(text).toHaveLength(501);
     expect(text?.endsWith("…")).toBe(true);
+  });
+});
+
+describe("remindUntilEmitted progress", () => {
+  const toolTurn = (messages: unknown[]) => {
+    messages.push({ role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", name: "read" }] });
+    messages.push({ role: "toolResult" });
+    messages.push(ok);
+  };
+
+  it("resets the reminder budget when a reminder turn ran a tool call", async () => {
+    const capture: EmitCapture = {};
+    const { session, prompts } = fakeSession(capture, [
+      toolTurn,
+      toolTurn,
+      toolTurn,
+      (messages, c) => {
+        c.envelope = envelope;
+        messages.push(ok);
+      },
+    ]);
+    expect(await remindUntilEmitted(session, capture, opts)).toEqual({ reminders: 4 });
+    expect(prompts[2]).toContain("Reminder 1 of 2");
+  });
+
+  it("gives up after the budget of reminders in a row with no tool call", async () => {
+    const capture: EmitCapture = {};
+    const { session } = fakeSession(capture, [toolTurn, (m) => m.push(ok), (m) => m.push(ok), (m) => m.push(ok)]);
+    expect(await remindUntilEmitted(session, capture, opts)).toEqual({ reminders: 3 });
+  });
+
+  it("stops at the hard ceiling even when every reminder makes progress", async () => {
+    const capture: EmitCapture = {};
+    const { session } = fakeSession(
+      capture,
+      Array.from({ length: MAX_TOTAL_EMIT_REMINDERS + 5 }, () => toolTurn),
+    );
+    expect(await remindUntilEmitted(session, capture, opts)).toEqual({ reminders: MAX_TOTAL_EMIT_REMINDERS });
+  });
+
+  it("tells the agent when its last tool call was written out as text", async () => {
+    const leaked = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "thinking", thinking: "read it<｜tool▁calls▁begin｜>read<｜tool▁sep｜>{}" }],
+    };
+    expect(lastTurnLeakedToolCall([leaked])).toBe(true);
+    expect(lastTurnLeakedToolCall([{ role: "assistant", content: [{ type: "text", text: "all done" }] }])).toBe(false);
+    const capture: EmitCapture = {};
+    const { session, prompts } = fakeSession(capture, [], [leaked]);
+    await remindUntilEmitted(session, capture, opts);
+    expect(prompts[0]).toContain("was written out as plain text");
+    expect(prompts[1]).not.toContain("was written out as plain text");
   });
 });
 

@@ -349,6 +349,7 @@ async function runTurn(
         model,
         systemPrompt: { type: "custom", prompt: input.stage.system_prompt },
         settingSources: [],
+        settings: { autoCompactEnabled: true },
         tools: CLAUDE_BUILTIN_TOOLS,
         mcpServers: { [STAGEFLOW_MCP_SERVER_NAME]: mcpServer, ...passedServers },
         permissionMode: "bypassPermissions",

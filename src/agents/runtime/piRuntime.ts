@@ -8,13 +8,17 @@ import {
   ModelRuntime,
   resolveCliModel,
   SessionManager,
-  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { collectMcpExtensionToolNames, mcpToolMetadataMissing } from "../../agent/piAdapter.js";
 import { attachIsolatedMcp } from "../../agent/piIsolatedMcp.js";
 import { warmIsolatedMcpMetadata } from "../../agent/piIsolatedMcpProbe.js";
 import { createPiAgentSession, createSealedResourceLoader } from "../../agent/piSessionFactory.js";
+import { createPiSettingsManager } from "../../agent/piSettings.js";
+import { createCompactionExtension } from "../../compaction/extension.js";
+import { WORKING_STATE_TOOL_NAME } from "../../compaction/types.js";
+import { WORKING_STATE_GUIDANCE } from "../../compaction/workingState.js";
+import { createWorkingStateExtension } from "../../tools/workingState.js";
 import { bindCursorApiKey, isCursorModelRef } from "../../agent/cursorProvider.js";
 import { findProviderSupport } from "../../agent/providerSupport.js";
 import { grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
@@ -28,6 +32,7 @@ import { isUsableAuthFile, resolveCredentialBinding } from "../../runtime/creden
 import { getModelCatalog } from "../../models/catalog.js";
 import { AgentError } from "../errors.js";
 import { MEMORY_STORE_BASH_DENIED, memoryStorePathInCommand } from "../../memory/bashDeny.js";
+import { compactionUsageCost, type CompactionEndSessionEvent } from "../../agent/compactionEvents.js";
 import { memoryHome } from "../../memory/host.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
@@ -61,6 +66,8 @@ export type OpenSessionInput = {
   /** Stageflow tools this agent is granted. */
   stageflowTools?: ToolkitTool[];
   memory?: StageMemory;
+  /** Defaults to true; one-shot judge sessions have no use for it. */
+  workingState?: boolean;
   hooks: () => TurnHooks | undefined;
 };
 
@@ -136,7 +143,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
   try {
     await mkdir(options.agentDir, { recursive: true });
     const modelRuntime = await ModelRuntime.create({ authPath, modelsPath: path.join(path.dirname(authPath), "models.json") });
-    const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true } });
+    const settingsManager = createPiSettingsManager();
 
     const mcpServers = Object.keys(definition.tools.mcp);
     const resolvedMcp =
@@ -154,11 +161,18 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
 
     const gateExtension: ExtensionFactory = (pi) => {
       pi.on("tool_call", async (event) => {
+        if (event.toolName === WORKING_STATE_TOOL_NAME) return undefined;
         const outcome = await input.gate({ toolCallId: event.toolCallId, toolName: event.toolName, input: event.input as Record<string, unknown> });
         return outcome;
       });
     };
-    const extensionFactories: InlineExtension[] = [{ name: "stageflow-agent-gate", factory: gateExtension }, ...(attached.extensionFactories ?? [])];
+    const withWorkingState = input.workingState !== false;
+    const extensionFactories: InlineExtension[] = [
+      { name: "stageflow-agent-gate", factory: gateExtension },
+      { name: "stageflow-compaction", factory: createCompactionExtension({ onWarn: (m) => console.error(m) }) },
+      ...(withWorkingState ? [{ name: "stageflow-working-state", factory: createWorkingStateExtension() }] : []),
+      ...(attached.extensionFactories ?? []),
+    ];
     const loader = createSealedResourceLoader({
       cwd: projectRoot,
       agentDir: options.agentDir,
@@ -183,6 +197,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
     }
 
     const toolNames = [...input.toolNames];
+    if (withWorkingState) toolNames.push(WORKING_STATE_TOOL_NAME);
     if (attached.extensionFactories) {
       const mcp = collectMcpExtensionToolNames(loader);
       if (!mcp.ok) throw new AgentError("agent.backend_unavailable", `MCP adapter registered unrequested tool(s): ${mcp.unrequested.join(", ")}`);
@@ -358,7 +373,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         throw new AgentError("agent.invalid", `Memory could not be opened (${code})`);
       }
     }
-    const systemPrompt = `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}`;
+    const systemPrompt = `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}\n\n${WORKING_STATE_GUIDANCE}`;
     state.opened = await open({
       projectRoot,
       definition,
@@ -404,6 +419,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       let text = "";
       const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
       let startedAt = new Date();
+      let compactionStartedAt: Date | undefined;
       const calls = new Map<string, { id: string; tool: string; input: Record<string, unknown> }>();
       // A model call that goes quiet (provider queue, dropped connection) must not hold the session forever.
       // Waiting on a person (approval), a running tool or a sub-agent is not a stall.
@@ -446,7 +462,18 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
           result?: { content?: unknown; isError?: boolean };
           isError?: boolean;
         };
-        if (e.type === "message_start" && e.message?.role === "assistant") startedAt = new Date();
+        if (e.type === "compaction_start") compactionStartedAt = new Date();
+        else if (e.type === "compaction_end") {
+          const end = event as unknown as CompactionEndSessionEvent;
+          const info = compactionUsageCost(end);
+          usage.inputTokens += info.inputTokens;
+          usage.outputTokens += info.outputTokens;
+          usage.costUsd += info.costUsd;
+          const model = (session as { model?: { id?: string } }).model?.id;
+          if (end.result?.usage) {
+            input.hooks.modelFinished({ startedAt: compactionStartedAt ?? new Date(), endedAt: new Date(), ...info, ...(model ? { model } : {}) });
+          }
+        } else if (e.type === "message_start" && e.message?.role === "assistant") startedAt = new Date();
         else if (e.type === "message_update" && e.assistantMessageEvent?.type === "text_delta" && typeof e.assistantMessageEvent.delta === "string") {
           text += e.assistantMessageEvent.delta;
           input.onDelta(e.assistantMessageEvent.delta);
@@ -505,6 +532,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         definition: { ...input.definition, tools: { ...input.definition.tools, builtin: [], builtin_tools: [], mcp: {}, skills: [] }, sub_agents: [] },
         systemPrompt: input.systemPrompt ?? "You are a strict evaluator. Answer only with the requested number.",
         toolNames: [],
+        workingState: false,
         gate: async () => ({ block: true, reason: "No tools" }),
         hooks: () => undefined,
       });

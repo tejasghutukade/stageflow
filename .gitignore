@@ -94,3 +94,4 @@ benchmarks/
 
 # Demo video project lives in the main checkout only
 /demo-video/
+.compaction-evidence*

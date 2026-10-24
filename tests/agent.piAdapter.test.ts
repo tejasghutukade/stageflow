@@ -20,6 +20,7 @@ import {
 } from "../src/agent/piAdapter.js";
 import { registerProviderSupport } from "../src/agent/providerSupport.js";
 import { STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME } from "../src/agent/toolOutputBudgetExtension.js";
+import { WORKING_STATE_TOOL_NAME } from "../src/compaction/types.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { StageMcpError } from "../src/config/resolveStageMcpServers.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
@@ -221,10 +222,10 @@ function wiringInput(
 }
 
 describe("prepareStageSessionWiring MCP snapshot", () => {
-  const expectedSealedTools = resolveStageToolNames(
-    "emit_stage_envelope",
-    "write_stage_artifact",
-  );
+  const expectedSealedTools = [
+    ...resolveStageToolNames("emit_stage_envelope", "write_stage_artifact"),
+    WORKING_STATE_TOOL_NAME,
+  ];
   const mcpInlinePath = `<inline:${piIsolatedMcp.STAGEFLOW_PI_MCP_EXTENSION_NAME}>`;
   let attachSpy: ReturnType<typeof wrapAttachAndEmitStatus>;
 
@@ -298,6 +299,8 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
         name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
         factory: expect.any(Function),
       }),
+      expect.objectContaining({ name: "stageflow-compaction", factory: expect.any(Function) }),
+      expect.objectContaining({ name: "stageflow-working-state", factory: expect.any(Function) }),
     ]);
     expect(lastLoaderOptions()).not.toHaveProperty("eventBus");
     expect(lastSessionTools()).toEqual(expectedSealedTools);
@@ -360,6 +363,8 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
         name: STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
         factory: expect.any(Function),
       }),
+      expect.objectContaining({ name: "stageflow-compaction", factory: expect.any(Function) }),
+      expect.objectContaining({ name: "stageflow-working-state", factory: expect.any(Function) }),
     ]);
     expect(lastLoaderOptions()).not.toHaveProperty("eventBus");
     expect(lastSessionTools()).toEqual(expectedSealedTools);

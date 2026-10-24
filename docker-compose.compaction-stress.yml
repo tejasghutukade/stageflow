@@ -1,0 +1,16 @@
+# Compaction stress test Host — see examples/compaction-stress/README.md.
+#   node examples/compaction-stress/generate-evidence.mjs "$PWD/.compaction-evidence"
+#   docker compose -p compaction-stress -f docker-compose.yml -f docker-compose.compaction-stress.yml up -d --build
+#   docker exec -u 0 compaction-stress-stageflow-1 sh -c 'rm -rf /data/evidence && mkdir /data/evidence'
+#   docker cp .compaction-evidence/. compaction-stress-stageflow-1:/data/evidence/
+#   docker exec -u 0 compaction-stress-stageflow-1 chown -R stageflow:stageflow /data/evidence
+# The checkout must be a plain directory, not a mount: a stage swaps it by renaming it.
+services:
+  stageflow:
+    ports: !override
+      - "127.0.0.1:3850:3847"
+    environment:
+      STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness,/catalog/compaction-stress
+    volumes:
+      - ./examples/compaction-stress:/catalog/compaction-stress:ro
+      - ${COMPACTION_EVIDENCE_DIR:-./.compaction-evidence}:/seed/evidence:ro

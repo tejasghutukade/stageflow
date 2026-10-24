@@ -9,6 +9,8 @@ const ACTIVITY_EVENTS = new Set<StageActivityEvent["event"]>([
   "tool_start",
   "tool_end",
   "tool_progress",
+  "context_usage",
+  "context_compacted",
   "message",
   "operator_prompt",
   "operator_answer",

@@ -1,4 +1,5 @@
 import type { PendingPrompt, StageAnswer, StageLogEvent } from "../api/types";
+import { formatTokenCount } from "../redesign/runs/stageUsage";
 import { waitingOnYouTitle } from "./runStatus";
 
 const ACTIVITY_SNIPPET_LIMIT = 160;
@@ -21,6 +22,15 @@ function describeOperatorPrompt(event: StageLogEvent): string | undefined {
     return activitySnippet(p.message);
   }
   return undefined;
+}
+
+function describeContextCompacted(event: StageLogEvent): string | undefined {
+  const before = event.tokensBefore;
+  if (typeof before !== "number") return undefined;
+  const after = typeof event.tokensAfter === "number" ? formatTokenCount(event.tokensAfter) : "?";
+  const chars = typeof event.summaryChars === "number" ? `, summary ${formatTokenCount(event.summaryChars)} chars` : "";
+  const cost = typeof event.costUsd === "number" ? `, $${event.costUsd.toFixed(3)}` : "";
+  return `${formatTokenCount(before)} -> ${after} tokens${chars}${cost}`;
 }
 
 function describeOperatorAnswer(event: StageLogEvent): string | undefined {
@@ -76,6 +86,10 @@ export function formatActivityLabel(event: StageLogEvent): string {
       if (event.text) return `${role}: ${event.text}`;
       return role;
     }
+    case "context_usage":
+      return `Context ${typeof event.percent === "number" ? `${event.percent}%` : ""}`.trim();
+    case "context_compacted":
+      return "Context compacted";
     case "operator_prompt":
       return "Operator prompt";
     case "operator_answer":
@@ -114,6 +128,7 @@ export function formatActivityDescription(event: StageLogEvent): string | undefi
   if (event.event === "failed" && event.reason) return event.reason;
   if (event.event === "interrupted" && event.reason) return event.reason;
   if (event.event === "turn_start" && event.reason) return event.reason;
+  if (event.event === "context_compacted") return describeContextCompacted(event);
   if (event.event === "operator_prompt") return describeOperatorPrompt(event);
   if (event.event === "operator_answer") return describeOperatorAnswer(event);
   if (event.event === "feedback_loop_decided") return describeFeedbackLoopDecided(event);

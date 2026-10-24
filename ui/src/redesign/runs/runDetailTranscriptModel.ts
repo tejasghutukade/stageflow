@@ -28,6 +28,8 @@ const TRANSCRIPT_NOISE_EVENTS = new Set<string>([
   "interrupted",
   "agent_start",
   "agent_end",
+  "context_usage",
+  "context_compacted",
   "waiting_for_input",
   "resumed",
   "operator_prompt",

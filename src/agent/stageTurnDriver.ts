@@ -1,7 +1,14 @@
 import type { EmitCapture } from "../tools/emitStageEnvelope.js";
 
-/** Follow-up turns sent when the agent ends its turn without an accepted envelope. */
+/**
+ * Follow-up turns in a row, with no progress between them, sent when the agent ends its turn
+ * without an accepted envelope. A reminder turn that runs a tool call counts as progress and
+ * resets this budget.
+ */
 export const DEFAULT_EMIT_REMINDERS = 2;
+
+/** Hard ceiling on reminders in one stage attempt, however much progress each one made. */
+export const MAX_TOTAL_EMIT_REMINDERS = 20;
 
 const PROVIDER_ERROR_MAX_CHARS = 500;
 
@@ -54,15 +61,47 @@ function lastTurnAborted(messages: readonly unknown[]): boolean {
   return lastAssistant(messages)?.stopReason === "aborted";
 }
 
+const LEAKED_TOOL_CALL = /<[|｜]?\s*tool[▁_ ]?calls?[▁_ ]?(begin|start)|<tool_call>|<function_calls?>/i;
+
+type ContentBlock = { type?: unknown; text?: unknown; thinking?: unknown };
+
+/** True when the last assistant turn wrote a tool call out as plain text instead of making a real one. */
+export function lastTurnLeakedToolCall(messages: readonly unknown[]): boolean {
+  const m = lastAssistant(messages) as { content?: unknown } | undefined;
+  if (!m || !Array.isArray(m.content)) return false;
+  return (m.content as ContentBlock[]).some((block) => {
+    if (block.type === "toolCall") return false;
+    const text = typeof block.text === "string" ? block.text : typeof block.thinking === "string" ? block.thinking : "";
+    return LEAKED_TOOL_CALL.test(text);
+  });
+}
+
+/** Tool calls the agent made in the messages after `fromIndex`. */
+function toolCallsSince(messages: readonly unknown[], fromIndex: number): number {
+  let count = 0;
+  for (const raw of messages.slice(fromIndex)) {
+    const m = raw as { role?: unknown; content?: unknown };
+    if (m?.role !== "assistant" || !Array.isArray(m.content)) continue;
+    count += (m.content as ContentBlock[]).filter((block) => block.type === "toolCall").length;
+  }
+  return count;
+}
+
 export function emitReminderPrompt(
   emitToolName: string,
   attempt: number,
   max: number,
   rejectedEmit?: string,
+  leakedToolCall = false,
 ): string {
   const lines = [
     `Reminder ${attempt} of ${max}: your turn ended without an accepted ${emitToolName} call, so this stage has not finished.`,
   ];
+  if (leakedToolCall) {
+    lines.push(
+      `Your last tool call was written out as plain text, so it was NOT run. Make it again as a real tool call.`,
+    );
+  }
   if (rejectedEmit !== undefined) {
     lines.push(`Your last ${emitToolName} call was rejected: ${rejectedEmit}`);
     lines.push(`Fix that and call ${emitToolName} again.`);
@@ -87,14 +126,31 @@ export async function remindUntilEmitted(
 ): Promise<RemindOutcome> {
   const max = options.maxReminders ?? DEFAULT_EMIT_REMINDERS;
   let reminders = 0;
+  let withoutProgress = 0;
   for (;;) {
     if (capture.envelope) return { reminders };
     const providerError = lastTurnProviderError(session.messages);
     if (providerError !== undefined) return { reminders, providerError };
-    if (options.shouldStop() || lastTurnAborted(session.messages) || reminders >= max) {
+    if (
+      options.shouldStop() ||
+      lastTurnAborted(session.messages) ||
+      withoutProgress >= max ||
+      reminders >= MAX_TOTAL_EMIT_REMINDERS
+    ) {
       return { reminders };
     }
     reminders++;
-    await session.prompt(emitReminderPrompt(options.emitToolName, reminders, max, capture.error));
+    withoutProgress++;
+    const before = session.messages.length;
+    await session.prompt(
+      emitReminderPrompt(
+        options.emitToolName,
+        withoutProgress,
+        max,
+        capture.error,
+        lastTurnLeakedToolCall(session.messages),
+      ),
+    );
+    if (toolCallsSince(session.messages, before) > 0) withoutProgress = 0;
   }
 }

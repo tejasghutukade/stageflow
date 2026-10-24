@@ -1,0 +1,15 @@
+id: compaction-stress
+goal: >
+  Produce a blameless postmortem for the checkout outage on 2026-03-14
+  (02:00-08:00 UTC) from the raw service logs and runbooks in the checkout.
+context: |
+  The checkout is an evidence bundle: logs/<service>/<service>-NN.log (six
+  services, two shards each, about 1 MB in total) and runbooks/*.md.
+  Generate it with: node examples/compaction-stress/generate-evidence.mjs <dir>
+  and point `checkout` at <dir>. The logs are deliberately larger than a
+  stage's context budget, so the first stage's session must compact.
+constraints: |
+  Read the evidence; do not guess. Do not modify the checkout.
+  Blameless tone: name changes and systems, not people, except the oncall
+  who is named only as the responder.
+checkout: /data/evidence

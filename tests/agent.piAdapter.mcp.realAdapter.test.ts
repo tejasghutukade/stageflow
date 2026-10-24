@@ -74,6 +74,7 @@ describe("stage MCP with the real pi-mcp-adapter", () => {
         expect(captured.tools).toHaveLength(1);
         expect(captured.tools[0]).toEqual([
           ...resolveStageToolNames("emit_stage_envelope", "write_stage_artifact"),
+          "working_state",
           "echo_echo",
         ]);
         const active = captured.sessions[0]!.getActiveToolNames();

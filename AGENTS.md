@@ -108,6 +108,23 @@ Rules every change must keep:
 
 Real Chrome smoke test (opt-in, needs `agent-browser` on `PATH`): `STAGEFLOW_BROWSER_SMOKE=1 npx vitest run tests/browser.realChrome.smoke.test.ts`
 
+### Context and compaction
+
+Pi stage sessions, project agents and the operator agent compact their own context. Code: `src/compaction/`, `src/tools/workingState.ts`, `src/agent/piSettings.ts`, `src/agent/toolOutputBudget*.ts`, `src/agent/compactionEvents.ts`; the harness is `scripts/compaction-eval/`. User docs: **[docs/context-and-compaction.md](docs/context-and-compaction.md)**. Read it and `docs/plans/compaction-strategy.md` (local-only) before changing any of it.
+
+Rules every change must keep:
+
+- **Compaction is always on and not configurable.** Build Pi settings only through `createPiSettingsManager()`; never write `compaction: { enabled: false }`.
+- **Compaction is ordinary work.** Its model call is charged to the stage's `StageUsage` and the agent's cost like any other call; add no special budget handling.
+- **The assignment lives in the system prompt** (`composeStagePiSystemPrompt`), which compaction never rewrites. Do not move the envelope contract back into the first user message.
+- **`read` and `bash` share a per-turn token cap** (`decideTurnCap`); the first result of a turn always returns.
+- **Pinned facts, directives, cleared-result placeholders and working state are deterministic and secret-scrubbed** (`redactString` plus `scrubSecrets`). A secret never enters `stageflowPinned` details, the summary sections or `working_state`.
+- **Only re-fetchable, successful read-only tool results may be cleared** (`classifyForClearing` fails closed). Errors, operator answers, emits and side-effecting calls are never cleared.
+- **The hook falls back to Pi's default compaction on any failure**, never to nothing; an abort is rethrown.
+- **`working_state` is internal**: it bypasses the agent tool gate and approvals, is exempt from the tool-output budget, and its guidance (`WORKING_STATE_GUIDANCE`) is in every stage and agent system prompt.
+- **Bump `COMPACTION_PROMPT_VERSION`** (`src/compaction/types.ts`) when the focus prompt or the summary section layout changes, and re-run `scripts/compaction-eval/` before and after.
+- **No test calls a real model.** The harness's real-model runs are manual and capped (`--max-cost-usd`).
+
 ### Tests
 
 - Tests live in `tests/*.test.ts`

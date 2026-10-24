@@ -24,7 +24,8 @@ export type SpillReason =
   | "exceeds_remaining"
   | "exceeds_per_result_cap"
   | "unknown_usage_fallback"
-  | "adapter_truncated";
+  | "adapter_truncated"
+  | "turn_cap_deferred";
 
 export type BudgetDecision =
   | { kind: "inline"; estTokens: number }
@@ -52,6 +53,31 @@ export function decideToolOutput(input: BudgetInput): BudgetDecision {
     return { kind: "spill", estTokens, reason: "exceeds_remaining" };
   }
   return { kind: "inline", estTokens };
+}
+
+export const TURN_TOTAL_MAX_FRACTION = 0.4;
+
+export type TurnCapInput = {
+  resultTokens: number;
+  contextWindow: number;
+  knownTokens: number | null;
+  turnLedgerTokens: number;
+};
+
+/**
+ * Turn cap for tools whose output is kept inline (read, bash): the first result
+ * of a turn always passes so a lone call can make progress; later results in
+ * the same turn are deferred once the turn's total would pass the smaller of
+ * the remaining window (after the reserve) and TURN_TOTAL_MAX_FRACTION of it.
+ */
+export function decideTurnCap(input: TurnCapInput): "inline" | "defer" {
+  const window = input.contextWindow;
+  if (input.knownTokens === null || !Number.isFinite(window) || window <= 0) return "inline";
+  if (input.turnLedgerTokens <= 0) return "inline";
+  const reserve = Math.max(RESERVE_MIN_TOKENS, RESERVE_FRACTION * window);
+  const remaining = window - input.knownTokens - reserve;
+  const allowed = Math.min(remaining, TURN_TOTAL_MAX_FRACTION * window);
+  return input.turnLedgerTokens + input.resultTokens > allowed ? "defer" : "inline";
 }
 
 export function utf8ByteLength(text: string): number {
