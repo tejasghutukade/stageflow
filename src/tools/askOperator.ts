@@ -7,6 +7,7 @@
  * Do not abort the session from inside `execute`: the tool Promise is the
  * live blocking surface until the operator answers (or stage teardown).
  */
+import { ASK_OPERATOR_TOOL_NAME } from "./stageToolNames.js";
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { HostGateContext } from "../browser/gateHandoff.js";
@@ -629,7 +630,7 @@ export function createAskOperatorTool(options: AskOperatorToolOptions) {
     : ASK_OPERATOR_KINDS.join(", ");
 
   return {
-    name: "ask_operator",
+    name: ASK_OPERATOR_TOOL_NAME,
     label: "Ask operator",
     description:
       `Ask the operator a question and wait for their answer. Supports ${kindList} prompts. Does not complete the stage — call emit_stage_envelope when finished.`,

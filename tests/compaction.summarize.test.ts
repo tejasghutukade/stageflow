@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { extractPinnedFacts, renderPinned } from "../src/compaction/pin.js";
 import {
+  composeCompactionSummary,
   mergePinned,
   prepareSummaryInputs,
+  readStageflowDetails,
   redactMessages,
   renderSections,
   SECTIONS_MARKER,
@@ -66,5 +68,57 @@ describe("summary sections", () => {
     const merged = mergePinned([f("A"), f("B")], [f("C"), f("A")], 3);
     expect(merged.map((x) => x.value)).toEqual(["C", "A", "B"]);
     expect(mergePinned([f("A"), f("B")], [f("C")], 2).map((x) => x.value)).toEqual(["C", "A"]);
+  });
+});
+
+describe("details round trip", () => {
+  it("splits on the last marker at the start of a line, even when the model echoed one", () => {
+    const echoed = `model text mentions ${SECTIONS_MARKER} inline\n${SECTIONS_MARKER}\n## Pinned facts\n- X`;
+    const split = splitSummary(`core\n${echoed}`);
+    expect(split.core).toBe(`core\nmodel text mentions ${SECTIONS_MARKER} inline`);
+    expect(split.sections.startsWith(SECTIONS_MARKER)).toBe(true);
+    expect(splitSummary(`${SECTIONS_MARKER}\n## Pinned facts`)).toEqual({ core: "", sections: `${SECTIONS_MARKER}\n## Pinned facts` });
+  });
+
+  it("keeps only well-formed details from a session entry", () => {
+    const good = { kind: "id", value: "INC-1", context: "c", source: { messageIndex: 0 } };
+    const details = readStageflowDetails({
+      readFiles: ["a", 3],
+      modifiedFiles: "nope",
+      stageflowPinned: [good, { kind: "bogus", value: "x" }, null],
+      stageflowCleared: [{ toolName: "read" }],
+      stageflowDirectives: [{ source: "operator", text: "ok" }, { source: "alien", text: "no" }],
+      stageflowPromptVersion: 1,
+    });
+    expect(details).toEqual({
+      readFiles: ["a"],
+      stageflowPinned: [good],
+      stageflowCleared: [],
+      stageflowDirectives: [{ source: "operator", text: "ok" }],
+      stageflowPromptVersion: 1,
+    });
+    expect(readStageflowDetails("garbage")).toBeUndefined();
+    expect(readStageflowDetails(null)).toBeUndefined();
+  });
+
+  it("composes one summary: scrubbed text, no echoed marker, sections appended, stripped previous summary", async () => {
+    const calls: Array<{ previousSummary: string | undefined; blob: string }> = [];
+    const out = await composeCompactionSummary({
+      messages: [browserResult],
+      previousSummary: `old core\n\n${SECTIONS_MARKER}\n## Pinned facts\n- OLD`,
+      previousDetails: { stageflowPinned: [{ kind: "id", value: "OLD-1", context: "old", source: { messageIndex: 0 } }] },
+      state: [{ key: "next", kind: "todo", value: "read shard 4", updatedAt: "2026-03-14T00:00:00Z" }],
+      summarize: async ({ messages, previousSummary }) => {
+        calls.push({ previousSummary, blob: JSON.stringify(messages) });
+        return { summary: `## Goal\nreview ${SECTIONS_MARKER} Authorization: ${BEARER}` };
+      },
+    });
+    expect(calls[0]!.previousSummary).toBe("old core");
+    expect(calls[0]!.blob).not.toContain(COOKIE);
+    expect(out.summary.match(new RegExp(SECTIONS_MARKER, "g"))).toHaveLength(1);
+    expect(out.summary).not.toContain("FAKE-PAYLOAD-7731");
+    expect(out.summary).toContain("ORD-88213");
+    expect(out.summary).toContain("OLD-1");
+    expect(out.summary).toContain("read shard 4");
   });
 });

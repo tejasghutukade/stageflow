@@ -1,3 +1,4 @@
+import { ASK_OPERATOR_TOOL_NAME, EMIT_STAGE_ENVELOPE_TOOL_NAME } from "../tools/stageToolNames.js";
 import { scrubSecrets, type LooseMessage } from "./pin.js";
 
 export type DirectiveSource = "operator" | "user" | "rejection";
@@ -10,8 +11,8 @@ export const USER_DIRECTIVE_MAX_CHARS = 280;
 export const DIRECTIVES_CARRY_MAX = 60;
 
 const NOISE_USER = /^(?:Begin this stage\b|Reminder \d+ of \d+|Continue this stage after feedback-loop)/i;
-const OPERATOR_TOOLS = new Set(["ask_operator"]);
-const ENVELOPE_TOOLS = new Set(["emit_stage_envelope"]);
+const OPERATOR_TOOLS = new Set([ASK_OPERATOR_TOOL_NAME]);
+const ENVELOPE_TOOLS = new Set([EMIT_STAGE_ENVELOPE_TOOL_NAME]);
 
 function blocksText(content: unknown): string {
   if (typeof content === "string") return content;

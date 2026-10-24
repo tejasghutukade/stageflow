@@ -137,6 +137,7 @@ export { STAGEFLOW_PATH_DENIED };
 import { createPiSettingsManager } from "./piSettings.js";
 import { createCompactionExtension } from "../compaction/extension.js";
 import { createOpenRouterRoutingExtension } from "./openRouterRouting.js";
+import { ASK_OPERATOR_TOOL_NAME } from "../tools/stageToolNames.js";
 import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
 import { WORKING_STATE_GUIDANCE } from "../compaction/workingState.js";
 import { createWorkingStateExtension } from "../tools/workingState.js";
@@ -190,7 +191,7 @@ export function createDurableRootPathDenyExtension(options: {
 export function resolveStageToolNames(
   emitToolName: string,
   artifactToolName?: string,
-  askOperatorToolName = "ask_operator",
+  askOperatorToolName = ASK_OPERATOR_TOOL_NAME,
   gateKinds?: StageGateKind[],
 ): string[] {
   const tools = [
@@ -1037,7 +1038,7 @@ export async function repairPrematureAskOperatorClosure(
     if ((entry as { type?: string }).type !== "message") continue;
     const message = (entry as { message?: Record<string, unknown> }).message;
     if (!message || message.role !== "toolResult") continue;
-    if (message.toolName !== "ask_operator" || message.isError !== true) continue;
+    if (message.toolName !== ASK_OPERATOR_TOOL_NAME || message.isError !== true) continue;
     const content = message.content;
     if (!Array.isArray(content)) continue;
     const first = content[0] as { text?: string } | undefined;
@@ -1340,7 +1341,7 @@ async function prepareStageSessionWiring(
             WORKING_STATE_TOOL_NAME,
             emitDef.name,
             artifactDef.name,
-            askDef?.name ?? "ask_operator",
+            askDef?.name ?? ASK_OPERATOR_TOOL_NAME,
           ]),
         }),
       },
@@ -1418,7 +1419,7 @@ async function prepareStageSessionWiring(
     const tools = resolveStageToolNames(
       emitDef.name,
       artifactDef.name,
-      askDef?.name ?? "ask_operator",
+      askDef?.name ?? ASK_OPERATOR_TOOL_NAME,
       gateKinds,
     );
     tools.push(WORKING_STATE_TOOL_NAME);

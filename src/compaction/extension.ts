@@ -6,14 +6,12 @@ import {
 import { applyClearing, planClearing, type ClearingPolicy } from "./mask.js";
 import {
   COMPACTION_FOCUS,
-  prepareSummaryInputs,
-  renderSections,
-  splitSummary,
+  composeCompactionSummary,
+  readStageflowDetails,
   stageflowDetails,
   type StageflowCompactionDetails,
 } from "./summarize.js";
 import { getWorkingStateSections } from "./workingState.js";
-import { scrubSecrets } from "./pin.js";
 import type { LooseMessage } from "./pin.js";
 
 export type CompactionPolicy = {
@@ -45,9 +43,7 @@ type PreCompactContext = {
 function lastCompactionDetails(branch: readonly unknown[]): StageflowCompactionDetails | undefined {
   for (let i = branch.length - 1; i >= 0; i--) {
     const e = branch[i] as { type?: string; details?: unknown };
-    if (e?.type === "compaction") {
-      return e.details !== null && typeof e.details === "object" ? (e.details as StageflowCompactionDetails) : undefined;
-    }
+    if (e?.type === "compaction") return readStageflowDetails(e.details);
   }
   return undefined;
 }
@@ -67,40 +63,35 @@ export function createCompactionExtension(options: CompactionExtensionOptions = 
         if (!auth.ok) return undefined;
         const { preparation } = event;
         const previousDetails = lastCompactionDetails(event.branchEntries);
-        const messages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages] as LooseMessage[];
-        const prepared = prepareSummaryInputs({
-          messages,
-          previousDetails,
+        const historyCount = preparation.messagesToSummarize.length;
+        const composed = await composeCompactionSummary({
+          messages: [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages] as LooseMessage[],
+          ...(preparation.previousSummary !== undefined ? { previousSummary: preparation.previousSummary } : {}),
+          ...(previousDetails ? { previousDetails } : {}),
+          state: getWorkingStateSections(ctx.sessionManager.getEntries() as never),
           ...(policy.clearInSummary ? { clearInSummary: policy.clearInSummary } : {}),
+          summarize: ({ messages, previousSummary }) =>
+            compact(
+              {
+                ...preparation,
+                messagesToSummarize: messages.slice(0, historyCount) as CompactionPreparation["messagesToSummarize"],
+                turnPrefixMessages: messages.slice(historyCount) as CompactionPreparation["turnPrefixMessages"],
+                ...(previousSummary !== undefined ? { previousSummary } : {}),
+              },
+              model as never,
+              auth.apiKey,
+              auth.headers,
+              COMPACTION_FOCUS,
+              event.signal,
+              ctx.thinkingLevel as never,
+              undefined,
+              auth.env,
+            ),
         });
-        const history = prepared.messagesForSummarizer.slice(0, preparation.messagesToSummarize.length);
-        const prefix = prepared.messagesForSummarizer.slice(preparation.messagesToSummarize.length);
-        const stripped: CompactionPreparation = {
-          ...preparation,
-          messagesToSummarize: history as CompactionPreparation["messagesToSummarize"],
-          turnPrefixMessages: prefix as CompactionPreparation["turnPrefixMessages"],
-          ...(preparation.previousSummary !== undefined
-            ? { previousSummary: splitSummary(preparation.previousSummary).core }
-            : {}),
-        };
-        const result = await compact(
-          stripped,
-          model as never,
-          auth.apiKey,
-          auth.headers,
-          COMPACTION_FOCUS,
-          event.signal,
-          ctx.thinkingLevel as never,
-          undefined,
-          auth.env,
-        );
-        const state = getWorkingStateSections(ctx.sessionManager.getEntries() as never);
-        const sections = renderSections({ pinned: prepared.pinned, cleared: prepared.cleared, state, directives: prepared.directives });
-        const core = scrubSecrets(result.summary).trimEnd();
-        const summary = sections ? `${core}\n\n${sections}` : core;
+        const { result, prepared } = composed;
         return {
           compaction: {
-            summary,
+            summary: composed.summary,
             firstKeptEntryId: result.firstKeptEntryId,
             tokensBefore: result.tokensBefore,
             ...(result.usage ? { usage: result.usage } : {}),

@@ -30,10 +30,50 @@ export type StageflowCompactionDetails = {
   stageflowPromptVersion?: number;
 };
 
+/** The sections are always appended last, so the last marker at the start of a line is the real one. */
 export function splitSummary(summary: string): { core: string; sections: string } {
-  const at = summary.indexOf(SECTIONS_MARKER);
+  const afterNewline = summary.lastIndexOf(`\n${SECTIONS_MARKER}`);
+  const at = afterNewline >= 0 ? afterNewline + 1 : summary.startsWith(SECTIONS_MARKER) ? 0 : -1;
   if (at < 0) return { core: summary, sections: "" };
   return { core: summary.slice(0, at).trimEnd(), sections: summary.slice(at) };
+}
+
+const FACT_KINDS = new Set(["id", "number", "timestamp", "url", "path", "error", "other"]);
+const DIRECTIVE_SOURCES = new Set(["operator", "user", "rejection"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function strings(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : undefined;
+}
+
+function validPinned(x: unknown): x is PinnedFact {
+  return isRecord(x) && typeof x.kind === "string" && FACT_KINDS.has(x.kind) && typeof x.value === "string" && typeof x.context === "string" && isRecord(x.source) && typeof x.source.messageIndex === "number";
+}
+
+function validCleared(x: unknown): x is ClearedResult {
+  return isRecord(x) && typeof x.toolName === "string" && typeof x.toolCallId === "string" && typeof x.recoverHint === "string" && typeof x.bytes === "number" && typeof x.descriptor === "string";
+}
+
+function validDirective(x: unknown): x is Directive {
+  return isRecord(x) && typeof x.source === "string" && DIRECTIVE_SOURCES.has(x.source) && typeof x.text === "string";
+}
+
+/** Details come from the session file, so anything not shaped like ours is dropped rather than trusted. */
+export function readStageflowDetails(value: unknown): StageflowCompactionDetails | undefined {
+  if (!isRecord(value)) return undefined;
+  const readFiles = strings(value.readFiles);
+  const modifiedFiles = strings(value.modifiedFiles);
+  return {
+    ...(readFiles ? { readFiles } : {}),
+    ...(modifiedFiles ? { modifiedFiles } : {}),
+    ...(Array.isArray(value.stageflowPinned) ? { stageflowPinned: value.stageflowPinned.filter(validPinned) } : {}),
+    ...(Array.isArray(value.stageflowCleared) ? { stageflowCleared: value.stageflowCleared.filter(validCleared) } : {}),
+    ...(Array.isArray(value.stageflowDirectives) ? { stageflowDirectives: value.stageflowDirectives.filter(validDirective) } : {}),
+    ...(typeof value.stageflowPromptVersion === "number" ? { stageflowPromptVersion: value.stageflowPromptVersion } : {}),
+  };
 }
 
 function factKey(f: PinnedFact): string {
@@ -147,4 +187,42 @@ export function stageflowDetails(
     stageflowDirectives: [...directives],
     stageflowPromptVersion: COMPACTION_PROMPT_VERSION,
   };
+}
+
+export type SummarizeCall = {
+  messages: LooseMessage[];
+  previousSummary: string | undefined;
+};
+
+export type ComposedSummary<R> = {
+  summary: string;
+  result: R;
+  prepared: PreparedSummaryInputs;
+};
+
+/**
+ * The whole summary pipeline in one place: pin and redact the input, ask the model for the written part,
+ * scrub it, then append the deterministic sections. The Pi hook and the evaluation harness both call this,
+ * so what the harness measures is what ships.
+ */
+export async function composeCompactionSummary<R extends { summary: string }>(input: {
+  messages: readonly LooseMessage[];
+  previousSummary?: string;
+  previousDetails?: StageflowCompactionDetails;
+  state: readonly WorkingStateEntry[];
+  clearInSummary?: ClearingPolicy;
+  summarize: (call: SummarizeCall) => Promise<R>;
+}): Promise<ComposedSummary<R>> {
+  const prepared = prepareSummaryInputs({
+    messages: input.messages,
+    ...(input.previousDetails ? { previousDetails: input.previousDetails } : {}),
+    ...(input.clearInSummary ? { clearInSummary: input.clearInSummary } : {}),
+  });
+  const result = await input.summarize({
+    messages: prepared.messagesForSummarizer,
+    previousSummary: input.previousSummary !== undefined ? splitSummary(input.previousSummary).core : undefined,
+  });
+  const core = scrubSecrets(result.summary).split(SECTIONS_MARKER).join("").trimEnd();
+  const sections = renderSections({ pinned: prepared.pinned, cleared: prepared.cleared, state: input.state, directives: prepared.directives });
+  return { summary: sections ? `${core}\n\n${sections}` : core, result, prepared };
 }

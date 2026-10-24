@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addCompactionUsage,
   compactionActivityEvent,
+  compactionUsageCost,
   type CompactionEndSessionEvent,
 } from "../src/agent/compactionEvents.js";
 import { emptyStageUsage } from "../src/types/usage.js";
@@ -56,5 +57,29 @@ describe("addCompactionUsage", () => {
     const usage = emptyStageUsage();
     addCompactionUsage(usage, "m1", { ...end, result: undefined });
     expect(usage.costUsd).toBe(0);
+  });
+});
+
+describe("compaction_end shapes agree across consumers", () => {
+  const usage = { input: 1000, output: 200, cacheRead: 5, cacheWrite: 7, cost: { total: 0.004 } };
+  const shapes: Array<{ name: string; event: CompactionEndSessionEvent; cost: number; inputTokens: number }> = [
+    { name: "finished", event: end, cost: 0.004, inputTokens: 1000 },
+    { name: "finished and will retry", event: { ...end, reason: "overflow", willRetry: true }, cost: 0.004, inputTokens: 1000 },
+    { name: "aborted after the model call", event: { ...end, aborted: true }, cost: 0.004, inputTokens: 1000 },
+    { name: "no usage reported", event: { ...end, result: { summary: "s", tokensBefore: 10 } }, cost: 0, inputTokens: 0 },
+    { name: "failed with no result", event: { type: "compaction_end", reason: "overflow", result: undefined, aborted: false, willRetry: false, errorMessage: "boom" }, cost: 0, inputTokens: 0 },
+    { name: "usage without a cost", event: { ...end, result: { summary: "s", tokensBefore: 10, usage: { input: 3, output: 4 } } }, cost: 0, inputTokens: 3 },
+  ];
+
+  it.each(shapes)("$name: stage usage, agent cost and the activity event match", ({ event, cost, inputTokens }) => {
+    const stage = emptyStageUsage();
+    addCompactionUsage(stage, "m1", event);
+    const agent = compactionUsageCost(event);
+    const shown = compactionActivityEvent(event, null);
+    expect(agent.costUsd).toBeCloseTo(cost);
+    expect(agent.inputTokens).toBe(inputTokens);
+    expect(stage.costUsd).toBeCloseTo(agent.costUsd);
+    expect(shown.costUsd).toBeCloseTo(agent.costUsd);
+    expect(Object.values(stage.models).reduce((n, m) => n + m.inputTokens, 0)).toBe(agent.inputTokens);
   });
 });

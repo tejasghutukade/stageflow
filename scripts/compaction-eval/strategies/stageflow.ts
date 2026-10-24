@@ -1,5 +1,4 @@
-import { scrubSecrets } from "../../../src/compaction/pin.js";
-import { COMPACTION_FOCUS, prepareSummaryInputs, renderSections } from "../../../src/compaction/summarize.js";
+import { COMPACTION_FOCUS, composeCompactionSummary } from "../../../src/compaction/summarize.js";
 import type { ClearingPolicy } from "../../../src/compaction/mask.js";
 import type { CompactionStrategy } from "../types.js";
 import { piSummarize } from "./pi.js";
@@ -9,14 +8,15 @@ function make(id: string, description: string, opts: { focus: boolean; clear?: C
     id,
     description,
     async summarize(input) {
-      const prepared = prepareSummaryInputs({
+      const composed = await composeCompactionSummary({
         messages: input.messages as never,
+        ...(input.previousSummary !== undefined ? { previousSummary: input.previousSummary } : {}),
+        state: [],
         ...(opts.clear ? { clearInSummary: opts.clear } : {}),
+        summarize: ({ messages, previousSummary }) =>
+          piSummarize({ ...input, messages: messages as never, ...(previousSummary !== undefined ? { previousSummary } : {}) }, opts.focus ? COMPACTION_FOCUS : undefined),
       });
-      const out = await piSummarize({ ...input, messages: prepared.messagesForSummarizer as never }, opts.focus ? COMPACTION_FOCUS : undefined);
-      const sections = renderSections({ pinned: prepared.pinned, cleared: prepared.cleared, state: [], directives: prepared.directives });
-      const core = scrubSecrets(out.summary).trimEnd();
-      return { ...out, summary: sections ? `${core}\n\n${sections}` : core };
+      return { ...composed.result, summary: composed.summary };
     },
   };
 }
