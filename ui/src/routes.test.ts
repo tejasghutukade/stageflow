@@ -27,6 +27,7 @@ import {
   runStagePath,
   stagePath,
   workshopPath,
+  guidePath,
 } from "./routes";
 
 describe("parseHash", () => {
@@ -186,6 +187,21 @@ describe("parseHash", () => {
       taskPath: "pipelines/demo.task.yaml",
       projectRoot: "examples",
     });
+  });
+
+  it("new chat and session restore URLs omit package params", () => {
+    expect(workshopPath()).toBe("/workshop");
+    expect(workshopPath({ session: "sess-abc" })).toBe(
+      "/workshop?session=sess-abc",
+    );
+    expect(
+      workshopPath({
+        session: "sess-abc",
+        pipeline: "pipelines/demo.pipeline.yaml",
+      }),
+    ).toEqual(
+      expect.stringContaining("session=sess-abc"),
+    );
   });
 
   it("opens inbox for an empty hash and for #/today", () => {
@@ -359,5 +375,29 @@ describe("eval routes", () => {
   it("falls back to inbox for malformed eval paths", () => {
     expect(parseHash("#/evals/e/runs/zero")).toEqual({ name: "inbox" });
     expect(parseHash("#/evals/e/unknown")).toEqual({ name: "inbox" });
+  });
+
+  it("parses Guide and keeps chat on the short path", () => {
+    expect(parseHash("#/guide")).toEqual({ name: "guide", section: "chat" });
+    expect(parseHash(`#${guidePath()}`)).toEqual({ name: "guide", section: "chat" });
+    expect(parseHash(`#${guidePath("chat")}`)).toEqual({ name: "guide", section: "chat" });
+    expect(parseHash("#/guide/library")).toEqual({ name: "guide", section: "library" });
+  });
+
+  it("parses Guide chat session and builds session URLs", () => {
+    expect(parseHash("#/guide?session=thread-abc")).toEqual({
+      name: "guide",
+      section: "chat",
+      sessionId: "thread-abc",
+    });
+    expect(parseHash(`#${guidePath("chat", { session: "thread-abc" })}`)).toEqual({
+      name: "guide",
+      section: "chat",
+      sessionId: "thread-abc",
+    });
+    expect(guidePath("chat", { session: "thread-abc" })).toBe(
+      "/guide?session=thread-abc",
+    );
+    expect(guidePath("library", { session: "thread-abc" })).toBe("/guide/library");
   });
 });

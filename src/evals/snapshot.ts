@@ -76,11 +76,20 @@ export type ConversationSettings = {
   simulator_prompt_version: number;
 };
 
+export type InternalAgentSnapshotTarget = {
+  kind: "internal_agent";
+  profile_id: string;
+  title: string;
+  playbook_hash: string;
+  tools: string[];
+  model: string;
+};
+
 export type ConfigSnapshot = {
   snapshot_version: number;
   eval: { id: string; path: string; hash: string; definition: Record<string, unknown> };
   overrides: SnapshotOverrides;
-  target: StageSnapshotTarget | AgentSnapshotTarget;
+  target: StageSnapshotTarget | AgentSnapshotTarget | InternalAgentSnapshotTarget;
   dataset: {
     path: string;
     hash: string;
@@ -195,7 +204,7 @@ export type SnapshotInput = {
   evalHash: string;
   evalDefinition: Record<string, unknown>;
   overrides: SnapshotOverrides;
-  target: Omit<StageSnapshotTarget, "kind"> | Omit<AgentSnapshotTarget, "kind">;
+  target: Omit<StageSnapshotTarget, "kind"> | Omit<AgentSnapshotTarget, "kind"> | Omit<InternalAgentSnapshotTarget, "kind">;
   dataset: ConfigSnapshot["dataset"];
   graders: SnapshotGrader[];
   settings: ConfigSnapshot["settings"];
@@ -204,7 +213,8 @@ export type SnapshotInput = {
 };
 
 export function buildSnapshot(input: SnapshotInput): ConfigSnapshot {
-  const agentTarget = "agent_id" in input.target ? input.target : null;
+  const internalTarget = "profile_id" in input.target ? input.target : null;
+  const agentTarget = !internalTarget && "agent_id" in input.target ? input.target : null;
   return {
     snapshot_version: CONFIG_SNAPSHOT_VERSION,
     eval: {
@@ -214,14 +224,18 @@ export function buildSnapshot(input: SnapshotInput): ConfigSnapshot {
       definition: input.evalDefinition,
     },
     overrides: input.overrides,
-    target: agentTarget ? { kind: "agent", ...agentTarget } : { kind: "stage", ...(input.target as Omit<StageSnapshotTarget, "kind">) },
+    target: internalTarget
+      ? { kind: "internal_agent", ...internalTarget }
+      : agentTarget
+        ? { kind: "agent", ...agentTarget }
+        : { kind: "stage", ...(input.target as Omit<StageSnapshotTarget, "kind">) },
     dataset: input.dataset,
     graders: input.graders,
     settings: input.settings,
     engine: {
       name: input.engine.name,
       version: input.engine.version,
-      rubric_prompt_version: agentTarget ? CONVERSATION_RUBRIC_PROMPT_VERSION : RUBRIC_PROMPT_VERSION,
+      rubric_prompt_version: agentTarget || internalTarget ? CONVERSATION_RUBRIC_PROMPT_VERSION : RUBRIC_PROMPT_VERSION,
       node_version: input.engine.nodeVersion,
     },
     stageflow_version: input.stageflowVersion,

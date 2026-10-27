@@ -29,6 +29,40 @@ import { readStageVerificationHistory } from "../runstore/verificationHistory.js
 
 const auditLog = rootLogger.child({ component: "audit" });
 
+const decisionAnswer = z.enum(["accept", "reject"]);
+const freeTextOrConfirmAnswer = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("free_text"), text: z.string() }),
+  z.object({
+    kind: z.literal("confirm"),
+    decision: decisionAnswer,
+    text: z.string().optional(),
+  }),
+]);
+const askOperatorAnswerInput = z.discriminatedUnion("kind", [
+  z.object({
+    promptId: z.string().min(1),
+    kind: z.literal("free_text"),
+    text: z.string(),
+  }),
+  z.object({
+    promptId: z.string().min(1),
+    kind: z.literal("confirm"),
+    decision: decisionAnswer,
+    text: z.string().optional(),
+  }),
+  z.object({
+    promptId: z.string().min(1),
+    kind: z.literal("artifact_backed"),
+    decision: decisionAnswer,
+    text: z.string().optional(),
+  }),
+  z.object({
+    promptId: z.string().min(1),
+    kind: z.literal("multi_question"),
+    answers: z.record(z.string(), freeTextOrConfirmAnswer),
+  }),
+]);
+
 export function registerControlTools(server: McpServer, deps: McpToolDeps): void {
   const { manager, store, cwd } = deps;
 
@@ -80,7 +114,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
       inputSchema: z.object({
         runId: z.string(),
         stageId: z.string(),
-        answer: z.record(z.string(), z.unknown()),
+        answer: askOperatorAnswerInput,
       }),
     },
     async ({ runId, stageId, answer }) => {

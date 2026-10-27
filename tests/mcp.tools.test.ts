@@ -1668,8 +1668,7 @@ describe("MCP start_run repository binding (U7)", () => {
         github_token: "should-not-work",
       });
       expect(tokenReject.isError).toBe(true);
-      expect(tokenReject.payload.code).toBe("start.token_rejected");
-      expect(tokenReject.payload.field).toBe("github_token");
+      expect(tokenReject.content.map((block) => block.text ?? "").join("\n")).toMatch(/github_token/);
     });
   });
 

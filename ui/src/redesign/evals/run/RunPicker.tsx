@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { LuCheck, LuChevronDown, LuSearch } from "react-icons/lu";
-import { edgeEnabled, filterPickerOptions, nextEnabled, type PickerOption } from "./runDialogModel";
+import { edgeEnabled, filterPickerOptions, modelPickerOptions, nextEnabled, type PickerOption } from "./runDialogModel";
 import type { SwitcherTone } from "./runSwitcherModel";
 
 const MONO = "font-['Geist_Mono',monospace]";
@@ -246,5 +246,30 @@ export function RunPicker({
           )
         : null}
     </div>
+  );
+}
+
+/** The judge field: the same searchable, grouped picker as the agent model. */
+export function JudgeModelPicker({
+  models,
+  value,
+  defaultLabel,
+  onChange,
+  ariaLabel = "Judge model",
+}: {
+  models: ReadonlyArray<{ id: string; provider?: string; name?: string; judge_capable?: boolean }>;
+  value: string | null;
+  defaultLabel: string;
+  onChange: (value: string | null) => void;
+  ariaLabel?: string;
+}) {
+  return (
+    <RunPicker
+      searchable
+      ariaLabel={ariaLabel}
+      value={value ?? ""}
+      options={modelPickerOptions([...models], defaultLabel, true)}
+      onChange={(next) => onChange(next === "" ? null : next)}
+    />
   );
 }

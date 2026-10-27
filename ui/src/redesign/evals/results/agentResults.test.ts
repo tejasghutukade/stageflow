@@ -93,7 +93,9 @@ describe("agent run snapshot helpers", () => {
 describe("results header and overview", () => {
   it("writes the agent subtitle with scenarios, judge and user model", () => {
     const text = headerSubtitle(agentRun(), Date.parse("2026-10-20T10:05:00Z"));
-    expect(text).toBe("Agent Support r4 · review-diffs, 24 scenarios × 3 repeats · judge anthropic/claude-sonnet-4-5 · user anthropic/claude-sonnet-4-5 · finished 5m in 3 m 41 s");
+    expect(text).toBe(
+      "Agent Support r4 · anthropic/claude-sonnet-4-5 · review-diffs, 24 scenarios × 3 repeats · judge anthropic/claude-sonnet-4-5 · user anthropic/claude-sonnet-4-5 · finished 5m in 3 m 41 s",
+    );
   });
 
   it("keeps the stage subtitle", () => {
@@ -266,6 +268,8 @@ describe("live progress for agents", () => {
 
   it("starts the subtitle with the agent", () => {
     const run = agentRun({ started_at: "2026-10-20T10:00:00Z", finished_at: null });
-    expect(liveSubtitle(run, Date.parse("2026-10-20T10:00:30Z"))).toBe("Agent Support r4 · review-diffs, 24 cases × 3 repeats · started 30.0 s ago");
+    expect(liveSubtitle(run, Date.parse("2026-10-20T10:00:30Z"))).toBe(
+      "Agent Support r4 · anthropic/claude-sonnet-4-5 · review-diffs, 24 cases × 3 repeats · started 30.0 s ago",
+    );
   });
 });

@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { NAV_GROUPS } from "./navConfig";
 
 describe("sidebar", () => {
-  it("groups by what the person is doing, with Overview and Inbox pinned above the sections", () => {
+  it("groups by what the person is doing, with Guide, Overview and Inbox pinned above the sections", () => {
     expect(NAV_GROUPS.map((group) => [group.label ?? null, group.items.map((item) => item.id)])).toEqual([
-      [null, ["overview", "inbox"]],
+      [null, ["guide", "overview", "inbox"]],
       ["Activity", ["runs", "agent-sessions"]],
       ["Build", ["pipelines", "agents", "tasks", "catalog", "evals"]],
       ["Connect", ["triggers", "connections", "memories"]],

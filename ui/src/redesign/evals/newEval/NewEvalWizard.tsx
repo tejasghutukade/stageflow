@@ -11,6 +11,7 @@ import { SetupStep } from "./SetupStep";
 import { footerText } from "./graderForms";
 import { findAgent } from "./agentPickerModel";
 import { useAgentTargets } from "./useAgentTargets";
+import { countsAsJudgeModel } from "../run/runDialogModel";
 import { useStageFields, useWizardData } from "./useWizardData";
 import { useWizardPreview } from "./useWizardPreview";
 import { createFromDraft } from "./wizardCreate";
@@ -97,7 +98,7 @@ export function NewEvalWizard({ pipeline, stage, file, agent }: Preselect) {
   const writeRoots = writeRootsFor(data.writeRoots, draft.target);
   const { preview, dirs } = useWizardPreview(draft, datasetPaths, draft.target !== null && draft.dataset !== null, writeRoots);
   const findings = visibleFindings(preview.findings, datasetWritten || holdsCases(draft));
-  const judgeModels = useMemo(() => data.models.filter((m) => m.judge_capable !== false).map((m) => m.id), [data.models]);
+  const judgeModels = useMemo(() => data.models.filter((m) => countsAsJudgeModel(m)).map((m) => m.id), [data.models]);
 
   const step = draft.step;
   const idError = validateEvalId(draft.id, takenEvalIds);

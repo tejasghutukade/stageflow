@@ -358,6 +358,18 @@ describe("eval routes: evals", () => {
     expect(await readFile(path.join(h.root, "evals", "review.eval.yaml"), "utf8")).toBe(evalYaml());
   });
 
+  it("checks the dataset next to the eval when the draft omits the project", async () => {
+    const h = await setup();
+    const detail = await h.get(`/api/evals/review?${q(h)}`);
+    const res = await h.post("/api/evals/validate", { definition: { ...detail.body.definition, name: "Renamed" } });
+    expect(res.status).toBe(200);
+    const codes = res.body.findings.map((f: { code: string }) => f.code);
+    expect(codes).not.toContain("dataset.load_error");
+    expect(codes).not.toContain("eval.dataset_unresolved");
+    expect(res.body.findings.filter((f: { severity: string }) => f.severity === "error")).toEqual([]);
+    expect(res.body.derived_yaml).toContain("name: Renamed");
+  });
+
   it("creates an eval, refuses duplicates, and rejects invalid definitions with findings", async () => {
     const h = await setup();
     const detail = await h.get(`/api/evals/review?${q(h)}`);

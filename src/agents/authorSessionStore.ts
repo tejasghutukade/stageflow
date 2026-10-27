@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { globalStageflowHome } from "../project/globalHome.js";
 import type { SummaryLine } from "./definitionSummary.js";
@@ -130,6 +130,20 @@ export function saveAuthorSession(record: AuthorSessionRecord, storeRoot?: strin
   return next;
 }
 
+/** Removes the session directory. Returns false when the id is invalid or missing. */
+export function deleteAuthorSession(sessionId: string, storeRoot?: string): boolean {
+  let file: string;
+  try {
+    file = authorSessionFilePath(sessionId, storeRoot);
+  } catch {
+    return false;
+  }
+  const dir = path.dirname(file);
+  if (!existsSync(dir)) return false;
+  rmSync(dir, { recursive: true, force: true });
+  return true;
+}
+
 export type AuthorDraftSummary = {
   id: string;
   name: string;
@@ -142,7 +156,7 @@ function draftTitle(draft: AgentAuthorDraft): string {
   return name || "Untitled draft";
 }
 
-function draftHasWork(record: AuthorSessionRecord): boolean {
+export function draftHasWork(record: AuthorSessionRecord): boolean {
   if (record.transcript.length > 0) return true;
   for (const key of ["name", "instructions", "description"] as const) {
     const value = record.draft[key];

@@ -61,6 +61,7 @@ describe("ensureCatalogScanRoot", () => {
     expect(catalogScanRootForDirectory("examples/linkedin-candidate-search")).toBe(
       "examples/linkedin-candidate-search",
     );
+    expect(catalogScanRootForDirectory("pipelines/policy-check")).toBe("pipelines");
   });
 
   it("adds workshop once to pipelines and tasks", async () => {

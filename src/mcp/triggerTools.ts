@@ -7,7 +7,8 @@ import {
 } from "../config/catalogRelativePath.js";
 import { createTrigger, parseCreateTriggerBody } from "../config/createTrigger.js";
 import { parsePatchTriggerBody, parsePutTriggerBody, updateTriggerDefinition, updateTriggerEnabled } from "../config/updateTrigger.js";
-import { loadCatalogTriggers } from "../config/triggerCatalog.js";
+import { readTriggerAdapterStatus } from "../config/triggerAdapterStatus.js";
+import { loadCatalogTriggers, type TriggerListItem } from "../config/triggerCatalog.js";
 import { writeAudit } from "../logging/audit.js";
 import { logger as rootLogger } from "../logging/logger.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
@@ -56,27 +57,72 @@ const triggerEventSchema = z.object({
   config: z.record(z.string(), z.unknown()).optional(),
 });
 
-const createTriggerSchema = z.object({
-  project_root: z
-    .string()
-    .optional()
-    .describe(
-      "Catalog project root to write into; required when multiple catalog roots are configured and no sole non-seeded root exists",
-    ),
+function findListedTrigger(
+  items: TriggerListItem[],
+  id: string,
+  projectRoot?: string,
+): TriggerListItem | { error: string; status: 404 | 409; project_roots?: string[] } {
+  if (projectRoot) {
+    const found = items.find((item) => item.id === id && item.project_root === projectRoot);
+    if (!found) return { error: `Trigger not found: ${id}`, status: 404 };
+    return found;
+  }
+  const matches = items.filter((item) => item.id === id);
+  if (matches.length === 0) return { error: `Trigger not found: ${id}`, status: 404 };
+  if (matches.length > 1) {
+    return {
+      error: `Trigger id is ambiguous across catalog roots: ${id}`,
+      status: 409,
+      project_roots: [...new Set(matches.map((item) => item.project_root))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    };
+  }
+  return matches[0]!;
+}
+
+const triggerProjectRoot = z
+  .string()
+  .optional()
+  .describe(
+    "Catalog project root to write into; required when multiple catalog roots are configured and no sole non-seeded root exists",
+  );
+
+const triggerTask = z
+  .string()
+  .optional()
+  .describe(
+    "Catalog task id; omit to create a dynamic-mode trigger whose task is supplied at fire time",
+  );
+
+const createTriggerBase = {
+  project_root: triggerProjectRoot,
   directory: z.string(),
   id: z.string(),
   pipeline: z.string(),
-  task: z
-    .string()
-    .optional()
-    .describe(
-      "Catalog task id; omit to create a dynamic-mode trigger whose task is supplied at fire time",
-    ),
-  kind: z.enum(["manual", "schedule", "event"]),
-  schedule: triggerScheduleSchema.optional(),
-  event: triggerEventSchema.optional(),
+  task: triggerTask,
   enabled: z.boolean().optional(),
-});
+};
+
+const createTriggerSchema = z.discriminatedUnion("kind", [
+  z.object({ ...createTriggerBase, kind: z.literal("manual") }),
+  z.object({ ...createTriggerBase, kind: z.literal("schedule"), schedule: triggerScheduleSchema }),
+  z.object({ ...createTriggerBase, kind: z.literal("event"), event: triggerEventSchema }),
+]);
+
+const updateTriggerBase = {
+  id: z.string(),
+  project_root: z.string().optional(),
+  pipeline: z.string(),
+  task: z.string().optional(),
+  enabled: z.boolean(),
+};
+
+const updateTriggerSchema = z.discriminatedUnion("kind", [
+  z.object({ ...updateTriggerBase, kind: z.literal("manual") }),
+  z.object({ ...updateTriggerBase, kind: z.literal("schedule"), schedule: triggerScheduleSchema }),
+  z.object({ ...updateTriggerBase, kind: z.literal("event"), event: triggerEventSchema }),
+]);
 
 export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void {
   const { store, cwd, manager } = deps;
@@ -90,7 +136,13 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
     },
     async () => {
       const items = await loadCatalogTriggers({ store, bootCwd: cwd });
-      return textResult({ triggers: items });
+      const triggers = await Promise.all(
+        items.map(async (item) => ({
+          ...item,
+          adapter_status: await readTriggerAdapterStatus(item, store),
+        })),
+      );
+      return textResult({ triggers });
     },
   );
 
@@ -101,15 +153,25 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
         "Look up one catalog trigger by id (same source as GET /api/triggers/:id).",
       inputSchema: z.object({
         id: z.string(),
+        project_root: z
+          .string()
+          .optional()
+          .describe("Catalog project root; required when the same trigger id exists in more than one root"),
       }),
     },
-    async ({ id }) => {
+    async ({ id, project_root }) => {
       const items = await loadCatalogTriggers({ store, bootCwd: cwd });
-      const found = items.find((item) => item.id === id);
-      if (!found) {
-        return textResult({ error: `Trigger not found: ${id}`, status: 404 }, true);
+      const found = findListedTrigger(items, id, project_root);
+      if ("error" in found) {
+        return textResult(
+          { error: found.error, status: found.status, ...(found.project_roots ? { project_roots: found.project_roots } : {}) },
+          true,
+        );
       }
-      return textResult(found);
+      return textResult({
+        ...found,
+        adapter_status: await readTriggerAdapterStatus(found, store),
+      });
     },
   );
 
@@ -120,6 +182,10 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
         "Fire a catalog trigger by id: resolves its pipeline/task refs and starts a run through the same RunManager.startRun path as start_run (same as POST /api/triggers/:id/fire). Returns { runId } or { runId, queued: true, queuePosition }. Fails not_found (404) for an unknown id, or 409 when the trigger is disabled.",
       inputSchema: z.object({
         id: z.string(),
+        project_root: z
+          .string()
+          .optional()
+          .describe("Catalog project root; required when the same trigger id exists in more than one root"),
         task: taskFileSchema
           .optional()
           .describe(
@@ -127,9 +193,13 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
           ),
       }),
     },
-    async ({ id, task }) => {
+    async ({ id, task, project_root }) => {
       const callerId = callerIdFromRequestAuth();
-      const result = await fireTrigger(id, store, manager, { cwd, task });
+      const result = await fireTrigger(id, store, manager, {
+        cwd,
+        task,
+        ...(project_root ? { project_root } : {}),
+      });
       if (!result.ok) {
         writeAudit(auditLog, {
           caller_id: callerId,
@@ -227,16 +297,7 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
     "update_trigger",
     {
       description: "Replace a trigger's definition (pipeline, task, kind, schedule or event, enabled). Same validation and write path as PUT /api/triggers/:id; the id cannot change.",
-      inputSchema: z.object({
-        id: z.string(),
-        project_root: z.string().optional(),
-        pipeline: z.string(),
-        task: z.string().optional(),
-        kind: z.enum(["manual", "schedule", "event"]),
-        schedule: triggerScheduleSchema.optional(),
-        event: triggerEventSchema.optional(),
-        enabled: z.boolean().optional(),
-      }),
+      inputSchema: updateTriggerSchema,
     },
     async ({ id, project_root, ...body }) => {
       const parsed = parsePutTriggerBody(body, id);

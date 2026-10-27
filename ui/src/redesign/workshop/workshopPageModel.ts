@@ -30,9 +30,11 @@ export type WorkshopBootTarget = "package" | "session";
 
 export type SaveDialogMode = "create" | "overwrite";
 
-export type SaveIntent =
-  | { kind: "overwrite-direct" }
-  | { kind: "dialog"; mode: SaveDialogMode; allowInvalidInitial: boolean };
+export type SaveIntent = {
+  kind: "dialog";
+  mode: SaveDialogMode;
+  allowInvalidInitial: boolean;
+};
 
 export type FolderOption = { value: string; label: string };
 
@@ -90,10 +92,101 @@ export function workshopPrimarySaveDisabled(input: {
   return input.hasDestination && input.saveState === "clean";
 }
 
-export function workshopBootTarget(
+/** Session wins when both `?session=` and `?pipeline=` are present (W3). */
+export function workshopBootTarget(input: {
+  sessionId?: string | null;
+  pipelinePath?: string | null;
+}): WorkshopBootTarget {
+  if (input.sessionId?.trim()) return "session";
+  if (input.pipelinePath?.trim()) return "package";
+  return "session";
+}
+
+/** New chat / session restore: no package identity in the URL (W1). */
+export function workshopUrlAfterNewChat(): {
+  session?: undefined;
+  pipeline?: undefined;
+  task?: undefined;
+  project_root?: undefined;
+} {
+  return {};
+}
+
+/** Session restore strips package params so refresh stays on the chat (W3). */
+export function workshopUrlAfterSession(sessionId: string): { session: string } {
+  return { session: sessionId };
+}
+
+/** Intentional package open keeps pipeline identity, never a session (W1/W3). */
+export function workshopUrlAfterPackageOpen(input: {
+  pipeline: string;
+  task?: string;
+  projectRoot?: string;
+}): { pipeline: string; task?: string; project_root?: string } {
+  return {
+    pipeline: input.pipeline,
+    ...(input.task ? { task: input.task } : {}),
+    ...(input.projectRoot ? { project_root: input.projectRoot } : {}),
+  };
+}
+
+/** Cleared disk-change baseline used on New chat and package switch (W10). */
+export function emptyDiskChangeState(): {
+  fingerprints: Record<string, string>;
+  changedPaths: string[];
+  showBanner: false;
+} {
+  return { fingerprints: {}, changedPaths: [], showBanner: false };
+}
+
+/**
+ * First message after an ephemeral package open should focus/create the tied
+ * build before the agent runs (W2/W6). Returns null when a build is already
+ * selected or no package is open.
+ */
+export function packageFocusInputForChat(input: {
+  selectedBuildId: string | null;
+  savedPipelinePath: string | null | undefined;
+  projectRoot: string | null | undefined;
+}): { projectRoot: string; relativePath: string } | null {
+  if (input.selectedBuildId) return null;
+  const relativePath = input.savedPipelinePath?.trim();
+  const projectRoot = input.projectRoot?.trim();
+  if (!relativePath || !projectRoot) return null;
+  return { projectRoot, relativePath };
+}
+
+/** Bump a studio request generation so only the latest async pick/boot applies (W11). */
+export function nextStudioGeneration(ref: { current: number }): number {
+  ref.current += 1;
+  return ref.current;
+}
+
+export function studioGenerationIsCurrent(
+  captured: number,
+  ref: { current: number },
+): boolean {
+  return ref.current === captured;
+}
+
+/** Identity of a package open. The workshop session id is not part of it. */
+export function workshopPackageBootKey(
+  pipelinePath: string,
+  taskPath?: string,
+  projectRoot?: string,
+): string {
+  return `${projectRoot ?? ""}\0${pipelinePath}\0${taskPath ?? ""}`;
+}
+
+/** A session id written into the URL after boot is the same open, not a new one. */
+export function shouldBootWorkshopPackage(
+  openKey: string | null,
   pipelinePath: string | undefined,
-): WorkshopBootTarget {
-  return pipelinePath ? "package" : "session";
+  taskPath?: string,
+  projectRoot?: string,
+): boolean {
+  if (!pipelinePath) return false;
+  return openKey !== workshopPackageBootKey(pipelinePath, taskPath, projectRoot);
 }
 
 export function projectRootField(
@@ -113,6 +206,22 @@ export function draftOriginFromResponse(input: {
     project_root,
     kind: input.root_kind ?? "registered",
     readOnly: input.read_only === true,
+  };
+}
+
+/** Prefer open API origin; else catalog root metadata (never assume writable). */
+export function draftOriginFromCatalogRoot(
+  roots: readonly CatalogRoot[],
+  projectRoot: string | null | undefined,
+): DraftOrigin | null {
+  const target = projectRoot?.trim();
+  if (!target) return null;
+  const root = roots.find((item) => item.project_root === target);
+  if (!root) return null;
+  return {
+    project_root: root.project_root,
+    kind: root.kind,
+    readOnly: root.read_only === true,
   };
 }
 
@@ -245,20 +354,10 @@ export function saveIntent(input: {
   errorCount: number;
   invalid?: boolean;
 }): SaveIntent {
-  if (input.invalid) {
-    return {
-      kind: "dialog",
-      mode: input.hasDestination ? "overwrite" : "create",
-      allowInvalidInitial: true,
-    };
-  }
-  if (input.hasDestination && input.errorCount === 0) {
-    return { kind: "overwrite-direct" };
-  }
   return {
     kind: "dialog",
     mode: input.hasDestination ? "overwrite" : "create",
-    allowInvalidInitial: false,
+    allowInvalidInitial: Boolean(input.invalid),
   };
 }
 

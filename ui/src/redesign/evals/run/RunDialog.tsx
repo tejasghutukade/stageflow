@@ -409,7 +409,6 @@ function RunDialogForm({
             <RunPicker
               searchable
               ariaLabel="Judge model"
-              hint={JUDGE_ONLY_HINT}
               value={state.judgeModel ?? ""}
               options={modelPickerOptions(models, judgeDefaultLabel(ctx), true)}
               onChange={(v) => patch({ judgeModel: v === "" ? null : v })}

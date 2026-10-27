@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   buildEmitStageEnvelopeShape,
   writeStageArtifactShape,
@@ -16,19 +17,50 @@ import type { CloneEmitContext, ForkEmitContext } from "../src/types/forkChoice.
  * "fork + clone" shapes, since the typebox schema's own field set is
  * conditional on those contexts.
  */
-function typeboxFieldNames(
-  forkEmitContext?: ForkEmitContext,
-  cloneEmitContext?: CloneEmitContext,
-): string[] {
-  const def = createEmitStageEnvelopeTool({}, undefined, forkEmitContext, cloneEmitContext);
-  return Object.keys((def.parameters as { properties: Record<string, unknown> }).properties);
+type Branch = { properties?: Record<string, unknown>; required?: string[] };
+
+function branchesOf(schema: { anyOf?: Branch[]; oneOf?: Branch[] }): Branch[] {
+  return schema.anyOf ?? schema.oneOf ?? [];
 }
 
-function zodFieldNames(
+function statusOf(branch: Branch): string {
+  const status = branch.properties?.status as { const?: string } | undefined;
+  return status?.const ?? "";
+}
+
+function branchFields(
   forkEmitContext?: ForkEmitContext,
   cloneEmitContext?: CloneEmitContext,
-): string[] {
-  return Object.keys(buildEmitStageEnvelopeShape({ forkEmitContext, cloneEmitContext }));
+): { typebox: Map<string, { fields: string[]; required: string[] }>; zod: Map<string, { fields: string[]; required: string[] }> } {
+  const def = createEmitStageEnvelopeTool({}, undefined, forkEmitContext, cloneEmitContext);
+  const zodJson = z.toJSONSchema(buildEmitStageEnvelopeShape({ forkEmitContext, cloneEmitContext })) as {
+    anyOf?: Branch[];
+    oneOf?: Branch[];
+  };
+  const collect = (branches: Branch[]) => {
+    const map = new Map<string, { fields: string[]; required: string[] }>();
+    for (const branch of branches) {
+      map.set(statusOf(branch), {
+        fields: Object.keys(branch.properties ?? {}).sort(),
+        required: [...(branch.required ?? [])].sort(),
+      });
+    }
+    return map;
+  };
+  return {
+    typebox: collect(branchesOf(def.parameters as { anyOf?: Branch[] })),
+    zod: collect(branchesOf(zodJson)),
+  };
+}
+
+function fieldNames(
+  forkEmitContext?: ForkEmitContext,
+  cloneEmitContext?: CloneEmitContext,
+): { typebox: string[]; zod: string[] } {
+  const { typebox, zod } = branchFields(forkEmitContext, cloneEmitContext);
+  const names = (map: Map<string, { fields: string[] }>) =>
+    [...new Set([...map.values()].flatMap((branch) => branch.fields))].sort();
+  return { typebox: names(typebox), zod: names(zod) };
 }
 
 const CLONE_CONTEXT: CloneEmitContext = {
@@ -42,19 +74,23 @@ const FORK_CONTEXT: ForkEmitContext = {
 
 describe("emit_stage_envelope schema parity — typebox (Pi) vs Zod (Claude)", () => {
   it("same field names with no fork/clone context", () => {
-    expect(new Set(zodFieldNames())).toEqual(new Set(typeboxFieldNames()));
+    const fields = fieldNames();
+    expect(fields.zod).toEqual(fields.typebox);
+    expect(branchFields().zod).toEqual(branchFields().typebox);
   });
 
   it("clone_forks is never on the emit schema, even when a cloneEmitContext is passed", () => {
-    expect(typeboxFieldNames(undefined, CLONE_CONTEXT)).not.toContain("clone_forks");
-    expect(zodFieldNames(undefined, CLONE_CONTEXT)).not.toContain("clone_forks");
-    expect(typeboxFieldNames()).not.toContain("clone_forks");
-    expect(zodFieldNames()).not.toContain("clone_forks");
+    expect(fieldNames(undefined, CLONE_CONTEXT).typebox).not.toContain("clone_forks");
+    expect(fieldNames(undefined, CLONE_CONTEXT).zod).not.toContain("clone_forks");
+    expect(fieldNames().typebox).not.toContain("clone_forks");
+    expect(fieldNames().zod).not.toContain("clone_forks");
   });
 
   it("same field names with both a fork and a clone context", () => {
-    expect(new Set(zodFieldNames(FORK_CONTEXT, CLONE_CONTEXT))).toEqual(
-      new Set(typeboxFieldNames(FORK_CONTEXT, CLONE_CONTEXT)),
+    const fields = fieldNames(FORK_CONTEXT, CLONE_CONTEXT);
+    expect(fields.zod).toEqual(fields.typebox);
+    expect(branchFields(FORK_CONTEXT, CLONE_CONTEXT).zod).toEqual(
+      branchFields(FORK_CONTEXT, CLONE_CONTEXT).typebox,
     );
   });
 });

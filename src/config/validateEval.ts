@@ -1,3 +1,5 @@
+import { internalAgentsVisible } from "../operatorAgent/internalAgents.js";
+import { PROFILE_GRANTS } from "../toolkit/profiles.js";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { mapJudge } from "../evals/judgeProviders.js";
@@ -133,21 +135,24 @@ export async function validateEval(
 
   const targetKind = file.target.kind;
   for (const grader of loaded.graders) {
-    const wrongKind =
-      targetKind === "agent"
-        ? grader.type === "schema"
-        : CONVERSATION_GRADER_TYPES.includes(grader.type);
+    const conversationTarget = targetKind === "agent" || targetKind === "internal_agent";
+    const wrongKind = conversationTarget
+      ? grader.type === "schema"
+      : CONVERSATION_GRADER_TYPES.includes(grader.type);
     if (wrongKind) {
       add(
         "error",
         "eval.grader_not_applicable",
-        `Grader "${grader.id}" (${grader.type}) cannot grade ${targetKind === "agent" ? "an agent" : "a stage"} target`,
+        `Grader "${grader.id}" (${grader.type}) cannot grade ${conversationTarget ? "an agent" : "a stage"} target`,
       );
     }
   }
 
   if (file.target.kind === "agent") {
     return validateAgentEval(loaded, ctx, findings);
+  }
+  if (file.target.kind === "internal_agent") {
+    return validateInternalAgentEval(loaded, findings);
   }
 
   const target = await resolveEvalTarget(file, loaded.path, ctx.projectRoot);
@@ -320,6 +325,45 @@ function hasExpectedTools(c: { expected?: unknown }): boolean {
   if (typeof expected !== "object" || expected === null) return false;
   const record = expected as Record<string, unknown>;
   return record.tools !== undefined || record.forbidden_tools !== undefined;
+}
+
+function validateInternalAgentEval(loaded: LoadedEval, findings: ValidationFinding[]): ValidationFinding[] {
+  const add = (severity: ValidationSeverity, code: string, message: string): void => {
+    findings.push(evalFinding(loaded.relPath, severity, code, message));
+  };
+  const profile = loaded.file.target.kind === "internal_agent" ? loaded.file.target.profile : "";
+  if (!internalAgentsVisible()) {
+    add("error", "eval.internal_agent_hidden", "Internal agents are hidden. Set STAGEFLOW_SHOW_INTERNAL_AGENTS=1 on the Host to eval one.");
+  }
+  const grant = PROFILE_GRANTS[profile];
+  if (!grant) {
+    add("error", "eval.internal_agent_unknown", `No internal agent has id "${profile}"`);
+  }
+  const conversation = resolveConversation(loaded.file.conversation);
+  if (conversation.tools === "real") {
+    add(
+      "error",
+      "eval.internal_agent_real_tools",
+      "An internal agent eval cannot use real tools. They write the operator's project and do not pass the project-agent tool gate. Use read_only or mocked.",
+    );
+  }
+  if (grant) {
+    const names = new Set(grant.tools);
+    for (const grader of loaded.graders) {
+      if (grader.type !== "tool_calls") continue;
+      const mentioned = [
+        ...(grader.mustCall ?? []),
+        ...(grader.mustNotCall ?? []),
+        ...(grader.mustAskFirst ?? []),
+        ...grader.args.map((arg) => arg.tool),
+      ];
+      const missing = [...new Set(mentioned)].filter((name) => !names.has(name));
+      if (missing.length > 0) {
+        add("warning", "eval.tool_not_granted", `Grader "${grader.id}" names tool(s) ${profile} does not have: ${missing.join(", ")}`);
+      }
+    }
+  }
+  return findings;
 }
 
 async function validateAgentEval(

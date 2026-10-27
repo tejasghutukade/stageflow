@@ -50,7 +50,7 @@ function ctxOf(d = detail(), cases: Array<{ input: Record<string, unknown> }> = 
 describe("agent run context", () => {
   it("names the agent and its revision in the subtitle", () => {
     const c = ctxOf();
-    expect(c.subtitle).toBe("Agent Support · r4 · dataset support-cases · 1 grader");
+    expect(c.subtitle).toBe("Agent Support · r4 · anthropic/claude-sonnet-4-5 · dataset support-cases · 1 grader");
     expect(c.agent).toMatchObject({ id: "support", name: "Support", revision: 4, model: "anthropic/claude-sonnet-4-5" });
     expect(c.defaults).toEqual({ repeats: 3, maxCostUsd: 1, stageModel: "anthropic/claude-sonnet-4-5", judge: "anthropic/claude-sonnet-4-5" });
   });

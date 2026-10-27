@@ -89,7 +89,13 @@ export function EvalRow({
         ) : null}
       </div>
       <div role="cell" className={`${COLUMN.dataset} shrink-0 min-w-0`}>
-        <p className={`${MONO} truncate text-xs text-[var(--sf-text-1)]`}>{row.datasetName}</p>
+        <a
+          href={`#${row.datasetHref}`}
+          onClick={(e) => e.stopPropagation()}
+          className={`${MONO} block truncate text-xs text-[var(--sf-text-1)] hover:underline`}
+        >
+          {row.datasetName}
+        </a>
         <p className="mt-0.5 text-xs leading-[1.4] text-[var(--sf-text-3)]">{row.datasetMeta}</p>
       </div>
       <div role="cell" className={`${COLUMN.lastRun} shrink-0`}>

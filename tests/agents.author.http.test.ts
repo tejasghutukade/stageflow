@@ -180,4 +180,61 @@ describe("POST /api/agent-author/chat", () => {
       "Who is it for?",
     ]);
   });
+
+  it("DELETE removes an author session and 404s when missing", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-agent-author-delete-http-"));
+    const project = await mkdtemp(path.join(tmpdir(), "sf-agent-author-delete-project-"));
+    bindStageflowHomeForTests(home);
+    const store = createRunStore({ rootDir: home });
+    const started = await startUiServer({
+      agent: scriptedFakeAgent([]),
+      cwd: project,
+      rootDir: home,
+      store,
+      port: 0,
+      uiDistDir: path.join(home, "missing-ui"),
+      controlTokens: loadControlTokens({ STAGEFLOW_CONTROL_TOKEN: DRIVE }),
+      workshopOperatorHost: createWorkshopOperatorHost({
+        model: {
+          async complete() {
+            return { events: [{ type: "message", role: "assistant", text: "Who is it for?" }] };
+          },
+        },
+      }),
+    });
+    servers.push(started.server);
+    const address = started.server.address();
+    if (!address || typeof address === "string") throw new Error("expected a port");
+    const base = `http://127.0.0.1:${address.port}`;
+    const headers = {
+      Authorization: `Bearer ${DRIVE}`,
+      "Content-Type": "application/json",
+    };
+    const chat = await fetch(`${base}/api/agent-author/chat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ message: "A scout.", draft: { name: "Scout" } }),
+    });
+    const opened = (await chat.json()) as { sessionId: string };
+    expect(chat.status).toBe(200);
+
+    const removed = await fetch(`${base}/api/agent-author/sessions/${opened.sessionId}`, {
+      method: "DELETE",
+      headers,
+    });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ removed: true });
+    expect(readAuthorSession(opened.sessionId)).toBeNull();
+
+    const listed = await fetch(`${base}/api/agent-author/sessions`, { headers });
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toEqual({ drafts: [] });
+
+    const missing = await fetch(`${base}/api/agent-author/sessions/${opened.sessionId}`, {
+      method: "DELETE",
+      headers,
+    });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ code: "agent.session_not_found" });
+  });
 });

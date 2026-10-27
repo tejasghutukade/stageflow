@@ -74,6 +74,13 @@ export function resetAgentAuthorSessionsForTests(): void {
   sessions.clear();
 }
 
+export function forgetAgentAuthorSession(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  session.close();
+  sessions.delete(sessionId);
+}
+
 export async function runAgentAuthorTurn(input: {
   host: OperatorAgentHost;
   projectRoot: string;

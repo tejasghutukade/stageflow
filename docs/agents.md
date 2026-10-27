@@ -38,6 +38,10 @@ Every turn records a span tree, and `evals.groundedness` can score replies. See 
 
 You can also **evaluate an agent**: play scripted or simulated users against it, grade the conversations and tool calls, and compare a change to its instructions, model or tools before you save it. See [Evals for agents](evals.md#evals-for-agents). Each eval conversation runs in a hidden **eval session** with tools read-only by default; eval sessions do not appear in the lists below, the Inbox or counts ([Agent observability: eval sessions](agent-observability.md#eval-sessions)). An agent's page shows its evals and an **Evaluate** button. The **Agent sessions** page in the sidebar lists sessions across all agents (`GET /api/agents/sessions`, same filters as the per-agent list plus `agent`); an agent's own page lists only its sessions.
 
+## Internal agents {#internal-agents}
+
+The console's own assistants (the Workshop author, the agent author that drafts an agent in the create chat, and the Guide) are built into Stageflow, not project agents, and stay hidden. A maintainer who starts the Host with `STAGEFLOW_SHOW_INTERNAL_AGENTS=1` sees them in an **Internal agents** section on the Agents page: title, id and tool count, and a read-only view of the playbook and tool names (`GET /api/internal-agents`, which answers `{ "visible": false, "agents": [] }` without the variable). They cannot be edited, enabled, archived or chatted with there, and they are not counted with project agents. The same variable lets an eval target one (`target: { kind: internal_agent, profile: stageflow-guide }`). The run is read-only: a write, send or delete is recorded and not executed.
+
 ## Channels (inbound)
 
 An agent answers on **one** connection, and a connection has one agent:

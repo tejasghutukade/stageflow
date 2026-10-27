@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { Type } from "typebox";
 import { parse as parseYaml } from "yaml";
 import {
   agentAuthorContextAdapter,
@@ -9,7 +10,8 @@ import {
   type AgentAuthorContext,
   type AgentAuthorDraft,
 } from "../agentAuthorContext.js";
-import { AGENT_ID_PATTERN, parseAgentDefinition } from "../../config/loadAgent.js";
+import { slugAgentId } from "../../agents/agentId.js";
+import { parseAgentDefinition } from "../../config/loadAgent.js";
 import { listProjectMcpCatalog } from "../../config/resolveStageMcpServers.js";
 import type {
   OperatorAgentProfile,
@@ -27,6 +29,36 @@ import { globalStageflowHome } from "../../project/globalHome.js";
 export const AGENT_AUTHOR_PROFILE_ID = "agent-author";
 
 const MAX_READ_CHARS = 32_000;
+const closed = { additionalProperties: false } as const;
+const emptyParams = Type.Object({}, closed);
+
+/** Known top-level AgentDefinition fields; nested values stay Unknown (Workshop pattern). */
+const agentDraftPatchFields = {
+  id: Type.Optional(Type.Unknown()),
+  name: Type.Optional(Type.Unknown()),
+  description: Type.Optional(Type.Unknown()),
+  greeting: Type.Optional(Type.Unknown()),
+  enabled: Type.Optional(Type.Unknown()),
+  instructions: Type.Optional(Type.Unknown()),
+  project_context: Type.Optional(Type.Unknown()),
+  execution: Type.Optional(Type.Unknown()),
+  model: Type.Optional(Type.Unknown()),
+  tools: Type.Optional(Type.Unknown()),
+  approvals: Type.Optional(Type.Unknown()),
+  sub_agents: Type.Optional(Type.Unknown()),
+  sub_agent_depth: Type.Optional(Type.Unknown()),
+  guardrails: Type.Optional(Type.Unknown()),
+  evals: Type.Optional(Type.Unknown()),
+  observability: Type.Optional(Type.Unknown()),
+  channel: Type.Optional(Type.Unknown()),
+  memories: Type.Optional(Type.Unknown()),
+  web_chat: Type.Optional(Type.Unknown()),
+  schedule: Type.Optional(Type.Unknown()),
+  limits: Type.Optional(Type.Unknown()),
+} as const;
+
+const agentDraftPatchObject = Type.Object(agentDraftPatchFields, closed);
+const AGENT_DRAFT_PATCH_KEYS = new Set(Object.keys(agentDraftPatchFields));
 
 let proposalSeq = 0;
 
@@ -107,12 +139,29 @@ export function agentAuthorBridgeHint(toolNames: readonly string[]): string {
   ].join("\n");
 }
 
-function patchFromToolArgs(args: Record<string, unknown>): Record<string, unknown> | null {
-  const patch = coercePlainObject(args.patch);
-  if (patch) return patch;
-  const { summary: _summary, patch: _patch, ...rest } = args;
-  if (Object.keys(rest).length === 0) return null;
-  return coercePlainObject(rest) ?? (isPlainObject(rest) ? rest : null);
+function unknownPatchKeys(patch: Record<string, unknown>): string[] {
+  return Object.keys(patch).filter((key) => !AGENT_DRAFT_PATCH_KEYS.has(key));
+}
+
+/** Thin adapter: object / YAML-string `patch`, or flat known fields. Rejects unknown keys after coerce. */
+function patchFromToolArgs(
+  args: Record<string, unknown>,
+): { ok: true; patch: Record<string, unknown> } | { ok: false; error: string } {
+  let patch = coercePlainObject(args.patch);
+  if (!patch) {
+    const { summary: _summary, patch: _patch, ...rest } = args;
+    if (Object.keys(rest).length === 0) return { ok: false, error: "patch must be an object (JSON or YAML)" };
+    patch = coercePlainObject(rest) ?? (isPlainObject(rest) ? rest : null);
+  }
+  if (!patch) return { ok: false, error: "patch must be an object (JSON or YAML)" };
+  const unknown = unknownPatchKeys(patch);
+  if (unknown.length > 0) {
+    return {
+      ok: false,
+      error: `unknown patch field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`,
+    };
+  }
+  return { ok: true, patch };
 }
 
 /** Objects merge key by key; arrays and scalars replace; `null` removes the key. */
@@ -127,21 +176,11 @@ export function mergeDraftPatch(draft: AgentAuthorDraft, patch: Record<string, u
   return next;
 }
 
-function slugId(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/^[^a-z]+/, "")
-    .slice(0, 64);
-  return AGENT_ID_PATTERN.test(slug) ? slug : "";
-}
-
 const readProjectFile: OperatorAgentTool = {
   name: "read_project_file",
   description:
     "Read a text file inside the operator project. Relative path only. Refuses .git, node_modules, and paths outside the project. Does not write.",
+  parameters: Type.Object({ path: Type.String({ minLength: 1 }) }, closed),
   async handler(args, ctx) {
     const root = projectRootOf(ctx);
     const rel = stringArg(args, "path")?.trim();
@@ -172,6 +211,7 @@ const listProjectFiles: OperatorAgentTool = {
   name: "list_project_files",
   description:
     "List documentation the author may read: docs/ and policies/ (.md and .txt), plus AGENTS.md and README.md at the project root. Does not list source code.",
+  parameters: emptyParams,
   async handler(_args, ctx) {
     const root = projectRootOf(ctx);
     if (!root) return { ok: false, content: null, error: "project root is not set" };
@@ -209,6 +249,7 @@ const readAgentDraft: OperatorAgentTool = {
   name: "read_agent_draft",
   description:
     "Read the current unsaved agent draft (agents/<id>.agent.yaml shape). Use before update_agent_draft when you need the latest fields.",
+  parameters: emptyParams,
   handler(_args, ctx) {
     const draft = readAgentAuthorDraft(ctx.getContext());
     const context = ctx.getContext();
@@ -226,6 +267,7 @@ const readAgentDraft: OperatorAgentTool = {
 const listMcpServers: OperatorAgentTool = {
   name: "list_mcp_servers",
   description: "List MCP server names declared in the project's .mcp.json. Use these names under tools.mcp. Does not connect.",
+  parameters: emptyParams,
   async handler(_args, ctx) {
     const root = projectRootOf(ctx);
     if (!root) return { ok: false, content: null, error: "project root is not set" };
@@ -238,6 +280,7 @@ const listAuthorCatalog: OperatorAgentTool = {
   name: "list_author_catalog",
   description:
     "List host connections (id and provider only) and installed skill names. No secrets. Use these ids in channel.connection_id and tools.skills. If a name is not listed, do not grant it.",
+  parameters: emptyParams,
   async handler(_args, ctx) {
     const root = projectRootOf(ctx);
     if (!root) return { ok: false, content: null, error: "project root is not set" };
@@ -266,14 +309,22 @@ const updateAgentDraft: OperatorAgentTool = {
     "patch uses the agent YAML schema: objects merge key by key, arrays replace, null removes a key.",
     "The result lists validation issues; fix them in a follow-up patch. Does not write YAML.",
   ].join(" "),
+  parameters: Type.Object(
+    {
+      patch: agentDraftPatchObject,
+      summary: Type.Optional(Type.String()),
+    },
+    closed,
+  ),
   handler(args, ctx) {
-    const patch = patchFromToolArgs(args);
-    if (!patch) return { ok: false, content: null, error: "patch must be an object (JSON or YAML)" };
+    const parsedPatch = patchFromToolArgs(args);
+    if (!parsedPatch.ok) return { ok: false, content: null, error: parsedPatch.error };
+    const patch = parsedPatch.patch;
     const currentContext = ctx.getContext();
     const current = readAgentAuthorDraft(currentContext);
     const next = mergeDraftPatch(current, patch);
     if (typeof next.name === "string" && next.name.trim() && !(typeof next.id === "string" && next.id.trim())) {
-      const id = slugId(next.name);
+      const id = slugAgentId(next.name);
       if (id) next.id = id;
     }
     const parsed = parseAgentDefinition(next);

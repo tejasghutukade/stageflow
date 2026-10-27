@@ -119,7 +119,7 @@ Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--chec
 
 ## Pull and run (GHCR) {#pull-and-run-ghcr}
 
-Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.42`.
+Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.39`.
 
 This starts the console on this machine. The `stageflow-data` volume keeps providers and pipelines you save in the console. Pass `sf ui` because the image command is `sf mcp`. This command does not mount the Docker socket, so stage file tools run in the Stageflow container. [Compose from a checkout](#local-try-compose) is what turns the stage sandbox on.
 
@@ -128,7 +128,7 @@ docker run --rm --name stageflow \
   -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.42 \
+  ghcr.io/tejasghutukade/stageflow:0.39 \
   sf ui
 ```
 

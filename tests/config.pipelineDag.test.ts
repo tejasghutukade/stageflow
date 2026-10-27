@@ -90,6 +90,23 @@ describe("resolvePipelineDag", () => {
     ).toThrow(/on must be a non-empty unique subset/i);
   });
 
+  it.each([
+    { name: "array alias", on: ["success"] as string[] | string },
+    { name: "scalar alias", on: "success" as string[] | string },
+  ])("accepts success alias as succeeded ($name)", ({ on }) => {
+    const { dag } = resolvePipelineDag(
+      [
+        { id: "clarify", entry: true, route: [{ to: "design-doc", on }] },
+        { id: "design-doc" },
+      ],
+      ctx("alias-on"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("design-doc")?.needsEdges).toEqual([
+      { id: "clarify", on: ["succeeded"] },
+    ]);
+  });
+
   it("rejects a cycle reached via a fan-in edge", () => {
     expect(() =>
       resolvePipelineDag(

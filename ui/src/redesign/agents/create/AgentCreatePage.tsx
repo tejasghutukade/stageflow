@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { LuCheck, LuCircle, LuCode, LuTriangleAlert } from "react-icons/lu";
-import { AgentApiError, agentsApi, createAuthorSession, getAuthorSession, saveAuthorDraft, type AgentDefinition, type AgentIssue } from "../../../api/agents";
+import { AgentApiError, agentsApi, createAuthorSession, deleteAuthorSession, getAuthorSession, saveAuthorDraft, type AgentDefinition, type AgentIssue } from "../../../api/agents";
 import { agentCreatePath, agentPath, agentsPath, navigate } from "../../../routes";
 import { NOWRAP, PAGE_BG } from "../agentsTokens";
 import { AgentDefinitionForm, CREATE_SECTIONS } from "../config/AgentDefinitionForm";
@@ -12,7 +12,9 @@ import { markAgentCreated } from "../useAgent";
 import { Button, PageFooter } from "../ui"
 import { PageHeader } from "../../shell/PageHeader";;
 import { AgentAuthorChatColumn, authorMessagesFromTranscript } from "./AgentAuthorChatColumn";
+import { planAuthorCreateDiscard } from "./authorCreateDiscard";
 import { createAuthorCreateClaim, mergeAuthorTurnIntoForm } from "./authorCreateSession";
+import { createAgentHandlingIdCollision } from "./createCollision";
 
 export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string }) {
   const openedWith = useRef(authorSessionId);
@@ -30,8 +32,10 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
   const [boot, setBoot] = useState<"loading" | "ready">(authorSessionId ? "loading" : "ready");
   const [seedMessages, setSeedMessages] = useState<ReturnType<typeof authorMessagesFromTranscript> | undefined>(undefined);
   const [seedModel, setSeedModel] = useState<string | undefined>(undefined);
+  const transcriptCountRef = useRef(0);
   const skipSave = useRef(Boolean(authorSessionId));
   const [saving, setSaving] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [saveIssues, setSaveIssues] = useState<AgentIssue[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [yamlOpen, setYamlOpen] = useState(false);
@@ -50,6 +54,7 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
         const next = completeDefinition(record.draft);
         setDefinition(next);
         setAuthorWroteInstructions(Boolean(next.instructions.trim()));
+        transcriptCountRef.current = record.transcript.length;
         setSeedMessages(authorMessagesFromTranscript(record.transcript));
         if (record.model) setSeedModel(record.model);
         setSessionId(record.id);
@@ -90,6 +95,7 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
 
   async function ensureSession(): Promise<string> {
     const id = await claimRef.current.ensure(definitionRef.current, sessionRef.current);
+    if (transcriptCountRef.current < 1) transcriptCountRef.current = 1;
     if (sessionRef.current !== id) {
       sessionRef.current = id;
       setSessionId(id);
@@ -100,10 +106,33 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
 
   function rememberSession(id: string) {
     claimRef.current.adopt(id);
+    if (transcriptCountRef.current < 1) transcriptCountRef.current = 1;
     if (sessionRef.current === id) return;
     sessionRef.current = id;
     setSessionId(id);
     navigate(agentCreatePath({ session: id }));
+  }
+
+  async function onDiscard() {
+    if (discarding) return;
+    const plan = planAuthorCreateDiscard({
+      sessionId: sessionRef.current,
+      definition: definitionRef.current,
+      transcriptMessages: transcriptCountRef.current,
+    });
+    if (plan.action === "navigate") {
+      navigate(agentsPath());
+      return;
+    }
+    if (plan.confirm && !window.confirm("Discard this draft? The author session will be deleted.")) return;
+    setDiscarding(true);
+    try {
+      await deleteAuthorSession(plan.sessionId);
+    } catch {
+    } finally {
+      setDiscarding(false);
+    }
+    navigate(agentsPath());
   }
 
   const allIssues = validation.pending && saveIssues.length > 0 ? saveIssues : validation.issues;
@@ -119,7 +148,6 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
     definitionRef.current = next;
     claimRef.current.note(next);
     setDefinition(next);
-    void ensureSession().catch(() => undefined);
   }
 
   function onAuthorChange(
@@ -143,7 +171,7 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
     setSaving(true);
     setSaveError(null);
     try {
-      const created = await agentsApi.create(definition);
+      const created = await createAgentHandlingIdCollision(definition, (next) => agentsApi.create(next));
       markAgentCreated(created.agent.id);
       navigate(agentPath(created.agent.id));
     } catch (error) {
@@ -191,8 +219,10 @@ export function AgentCreatePage({ authorSessionId }: { authorSessionId?: string 
             <Button variant="ghost" icon={<LuCode aria-hidden />} onClick={() => setYamlOpen(true)}>
               View YAML
             </Button>
-            <Button onClick={() => navigate(agentsPath())}>Discard</Button>
-            <Button variant="primary" disabled={saving || validation.pending} onClick={() => void onSave()}>
+            <Button disabled={discarding} onClick={() => void onDiscard()}>
+              {discarding ? "Discarding…" : "Discard"}
+            </Button>
+            <Button variant="primary" disabled={saving || discarding || validation.pending} onClick={() => void onSave()}>
               {saving ? "Saving…" : "Save agent"}
             </Button>
           </>

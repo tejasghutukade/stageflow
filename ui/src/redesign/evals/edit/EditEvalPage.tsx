@@ -3,7 +3,7 @@ import { LuCode, LuLayoutList, LuPlay } from "react-icons/lu";
 import { EvalApiError, fetchEval, updateEval, validateEval } from "../../../api/evalsClient";
 import type { EvalDefinition, EvalDetail } from "../../../api/evalTypes";
 import type { ValidationFinding } from "../../../api/types";
-import { evalEditPath, evalRunPath, evalsPath, navigate } from "../../../routes";
+import { datasetPath, evalEditPath, evalRunPath, evalsPath, navigate } from "../../../routes";
 import { showToast } from "../../../toast";
 import { PageHeader } from "../../shell/PageHeader";
 import { BTN, BTN_PRIMARY, TEXTAREA } from "../datasets/DialogShell";
@@ -13,6 +13,7 @@ import { useAgentTargets } from "../newEval/useAgentTargets";
 import { CARD, FindingsList, MONO } from "../newEval/parts";
 import { useWizardData } from "../newEval/useWizardData";
 import type { GradersDraft } from "../newEval/wizardModel";
+import { countsAsJudgeModel } from "../run/runDialogModel";
 import { openRunDialog } from "../run/runDialogStore";
 import { DefinitionCard } from "./DefinitionCard";
 import { DiffPanel } from "./DiffPanel";
@@ -193,7 +194,7 @@ export function EditEvalPage({ evalId }: { evalId: string }) {
   }, [evalId]);
 
   const evalDir = detail ? evalDirOf(detail.path) : ".";
-  const judgeModels = useMemo(() => data.models.filter((m) => m.judge_capable !== false).map((m) => m.id), [data.models]);
+  const judgeModels = useMemo(() => data.models.filter((m) => countsAsJudgeModel(m)).map((m) => m.id), [data.models]);
   const currentTarget = useMemo(() => (state?.draft ? targetFromDefinition(data.rows, state.draft, evalDir) : null), [data.rows, state?.draft, evalDir]);
   const dataset = useMemo(() => (state?.draft ? data.datasets.find((d) => sameFile(d.path, resolveRelative(evalDir, state.draft!.dataset))) : undefined), [data.datasets, state?.draft, evalDir]);
 
@@ -390,6 +391,7 @@ export function EditEvalPage({ evalId }: { evalId: string }) {
                 onChange={change}
                 onChangeTarget={() => setDialog("target")}
                 onChangeDataset={() => setDialog("dataset")}
+                {...(dataset ? { onOpenDataset: () => navigate(datasetPath(dataset.id, { eval: evalId })) } : {})}
               />
               {isAgent ? (
                 <ConversationCard

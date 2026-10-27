@@ -81,6 +81,20 @@ export function startNewChatStudio(
   };
 }
 
+/** Browse/open a package without creating a workshop build (W2). */
+export function openEphemeralPackageStudio(input: {
+  draft: DraftPackagePayload;
+  rows: readonly StudioPickerRow[];
+  error?: string | null;
+}): StudioSelection {
+  return {
+    buildId: null,
+    draft: input.draft,
+    rows: input.rows.map((row) => ({ ...row })),
+    error: input.error ?? null,
+  };
+}
+
 export function openSessionStudio(input: {
   activeBuildId?: string | null;
   build: WorkshopBuildView | null;
@@ -157,15 +171,25 @@ export function mutationMapAfterChange<T>(
   return cards;
 }
 
+export type UnboundPackageOpen =
+  | {
+      ok: true;
+      draft: DraftPackagePayload;
+      projectRoot: string;
+      relativePath: string;
+    }
+  | { ok: false; error: string };
+
 export async function chooseStudioRow(input: {
-  sessionId: string;
+  /** When null, the studio loads the build without writing a session pointer. */
+  sessionId: string | null;
   row: StudioPickerRow;
   selection: StudioSelection;
-  focus: (
-    row: StudioPickerRow,
-  ) => Promise<
-    { ok: true; build: WorkshopBuildView } | { ok: false; error: string }
-  >;
+  /**
+   * Unbound catalog rows open as an in-memory draft only (no build create).
+   * Persistence happens on first chat message / explicit focus.
+   */
+  openUnbound: (row: StudioPickerRow) => Promise<UnboundPackageOpen>;
   updatePointer: (
     sessionId: string,
     buildId: string,
@@ -184,12 +208,14 @@ export async function chooseStudioRow(input: {
         changed: false,
       };
     }
-    const pointed = await input.updatePointer(input.sessionId, loaded.build.id);
-    if (!pointed.ok) {
-      return {
-        selection: { ...input.selection, error: pointed.error },
-        changed: false,
-      };
+    if (input.sessionId) {
+      const pointed = await input.updatePointer(input.sessionId, loaded.build.id);
+      if (!pointed.ok) {
+        return {
+          selection: { ...input.selection, error: pointed.error },
+          changed: false,
+        };
+      }
     }
     const selection = selectListedBuild(input.selection, loaded.build);
     return {
@@ -202,27 +228,20 @@ export async function chooseStudioRow(input: {
     return { selection: input.selection, changed: false };
   }
 
-  const focused = await input.focus(input.row);
-  if (!focused.ok) {
+  const opened = await input.openUnbound(input.row);
+  if (!opened.ok) {
     return {
-      selection: { ...input.selection, error: focused.error },
+      selection: { ...input.selection, error: opened.error },
       changed: false,
     };
   }
-  const pointed = await input.updatePointer(
-    input.sessionId,
-    focused.build.id,
-  );
-  if (!pointed.ok) {
-    return {
-      selection: { ...input.selection, error: pointed.error },
-      changed: false,
-    };
-  }
-  const selection = selectListedBuild(input.selection, focused.build);
+  const selection = openEphemeralPackageStudio({
+    draft: opened.draft,
+    rows: input.selection.rows,
+  });
   return {
     selection,
-    changed: selection.buildId !== input.selection.buildId,
+    changed: true,
   };
 }
 
