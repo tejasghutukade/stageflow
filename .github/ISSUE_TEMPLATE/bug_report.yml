@@ -1,0 +1,36 @@
+name: Bug report
+description: Something in Stageflow is not working as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A minimal pipeline/task YAML and the command you ran help most.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Stageflow version
+      placeholder: "sf --version"
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: "macOS 15 / Node 22 / Docker"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or JSON output
+      description: Remove secrets before pasting.
+      render: shell
