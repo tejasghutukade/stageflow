@@ -58,14 +58,14 @@ See [Architecture](docs/architecture.md) for component boundaries, execution flo
 
 ### Docker (recommended)
 
-Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.39` is the current minor tag (`0.39.0` is that exact release).
+Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.42` is the current minor tag (`0.42.0` is that exact release).
 
 ```bash
 docker run --rm --name stageflow \
   -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.39 \
+  ghcr.io/tejasghutukade/stageflow:0.42 \
   sf ui
 ```
 
@@ -82,7 +82,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.39 \
+  ghcr.io/tejasghutukade/stageflow:0.42 \
   sf ui
 ```
 
