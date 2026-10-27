@@ -27,6 +27,12 @@ import { openStageAttempt } from "./stageAttemptBootstrap.js";
 import { attemptContext } from "./stageAttemptContext.js";
 import { loadActiveFeedbackLoopContext } from "./feedbackLoopCoordinator.js";
 import {
+  buildCompletedEnvelopesFromRun,
+  resolvePriorEnvelope,
+} from "./envelopeRouting.js";
+import { assignment } from "./cloneSchedule.js";
+import { grantedPathsFromPriors } from "./priorArtifactGrants.js";
+import {
   outcomeToWorkerResult,
   SF_STAGE_WORKER,
   STAGE_WORKER_EXIT,
@@ -114,6 +120,32 @@ export async function runStageWorker(
   );
   const unbindAgentDir = bindPiAgentDirEnv(roots.agentDir);
 
+  const completedEnvelopes = await buildCompletedEnvelopesFromRun(
+    store,
+    input.runId,
+    undefined,
+    dag,
+  );
+  const assigned = assignment(
+    dag,
+    input.stageId,
+    definitionId,
+    completedEnvelopes,
+  );
+  const priorResult =
+    assigned ??
+    (await resolvePriorEnvelope({
+      dag,
+      stageId: input.stageId,
+      completedEnvelopes,
+      store,
+      runId: input.runId,
+    }));
+  const grantedPaths =
+    priorResult.ok
+      ? await grantedPathsFromPriors(workspaceDir, priorResult)
+      : [];
+
   const sandbox = await openStageSandbox({
     env: process.env,
     roots,
@@ -122,6 +154,7 @@ export async function runStageWorker(
     attempt,
     attemptDir,
     ...(checkoutRoot !== undefined ? { checkoutRoot } : {}),
+    ...(grantedPaths.length > 0 ? { grantedPaths } : {}),
   });
   roots = sandbox.roots;
   const beforeVerify = sandbox.beforeVerify;

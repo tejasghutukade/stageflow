@@ -28,6 +28,7 @@ export async function openStageSandbox(input: {
   attempt: number;
   attemptDir: string;
   checkoutRoot?: string;
+  grantedPaths?: readonly string[];
 }): Promise<StageSandbox> {
   const options = resolveSandboxContainerOptions(input.env);
   if (!options) {
@@ -60,9 +61,11 @@ export async function openStageSandbox(input: {
     options.dockerBin,
   );
   const checkout = input.checkoutRoot?.trim();
+  const grants = input.grantedPaths ?? [];
   const desk = buildSandboxDesk({
     attemptDir: input.attemptDir,
     ...(checkout ? { checkoutRoot: checkout } : {}),
+    ...(grants.length > 0 ? { grantedPaths: grants } : {}),
   });
 
   const session: StageSandbox = {

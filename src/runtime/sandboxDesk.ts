@@ -74,7 +74,7 @@ export function buildSandboxDesk(input: {
       containerPath: `${SANDBOX_MOUNT_PATH}/grants/${grantSegment(index, hostPath)}`,
       shape: "mirror",
       copyIn: true,
-      copyOut: true,
+      copyOut: false,
       optional: false,
     });
   }

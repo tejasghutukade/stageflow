@@ -75,6 +75,11 @@ describe("buildSandboxDesk", () => {
     expect(hostPaths).not.toContain(sibling);
     const grant = desk.bindings.find((binding) => binding.role === "grant");
     expect(grant?.containerPath).toBe(`${SANDBOX_MOUNT_PATH}/grants/0-note.txt`);
+    expect(grant).toMatchObject({
+      copyIn: true,
+      copyOut: false,
+      optional: false,
+    });
   });
 });
 
@@ -92,7 +97,7 @@ describe("confineSandboxPath", () => {
 });
 
 describe("populate and sync sandbox desk", () => {
-  it("copies a granted file in, leaves its sibling out, and copies edits back", async () => {
+  it("copies a granted file in, leaves its sibling out, and does not sync grant edits onto the parent host file", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-desk-sync-"));
     const stateDir = path.join(root, "docker-state");
     const attemptDir = path.join(root, "attempt");
@@ -107,6 +112,7 @@ describe("populate and sync sandbox desk", () => {
     process.env.FAKE_DOCKER_STATE_DIR = stateDir;
     try {
       const desk = buildSandboxDesk({ attemptDir, grantedPaths: [note] });
+      expect(desk.bindings.find((binding) => binding.role === "grant")?.copyOut).toBe(false);
       const { containerName } = await startSandboxContainer({
         image: "stageflow-bash:v1",
         dockerBin: fakeDockerBin,
@@ -138,7 +144,7 @@ describe("populate and sync sandbox desk", () => {
       );
       await writeFile(path.join(attemptDir, "artifacts", "kept.txt"), "published\n");
       await syncSandboxDesk({ containerName, dockerBin: fakeDockerBin, desk });
-      expect(await readFile(note, "utf8")).toBe("edited\n");
+      expect(await readFile(note, "utf8")).toBe("original\n");
       expect(await readFile(sibling, "utf8")).toBe("sibling\n");
       expect(await readFile(path.join(attemptDir, "work", "scratch.txt"), "utf8")).toBe("scratch\n");
       expect(await readFile(path.join(attemptDir, "artifacts", "kept.txt"), "utf8")).toBe(
