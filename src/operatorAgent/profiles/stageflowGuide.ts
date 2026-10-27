@@ -4,7 +4,7 @@ import type { McpToolDeps } from "../../mcp/deps.js";
 import { stageflowGuideToolNames } from "../../toolkit/profiles.js";
 import type { OperatorAgentContextAdapter, OperatorAgentProfile } from "../types.js";
 import { createConfirmActionTool, guideContextOf } from "./guideConfirm.js";
-import { createGuideOperatorTools } from "./guideTools.js";
+import { GuideToolkit } from "./guideTools.js";
 
 export const STAGEFLOW_GUIDE_PROFILE_ID = "stageflow-guide";
 
@@ -130,7 +130,7 @@ const guideContextAdapter: OperatorAgentContextAdapter = {
 
 export function createStageflowGuideProfile(deps?: McpToolDeps): OperatorAgentProfile {
   const tools = deps
-    ? [...createGuideOperatorTools(deps), createConfirmActionTool(), createShowUiTool(deps), ...createGuideKnowledgeTools()]
+    ? [...GuideToolkit(deps), createConfirmActionTool(), createShowUiTool(deps), ...createGuideKnowledgeTools()]
     : [];
   return {
     id: STAGEFLOW_GUIDE_PROFILE_ID,

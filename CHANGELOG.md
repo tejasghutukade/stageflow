@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Artifact path grammar and closed-posture disk inspect share one module each.** Emit, verify, and prior grants compose the same layout/inspect rules instead of hand-rolled twins.
+- **Run reopen clock and action eligibility are deep pure modules.** Store/`finished_at`, retention, retry, cancel, abandon, and the Gantt now-marker go through them; UI retry matches runtime (including succeeded stages that are not clone/fork blocked).
+- **Guide cards and mutations deepen.** `cardContract` owns wire validate/build for producer and console; `GuideToolkit(deps)` owns confirm + place over `buildToolkit`.
 - **Grant mounts copy files as files.** Host file artifacts bind with `shape: "file"` at `/workspace/grants/<stage>/<filename>` instead of creating a directory named after the file.
 - **Stage retry reopens cancelled runs.** Retry is allowed when the run is `failed`, `succeeded`, or `cancelled`; moving back to `running` clears `finished_at` so the timeline “now” marker and Cancel stay coherent.
 - **HTTP stage retry returns when the attempt starts.** The console Abandon/Cancel busy lock is no longer held for the whole stage.

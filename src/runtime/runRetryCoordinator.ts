@@ -1,11 +1,8 @@
 import type { StagePort } from "../agent/port.js";
-import {
-  findUnhandledFailedStage,
-  type RunDetail,
-  type RunPipelineDagSnapshot,
-  type RunStatus,
-  type RunStore,
-  type StageSnapshot,
+import type {
+  RunPipelineDagSnapshot,
+  RunStatus,
+  RunStore,
 } from "../runstore/port.js";
 import type { PipelineRunResult } from "./pipelineRunner.js";
 import {
@@ -20,6 +17,16 @@ import type { StageProcessLauncher } from "./stageProcessLauncher.js";
 import type { StageHitlController } from "./stageHitl.js";
 import { syncRunStatusFromStages } from "./stageRecovery.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import {
+  assertStageRetryEligible,
+  resumesRunOnStageRetry,
+} from "./runActionEligibility.js";
+
+export {
+  assertStageRetryEligible,
+  resumesRunOnStageRetry,
+  succeededStageRetryBlocker,
+} from "./runActionEligibility.js";
 
 export class DuplicateRetryRootError extends Error {
   constructor(runId: string, stageId: string) {
@@ -116,98 +123,6 @@ export type RetryStageRequest = {
   awaitRoot?: boolean;
   beforeAttemptStart?: (attempt: number) => Promise<void>;
 };
-
-export function succeededStageRetryBlocker(
-  stageSnap: StageSnapshot,
-): string | undefined {
-  if (
-    stageSnap.definition_id !== undefined &&
-    stageSnap.definition_id !== stageSnap.stage_id
-  ) {
-    return `Cannot re-run a succeeded clone instance stage (stage=${stageSnap.stage_id}, definition=${stageSnap.definition_id}): clone instances are created by upstream fan-out and cannot be rebuilt in place. Use rerun to start a new run.`;
-  }
-  if (stageSnap.envelope?.fork_choice !== undefined) {
-    return `Cannot re-run a succeeded fork stage (stage=${stageSnap.stage_id}): its envelope recorded a fork_choice and skipped branches cannot be restored. Use rerun to start a new run.`;
-  }
-  return undefined;
-}
-
-/** Statuses a stage retry pulls back to running so Cancel stays available. */
-export function resumesRunOnStageRetry(status: RunStatus): boolean {
-  return status === "failed" || status === "succeeded" || status === "cancelled";
-}
-
-export function assertStageRetryEligible(
-  detail: RunDetail,
-  stageId: string,
-  opts?: {
-    recoveryActive?: boolean;
-    persistedStatus?: RunStatus;
-    dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null;
-  },
-): {
-  ok: true;
-} | { ok: false; reason: string; status: number; code: string } {
-  const stageSnap = detail.stages.find((s) => s.stage_id === stageId);
-  if (!stageSnap) {
-    return {
-      ok: false,
-      reason: `Stage not found: ${stageId}`,
-      status: 404,
-      code: "stage_not_found",
-    };
-  }
-
-  if (stageSnap.status === "waiting_for_input") {
-    return {
-      ok: false,
-      reason: `Stage is waiting for input and cannot be retried`,
-      status: 409,
-      code: "hitl_not_retriable",
-    };
-  }
-
-  const runStatus = opts?.persistedStatus ?? detail.status;
-  const recoveryActive = opts?.recoveryActive === true;
-  if (!resumesRunOnStageRetry(runStatus)) {
-    const acceptedPendingRetry =
-      runStatus === "running" &&
-      stageSnap.status === "failed" &&
-      findUnhandledFailedStage(detail.stages, opts?.dag) === undefined &&
-      detail.stages.some((stage) => stage.status === "pending");
-    if (!(runStatus === "running" && recoveryActive) && !acceptedPendingRetry) {
-      return {
-        ok: false,
-        reason: `Run is not failed or succeeded (status=${runStatus})`,
-        status: 409,
-        code: "run_not_retryable",
-      };
-    }
-  }
-
-  if (stageSnap.status !== "failed" && stageSnap.status !== "succeeded") {
-    return {
-      ok: false,
-      reason: `Stage is not failed or succeeded (status=${stageSnap.status})`,
-      status: 409,
-      code: "stage_not_failed",
-    };
-  }
-
-  if (stageSnap.status === "succeeded") {
-    const blocker = succeededStageRetryBlocker(stageSnap);
-    if (blocker !== undefined) {
-      return {
-        ok: false,
-        reason: blocker,
-        status: 409,
-        code: "run_not_retryable",
-      };
-    }
-  }
-
-  return { ok: true };
-}
 
 function mutationKey(stageId: string, attempt: number): string {
   return `${stageId}\0${attempt}`;

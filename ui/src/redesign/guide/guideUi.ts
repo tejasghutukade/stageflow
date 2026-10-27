@@ -1,46 +1,11 @@
+import { readGuideUi as readGuideUiContract, type GuidePipelineStage, type GuideUi } from "@stageflow/guide-card-contract";
 import type { StatusSignal } from "../statusSignal";
-import type { GuidePipelineStage, GuideUi } from "./api";
 
-const COMPONENTS = new Set(["pipeline", "resource", "plan", "choices", "eval_report", "links"]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasArrays(value: unknown, keys: string[]): boolean {
-  return isRecord(value) && keys.every((key) => Array.isArray(value[key]));
-}
+export type { GuidePipelineStage, GuideUi };
 
 /** The card payload of a `show_ui` result, or null when it is not one the console can draw. */
 export function readGuideUi(result: unknown): GuideUi | null {
-  if (!isRecord(result) || !isRecord(result.ui)) return null;
-  const ui = result.ui;
-  if (typeof ui.component !== "string" || !COMPONENTS.has(ui.component)) return null;
-  switch (ui.component) {
-    case "pipeline": {
-      if (!hasArrays(ui.pipeline, ["stages"]) || !isRecord(ui.validation) || !isRecord(ui.link)) return null;
-      const stages = (ui.pipeline as { stages: unknown[] }).stages;
-      if (!stages.every((stage) => isRecord(stage) && typeof stage.id === "string")) return null;
-      break;
-    }
-    case "resource":
-      if (!Array.isArray(ui.fields) || !isRecord(ui.link)) return null;
-      break;
-    case "plan":
-      if (!Array.isArray(ui.steps)) return null;
-      break;
-    case "choices":
-      if (typeof ui.question !== "string" || !Array.isArray(ui.options)) return null;
-      if (!ui.options.every((option) => isRecord(option) && typeof option.id === "string" && typeof option.label === "string")) return null;
-      break;
-    case "eval_report":
-      if (!Array.isArray(ui.failures) || !isRecord(ui.link)) return null;
-      break;
-    case "links":
-      if (!Array.isArray(ui.links)) return null;
-      break;
-  }
-  return ui as GuideUi;
+  return readGuideUiContract(result);
 }
 
 /** Stages in dependency order; ties keep the authored order, and cycles fall back to it. */

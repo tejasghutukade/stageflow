@@ -237,7 +237,7 @@ export function spatialNodeAction(
     return null;
   }
   if (status === "running") return "abandon";
-  if (status === "failed" || abandoned) return "retry";
+  if (status === "failed" || status === "succeeded" || abandoned) return "retry";
   return null;
 }
 
@@ -632,7 +632,10 @@ function SpatialNode({
     snapshot !== undefined &&
     canResumeTimedOut(snapshot) &&
     onResumeStage !== undefined;
-  const showRetry = action === "retry" && canRetry(status) && onRetryStage;
+  const showRetry =
+    action === "retry" &&
+    canRetry(snapshot ?? { status }) &&
+    onRetryStage;
   const showAbandon = action === "abandon" && canAbandon(status) && onAbandonStage;
   const chromeStatus = nodeChromeStatus(status, abandoned);
   const feedbackClass = [

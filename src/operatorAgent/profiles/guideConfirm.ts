@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
+import { buildChoicesUi } from "../../guide/cardContract.js";
 import { TOOL_META } from "../../toolkit/meta.js";
 import type { OperatorAgentTool, OperatorAgentToolContext, OperatorAgentToolResult } from "../types.js";
 
@@ -92,15 +93,14 @@ export function createConfirmActionTool(): OperatorAgentTool {
           confirmation_id: confirmation.id,
           tool,
           next: "STOP. Do not call another tool. The person has not answered. Wait for their next message.",
-          ui: {
-            component: "choices",
+          ui: buildChoicesUi({
             question: summary,
             options: [
               { id: "yes", label: "Yes, go ahead" },
               { id: "no", label: "No, don't" },
             ],
             allowOther: true,
-          },
+          }),
         },
       };
     },

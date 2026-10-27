@@ -74,55 +74,62 @@ function errorOf(content: unknown): string {
   return "tool_failed";
 }
 
-/** Stageflow catalog tools as Guide profile tools. Gates and approvals are left out. */
-export function createGuideOperatorTools(deps: McpToolDeps): OperatorAgentTool[] {
+function placeArgs(name: string, args: Record<string, unknown>, deps: McpToolDeps): Record<string, unknown> {
+  const root = deps.projectRoot ?? deps.cwd;
+  return placeGuideWriteArgs(name, args, (rel) => {
+    const abs = path.resolve(root, rel);
+    const back = path.relative(root, abs);
+    if (back.startsWith("..") || path.isAbsolute(back)) return false;
+    try {
+      accessSync(abs);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function wrapCatalogTool(
+  tool: ReturnType<typeof buildToolkit>[number],
+  deps: McpToolDeps,
+  signal: AbortSignal,
+): OperatorAgentTool {
+  const confirmed = GUIDE_CONFIRMED_TOOLS.has(tool.name);
+  const placed = PLACED_TOOLS.has(tool.name);
+  const description = [
+    tool.description,
+    placed ? PLACE_NOTE : "",
+    confirmed ? "Needs confirmation_id from confirm_action, issued before the person's latest message." : "",
+  ]
+    .filter((part) => part.length > 0)
+    .join(" ");
+  return {
+    name: tool.name,
+    description,
+    parameters: modelParameters(tool.parameters, confirmed),
+    handler: async (args, ctx): Promise<OperatorAgentToolResult> => {
+      let input = args;
+      if (confirmed) {
+        const refused = checkGuideConfirmation(tool.name, args, ctx);
+        if (refused) return refused;
+        const { confirmation_id: _, ...rest } = args;
+        input = rest;
+      }
+      if (placed) input = placeArgs(tool.name, input, deps);
+      const result = await tool.run(input, { signal });
+      const content = contentOf(result.text);
+      return result.ok ? { ok: true, content } : { ok: false, content, error: errorOf(content) };
+    },
+  };
+}
+
+/**
+ * Guide-facing catalog tools. Owns confirm gating and pipeline/stage placement over `buildToolkit`.
+ * MCP and other agents keep using raw `buildToolkit`.
+ */
+export function GuideToolkit(deps: McpToolDeps): OperatorAgentTool[] {
   const signal = new AbortController().signal;
   return buildToolkit(deps)
     .filter((tool) => !isOperatorOnlyTool(tool.name))
-    .map((tool) => {
-      const confirmed = GUIDE_CONFIRMED_TOOLS.has(tool.name);
-      const placed = PLACED_TOOLS.has(tool.name);
-      const description = [
-        tool.description,
-        placed ? PLACE_NOTE : "",
-        confirmed
-          ? "Needs confirmation_id from confirm_action, issued before the person's latest message."
-          : "",
-      ]
-        .filter((part) => part.length > 0)
-        .join(" ");
-      return {
-        name: tool.name,
-        description,
-        parameters: modelParameters(tool.parameters, confirmed),
-        handler: async (args, ctx): Promise<OperatorAgentToolResult> => {
-          let input = args;
-          if (confirmed) {
-            const refused = checkGuideConfirmation(tool.name, args, ctx);
-            if (refused) return refused;
-            const { confirmation_id: _, ...rest } = args;
-            input = rest;
-          }
-          if (placed) {
-            const root = deps.projectRoot ?? deps.cwd;
-            input = placeGuideWriteArgs(tool.name, input, (rel) => {
-              const abs = path.resolve(root, rel);
-              const back = path.relative(root, abs);
-              if (back.startsWith("..") || path.isAbsolute(back)) return false;
-              try {
-                accessSync(abs);
-                return true;
-              } catch {
-                return false;
-              }
-            });
-          }
-          const result = await tool.run(input, { signal });
-          const content = contentOf(result.text);
-          return result.ok
-            ? { ok: true, content }
-            : { ok: false, content, error: errorOf(content) };
-        },
-      };
-    });
+    .map((tool) => wrapCatalogTool(tool, deps, signal));
 }

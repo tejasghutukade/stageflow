@@ -2,79 +2,16 @@ import { authorizationHeaders, notifyControlTokenRequired } from "../../api/cont
 import { ChatApiError, type ChatApi, type ChatAgentInfo, type ChatThreadDetail, type ChatThreadSummary } from "../../chat/api";
 import { readFrames, toFrame, type ChatFrame, type ChatMessageRecord } from "../../chat/ndjson";
 
+export type {
+  GuideLink,
+  GuideLinkKind,
+  GuidePipelineStage,
+  GuideUi,
+} from "@stageflow/guide-card-contract";
+
 const ROOT = "/api/guide";
 
 export type GuideAttachmentInput = { name: string; mediaType: string; content: string };
-
-export type GuideLinkKind =
-  | "pipeline"
-  | "stage"
-  | "task"
-  | "agent"
-  | "trigger"
-  | "eval"
-  | "eval_run"
-  | "dataset"
-  | "connection"
-  | "memory"
-  | "run";
-
-export type GuideLink = { kind: GuideLinkKind; id: string; path?: string; projectRoot?: string; label?: string };
-
-export type GuidePipelineStage = {
-  id: string;
-  summary?: string;
-  model?: string;
-  needs: string[];
-  gates: string[];
-  channels: string[];
-  hasVerify: boolean;
-};
-
-export type GuideUi =
-  | {
-      component: "pipeline";
-      title: string;
-      pipeline: {
-        id: string;
-        path: string;
-        model?: string;
-        stages: GuidePipelineStage[];
-        memories: string[];
-        task?: { id: string; goal: string };
-      };
-      validation: { ok: boolean; errors: number; warnings: number; messages: string[] };
-      link: GuideLink;
-    }
-  | {
-      component: "resource";
-      title: string;
-      kind: GuideLinkKind;
-      fields: Array<{ label: string; value: string }>;
-      status?: string;
-      link: GuideLink;
-    }
-  | { component: "plan"; title: string; steps: Array<{ title: string; detail?: string; status: "todo" | "current" | "done" }> }
-  | {
-      component: "choices";
-      question: string;
-      options: Array<{ id: string; label: string; description?: string }>;
-      allowOther: boolean;
-    }
-  | {
-      component: "eval_report";
-      title: string;
-      evalId: string;
-      runId: string;
-      status: string;
-      passRate: number | null;
-      passed: boolean | null;
-      cases: number;
-      failures: Array<{ caseId: string; reason: string }>;
-      costUsd: number | null;
-      link: GuideLink;
-    }
-  | { component: "links"; title?: string; links: GuideLink[] };
 
 export type GuideToolStatus = "running" | "complete" | "error";
 

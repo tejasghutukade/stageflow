@@ -1,11 +1,17 @@
-import type { Stats } from "node:fs";
-import { lstat, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { TerminalEnvelope } from "../types/envelope.js";
 import { isInsideDir } from "../runstore/workspaceLayout.js";
+import {
+  acceptArtifactListedPath,
+  isGrantableArtifactPath,
+} from "./artifactPath.js";
+import { inspectArtifactUnderRoot } from "./artifactDiskInspect.js";
 import type { ResolvePriorEnvelopeResult } from "./envelopeRouting.js";
 import { SANDBOX_MOUNT_PATH } from "./sandboxContainer.js";
 import type { StageArtifactGrant } from "./stageRoots.js";
+
+export { isGrantableArtifactPath } from "./artifactPath.js";
 
 function successArtifactsFromPrior(
   prior: Extract<ResolvePriorEnvelopeResult, { ok: true }>,
@@ -31,85 +37,40 @@ function successArtifactsFromPrior(
   return listed;
 }
 
-export function isGrantableArtifactPath(listedPath: string): boolean {
-  if (typeof listedPath !== "string" || listedPath.length === 0) return false;
-  const posix = listedPath.replace(/\\/g, "/");
-  if (path.isAbsolute(listedPath) || path.posix.isAbsolute(posix)) return false;
-  if (posix.includes("\0") || posix.includes("..")) return false;
-  const parts = posix.split("/").filter((part) => part.length > 0);
-  if (parts.length < 6) return false;
-  if (parts[0] !== "stages" || parts[2] !== "attempts" || parts[4] !== "artifacts") {
-    return false;
-  }
-  const attempt = parts[3]!;
-  if (!/^\d+$/.test(attempt)) return false;
-  return true;
-}
-
 /**
- * Walk listedPath under workspaceRoot with lstat on every segment.
- * Rejects any symlink ancestor or leaf (same closed posture as emit disk-truth).
- * Returns the absolute lexical path only when the leaf is a regular file.
+ * Soft-skip grant host resolution: missing / symlink / non-file → null.
+ * Closed-posture walk via inspect; realpath must stay inside the workspace.
  */
 async function resolveGrantableHostFile(
   workspaceRoot: string,
   listedPath: string,
 ): Promise<string | null> {
-  const posix = listedPath.replace(/\\/g, "/");
-  const segments = posix.split("/").filter((segment) => segment.length > 0);
-  let current = workspaceRoot;
-  let stats: Stats | undefined;
-  for (const segment of segments) {
-    current = path.join(current, segment);
+  try {
+    const presence = await inspectArtifactUnderRoot(workspaceRoot, listedPath);
+    if (presence.file_type !== "file" || presence.absolutePath === undefined) {
+      return null;
+    }
+    const current = presence.absolutePath;
     if (!isInsideDir(current, workspaceRoot) || current === workspaceRoot) {
       return null;
     }
-    try {
-      stats = await lstat(current);
-    } catch {
-      return null;
-    }
-    if (stats.isSymbolicLink()) {
-      return null;
-    }
-  }
-  if (stats === undefined || !stats.isFile()) {
-    return null;
-  }
-  try {
     const workspaceReal = await realpath(workspaceRoot);
     const fileReal = await realpath(current);
     if (!isInsideDir(fileReal, workspaceReal) || fileReal === workspaceReal) {
       return null;
     }
+    return current;
   } catch {
     return null;
   }
-  return current;
-}
-
-type ParsedArtifactPath = {
-  stageId: string;
-  attempt: string;
-  relative: string;
-};
-
-function parseGrantableArtifact(listedPath: string): ParsedArtifactPath | null {
-  if (!isGrantableArtifactPath(listedPath)) return null;
-  const parts = listedPath.replace(/\\/g, "/").split("/").filter((part) => part.length > 0);
-  return {
-    stageId: parts[1]!,
-    attempt: parts[3]!,
-    relative: parts.slice(5).join("/"),
-  };
 }
 
 /** Sandbox path for one artifact. Colliding names from different attempts include the attempt. */
 export function assignGrantContainerPaths(listedPaths: readonly string[]): Map<string, string> {
   const parsed = listedPaths.map((listedPath) => {
-    const parts = parseGrantableArtifact(listedPath);
+    const parts = acceptArtifactListedPath(listedPath, { kind: "grantable" });
     const base =
-      parts === null
+      parts === undefined
         ? null
         : `${SANDBOX_MOUNT_PATH}/grants/${parts.stageId}/${parts.relative}`;
     return { listedPath, parts, base };
@@ -121,7 +82,7 @@ export function assignGrantContainerPaths(listedPaths: readonly string[]): Map<s
   }
   const assigned = new Map<string, string>();
   for (const item of parsed) {
-    if (item.parts === null || item.base === null) continue;
+    if (item.parts === undefined || item.base === null) continue;
     const containerPath =
       (counts.get(item.base) ?? 0) > 1
         ? `${SANDBOX_MOUNT_PATH}/grants/${item.parts.stageId}/attempt-${item.parts.attempt}/${item.parts.relative}`

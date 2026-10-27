@@ -11,85 +11,40 @@ import type { McpToolDeps } from "../mcp/deps.js";
 import { buildEvalDetail, buildResultsPage, EvalApiError, locateEval, runByIdOr404 } from "../evals/read/api.js";
 import { buildRunDetail } from "../evals/read/runs.js";
 import type { OperatorAgentTool, OperatorAgentToolResult } from "../operatorAgent/types.js";
+import {
+  buildChoicesUi,
+  buildLinksUi,
+  buildPlanUi,
+  GuideCardError,
+  GUIDE_LINK_KINDS,
+  GUIDE_RESOURCE_KINDS,
+  GUIDE_UI_MAX_CHOICES,
+  GUIDE_UI_MAX_FAILURES,
+  GUIDE_UI_MAX_LINKS,
+  GUIDE_UI_MAX_MESSAGES,
+  GUIDE_UI_MAX_PLAN_STEPS,
+  GUIDE_UI_MAX_TEXT,
+  type GuidePipelineStage,
+  type GuideUi,
+} from "./cardContract.js";
 
 export const GUIDE_UI_TOOL_NAMES = ["show_ui"] as const;
 
-export const GUIDE_LINK_KINDS = [
-  "pipeline",
-  "stage",
-  "task",
-  "agent",
-  "trigger",
-  "eval",
-  "eval_run",
-  "dataset",
-  "connection",
-  "memory",
-  "run",
-] as const;
+export {
+  GUIDE_LINK_KINDS,
+  GUIDE_RESOURCE_KINDS,
+  type GuideLink,
+  type GuideLinkKind,
+  type GuidePipelineStage,
+  type GuideUi,
+} from "./cardContract.js";
 
-export const GUIDE_RESOURCE_KINDS = ["agent", "trigger", "eval", "connection", "memory", "task"] as const;
-
-const MAX_TEXT = 300;
-const MAX_PLAN_STEPS = 12;
-const MAX_CHOICES = 6;
-const MAX_LINKS = 8;
-const MAX_FAILURES = 5;
-const MAX_MESSAGES = 5;
-
-export type GuideLinkKind = (typeof GUIDE_LINK_KINDS)[number];
-
-export type GuideLink = { kind: GuideLinkKind; id: string; path?: string; projectRoot?: string; label?: string };
-
-export type GuidePipelineStage = {
-  id: string;
-  summary?: string;
-  model?: string;
-  needs: string[];
-  gates: string[];
-  channels: string[];
-  hasVerify: boolean;
-};
-
-export type GuideUi =
-  | {
-      component: "pipeline";
-      title: string;
-      pipeline: {
-        id: string;
-        path: string;
-        model?: string;
-        stages: GuidePipelineStage[];
-        memories: string[];
-        task?: { id: string; goal: string };
-      };
-      validation: { ok: boolean; errors: number; warnings: number; messages: string[] };
-      link: GuideLink;
-    }
-  | {
-      component: "resource";
-      title: string;
-      kind: GuideLinkKind;
-      fields: Array<{ label: string; value: string }>;
-      status?: string;
-      link: GuideLink;
-    }
-  | { component: "plan"; title: string; steps: Array<{ title: string; detail?: string; status: "todo" | "current" | "done" }> }
-  | { component: "choices"; question: string; options: Array<{ id: string; label: string; description?: string }>; allowOther: boolean }
-  | {
-      component: "eval_report";
-      title: string;
-      evalId: string;
-      runId: string;
-      status: string;
-      passRate: number | null;
-      passed: boolean | null;
-      cases: number;
-      failures: Array<{ caseId: string; reason: string }>;
-      costUsd: number | null;
-      link: GuideLink;
-    }
-  | { component: "links"; title?: string; links: GuideLink[] };
+const MAX_TEXT = GUIDE_UI_MAX_TEXT;
+const MAX_PLAN_STEPS = GUIDE_UI_MAX_PLAN_STEPS;
+const MAX_CHOICES = GUIDE_UI_MAX_CHOICES;
+const MAX_LINKS = GUIDE_UI_MAX_LINKS;
+const MAX_FAILURES = GUIDE_UI_MAX_FAILURES;
+const MAX_MESSAGES = GUIDE_UI_MAX_MESSAGES;
 
 const text = z.string().trim().min(1).max(MAX_TEXT);
 const ref = z.string().trim().min(1).max(MAX_TEXT);
@@ -511,16 +466,14 @@ function plainUi(args: Record<string, unknown>, component: string): GuideUi {
   args = normalizePlainArgs(args);
   if (component === "plan") {
     const input = parseArgs(planArgs, args);
-    return {
-      component: "plan",
+    return buildPlanUi({
       title: input.title,
       steps: input.steps.map((step) => ({ title: step.title, ...(step.detail ? { detail: step.detail } : {}), status: step.status })),
-    };
+    });
   }
   if (component === "choices") {
     const input = parseArgs(choicesArgs, args);
-    return {
-      component: "choices",
+    return buildChoicesUi({
       question: input.question,
       options: input.options.map((option) => ({
         id: option.id,
@@ -528,11 +481,10 @@ function plainUi(args: Record<string, unknown>, component: string): GuideUi {
         ...(option.description ? { description: option.description } : {}),
       })),
       allowOther: input.allow_other ?? false,
-    };
+    });
   }
   const input = parseArgs(linksArgs, args);
-  return {
-    component: "links",
+  return buildLinksUi({
     ...(input.title ? { title: input.title } : {}),
     links: input.links.map((link) => ({
       kind: link.kind,
@@ -541,11 +493,11 @@ function plainUi(args: Record<string, unknown>, component: string): GuideUi {
       ...(link.project_root ? { projectRoot: link.project_root } : {}),
       ...(link.label ? { label: link.label } : {}),
     })),
-  };
+  });
 }
 
 function errorCode(err: unknown): string {
-  if (err instanceof GuideUiError) return err.code;
+  if (err instanceof GuideUiError || err instanceof GuideCardError) return err.code;
   if (err instanceof EvalApiError) return err.status === 404 ? "guide.ui_not_found" : err.status === 409 ? "guide.ui_ambiguous" : "guide.ui_read_failed";
   if (isAgentError(err) || err instanceof MemoryError) return /not_found/i.test(err.code) ? "guide.ui_not_found" : "guide.ui_read_failed";
   return "guide.ui_read_failed";

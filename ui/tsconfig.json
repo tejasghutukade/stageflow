@@ -18,6 +18,12 @@
     "paths": {
       "@stageflow/workshop-catalog-filenames": [
         "../src/config/workshopCatalogFilenames.ts"
+      ],
+      "@stageflow/run-status-clock": [
+        "../src/runstore/runStatusClock.ts"
+      ],
+      "@stageflow/guide-card-contract": [
+        "../src/guide/cardContract.ts"
       ]
     }
   },

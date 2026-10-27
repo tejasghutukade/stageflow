@@ -48,12 +48,25 @@ describe("stageActionVisibility", () => {
     ).toMatchObject({ showRetry: true, retryDisabled: true });
   });
 
-  it("hides retry when the stage cannot retry and no gate is blocking it", () => {
+  it("shows retry for a plain succeeded stage, hides it for blocked clones", () => {
     expect(
       stageActionVisibility({
         status: "succeeded",
         events: [],
         retryBlocked: false,
+        ...wired,
+      }).showRetry,
+    ).toBe(true);
+    expect(
+      stageActionVisibility({
+        status: "succeeded",
+        events: [],
+        retryBlocked: false,
+        stage: {
+          status: "succeeded",
+          stage_id: "design-doc#1",
+          definition_id: "design-doc",
+        },
         ...wired,
       }).showRetry,
     ).toBe(false);

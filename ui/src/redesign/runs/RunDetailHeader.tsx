@@ -350,6 +350,7 @@ export function RunDetailHeader({
         hasRetry: Boolean(onRetryStage),
         hasResume: Boolean(onResumeStage),
         hasAbandon: Boolean(onAbandonStage),
+        stage: selectedStage,
       })
     : null;
   const retryAvailable = Boolean(

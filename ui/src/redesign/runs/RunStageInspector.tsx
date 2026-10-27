@@ -170,6 +170,7 @@ export function RunStageInspector({
       hasRetry: true,
       hasResume: true,
       hasAbandon: true,
+      stage,
     });
 
   const model = stagePrimaryModel(stage);

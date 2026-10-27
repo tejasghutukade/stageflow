@@ -28,6 +28,11 @@ export default defineConfig({
         uiRoot,
         "../src/config/workshopCatalogFilenames.ts",
       ),
+      "@stageflow/run-status-clock": path.resolve(
+        uiRoot,
+        "../src/runstore/runStatusClock.ts",
+      ),
+      "@stageflow/guide-card-contract": path.resolve(uiRoot, "../src/guide/cardContract.ts"),
     },
   },
   server: {
