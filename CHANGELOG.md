@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-27
+
+### Added
+
+- **On-disk stage artifacts before emit.** `emit_stage_envelope` refuses claims that are not regular files under the attempt’s artifacts directory (closed posture: no symlinks). See [Envelopes](docs/envelopes.md).
+- **Prior envelope artifacts as sandbox grants.** Consumer stages get read-only mounts at `/workspace/grants/<stageId>/…` with an explicit listed→container mapping in the stage prompt. Missing prior files are skipped; duplicate basenames are disambiguated.
+- **Honest missing artifact claims in the console.** Envelope panels show when a claimed path is absent on disk.
+
+### Changed
+
+- **Grant mounts copy files as files.** Host file artifacts bind with `shape: "file"` at `/workspace/grants/<stage>/<filename>` instead of creating a directory named after the file.
+- **Stage retry reopens cancelled runs.** Retry is allowed when the run is `failed`, `succeeded`, or `cancelled`; moving back to `running` clears `finished_at` so the timeline “now” marker and Cancel stay coherent.
+- **HTTP stage retry returns when the attempt starts.** The console Abandon/Cancel busy lock is no longer held for the whole stage.
+- **Stage transcript tool results.** Tool outputs render as structured cards (including GitHub PR-shaped payloads) in a scrollable transcript pane instead of raw escaped JSON.
+
 ## [0.43.0] - 2026-10-24
 
 ### Added
