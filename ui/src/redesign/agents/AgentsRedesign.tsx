@@ -1,5 +1,6 @@
 import { agentCreatePath, navigate } from "../../routes";
 import { AgentsDirectoryPage } from "./AgentsDirectoryPage";
+import { agentCreateRemountKey } from "./create/agentCreateRemountKey";
 import { AgentCreatePage } from "./create/AgentCreatePage";
 import { AgentDetailPage } from "./detail/AgentDetailPage";
 import { AgentEditPage } from "./edit/AgentEditPage";
@@ -21,7 +22,9 @@ export function AgentsRedesign({
   authorSessionId?: string;
   screen: AgentsScreen;
 }) {
-  if (screen === "create") return <AgentCreatePage authorSessionId={authorSessionId} />;
+  if (screen === "create") {
+    return <AgentCreatePage key={agentCreateRemountKey(authorSessionId)} authorSessionId={authorSessionId} />;
+  }
   if (!agentId || screen === "directory") {
     return <AgentsDirectoryPage onNewAgent={() => navigate(agentCreatePath())} />;
   }

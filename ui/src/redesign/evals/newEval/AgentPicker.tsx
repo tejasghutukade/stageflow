@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import { LuSearch } from "react-icons/lu";
+import type { InternalAgent } from "../../../api/internalAgents";
 import type { EvalAgentTarget } from "../../../api/evalTypes";
 import { INPUT } from "../datasets/DialogShell";
 import { agentRowView, filterAgents, pickerNotice, type RiskBadge } from "./agentPickerModel";
+import { InternalAgentTargets } from "./InternalAgentTargets";
 import { MONO } from "./parts";
 import type { WizardTarget } from "./wizardModel";
 
@@ -12,6 +14,7 @@ type Props = {
   error: string | null;
   target: WizardTarget | null;
   onPick: (agent: EvalAgentTarget) => void;
+  onPickInternal?: (agent: InternalAgent) => void;
   onRetry?: () => void;
   listClass?: string;
 };
@@ -38,7 +41,7 @@ export function RiskBadges({ badges }: { badges: RiskBadge[] }) {
 }
 
 /** The wizard's agent list: search, one row per agent with model, revision, tool risk badges and what asks first. */
-export function AgentPicker({ items, loading, error, target, onPick, onRetry, listClass = "max-h-[300px]" }: Props) {
+export function AgentPicker({ items, loading, error, target, onPick, onPickInternal, onRetry, listClass = "max-h-[300px]" }: Props) {
   const [query, setQuery] = useState("");
   const shown = useMemo(() => filterAgents(items, query), [items, query]);
   const notice = pickerNotice({ loading, error, items, shown });
@@ -97,6 +100,7 @@ export function AgentPicker({ items, loading, error, target, onPick, onRetry, li
           );
         })}
       </div>
+      <InternalAgentTargets query={query} selectedId={target?.internal ? target.agentId : undefined} onPick={onPickInternal} />
     </>
   );
 }

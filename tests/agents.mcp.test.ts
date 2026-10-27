@@ -47,15 +47,41 @@ describe("agent MCP tools", () => {
       definition: { id: "research", name: "Research", instructions: "Answer." },
     });
     expect(created.payload?.agent).toMatchObject({ id: "research", enabled: false });
-    expect((await mcpCall(base, "list_agent_revisions", { id: "research" })).payload?.revisions[0]).toMatchObject({
+    const listedRevision = (await mcpCall(base, "list_agent_revisions", { id: "research" })).payload?.revisions[0];
+    expect(listedRevision).toMatchObject({
       source: "api",
       author: "mcp",
     });
+    const revision = await mcpCall(base, "get_agent_revision", { id: "research", revision: listedRevision.revision });
+    expect(revision.isError).toBe(false);
+    expect(revision.payload).toMatchObject({
+      revision: listedRevision.revision,
+      source: "api",
+      author: "mcp",
+      definition: { id: "research", instructions: "Answer." },
+    });
+    expect(revision.payload.yaml).toContain("Answer.");
+    const missingRevision = await mcpCall(base, "get_agent_revision", { id: "research", revision: 99 });
+    expect(missingRevision).toMatchObject({ isError: true, payload: { code: "agent.revision_not_found" } });
 
     const disabledChat = await mcpCall(base, "agent_chat", { id: "research", message: "Hi" });
     expect(disabledChat).toMatchObject({ isError: true, payload: { code: "agent.disabled" } });
 
     await mcpCall(base, "enable_agent", { id: "research" });
+    const diff = await mcpCall(base, "diff_agent_revisions", {
+      id: "research",
+      from: listedRevision.revision,
+      to: listedRevision.revision + 1,
+    });
+    expect(diff.isError).toBe(false);
+    expect(diff.payload).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "removed", text: "enabled: false" }),
+        expect.objectContaining({ kind: "added", text: "enabled: true" }),
+      ]),
+    );
+    const missingDiff = await mcpCall(base, "diff_agent_revisions", { id: "research", from: 1, to: 99 });
+    expect(missingDiff).toMatchObject({ isError: true, payload: { code: "agent.revision_not_found" } });
     const chat = await mcpCall(base, "agent_chat", { id: "research", message: "Hi" });
     expect(chat.isError).toBe(false);
     expect(chat.payload?.session).toMatchObject({ source: "mcp" });

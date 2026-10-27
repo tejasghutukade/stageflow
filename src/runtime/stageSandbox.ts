@@ -1,5 +1,7 @@
 import {
+  assertStageReadOnlyDirExists,
   resolveSandboxContainerOptions,
+  stageReadOnlyDir,
   startSandboxContainer,
   stopSandboxContainer,
 } from "./sandboxContainer.js";
@@ -32,15 +34,28 @@ export async function openStageSandbox(input: {
     return { roots: input.roots, close: async () => {} };
   }
 
+  let readOnlyDir: string | undefined;
+  try {
+    readOnlyDir = stageReadOnlyDir(input.env);
+    if (readOnlyDir !== undefined) await assertStageReadOnlyDirExists(readOnlyDir);
+  } catch (err) {
+    return {
+      roots: input.roots,
+      close: async () => {},
+      failure: err instanceof Error ? err.message : String(err),
+    };
+  }
+
   const started = await startSandboxContainer({
     image: options.image,
     dockerBin: options.dockerBin,
     runId: input.runId,
     stageId: input.stageId,
     attempt: input.attempt,
+    ...(readOnlyDir !== undefined ? { readOnlyDir } : {}),
   });
   const roots = withContainerName(
-    input.roots,
+    readOnlyDir !== undefined ? { ...input.roots, readonlyDir: readOnlyDir } : input.roots,
     started.containerName,
     options.dockerBin,
   );

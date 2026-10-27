@@ -8,6 +8,7 @@ import "./redesign/shell.css";
 import "./redesign/slice3.css";
 import "./redesign/editor/editor.css";
 import "./redesign/workshop/workshop.css";
+import "./redesign/guide/guide.css";
 import "./redesign/runs.css";
 import "./redesign/slice5.css";
 import { StrictMode } from "react";

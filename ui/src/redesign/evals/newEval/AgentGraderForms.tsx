@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { LuPlus, LuTrash2 } from "react-icons/lu";
 import { INPUT, TEXTAREA } from "../datasets/DialogShell";
+import { JudgeModelPicker } from "../run/RunPicker";
 import { ChipInput } from "./ChipInput";
 import { Field, MONO, SELECT } from "./parts";
 import {
@@ -254,12 +255,12 @@ export function GoalReachedForm({ grader, onChange, judgeModels, judgeDefault }:
   return (
     <div className="flex flex-col gap-3">
       <Field label="Judge model">
-        <select className={SELECT} value={typeof grader.judge === "string" ? grader.judge : ""} onChange={(e) => onChange(setJudge(grader, e.target.value))}>
-          <option value="">{judgeDefault ? `Eval default · ${judgeDefault}` : "Eval default"}</option>
-          {judgeModels.map((m) => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
+        <JudgeModelPicker
+          models={judgeModels.map((id) => ({ id }))}
+          value={typeof grader.judge === "string" ? grader.judge : null}
+          defaultLabel={judgeDefault ? `Eval default · ${judgeDefault}` : "Eval default"}
+          onChange={(judge) => onChange(setJudge(grader, judge ?? ""))}
+        />
       </Field>
       <Field label="Guidance (optional)" hint="Extra instructions for the judge.">
         <textarea

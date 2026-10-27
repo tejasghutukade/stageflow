@@ -43,6 +43,7 @@ describe("Workshop Author playbook + docs retrieval", () => {
     expect(playbook).toMatch(/Stage MCP|\.mcp\.json/i);
     expect(playbook).toMatch(/recover|recovery/i);
     expect(playbook).toMatch(/explain-only|no first-class Workshop editors/i);
+    expect(playbook).toContain("The pipeline already open in the studio is the one to edit");
   });
 
   it("wires primary Author tools and excludes disk/shell builtins", () => {

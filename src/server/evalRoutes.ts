@@ -246,9 +246,13 @@ function agentsOf(c: Ctx): RouteAgents | undefined {
   return c.agents?.();
 }
 
-function agentsInput(c: Ctx): { agents?: EvalAgentsPort & SessionsSource } {
+function agentsInput(c: Ctx): {
+  agents?: EvalAgentsPort & SessionsSource;
+  internalAgents?: Array<{ id: string; title: string; playbook: string; tools: string[] }>;
+} {
   const agents = agentsOf(c);
-  return agents ? { agents } : {};
+  const internalAgents = c.evalRunManager.visibleInternalAgents();
+  return { ...(agents ? { agents } : {}), ...(internalAgents.length > 0 ? { internalAgents } : {}) };
 }
 
 function engineCheck(c: Ctx): void {
@@ -368,11 +372,32 @@ function parseDefinitionOrYaml(body: Record<string, unknown>): { definition?: un
   return { definition: body.definition };
 }
 
+function validateEvalId(input: { definition?: unknown; yaml?: string }): string | undefined {
+  if (isRecord(input.definition) && typeof input.definition.id === "string") return input.definition.id;
+  if (typeof input.yaml !== "string") return undefined;
+  const match = /^id:\s*["']?([A-Za-z0-9][A-Za-z0-9._-]{0,63})["']?\s*$/m.exec(input.yaml);
+  return match?.[1];
+}
+
+async function existingEvalFile(
+  c: Ctx,
+  wire: string | undefined,
+  id: string,
+): Promise<{ projectRoot: string; absPath: string } | undefined> {
+  try {
+    const located = await evalRootFor(c, wire, id);
+    return { projectRoot: located.projectRoot, absPath: located.ref.absPath };
+  } catch (err) {
+    if (err instanceof EvalApiError && err.status === 404) return undefined;
+    throw err;
+  }
+}
+
 async function handleEvalValidate(c: Ctx): Promise<void> {
   const body = await readBody(c);
   const input = parseDefinitionOrYaml(body);
-  const projectRoot = await projectRootFor(c, wireFromBody(body));
-  const manifest = await manifestForWrite(projectRoot);
+  const wire = wireFromBody(body);
+  let projectRoot = await projectRootFor(c, wire);
   const suppliedPath = optString(body, "path");
   const datasetCases = optDatasetCases(body);
 
@@ -381,10 +406,17 @@ async function handleEvalValidate(c: Ctx): Promise<void> {
     evalAbs = path.resolve(projectRoot, suppliedPath);
     assertInsideProject(projectRoot, evalAbs, "eval path");
   } else {
-    const rawId = isRecord(input.definition) ? input.definition.id : undefined;
-    const dir = await resolveWriteDir(projectRoot, manifest, "evals");
-    const fileName = typeof rawId === "string" && ID_RE.test(rawId) ? `${rawId}.eval.yaml` : "new.eval.yaml";
-    evalAbs = path.join(dir.absDir, fileName);
+    const rawId = validateEvalId(input);
+    const located = rawId !== undefined && ID_RE.test(rawId) ? await existingEvalFile(c, wire, rawId) : undefined;
+    if (located) {
+      projectRoot = located.projectRoot;
+      evalAbs = located.absPath;
+    } else {
+      const manifest = await manifestForWrite(projectRoot);
+      const dir = await resolveWriteDir(projectRoot, manifest, "evals");
+      const fileName = rawId !== undefined && ID_RE.test(rawId) ? `${rawId}.eval.yaml` : "new.eval.yaml";
+      evalAbs = path.join(dir.absDir, fileName);
+    }
   }
 
   let derived: string;
@@ -1077,7 +1109,7 @@ async function datasetDetailFor(
   let inputSchema: unknown;
   let agent: AgentDatasetUse | undefined;
   if (useEval !== undefined) {
-    if (useEval.loaded.file.target.kind === "agent") {
+    if (useEval.loaded.file.target.kind === "agent" || useEval.loaded.file.target.kind === "internal_agent") {
       agent = { mode: resolveConversation(useEval.loaded.file.conversation).mode };
     } else {
       const target = await resolveEvalTarget(useEval.loaded.file, useEval.loaded.path, projectRoot);
@@ -1135,7 +1167,8 @@ async function conversationModeOf(c: Ctx, body: Record<string, unknown>) {
   if (evalId === undefined) return undefined;
   const { projectRoot, ref } = await evalRootFor(c, wireFromBody(body), evalId);
   const outcome = await loadEvalOutcome(ref.absPath, projectRoot);
-  return outcome.ok && outcome.value.file.target.kind === "agent"
+  const kind = outcome.ok ? outcome.value.file.target.kind : undefined;
+  return outcome.ok && (kind === "agent" || kind === "internal_agent")
     ? resolveConversation(outcome.value.file.conversation).mode
     : undefined;
 }

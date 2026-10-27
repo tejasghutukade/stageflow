@@ -49,19 +49,6 @@ function stringLiteralsSchema(values: readonly string[]) {
   );
 }
 
-function stageEnvelopeSchema(payloadSchema?: TSchema) {
-  return Type.Object({
-    status: Type.Union([Type.Literal("success"), Type.Literal("failure")]),
-    summary: Type.String({ minLength: 1 }),
-    artifacts: Type.Array(Type.String()),
-    payload: Type.Optional(
-      payloadSchema !== undefined
-        ? payloadSchema
-        : Type.Record(Type.String(), Type.Unknown()),
-    ),
-  });
-}
-
 function feedbackLoopActionSchema(context: FeedbackLoopConfig): TSchema {
   return Type.Union([
     Type.Object(
@@ -76,6 +63,66 @@ function feedbackLoopActionSchema(context: FeedbackLoopConfig): TSchema {
       { additionalProperties: false },
     ),
   ]);
+}
+
+const closed = { additionalProperties: false } as const;
+
+function checklistAttestationsSchema() {
+  return Type.Optional(
+    Type.Array(
+      Type.Object(
+        {
+          check_id: Type.String({ minLength: 1 }),
+          items: Type.Array(Type.String()),
+        },
+        closed,
+      ),
+    ),
+  );
+}
+
+function emitStageEnvelopeParameters(input: {
+  compiledPayload?: TSchema;
+  forkEmitContext?: ForkEmitContext;
+  feedbackLoopEmitContext?: FeedbackLoopConfig;
+}) {
+  const freePayload = Type.Record(Type.String(), Type.Unknown());
+  const payloadValue = input.compiledPayload ?? freePayload;
+  const forkOptional = Type.Optional(Type.Array(Type.String()));
+  const forkOnSuccess =
+    input.forkEmitContext !== undefined && input.feedbackLoopEmitContext === undefined
+      ? Type.Array(Type.String())
+      : forkOptional;
+  const shared = {
+    summary: Type.String({ minLength: 1 }),
+    artifacts: Type.Array(Type.String()),
+    checklist_attestations: checklistAttestationsSchema(),
+    stage_id: Type.Optional(Type.String()),
+    notes: Type.Optional(Type.String()),
+  };
+  const success = Type.Object(
+    {
+      status: Type.Literal("success"),
+      ...shared,
+      payload:
+        input.compiledPayload !== undefined ? input.compiledPayload : Type.Optional(freePayload),
+      fork_choice: forkOnSuccess,
+      ...(input.feedbackLoopEmitContext !== undefined
+        ? { feedback_loop: feedbackLoopActionSchema(input.feedbackLoopEmitContext) }
+        : {}),
+    },
+    closed,
+  );
+  const failure = Type.Object(
+    {
+      status: Type.Literal("failure"),
+      ...shared,
+      payload: Type.Optional(payloadValue),
+      fork_choice: forkOptional,
+    },
+    closed,
+  );
+  return Type.Union([success, failure]);
 }
 
 function toolResult(
@@ -109,36 +156,10 @@ export function createEmitStageEnvelopeTool(
     label: "Emit stage envelope",
     description:
       "Emit the shared stage handoff envelope. Call exactly once when the stage is complete. The pipeline cannot advance until this tool succeeds.",
-    parameters: Type.Object({
-      status: Type.Union([Type.Literal("success"), Type.Literal("failure")]),
-      summary: Type.String({ minLength: 1 }),
-      artifacts: Type.Array(Type.String()),
-      payload: Type.Optional(
-        compiledPayload !== undefined
-          ? compiledPayload
-          : Type.Record(Type.String(), Type.Unknown()),
-      ),
-      fork_choice:
-        forkEmitContext !== undefined && feedbackLoopEmitContext === undefined
-          ? Type.Array(Type.String())
-          : Type.Optional(Type.Array(Type.String())),
-      ...(feedbackLoopEmitContext !== undefined
-        ? {
-            feedback_loop: Type.Optional(
-              feedbackLoopActionSchema(feedbackLoopEmitContext),
-            ),
-          }
-        : {}),
-      checklist_attestations: Type.Optional(
-        Type.Array(
-          Type.Object({
-            check_id: Type.String({ minLength: 1 }),
-            items: Type.Array(Type.String()),
-          }),
-        ),
-      ),
-      stage_id: Type.Optional(Type.String()),
-      notes: Type.Optional(Type.String()),
+    parameters: emitStageEnvelopeParameters({
+      compiledPayload,
+      forkEmitContext,
+      feedbackLoopEmitContext,
     }),
     prepareArguments: prepareEmitStageEnvelopeArguments as (
       args: unknown,

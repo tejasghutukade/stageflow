@@ -28,7 +28,7 @@ export const NO_COST_HISTORY = "No cost history yet; the limit still applies";
 export const NO_PREVIOUS_RUN = "No previous run to base this on";
 export const EXCLUDES_JUDGE = "Estimate excludes judge calls.";
 export const AGENT_DEFAULT_MAX_COST_USD = 1;
-export const AGENT_MODEL_HELPER = "Try another model without editing the agent";
+export const AGENT_MODEL_HELPER = "The agent answers with this model. The first option is the one saved on the eval.";
 export const AGENT_JUDGE_SAME_HINT = "Same model as the agent. Pick another to avoid self-preference.";
 export const CONVERSATION_FOOTNOTE = "A conversation that has started always finishes, so the limit can be passed by a little.";
 export const REAL_RUN_CONSENT = "I understand this run can change files and call outside services.";
@@ -143,12 +143,20 @@ export function buildContext(input: {
 }): RunDialogContext {
   const { detail, lastRunConfig } = input;
   const def = detail.definition;
-  const isAgent = def?.target.kind === "agent";
-  const stageLabel = def?.target.kind === "agent" ? def.target.agent : (def?.target.stage ?? def?.target.file ?? "—");
+  const isAgent = def?.target.kind === "agent" || def?.target.kind === "internal_agent";
+  const stageLabel =
+    def?.target.kind === "agent"
+      ? def.target.agent
+      : def?.target.kind === "internal_agent"
+        ? def.target.profile
+        : (def?.target.stage ?? def?.target.file ?? "—");
   const datasetLabel = def ? datasetIdOf(def.dataset) : "—";
   const graders = def?.graders.length ?? 0;
   const live = detail.agent ?? null;
-  const model = def?.defaults?.model ?? (isAgent ? (live?.model ?? null) : null) ?? lastRunConfig?.target?.model ?? null;
+  const configuredModel = def?.defaults?.model ?? null;
+  const agentModel = isAgent ? live?.model ?? null : null;
+  const previousModel = typeof lastRunConfig?.target?.model === "string" ? lastRunConfig.target.model : null;
+  const model = configuredModel ?? agentModel ?? previousModel;
   const judge = def?.defaults?.judge ?? lastRunConfig?.settings?.judge ?? null;
   const conversation: EvalConversation = def?.conversation ?? {};
   const defaultMode = conversation.mode ?? "script";
@@ -159,7 +167,7 @@ export function buildContext(input: {
         id: stageLabel,
         name: agentName,
         revision: live?.revision ?? 0,
-        model: live?.model ?? null,
+        model: live?.model ?? configuredModel,
         conversation,
         userModel,
         anySimulated: defaultMode === "simulated" || (input.cases ?? []).some((c) => modeOfCase(c, defaultMode) === "simulated"),
@@ -170,7 +178,7 @@ export function buildContext(input: {
     projectRoot: input.projectRoot,
     title: `Run ${input.evalId}`,
     subtitle: agent
-      ? `Agent ${agentName}${live ? ` · r${live.revision}` : ""} · dataset ${datasetLabel} · ${graders} ${graders === 1 ? "grader" : "graders"}`
+      ? `Agent ${agentName}${live ? ` · r${live.revision}` : ""} · ${model ?? "no model set"} · dataset ${datasetLabel} · ${graders} ${graders === 1 ? "grader" : "graders"}`
       : `Stage ${stageLabel} · dataset ${datasetLabel} · ${graders} ${graders === 1 ? "grader" : "graders"}`,
     casesTotal: input.casesTotal ?? 0,
     defaults: {
@@ -242,7 +250,7 @@ export function userModelDefaultLabel(ctx: RunDialogContext): string {
 }
 
 export function agentDefaultLabel(ctx: RunDialogContext): string {
-  return ctx.defaults.stageModel ? `Agent default · ${ctx.defaults.stageModel}` : "Agent default";
+  return ctx.defaults.stageModel ? `Eval model · ${ctx.defaults.stageModel}` : "Eval model";
 }
 
 export function parseRepeats(text: string): number | null {
@@ -442,7 +450,7 @@ export function modelOptions(
   defaultLabel: string,
   forJudge: boolean,
 ): Array<{ value: string; label: string }> {
-  const list = models.filter((m) => !forJudge || m.judge_capable !== false);
+  const list = models.filter((m) => !forJudge || countsAsJudgeModel(m));
   return [{ value: "", label: defaultLabel }, ...list.map((m) => ({ value: m.id, label: m.id }))];
 }
 
@@ -462,12 +470,19 @@ export type PickerOption = {
 
 export const JUDGE_ONLY_HINT = "Judge-capable models only";
 
+/** A model the judge picker offers. Cursor is included with the judge-capable providers. */
+export function countsAsJudgeModel(model: { id: string; provider?: string; judge_capable?: boolean }): boolean {
+  if (model.judge_capable !== false) return true;
+  const provider = model.provider ?? (model.id.includes("/") ? model.id.slice(0, model.id.indexOf("/")) : "");
+  return provider === "cursor";
+}
+
 export function modelPickerOptions(
   models: Array<{ id: string; provider?: string; name?: string; judge_capable?: boolean }>,
   defaultLabel: string,
   forJudge: boolean,
 ): PickerOption[] {
-  const list = models.filter((m) => !forJudge || m.judge_capable !== false);
+  const list = models.filter((m) => !forJudge || countsAsJudgeModel(m));
   const providerOf = (m: { id: string; provider?: string }) => m.provider ?? (m.id.includes("/") ? m.id.slice(0, m.id.indexOf("/")) : "other");
   const tail = (id: string) => (id.indexOf("/") > 0 ? id.slice(id.indexOf("/") + 1) : id);
   const sorted = [...list].sort((a, b) => providerOf(a).localeCompare(providerOf(b)));

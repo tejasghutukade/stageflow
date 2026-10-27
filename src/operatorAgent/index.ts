@@ -68,6 +68,13 @@ export {
   createAgentAuthorContext,
   createAgentAuthorProfile,
 } from "./profiles/agentAuthor.js";
+export {
+  STAGEFLOW_GUIDE_GREETING,
+  STAGEFLOW_GUIDE_PLAYBOOK,
+  STAGEFLOW_GUIDE_PROFILE_ID,
+  STAGEFLOW_GUIDE_TOOL_NAMES,
+  createStageflowGuideProfile,
+} from "./profiles/stageflowGuide.js";
 export { AGENT_AUTHOR_PLAYBOOK } from "./profiles/agentAuthorPlaybook.js";
 export { operatorContextFingerprint } from "./proposals.js";
 export {

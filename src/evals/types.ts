@@ -29,7 +29,14 @@ export type StageEvalTarget = {
 
 export type AgentEvalTarget = { kind: "agent"; agent: string };
 
-export type EvalTarget = StageEvalTarget | AgentEvalTarget;
+export type InternalAgentEvalTarget = { kind: "internal_agent"; profile: string };
+
+export type EvalTarget = StageEvalTarget | AgentEvalTarget | InternalAgentEvalTarget;
+
+/** A conversation eval: a project agent or a built-in operator agent. */
+export function isConversationTarget(kind: string): boolean {
+  return kind === "agent" || kind === "internal_agent";
+}
 
 export type ConversationMode = "script" | "simulated";
 export type ConversationTools = "real" | "read_only" | "mocked";
@@ -138,7 +145,9 @@ export type StageTargetRef = {
 
 export type AgentTargetRef = { kind: "agent"; agentId: string; revision?: number };
 
-export type TargetRef = StageTargetRef | AgentTargetRef;
+export type InternalAgentTargetRef = { kind: "internal_agent"; profileId: string };
+
+export type TargetRef = StageTargetRef | AgentTargetRef | InternalAgentTargetRef;
 
 type ResolvedGraderCommon = {
   id: string;

@@ -26,6 +26,40 @@ type ToolResult = {
   isError?: boolean;
 };
 
+const closed = { additionalProperties: false } as const;
+
+function workingStateKindSchema() {
+  return Type.Union(
+    WORKING_STATE_KINDS.map((k) => Type.Literal(k)) as [
+      ReturnType<typeof Type.Literal>,
+      ReturnType<typeof Type.Literal>,
+      ...ReturnType<typeof Type.Literal>[],
+    ],
+  );
+}
+
+function workingStateParameters() {
+  return Type.Union([
+    Type.Object(
+      {
+        operation: Type.Literal("set"),
+        key: Type.String({ maxLength: WORKING_STATE_MAX_KEY }),
+        kind: workingStateKindSchema(),
+        value: Type.String({ maxLength: WORKING_STATE_MAX_VALUE }),
+      },
+      closed,
+    ),
+    Type.Object(
+      {
+        operation: Type.Literal("delete"),
+        key: Type.String({ maxLength: WORKING_STATE_MAX_KEY }),
+      },
+      closed,
+    ),
+    Type.Object({ operation: Type.Literal("list") }, closed),
+  ]);
+}
+
 function result(text: string, isError = false): ToolResult {
   return {
     content: [{ type: "text", text }],
@@ -42,22 +76,7 @@ export function createWorkingStateTool(options: WorkingStateToolOptions) {
     label: "Working state",
     description:
       "Keep your own structured working state. Older messages and tool results are trimmed automatically, but this state is kept and shown to you again after every trim. Use `set` as soon as you know something you will need later: exact values and identifiers (fact), choices and reasons (decision), what is finished (progress), what remains (todo), what is stuck (blocker). Keep entries short (one or two lines). Reuse a key to update an entry instead of adding a duplicate; use `delete` when an entry no longer matters; `list` shows everything. Never store secrets.",
-    parameters: Type.Object({
-      operation: Type.Union([
-        Type.Literal("set"),
-        Type.Literal("delete"),
-        Type.Literal("list"),
-      ]),
-      key: Type.Optional(Type.String({ maxLength: WORKING_STATE_MAX_KEY })),
-      kind: Type.Optional(
-        Type.Union(WORKING_STATE_KINDS.map((k) => Type.Literal(k)) as [
-          ReturnType<typeof Type.Literal>,
-          ReturnType<typeof Type.Literal>,
-          ...ReturnType<typeof Type.Literal>[],
-        ]),
-      ),
-      value: Type.Optional(Type.String({ maxLength: WORKING_STATE_MAX_VALUE })),
-    }),
+    parameters: workingStateParameters(),
     async execute(_toolCallId: string, input: unknown): Promise<ToolResult> {
       const params = (input ?? {}) as {
         operation?: string;
@@ -126,6 +145,7 @@ export function createWorkingStateExtension(): ExtensionFactory {
     });
     pi.registerTool({
       ...tool,
+      constrainedSampling: { type: "json_schema", strict: "prefer" },
       async execute(toolCallId: string, params: unknown,
         _signal: unknown,
         _onUpdate: unknown,

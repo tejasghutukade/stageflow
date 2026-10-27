@@ -519,7 +519,7 @@ export async function runWorkshopChatTurn(
       }
       rawEvents = await agentSession.send(prompt, {
         onDelta: input.onDelta,
-        onActivity: (update) => {
+        onActivity: ({ args: _args, result: _result, ...update }) => {
           const buildId = registry.getPinnedBuildId(sessionId);
           input.onActivity?.({
             ...update,

@@ -126,7 +126,20 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
     "edit_stage",
     {
       description: "Edit an existing stage on disk by id: body fields and/or its pipeline entry (route, entry, uses).",
-      inputSchema: z.looseObject({ path: pipelinePath, id: z.string(), allow_invalid: allowInvalid }),
+      inputSchema: z.object({
+        path: pipelinePath,
+        id: z.string(),
+        patch: record.optional(),
+        body: record.optional(),
+        pipeline_entry: record.optional(),
+        entry: z.boolean().optional(),
+        route: z.array(record).optional(),
+        uses: z.string().optional(),
+        system_prompt: z.string().optional(),
+        model: z.string().optional(),
+        io: record.optional(),
+        allow_invalid: allowInvalid,
+      }),
     },
     ({ path: relPath, allow_invalid, ...args }) => mutate(relPath, "overwrite", (draft) => buildEditStageDraft(draft, args), { allowInvalid: allow_invalid }),
   );

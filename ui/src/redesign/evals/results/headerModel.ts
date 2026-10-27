@@ -2,7 +2,7 @@ import type { EvalRunDetail, EvalRunStatus } from "../../../api/evalTypes";
 import { datasetName } from "../evalListModel";
 import { elapsedMs, incompleteBanner, runDatasetPath } from "../run/liveProgressModel";
 import { formatDuration, formatPercent, formatRelativeTime } from "../format";
-import { agentRunLabel, conversationOf, isAgentRun } from "../agentRun";
+import { agentRunLabel, conversationOf, internalAgentLabel, isAgentRun, isConversationTarget, targetModelOf } from "../agentRun";
 
 export type ResultsTabId = "overview" | "cases" | "graders" | "config";
 export type Tone = "ok" | "needs" | "fail" | "muted";
@@ -70,10 +70,14 @@ export function headerSubtitle(run: EvalRunDetail, now = Date.now()): string {
   const repeats = repeatsOf(run);
   const cases = run.progress.cases_total;
   const parts: string[] = [];
-  const agent = isAgentRun(run);
+  const agent = isConversationTarget(run);
   const agentLabel = agentRunLabel(run);
-  if (agent && agentLabel) parts.push(agentLabel);
+  const internal = internalAgentLabel(run);
+  if (isAgentRun(run) && agentLabel) parts.push(agentLabel);
+  else if (internal) parts.push(internal);
   else if (stage) parts.push(pipeline ? `Stage ${stage} in ${pipeline}` : `Stage ${stage}`);
+  const model = targetModelOf(run);
+  if (model) parts.push(model);
   const noun = agent ? (cases === 1 ? "scenario" : "scenarios") : cases === 1 ? "case" : "cases";
   const shape = `${cases} ${noun} × ${repeats} ${repeats === 1 ? "repeat" : "repeats"}`;
   parts.push(datasetPath ? `${datasetName(datasetPath)}, ${shape}` : shape);

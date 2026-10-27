@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { JUDGE_MAX_OUTPUT_TOKENS } from "../src/evals/constants.js";
 import { EngineError } from "../src/evals/engine/promptfoo/errors.js";
 import {
   ASSERTIONS_FILE,
@@ -92,7 +93,10 @@ describe("generated promptfoo config", () => {
     const rubrics = (config.tests as Array<{ assert: Array<Record<string, unknown>> }>)[0].assert.filter(
       (a) => a.type === "llm-rubric",
     );
-    expect(rubrics.map((a) => a.provider)).toEqual(["openai:chat:stub-judge", "anthropic:messages:claude-sonnet-4-5"]);
+    expect(rubrics.map((a) => a.provider)).toEqual([
+      { id: "openai:chat:stub-judge", config: { max_tokens: JUDGE_MAX_OUTPUT_TOKENS } },
+      { id: "anthropic:messages:claude-sonnet-4-5", config: { max_tokens: JUDGE_MAX_OUTPUT_TOKENS } },
+    ]);
     expect(text).not.toMatch(/apiKey|api_key/i);
     expect(rubrics[0].value).toBe("The summary is helpful");
     const first = plan().graders[1];
@@ -100,7 +104,7 @@ describe("generated promptfoo config", () => {
     expect(rubrics[0].rubricPrompt).toBe(renderRubricPrompt(first));
   });
 
-  it("uses an object provider only when a test config is given", () => {
+  it("merges a test provider config over the judge output cap", () => {
     const config = buildConfig(samplePlan(), {
       graderModuleUrl: GRADER_URL,
       judgeProviderConfig: { apiBaseUrl: "http://127.0.0.1:1/v1" },
@@ -108,7 +112,7 @@ describe("generated promptfoo config", () => {
     const assertion = (config.tests as Array<{ assert: Array<Record<string, unknown>> }>)[0].assert[1];
     expect(assertion.provider).toEqual({
       id: "openai:chat:stub-judge",
-      config: { apiBaseUrl: "http://127.0.0.1:1/v1" },
+      config: { max_tokens: JUDGE_MAX_OUTPUT_TOKENS, apiBaseUrl: "http://127.0.0.1:1/v1" },
     });
   });
 

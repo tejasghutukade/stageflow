@@ -48,6 +48,7 @@ import {
   type AskOperatorPrompt,
 } from "../tools/askOperator.js";
 import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
+import type { FeedbackLoopConfig } from "../types/pipeline.js";
 import type { PreEmitCheckOptions } from "../envelope/preEmitChecks.js";
 import { execInSandboxContainer as defaultExecInSandboxContainer } from "../runtime/sandboxContainer.js";
 import {
@@ -79,30 +80,75 @@ export type AskOperatorCapture = { prompt?: AskOperatorPrompt };
  * `fork_choice` is required (not just present) when the stage has a fork
  * to route.
  */
+function feedbackLoopShape(context: FeedbackLoopConfig) {
+  return z.discriminatedUnion("action", [
+    z.strictObject({ action: z.literal("continue") }),
+    z.strictObject({
+      action: z.literal("send_back"),
+      target: z.literal(context.target),
+    }),
+  ]);
+}
+
+function payloadShape(payloadSchema: unknown | undefined, required: boolean) {
+  const base =
+    payloadSchema === undefined
+      ? z.record(z.string(), z.unknown())
+      : z.fromJSONSchema(payloadSchema as Parameters<typeof z.fromJSONSchema>[0]);
+  return required ? base : base.optional();
+}
+
 export function buildEmitStageEnvelopeShape(options: {
   forkEmitContext?: ForkEmitContext;
   cloneEmitContext?: CloneEmitContext;
+  payloadSchema?: unknown;
+  feedbackLoopEmitContext?: FeedbackLoopConfig;
 }) {
-  return {
-    status: z.enum(["success", "failure"]),
+  const forkRequired =
+    options.forkEmitContext !== undefined && options.feedbackLoopEmitContext === undefined;
+  const attestations = z
+    .array(
+      z.strictObject({
+        check_id: z.string().min(1),
+        items: z.array(z.string()),
+      }),
+    )
+    .optional();
+  const shared = {
     summary: z.string().min(1),
     artifacts: z.array(z.string()),
-    payload: z.record(z.string(), z.unknown()).optional(),
-    fork_choice:
-      options.forkEmitContext !== undefined
-        ? z.array(z.string())
-        : z.array(z.string()).optional(),
-    checklist_attestations: z
-      .array(
-        z.object({
-          check_id: z.string().min(1),
-          items: z.array(z.string()),
-        }),
-      )
-      .optional(),
+    checklist_attestations: attestations,
     stage_id: z.string().optional(),
     notes: z.string().optional(),
+    fork_choice: z.array(z.string()).optional(),
   };
+  return z.discriminatedUnion("status", [
+    z.strictObject({
+      status: z.literal("success"),
+      ...shared,
+      payload: payloadShape(options.payloadSchema, options.payloadSchema !== undefined),
+      fork_choice: forkRequired ? z.array(z.string()) : z.array(z.string()).optional(),
+      ...(options.feedbackLoopEmitContext !== undefined
+        ? { feedback_loop: feedbackLoopShape(options.feedbackLoopEmitContext) }
+        : {}),
+    }),
+    z.strictObject({
+      status: z.literal("failure"),
+      ...shared,
+      payload: payloadShape(options.payloadSchema, false),
+    }),
+  ]);
+}
+
+function asClaudeObjectSchema(schema: z.ZodType): z.ZodType {
+  const json = z.toJSONSchema(schema) as Record<string, unknown>;
+  delete json.$schema;
+  const target = schema as z.ZodType & {
+    _zod: { def: { type?: string }; toJSONSchema?: () => unknown };
+  };
+  target._zod.def.type = "object";
+  target._zod.toJSONSchema = () => json;
+  return schema;
 }
 
 /** Exported for the same parity-test reason as `emitStageEnvelopeShape` above. */
@@ -300,6 +346,7 @@ export function buildStageflowMcpServer(options: {
   forkEmitContext?: ForkEmitContext;
   cloneEmitContext?: CloneEmitContext;
   preEmitCheckOptions?: PreEmitCheckOptions;
+  feedbackLoopEmitContext?: FeedbackLoopConfig;
   writeStageArtifact: WriteStageArtifactOptions;
   askOperator?: {
     capture: AskOperatorCapture;
@@ -313,18 +360,23 @@ export function buildStageflowMcpServer(options: {
     options.forkEmitContext,
     options.cloneEmitContext,
     options.preEmitCheckOptions,
+    options.feedbackLoopEmitContext,
   );
   const artifactDef = createWriteStageArtifactTool(options.writeStageArtifact);
 
   const emitTool = tool(
     emitDef.name,
     emitDef.description,
-    buildEmitStageEnvelopeShape({
-      forkEmitContext: options.forkEmitContext,
-      cloneEmitContext: options.cloneEmitContext,
-    }),
+    asClaudeObjectSchema(
+      buildEmitStageEnvelopeShape({
+        forkEmitContext: options.forkEmitContext,
+        cloneEmitContext: options.cloneEmitContext,
+        payloadSchema: options.payloadSchema,
+        feedbackLoopEmitContext: options.feedbackLoopEmitContext,
+      }),
+    ) as never,
     async (args) => toCallToolResult(await emitDef.execute("claude-tool-call", args)),
-  );
+  ) as unknown as SdkMcpToolDefinition<any>;
 
   const artifactTool = tool(
     artifactDef.name,

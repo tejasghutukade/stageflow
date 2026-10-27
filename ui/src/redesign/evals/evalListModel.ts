@@ -5,7 +5,7 @@ import type {
   EvalListStatus,
   EvalRegressionBanner,
 } from "../../api";
-import { evalComparePath, evalEditPath, evalPath, evalRunPath } from "../../routes";
+import { datasetPath, evalComparePath, evalEditPath, evalPath, evalRunPath } from "../../routes";
 import { activeRunText } from "./run/runSwitcherModel";
 import { formatCost, formatPercent, formatPoints } from "./format";
 
@@ -123,6 +123,7 @@ export type EvalRowModel = {
   targetLabel: string;
   targetPath: string;
   datasetName: string;
+  datasetHref: string;
   datasetMeta: string;
   hasRun: boolean;
   rateText: string;
@@ -180,6 +181,7 @@ export function evalRowModel(item: EvalListItem): EvalRowModel {
     targetLabel: targetLabelOf(item),
     targetPath: targetPath(item),
     datasetName: datasetName(item.dataset_path),
+    datasetHref: datasetPath(datasetName(item.dataset_path), { eval: item.id }),
     datasetMeta: datasetMeta(item),
     hasRun: last !== null,
     rateText: formatPercent(rate),

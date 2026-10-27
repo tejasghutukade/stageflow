@@ -3,12 +3,13 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmS
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { globalStageflowHome } from "../../../project/globalHome.js";
-import type {
-  EngineIo,
-  EvalEngine,
-  EvalPlan,
-  RunCaseRequest,
-  RunCaseResult,
+import {
+  isConversationTarget,
+  type EngineIo,
+  type EvalEngine,
+  type EvalPlan,
+  type RunCaseRequest,
+  type RunCaseResult,
 } from "../../types.js";
 import { EngineError } from "./errors.js";
 import {
@@ -222,7 +223,7 @@ export class PromptfooEngine implements EvalEngine {
     const hostRuns = new Map<string, RunCaseResult>();
     const keyOf = (caseId: string, repeatIndex: number): string => `${caseId}#${repeatIndex}`;
     const runCase = async (req: RunCaseRequest): Promise<RunCaseResult> => {
-      io.onPhase(req.caseId, req.repeatIndex, plan.target.kind === "agent" ? "agent_running" : "stage_running");
+      io.onPhase(req.caseId, req.repeatIndex, isConversationTarget(plan.target.kind) ? "agent_running" : "stage_running");
       const result = await io.runCase(req);
       hostRuns.set(keyOf(req.caseId, req.repeatIndex), result);
       if (result.ok) io.onPhase(req.caseId, req.repeatIndex, "grading");

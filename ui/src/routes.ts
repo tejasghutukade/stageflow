@@ -59,6 +59,7 @@ export type Route =
   | { name: "extensionFile"; path: string }
   | { name: "settings" }
   | { name: "connect" }
+  | { name: "guide"; section: string; sessionId?: string }
   | {
       name: "workshop";
       sessionId?: string;
@@ -155,6 +156,14 @@ export function extensionPackagePath(
 
 export function extensionFilePath(filePath: string): string {
   return `/extensions/files/${encodeURIComponent(filePath)}`;
+}
+
+export function guidePath(section: string = "chat", opts?: { session?: string }): string {
+  const base = section === "chat" ? "/guide" : `/guide/${encodeURIComponent(section)}`;
+  if (section === "chat" && opts?.session) {
+    return `${base}?session=${encodeURIComponent(opts.session)}`;
+  }
+  return base;
 }
 
 export function workshopPath(opts?: {
@@ -537,6 +546,18 @@ export function parseHash(hash = window.location.hash): Route {
   }
   if (path === "settings") return { name: "settings" };
   if (path === "connect") return { name: "connect" };
+  if (path === "guide" || path.startsWith("guide/")) {
+    const section =
+      path === "guide" ? "chat" : firstSegment(path.slice("guide/".length));
+    if (section) {
+      const sessionId = params.get("session") ?? undefined;
+      return {
+        name: "guide",
+        section,
+        ...(sessionId ? { sessionId } : {}),
+      };
+    }
+  }
   if (path === "workshop" || path === "workshop-lab") {
     const sessionId = params.get("session") ?? undefined;
     const pipelinePath = params.get("pipeline") ?? undefined;

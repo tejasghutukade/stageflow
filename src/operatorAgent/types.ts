@@ -1,3 +1,4 @@
+import type { TSchema } from "typebox";
 import type { DraftPackage } from "../config/draftPackage.js";
 import type { ValidationResult } from "../config/validateCatalog.js";
 import type {
@@ -20,6 +21,7 @@ export type OperatorAgentToolHandler = (
 export type OperatorAgentTool = {
   name: string;
   description: string;
+  parameters: TSchema;
   handler: OperatorAgentToolHandler;
 };
 
@@ -28,6 +30,14 @@ export type OperatorAgentToolContext = {
   setContext(next: unknown): void;
   /** Apply mutation immediately and record an undo receipt. */
   emitProposal(proposal: OperatorAgentProposal): void;
+  /**
+   * Set only on an eval session. Returning a result skips the tool handler.
+   * Returning null lets the handler run. Absent on Workshop, author and Guide sessions.
+   */
+  evalGate?: {
+    decide(name: string, args: Record<string, unknown>): OperatorAgentToolResult | null;
+    observe(name: string, result: OperatorAgentToolResult): void;
+  };
 };
 
 export type OperatorAgentProposal = {
@@ -76,6 +86,10 @@ export type WorkshopToolActivityUpdate = {
   draft?: DraftPackage;
   /** Build the turn is editing. Absent when the chat is unlinked. */
   buildId?: string;
+  /** Tool arguments, on `running`. */
+  args?: Record<string, unknown>;
+  /** Tool result `content`, on `complete`. */
+  result?: unknown;
 };
 
 export type OperatorAgentSession = {
@@ -118,6 +132,15 @@ export type OperatorAgentHost = {
   openSession(input: {
     profileId: string;
     context: unknown;
+  }): OperatorAgentSession;
+  /**
+   * A session whose tools pass through `gate` before they run. The gate is required:
+   * an eval session with no gate is refused.
+   */
+  openEvalSession(input: {
+    profileId: string;
+    context: unknown;
+    gate: NonNullable<OperatorAgentToolContext["evalGate"]>;
   }): OperatorAgentSession;
 };
 

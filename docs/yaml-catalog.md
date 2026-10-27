@@ -1312,7 +1312,7 @@ Unknown keys at any level are an error (`eval.unknown_key`).
 | `conversation` | object | no | Agent targets only. See [Agent evals](#agent-evals) |
 | `budget` | object | no | `{ latency_ms?, cost_usd? }`, positive numbers. Per-result warnings, never failures |
 
-**Target.** `kind` is required and is `stage` or `agent` (`eval.target_kind_unsupported` otherwise). A stage target has exactly one of two forms. Paths are relative to the eval file.
+**Target.** `kind` is required and is `stage`, `agent` or `internal_agent` (`eval.target_kind_unsupported` otherwise). A stage target has exactly one of two forms. Paths are relative to the eval file. An internal-agent target is `target: { kind: internal_agent, profile: <id> }` and is valid only while the Host has `STAGEFLOW_SHOW_INTERNAL_AGENTS=1` (`eval.internal_agent_hidden` otherwise, `eval.internal_agent_unknown` for an id that is not a built-in agent, `eval.internal_agent_real_tools` when `conversation.tools` is `real`).
 
 | Form | Keys | Meaning |
 |------|------|---------|
@@ -1388,7 +1388,10 @@ On an agent target, `field` and `reference` paths start at the conversation (for
 | `eval.id_filename_mismatch` | error | `id` differs from the filename stem |
 | `eval.duplicate_id` | error | Two evals in the project share an `id` |
 | `eval.invalid_field` | error | Wrong type or range |
-| `eval.target_kind_unsupported` | error | `target.kind` is neither `stage` nor `agent` |
+| `eval.target_kind_unsupported` | error | `target.kind` is not `stage`, `agent` or `internal_agent` |
+| `eval.internal_agent_hidden` | error | `kind: internal_agent` while `STAGEFLOW_SHOW_INTERNAL_AGENTS` is not `1` |
+| `eval.internal_agent_unknown` | error | `profile` is not a built-in agent |
+| `eval.internal_agent_real_tools` | error | An internal-agent eval sets `conversation.tools: real` |
 | `eval.target_invalid` | error | Not exactly one target form |
 | `eval.target_unresolved` | error | The pipeline, stage or file is not found or does not load (for example no resolvable `model`) |
 | `eval.dataset_unresolved` | error | The dataset file is not found or is outside the project |

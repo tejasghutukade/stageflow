@@ -12,7 +12,7 @@ Full-viewport grid: `232px` rail + scrolling main (`h-screen`, `grid-cols-[232px
 
 Props: see `AppRail.tsx` (`activeId`, `onNavigate`, counts and health, workspace, `onOpenPalette`; the nav itself comes from `navConfig.ts`).
 
-Grouped nav (Inbox pinned; Activity, Build, Connect), capacity meter, compact provider row, pins, workspace switcher, search, start run; Settings in the footer.
+Grouped nav (Guide, Overview, and Inbox pinned; Activity, Build, Connect), capacity meter, compact provider row, pins, workspace switcher, search, start run; Settings in the footer. Guide (`#/guide`) is the conversational workspace and sits above Overview.
 
 ## `PageHeader`
 

@@ -6,7 +6,7 @@ import type {
 } from "../../../api/evalTypes";
 import { formatCost, formatDuration, formatPercent, formatScore } from "../format";
 import { datasetName } from "../evalListModel";
-import { agentRunLabel, isAgentRun } from "../agentRun";
+import { agentRunLabel, internalAgentLabel, isAgentRun, targetModelOf } from "../agentRun";
 import { formatLimit } from "./runDialogModel";
 
 export const MIN_RESULTS_FOR_ESTIMATE = 3;
@@ -302,8 +302,12 @@ export function liveSubtitle(run: EvalRunDetail, now: number): string {
       ? `${cases} × ${repeats} ${repeats === 1 ? "repeat" : "repeats"}`
       : cases;
   const parts: string[] = [];
+  const internal = internalAgentLabel(run);
   if (isAgentRun(run) && agentLabel) parts.push(agentLabel);
+  else if (internal) parts.push(internal);
   else if (stage) parts.push(pipeline ? `Stage ${stage} in ${pipeline}` : `Stage ${stage}`);
+  const model = targetModelOf(run);
+  if (model) parts.push(model);
   parts.push(dataset ? `${datasetName(dataset)}, ${withRepeats}` : withRepeats);
   const elapsed = elapsedMs(run, now);
   parts.push(elapsed === null ? "waiting to start" : `started ${formatDuration(elapsed)} ago`);

@@ -90,6 +90,25 @@ describe("createAuthorCreateClaim", () => {
     await claim.writeIfCurrent(newer);
     expect(writes).toEqual([newer]);
   });
+
+  it("note and writeIfCurrent without ensure never create a session", async () => {
+    let creates = 0;
+    let saves = 0;
+    const claim = createAuthorCreateClaim({
+      create: async () => {
+        creates += 1;
+        return "sess-1";
+      },
+      save: async () => {
+        saves += 1;
+      },
+    });
+    const next = draft({ name: "Form only" });
+    claim.note(next);
+    await claim.writeIfCurrent(next);
+    expect(creates).toBe(0);
+    expect(saves).toBe(0);
+  });
 });
 
 describe("mergeAuthorTurnIntoForm", () => {

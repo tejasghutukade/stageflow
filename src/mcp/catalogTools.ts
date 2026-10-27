@@ -114,41 +114,39 @@ const inlinePipelineSchema = z
   })
   .strict();
 
-const startRunSchema = z
-  .object({
-    pipeline: z
-      .union([z.string(), inlinePipelineSchema])
-      .describe(
-        "Catalog-relative pipeline path, or an inline pipeline definition object ({ id, stages: [...] }) authored directly in this call",
-      ),
-    task_path: z.string().optional(),
-    task: taskFileSchema.optional(),
-    project_root: z.string().optional(),
-    checkout: z
-      .string()
-      .optional()
-      .describe(
-        "Catalog-relative checkout path (maps to RunManager checkoutOverride); absolute paths are rejected with absolute_path_not_allowed",
-      ),
-    checkout_override: z
-      .string()
-      .optional()
-      .describe("Alias of checkout; prefer checkout"),
-    skip_gates: z.boolean().optional(),
-    git_sha: z.string().optional(),
-    ci_pr_url: z.string().optional(),
-    ci_job_url: z.string().optional(),
-    skills: z
-      .record(z.string(), z.record(z.string(), z.string()))
-      .optional()
-      .describe(
-        "Run-scoped skills: name → { relativePath: utf-8 contents }. Requires SKILL.md per name; materialised under the run workspace skills dir (never the worktree)",
-      ),
-  })
-  .passthrough()
-  .refine((data) => Boolean(data.task_path) !== Boolean(data.task), {
-    message: "Exactly one of task_path or task is required",
-  });
+const startRunCommon = {
+  pipeline: z
+    .union([z.string(), inlinePipelineSchema])
+    .describe(
+      "Catalog-relative pipeline path, or an inline pipeline definition object ({ id, stages: [...] }) authored directly in this call",
+    ),
+  project_root: z.string().optional(),
+  checkout: z
+    .string()
+    .optional()
+    .describe(
+      "Catalog-relative checkout path (maps to RunManager checkoutOverride); absolute paths are rejected with absolute_path_not_allowed",
+    ),
+  checkout_override: z
+    .string()
+    .optional()
+    .describe("Alias of checkout; prefer checkout"),
+  skip_gates: z.boolean().optional(),
+  git_sha: z.string().optional(),
+  ci_pr_url: z.string().optional(),
+  ci_job_url: z.string().optional(),
+  skills: z
+    .record(z.string(), z.record(z.string(), z.string()))
+    .optional()
+    .describe(
+      "Run-scoped skills: name → { relativePath: utf-8 contents }. Requires SKILL.md per name; materialised under the run workspace skills dir (never the worktree)",
+    ),
+};
+
+const startRunSchema = z.union([
+  z.strictObject({ ...startRunCommon, task_path: z.string() }),
+  z.strictObject({ ...startRunCommon, task: taskFileSchema }),
+]);
 
 /**
  * Deliberately thin, same reasoning as inlinePipelineSchema above: real
@@ -161,54 +159,53 @@ const envelopeRefSchema = z.object({
   attempt: z.number().int().positive().optional(),
 });
 
-const runStageSchema = z
-  .object({
-    stage: z
-      .union([z.string(), z.record(z.string(), z.unknown())])
-      .describe(
-        "Catalog-relative path to a stage YAML file (same path contract as start_run — absolute paths rejected, must be inside a registered project_root), or a bare inline stage body object ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper) authored directly in this call",
-      ),
-    project_root: z
-      .string()
-      .optional()
-      .describe(
-        "Catalog project root to resolve a string stage path against; required when multiple catalog roots are configured and no sole non-seeded root exists",
-      ),
-    task_path: z.string().optional(),
-    task: taskFileSchema.optional(),
-    envelope_ref: z
-      .union([envelopeRefSchema, z.array(envelopeRefSchema).min(1)])
-      .optional()
-      .describe(
-        "Resolve one or more previously stored StageEnvelopes (from another run_stage call or from any stage inside a full pipeline run) and use them as this stage's input, instead of an inline task/task_path. A single ref: its payload becomes input, its summary becomes goal. Multiple refs (an array): each resolved payload is namespaced under its stageId in input (disambiguated by runId on a stageId collision), and summaries are combined into goal.",
-      ),
-    checkout: z
-      .string()
-      .optional()
-      .describe(
-        "Optional checkout to use with envelope_ref (ignored with task/task_path, which carry their own checkout). Resolving envelope_ref never implies a checkout on its own.",
-      ),
-    model: z
-      .string()
-      .optional()
-      .describe(
-        "Override the model/backend for this call only, taking precedence over the stage's own declared model and the global default. Omit to use the stage's own model (or the global default).",
-      ),
-    blocking: z
-      .boolean()
-      .optional()
-      .describe(
-        "When true, wait for the run to reach a terminal or waiting state and return the result in this same call, instead of returning immediately with just { runId }",
-      ),
-    timeout_ms: z
-      .number()
-      .optional()
-      .describe("Wait budget in ms when blocking is true (same bounds as wait_run)"),
-  })
-  .refine(
-    (data) => [data.task_path, data.task, data.envelope_ref].filter(Boolean).length === 1,
-    { message: "Exactly one of task_path, task, or envelope_ref is required" },
+const runStageCommon = {
+  stage: z
+    .union([z.string(), z.record(z.string(), z.unknown())])
+    .describe(
+      "Catalog-relative path to a stage YAML file (same path contract as start_run — absolute paths rejected, must be inside a registered project_root), or a bare inline stage body object ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper) authored directly in this call",
+    ),
+  project_root: z
+    .string()
+    .optional()
+    .describe(
+      "Catalog project root to resolve a string stage path against; required when multiple catalog roots are configured and no sole non-seeded root exists",
+    ),
+  checkout: z
+    .string()
+    .optional()
+    .describe(
+      "Optional checkout to use with envelope_ref (ignored with task/task_path, which carry their own checkout). Resolving envelope_ref never implies a checkout on its own.",
+    ),
+  model: z
+    .string()
+    .optional()
+    .describe(
+      "Override the model/backend for this call only, taking precedence over the stage's own declared model and the global default. Omit to use the stage's own model (or the global default).",
+    ),
+  blocking: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, wait for the run to reach a terminal or waiting state and return the result in this same call, instead of returning immediately with just { runId }",
+    ),
+  timeout_ms: z
+    .number()
+    .optional()
+    .describe("Wait budget in ms when blocking is true (same bounds as wait_run)"),
+};
+
+const envelopeRefField = z
+  .union([envelopeRefSchema, z.array(envelopeRefSchema).min(1)])
+  .describe(
+    "Resolve one or more previously stored StageEnvelopes (from another run_stage call or from any stage inside a full pipeline run) and use them as this stage's input, instead of an inline task/task_path. A single ref: its payload becomes input, its summary becomes goal. Multiple refs (an array): each resolved payload is namespaced under its stageId in input (disambiguated by runId on a stageId collision), and summaries are combined into goal.",
   );
+
+const runStageSchema = z.union([
+  z.strictObject({ ...runStageCommon, task_path: z.string() }),
+  z.strictObject({ ...runStageCommon, task: taskFileSchema }),
+  z.strictObject({ ...runStageCommon, envelope_ref: envelopeRefField }),
+]);
 
 const runStatusSchema = z.enum([
   "created",
@@ -560,7 +557,10 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         ci_pr_url,
         ci_job_url,
         skills,
-      } = args;
+      } = args as typeof args & {
+        task_path?: string;
+        task?: z.infer<typeof taskFileSchema>;
+      };
       if (typeof pipeline === "string" && !pipeline.trim()) {
         return textResult({ error: "pipeline is required" }, true);
       }
@@ -700,7 +700,13 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         "Run a single stage directly, without authoring a pipeline. `stage` is a filesystem path to a stage YAML file, or a bare inline stage body ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper), and exactly one of task_path, an inline task, or envelope_ref ({ runId, stageId, attempt? }) to resolve a previously stored envelope — from another run_stage call or any stage in a full pipeline run — as this stage's input. Internally this synthesizes a one-stage pipeline and executes it through the normal run path, so it shows up in list_runs/get_run and is polled with wait_run / get_envelope exactly like any other run. By default returns { runId, stageId } immediately (async); pass blocking:true to wait in this same call and get back { runId, stageId, status: \"completed\"|\"needs_input\"|\"timeout\", envelope? , pending_prompt? }.",
       inputSchema: runStageSchema,
     },
-    async ({ stage, project_root, task_path, task, envelope_ref, checkout, model, blocking, timeout_ms }) => {
+    async (args) => {
+      const { stage, project_root, task_path, task, envelope_ref, checkout, model, blocking, timeout_ms } =
+        args as typeof args & {
+          task_path?: string;
+          task?: z.infer<typeof taskFileSchema>;
+          envelope_ref?: z.infer<typeof envelopeRefField>;
+        };
       let taskInput: string | z.infer<typeof taskFileSchema> | undefined = task_path ?? task;
       if (envelope_ref) {
         try {

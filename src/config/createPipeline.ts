@@ -5,6 +5,7 @@ import type {
   PipelineNeeds,
   RouteIfPredicate,
 } from "../types/pipeline.js";
+import { ensureCatalogScanRoot } from "./ensureCatalogScanRoot.js";
 import {
   invertPredecessorEdgesToRoute,
   invertRouteToPredecessorEdges,
@@ -692,6 +693,8 @@ export async function createPipeline(
       error: errorFinding?.message ?? "Pipeline validation failed",
     };
   }
+
+  await ensureCatalogScanRoot(projectRoot, path.relative(projectRoot, pipelineDirectory));
 
   const loadOutcome = await loadPipelineOutcome(relPath, { cwd: projectRoot });
   if (!loadOutcome.ok) {

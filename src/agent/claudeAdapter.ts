@@ -316,6 +316,7 @@ async function runTurn(
         checks: input.stage.pre_emit_checks,
         readQaTrail: input.readQaTrail,
       },
+      feedbackLoopEmitContext: input.feedbackLoopEmitContext,
       writeStageArtifact: {
         runWorkspaceDir: input.roots.runWorkspaceDir,
         stageId: runtimeStageId(input),

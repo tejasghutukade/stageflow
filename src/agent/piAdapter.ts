@@ -682,7 +682,10 @@ function buildUserPrompt(
       : "";
   const artifactGuidance = sandboxed
     ? [
-        "Sandbox desk: /workspace. read, bash, write, and edit run only inside that desk.",
+        "Sandbox desk: /workspace. read, write, and edit run only inside that desk.",
+        input.roots.readonlyDir
+          ? `One folder is mounted read-only at ${input.roots.readonlyDir}. Read the files there. If a file you were given is not in that folder, stop and say so. Do not create stand-in documents.`
+          : "The host filesystem is not mounted.",
         input.roots.checkoutRoot
           ? `Checkout: /workspace/checkout. The host checkout path is not mounted.`
           : "This stage has no checkout. Scratch files go in /workspace/work.",
@@ -1248,7 +1251,10 @@ async function prepareStageSessionWiring(
     },
     input.feedbackLoopEmitContext,
   );
-  const emitTool = defineTool(emitDef);
+  const emitTool = defineTool({
+    ...emitDef,
+    constrainedSampling: { type: "json_schema", strict: "prefer" },
+  });
 
   const gateKinds = input.stage.gate_kinds;
   const includeAsk = Array.isArray(gateKinds) && gateKinds.length > 0;
@@ -1258,14 +1264,22 @@ async function prepareStageSessionWiring(
         allowedKinds: gateKinds,
       })
     : undefined;
-  const askTool = askDef ? defineTool(askDef) : undefined;
+  const askTool = askDef
+    ? defineTool({
+        ...askDef,
+        constrainedSampling: { type: "json_schema", strict: "prefer" },
+      })
+    : undefined;
 
   const artifactDef = createWriteStageArtifactTool({
     runWorkspaceDir: roots.runWorkspaceDir,
     stageId: runtimeStageId(input),
     attempt: roots.attempt ?? 1,
   });
-  const artifactTool = defineTool(artifactDef);
+  const artifactTool = defineTool({
+    ...artifactDef,
+    constrainedSampling: { type: "json_schema", strict: "prefer" },
+  });
 
   if (input.stage.skill !== undefined && input.skillFilePath === undefined) {
     return {
@@ -1436,12 +1450,18 @@ async function prepareStageSessionWiring(
     }
     if (input.channels && input.stage.channels?.some(channel => channel.operations.includes("send"))) {
       const definition = createSendMessageTool(input.channels);
-      customTools.push(defineTool(definition));
+      customTools.push(defineTool({
+        ...definition,
+        constrainedSampling: { type: "json_schema", strict: "prefer" },
+      }));
       tools.push(definition.name);
     }
     if (input.memory) {
       for (const definition of memorySession(input.memory).tools) {
-        customTools.push(defineTool(definition));
+        customTools.push(defineTool({
+          ...definition,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+        }));
         tools.push(definition.name);
       }
     }
@@ -1455,7 +1475,10 @@ async function prepareStageSessionWiring(
         permitted.has("downloadAttachment") ? createDownloadEmailAttachmentTool(input.email) : undefined,
       ];
       for (const definition of definitions) if (definition) {
-        customTools.push(defineTool(definition));
+        customTools.push(defineTool({
+          ...definition,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+        }));
         tools.push(definition.name);
       }
     }
@@ -1465,12 +1488,14 @@ async function prepareStageSessionWiring(
         ...(roots.containerDockerBin !== undefined
           ? { dockerBin: roots.containerDockerBin }
           : {}),
+        ...(roots.readonlyDir !== undefined ? { readonlyDir: roots.readonlyDir } : {}),
       };
+      const sampling = { type: "json_schema", strict: "prefer" } as const;
       customTools.push(
-        defineTool(createSandboxReadTool(sandboxTools)),
-        defineTool(createSandboxWriteTool(sandboxTools)),
-        defineTool(createSandboxEditTool(sandboxTools)),
-        defineTool(createSandboxBashTool(sandboxTools)),
+        defineTool({ ...createSandboxReadTool(sandboxTools), constrainedSampling: sampling }),
+        defineTool({ ...createSandboxWriteTool(sandboxTools), constrainedSampling: sampling }),
+        defineTool({ ...createSandboxEditTool(sandboxTools), constrainedSampling: sampling }),
+        defineTool({ ...createSandboxBashTool(sandboxTools), constrainedSampling: sampling }),
       );
     }
 

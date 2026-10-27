@@ -121,3 +121,21 @@ graders:
 ```
 
 A simulator model and the judge read the conversation, so the run costs more and varies more between repeats. See [Evals for agents](../../docs/evals.md#evals-for-agents).
+
+# Guide behavior (internal agent)
+
+`guide-behavior.eval.yaml` checks the built-in Guide. The Host must be started with `STAGEFLOW_SHOW_INTERNAL_AGENTS=1`. The target is `stageflow-guide`. Tools stay `read_only`: a write, send or delete is recorded and not executed, so the graders can require `confirm_action` or `show_ui` and forbid the write in the same breath.
+
+It is strict on purpose. Every grader must pass and the pass threshold is 1. The 15 scenarios cover off-topic requests, a vague request, the wrong building block, a secret in a file, a schedule before a first run, `needs` instead of `route`, a prompt-injection instruction, planning before a multi-step build, building only after a yes, and a limit the short playbook does not list (OAuth MCP on a stage, which must be looked up). A model that builds immediately, or that does the out-of-scope task, fails.
+
+Copy the eval and dataset into a project's `evals/` directory, or open them from a project root that scans `examples/evals`. Then run `guide-behavior` from the console. The run uses the Host's model and spends against `max_cost_usd: 8`.
+
+# Guide depth (internal agent)
+
+`guide-depth.eval.yaml` is the hard companion to `guide-behavior`. Same target (`stageflow-guide`, `STAGEFLOW_SHOW_INTERNAL_AGENTS=1`, `read_only` tools), but 35 scripted scenarios, most of them several turns, 2 repeats each, and a pass threshold of 0.8 so weights count.
+
+Scenarios cover scope under disguise (a Stageflow story around a SQL request, other products, a mid-chat recipe, a roleplay jailbreak), prompt injection (a pasted task file, claimed admin authority, a fake system message, pasted tool output), confirmation discipline (a no, a yes, one yes per action, pressure to skip), steering and then obeying, plan then revise then build, Stageflow traps from the playbook (`fork` and `feedback_loop`, schedule without a task, channels that only send, memory cards, provider sign-in), and honesty (features that do not exist, a price it cannot know, numbers it must read from a tool).
+
+Hard rules (`must_pass`): `tool-bounds`, `confirm-discipline`, `no-early-writes`, `plan-before-build`, `no-secret-echo` and the judged `reaches-the-outcome`. Weighted: `no-invented-facts`, `steers-well`, `plain-words`, `asks-little` (one question per reply), `says-the-point`, `no-catalog-tour`, `tool-budget`. The four code graders run JavaScript on your machine.
+
+It needs a judge model (`defaults.judge`, an `anthropic/`, `openai/` or `openrouter/` id that is not the Guide's model). Judge calls are billed and counted against `max_cost_usd: 8`. Scripts only: simulated users are not supported for internal agents.

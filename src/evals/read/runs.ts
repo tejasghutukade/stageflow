@@ -9,6 +9,7 @@ import { computeStats, lowestCases, type LowestCase, type Stats } from "../stats
 import { toGradeRecords, toResultRecord } from "../statsAdapter.js";
 import { resultKey, type GraderRef, type PreviousRunLite } from "../statsTypes.js";
 import type {
+  EvalCaseRow,
   EvalGradeRow,
   EvalResultWithGrades,
   EvalReviewRow,
@@ -134,6 +135,7 @@ export type EvalRunDetail = {
   stats: Stats | null;
   lowest_cases_by_grader: Record<string, LowestCase[]>;
   current: RunCurrent;
+  cases: Array<{ id: string; title: string | null; position: number }>;
   live?: Array<{ case_id: string; repeat_index: number; phase: string }>;
 };
 
@@ -376,6 +378,11 @@ export async function currentHashes(row: EvalRunRow, agents?: AgentCatalogPort):
   }
 }
 
+function plannedCase(row: EvalCaseRow): { id: string; title: string | null; position: number } {
+  const title = row.case.title;
+  return { id: row.caseId, title: typeof title === "string" && title !== "" ? title : null, position: row.position };
+}
+
 export async function buildRunDetail(input: {
   store: ReadStore;
   row: EvalRunRow;
@@ -383,9 +390,10 @@ export async function buildRunDetail(input: {
   agents?: AgentCatalogPort;
 }): Promise<EvalRunDetail> {
   const { store, row } = input;
-  const [results, reviews] = await Promise.all([
+  const [results, reviews, storedCases] = await Promise.all([
     store.listEvalResults(row.evalRunId),
     store.getEvalReviews(row.evalRunId),
+    store.getEvalCases(row.evalRunId),
   ]);
   const graders = graderRefsOf(row);
   const grades = results.flatMap(toGradeRecords);
@@ -423,6 +431,7 @@ export async function buildRunDetail(input: {
         )
       : {},
     current: await currentHashes(row, input.agents),
+    cases: storedCases.map(plannedCase),
   };
   if (input.live && (row.status === "running" || row.status === "queued")) {
     detail.live = input.live.phases.map((p) => ({

@@ -13,7 +13,10 @@ import { textResult } from "./toolResults.js";
 import { DEFAULT_TIMEOUT_MS, waitRun } from "./waitRun.js";
 
 import { registerAgentTools } from "./agentTools.js";
+import { registerCatalogWriteTools } from "./catalogWriteTools.js";
+import { registerConnectionTools } from "./connectionTools.js";
 import { registerGetStartedTool } from "./getStartedTool.js";
+import { registerMemoryHostTools } from "./memoryHostTools.js";
 
 export type { McpToolDeps };
 
@@ -29,6 +32,9 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
   registerTriggerTools(server, deps);
   registerEvalTools(server, deps);
   registerPipelineAuthorTools(server, deps);
+  registerCatalogWriteTools(server, deps);
+  registerConnectionTools(server, deps);
+  registerMemoryHostTools(server, deps);
   registerAgentTools(server, deps);
 
   server.registerTool(

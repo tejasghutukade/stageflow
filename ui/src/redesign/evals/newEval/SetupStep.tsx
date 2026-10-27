@@ -9,9 +9,11 @@ import { ScenarioEditor } from "../datasets/ScenarioEditor";
 import { SessionCandidatesDialog } from "../datasets/SessionCandidatesDialog";
 import { modeLabel, scenarioRow } from "../datasets/scenarioModel";
 import { formatCost } from "../format";
+import { JudgeModelPicker } from "../run/RunPicker";
+import { countsAsJudgeModel } from "../run/runDialogModel";
 import { AgentPicker, RiskBadges } from "./AgentPicker";
 import { ConversationCard } from "./ConversationCard";
-import { CARD, CheckList, Chip, Field, MONO, NumberField, SELECT, Section, YamlBlock } from "./parts";
+import { CARD, CheckList, Chip, Field, MONO, NumberField, Section, YamlBlock } from "./parts";
 import { StagePicker } from "./StagePicker";
 import { riskBadges, toolSummary } from "./agentPickerModel";
 import { agentEstimateLines, estimateBasisText, stubbedHint } from "./conversationModel";
@@ -26,6 +28,7 @@ import {
   agentSampleAvailability,
   agentSampleError,
   agentTargetOf,
+  internalTargetOf,
   estimateText,
   holdsCases,
   datasetFilePath,
@@ -104,7 +107,7 @@ export function SetupStep({ data, agents, draft, setDraft, fields, preview, dirs
     }
   }
   const stageId = t?.stageId ?? (agent ? "agent" : "stage");
-  const judgeModels = data.models.filter((m) => m.judge_capable !== false);
+  const judgeModels = data.models.filter((m) => countsAsJudgeModel(m));
   const judgeIds = judgeModels.map((m) => m.id);
   const hint = judgeSameAsStage(draft);
   const mode = draft.conversation.mode;
@@ -190,6 +193,7 @@ export function SetupStep({ data, agents, draft, setDraft, fields, preview, dirs
                 target={t}
                 onRetry={agents.reload}
                 onPick={(a) => setDraft((d) => withTarget(d, agentTargetOf(a, d.target?.projectRoot), null, taken.evals))}
+                onPickInternal={(a) => setDraft((d) => withTarget(d, internalTargetOf(a), null, taken.evals))}
               />
               {selectedAgent ? (
                 <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--sf-hairline)] px-3 py-2.5">
@@ -317,13 +321,16 @@ export function SetupStep({ data, agents, draft, setDraft, fields, preview, dirs
               <NumberField value={draft.defaults.repeats} parse={(x) => (x.trim() === "" ? null : Number(x))} show={String} error={errors.repeats} onCommit={(n) => setDraft((d) => ({ ...d, defaults: { ...d.defaults, repeats: n } }))} />
             </Field>
             <Field label="Judge model" {...(hint ? { warn: agent ? JUDGE_SAME_AGENT_HINT : JUDGE_SAME_HINT } : {})}>
-              <select className={SELECT} value={draft.defaults.judge ?? ""} onChange={(e) => setDraft((d) => ({ ...d, defaults: { ...d.defaults, judge: e.target.value === "" ? null : e.target.value } }))}>
-                <option value="">None yet</option>
-                {judgeModels.map((m) => (
-                  <option key={m.id} value={m.id}>{m.id}</option>
-                ))}
-                {draft.defaults.judge && !judgeModels.some((m) => m.id === draft.defaults.judge) ? <option value={draft.defaults.judge}>{draft.defaults.judge}</option> : null}
-              </select>
+              <JudgeModelPicker
+                models={
+                  draft.defaults.judge && !judgeModels.some((m) => m.id === draft.defaults.judge)
+                    ? [...judgeModels, { id: draft.defaults.judge }]
+                    : judgeModels
+                }
+                value={draft.defaults.judge}
+                defaultLabel="None yet"
+                onChange={(judge) => setDraft((d) => ({ ...d, defaults: { ...d.defaults, judge } }))}
+              />
             </Field>
             <Field label="Pass threshold" hint="Run passes at or above this score" error={errors.passThreshold}>
               <NumberField value={draft.defaults.passThreshold} parse={parsePercent} show={(n) => `${percentText(n)}%`} error={errors.passThreshold} onCommit={(n) => setDraft((d) => ({ ...d, defaults: { ...d.defaults, passThreshold: n } }))} />

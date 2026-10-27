@@ -20,7 +20,13 @@ export type ToolGroupId =
   | "agents.converse"
   | "evals.read"
   | "evals.run"
-  | "pipelines.author";
+  | "evals.write"
+  | "evals.cleanup"
+  | "pipelines.author"
+  | "connections"
+  | "connections.cleanup"
+  | "memories"
+  | "memories.cleanup";
 
 export type ToolGroup = {
   id: ToolGroupId;
@@ -43,8 +49,14 @@ export const TOOL_GROUPS: readonly ToolGroup[] = [
   { id: "agents.cleanup", title: "Archive agents", summary: "Archive an agent. Destructive." },
   { id: "agents.converse", title: "Talk to agents", summary: "Chat with an agent and stop its running turn." },
   { id: "pipelines.author", title: "Author pipelines and tasks", summary: "Read, create and edit pipelines, stages and tasks directly on disk." },
+  { id: "connections", title: "Connections", summary: "List, create, test and update host connections. Secret values are stored and never returned." },
+  { id: "connections.cleanup", title: "Remove connections", summary: "Remove a connection and its stored secrets. Destructive." },
+  { id: "memories", title: "Memories", summary: "List, create and edit host memories and their cards." },
+  { id: "memories.cleanup", title: "Delete memory cards", summary: "Delete one card from a host memory. Destructive." },
   { id: "evals.read", title: "Read evals", summary: "List evals, runs and results; validate and compare. Free." },
-  { id: "evals.run", title: "Run evals", summary: "Start and cancel eval runs. Calls models and costs money." },
+  { id: "evals.run", title: "Run evals", summary: "Start and cancel eval runs, and try one case. Calls models and costs money." },
+  { id: "evals.write", title: "Author evals", summary: "Create and edit evals and datasets, install a sample, and review or sort suggestions." },
+  { id: "evals.cleanup", title: "Delete eval runs", summary: "Delete an eval run and its stored results. Destructive." },
 ];
 
 export type ToolMeta = {
@@ -111,6 +123,8 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   get_agent: t("agents.read", "read"),
   validate_agent: t("agents.read", "read"),
   list_agent_revisions: t("agents.read", "read"),
+  get_agent_revision: t("agents.read", "read"),
+  diff_agent_revisions: t("agents.read", "read"),
   get_agent_session: t("agents.read", "read"),
   list_agent_sessions: t("agents.read", "read"),
 
@@ -133,6 +147,26 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   edit_stage: t("pipelines.author", "write"),
   create_task: t("pipelines.author", "write"),
   edit_task: t("pipelines.author", "write"),
+  create_task_file: t("pipelines.author", "write"),
+  update_task_file: t("pipelines.author", "write"),
+  import_task_file: t("pipelines.author", "external"),
+  create_stage_file: t("pipelines.author", "write"),
+  write_catalog_file: t("pipelines.author", "write"),
+  validate_catalog_draft: t("pipelines.author", "read"),
+
+  list_connections: t("connections", "read"),
+  create_connection: t("connections", "write"),
+  update_connection: t("connections", "write"),
+  test_connection: t("connections", "external"),
+  validate_connection_target: t("connections", "read"),
+  remove_connection: t("connections.cleanup", "destructive"),
+
+  list_memories: t("memories", "read"),
+  get_memory: t("memories", "read"),
+  create_memory: t("memories", "write"),
+  write_memory: t("memories", "write"),
+  write_memory_card: t("memories", "write"),
+  delete_memory_card: t("memories.cleanup", "destructive"),
 
   list_evals: t("evals.read", "read"),
   get_eval: t("evals.read", "read"),
@@ -144,9 +178,22 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   compare_eval_runs: t("evals.read", "read"),
   get_eval_failure_suggestions: t("evals.read", "read"),
   get_eval_failure_sort_status: t("evals.read", "read"),
+  get_eval_run_export: t("evals.read", "read"),
   run_eval: t("evals.run", "external"),
   sort_eval_failures: t("evals.run", "external"),
   cancel_eval_run: t("evals.run", "write"),
+  try_eval_case: t("evals.run", "external"),
+
+  create_eval: t("evals.write", "write"),
+  update_eval: t("evals.write", "write"),
+  create_dataset: t("evals.write", "write"),
+  update_dataset_cases: t("evals.write", "write"),
+  convert_dataset: t("evals.write", "write"),
+  install_eval_sample: t("evals.write", "write"),
+  put_eval_review: t("evals.write", "write"),
+  accept_eval_failure_suggestions: t("evals.write", "write"),
+  dismiss_eval_failure_suggestions: t("evals.write", "write"),
+  delete_eval_run: t("evals.cleanup", "destructive"),
 };
 
 export type StageflowGrants = { groups: readonly string[]; tools: readonly string[] };

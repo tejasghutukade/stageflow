@@ -33,6 +33,8 @@ export type StageRoots = {
   containerName?: string;
   /** The docker binary the container above was started with (see STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN). */
   containerDockerBin?: string;
+  /** Host folder bind-mounted read-only into the sandbox at this same path. */
+  readonlyDir?: string;
 };
 
 export const STAGEFLOW_CHECKOUT = "STAGEFLOW_CHECKOUT";

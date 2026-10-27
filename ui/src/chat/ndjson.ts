@@ -41,15 +41,18 @@ export function toFrame(value: unknown): ChatFrame | null {
 }
 
 /** Reads a newline-delimited JSON stream, yielding each valid frame as soon as its line completes. */
-export async function* readFrames(body: ReadableStream<Uint8Array>): AsyncGenerator<ChatFrame, void> {
+export async function* readFrames<F = ChatFrame>(
+  body: ReadableStream<Uint8Array>,
+  decode: (value: unknown) => F | null = toFrame as (value: unknown) => F | null,
+): AsyncGenerator<F, void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  const parse = (line: string): ChatFrame | null => {
+  const parse = (line: string): F | null => {
     const trimmed = line.trim();
     if (!trimmed) return null;
     try {
-      return toFrame(JSON.parse(trimmed));
+      return decode(JSON.parse(trimmed));
     } catch {
       return null;
     }

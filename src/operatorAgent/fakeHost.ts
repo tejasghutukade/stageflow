@@ -5,6 +5,7 @@ import {
 } from "./host.js";
 import type { DocsRetriever } from "./docsRetrieval.js";
 import { createAgentAuthorProfile } from "./profiles/agentAuthor.js";
+import { createStageflowGuideProfile } from "./profiles/stageflowGuide.js";
 import {
   createWorkshopAuthorProfile,
   isTaskProposalIntent,
@@ -48,7 +49,7 @@ export function createFakeOperatorAgentModel(
 ): OperatorAgentModel {
   let index = 0;
   return {
-    async complete({ profile, message, tools }) {
+    async complete({ profile, message, tools, onActivity }) {
       const turn = script[Math.min(index, script.length - 1)] ?? {
         type: "propose_stage" as const,
       };
@@ -71,11 +72,19 @@ export function createFakeOperatorAgentModel(
       }
 
       if (turn.type === "call_tool") {
+        const args = turn.args ?? {};
+        const callId = `${turn.name}-${index}`;
+        onActivity?.({ id: callId, name: turn.name, status: "running", args });
         const result = await invokeProfileTool(
           profile,
           turn.name,
-          turn.args ?? {},
+          args,
           tools,
+        );
+        onActivity?.(
+          result.ok
+            ? { id: callId, name: turn.name, status: "complete", result: result.content }
+            : { id: callId, name: turn.name, status: "error", errorMessage: result.error ?? "unknown error" },
         );
         const events: OperatorAgentSessionEvent[] = [
           { type: "tool_result", name: turn.name, result },
@@ -154,6 +163,7 @@ export function createWorkshopOperatorHost(
         projectRoot: options.projectRoot,
       }),
       createAgentAuthorProfile(),
+      createStageflowGuideProfile(),
     ],
   );
   return host;

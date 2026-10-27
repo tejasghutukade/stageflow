@@ -12,6 +12,7 @@ import {
   parsePercent,
   percentText,
 } from "../newEval/wizardModel";
+import { JudgeModelPicker } from "../run/RunPicker";
 import { draftDefaults, targetSummary, withDefault, withJudge, withText, withType } from "./editModel";
 
 const FALLBACK = { repeats: DEFAULT_REPEATS, passThreshold: DEFAULT_PASS_THRESHOLD, maxCostUsd: DEFAULT_MAX_COST_USD };
@@ -26,18 +27,24 @@ type Props = {
   onChange: (next: (d: EvalDefinition) => EvalDefinition) => void;
   onChangeTarget: () => void;
   onChangeDataset: () => void;
+  onOpenDataset?: () => void;
 };
 
-function ChangeInput({ value, label, onChange }: { value: string; label: string; onChange: () => void }) {
+function ChangeInput({ value, label, onChange, onOpen }: { value: string; label: string; onChange: () => void; onOpen?: () => void }) {
   return (
     <div className="flex h-8 items-center gap-2 rounded-lg border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)] pl-2.5 pr-1 text-[13px]">
       <span className={`${MONO} min-w-0 flex-1 truncate text-[var(--sf-text-1)]`} title={value}>{value}</span>
+      {onOpen ? (
+        <button type="button" onClick={onOpen} className="rounded-md px-2 py-1 text-xs text-[var(--sf-text-2)] hover:text-[var(--sf-text-1)]">
+          Open
+        </button>
+      ) : null}
       <button type="button" onClick={onChange} aria-label={label} className="rounded-md px-2 py-1 text-xs text-[var(--sf-text-2)] hover:text-[var(--sf-text-1)]">Change</button>
     </div>
   );
 }
 
-export function DefinitionCard({ definition, judgeModels, targetModel, agent, datasetLabel, onChange, onChangeTarget, onChangeDataset }: Props) {
+export function DefinitionCard({ definition, judgeModels, targetModel, agent, datasetLabel, onChange, onChangeTarget, onChangeDataset, onOpenDataset }: Props) {
   const isAgent = definition.target.kind === "agent";
   const d = draftDefaults(definition, isAgent ? { ...FALLBACK, maxCostUsd: AGENT_DEFAULT_MAX_COST_USD } : FALLBACK);
   const errors = defaultsErrors(d);
@@ -59,7 +66,7 @@ export function DefinitionCard({ definition, judgeModels, targetModel, agent, da
           <ChangeInput value={targetSummary(definition, agent)} label={isAgent ? "Change target agent" : "Change target stage"} onChange={onChangeTarget} />
         </Field>
         <Field label="Dataset">
-          <ChangeInput value={datasetLabel} label="Change dataset" onChange={onChangeDataset} />
+          <ChangeInput value={datasetLabel} label="Change dataset" onChange={onChangeDataset} {...(onOpenDataset ? { onOpen: onOpenDataset } : {})} />
         </Field>
         <Field label="Repeats per case" error={errors.repeats}>
           <NumberField value={d.repeats} parse={(x) => (x.trim() === "" ? null : Number(x))} show={String} error={errors.repeats} onCommit={(n) => onChange((x) => withDefault(x, "repeats", n))} />
@@ -68,13 +75,12 @@ export function DefinitionCard({ definition, judgeModels, targetModel, agent, da
           <NumberField value={d.passThreshold} parse={parsePercent} show={(n) => `${percentText(n)}%`} error={errors.passThreshold} onCommit={(n) => onChange((x) => withDefault(x, "pass_threshold", n))} />
         </Field>
         <Field label="Judge model" {...(judgeSame ? { warn: isAgent ? JUDGE_SAME_AGENT_HINT : JUDGE_SAME_HINT } : {})}>
-          <select className={SELECT} value={d.judge ?? ""} onChange={(e) => onChange((x) => withJudge(x, e.target.value === "" ? null : e.target.value))}>
-            <option value="">None</option>
-            {judgeModels.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-            {d.judge && !judgeModels.includes(d.judge) ? <option value={d.judge}>{d.judge}</option> : null}
-          </select>
+          <JudgeModelPicker
+            models={[...judgeModels, ...(d.judge && !judgeModels.includes(d.judge) ? [d.judge] : [])].map((id) => ({ id }))}
+            value={d.judge ?? null}
+            defaultLabel="None"
+            onChange={(judge) => onChange((x) => withJudge(x, judge))}
+          />
         </Field>
         <Field label="Cost limit per run" error={errors.maxCostUsd}>
           <NumberField value={d.maxCostUsd} prefix="$" parse={(x) => (x.trim() === "" ? null : Number(x.replace(/^\$/, "")))} show={(n) => (Number.isFinite(n) ? n.toFixed(2) : "")} error={errors.maxCostUsd} onCommit={(n) => onChange((x) => withDefault(x, "max_cost_usd", n))} />

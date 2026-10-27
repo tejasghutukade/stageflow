@@ -15,6 +15,18 @@ export function friendlyMessage(code: string, retryAfterSec?: number): string {
       return "The assistant is still replying. Please wait for it to finish.";
     case "web_chat.limit_reached":
       return "This conversation has reached its limit. Start a new one.";
+    case "guide.message_too_long":
+      return "That message is too long. Please shorten it and try again.";
+    case "guide.busy":
+      return "Stageflow is still replying. Please wait for it to finish.";
+    case "guide.not_found":
+      return "This conversation is no longer available. Start a new chat.";
+    case "guide.invalid":
+      return "That message couldn't be sent.";
+    case "guide.attachment":
+      return "Those files couldn't be attached. Use up to 5 text files, 256 KB each.";
+    case "guide.unavailable":
+      return "Stageflow isn't available right now.";
     case UNAVAILABLE_CODE:
       return "This chat isn't available right now.";
     default:

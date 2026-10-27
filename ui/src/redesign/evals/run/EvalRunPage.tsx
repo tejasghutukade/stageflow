@@ -87,7 +87,15 @@ function useEvalRunPolling(evalId: string, runNumber: number, projectRoot?: stri
   return { ...state, refresh };
 }
 
+function plannedCases(run: EvalRunDetail): LiveCase[] | null {
+  const stored = run.cases;
+  if (!stored || stored.length === 0) return null;
+  return stored.map((c) => ({ id: c.id, title: c.title, position: c.position }));
+}
+
 function useCases(run: EvalRunDetail | null): LiveCase[] | null {
+  const fromRun = run ? plannedCases(run) : null;
+  const hasPlanned = fromRun !== null;
   const [cases, setCases] = useState<LiveCase[] | null>(null);
   const datasetPath = run ? runDatasetPath(run) : null;
   const evalId = run?.eval_id;
@@ -95,15 +103,15 @@ function useCases(run: EvalRunDetail | null): LiveCase[] | null {
   const active = run ? isActiveStatus(run.status) : false;
 
   useEffect(() => {
-    if (!active || !datasetPath || !evalId || loaded.current === `${evalId}\0${datasetPath}`) return;
+    if (hasPlanned || !active || !datasetPath || !evalId || loaded.current === `${evalId}\0${datasetPath}`) return;
     loaded.current = `${evalId}\0${datasetPath}`;
     loadCases(datasetIdOf(datasetPath), evalId).then(
       ({ cases: list }) => setCases(list.map((c, index) => ({ id: c.id, title: c.title ?? null, position: index + 1 }))),
       () => setCases(null),
     );
-  }, [active, datasetPath, evalId]);
+  }, [active, datasetPath, evalId, hasPlanned]);
 
-  return cases;
+  return fromRun ?? cases;
 }
 
 function StopConfirm({ onConfirm, onClose }: { onConfirm: () => void; onClose: () => void }) {
