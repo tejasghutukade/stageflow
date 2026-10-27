@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -98,6 +98,37 @@ describe("grantedPathsFromPriors", () => {
       ok: true,
       prior: { status: "success", summary: "empty", artifacts: [] },
     };
+    expect(await grantedPathsFromPriors(workspace, prior)).toEqual([]);
+  });
+
+  it("rejects symlink leaves and symlink ancestors under artifacts", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "sf-prior-symlink-"));
+    const outside = await mkdtemp(path.join(tmpdir(), "sf-prior-outside-"));
+    const secret = path.join(outside, "secret.txt");
+    await writeFile(secret, "secret\n");
+
+    const leafRel = "stages/parent/attempts/1/artifacts/linked.md";
+    const leafAbs = path.join(workspace, leafRel);
+    await mkdir(path.dirname(leafAbs), { recursive: true });
+    await symlink(secret, leafAbs);
+
+    const ancestorArtifacts = path.join(
+      workspace,
+      "stages/parent/attempts/2/artifacts",
+    );
+    await mkdir(path.dirname(ancestorArtifacts), { recursive: true });
+    await symlink(outside, ancestorArtifacts);
+    const viaAncestorRel = "stages/parent/attempts/2/artifacts/secret.txt";
+
+    const prior: Extract<ResolvePriorEnvelopeResult, { ok: true }> = {
+      ok: true,
+      prior: {
+        status: "success",
+        summary: "symlink",
+        artifacts: [leafRel, viaAncestorRel],
+      },
+    };
+
     expect(await grantedPathsFromPriors(workspace, prior)).toEqual([]);
   });
 });

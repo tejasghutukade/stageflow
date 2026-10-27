@@ -10,11 +10,7 @@ export type ArtifactPresenceContext = {
   attempt: number;
 };
 
-type ArtifactInspectEvidence = {
-  path: string;
-  exists: boolean;
-  file_type: "file" | "directory" | "symlink" | "other" | "missing";
-};
+type ArtifactFileType = "file" | "directory" | "symlink" | "other" | "missing";
 
 function attemptArtifactsPrefix(stageId: string, attempt: number): string {
   return path.posix.join(
@@ -26,14 +22,16 @@ function attemptArtifactsPrefix(stageId: string, attempt: number): string {
   );
 }
 
+function artifactBasename(listedPath: string): string {
+  return path.posix.basename(listedPath.replace(/\\/g, "/"));
+}
+
 function missingArtifactMessage(listedPath: string): string {
-  const basename = path.posix.basename(listedPath.replace(/\\/g, "/"));
-  return `artifact "${basename}" is missing from this attempt's artifacts directory; write it with write_stage_artifact before emit`;
+  return `artifact "${artifactBasename(listedPath)}" is missing from this attempt's artifacts directory; write it with write_stage_artifact before emit`;
 }
 
 function notFileArtifactMessage(listedPath: string, fileType: string): string {
-  const basename = path.posix.basename(listedPath.replace(/\\/g, "/"));
-  return `artifact "${basename}" is ${fileType}, not a regular file under this attempt's artifacts directory; write it with write_stage_artifact before emit`;
+  return `artifact "${artifactBasename(listedPath)}" is ${fileType}, not a regular file under this attempt's artifacts directory; write it with write_stage_artifact before emit`;
 }
 
 /**
@@ -41,7 +39,7 @@ function notFileArtifactMessage(listedPath: string, fileType: string): string {
  * artifacts directory. Foreign-stage / wrong-attempt run-relative paths and
  * escapes return undefined (fail closed).
  */
-export function relativePathUnderAttemptArtifacts(
+function relativePathUnderAttemptArtifacts(
   listedPath: string,
   stageId: string,
   attempt: number,
@@ -71,7 +69,7 @@ export function relativePathUnderAttemptArtifacts(
 async function inspectArtifact(
   artifactsDir: string,
   relativePath: string,
-): Promise<ArtifactInspectEvidence> {
+): Promise<ArtifactFileType> {
   const target = path.resolve(artifactsDir, relativePath);
   const relative = path.relative(artifactsDir, target);
   if (
@@ -80,7 +78,7 @@ async function inspectArtifact(
     relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative)
   ) {
-    return { path: relativePath, exists: false, file_type: "missing" };
+    return "missing";
   }
   try {
     const segments = relative.split(path.sep).filter((segment) => segment !== "");
@@ -90,28 +88,25 @@ async function inspectArtifact(
       current = path.join(current, segment);
       stats = await lstat(current);
       if (stats.isSymbolicLink()) {
-        return { path: relativePath, exists: true, file_type: "symlink" };
+        return "symlink";
       }
       if (current !== target && !stats.isDirectory()) {
-        return { path: relativePath, exists: true, file_type: "other" };
+        return "other";
       }
     }
     if (stats === undefined) {
-      return { path: relativePath, exists: false, file_type: "missing" };
-    }
-    if (stats.isSymbolicLink()) {
-      return { path: relativePath, exists: true, file_type: "symlink" };
+      return "missing";
     }
     if (stats.isDirectory()) {
-      return { path: relativePath, exists: true, file_type: "directory" };
+      return "directory";
     }
     if (!stats.isFile()) {
-      return { path: relativePath, exists: true, file_type: "other" };
+      return "other";
     }
-    return { path: relativePath, exists: true, file_type: "file" };
+    return "file";
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { path: relativePath, exists: false, file_type: "missing" };
+      return "missing";
     }
     throw error;
   }
@@ -146,12 +141,12 @@ export async function assertEmittedArtifactsOnDisk(
     if (relative === undefined) {
       throw new EnvelopeError(missingArtifactMessage(listed));
     }
-    const evidence = await inspectArtifact(artifactsDir, relative);
-    if (evidence.file_type === "missing") {
+    const fileType = await inspectArtifact(artifactsDir, relative);
+    if (fileType === "missing") {
       throw new EnvelopeError(missingArtifactMessage(listed));
     }
-    if (evidence.file_type !== "file") {
-      throw new EnvelopeError(notFileArtifactMessage(listed, evidence.file_type));
+    if (fileType !== "file") {
+      throw new EnvelopeError(notFileArtifactMessage(listed, fileType));
     }
   }
 }
