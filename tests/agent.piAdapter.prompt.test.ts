@@ -175,6 +175,41 @@ describe("composeStageUserPrompt tool output guidance", () => {
   });
 });
 
+describe("composeStageUserPrompt sandbox artifact guidance", () => {
+  it("sandboxed prompt names durable write_stage_artifact and /workspace/grants", () => {
+    const prompt = composeStageUserPrompt(
+      {
+        ...baseInput(),
+        roots: {
+          ...buildStageRoots("/tmp/run-ws", "oss-plan-investigation"),
+          containerName: "stageflow-run-oss-plan-investigation-1-abc",
+        },
+      },
+      "emit_stage_envelope",
+      undefined,
+      "write_stage_artifact",
+    );
+    expect(prompt).toContain("Durable stage artifacts only via write_stage_artifact");
+    expect(prompt).toContain("/workspace/grants/<n>-<basename>");
+    expect(prompt).toContain("Scratch space is /workspace/work");
+    expect(prompt).toContain("Desk /workspace/artifacts is not durable");
+    expect(prompt).toContain("do not open stages/<id>/attempts/...");
+    expect(prompt).not.toContain("Attempt artifacts are at /workspace/artifacts");
+  });
+
+  it("non-sandbox soft guidance prefers write_stage_artifact without claiming grants", () => {
+    const prompt = composeStageUserPrompt(
+      baseInput(),
+      "emit_stage_envelope",
+      undefined,
+      "write_stage_artifact",
+    );
+    expect(prompt).toContain("prefer write_stage_artifact");
+    expect(prompt).not.toContain("/workspace/grants");
+    expect(prompt).not.toContain("Desk /workspace/artifacts is not durable");
+  });
+});
+
 describe("composeFeedbackResumePrompt", () => {
   it("includes labelled Feedback Loop Context for feedback_resume", () => {
     const ctx = makeFeedbackLoopContext();

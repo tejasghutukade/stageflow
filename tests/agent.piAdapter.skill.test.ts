@@ -281,10 +281,41 @@ describe("stage skill invoke prefix", () => {
     expect(prompt).toContain("stages/hamilton-weather/attempts/1/artifacts/");
     expect(prompt).toContain("write_stage_artifact");
     expect(prompt).toContain("prefer write_stage_artifact");
+    expect(prompt).not.toContain("/workspace/grants");
     expect(prompt).not.toContain("Project checkout (agent cwd):");
     expect(prompt).not.toContain(
       "Write any artifacts under stages/hamilton-weather/artifacts/",
     );
+  });
+
+  it("sandboxed skill prompt teaches grants and durable write_stage_artifact", () => {
+    const skillFilePath = "/tmp/skills/improve-codebase-architecture/SKILL.md";
+    const prompt = composeStageUserPrompt(
+      {
+        roots: {
+          ...buildStageRoots("/tmp/run-ws", "review", "/tmp/checkout"),
+          containerName: "stageflow-run-review-1-abc",
+        },
+        stage: {
+          id: "review",
+          system_prompt: "x",
+          model: "anthropic/claude-sonnet-4-5",
+          skill: "improve-codebase-architecture",
+        },
+        task: { id: "t1", goal: "Review the diff" },
+        priorEnvelope: null,
+        skillFilePath,
+      },
+      "emit_stage_envelope",
+      undefined,
+      "write_stage_artifact",
+    );
+
+    expect(prompt.startsWith("/skill:improve-codebase-architecture ")).toBe(true);
+    expect(prompt).toContain("Durable stage artifacts only via write_stage_artifact");
+    expect(prompt).toContain("/workspace/grants/<n>-<basename>");
+    expect(prompt).toContain("do not open stages/<id>/attempts/...");
+    expect(prompt).not.toContain("Attempt artifacts are at /workspace/artifacts");
   });
 
   it("bound and unbound prompts cite attempt from roots", () => {

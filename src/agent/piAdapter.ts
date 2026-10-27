@@ -689,10 +689,11 @@ function buildUserPrompt(
         input.roots.checkoutRoot
           ? `Checkout: /workspace/checkout. The host checkout path is not mounted.`
           : "This stage has no checkout. Scratch files go in /workspace/work.",
-        "Attempt artifacts are at /workspace/artifacts. Scratch space is /workspace/work.",
+        "Scratch space is /workspace/work. Desk /workspace/artifacts is not durable — bash or builtin writes there do not persist for emit or the next stage.",
         artifactToolName !== undefined
-          ? `Create factory stage artifacts only with ${artifactToolName} (path relative to ${attemptArtifactsPath}). Use the returned run-relative path in ${emitToolName}.`
-          : `Create factory stage artifacts under ${attemptArtifactsPath} relative to the run folder.`,
+          ? `Durable stage artifacts only via ${artifactToolName} (path relative to ${attemptArtifactsPath}). Use the returned run-relative path in ${emitToolName}.`
+          : `Durable stage artifacts belong under ${attemptArtifactsPath} relative to the run folder.`,
+        "Prior stage artifacts (when granted) are read-only under /workspace/grants/<n>-<basename>. Read those paths; do not open stages/<id>/attempts/... host layouts.",
       ].join("\n")
     : input.roots.mode === "bound" && artifactToolName !== undefined
       ? [
