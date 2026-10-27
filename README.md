@@ -10,6 +10,15 @@ Open-source runtime for **configurable multi-stage agent workflows** with typed 
 [![GitHub issues](https://img.shields.io/github/issues/tejasghutukade/stageflow)](https://github.com/tejasghutukade/stageflow/issues)
 [![CI](https://img.shields.io/github/actions/workflow/status/tejasghutukade/stageflow/ci.yml?branch=main)](https://github.com/tejasghutukade/stageflow/actions/workflows/ci.yml)
 
+<p align="center">
+  <a href="https://github.com/tejasghutukade/stageflow/releases/download/media/stageflow-demo.mp4"><img src="https://github.com/tejasghutukade/stageflow/releases/download/media/stageflow-demo.gif" alt="Stageflow demo: a pipeline runs, pauses at a human gate, resumes, and finishes in the operator console" width="800"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/tejasghutukade/stageflow/releases/download/media/stageflow-demo.mp4">Watch the 76s demo (MP4)</a> ·
+  <a href="https://github.com/tejasghutukade/stageflow/releases/download/media/stageflow-demo-long.mp4">Full walkthrough (3 min)</a>
+</p>
+
 Author pipeline-owned YAML in your project. Stageflow schedules each stage in a fresh agent session, moves context through explicit envelopes and artifacts, and persists run state under `.stageflow/`. [Pi](https://github.com/badlogic/pi-mono) is the current agent execution backend. Bins: **`sf`** and **`stageflow`**.
 
 ## Why Stageflow?
