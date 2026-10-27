@@ -152,3 +152,32 @@ describe("guide knowledge tools", () => {
     expect(none.error).toBe("guide.id_or_query_required");
   });
 });
+
+describe("guide knowledge Artifact contract", () => {
+  it("pipelines topic teaches durable write, emit disk-truth, grants, and work/ exclusion", () => {
+    const body = findGuideKnowledge("pipelines")!.body;
+    expect(body).toMatch(/Artifact contract/i);
+    expect(body).toContain("write_stage_artifact");
+    expect(body).toMatch(/emit list.*disk|disk-truth|≠ disk/i);
+    expect(body).toContain("/workspace/grants");
+    expect(body).toMatch(/stages\/.*artifacts/i);
+    expect(body).toContain("/workspace/work");
+    expect(body).toMatch(/never handoff|is never handoff/i);
+    expect(body).toMatch(/payload/i);
+  });
+
+  it("best_practices and stages reinforce grants/payload and no blanket create_stage verify", () => {
+    const practices = findGuideKnowledge("best_practices")!.body;
+    expect(practices).toMatch(/Artifact contract/i);
+    expect(practices).toContain("write_stage_artifact");
+    expect(practices).toContain("/workspace/grants");
+    expect(practices).toMatch(/create_stage/);
+    expect(practices).toMatch(/after-phase.*artifact|verify.*type: artifact/i);
+
+    const stages = findGuideKnowledge("stages")!.body;
+    expect(stages).toContain("write_stage_artifact");
+    expect(stages).toContain("/workspace/grants");
+    expect(stages).toMatch(/create_stage/);
+    expect(stages).toMatch(/does not auto-add after-phase artifact/i);
+  });
+});

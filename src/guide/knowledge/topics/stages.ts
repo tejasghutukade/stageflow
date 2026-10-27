@@ -30,7 +30,9 @@ Pipeline-entry wiring (not body): \`route\`, \`entry\`, \`on_verify_fail\`, \`re
 
 ## Tools every stage has
 
-\`emit_stage_envelope\` (ends the stage), \`write_stage_artifact\` (writes files to the attempt folder) and, when \`gate_kinds\` is non-empty, \`ask_operator\`. On Pi, stages also have the Pi coding agent's own file and shell tools (for example \`read\` and \`bash\`). With memories attached, Pi stages get \`read_memory\`, \`replace_memory\`, \`add_memory_card\`, \`update_memory_card\`, \`read_memory_card\`, \`search_memory_cards\`. With a channel, Pi stages get \`send_message\`.
+\`emit_stage_envelope\` (ends the stage), \`write_stage_artifact\` (durable files under the attempt artifacts folder — the only durable handoff write) and, when \`gate_kinds\` is non-empty, \`ask_operator\`. On Pi, stages also have the Pi coding agent's own file and shell tools (for example \`read\` and \`bash\`). With memories attached, Pi stages get \`read_memory\`, \`replace_memory\`, \`add_memory_card\`, \`update_memory_card\`, \`read_memory_card\`, \`search_memory_cards\`. With a channel, Pi stages get \`send_message\`.
+
+Artifact handoff: list paths from \`write_stage_artifact\` on emit (non-empty lists must exist on disk). Under a stage sandbox, a later stage reads prior files at \`/workspace/grants/…\` or takes facts from \`payload\` — not host \`stages/…/artifacts\` paths and not \`/workspace/work\`. \`create_stage\` does not auto-add after-phase artifact \`verify\`; add that only when you need hard proof of a named file.
 
 ## Stage environment
 

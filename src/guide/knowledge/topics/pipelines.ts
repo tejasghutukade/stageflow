@@ -77,7 +77,17 @@ A stage with a non-empty \`gate_kinds\` list (\`free_text\`, \`confirm\`, \`mult
 
 ## Envelopes and artifacts
 
-A stage ends only when the agent calls \`emit_stage_envelope\` with \`status\` (\`success\`/\`failure\`), a non-empty \`summary\`, \`artifacts\` (list, may be empty) and \`payload\` (validated against \`io.output.schema\` on success). Files are written with \`write_stage_artifact\` under the attempt's artifacts folder. If the agent stops without emitting, Stageflow sends up to two reminders, then fails the stage (\`missing emit_stage_envelope\`). A \`failure\` envelope skip-cascades single-parent children.
+A stage ends only when the agent calls \`emit_stage_envelope\` with \`status\` (\`success\`/\`failure\`), a non-empty \`summary\`, \`artifacts\` (list, may be empty) and \`payload\` (validated against \`io.output.schema\` on success). If the agent stops without emitting, Stageflow sends up to two reminders, then fails the stage (\`missing emit_stage_envelope\`). A \`failure\` envelope skip-cascades single-parent children.
+
+### Artifact contract
+
+Cross-stage **file** handoff is declared artifacts plus the envelope — not checkout edits and not \`work/\`.
+
+1. **Durable writes only via \`write_stage_artifact\`.** The tool writes under the current attempt's artifacts directory and returns a run-relative path for the envelope list. Bash/\`cp\` into a sandbox desk path (for example \`/workspace/artifacts\`) does not persist as a host handoff file.
+2. **Emit list ≠ disk until emit checks pass.** Listing a path in \`artifacts\` is a claim. On success emit, a non-empty list is accepted only when each path is an existing regular file under **this** attempt's artifacts dir (emit disk-truth). Empty \`artifacts: []\` stays valid. Optional after-phase \`verify\` \`type: artifact\` is separate hard proof; do not add it on every new stage by default.
+3. **Facts travel in \`payload\`.** Put required fields the next stage needs in \`io.output.schema\`. Use artifacts for files; put pointers or basenames in payload when useful.
+4. **Sandbox consumers read grants (or payload), not host attempt paths.** Under a stage container, the next stage mounts prior listed-and-existing files read-only under \`/workspace/grants/…\`. Do not author prompts that \`read stages/<id>/attempts/…/artifacts/…\` as the handoff. Unbound (no container) stages can still open run-relative artifact paths on the host.
+5. **\`/workspace/work\` is never handoff.** Scratch only; it is not copied into the next stage's desk as an artifact grant.
 
 ## Validation
 

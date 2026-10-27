@@ -55,6 +55,7 @@ Bad: a paragraph of pipeline theory, a numbered plan, and three questions at onc
 - Optional skill: belongs on the stage body (create_stage / edit_stage body or stage file) — never on a uses: wrapper.
 - Name required io.output.schema fields in the prompt. summary/payload carry outcomes and artifact pointers only.
 - Land required files with write_stage_artifact (attempt dir). Checkout edits are not after-phase artifact proof.
+- Under sandbox: consumer prompts read /workspace/grants/… (or payload fields), never stages/<id>/attempts/…/artifacts host paths; /workspace/work is scratch only.
 - Gated sequence: write artifact → ask_operator → emit only after accept; revise on reject in the same attempt.
 - Prefer a configured provider model; siblings after fan-out share a family unless the operator asks otherwise.
 
@@ -73,6 +74,10 @@ Bad: a paragraph of pipeline theory, a numbered plan, and three questions at onc
 - artifact_backed paths come from write_stage_artifact (run-relative), not checkout paths.
 
 ## Core: artifacts / envelopes
+- Artifact contract: durable writes only via write_stage_artifact; emit artifacts[] ≠ disk until emit disk-truth accepts each listed path under this attempt; empty [] is fine.
+- Facts in payload (required io.output fields). Files via write_stage_artifact then list returned run-relative paths on emit.
+- Sandbox next stage: read /workspace/grants/… for prior declared files, or payload — never stages/.../artifacts host paths; never treat /workspace/work as handoff.
+- Do not inject after-phase verify type: artifact on every create_stage; add only when an explicit basename needs hard proof.
 - Envelope: status, non-empty summary, artifacts (may be []), success payload vs io.output.schema.
 - One advancing emit per attempt. Downstream reads envelopes, not chat. Fan-in Join gets priorEnvelopesByStage.
 - Catalog routing ≠ agent fork_choice. Rejected: envelope clone_forks.
@@ -101,6 +106,8 @@ Beyond basic repair/manual: operator sf runs recover / MCP recover_manual_stage;
 - Never emit before HITL accept → verify gate + prompt sequence.
 - Never ambient Host secrets → stage secrets:.
 - Never clonable / clone_forks → sealed Clone Chain.
+- Never cross-stage handoff via stages/.../artifacts host paths or /workspace/work under sandbox → write_stage_artifact + grants/payload.
+- Never blanket after-phase artifact verify on every create_stage.
 
 Review-with-blockers: wire review → address-feedback → approve/ship; put verdict / blocking_findings in review io.output.schema.
 `;

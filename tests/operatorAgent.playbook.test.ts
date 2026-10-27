@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCreateStageDraft,
   createFailingDocsRetriever,
   createFilesystemDocsRetriever,
   createStubDocsRetriever,
@@ -44,6 +45,30 @@ describe("Workshop Author playbook + docs retrieval", () => {
     expect(playbook).toMatch(/recover|recovery/i);
     expect(playbook).toMatch(/explain-only|no first-class Workshop editors/i);
     expect(playbook).toContain("The pipeline already open in the studio is the one to edit");
+  });
+
+  it("bakes the Artifact contract into Core artifacts / envelopes", () => {
+    const playbook = WORKSHOP_AUTHOR_PLAYBOOK;
+    expect(playbook).toMatch(/Artifact contract/i);
+    expect(playbook).toContain("write_stage_artifact");
+    expect(playbook).toMatch(/disk-truth|artifacts\[\] ≠ disk/i);
+    expect(playbook).toContain("/workspace/grants");
+    expect(playbook).toMatch(/stages\/\.\.\.\/artifacts|stages\/<id>\/attempts/);
+    expect(playbook).toContain("/workspace/work");
+    expect(playbook).toMatch(/Do not inject after-phase verify type: artifact on every create_stage/i);
+    expect(playbook).toMatch(/Never blanket after-phase artifact verify on every create_stage/i);
+  });
+
+  it("create_stage draft has no auto artifact verify", () => {
+    const built = buildCreateStageDraft(emptyDraftPackage("demo"), {
+      id: "intake",
+      system_prompt: "Collect intake",
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const body = built.nextDraft.stages?.[0]?.body as Record<string, unknown>;
+    expect(body).not.toHaveProperty("verify");
+    expect(body.verify).toBeUndefined();
   });
 
   it("wires primary Author tools and excludes disk/shell builtins", () => {
