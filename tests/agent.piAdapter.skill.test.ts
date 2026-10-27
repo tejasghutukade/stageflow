@@ -313,8 +313,8 @@ describe("stage skill invoke prefix", () => {
 
     expect(prompt.startsWith("/skill:improve-codebase-architecture ")).toBe(true);
     expect(prompt).toContain("Durable stage artifacts only via write_stage_artifact");
-    expect(prompt).toContain("/workspace/grants/<n>-<basename>");
-    expect(prompt).toContain("do not open stages/<id>/attempts/...");
+    expect(prompt).toContain("No prior artifacts are granted in this sandbox.");
+    expect(prompt).toContain("Do not open stages/<id>/attempts/...");
     expect(prompt).not.toContain("Attempt artifacts are at /workspace/artifacts");
   });
 

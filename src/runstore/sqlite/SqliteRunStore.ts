@@ -561,7 +561,8 @@ export class SqliteRunStore implements RunStore {
           })
       : this.db
           .prepare(
-            `UPDATE runs SET status = @status, updated_at = @updated_at WHERE run_id = @run_id`,
+            `UPDATE runs SET status = @status, updated_at = @updated_at, finished_at = NULL
+             WHERE run_id = @run_id`,
           )
           .run({
             run_id: runId,
@@ -598,7 +599,7 @@ export class SqliteRunStore implements RunStore {
           })
       : this.db
           .prepare(
-            `UPDATE runs SET status = @status, updated_at = @updated_at
+            `UPDATE runs SET status = @status, updated_at = @updated_at, finished_at = NULL
              WHERE run_id = @run_id AND status = @expected_status`,
           )
           .run({

@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  grantedPathsFromPriors,
+  artifactGrantsFromPriors,
+  assignGrantContainerPaths,
   isGrantableArtifactPath,
 } from "../src/runtime/priorArtifactGrants.js";
 import type { ResolvePriorEnvelopeResult } from "../src/runtime/envelopeRouting.js";
@@ -33,7 +34,30 @@ describe("isGrantableArtifactPath", () => {
   });
 });
 
-describe("grantedPathsFromPriors", () => {
+describe("assignGrantContainerPaths", () => {
+  it("places a file at /workspace/grants/<stage>/<name>", () => {
+    const listed = "stages/review-pr/attempts/1/artifacts/verified-findings.json";
+    expect(assignGrantContainerPaths([listed]).get(listed)).toBe(
+      "/workspace/grants/review-pr/verified-findings.json",
+    );
+  });
+
+  it("keeps a nested artifact path and disambiguates the same name from another attempt", () => {
+    const first = "stages/review-pr/attempts/1/artifacts/notes/a.md";
+    const second = "stages/review-pr/attempts/2/artifacts/verified-findings.json";
+    const third = "stages/review-pr/attempts/1/artifacts/verified-findings.json";
+    const assigned = assignGrantContainerPaths([first, second, third]);
+    expect(assigned.get(first)).toBe("/workspace/grants/review-pr/notes/a.md");
+    expect(assigned.get(second)).toBe(
+      "/workspace/grants/review-pr/attempt-2/verified-findings.json",
+    );
+    expect(assigned.get(third)).toBe(
+      "/workspace/grants/review-pr/attempt-1/verified-findings.json",
+    );
+  });
+});
+
+describe("artifactGrantsFromPriors", () => {
   it("maps existing prior artifact files and skips missing ones", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "sf-prior-grants-"));
     const presentRel = "stages/parent/attempts/1/artifacts/report.md";
@@ -51,8 +75,15 @@ describe("grantedPathsFromPriors", () => {
       },
     };
 
-    const grants = await grantedPathsFromPriors(workspace, prior);
-    expect(grants).toEqual([presentAbs]);
+    const grants = await artifactGrantsFromPriors(workspace, prior);
+    expect(grants).toEqual([
+      {
+        listedPath: presentRel,
+        hostPath: presentAbs,
+        containerPath: "/workspace/grants/parent/report.md",
+        kind: "file",
+      },
+    ]);
   });
 
   it("unions join priors and never grants work or session paths", async () => {
@@ -87,9 +118,13 @@ describe("grantedPathsFromPriors", () => {
       },
     };
 
-    const grants = await grantedPathsFromPriors(workspace, prior);
-    expect(grants).toEqual([aAbs, bAbs]);
-    expect(grants).not.toContain(workAbs);
+    const grants = await artifactGrantsFromPriors(workspace, prior);
+    expect(grants.map((grant) => grant.hostPath)).toEqual([aAbs, bAbs]);
+    expect(grants.map((grant) => grant.containerPath)).toEqual([
+      "/workspace/grants/a/a.md",
+      "/workspace/grants/b/b.md",
+    ]);
+    expect(grants.map((grant) => grant.hostPath)).not.toContain(workAbs);
   });
 
   it("returns no grants when prior artifacts are empty", async () => {
@@ -98,7 +133,7 @@ describe("grantedPathsFromPriors", () => {
       ok: true,
       prior: { status: "success", summary: "empty", artifacts: [] },
     };
-    expect(await grantedPathsFromPriors(workspace, prior)).toEqual([]);
+    expect(await artifactGrantsFromPriors(workspace, prior)).toEqual([]);
   });
 
   it("rejects symlink leaves and symlink ancestors under artifacts", async () => {
@@ -129,6 +164,6 @@ describe("grantedPathsFromPriors", () => {
       },
     };
 
-    expect(await grantedPathsFromPriors(workspace, prior)).toEqual([]);
+    expect(await artifactGrantsFromPriors(workspace, prior)).toEqual([]);
   });
 });

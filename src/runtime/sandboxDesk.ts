@@ -8,6 +8,7 @@ import {
   SANDBOX_MOUNT_PATH,
 } from "./sandboxContainer.js";
 import { shellQuote } from "./sandboxFiles.js";
+import type { StageArtifactGrant } from "./stageRoots.js";
 
 export type SandboxDeskRole = "artifacts" | "envelope" | "checkout" | "grant" | "work";
 
@@ -28,7 +29,7 @@ export type SandboxDesk = {
 export function buildSandboxDesk(input: {
   attemptDir: string;
   checkoutRoot?: string;
-  grantedPaths?: readonly string[];
+  grants?: readonly StageArtifactGrant[];
 }): SandboxDesk {
   const attemptDir = input.attemptDir;
   const bindings: SandboxDeskBinding[] = [
@@ -65,14 +66,12 @@ export function buildSandboxDesk(input: {
     });
   }
 
-  const grants = input.grantedPaths ?? [];
-  for (let index = 0; index < grants.length; index += 1) {
-    const hostPath = grants[index]!;
+  for (const grant of input.grants ?? []) {
     bindings.push({
       role: "grant",
-      hostPath,
-      containerPath: `${SANDBOX_MOUNT_PATH}/grants/${grantSegment(index, hostPath)}`,
-      shape: "mirror",
+      hostPath: grant.hostPath,
+      containerPath: grant.containerPath,
+      shape: grant.kind === "directory" ? "directory" : "file",
       copyIn: true,
       copyOut: false,
       optional: false,
@@ -90,12 +89,6 @@ export function buildSandboxDesk(input: {
   });
 
   return { bindings };
-}
-
-function grantSegment(index: number, hostPath: string): string {
-  const base = path.basename(hostPath).replace(/[^A-Za-z0-9_.-]/g, "_");
-  const safe = base.length > 0 && base !== "." && base !== ".." ? base : "path";
-  return `${index}-${safe}`;
 }
 
 async function pathExists(target: string): Promise<boolean> {
@@ -119,6 +112,12 @@ export async function populateSandboxDesk(params: {
   ]);
   for (const binding of params.desk.bindings) {
     if (binding.role === "checkout" || binding.shape === "mirror") {
+      dirs.add(binding.containerPath);
+    }
+    if (binding.role === "grant" && binding.shape === "file") {
+      dirs.add(path.posix.dirname(binding.containerPath));
+    }
+    if (binding.role === "grant" && binding.shape === "directory") {
       dirs.add(binding.containerPath);
     }
   }

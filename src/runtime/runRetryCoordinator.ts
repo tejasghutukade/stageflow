@@ -132,6 +132,11 @@ export function succeededStageRetryBlocker(
   return undefined;
 }
 
+/** Statuses a stage retry pulls back to running so Cancel stays available. */
+export function resumesRunOnStageRetry(status: RunStatus): boolean {
+  return status === "failed" || status === "succeeded" || status === "cancelled";
+}
+
 export function assertStageRetryEligible(
   detail: RunDetail,
   stageId: string,
@@ -164,7 +169,7 @@ export function assertStageRetryEligible(
 
   const runStatus = opts?.persistedStatus ?? detail.status;
   const recoveryActive = opts?.recoveryActive === true;
-  if (runStatus !== "failed" && runStatus !== "succeeded") {
+  if (!resumesRunOnStageRetry(runStatus)) {
     const acceptedPendingRetry =
       runStatus === "running" &&
       stageSnap.status === "failed" &&
@@ -470,7 +475,7 @@ export class RunRetryCoordinator {
         }
         insertedForResume = tracked.insertedForResume === true;
 
-        if (priorRunStatus === "failed" || priorRunStatus === "succeeded") {
+        if (resumesRunOnStageRetry(priorRunStatus)) {
           await store.updateRunStatus(runId, "running");
           bumpedRunning = true;
         }

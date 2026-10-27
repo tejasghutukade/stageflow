@@ -31,7 +31,7 @@ import {
   resolvePriorEnvelope,
 } from "./envelopeRouting.js";
 import { assignment } from "./cloneSchedule.js";
-import { grantedPathsFromPriors } from "./priorArtifactGrants.js";
+import { artifactGrantsFromPriors } from "./priorArtifactGrants.js";
 import {
   outcomeToWorkerResult,
   SF_STAGE_WORKER,
@@ -141,10 +141,9 @@ export async function runStageWorker(
       store,
       runId: input.runId,
     }));
-  const grantedPaths =
-    priorResult.ok
-      ? await grantedPathsFromPriors(workspaceDir, priorResult)
-      : [];
+  const artifactGrants = priorResult.ok
+    ? await artifactGrantsFromPriors(workspaceDir, priorResult)
+    : [];
 
   const sandbox = await openStageSandbox({
     env: process.env,
@@ -154,9 +153,12 @@ export async function runStageWorker(
     attempt,
     attemptDir,
     ...(checkoutRoot !== undefined ? { checkoutRoot } : {}),
-    ...(grantedPaths.length > 0 ? { grantedPaths } : {}),
+    ...(artifactGrants.length > 0 ? { grants: artifactGrants } : {}),
   });
   roots = sandbox.roots;
+  if (artifactGrants.length > 0) {
+    roots = { ...roots, artifactGrants };
+  }
   const beforeVerify = sandbox.beforeVerify;
   let outcome: RunStageOutcome | undefined;
   let thrown: unknown;

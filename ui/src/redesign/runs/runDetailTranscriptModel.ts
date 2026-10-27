@@ -1,5 +1,6 @@
 import type { StageLogEvent } from "../../api";
 import { formatActivityDescription } from "../../status/activityCopy";
+import { toolPayloadMatches } from "./runDetailTranscriptFormat";
 
 export type ToolCallView = {
   name: string;
@@ -9,16 +10,19 @@ export type ToolCallView = {
   progressPreview?: string;
   at?: string;
   startedAt?: string;
+  resultFromMessage?: boolean;
 };
 
 export type RunDetailTranscriptTurnKind =
   | "tools"
   | "message"
+  | "tool_result"
   | "operator_answer";
 
 export type RunDetailTranscriptTurnModel =
   | { kind: "tools"; calls: ToolCallView[] }
   | { kind: "message"; event: StageLogEvent }
+  | { kind: "tool_result"; text: string; at?: string }
   | { kind: "operator_answer"; event: StageLogEvent };
 
 const TRANSCRIPT_NOISE_EVENTS = new Set<string>([
@@ -126,6 +130,30 @@ export function pairToolEvents(events: StageLogEvent[]): ToolCallView[] {
   return rows;
 }
 
+function isToolResultRole(role: string | undefined): boolean {
+  const normalized = role?.toLowerCase();
+  return normalized === "toolresult" || normalized === "tool_result";
+}
+
+function attachToolResultMessage(
+  turns: RunDetailTranscriptTurnModel[],
+  text: string,
+): boolean {
+  const last = turns[turns.length - 1];
+  if (last?.kind !== "tools") return false;
+  const call = last.calls.find(
+    (item) =>
+      item.status !== "running" &&
+      !item.resultFromMessage &&
+      item.result !== undefined &&
+      toolPayloadMatches(item.result, text),
+  );
+  if (!call) return false;
+  call.result = text;
+  call.resultFromMessage = true;
+  return true;
+}
+
 function mergeAssistantMessage(
   turns: RunDetailTranscriptTurnModel[],
   event: StageLogEvent,
@@ -172,7 +200,12 @@ export function buildRunDetailTranscriptTurns(
     }
 
     if (ev.event === "message") {
-      if (ev.text?.trim()) {
+      const text = ev.text?.trim();
+      if (text && isToolResultRole(ev.role)) {
+        if (!attachToolResultMessage(turns, text)) {
+          turns.push({ kind: "tool_result", text, at: ev.at });
+        }
+      } else if (text) {
         if (mergeAssistant && ev.role === "assistant") {
           mergeAssistantMessage(turns, ev);
         } else {

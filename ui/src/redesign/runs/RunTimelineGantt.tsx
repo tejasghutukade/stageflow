@@ -78,8 +78,7 @@ export function RunTimelineGantt({
     "cancelled",
     "abandoned",
   ]);
-  const showNowMarker =
-    run.finished_at == null && !terminalRunStatuses.has(run.status);
+  const showNowMarker = !terminalRunStatuses.has(run.status);
   const span = axisSpanMs(bounds.endMs - bounds.startMs, showNowMarker);
   const doneCount = stages.filter((s) => s.status === "succeeded").length;
   const tickCount = 5;

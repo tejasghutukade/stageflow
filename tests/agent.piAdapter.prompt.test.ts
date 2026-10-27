@@ -190,10 +190,40 @@ describe("composeStageUserPrompt sandbox artifact guidance", () => {
       "write_stage_artifact",
     );
     expect(prompt).toContain("Durable stage artifacts only via write_stage_artifact");
-    expect(prompt).toContain("/workspace/grants/<n>-<basename>");
+    expect(prompt).toContain("No prior artifacts are granted in this sandbox.");
+  });
+
+  it("lists each granted file at its sandbox path", () => {
+    const prompt = composeStageUserPrompt(
+      {
+        ...baseInput(),
+        roots: {
+          ...buildStageRoots("/tmp/run-ws", "post-review"),
+          containerName: "stageflow-run-post-review-1-abc",
+          artifactGrants: [
+            {
+              listedPath: "stages/review-pr/attempts/1/artifacts/verified-findings.json",
+              hostPath: "/tmp/verified-findings.json",
+              containerPath: "/workspace/grants/review-pr/verified-findings.json",
+              kind: "file",
+            },
+          ],
+        },
+      },
+      "emit_stage_envelope",
+      undefined,
+      "write_stage_artifact",
+    );
+    expect(prompt).toContain(
+      "- verified-findings.json (file) → /workspace/grants/review-pr/verified-findings.json",
+    );
+    expect(prompt).toContain(
+      "from stages/review-pr/attempts/1/artifacts/verified-findings.json",
+    );
+    expect(prompt).toContain("A file grant is a file at that path.");
     expect(prompt).toContain("Scratch space is /workspace/work");
     expect(prompt).toContain("Desk /workspace/artifacts is not durable");
-    expect(prompt).toContain("do not open stages/<id>/attempts/...");
+    expect(prompt).toContain("Do not open stages/<id>/attempts/...");
     expect(prompt).not.toContain("Attempt artifacts are at /workspace/artifacts");
   });
 

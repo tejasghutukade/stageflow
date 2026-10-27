@@ -25,6 +25,7 @@ import type {
 import { RunManager } from "../src/runtime/runManager.js";
 import {
   assertStageRetryEligible,
+  resumesRunOnStageRetry,
   DuplicateRetryRootError,
   RetryRootWaitTimeoutError,
   RunRetryCoordinator,
@@ -220,6 +221,15 @@ async function seedParallelReconcilableRun(
   return run;
 }
 
+describe("resumesRunOnStageRetry", () => {
+  it("puts a cancelled run back to running so Cancel stays available", () => {
+    expect(resumesRunOnStageRetry("cancelled")).toBe(true);
+    expect(resumesRunOnStageRetry("failed")).toBe(true);
+    expect(resumesRunOnStageRetry("succeeded")).toBe(true);
+    expect(resumesRunOnStageRetry("running")).toBe(false);
+  });
+});
+
 describe("assertStageRetryEligible", () => {
   const forkEnvelope: StageEnvelope = {
     status: "success",
@@ -310,6 +320,14 @@ describe("assertStageRetryEligible", () => {
       name: "a running run with a failed stage when recoveryActive is true",
       detail: eligibilityDetail({ runStatus: "running", stageStatus: "failed" }),
       options: { recoveryActive: true },
+    },
+    {
+      name: "a cancelled run with a failed stage",
+      detail: eligibilityDetail({
+        runStatus: "cancelled",
+        stageStatus: "failed",
+      }),
+      options: undefined,
     },
     {
       name: "a succeeded run with a plain succeeded stage",

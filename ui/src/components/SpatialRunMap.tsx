@@ -725,6 +725,7 @@ function SpatialNode({
         showRetry={Boolean(showRetry)}
         showAbandon={Boolean(showAbandon)}
         busy={busy}
+        abandonBusy={abandoning}
         resumeLabel={resuming ? "Resuming…" : "Resume session"}
         retryLabel={retrying ? "Retrying…" : "Retry stage"}
         abandonLabel={abandoning ? "Abandoning…" : "Abandon stage"}
@@ -832,6 +833,7 @@ function NodeStatusColumn({
   showRetry,
   showAbandon,
   busy,
+  abandonBusy,
   resumeLabel,
   retryLabel,
   abandonLabel,
@@ -847,6 +849,7 @@ function NodeStatusColumn({
   showRetry: boolean;
   showAbandon: boolean;
   busy: boolean;
+  abandonBusy: boolean;
   resumeLabel: string;
   retryLabel: string;
   abandonLabel: string;
@@ -981,7 +984,7 @@ function NodeStatusColumn({
           kind="abandon"
           cx={cx}
           cy={actionY}
-          busy={busy}
+          busy={abandonBusy}
           label={abandonLabel}
           onActivate={onAbandon}
         />

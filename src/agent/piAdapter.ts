@@ -625,6 +625,23 @@ function attachStageProgress(
   };
 }
 
+function formatGrantedArtifacts(
+  grants: StageRunInput["roots"]["artifactGrants"],
+): string {
+  if (grants === undefined || grants.length === 0) {
+    return "No prior artifacts are granted in this sandbox. Do not open stages/<id>/attempts/... host layouts.";
+  }
+  const lines = [
+    "Prior artifacts are read-only. Read the sandbox path on each line. A file grant is a file at that path. A directory grant is a directory. Do not open stages/<id>/attempts/... host layouts.",
+  ];
+  for (const grant of grants) {
+    const name = grant.listedPath.split("/").pop() || grant.listedPath;
+    lines.push(`- ${name} (${grant.kind}) → ${grant.containerPath}`);
+    lines.push(`  from ${grant.listedPath}`);
+  }
+  return lines.join("\n");
+}
+
 function buildUserPrompt(
   input: StageRunInput,
   emitToolName: string,
@@ -693,7 +710,7 @@ function buildUserPrompt(
         artifactToolName !== undefined
           ? `Durable stage artifacts only via ${artifactToolName} (path relative to ${attemptArtifactsPath}). Use the returned run-relative path in ${emitToolName}.`
           : `Durable stage artifacts belong under ${attemptArtifactsPath} relative to the run folder.`,
-        "Prior stage artifacts (when granted) are read-only under /workspace/grants/<n>-<basename>. Read those paths; do not open stages/<id>/attempts/... host layouts.",
+        formatGrantedArtifacts(input.roots.artifactGrants),
       ].join("\n")
     : input.roots.mode === "bound" && artifactToolName !== undefined
       ? [

@@ -20,6 +20,16 @@ describe("canCancelRun", () => {
     expect(canCancelRun("failed")).toBe(false);
     expect(canCancelRun("cancelled")).toBe(false);
   });
+
+  it("allows cancel when a stage is still running under a cancelled run", () => {
+    expect(
+      canCancelRun("cancelled", [
+        { status: "succeeded" },
+        { status: "running" },
+      ]),
+    ).toBe(true);
+    expect(canCancelRun("cancelled", [{ status: "failed" }])).toBe(false);
+  });
 });
 
 describe("canDeleteRun", () => {

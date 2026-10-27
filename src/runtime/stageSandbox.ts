@@ -11,7 +11,7 @@ import {
   syncSandboxDesk,
   type SandboxDesk,
 } from "./sandboxDesk.js";
-import { withContainerName, type StageRoots } from "./stageRoots.js";
+import { withContainerName, type StageArtifactGrant, type StageRoots } from "./stageRoots.js";
 
 export type StageSandbox = {
   roots: StageRoots;
@@ -28,7 +28,7 @@ export async function openStageSandbox(input: {
   attempt: number;
   attemptDir: string;
   checkoutRoot?: string;
-  grantedPaths?: readonly string[];
+  grants?: readonly StageArtifactGrant[];
 }): Promise<StageSandbox> {
   const options = resolveSandboxContainerOptions(input.env);
   if (!options) {
@@ -61,11 +61,11 @@ export async function openStageSandbox(input: {
     options.dockerBin,
   );
   const checkout = input.checkoutRoot?.trim();
-  const grants = input.grantedPaths ?? [];
+  const grants = input.grants ?? [];
   const desk = buildSandboxDesk({
     attemptDir: input.attemptDir,
     ...(checkout ? { checkoutRoot: checkout } : {}),
-    ...(grants.length > 0 ? { grantedPaths: grants } : {}),
+    ...(grants.length > 0 ? { grants } : {}),
   });
 
   const session: StageSandbox = {

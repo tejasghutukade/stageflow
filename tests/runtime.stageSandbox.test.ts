@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,7 +55,14 @@ describe("openStageSandbox", () => {
       stageId: "child",
       attempt: 1,
       attemptDir,
-      grantedPaths: [grant],
+      grants: [
+        {
+          listedPath: "stages/parent/attempts/1/artifacts/parent-report.md",
+          hostPath: grant,
+          containerPath: "/workspace/grants/parent/parent-report.md",
+          kind: "file",
+        },
+      ],
     });
 
     expect(sandbox.roots).toBe(roots);
@@ -96,18 +103,24 @@ describe("openStageSandbox", () => {
       stageId: "child",
       attempt: 1,
       attemptDir,
-      grantedPaths: [report],
+      grants: [
+        {
+          listedPath: "stages/parent/attempts/1/artifacts/report.md",
+          hostPath: report,
+          containerPath: "/workspace/grants/parent/report.md",
+          kind: "file",
+        },
+      ],
     });
     expect(sandbox.failure).toBeUndefined();
     expect(sandbox.roots.containerName).toBeTruthy();
 
     const workspace = path.join(stateDir, sandbox.roots.containerName!);
-    expect(
-      await readFile(path.join(workspace, "grants", "0-report.md", "report.md"), "utf8"),
-    ).toBe("report\n");
-    await expect(
-      readFile(path.join(workspace, "grants", "0-other.md", "other.md"), "utf8"),
-    ).rejects.toThrow();
+    expect(await readFile(path.join(workspace, "grants", "parent", "report.md"), "utf8")).toBe(
+      "report\n",
+    );
+    expect((await stat(path.join(workspace, "grants", "parent", "report.md"))).isFile()).toBe(true);
+    await expect(readFile(path.join(workspace, "grants", "parent", "other.md"), "utf8")).rejects.toThrow();
     await expect(readFile(path.join(workspace, "pi-session.jsonl"), "utf8")).rejects.toThrow();
     await expect(
       readFile(path.join(workspace, "stages", "parent", "attempts", "1", "artifacts", "report.md"), "utf8"),

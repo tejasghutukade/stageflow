@@ -55,7 +55,7 @@ Bad: a paragraph of pipeline theory, a numbered plan, and three questions at onc
 - Optional skill: belongs on the stage body (create_stage / edit_stage body or stage file) — never on a uses: wrapper.
 - Name required io.output.schema fields in the prompt. summary/payload carry outcomes and artifact pointers only.
 - Land required files with write_stage_artifact (attempt dir). Checkout edits are not after-phase artifact proof.
-- Under sandbox: consumer prompts read /workspace/grants/… (or payload fields), never stages/<id>/attempts/…/artifacts host paths; /workspace/work is scratch only.
+- Under sandbox: the stage assignment lists each prior file at /workspace/grants/<stage>/… (that path is the file). Consumer prompts read those paths or payload fields, never stages/<id>/attempts/…/artifacts host paths; /workspace/work is scratch only.
 - Gated sequence: write artifact → ask_operator → emit only after accept; revise on reject in the same attempt.
 - Prefer a configured provider model; siblings after fan-out share a family unless the operator asks otherwise.
 
@@ -76,7 +76,7 @@ Bad: a paragraph of pipeline theory, a numbered plan, and three questions at onc
 ## Core: artifacts / envelopes
 - Artifact contract: durable writes only via write_stage_artifact; emit artifacts[] ≠ disk until emit disk-truth accepts each listed path under this attempt; empty [] is fine.
 - Facts in payload (required io.output fields). Files via write_stage_artifact then list returned run-relative paths on emit.
-- Sandbox next stage: read /workspace/grants/… for prior declared files, or payload — never stages/.../artifacts host paths; never treat /workspace/work as handoff.
+- Sandbox next stage: read the granted file at /workspace/grants/<stage>/… from the assignment, or payload — never stages/.../artifacts host paths; never treat /workspace/work as handoff.
 - Do not inject after-phase verify type: artifact on every create_stage; add only when an explicit basename needs hard proof.
 - Envelope: status, non-empty summary, artifacts (may be []), success payload vs io.output.schema.
 - One advancing emit per attempt. Downstream reads envelopes, not chat. Fan-in Join gets priorEnvelopesByStage.

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,14 +68,22 @@ describe("buildSandboxDesk", () => {
     const sibling = path.join(dir, "other.txt");
     const desk = buildSandboxDesk({
       attemptDir: path.join("/tmp", "attempt"),
-      grantedPaths: [note],
+      grants: [
+        {
+          listedPath: "stages/review-pr/attempts/1/artifacts/note.txt",
+          hostPath: note,
+          containerPath: `${SANDBOX_MOUNT_PATH}/grants/review-pr/note.txt`,
+          kind: "file",
+        },
+      ],
     });
     const hostPaths = desk.bindings.map((binding) => binding.hostPath);
     expect(hostPaths).toContain(note);
     expect(hostPaths).not.toContain(sibling);
     const grant = desk.bindings.find((binding) => binding.role === "grant");
-    expect(grant?.containerPath).toBe(`${SANDBOX_MOUNT_PATH}/grants/0-note.txt`);
+    expect(grant?.containerPath).toBe(`${SANDBOX_MOUNT_PATH}/grants/review-pr/note.txt`);
     expect(grant).toMatchObject({
+      shape: "file",
       copyIn: true,
       copyOut: false,
       optional: false,
@@ -111,7 +119,17 @@ describe("populate and sync sandbox desk", () => {
     const previousState = process.env.FAKE_DOCKER_STATE_DIR;
     process.env.FAKE_DOCKER_STATE_DIR = stateDir;
     try {
-      const desk = buildSandboxDesk({ attemptDir, grantedPaths: [note] });
+      const desk = buildSandboxDesk({
+        attemptDir,
+        grants: [
+          {
+            listedPath: "stages/review-pr/attempts/1/artifacts/note.txt",
+            hostPath: note,
+            containerPath: `${SANDBOX_MOUNT_PATH}/grants/review-pr/note.txt`,
+            kind: "file",
+          },
+        ],
+      });
       expect(desk.bindings.find((binding) => binding.role === "grant")?.copyOut).toBe(false);
       const { containerName } = await startSandboxContainer({
         image: "stageflow-bash:v1",
@@ -126,15 +144,18 @@ describe("populate and sync sandbox desk", () => {
         desk,
       });
       const workspace = path.join(stateDir, containerName);
-      expect(await readFile(path.join(workspace, "grants", "0-note.txt", "note.txt"), "utf8")).toBe(
+      expect(await readFile(path.join(workspace, "grants", "review-pr", "note.txt"), "utf8")).toBe(
         "original\n",
+      );
+      expect((await stat(path.join(workspace, "grants", "review-pr", "note.txt"))).isFile()).toBe(
+        true,
       );
       expect(await readFile(path.join(workspace, "artifacts", "kept.txt"), "utf8")).toBe("kept\n");
       await expect(readFile(path.join(workspace, "other.txt"), "utf8")).rejects.toThrow();
       await expect(readFile(path.join(workspace, "pi-session.jsonl"), "utf8")).rejects.toThrow();
       await writeSandboxFile(
         { containerName, dockerBin: fakeDockerBin },
-        "grants/0-note.txt/note.txt",
+        "grants/review-pr/note.txt",
         "edited\n",
       );
       await writeSandboxFile(
@@ -150,6 +171,45 @@ describe("populate and sync sandbox desk", () => {
       expect(await readFile(path.join(attemptDir, "artifacts", "kept.txt"), "utf8")).toBe(
         "published\n",
       );
+    } finally {
+      if (previousState === undefined) delete process.env.FAKE_DOCKER_STATE_DIR;
+      else process.env.FAKE_DOCKER_STATE_DIR = previousState;
+    }
+  });
+
+  it("copies a granted directory as that directory, not a file-named wrapper", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-desk-grant-dir-"));
+    const stateDir = path.join(root, "docker-state");
+    const attemptDir = path.join(root, "attempt");
+    const notes = path.join(root, "notes");
+    await mkdir(path.join(attemptDir, "artifacts"), { recursive: true });
+    await mkdir(notes, { recursive: true });
+    await writeFile(path.join(notes, "a.md"), "a\n");
+    const previousState = process.env.FAKE_DOCKER_STATE_DIR;
+    process.env.FAKE_DOCKER_STATE_DIR = stateDir;
+    try {
+      const desk = buildSandboxDesk({
+        attemptDir,
+        grants: [
+          {
+            listedPath: "stages/review-pr/attempts/1/artifacts/notes",
+            hostPath: notes,
+            containerPath: `${SANDBOX_MOUNT_PATH}/grants/review-pr/notes`,
+            kind: "directory",
+          },
+        ],
+      });
+      const { containerName } = await startSandboxContainer({
+        image: "stageflow-bash:v1",
+        dockerBin: fakeDockerBin,
+        runId: "run-1",
+        stageId: "work",
+        attempt: 1,
+      });
+      await populateSandboxDesk({ containerName, dockerBin: fakeDockerBin, desk });
+      const copied = path.join(stateDir, containerName, "grants", "review-pr", "notes", "a.md");
+      expect(await readFile(copied, "utf8")).toBe("a\n");
+      expect((await stat(path.dirname(copied))).isDirectory()).toBe(true);
     } finally {
       if (previousState === undefined) delete process.env.FAKE_DOCKER_STATE_DIR;
       else process.env.FAKE_DOCKER_STATE_DIR = previousState;

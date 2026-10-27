@@ -1407,7 +1407,9 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           await readJsonBody(req);
           const runId = decodeURIComponent(retryMatch[1] ?? "");
           const stageId = decodeURIComponent(retryMatch[2] ?? "");
-          const result = await manager.retryStage(runId, stageId);
+          const result = await manager.retryStage(runId, stageId, {
+            awaitRoot: false,
+          });
           if (!result.ok) {
             json(res, result.status ?? 500, mapRetryStageFailure(result));
             return true;
