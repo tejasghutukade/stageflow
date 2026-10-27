@@ -6,11 +6,11 @@ import {
   formatByteSize,
   isImageArtifactPath,
 } from "../../components/ArtifactReader";
+import {
+  artifactFileName,
+  resolveDiskArtifactPath,
+} from "../../components/EnvelopeFields";
 import { stageCloneLabel } from "../../workspace/resolveRunWorkspace";
-
-function fileName(path: string): string {
-  return path.split("/").pop() ?? path;
-}
 
 function artifactUrl(runId: string, path: string): string {
   return `/api/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(path)}`;
@@ -61,6 +61,28 @@ function useArtifactSizes(runId: string, paths: string[]): Record<string, number
   return sizes;
 }
 
+/**
+ * Pick the selected disk path for the Artifacts panel.
+ * When `initialPath` is set but absent from disk, return selected=null (never coerce to paths[0]).
+ */
+export function resolveArtifactsPanelSelection(
+  diskPaths: readonly string[],
+  initialPath?: string | null,
+  currentSelected?: string | null,
+): { selected: string | null; missingClaim: string | null } {
+  if (initialPath != null && initialPath !== "") {
+    const resolved = resolveDiskArtifactPath(initialPath, diskPaths);
+    if (resolved) {
+      return { selected: resolved, missingClaim: null };
+    }
+    return { selected: null, missingClaim: initialPath };
+  }
+  if (currentSelected && diskPaths.includes(currentSelected)) {
+    return { selected: currentSelected, missingClaim: null };
+  }
+  return { selected: diskPaths[0] ?? null, missingClaim: null };
+}
+
 export function RunArtifactsPanel({
   runId,
   run,
@@ -76,22 +98,29 @@ export function RunArtifactsPanel({
 }) {
   const paths = stage.artifacts ?? [];
   const sizes = useArtifactSizes(runId, paths);
-  const [selected, setSelected] = useState<string | null>(
-    () => initialPath ?? paths[0] ?? null,
-  );
+  const [selected, setSelected] = useState<string | null>(() => {
+    return resolveArtifactsPanelSelection(paths, initialPath).selected;
+  });
+  const [missingClaim, setMissingClaim] = useState<string | null>(() => {
+    return resolveArtifactsPanelSelection(paths, initialPath).missingClaim;
+  });
 
   useEffect(() => {
-    if (initialPath && paths.includes(initialPath)) {
-      setSelected(initialPath);
-      return;
-    }
-    if (selected && paths.includes(selected)) return;
-    setSelected(paths[0] ?? null);
-  }, [stage.stage_id, paths.join("|"), initialPath, selected]);
+    const next = resolveArtifactsPanelSelection(paths, initialPath, selected);
+    setSelected(next.selected);
+    setMissingClaim(next.missingClaim);
+  }, [stage.stage_id, paths.join("|"), initialPath]);
 
   const label = stageCloneLabel(run, stage.stage_id);
 
   if (paths.length === 0) {
+    if (missingClaim) {
+      return (
+        <p className="px-6 py-4 text-[13px] text-[var(--sf-text-2)]">
+          {artifactFileName(missingClaim)} is not on disk for {label}.
+        </p>
+      );
+    }
     return (
       <p className="px-6 py-4 text-[13px] text-[var(--sf-text-2)]">
         No artifacts for {label}.
@@ -118,10 +147,13 @@ export function RunArtifactsPanel({
                       ? "border-l-2 border-l-[#6ca6ff] bg-[#16171b] text-[var(--sf-text-1)]"
                       : "border-l-2 border-l-transparent text-[var(--sf-text-2)] hover:bg-[#ffffff08]"
                   }`}
-                  onClick={() => setSelected(path)}
+                  onClick={() => {
+                    setSelected(path);
+                    setMissingClaim(null);
+                  }}
                 >
                   <span className="font-['Geist_Mono',monospace] text-xs leading-[1.33]">
-                    {fileName(path)}
+                    {artifactFileName(path)}
                   </span>
                   <span className="font-['Geist_Mono',monospace] text-[11px] text-[#8b8f98]">
                     {bytes != null ? formatByteSize(bytes) : "…"}
@@ -140,6 +172,10 @@ export function RunArtifactsPanel({
             path={selected}
             readOnly={readOnly}
           />
+        ) : missingClaim ? (
+          <p className="px-4 py-3 text-[13px] text-[var(--sf-text-3)]">
+            {artifactFileName(missingClaim)} is not on disk.
+          </p>
         ) : (
           <p className="px-4 py-3 text-[13px] text-[var(--sf-text-3)]">
             Select an artifact.
