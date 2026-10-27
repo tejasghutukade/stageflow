@@ -315,6 +315,11 @@ async function runTurn(
       preEmitCheckOptions: {
         checks: input.stage.pre_emit_checks,
         readQaTrail: input.readQaTrail,
+        artifactPresence: {
+          runWorkspaceDir: input.roots.runWorkspaceDir,
+          stageId: runtimeStageId(input),
+          attempt: input.roots.attempt ?? 1,
+        },
       },
       feedbackLoopEmitContext: input.feedbackLoopEmitContext,
       writeStageArtifact: {

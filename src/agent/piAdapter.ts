@@ -1248,6 +1248,11 @@ async function prepareStageSessionWiring(
     {
       checks: input.stage.pre_emit_checks,
       readQaTrail: input.readQaTrail,
+      artifactPresence: {
+        runWorkspaceDir: roots.runWorkspaceDir,
+        stageId: runtimeStageId(input),
+        attempt: roots.attempt ?? 1,
+      },
     },
     input.feedbackLoopEmitContext,
   );

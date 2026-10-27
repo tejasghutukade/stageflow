@@ -22,6 +22,7 @@ import {
   assertEnvelopePayload,
   compilePayloadSchema,
 } from "../envelope/payloadSchema.js";
+import { assertEmittedArtifactsOnDisk } from "../envelope/assertEmittedArtifacts.js";
 import {
   assertPreEmitChecks,
   type PreEmitCheckOptions,
@@ -192,6 +193,10 @@ export function createEmitStageEnvelopeTool(
         assertEnvelopePayload(envelope, payloadSchema);
         if (envelope.status !== "failure") {
           await assertPreEmitChecks(envelope, preEmitCheckOptions);
+          await assertEmittedArtifactsOnDisk(
+            envelope.artifacts,
+            preEmitCheckOptions?.artifactPresence,
+          );
         }
         capture.envelope = envelope;
         const advancing = isAdvancingEnvelope(envelope);

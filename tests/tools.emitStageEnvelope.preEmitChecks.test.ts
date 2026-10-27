@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,6 +11,7 @@ import {
 } from "../src/hitl/qaTrail.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { createEmitStageEnvelopeTool } from "../src/tools/emitStageEnvelope.js";
+import { createWriteStageArtifactTool } from "../src/tools/writeStageArtifact.js";
 import type { AskOperatorAnswer, AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { PreEmitCheck } from "../src/types/preEmitCheck.js";
 import type { StageGateKind } from "../src/types/stage.js";
@@ -439,7 +440,7 @@ describe("emit_stage_envelope verify when: [emit]", () => {
     expect(capture).not.toHaveProperty("envelope");
   });
 
-  it("lists envelope basename for type: artifact when emit without requiring the file on disk", async () => {
+  it("lists envelope basename for type: artifact when emit and requires the file on disk", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-verify-emit-artifact-"));
     await writeFile(
       path.join(root, "demo.pipeline.yaml"),
@@ -468,13 +469,24 @@ describe("emit_stage_envelope verify when: [emit]", () => {
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
 
+    const runWorkspaceDir = await mkdtemp(path.join(tmpdir(), "sf-emit-disk-"));
+    const presence = {
+      runWorkspaceDir,
+      stageId: "plan",
+      attempt: 1,
+    };
+    const emitOpts = {
+      checks: loaded.value.stages[0]?.pre_emit_checks,
+      artifactPresence: presence,
+    };
+
     const missing = {};
     const missingTool = createEmitStageEnvelopeTool(
       missing,
       undefined,
       undefined,
       undefined,
-      { checks: loaded.value.stages[0]?.pre_emit_checks },
+      emitOpts,
     );
     const missingResult = await missingTool.execute("emit-1", {
       status: "success",
@@ -484,13 +496,39 @@ describe("emit_stage_envelope verify when: [emit]", () => {
     expect(missingResult.isError).toBe(true);
     expect(missingResult.terminate).toBeUndefined();
 
+    const listedMissing = {};
+    const listedMissingTool = createEmitStageEnvelopeTool(
+      listedMissing,
+      undefined,
+      undefined,
+      undefined,
+      emitOpts,
+    );
+    const listedMissingResult = await listedMissingTool.execute("emit-1", {
+      status: "success",
+      summary: "ok",
+      artifacts: ["stages/plan/attempts/1/artifacts/report.md"],
+    });
+    expect(listedMissingResult.isError).toBe(true);
+    expect(listedMissingResult.terminate).toBeUndefined();
+    expect(String(listedMissingResult.details.error)).toMatch(/report\.md/);
+    expect(String(listedMissingResult.details.error)).toMatch(/write_stage_artifact/);
+    expect(listedMissing).not.toHaveProperty("envelope");
+
+    const writeTool = createWriteStageArtifactTool(presence);
+    const written = await writeTool.execute("w1", {
+      path: "report.md",
+      content: "report body\n",
+    });
+    expect(written.isError).toBeUndefined();
+
     const listed = {};
     const listedTool = createEmitStageEnvelopeTool(
       listed,
       undefined,
       undefined,
       undefined,
-      { checks: loaded.value.stages[0]?.pre_emit_checks },
+      emitOpts,
     );
     const listedResult = await listedTool.execute("emit-1", {
       status: "success",
@@ -500,5 +538,142 @@ describe("emit_stage_envelope verify when: [emit]", () => {
     expect(listedResult.isError).toBeUndefined();
     expect(listedResult.terminate).toBe(true);
     expect(listed).toHaveProperty("envelope");
+  });
+});
+
+describe("emit_stage_envelope artifact disk-truth", () => {
+  async function withPresence(stageId = "plan", attempt = 1) {
+    const runWorkspaceDir = await mkdtemp(path.join(tmpdir(), "sf-emit-presence-"));
+    return {
+      runWorkspaceDir,
+      stageId,
+      attempt,
+      artifactPresence: { runWorkspaceDir, stageId, attempt },
+    };
+  }
+
+  it("accepts when write_stage_artifact created the listed path", async () => {
+    const ctx = await withPresence("clarify", 1);
+    const writeTool = createWriteStageArtifactTool(ctx.artifactPresence);
+    const written = await writeTool.execute("w1", {
+      path: "notes.md",
+      content: "hello",
+    });
+    expect(written.details.path).toBe(
+      "stages/clarify/attempts/1/artifacts/notes.md",
+    );
+
+    const out = await emit(
+      { artifactPresence: ctx.artifactPresence },
+      {
+        status: "success",
+        summary: "ok",
+        artifacts: [written.details.path as string],
+      },
+    );
+    expectAccepted(out);
+  });
+
+  it("accepts empty artifacts: [] with presence configured", async () => {
+    const ctx = await withPresence();
+    expectAccepted(
+      await emit({ artifactPresence: ctx.artifactPresence }, plainSuccess),
+    );
+  });
+
+  it("rejects a listed basename that is missing on disk", async () => {
+    const ctx = await withPresence();
+    const out = await emit(
+      { artifactPresence: ctx.artifactPresence },
+      {
+        status: "success",
+        summary: "ok",
+        artifacts: ["stages/plan/attempts/1/artifacts/missing.json"],
+      },
+    );
+    expectRejected(out);
+    expect(String(out.result.details.error)).toMatch(/missing\.json/);
+    expect(String(out.result.details.error)).toMatch(/write_stage_artifact/);
+  });
+
+  it("rejects a foreign-stage run-relative path", async () => {
+    const ctx = await withPresence("plan", 1);
+    await mkdir(
+      path.join(ctx.runWorkspaceDir, "stages", "other", "attempts", "1", "artifacts"),
+      { recursive: true },
+    );
+    await writeFile(
+      path.join(
+        ctx.runWorkspaceDir,
+        "stages",
+        "other",
+        "attempts",
+        "1",
+        "artifacts",
+        "report.md",
+      ),
+      "foreign\n",
+    );
+
+    const out = await emit(
+      { artifactPresence: ctx.artifactPresence },
+      {
+        status: "success",
+        summary: "ok",
+        artifacts: ["stages/other/attempts/1/artifacts/report.md"],
+      },
+    );
+    expectRejected(out);
+    expect(String(out.result.details.error)).toMatch(/report\.md/);
+    expect(String(out.result.details.error)).toMatch(/write_stage_artifact/);
+  });
+
+  it("rejects a path escape under the attempt artifacts dir", async () => {
+    const ctx = await withPresence();
+    const out = await emit(
+      { artifactPresence: ctx.artifactPresence },
+      {
+        status: "success",
+        summary: "ok",
+        artifacts: ["../escape.md"],
+      },
+    );
+    expectRejected(out);
+    expect(String(out.result.details.error)).toMatch(/escape\.md/);
+    expect(String(out.result.details.error)).toMatch(/write_stage_artifact/);
+  });
+
+  it("rejects all-or-nothing when only one of two listed paths exists", async () => {
+    const ctx = await withPresence();
+    const writeTool = createWriteStageArtifactTool(ctx.artifactPresence);
+    await writeTool.execute("w1", { path: "a.md", content: "a" });
+
+    const out = await emit(
+      { artifactPresence: ctx.artifactPresence },
+      {
+        status: "success",
+        summary: "ok",
+        artifacts: [
+          "stages/plan/attempts/1/artifacts/a.md",
+          "stages/plan/attempts/1/artifacts/b.md",
+        ],
+      },
+    );
+    expectRejected(out);
+    expect(String(out.result.details.error)).toMatch(/b\.md/);
+    expect(String(out.result.details.error)).toMatch(/write_stage_artifact/);
+  });
+
+  it("skips disk-truth on status: failure even with listed phantoms", async () => {
+    const ctx = await withPresence();
+    const out = await emit(
+      { artifactPresence: ctx.artifactPresence },
+      {
+        status: "failure",
+        summary: "blocked",
+        artifacts: ["stages/plan/attempts/1/artifacts/missing.md"],
+      },
+    );
+    expectAccepted(out);
   });
 });
