@@ -20,7 +20,7 @@ import {
   type CasesTabId,
   type Paging,
 } from "./casesModel";
-import { graderDefinitions } from "./gradersModel";
+import { graderIdsOf } from "./gradersModel";
 import { thresholdOf } from "./headerModel";
 import { isAgentRun } from "../agentRun";
 import { useAllResultsFor, useResultsPage } from "./useResultsData";
@@ -78,7 +78,7 @@ export function CasesTab({
     const s = byCase.get(row.case_id);
     return s ? { ...view, bucket: bucketChip(s) } : view;
   });
-  const graderIds = graderDefinitions(run).map((g) => String(g.id));
+  const graderIds = graderIdsOf(run);
   const tags = tagOptions(vocabulary, allRows);
   const counts = data?.counts ?? null;
 

@@ -15,6 +15,14 @@ export function graderDefinitions(run: Pick<EvalRunDetail, "config">): Definitio
   return Array.isArray(list) ? (list as Definition[]) : [];
 }
 
+/** Grader ids for filters: the saved definition's, else the run's own grader list (older internal-agent runs saved none). */
+export function graderIdsOf(run: Pick<EvalRunDetail, "config">): string[] {
+  const defined = graderDefinitions(run).map((g) => String(g.id));
+  if (defined.length > 0) return defined;
+  const snapshot: Array<Record<string, unknown>> = Array.isArray(run.config?.graders) ? run.config.graders : [];
+  return snapshot.map((g) => String(g.id));
+}
+
 export function graderDefinition(run: Pick<EvalRunDetail, "config">, id: string): Definition | null {
   return graderDefinitions(run).find((g) => g.id === id) ?? null;
 }

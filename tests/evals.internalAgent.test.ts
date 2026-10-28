@@ -76,6 +76,23 @@ describe("internal agent evals", () => {
     expect(call?.policy_outcome).toBe("denied");
   });
 
+  it("saves the eval's graders in the run snapshot so the console can list them", async () => {
+    process.env[ENV] = "1";
+    const profile = createStageflowGuideProfile({ cwd: ROOT, manager: {} as never, store: {} as never });
+    const built = await buildEvalPlan({
+      projectRoot: ROOT,
+      evalPath: EVAL_PATH,
+      evalRunId: "er_snapshot",
+      engine: { name: "fake", version: "0", nodeVersion: process.version },
+      internalAgents: [{ id: profile.id, title: profile.title, playbook: profile.playbook, tools: profile.tools.map((t) => t.name) }],
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const definition = built.snapshot.eval.definition as { graders?: Array<{ id: string }>; target?: unknown };
+    expect(definition.target).toEqual({ kind: "internal_agent", profile: profile.id });
+    expect((definition.graders ?? []).map((g) => g.id)).toEqual(built.plan.graders.map((g) => g.id));
+  });
+
   it("stops one slow case without cancelling the next", async () => {
     process.env[ENV] = "1";
     let release: (() => void) | undefined;

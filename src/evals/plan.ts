@@ -234,7 +234,7 @@ function selectCases(
   return [...cases];
 }
 
-function evalDefinition(loaded: LoadedEval, projectRoot: string): Record<string, unknown> {
+export function evalDefinition(loaded: LoadedEval, projectRoot: string): Record<string, unknown> {
   const { file } = loaded;
   const paths = resolveEvalPaths(file, loaded.path);
   const rel = (abs: string | undefined): string | undefined =>
