@@ -43,8 +43,11 @@ export const NO_EXAMPLES_TEXT = "(none)";
 const REPLY_LINE = `Reply with only a JSON object and nothing else: {"pass": true|false, "score": <<SCORE_SHAPE>>, "reason": "<one sentence>"}`;
 const REASONING_REPLY_LINE = `Weigh the evidence against the rubric before you decide. Reply with only a JSON object and nothing else, writing "reason" first: {"reason": "<two or three sentences that weigh the evidence>", "pass": true|false, "score": <<SCORE_SHAPE>>}`;
 
+const CONVERSATION_REPLY_LINE = `Reply with only one JSON object and nothing else. It has three fields: "pass" (true or false), "score" (<<SCORE_SHAPE>>) and "reason" (one sentence in your own words that names what decided the verdict).`;
+
 function withReasoning(template: string, reasoning: boolean | undefined): string {
-  return reasoning === true ? template.replace(REPLY_LINE, () => REASONING_REPLY_LINE) : template;
+  if (reasoning !== true) return template;
+  return template.replace(REPLY_LINE, () => REASONING_REPLY_LINE).replace(CONVERSATION_REPLY_LINE, () => REASONING_REPLY_LINE);
 }
 
 export function escapeTemplate(text: string): string {

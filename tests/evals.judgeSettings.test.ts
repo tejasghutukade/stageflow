@@ -1,6 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { JUDGE_MAX_OUTPUT_TOKENS } from "../src/evals/constants.js";
 import { parseEvalOutcome } from "../src/config/loadEval.js";
 import type { LoadIssue } from "../src/config/loadOutcome.js";
 import { buildConfig } from "../src/evals/engine/promptfoo/generate.js";
@@ -93,7 +94,7 @@ describe("reasoning prompt variant", () => {
     expect(renderRubricPrompt({ scale: "pass_fail", examples: [], reasoning: false })).toBe(plain);
     const conversation = renderConversationRubricPrompt({ scale: "1_to_5", examples: [], reasoning: true });
     expect(conversation).toContain('writing "reason" first');
-    expect(conversation).toContain("<integer 1-5>");
+    expect(conversation).toContain("an integer from 1 to 5");
   });
 });
 
@@ -128,14 +129,17 @@ describe("generated config with judge settings", () => {
   });
 
   it("sets temperature on the judge provider only when given, keeping other provider config", () => {
-    expect(assertionsOf([rubricGrader()])[0]!.provider).toBe("anthropic:messages:claude-sonnet-4-5");
+    expect(assertionsOf([rubricGrader()])[0]!.provider).toEqual({
+      id: "anthropic:messages:claude-sonnet-4-5",
+      config: { max_tokens: JUDGE_MAX_OUTPUT_TOKENS },
+    });
     expect(assertionsOf([rubricGrader({ temperature: 0.3 })])[0]!.provider).toEqual({
       id: "anthropic:messages:claude-sonnet-4-5",
-      config: { temperature: 0.3 },
+      config: { max_tokens: JUDGE_MAX_OUTPUT_TOKENS, temperature: 0.3 },
     });
     expect(
       assertionsOf([rubricGrader({ temperature: 0 })], { judgeProviderConfig: { apiBaseUrl: "http://x" } })[0]!.provider,
-    ).toEqual({ id: "anthropic:messages:claude-sonnet-4-5", config: { apiBaseUrl: "http://x", temperature: 0 } });
+    ).toEqual({ id: "anthropic:messages:claude-sonnet-4-5", config: { max_tokens: JUDGE_MAX_OUTPUT_TOKENS, apiBaseUrl: "http://x", temperature: 0 } });
   });
 
   it("uses the reasoning prompt only when asked", () => {
