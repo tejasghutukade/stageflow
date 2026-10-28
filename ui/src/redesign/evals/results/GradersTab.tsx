@@ -10,10 +10,12 @@ export function GradersTab({
   run,
   onOpenCase,
   onShowFailing,
+  onEvalChanged,
 }: {
   run: EvalRunDetail;
   onOpenCase: (caseId: string, repeat: number) => void;
   onShowFailing: (graderId: string) => void;
+  onEvalChanged?: () => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const exported = useRunExport(run.eval_run_id, open !== null);
@@ -72,6 +74,7 @@ export function GradersTab({
                       graderHash={run.current?.grader_hashes?.[row.id] ?? null}
                       judge={null}
                       onOpenCase={onOpenCase}
+                      {...(onEvalChanged ? { onEvalChanged } : {})}
                     />
                   ) : null}
                   {judge ? (

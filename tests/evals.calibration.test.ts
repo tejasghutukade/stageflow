@@ -211,20 +211,21 @@ describe("EvalRunManager.calibrate", () => {
 });
 
 describe("suggestExamples", () => {
-  it("builds distinct examples from disagreements, leniency first, with the label note as the reason", async () => {
+  it("builds distinct examples from dev-split disagreements only, leniency first, with the label note as the reason", async () => {
     const first = manager(new FakeEngine({ judge: () => ({ verdict: "pass" }) }));
     const { evalRunId } = await first.start({ projectRoot: root, evalPath: EVAL_REL, startedVia: "cli" });
     await first.awaitFinished(evalRunId, 10_000);
     await store.putEvalGraderLabel(evalRunId, "c1", 0, "clear", { label: "fail", note: "not actionable" });
-    await store.putEvalGraderLabel(evalRunId, "c2", 0, "clear", { label: "pass" });
-    await store.putEvalGraderLabel(evalRunId, "c3", 0, "clear", { label: "fail" });
+    await store.putEvalGraderLabel(evalRunId, "c4", 0, "clear", { label: "pass" });
+    await store.putEvalGraderLabel(evalRunId, "c2", 0, "clear", { label: "fail" });
+    await store.putEvalGraderLabel(evalRunId, "c3", 0, "clear", { label: "pass" });
 
-    // judge: c1 pass (too lenient vs fail), c2 fail (too strict vs pass), c3 pass (too lenient)
+    // c1 and c4 are dev rows, c2 and c3 are held-out rows. The judge is wrong on all four.
     const m = manager(
-      new FakeEngine({ judge: (_g, testCase) => ({ verdict: testCase.id === "c2" ? "fail" : "pass", reason: "r" }) }),
+      new FakeEngine({ judge: (_g, testCase) => ({ verdict: ["c3", "c4"].includes(testCase.id) ? "fail" : "pass", reason: "r" }) }),
     );
     const out = await m.calibrate({ projectRoot: root, evalPath: EVAL_REL, graderId: "clear" });
-    expect(out.disagreements.every((d) => d.evalRunId === evalRunId)).toBe(true);
+    expect(out.disagreements.map((d) => d.caseId).sort()).toEqual(["c1", "c2", "c3", "c4"]);
 
     const items = await suggestExamples(store, {
       projectRoot: root,
@@ -234,13 +235,12 @@ describe("suggestExamples", () => {
       calibration: out.calibration,
       limit: 3,
     });
-    // labels are read newest first, so which lenient case comes first depends on timing; the kinds alternate
-    expect(items.map((i) => i.judge)).toEqual(["pass", "fail", "pass"]);
-    expect(items.map((i) => i.case_id).sort()).toEqual(["c1", "c2", "c3"]);
+    expect(items.map((i) => i.judge)).toEqual(["pass", "fail"]);
+    expect(items.map((i) => i.case_id)).toEqual(["c1", "c4"]);
     const byCase = new Map(items.map((i) => [i.case_id, i.example]));
     expect(byCase.get("c1")).toEqual({ verdict: "fail", output: expect.stringContaining("out c1"), reason: "not actionable" });
-    expect(byCase.get("c2")).toMatchObject({ verdict: "pass" });
-    expect("reason" in byCase.get("c2")!).toBe(false);
+    expect(byCase.get("c4")).toMatchObject({ verdict: "pass" });
+    expect("reason" in byCase.get("c4")!).toBe(false);
 
     const scored = await suggestExamples(store, {
       projectRoot: root,

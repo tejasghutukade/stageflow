@@ -1,5 +1,6 @@
 import type { RunStore } from "../runstore/port.js";
 import { replayOutput } from "./calibration.js";
+import { calibrationSplitOf } from "./stats.js";
 import type { EvalCalibrationRow } from "./storeTypes.js";
 import type { CaseOutput, RubricExample } from "./types.js";
 
@@ -35,7 +36,8 @@ function exampleFor(scale: "pass_fail" | "1_to_5", label: "pass" | "fail", outpu
 }
 
 /**
- * Up to three few-shot examples built from where the judge disagreed with the author: one of each kind of
+ * Up to three few-shot examples built from where the judge disagreed with the author on the dev split (a held-out row
+ * is never offered, so the held-out check stays a fair test): one of each kind of
  * disagreement first (judge too lenient, judge too strict), distinct outputs only. The author's label note,
  * when there is one, becomes the example's reason. Nothing is written.
  */
@@ -53,8 +55,9 @@ export async function suggestExamples(
   const limit = input.limit ?? EXAMPLE_SUGGESTION_LIMIT;
   const labels = await store.listEvalGraderLabelsForEval(input.projectRoot, input.evalId, input.graderId);
   const notes = new Map(labels.map((l) => [`${l.evalRunId}#${l.caseId}#${l.repeatIndex}`, l.note]));
-  const lenient = input.calibration.disagreements.filter((d) => d.judge === "pass");
-  const strict = input.calibration.disagreements.filter((d) => d.judge === "fail");
+  const dev = input.calibration.disagreements.filter((d) => calibrationSplitOf(d.caseId, d.repeatIndex) === "dev");
+  const lenient = dev.filter((d) => d.judge === "pass");
+  const strict = dev.filter((d) => d.judge === "fail");
   const ordered: typeof lenient = [];
   for (let i = 0; ordered.length < lenient.length + strict.length; i++) {
     if (lenient[i]) ordered.push(lenient[i]!);

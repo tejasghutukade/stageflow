@@ -19,12 +19,14 @@ export function CalibrationPanel({
   graderHash,
   judge,
   onOpenCase,
+  onEvalChanged,
 }: {
   evalId: string;
   graderId: string;
   graderHash: string | null;
   judge: string | null;
   onOpenCase: (caseId: string, repeat: number) => void;
+  onEvalChanged?: () => void;
 }) {
   const [latest, setLatest] = useState<EvalCalibration | null>(null);
   const [split, setSplit] = useState<Split>("all");
@@ -94,13 +96,14 @@ export function CalibrationPanel({
       setNote("Rubric saved. Check the judge again to measure it.");
       setCandidate(null);
       await loadLatest();
+      onEvalChanged?.();
     });
 
   const suggest = () =>
     act("suggest", async () => {
       const res = await suggestEvalExamples(evalId, graderId, latest?.id);
       setSuggestions(res.items);
-      if (res.items.length === 0) setNote("No examples to suggest from the disagreements.");
+      if (res.items.length === 0) setNote("No dev-split disagreements to learn from. Held-out rows are never offered, so the held-out check stays fair.");
     });
 
   const addExample = (item: EvalExampleSuggestion) =>
@@ -115,6 +118,7 @@ export function CalibrationPanel({
       setSuggestions((list) => (list ?? []).filter((x) => x !== item));
       setNote("Example added to the rubric. Check the judge again to measure it.");
       await loadLatest();
+      onEvalChanged?.();
     });
 
   const current = calibrationCurrent(latest, graderHash, judge);

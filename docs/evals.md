@@ -758,7 +758,7 @@ You get the number of labels, **agreement**, **Cohen's kappa** (agreement beyond
 
 **Tune the rubric.** In the console, expand the rubric on the Graders tab after a check:
 
-- **Suggest examples from disagreements** proposes up to three few-shot examples from where the judge and you disagreed (one too lenient, one too strict first). The example text is the stored output, the reason is your label note, and nothing changes until you press **Add to the rubric's examples** (up to 6 per rubric). The API is `POST /api/evals/:id/graders/:grader/suggest-examples`.
+- **Suggest examples from disagreements** proposes up to three few-shot examples from where the judge and you disagreed on the dev split (one too lenient, one too strict first). Held-out rows are never offered, so the held-out check stays a fair test. The example text is the stored output, the reason is your label note, and nothing changes until you press **Add to the rubric's examples** (up to 6 per rubric). The API is `POST /api/evals/:id/graders/:grader/suggest-examples`.
 - **Try a different rubric** measures new rubric text on the chosen split without saving it (the API takes a `candidate` with `rubric`, `examples`, `judge` or `judge_settings`) and shows the kappa change against the saved rubric. **Save rubric to the eval** writes it through the normal eval update. Candidate measurements are stored but never shown as the grader's calibration. Tune on `dev`, then confirm on `held_out`.
 
 Calibration sends your labeled outputs to the judge model's provider, like a run does. It is manual only. The MCP tools are `calibrate_eval_grader` (costs money, never available to eval sessions) and `list_grader_calibrations` (read-only).
