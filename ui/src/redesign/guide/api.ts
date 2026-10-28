@@ -92,16 +92,27 @@ export type GuideSendInput = {
   model?: string;
 };
 
-export type GuideThreadDetail = Omit<ChatThreadDetail, "messages"> & {
+export type GuideThreadStatus = "running" | "open";
+
+export type GuideThreadSummary = ChatThreadSummary & { status: GuideThreadStatus };
+
+export type GuideThreadDetail = Omit<ChatThreadDetail, "messages" | "status"> & {
   messages: GuideStoredMessage[];
+  status: GuideThreadStatus;
   model: string | null;
 };
 
-export type GuideApi = Omit<ChatApi, "getThread"> & {
+export type GuideApi = Omit<ChatApi, "getThread" | "listThreads"> & {
   getThread: (id: string) => Promise<GuideThreadDetail>;
+  listThreads: () => Promise<GuideThreadSummary[]>;
+  stopTurn: (id: string) => Promise<{ ok: true; stopped: boolean }>;
   sendTurn: (id: string, input: GuideSendInput, signal?: AbortSignal) => AsyncGenerator<GuideFrame, void>;
   updateThreadModel: (id: string, model: string | null) => Promise<{ thread: ChatThreadSummary; model: string | null }>;
 };
+
+export function guideThreadStatus(value: unknown): GuideThreadStatus {
+  return value === "running" ? "running" : "open";
+}
 
 async function errorFrom(response: Response): Promise<ChatApiError> {
   let body: { code?: unknown; message?: unknown } = {};
@@ -154,9 +165,15 @@ export function createGuideApi(fetchImpl: typeof fetch = fetch): GuideApi {
       const body = await json<{ agent: ChatAgentInfo }>("");
       return { name: body.agent.name, greeting: body.agent.greeting ?? null };
     },
-    listThreads: async (): Promise<ChatThreadSummary[]> => {
+    listThreads: async (): Promise<GuideThreadSummary[]> => {
       try {
-        return (await json<{ threads: ChatThreadSummary[] }>("/threads")).threads;
+        const body = await json<{ threads: Array<ChatThreadSummary & { status?: unknown }> }>("/threads");
+        return body.threads.map((thread) => ({
+          id: thread.id,
+          title: thread.title,
+          updatedAt: thread.updatedAt,
+          status: guideThreadStatus(thread.status),
+        }));
       } catch {
         return [];
       }
@@ -164,11 +181,16 @@ export function createGuideApi(fetchImpl: typeof fetch = fetch): GuideApi {
     createThread: async (): Promise<ChatThreadSummary> =>
       (await json<{ thread: ChatThreadSummary }>("/threads", { method: "POST", body: "{}" })).thread,
     getThread: async (id: string): Promise<GuideThreadDetail> => {
-      const detail = await json<GuideThreadDetail & { model?: string | null }>(
+      const detail = await json<GuideThreadDetail & { model?: string | null; status?: unknown }>(
         `/threads/${encodeURIComponent(id)}`,
       );
-      return { ...detail, model: detail.model ?? null };
+      return { ...detail, status: guideThreadStatus(detail.status), model: detail.model ?? null };
     },
+    stopTurn: (id: string) =>
+      json<{ ok: true; stopped: boolean }>(`/threads/${encodeURIComponent(id)}/stop`, {
+        method: "POST",
+        body: "{}",
+      }),
     updateThreadModel: (id: string, model: string | null) =>
       json<{ thread: ChatThreadSummary; model: string | null }>(`/threads/${encodeURIComponent(id)}`, {
         method: "PATCH",

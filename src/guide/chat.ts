@@ -59,8 +59,11 @@ export type GuideFrame =
 
 const sessions = new Map<string, OperatorAgentSession>();
 const running = new Set<string>();
+const turnAborts = new Map<string, AbortController>();
 
 export function resetGuideSessionsForTests(): void {
+  for (const controller of turnAborts.values()) controller.abort();
+  turnAborts.clear();
   for (const session of sessions.values()) session.close();
   sessions.clear();
   running.clear();
@@ -76,6 +79,13 @@ export function guideAgentInfo(host: OperatorAgentHost): { name: string; greetin
 
 export function isGuideThreadRunning(threadId: string): boolean {
   return running.has(threadId);
+}
+
+export function abortGuideTurn(threadId: string): boolean {
+  const controller = turnAborts.get(threadId);
+  if (!controller) return false;
+  controller.abort();
+  return true;
 }
 
 async function openGuideSession(
@@ -125,6 +135,12 @@ export async function* streamGuideTurn(input: {
   if (running.has(record.id)) throw new GuideError("guide.busy", 409);
   if (input.signal?.aborted) return;
 
+  const turnAbort = new AbortController();
+  const onExternalAbort = () => turnAbort.abort();
+  if (input.signal) {
+    input.signal.addEventListener("abort", onExternalAbort);
+  }
+  turnAborts.set(record.id, turnAbort);
   running.add(record.id);
   let live: ReturnType<typeof createFrameQueue> | undefined;
   try {
@@ -159,7 +175,8 @@ export async function* streamGuideTurn(input: {
     const onAbort = () => {
       void session.abort();
     };
-    input.signal?.addEventListener("abort", onAbort);
+    turnAbort.signal.addEventListener("abort", onAbort);
+    if (turnAbort.signal.aborted) onAbort();
     const prompt = buildWorkshopChatPrompt(text || "Please look at the attached files.", attachments, null);
     const modelId = resolveWorkshopModel({ sessionOverride: sessionModel });
     session.setContext(advanceGuideTurn(session.getContext()));
@@ -181,12 +198,12 @@ export async function* streamGuideTurn(input: {
 
     for await (const frame of queue.frames()) {
       yield frame;
-      if (input.signal?.aborted) break;
+      if (turnAbort.signal.aborted) break;
     }
 
     const result = await finished;
-    input.signal?.removeEventListener("abort", onAbort);
-    if (input.signal?.aborted) {
+    turnAbort.signal.removeEventListener("abort", onAbort);
+    if (turnAbort.signal.aborted) {
       persistAssistant(input.threadId, input.storeRoot, streamed, parts.finish());
       return;
     }
@@ -218,12 +235,14 @@ export async function* streamGuideTurn(input: {
     if (saved) yield { type: "done", message: saved };
     else yield { type: "error", code: "guide.failed", message: "" };
   } catch (err) {
-    if (input.signal?.aborted) return;
+    if (turnAbort.signal.aborted) return;
     if (err instanceof GuideError) throw err;
     log.warn("guide.turn.failed", "turn failed", { threadId: record.id });
     yield { type: "error", code: "guide.failed", message: "" };
   } finally {
+    input.signal?.removeEventListener("abort", onExternalAbort);
     live?.close();
+    turnAborts.delete(record.id);
     running.delete(record.id);
   }
 }

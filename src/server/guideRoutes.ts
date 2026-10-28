@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  abortGuideTurn,
   GuideError,
   guideAgentInfo,
   isGuideThreadRunning,
@@ -39,6 +40,10 @@ function threadSummary(record: { id: string; title: string; updatedAt: string })
   return { id: record.id, title: record.title, updatedAt: record.updatedAt };
 }
 
+function canWrite(res: ServerResponse): boolean {
+  return !res.writableEnded && !res.destroyed;
+}
+
 export async function handleGuideRoutes(
   req: IncomingMessage,
   method: string,
@@ -51,19 +56,35 @@ export async function handleGuideRoutes(
   const threads = pathname === "/api/guide/threads";
   const threadMatch = /^\/api\/guide\/threads\/([^/]+)$/.exec(pathname);
   const messageMatch = /^\/api\/guide\/threads\/([^/]+)\/messages$/.exec(pathname);
-  if (!root && !threads && !threadMatch && !messageMatch) return false;
+  const stopMatch = /^\/api\/guide\/threads\/([^/]+)\/stop$/.exec(pathname);
+  if (!root && !threads && !threadMatch && !messageMatch && !stopMatch) return false;
 
   if (root && method === "GET") {
     json(res, 200, { agent: guideAgentInfo(host) });
     return true;
   }
   if (threads && method === "GET") {
-    json(res, 200, { threads: listGuideThreads() });
+    json(res, 200, {
+      threads: listGuideThreads().map((thread) => ({
+        ...thread,
+        status: isGuideThreadRunning(thread.id) ? "running" : "open",
+      })),
+    });
     return true;
   }
   if (threads && method === "POST") {
     const record = createGuideThread();
     json(res, 201, { thread: threadSummary(record) });
+    return true;
+  }
+  if (stopMatch && method === "POST") {
+    const threadId = decodeURIComponent(stopMatch[1] ?? "");
+    const record = readGuideThread(threadId);
+    if (!record) {
+      json(res, 404, { code: "guide.not_found", message: "" });
+      return true;
+    }
+    json(res, 200, { ok: true, stopped: abortGuideTurn(threadId) });
     return true;
   }
   if (threadMatch && method === "GET") {
@@ -124,11 +145,6 @@ export async function handleGuideRoutes(
       return true;
     }
     const text = typeof body.text === "string" ? body.text : "";
-    const abort = new AbortController();
-    const onClose = () => {
-      if (!res.writableEnded) abort.abort();
-    };
-    res.on("close", onClose);
     let started = false;
     try {
       for await (const frame of streamGuideTurn({
@@ -137,8 +153,8 @@ export async function handleGuideRoutes(
         text,
         attachments: body.attachments,
         model: typeof body.model === "string" ? body.model : undefined,
-        signal: abort.signal,
       })) {
+        if (!canWrite(res)) continue;
         if (!started) {
           started = true;
           res.writeHead(200, {
@@ -151,12 +167,11 @@ export async function handleGuideRoutes(
     } catch (err) {
       const code = err instanceof GuideError ? err.code : "guide.failed";
       const status = err instanceof GuideError ? err.status : 500;
-      if (!started && !abort.signal.aborted) json(res, status, { code, message: "" });
-      else if (started && !res.writableEnded) res.write(`${JSON.stringify({ type: "error", code, message: "" })}\n`);
+      if (!started && canWrite(res)) json(res, status, { code, message: "" });
+      else if (started && canWrite(res)) res.write(`${JSON.stringify({ type: "error", code, message: "" })}\n`);
     } finally {
-      res.off("close", onClose);
-      if (!res.headersSent && !abort.signal.aborted) json(res, 200, { code: "guide.failed", message: "" });
-      else if (!res.writableEnded) res.end();
+      if (!res.headersSent && canWrite(res)) json(res, 200, { code: "guide.failed", message: "" });
+      else if (canWrite(res)) res.end();
     }
     return true;
   }

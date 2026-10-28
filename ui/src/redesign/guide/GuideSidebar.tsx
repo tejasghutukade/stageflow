@@ -1,13 +1,32 @@
-import { ThreadListItemPrimitive, ThreadListPrimitive } from "@assistant-ui/react";
+import { ThreadListItemPrimitive, ThreadListPrimitive, useAuiState } from "@assistant-ui/react";
 import { LuMessageSquarePlus } from "react-icons/lu";
 import { navigate, guidePath } from "../../routes";
+import { useGuideActivity } from "./runtime";
 import { GUIDE_SECTIONS } from "./sections";
 
+function WorkingDot() {
+  return (
+    <span
+      className="sf-guide-working-dot size-1.5 shrink-0 rounded-full bg-[var(--sf-running)]"
+      role="status"
+      aria-label="Working"
+    />
+  );
+}
+
 function Conversation() {
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const localRunning = useAuiState((state) => state.threadListItem.isRunning);
+  const { runningIds } = useGuideActivity();
+  const working = localRunning || (remoteId != null && runningIds.has(remoteId));
+
   return (
     <ThreadListItemPrimitive.Root className="group flex rounded-lg data-[active]:bg-[var(--sf-active)] hover:bg-[var(--sf-active)]">
-      <ThreadListItemPrimitive.Trigger className="min-w-0 flex-1 truncate rounded-lg px-2.5 py-2 text-left text-[13px] text-[var(--sf-text-2)] group-data-[active]:font-medium group-data-[active]:text-[var(--sf-text-1)]">
-        <ThreadListItemPrimitive.Title fallback="New chat" />
+      <ThreadListItemPrimitive.Trigger className="flex min-w-0 flex-1 items-center gap-2 truncate rounded-lg px-2.5 py-2 text-left text-[13px] text-[var(--sf-text-2)] group-data-[active]:font-medium group-data-[active]:text-[var(--sf-text-1)]">
+        {working ? <WorkingDot /> : null}
+        <span className="min-w-0 flex-1 truncate">
+          <ThreadListItemPrimitive.Title fallback="New chat" />
+        </span>
       </ThreadListItemPrimitive.Trigger>
     </ThreadListItemPrimitive.Root>
   );

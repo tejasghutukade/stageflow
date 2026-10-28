@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFrames } from "../../chat/ndjson";
-import { toGuideFrame, toGuideParts } from "./api";
+import { createGuideApi, guideThreadStatus, toGuideFrame, toGuideParts } from "./api";
 
 function stream(text: string): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -96,5 +96,62 @@ describe("readFrames with the Guide decoder", () => {
     const frames = [];
     for await (const frame of readFrames(body, toGuideFrame)) frames.push(frame);
     expect(frames.map((frame) => frame.type)).toEqual(["delta", "tool", "tool"]);
+  });
+});
+
+describe("guideThreadStatus", () => {
+  it("keeps running and defaults everything else to open", () => {
+    expect(guideThreadStatus("running")).toBe("running");
+    expect(guideThreadStatus("open")).toBe("open");
+    expect(guideThreadStatus("waiting")).toBe("open");
+    expect(guideThreadStatus(undefined)).toBe("open");
+  });
+});
+
+describe("createGuideApi thread status and stop", () => {
+  it("maps list and get status and posts stop", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/guide/threads") && (init?.method ?? "GET") === "GET") {
+        return new Response(
+          JSON.stringify({
+            threads: [
+              { id: "a", title: "A", updatedAt: "2026-10-28T00:00:00.000Z", status: "running" },
+              { id: "b", title: "B", updatedAt: "2026-10-27T00:00:00.000Z" },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/api/guide/threads/a") && (init?.method ?? "GET") === "GET") {
+        return new Response(
+          JSON.stringify({
+            thread: { id: "a", title: "A", updatedAt: "2026-10-28T00:00:00.000Z" },
+            status: "running",
+            messages: [],
+            model: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/api/guide/threads/a/stop") && init?.method === "POST") {
+        return new Response(JSON.stringify({ ok: true, stopped: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", { status: 404 });
+    });
+    const api = createGuideApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.listThreads()).resolves.toEqual([
+      { id: "a", title: "A", updatedAt: "2026-10-28T00:00:00.000Z", status: "running" },
+      { id: "b", title: "B", updatedAt: "2026-10-27T00:00:00.000Z", status: "open" },
+    ]);
+    await expect(api.getThread("a")).resolves.toMatchObject({ status: "running", model: null });
+    await expect(api.stopTurn("a")).resolves.toEqual({ ok: true, stopped: true });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/guide/threads/a/stop",
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
   });
 });

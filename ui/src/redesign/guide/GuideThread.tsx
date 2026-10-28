@@ -4,7 +4,7 @@ import { LuArrowDown, LuArrowUp, LuFile, LuPaperclip, LuSquare, LuTriangleAlert,
 import { ModelPicker } from "../../components/ModelPicker";
 import { friendlyMessage } from "../../chat/errors";
 import { GUIDE_TOOLS } from "./GuideTools";
-import { useGuideModel } from "./runtime";
+import { useGuideActivity, useGuideModel } from "./runtime";
 
 const MarkdownText = lazy(() => import("../../chat/MarkdownText"));
 
@@ -127,8 +127,27 @@ function AssistantMessage() {
   );
 }
 
+function StopButton() {
+  const { stopCurrent } = useGuideActivity();
+  return (
+    <button
+      type="button"
+      aria-label="Stop replying"
+      className="mb-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-[var(--sf-raised)] text-[var(--sf-text-1)]"
+      onClick={() => {
+        void stopCurrent();
+      }}
+    >
+      <LuSquare aria-hidden className="size-3.5 fill-current" />
+    </button>
+  );
+}
+
 function Composer() {
   const { model, setModel } = useGuideModel();
+  const localRunning = useAuiState((state) => state.thread.isRunning);
+  const { isResuming } = useGuideActivity();
+  const busy = localRunning || isResuming;
   return (
     <ComposerPrimitive.Root className="flex flex-col gap-2 rounded-2xl border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)] px-3 py-2 focus-within:border-[var(--sf-text-3)]">
       <ComposerPrimitive.Attachments>
@@ -164,22 +183,16 @@ function Composer() {
           placeholder="Describe what you want to get done"
           className="max-h-40 min-h-9 flex-1 resize-none bg-transparent py-1.5 text-[15px] leading-relaxed text-[var(--sf-text-1)] outline-none placeholder:text-[var(--sf-text-3)]"
         />
-        <ThreadPrimitive.If running={false}>
+        {busy ? (
+          <StopButton />
+        ) : (
           <ComposerPrimitive.Send
             aria-label="Send message"
             className="mb-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-[var(--sf-text-1)] text-[var(--sf-ground)] disabled:cursor-not-allowed disabled:opacity-30"
           >
             <LuArrowUp aria-hidden className="size-4" />
           </ComposerPrimitive.Send>
-        </ThreadPrimitive.If>
-        <ThreadPrimitive.If running>
-          <ComposerPrimitive.Cancel
-            aria-label="Stop replying"
-            className="mb-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-[var(--sf-raised)] text-[var(--sf-text-1)]"
-          >
-            <LuSquare aria-hidden className="size-3.5 fill-current" />
-          </ComposerPrimitive.Cancel>
-        </ThreadPrimitive.If>
+        )}
       </div>
       <ModelPicker
         variant="chip"
@@ -193,6 +206,7 @@ function Composer() {
 }
 
 export function GuideThread({ agentName, greeting }: { agentName: string; greeting: string }) {
+  const { isResuming } = useGuideActivity();
   return (
     <ThreadPrimitive.Root className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--sf-ground)]">
       <ThreadPrimitive.Viewport className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth px-4 pt-6">
@@ -213,6 +227,7 @@ export function GuideThread({ agentName, greeting }: { agentName: string; greeti
           <ThreadPrimitive.Messages>
             {({ message }) => (message.role === "user" ? <UserMessage /> : <AssistantMessage />)}
           </ThreadPrimitive.Messages>
+          {isResuming ? <Dots /> : null}
         </div>
         <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mx-auto flex w-full max-w-3xl flex-col gap-2 bg-[var(--sf-ground)] pb-4 pt-3">
           <ThreadPrimitive.ScrollToBottom

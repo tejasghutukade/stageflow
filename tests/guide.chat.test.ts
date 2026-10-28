@@ -2,7 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resetGuideSessionsForTests, streamGuideTurn } from "../src/guide/chat.js";
+import {
+  abortGuideTurn,
+  isGuideThreadRunning,
+  resetGuideSessionsForTests,
+  streamGuideTurn,
+} from "../src/guide/chat.js";
 import {
   createGuideThread,
   listGuideThreads,
@@ -270,5 +275,167 @@ describe("stageflow guide", () => {
     expect(setGuideThreadModel(thread.id, null, storeRoot)?.model).toBeUndefined();
     expect(readGuideThread(thread.id, storeRoot)?.model).toBeUndefined();
     expect(setGuideThreadModel("missing", "openrouter/x", storeRoot)).toBeNull();
+  });
+
+  it("abortGuideTurn stops an in-flight turn and persists the partial reply", async () => {
+    storeRoot = await mkdtemp(path.join(tmpdir(), "sf-guide-"));
+    let releaseSend!: () => void;
+    const sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    let markEntered!: () => void;
+    const enteredSend = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    let aborted = false;
+    const model: OperatorAgentModel = {
+      async complete({ onDelta, onActivity }) {
+        onDelta?.("partial");
+        onActivity?.({ id: "t1", name: "list_pipelines", status: "running", args: {} });
+        markEntered();
+        await sendGate;
+        return { events: [{ type: "message", role: "assistant", text: "partial" }] };
+      },
+      async abort() {
+        aborted = true;
+        releaseSend();
+      },
+    };
+    const host = createOperatorAgentHost(model, [createStageflowGuideProfile()]);
+    const thread = createGuideThread(storeRoot);
+    expect(abortGuideTurn(thread.id)).toBe(false);
+    expect(isGuideThreadRunning(thread.id)).toBe(false);
+
+    const pending = (async () => {
+      const frames = [];
+      for await (const frame of streamGuideTurn({
+        host,
+        threadId: thread.id,
+        text: "go",
+        storeRoot,
+      })) {
+        frames.push(frame);
+      }
+      return frames;
+    })();
+
+    await enteredSend;
+    expect(isGuideThreadRunning(thread.id)).toBe(true);
+    expect(
+      listGuideThreads(storeRoot).map((item) => ({
+        id: item.id,
+        status: isGuideThreadRunning(item.id) ? "running" : "open",
+      })),
+    ).toEqual([{ id: thread.id, status: "running" }]);
+    expect(abortGuideTurn(thread.id)).toBe(true);
+
+    const frames = await pending;
+    expect(aborted).toBe(true);
+    expect(frames.some((frame) => frame.type === "done")).toBe(false);
+    expect(isGuideThreadRunning(thread.id)).toBe(false);
+    expect(abortGuideTurn(thread.id)).toBe(false);
+    expect(
+      listGuideThreads(storeRoot).map((item) => ({
+        id: item.id,
+        status: isGuideThreadRunning(item.id) ? "running" : "open",
+      })),
+    ).toEqual([{ id: thread.id, status: "open" }]);
+
+    const stored = readGuideThread(thread.id, storeRoot);
+    expect(stored?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(stored?.messages[1]).toMatchObject({
+      role: "assistant",
+      text: "partial",
+      parts: [
+        { type: "text", text: "partial" },
+        { type: "tool", id: "t1", name: "list_pipelines", status: "error", error: "guide.tool_interrupted", args: {} },
+      ],
+    });
+  });
+
+  it("honors an optional AbortSignal and still persists the partial reply", async () => {
+    storeRoot = await mkdtemp(path.join(tmpdir(), "sf-guide-"));
+    let releaseSend!: () => void;
+    const sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    let markEntered!: () => void;
+    const enteredSend = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const model: OperatorAgentModel = {
+      async complete({ onDelta }) {
+        onDelta?.("half");
+        markEntered();
+        await sendGate;
+        return { events: [{ type: "message", role: "assistant", text: "half" }] };
+      },
+      async abort() {
+        releaseSend();
+      },
+    };
+    const host = createOperatorAgentHost(model, [createStageflowGuideProfile()]);
+    const thread = createGuideThread(storeRoot);
+    const abort = new AbortController();
+    const pending = (async () => {
+      for await (const _frame of streamGuideTurn({
+        host,
+        threadId: thread.id,
+        text: "go",
+        storeRoot,
+        signal: abort.signal,
+      })) {
+        /* drain */
+      }
+    })();
+    await enteredSend;
+    abort.abort();
+    await pending;
+    expect(readGuideThread(thread.id, storeRoot)?.messages[1]).toMatchObject({
+      role: "assistant",
+      text: "half",
+    });
+    expect(isGuideThreadRunning(thread.id)).toBe(false);
+  });
+
+  it("finishes and persists when the consumer keeps draining without abort", async () => {
+    storeRoot = await mkdtemp(path.join(tmpdir(), "sf-guide-"));
+    let releaseSend!: () => void;
+    const sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    let markEntered!: () => void;
+    const enteredSend = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const model: OperatorAgentModel = {
+      async complete({ onDelta }) {
+        onDelta?.("still going");
+        markEntered();
+        await sendGate;
+        return { events: [{ type: "message", role: "assistant", text: "still going" }] };
+      },
+    };
+    const host = createOperatorAgentHost(model, [createStageflowGuideProfile()]);
+    const thread = createGuideThread(storeRoot);
+    const pending = (async () => {
+      const frames = [];
+      for await (const frame of streamGuideTurn({
+        host,
+        threadId: thread.id,
+        text: "keep going",
+        storeRoot,
+      })) {
+        frames.push(frame);
+      }
+      return frames;
+    })();
+    await enteredSend;
+    expect(isGuideThreadRunning(thread.id)).toBe(true);
+    expect(abortGuideTurn("missing")).toBe(false);
+    releaseSend();
+    const frames = await pending;
+    expect(frames.at(-1)).toMatchObject({ type: "done", message: { text: "still going" } });
+    expect(readGuideThread(thread.id, storeRoot)?.messages[1]?.text).toBe("still going");
   });
 });

@@ -99,9 +99,27 @@
 .sf-chat-dot {
   animation: sf-chat-dot 1.2s infinite ease-in-out;
 }
+@keyframes sf-guide-working-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+.sf-guide-working-dot {
+  animation: sf-guide-working-pulse 1.4s ease-in-out infinite;
+}
 @media (prefers-reduced-motion: reduce) {
   .sf-chat-dot {
     animation: none;
     opacity: 0.6;
+  }
+  .sf-guide-working-dot {
+    animation: none;
+    opacity: 0.85;
   }
 }
