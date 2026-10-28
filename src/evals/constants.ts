@@ -98,7 +98,9 @@ export const RUBRIC_PROMPT_VERSION = 1;
 export const CONFIG_SNAPSHOT_VERSION = 1;
 
 export const SIMULATOR_PROMPT_VERSION = 1;
-export const CONVERSATION_RUBRIC_PROMPT_VERSION = 1;
+export const CONVERSATION_RUBRIC_PROMPT_VERSION = 2;
+/** Room for reasoning judges, whose hidden thinking counts against the output cap. */
+export const JUDGE_MAX_OUTPUT_TOKENS = 8_192;
 /** Bump when the failure-sorting questions, bucket criteria or judge prompt text change. */
 export const TRIAGE_PROMPT_VERSION = 1;
 

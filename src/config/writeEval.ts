@@ -185,7 +185,7 @@ export function renderEvalYaml(definition: unknown): string {
 }
 
 function fillCreateDefaults(definition: EvalFile): EvalFile {
-  if (definition.target?.kind === "agent") {
+  if (definition.target?.kind === "agent" || definition.target?.kind === "internal_agent") {
     const conversation = { ...definition.conversation } as Record<string, unknown>;
     const d = EVAL_CONVERSATION_DEFAULTS;
     const explicit: Record<string, unknown> = {
@@ -351,7 +351,7 @@ export function previewEvalUpdate(currentText: string, definition: unknown): str
   if (!isPlain(target)) return renderEvalYaml(definition);
   if (isDeepStrictEqual(doc.toJS(), JSON.parse(JSON.stringify(target)))) return currentText;
   const targetKind = isPlain(target.target) ? target.target.kind : undefined;
-  syncMap(doc, doc.contents, target, [], targetKind === "agent");
+  syncMap(doc, doc.contents, target, [], targetKind === "agent" || targetKind === "internal_agent");
   return toText(doc);
 }
 

@@ -169,7 +169,10 @@ export type EvalDefinition = {
   name?: string;
   description?: string;
   type?: "capability" | "regression";
-  target: { kind: "stage"; pipeline?: string; stage?: string; file?: string } | { kind: "agent"; agent: string };
+  target:
+    | { kind: "stage"; pipeline?: string; stage?: string; file?: string }
+    | { kind: "agent"; agent: string }
+    | { kind: "internal_agent"; profile: string };
   dataset: string;
   task?: { goal?: string; context?: string; constraints?: string };
   defaults?: {
@@ -424,6 +427,7 @@ export type EvalRunDetail = {
     agent_definition_hash?: string | null;
   };
   live?: Array<{ case_id: string; repeat_index: number; phase: "stage_running" | "agent_running" | "grading" | "done" }>;
+  cases?: Array<{ id: string; title: string | null; position: number }>;
 };
 
 export type EvalRunListQuery = {

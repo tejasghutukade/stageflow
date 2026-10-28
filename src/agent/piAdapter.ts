@@ -625,6 +625,23 @@ function attachStageProgress(
   };
 }
 
+function formatGrantedArtifacts(
+  grants: StageRunInput["roots"]["artifactGrants"],
+): string {
+  if (grants === undefined || grants.length === 0) {
+    return "No prior artifacts are granted in this sandbox. Do not open stages/<id>/attempts/... host layouts.";
+  }
+  const lines = [
+    "Prior artifacts are read-only. Read the sandbox path on each line. A file grant is a file at that path. A directory grant is a directory. Do not open stages/<id>/attempts/... host layouts.",
+  ];
+  for (const grant of grants) {
+    const name = grant.listedPath.split("/").pop() || grant.listedPath;
+    lines.push(`- ${name} (${grant.kind}) → ${grant.containerPath}`);
+    lines.push(`  from ${grant.listedPath}`);
+  }
+  return lines.join("\n");
+}
+
 function buildUserPrompt(
   input: StageRunInput,
   emitToolName: string,
@@ -682,14 +699,18 @@ function buildUserPrompt(
       : "";
   const artifactGuidance = sandboxed
     ? [
-        "Sandbox desk: /workspace. read, bash, write, and edit run only inside that desk.",
+        "Sandbox desk: /workspace. read, write, and edit run only inside that desk.",
+        input.roots.readonlyDir
+          ? `One folder is mounted read-only at ${input.roots.readonlyDir}. Read the files there. If a file you were given is not in that folder, stop and say so. Do not create stand-in documents.`
+          : "The host filesystem is not mounted.",
         input.roots.checkoutRoot
           ? `Checkout: /workspace/checkout. The host checkout path is not mounted.`
           : "This stage has no checkout. Scratch files go in /workspace/work.",
-        "Attempt artifacts are at /workspace/artifacts. Scratch space is /workspace/work.",
+        "Scratch space is /workspace/work. Desk /workspace/artifacts is not durable — bash or builtin writes there do not persist for emit or the next stage.",
         artifactToolName !== undefined
-          ? `Create factory stage artifacts only with ${artifactToolName} (path relative to ${attemptArtifactsPath}). Use the returned run-relative path in ${emitToolName}.`
-          : `Create factory stage artifacts under ${attemptArtifactsPath} relative to the run folder.`,
+          ? `Durable stage artifacts only via ${artifactToolName} (path relative to ${attemptArtifactsPath}). Use the returned run-relative path in ${emitToolName}.`
+          : `Durable stage artifacts belong under ${attemptArtifactsPath} relative to the run folder.`,
+        formatGrantedArtifacts(input.roots.artifactGrants),
       ].join("\n")
     : input.roots.mode === "bound" && artifactToolName !== undefined
       ? [
@@ -1245,10 +1266,18 @@ async function prepareStageSessionWiring(
     {
       checks: input.stage.pre_emit_checks,
       readQaTrail: input.readQaTrail,
+      artifactPresence: {
+        runWorkspaceDir: roots.runWorkspaceDir,
+        stageId: runtimeStageId(input),
+        attempt: roots.attempt ?? 1,
+      },
     },
     input.feedbackLoopEmitContext,
   );
-  const emitTool = defineTool(emitDef);
+  const emitTool = defineTool({
+    ...emitDef,
+    constrainedSampling: { type: "json_schema", strict: "prefer" },
+  });
 
   const gateKinds = input.stage.gate_kinds;
   const includeAsk = Array.isArray(gateKinds) && gateKinds.length > 0;
@@ -1258,14 +1287,22 @@ async function prepareStageSessionWiring(
         allowedKinds: gateKinds,
       })
     : undefined;
-  const askTool = askDef ? defineTool(askDef) : undefined;
+  const askTool = askDef
+    ? defineTool({
+        ...askDef,
+        constrainedSampling: { type: "json_schema", strict: "prefer" },
+      })
+    : undefined;
 
   const artifactDef = createWriteStageArtifactTool({
     runWorkspaceDir: roots.runWorkspaceDir,
     stageId: runtimeStageId(input),
     attempt: roots.attempt ?? 1,
   });
-  const artifactTool = defineTool(artifactDef);
+  const artifactTool = defineTool({
+    ...artifactDef,
+    constrainedSampling: { type: "json_schema", strict: "prefer" },
+  });
 
   if (input.stage.skill !== undefined && input.skillFilePath === undefined) {
     return {
@@ -1436,12 +1473,18 @@ async function prepareStageSessionWiring(
     }
     if (input.channels && input.stage.channels?.some(channel => channel.operations.includes("send"))) {
       const definition = createSendMessageTool(input.channels);
-      customTools.push(defineTool(definition));
+      customTools.push(defineTool({
+        ...definition,
+        constrainedSampling: { type: "json_schema", strict: "prefer" },
+      }));
       tools.push(definition.name);
     }
     if (input.memory) {
       for (const definition of memorySession(input.memory).tools) {
-        customTools.push(defineTool(definition));
+        customTools.push(defineTool({
+          ...definition,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+        }));
         tools.push(definition.name);
       }
     }
@@ -1455,7 +1498,10 @@ async function prepareStageSessionWiring(
         permitted.has("downloadAttachment") ? createDownloadEmailAttachmentTool(input.email) : undefined,
       ];
       for (const definition of definitions) if (definition) {
-        customTools.push(defineTool(definition));
+        customTools.push(defineTool({
+          ...definition,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+        }));
         tools.push(definition.name);
       }
     }
@@ -1465,12 +1511,14 @@ async function prepareStageSessionWiring(
         ...(roots.containerDockerBin !== undefined
           ? { dockerBin: roots.containerDockerBin }
           : {}),
+        ...(roots.readonlyDir !== undefined ? { readonlyDir: roots.readonlyDir } : {}),
       };
+      const sampling = { type: "json_schema", strict: "prefer" } as const;
       customTools.push(
-        defineTool(createSandboxReadTool(sandboxTools)),
-        defineTool(createSandboxWriteTool(sandboxTools)),
-        defineTool(createSandboxEditTool(sandboxTools)),
-        defineTool(createSandboxBashTool(sandboxTools)),
+        defineTool({ ...createSandboxReadTool(sandboxTools), constrainedSampling: sampling }),
+        defineTool({ ...createSandboxWriteTool(sandboxTools), constrainedSampling: sampling }),
+        defineTool({ ...createSandboxEditTool(sandboxTools), constrainedSampling: sampling }),
+        defineTool({ ...createSandboxBashTool(sandboxTools), constrainedSampling: sampling }),
       );
     }
 

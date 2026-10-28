@@ -55,6 +55,8 @@ export type WizardTarget = {
   projectRoot?: string;
   model?: string;
   label: string;
+  /** A built-in operator agent, written as kind internal_agent. */
+  internal?: boolean;
 };
 
 export type DatasetSource = "upload" | "paste" | "runs" | "sessions" | "sample";
@@ -217,6 +219,7 @@ export function isAgentDraft(draft: Pick<WizardDraft, "targetKind">): boolean {
 }
 
 export function targetRef(target: WizardTarget, dirs: WriteDirs): NonNullable<EvalDefinition["target"]> {
+  if (target.internal) return { kind: "internal_agent", profile: target.agentId ?? target.stageId };
   if (target.kind === "agent") return { kind: "agent", agent: target.agentId ?? target.stageId };
   if (target.kind === "file" && target.file !== undefined) {
     return { kind: "stage", file: posixRelative(dirs.evals, target.file) };
@@ -398,6 +401,10 @@ export function datasetWithCases(
   if (cases.length === 0 && ds === null) return null;
   const base = ds ?? datasetFromScenarios([], mode, agentId, takenNames);
   return recountDataset({ ...base, cases }, mode);
+}
+
+export function internalTargetOf(agent: { id: string; title: string }): WizardTarget {
+  return { kind: "agent", stageId: agent.id, agentId: agent.id, internal: true, label: agent.title };
 }
 
 export function agentTargetOf(agent: Pick<EvalAgentTarget, "id" | "name" | "model" | "revision" | "enabled">, projectRoot?: string): WizardTarget {

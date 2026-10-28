@@ -27,6 +27,12 @@ import { openStageAttempt } from "./stageAttemptBootstrap.js";
 import { attemptContext } from "./stageAttemptContext.js";
 import { loadActiveFeedbackLoopContext } from "./feedbackLoopCoordinator.js";
 import {
+  buildCompletedEnvelopesFromRun,
+  resolvePriorEnvelope,
+} from "./envelopeRouting.js";
+import { assignment } from "./cloneSchedule.js";
+import { artifactGrantsFromPriors } from "./priorArtifactGrants.js";
+import {
   outcomeToWorkerResult,
   SF_STAGE_WORKER,
   STAGE_WORKER_EXIT,
@@ -114,6 +120,31 @@ export async function runStageWorker(
   );
   const unbindAgentDir = bindPiAgentDirEnv(roots.agentDir);
 
+  const completedEnvelopes = await buildCompletedEnvelopesFromRun(
+    store,
+    input.runId,
+    undefined,
+    dag,
+  );
+  const assigned = assignment(
+    dag,
+    input.stageId,
+    definitionId,
+    completedEnvelopes,
+  );
+  const priorResult =
+    assigned ??
+    (await resolvePriorEnvelope({
+      dag,
+      stageId: input.stageId,
+      completedEnvelopes,
+      store,
+      runId: input.runId,
+    }));
+  const artifactGrants = priorResult.ok
+    ? await artifactGrantsFromPriors(workspaceDir, priorResult)
+    : [];
+
   const sandbox = await openStageSandbox({
     env: process.env,
     roots,
@@ -122,8 +153,12 @@ export async function runStageWorker(
     attempt,
     attemptDir,
     ...(checkoutRoot !== undefined ? { checkoutRoot } : {}),
+    ...(artifactGrants.length > 0 ? { grants: artifactGrants } : {}),
   });
   roots = sandbox.roots;
+  if (artifactGrants.length > 0) {
+    roots = { ...roots, artifactGrants };
+  }
   const beforeVerify = sandbox.beforeVerify;
   let outcome: RunStageOutcome | undefined;
   let thrown: unknown;

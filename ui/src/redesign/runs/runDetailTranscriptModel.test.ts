@@ -92,6 +92,61 @@ describe("buildRunDetailTranscriptTurns", () => {
     ).toEqual([]);
   });
 
+  it("folds each toolResult onto the call with the same payload", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "bash", toolCallId: "c1" },
+      { event: "tool_start", toolName: "get_pull_request", toolCallId: "c2" },
+      {
+        event: "tool_end",
+        toolName: "bash",
+        toolCallId: "c1",
+        resultPreview:
+          '{"content":[{"type":"text","text":"total 20\\ndrwxr-xr-x policy-samples"}]}',
+      },
+      {
+        event: "tool_end",
+        toolName: "get_pull_request",
+        toolCallId: "c2",
+        resultPreview:
+          '{"content":[{"type":"text","text":"{\\n  \\"number\\": 98, \\"title\\": \\"Guide\\""}]}',
+      },
+      {
+        event: "message",
+        role: "toolResult",
+        text: '{\n  "number": 98,\n  "title": "Guide"\n}',
+      },
+      {
+        event: "message",
+        role: "toolResult",
+        text: "total 20\ndrwxr-xr-x policy-samples",
+      },
+    ];
+    const turns = buildRunDetailTranscriptTurns(events);
+    expect(turns.map((turn) => turn.kind)).toEqual(["tools"]);
+    const tools = turns[0];
+    if (tools?.kind !== "tools") return;
+    expect(tools.calls.map((call) => call.name)).toEqual([
+      "bash",
+      "get_pull_request",
+    ]);
+    expect(tools.calls[0]?.result).toBe("total 20\ndrwxr-xr-x policy-samples");
+    expect(tools.calls[1]?.result).toContain('"number": 98');
+  });
+
+  it("keeps a tool result when no tool call precedes it", () => {
+    expect(
+      buildRunDetailTranscriptTurns([
+        { event: "message", role: "toolResult", text: '{"ok":true}', at: "2026-01-01T00:00:00.000Z" },
+      ]),
+    ).toEqual([
+      {
+        kind: "tool_result",
+        text: '{"ok":true}',
+        at: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+  });
+
   it("optionally merges consecutive assistant messages", () => {
     const events: StageLogEvent[] = [
       { event: "message", role: "assistant", text: "part one" },

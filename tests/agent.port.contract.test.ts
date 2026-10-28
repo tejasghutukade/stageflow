@@ -1,10 +1,11 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeAgent, fakeHitlResumePath } from "../src/agent/fakeAgent.js";
 import type { StagePort, StageRunInput } from "../src/agent/port.js";
+import { attemptContext } from "../src/runtime/stageAttemptContext.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { createEmitStageEnvelopeTool } from "../src/tools/emitStageEnvelope.js";
 
@@ -347,12 +348,20 @@ const drivers = [fakeAgentDriver, claudeAgentDriver];
 
 describe.each(drivers)("StagePort contract — parameterized ($name)", (driver) => {
   it("emit success returns an advancing envelope", async () => {
+    const runWs = await makeTempDir();
+    const listed = "stages/clarify/attempts/1/artifacts/a.md";
+    const hostPath = path.join(runWs, listed);
+    await mkdir(path.dirname(hostPath), { recursive: true });
+    await writeFile(hostPath, "a\n", "utf8");
     const agent = await driver.makeAgent({
       type: "emit_success",
       summary: "ok",
-      artifacts: ["stages/clarify/attempts/1/artifacts/a.md"],
+      artifacts: [listed],
     });
-    const result = await agent.runStage(baseInput);
+    const result = await agent.runStage({
+      ...baseInput,
+      roots: buildStageRoots(runWs, "clarify", undefined, attemptContext(1)),
+    });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.envelope.summary).toBe("ok");
   });

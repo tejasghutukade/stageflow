@@ -33,6 +33,7 @@ import type {
   RunCaseRequest,
   RunCaseResult,
 } from "./types.js";
+import { isConversationTarget } from "./types.js";
 
 export const EVAL_HOST_STOPPED_REASON = "Host stopped while the run was in progress";
 export const EVAL_DEFAULT_ENGINE = "promptfoo";
@@ -80,6 +81,8 @@ export type EvalRunManagerDeps = {
   stageRunner: StageCaseRunner;
   /** Lazy: the manager is built before the agent host. Absent or undefined means agents are unavailable. */
   agents?: () => EvalAgentsPort | undefined;
+  /** Built-in operator agents currently visible. Empty when the Host hides them. */
+  internalAgents?: () => Array<{ id: string; title: string; playbook: string; tools: string[] }>;
   engines?: (name: string, options?: unknown) => EvalEngine;
   engineName?: string;
   stageflowVersion: string;
@@ -770,6 +773,9 @@ export class EvalRunManager {
   }
 
   private requireRealToolsConsent(plan: EvalPlan, overrides: EvalOverrides | undefined): void {
+    if (plan.target.kind === "internal_agent" && plan.conversation?.tools === "real") {
+      throw new EvalRunError("EVAL_REAL_TOOLS_NOT_CONFIRMED", "Internal agents cannot run an eval with real tools.");
+    }
     if (plan.target.kind === "agent" && plan.conversation?.tools === "real" && overrides?.allow_real_tools !== true) {
       throw new EvalRunError(
         "EVAL_REAL_TOOLS_NOT_CONFIRMED",
@@ -784,7 +790,7 @@ export class EvalRunManager {
    */
   async preflightAgentStart(input: StartEvalRunInput): Promise<void> {
     const outcome = await loadEvalOutcome(path.resolve(input.projectRoot, input.evalPath), input.projectRoot);
-    if (!outcome.ok || outcome.value.file.target.kind !== "agent") return;
+    if (!outcome.ok || !isConversationTarget(outcome.value.file.target.kind)) return;
     const built = await buildEvalPlan({
       projectRoot: input.projectRoot,
       evalPath: input.evalPath,
@@ -799,9 +805,14 @@ export class EvalRunManager {
     this.requireRealToolsConsent(built.plan, input.overrides);
   }
 
-  private agentsInput(): { agents?: AgentCatalogPort } {
+  visibleInternalAgents(): Array<{ id: string; title: string; playbook: string; tools: string[] }> {
+    return this.deps.internalAgents?.() ?? [];
+  }
+
+  private agentsInput(): { agents?: AgentCatalogPort; internalAgents?: Array<{ id: string; title: string; playbook: string; tools: string[] }> } {
     const agents = this.deps.agents?.();
-    return agents ? { agents } : {};
+    const internalAgents = this.deps.internalAgents?.() ?? [];
+    return { ...(agents ? { agents } : {}), internalAgents };
   }
 
   /** Delete the agent sessions of recovered runs and eval sessions older than 7 days that no result references. */

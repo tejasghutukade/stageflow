@@ -84,13 +84,27 @@ describe("MCP trigger tools", () => {
           task: "my-task",
           kind: "manual",
           enabled: true,
+          adapter_status: { adapter: "manual", state: "idle" },
         });
+        expect(typeof manual.project_root).toBe("string");
 
         const shown = await mcpCall(service.baseUrl, "get_trigger", {
           id: "manual-hello-world",
+          project_root: manual.project_root,
         });
         expect(shown.isError).toBe(false);
-        expect(shown.payload).toMatchObject({ id: "manual-hello-world" });
+        expect(shown.payload).toMatchObject({
+          id: "manual-hello-world",
+          project_root: manual.project_root,
+          adapter_status: { adapter: "manual", state: "idle" },
+        });
+
+        const wrongRoot = await mcpCall(service.baseUrl, "get_trigger", {
+          id: "manual-hello-world",
+          project_root: "/no/such/catalog/root",
+        });
+        expect(wrongRoot.isError).toBe(true);
+        expect(wrongRoot.payload.status).toBe(404);
 
         const missing = await mcpCall(service.baseUrl, "get_trigger", {
           id: "no-such-trigger",
@@ -119,11 +133,23 @@ describe("MCP trigger tools", () => {
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
       const service = await startTestService(store, agent, root);
       try {
+        const listed = await mcpCall(service.baseUrl, "list_triggers");
+        const projectRoot = listed.payload.triggers.find(
+          (t: { id: string }) => t.id === "manual-hello-world",
+        ).project_root;
         const fired = await mcpCall(service.baseUrl, "fire_trigger", {
           id: "manual-hello-world",
+          project_root: projectRoot,
         });
         expect(fired.isError).toBe(false);
         expect(typeof fired.payload.runId).toBe("string");
+
+        const wrongRoot = await mcpCall(service.baseUrl, "fire_trigger", {
+          id: "manual-hello-world",
+          project_root: "/no/such/catalog/root",
+        });
+        expect(wrongRoot.isError).toBe(true);
+        expect(wrongRoot.payload.status).toBe(400);
 
         const run = await store.readRun(fired.payload.runId);
         expect(run.pipeline_id).toBe("hello");

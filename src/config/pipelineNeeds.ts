@@ -17,8 +17,20 @@ export const NEED_TERMINAL_STATES: readonly NeedTerminalState[] = [
 
 const NEED_TERMINAL_STATE_SET = new Set<string>(NEED_TERMINAL_STATES);
 
+const NEED_TERMINAL_ALIASES: Record<string, NeedTerminalState> = {
+  success: "succeeded",
+  failure: "failed",
+};
+
 export function isNeedTerminalState(value: unknown): value is NeedTerminalState {
   return typeof value === "string" && NEED_TERMINAL_STATE_SET.has(value);
+}
+
+/** Map known aliases; return undefined if not a terminal state or known alias. */
+export function canonicalizeNeedTerminalState(value: unknown): NeedTerminalState | undefined {
+  if (typeof value !== "string") return undefined;
+  if (isNeedTerminalState(value)) return value;
+  return NEED_TERMINAL_ALIASES[value];
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -39,14 +51,15 @@ function parseNeedOn(
   const seen = new Set<string>();
   const on: NeedTerminalState[] = [];
   for (const item of raw) {
-    if (typeof item !== "string" || !NEED_TERMINAL_STATE_SET.has(item) || seen.has(item)) {
+    const canonical = canonicalizeNeedTerminalState(item);
+    if (canonical === undefined || seen.has(canonical)) {
       return {
         ok: false,
         message: `stage "${stageId}": needs "${parentId}": on must be a non-empty unique subset of succeeded, failed, skipped`,
       };
     }
-    seen.add(item);
-    on.push(item as NeedTerminalState);
+    seen.add(canonical);
+    on.push(canonical);
   }
   return { ok: true, value: on };
 }

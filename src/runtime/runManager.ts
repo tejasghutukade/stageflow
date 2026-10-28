@@ -1438,7 +1438,17 @@ export class RunManager {
       return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
     }
 
+    const trimmedReason = reason.trim();
+    if (trimmedReason.length === 0) {
+      return {
+        ok: false,
+        reason: "Cancel reason is required",
+        status: 400,
+      };
+    }
+
     if (meta.status === "cancelled") {
+      await this.interruptLiveStages(runId);
       return { ok: true, runId };
     }
 
@@ -1447,15 +1457,6 @@ export class RunManager {
         ok: false,
         reason: `Run is ${meta.status} and cannot be cancelled`,
         status: 409,
-      };
-    }
-
-    const trimmedReason = reason.trim();
-    if (trimmedReason.length === 0) {
-      return {
-        ok: false,
-        reason: "Cancel reason is required",
-        status: 400,
       };
     }
 
@@ -1521,6 +1522,42 @@ export class RunManager {
     }
 
     return { ok: true, runId };
+  }
+
+  private async interruptLiveStages(runId: string): Promise<void> {
+    const halt = this.schedulingHalts.get(runId);
+    if (halt !== undefined) {
+      halt.halted = true;
+    }
+    if (this.stageProcessLauncher !== undefined) {
+      await this.stageProcessLauncher.cancelRun(runId);
+    }
+    const detail = await this.options.store.readRun(runId);
+    for (const stage of detail.stages) {
+      if (stage.status !== "running" && stage.status !== "waiting_for_input") {
+        continue;
+      }
+      const wasWaiting = stage.status === "waiting_for_input";
+      await markStageInterrupted({
+        store: this.options.store,
+        runId,
+        stageId: stage.stage_id,
+        reason: OPERATOR_CANCEL_REASON,
+        status: "failed",
+      });
+      if (
+        this.retryCoordinator.isActive(runId) &&
+        this.retryCoordinator.getActiveRoots(runId)?.has(stage.stage_id)
+      ) {
+        this.retryCoordinator.signalExternalRetryRootTerminal(runId, stage.stage_id);
+      }
+      if (wasWaiting) {
+        this.hitl.clearLiveWait(runId, stage.stage_id);
+      }
+    }
+    if (this.active.has(runId)) {
+      this.removeActiveEntry(runId, false);
+    }
   }
 
   setA2aStore(store: A2aStore): void {
@@ -1919,8 +1956,12 @@ export class RunManager {
     );
   }
 
-  async retryStage(runId: string, stageId: string): Promise<RetryStageResult> {
-    return this.retryStageInternal(runId, stageId, true);
+  async retryStage(
+    runId: string,
+    stageId: string,
+    options?: { awaitRoot?: boolean },
+  ): Promise<RetryStageResult> {
+    return this.retryStageInternal(runId, stageId, options?.awaitRoot !== false);
   }
 
   async resumeTimedOutStage(
@@ -2257,6 +2298,12 @@ export class RunManager {
           : {}),
       });
       if (!result.ok || awaitRoot !== false) {
+        this.retryInFlight.delete(retryKey);
+      } else if (result.done !== undefined) {
+        void result.done.finally(() => {
+          this.retryInFlight.delete(retryKey);
+        });
+      } else {
         this.retryInFlight.delete(retryKey);
       }
       return result;

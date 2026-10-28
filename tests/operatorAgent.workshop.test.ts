@@ -63,7 +63,11 @@ describe("Operator Agent Host — Workshop Author", () => {
   it("registers Workshop Author as the first profile", () => {
     const host = createWorkshopOperatorHost();
     const profiles = host.listProfiles();
-    expect(profiles.map((p) => p.id)).toEqual([WORKSHOP_AUTHOR_PROFILE_ID, AGENT_AUTHOR_PROFILE_ID]);
+    expect(profiles.map((p) => p.id)).toEqual([
+      WORKSHOP_AUTHOR_PROFILE_ID,
+      AGENT_AUTHOR_PROFILE_ID,
+      "stageflow-guide",
+    ]);
     expect(profiles[0]!.greeting).toBe(WORKSHOP_AUTHOR_GREETING);
   });
 
@@ -959,7 +963,7 @@ describe("Workshop Author build tools", () => {
     });
   });
 
-  it("create_build while another build is focused persists a new untitled build and moves the pointer", async () => {
+  it("create_build while another build is focused returns the pinned build without creating another", async () => {
     await withIsolatedHome(async () => {
       const storeRoot = resolveWorkshopSessionStoreRoot();
       createWorkshopSession(storeRoot, { id: "sess-create-open" });
@@ -997,22 +1001,17 @@ describe("Workshop Author build tools", () => {
           };
         }
       ).build;
-      expect(created.id).not.toBe("build-open");
-      expect(created.projectRoot).toBeNull();
-      expect(created.relativePath).toBeNull();
-      expect(created.draft.pipeline.id).toBe("untitled");
-      expect(result.buildId).toBe(created.id);
+      expect(created.id).toBe("build-open");
+      expect(created.draft.pipeline.id).toBe("alpha");
+      expect(result.buildId).toBe("build-open");
       expect(
         getWorkshopSession(storeRoot, "sess-create-open").activeBuildId,
-      ).toBe(created.id);
-      expect(listWorkshopBuilds(storeRoot).map((build) => build.id).sort()).toEqual(
-        ["build-open", created.id].sort(),
-      );
+      ).toBe("build-open");
+      expect(listWorkshopBuilds(storeRoot).map((build) => build.id)).toEqual([
+        "build-open",
+      ]);
       expect(getWorkshopBuild(storeRoot, "build-open").draft.pipeline.id).toBe(
         "alpha",
-      );
-      expect(getWorkshopBuild(storeRoot, created.id).draft.pipeline.id).toBe(
-        "untitled",
       );
     });
   });

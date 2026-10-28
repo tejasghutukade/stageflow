@@ -15,7 +15,6 @@ import {
   resolveCliModel,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import {
   createPiAgentSession,
   createSealedResourceLoader,
@@ -27,6 +26,7 @@ import { bindCursorApiKey, cursorBridgePrompt, isCursorModelRef } from "../agent
 import { findProviderSupport } from "../agent/providerSupport.js";
 import "../agent/cursorProvider.js";
 import { logger as rootLogger } from "../logging/logger.js";
+import type { McpToolDeps } from "../mcp/deps.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
   isUsableAuthFile,
@@ -45,6 +45,7 @@ import {
   createAgentAuthorProfile,
   formatAgentAuthorTurnPrompt,
 } from "./profiles/agentAuthor.js";
+import { createStageflowGuideProfile } from "./profiles/stageflowGuide.js";
 import {
   createWorkshopAuthorProfile,
   type WorkshopAuthorProfileOptions,
@@ -154,11 +155,6 @@ export type PiOperatorAgentModel = OperatorAgentModel & {
   getPiSessionId(tools: OperatorAgentToolContext): string | undefined;
 };
 
-const FLEX_PARAMS = Type.Object(
-  {},
-  { additionalProperties: true },
-);
-
 const workshopLog = rootLogger.child({ component: "workshop" });
 
 export function workshopToolLogFields(
@@ -253,7 +249,8 @@ function buildWorkshopCustomTools(
       name: tool.name,
       label: tool.name,
       description: tool.description,
-      parameters: FLEX_PARAMS,
+      parameters: tool.parameters,
+      constrainedSampling: { type: "json_schema", strict: "prefer" },
       execute: async (_toolCallId: string, params: unknown) => {
         const args =
           params !== null && typeof params === "object" && !Array.isArray(params)
@@ -272,6 +269,7 @@ function buildWorkshopCustomTools(
         reportActivity({
           ...workshopToolActivity(callId, tool.name, "start", args),
           ...(pinnedBuildId ? { buildId: pinnedBuildId } : {}),
+          args,
         });
         const result = await invokeProfileTool(
           getProfile(),
@@ -299,6 +297,7 @@ function buildWorkshopCustomTools(
             ...update,
             draft,
             ...(doneBuildId ? { buildId: doneBuildId } : {}),
+            result: result.content,
           });
         } else {
           reportActivity({
@@ -778,7 +777,10 @@ export function createPiOperatorAgentModel(
 }
 
 export type LiveWorkshopOperatorHostOptions = WorkshopAuthorProfileOptions &
-  PiOperatorAgentModelOptions;
+  PiOperatorAgentModelOptions & {
+    /** When set, Guide can call the Stageflow catalog. Without it, Guide only talks. */
+    guideDeps?: McpToolDeps;
+  };
 
 export function createLiveWorkshopOperatorHost(
   options: LiveWorkshopOperatorHostOptions,
@@ -795,6 +797,7 @@ export function createLiveWorkshopOperatorHost(
     resolveModelId,
     retriever,
     projectRoot,
+    guideDeps,
   } = options;
 
   return createOperatorAgentHost(
@@ -815,6 +818,7 @@ export function createLiveWorkshopOperatorHost(
         ...(projectRoot !== undefined ? { projectRoot } : {}),
       }),
       createAgentAuthorProfile(),
+      createStageflowGuideProfile(guideDeps),
     ],
   );
 }

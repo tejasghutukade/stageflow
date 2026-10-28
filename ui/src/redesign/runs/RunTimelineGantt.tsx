@@ -25,6 +25,7 @@ import {
   statusSignalFromReadiness,
   statusSignalFromStageStatus,
 } from "../statusSignal";
+import { isRunClockTerminal } from "@stageflow/run-status-clock";
 
 function barClass(kind: TimelineSegment["kind"]): string {
   if (kind === "running") return "bg-[var(--sf-running)]";
@@ -72,14 +73,7 @@ export function RunTimelineGantt({
     () => timelineBounds(run, stages, now),
     [run, stages, now],
   );
-  const terminalRunStatuses = new Set<string>([
-    "succeeded",
-    "failed",
-    "cancelled",
-    "abandoned",
-  ]);
-  const showNowMarker =
-    run.finished_at == null && !terminalRunStatuses.has(run.status);
+  const showNowMarker = !isRunClockTerminal(run.status);
   const span = axisSpanMs(bounds.endMs - bounds.startMs, showNowMarker);
   const doneCount = stages.filter((s) => s.status === "succeeded").length;
   const tickCount = 5;

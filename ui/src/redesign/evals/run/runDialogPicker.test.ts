@@ -67,8 +67,9 @@ describe("model picker options", () => {
     expect(o.slice(1).map((x) => x.group)).toEqual(["anthropic", "anthropic", "openrouter"]);
     expect(o.find((x) => x.value === "openrouter/x/m1")).toMatchObject({ label: "M One", sublabel: "x/m1" });
   });
-  it("limits to judge-capable models for judges", () => {
-    expect(modelPickerOptions(models, "d", true).map((x) => x.value)).toEqual(["", "anthropic/opus", "openrouter/x/m1"]);
+  it("limits to judge-capable models for judges and still lists Cursor", () => {
+    const withCursor = [...models, { id: "cursor/auto", provider: "cursor", name: "auto", judge_capable: false as const }];
+    expect(modelPickerOptions(withCursor, "d", true).map((x) => x.value)).toEqual(["", "anthropic/opus", "cursor/auto", "openrouter/x/m1"]);
   });
   it("filters by name, id or provider and hides the default while typing", () => {
     const o = modelPickerOptions(models, "d", false);

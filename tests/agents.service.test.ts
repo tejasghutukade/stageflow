@@ -50,7 +50,10 @@ describe("AgentService definitions", () => {
   it("refuses to create over an existing agent or file", async () => {
     const { service, project, writeAgentFile } = await setup();
     await service.create(project, agentInput("helper"), { source: "console" });
-    await expectCode(service.create(project, agentInput("helper"), { source: "console" }), "agent.exists");
+    await expect(service.create(project, agentInput("helper"), { source: "console" })).rejects.toMatchObject({
+      code: "agent.exists",
+      message: 'An agent with id "helper" already exists',
+    });
     await writeAgentFile("broken", "id: [");
     await expectCode(service.create(project, agentInput("broken"), { source: "console" }), "agent.exists");
   });

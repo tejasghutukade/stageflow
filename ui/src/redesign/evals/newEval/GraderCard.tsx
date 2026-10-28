@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { LuChevronDown, LuChevronRight, LuGripVertical, LuPlus, LuTrash2 } from "react-icons/lu";
 import { INPUT, TEXTAREA } from "../datasets/DialogShell";
+import { JudgeModelPicker } from "../run/RunPicker";
 import { ConversationCheckForm, GoalReachedForm, ToolCallsForm } from "./AgentGraderForms";
 import { CARD, Chip, Field, MONO, SELECT } from "./parts";
 import {
@@ -268,12 +269,12 @@ export function GraderCard(p: Props) {
                   </Field>
                 ) : null}
                 <Field label="Judge model">
-                  <select className={SELECT} value={typeof g.judge === "string" ? g.judge : ""} onChange={(e) => p.onChange(setJudge(g, e.target.value))}>
-                    <option value="">{p.judgeDefault ? `Eval default · ${p.judgeDefault}` : "Eval default"}</option>
-                    {p.judgeModels.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
+                  <JudgeModelPicker
+                    models={p.judgeModels.map((id) => ({ id }))}
+                    value={typeof g.judge === "string" ? g.judge : null}
+                    defaultLabel={p.judgeDefault ? `Eval default · ${p.judgeDefault}` : "Eval default"}
+                    onChange={(judge) => p.onChange(setJudge(g, judge ?? ""))}
+                  />
                 </Field>
               </div>
               <div className="flex flex-col gap-2">

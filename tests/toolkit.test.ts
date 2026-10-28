@@ -30,7 +30,12 @@ describe("toolkit registry", () => {
 
   it("describes tool arguments as JSON schema", () => {
     const startRun = buildToolkit(deps).find((tool) => tool.name === "start_run")!;
-    expect(startRun.parameters).toMatchObject({ type: "object" });
+    expect(startRun.parameters).toMatchObject({
+      anyOf: [
+        { type: "object", required: ["pipeline", "task_path"] },
+        { type: "object", required: ["pipeline", "task"] },
+      ],
+    });
     expect(startRun.grantId).toBe("stageflow.start_run");
   });
 
@@ -176,9 +181,12 @@ describe("profile grants", () => {
     const { PROFILE_GRANTS, profileMayUse } = await import("../src/toolkit/profiles.js");
     expect([...PROFILE_GRANTS["workshop-author"]!.tools].sort()).toEqual([...WORKSHOP_AUTHOR_TOOL_NAMES].sort());
     expect([...PROFILE_GRANTS["agent-author"]!.tools].sort()).toEqual([...AGENT_AUTHOR_TOOL_NAMES].sort());
+    const { STAGEFLOW_GUIDE_TOOL_NAMES } = await import("../src/operatorAgent/profiles/stageflowGuide.js");
+    expect([...PROFILE_GRANTS["stageflow-guide"]!.tools]).toEqual([...STAGEFLOW_GUIDE_TOOL_NAMES]);
     expect(profileMayUse("workshop-author", "save")).toBe(true);
     expect(profileMayUse("workshop-author", "bash")).toBe(false);
     expect(profileMayUse("agent-author", "save")).toBe(false);
+    expect(profileMayUse("stageflow-guide", "save")).toBe(false);
     expect(profileMayUse("someone-else", "save")).toBe(false);
   });
 });

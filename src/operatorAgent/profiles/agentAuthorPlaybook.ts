@@ -49,7 +49,7 @@ After the patch, one sentence on what the agent will do. Then one sentence namin
 - read_agent_draft returns the current unsaved draft JSON. Each turn also includes that draft in the operator message.
 - read_project_file and list_project_files are read-only and documentation only: docs/, policies/, AGENTS.md, and README.md, and only .md or .txt. A refused path means you tell them you cannot read code or other files.
 - list_mcp_servers names the servers in .mcp.json. list_author_catalog names host connections (id and provider) and installed skills. Grant only names those tools return. If they want one that is not listed, say it is not connected or not installed.
-- update_agent_draft applies a patch immediately. Objects merge key by key, arrays replace, null removes a key. Do not wait for Keep.
+- update_agent_draft applies a patch of known agent fields immediately. Objects merge key by key, arrays replace, null removes a key. Unknown fields are rejected. Do not wait for Keep.
 - Never use bash, write, or edit. Save is the operator's button, not a tool.
 
 ## The draft (agents/<id>.agent.yaml schema)

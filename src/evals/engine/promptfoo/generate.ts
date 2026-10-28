@@ -1,9 +1,10 @@
 import { GUARD_FILENAME, GUARD_SOURCE } from "./guard.js";
 import { EngineError } from "./errors.js";
+import { JUDGE_MAX_OUTPUT_TOKENS } from "../../constants.js";
 import { mapJudge, unsupportedJudgeMessage } from "../../judgeProviders.js";
 import { caseGoal, goalRubricText } from "../../graders/goal.js";
 import { escapeTemplate, renderConversationRubricPrompt, renderRubricPrompt } from "./rubricPrompt.js";
-import type { EvalPlan, PlanCase, ResolvedGrader } from "../../types.js";
+import { isConversationTarget, type EvalPlan, type PlanCase, type ResolvedGrader } from "../../types.js";
 
 export const CALLBACK_URL_ENV = "STAGEFLOW_EVAL_CALLBACK_URL";
 export const RUN_TOKEN_ENV = "STAGEFLOW_EVAL_TOKEN";
@@ -232,7 +233,7 @@ function isJudged(grader: ResolvedGrader): grader is Extract<ResolvedGrader, { t
 }
 
 export function buildAssertionsSource(plan: EvalPlan, graderModuleUrl: string): string {
-  const agent = plan.target.kind === "agent";
+  const agent = isConversationTarget(plan.target.kind);
   const graders = plan.graders.map((g, index) => ({ index, grader: g }));
   const exports = graders
     .filter(({ grader }) => grader.type !== "rubric" && (agent || grader.type !== "goal_reached"))
@@ -322,10 +323,10 @@ function judgeAssertion(
     metric: grader.id,
     weight: 1,
     rubricPrompt: prompt,
-    provider:
-      options.judgeProviderConfig === undefined
-        ? mapping.providerSpec
-        : { id: mapping.providerSpec, config: options.judgeProviderConfig },
+    provider: {
+      id: mapping.providerSpec,
+      config: { max_tokens: JUDGE_MAX_OUTPUT_TOKENS, ...options.judgeProviderConfig },
+    },
   };
 }
 
@@ -334,7 +335,7 @@ function assertionsFor(
   options: GenerateOptions,
   testCase: PlanCase,
 ): Array<Record<string, unknown>> {
-  const agent = plan.target.kind === "agent";
+  const agent = isConversationTarget(plan.target.kind);
   return plan.graders.map((grader, index) => {
     if (isJudged(grader) && !(grader.type === "goal_reached" && caseGoal(testCase) === undefined)) {
       return judgeAssertion(grader, options, agent, testCase);
@@ -349,7 +350,7 @@ function assertionsFor(
 }
 
 export function buildConfig(plan: EvalPlan, options: GenerateOptions): Record<string, unknown> {
-  const agent = plan.target.kind === "agent";
+  const agent = isConversationTarget(plan.target.kind);
   const shared = agent ? undefined : assertionsFor(plan, options, plan.cases[0] ?? ({ input: {} } as PlanCase));
   return {
     description: `Stageflow eval ${plan.evalId}`,
@@ -371,9 +372,9 @@ export function buildConfig(plan: EvalPlan, options: GenerateOptions): Record<st
 export function generateFiles(plan: EvalPlan, options: GenerateOptions): GeneratedFiles {
   return {
     [CONFIG_FILE]: `${JSON.stringify(buildConfig(plan, options), null, 2)}\n`,
-    [PROVIDER_FILE]: buildProviderSource(plan.evalRunId, plan.target.kind === "agent"),
+    [PROVIDER_FILE]: buildProviderSource(plan.evalRunId, isConversationTarget(plan.target.kind)),
     [ASSERTIONS_FILE]: buildAssertionsSource(plan, options.graderModuleUrl),
-    [HOOKS_FILE]: buildHooksSource(plan.target.kind === "agent"),
+    [HOOKS_FILE]: buildHooksSource(isConversationTarget(plan.target.kind)),
     [DATASET_FILE]: `${JSON.stringify(plan.cases, null, 2)}\n`,
     [GUARD_FILENAME]: GUARD_SOURCE,
   };

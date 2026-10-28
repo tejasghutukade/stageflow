@@ -700,7 +700,7 @@ The console uses these routes (all under the Host's `/api`, with the same auth a
 | `GET /api/evals`, `POST /api/evals` | List (with status, banner, footer); create |
 | `GET /api/evals/:id`, `PUT /api/evals/:id` | One eval with findings; save |
 | `POST /api/evals/validate`, `POST /api/evals/try`, `POST /api/evals/sample` | Validate a draft; run one case; install the sample (body `kind` is `stage` or `agent`, default stage) |
-| `GET /api/evals/agent-targets` | Agents that can be an eval target, with model, revision, tools and why one is unavailable |
+| `GET /api/evals/agent-targets` | Agents that can be an eval target, with model, revision, tools and why one is unavailable. Internal agents are not in this list; with `STAGEFLOW_SHOW_INTERNAL_AGENTS=1` the picker reads `GET /api/internal-agents` and an eval can target one |
 | `POST /api/evals/:id/runs`, `GET /api/evals/:id/runs/:n`, `GET /api/evals/:id/runs/estimate` | Start a run; read by number; estimate |
 | `GET /api/evals/:id/failure-types` | Failure-type vocabulary |
 | `GET /api/eval-runs`, `GET /api/eval-runs/:id`, `DELETE /api/eval-runs/:id` | List, read, delete runs (`?subject_ref=<session or stage run id>` finds the run that owns a session) |
@@ -738,6 +738,7 @@ Not built for **agent evals**:
 - **A `groundedness` grader**, and a revision picker in the run dialog (a run uses the agent's current revision).
 - **A shipped simulated sample.** The sample is script mode; the README shows how to make it simulated.
 - **Editing the agent from the eval screens**, beyond what evals already do for their own files.
+- **Real tools on an internal agent.** With `STAGEFLOW_SHOW_INTERNAL_AGENTS=1`, the agent picker can target the console's built-in agents (Workshop author, agent author, Guide) as `target: { kind: internal_agent, profile }`. The eval tool gate stubs every write, send and delete, and `conversation.tools: real` is rejected (`eval.internal_agent_real_tools`). Reads, `show_ui`, `confirm_action` and the Guide knowledge tools do run. See [Agents: Internal agents](agents.md#internal-agents).
 
 ## See also
 

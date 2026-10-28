@@ -55,13 +55,19 @@ An agent can be given Stageflow's own tools (the ones in [MCP tools](mcp.md#tool
 | `gates.read` | `list_waiting`, `get_waiting_summary` | Read. |
 | `gates.decide` | `answer_gate`, `decide_feedback_loop`, `approve_agent_action`, `deny_agent_action` | **Operator-only: cannot be granted.** |
 | `triggers` | `list_triggers`, `get_trigger` (read), `create_trigger`, `update_trigger`, `set_trigger_enabled` (write), `fire_trigger` (external) | |
-| `agents.read` | `list_agents`, `get_agent`, `validate_agent`, `list_agent_revisions`, `get_agent_session`, `list_agent_sessions` | Read. |
+| `agents.read` | `list_agents`, `get_agent`, `validate_agent`, `list_agent_revisions`, `get_agent_revision`, `diff_agent_revisions`, `get_agent_session`, `list_agent_sessions` | Read. |
 | `agents.manage` | `create_agent`, `save_agent`, `enable_agent`, `disable_agent`, `restore_agent_revision` | Write. |
 | `agents.cleanup` | `archive_agent` | Destructive. |
 | `agents.converse` | `agent_chat` (external), `stop_agent_session` (write) | |
-| `evals.read` | `list_evals`, `get_eval`, `validate_eval`, `get_eval_run`, `list_eval_runs`, `get_eval_results`, `get_eval_result`, `compare_eval_runs` | Read, free. See [Evals](evals.md). |
-| `evals.run` | `run_eval` (external), `sort_eval_failures` (external), `cancel_eval_run` (write) | `run_eval` calls models and costs money, bounded by the eval's cost limit. `sort_eval_failures` sends failed results to an external classifier and costs a little. |
-| `pipelines.author` | `read_pipeline` (read), `create_pipeline`, `edit_pipeline`, `create_stage`, `edit_stage`, `create_task`, `edit_task` (write) | |
+| `evals.read` | `list_evals`, `get_eval`, `validate_eval`, `get_eval_run`, `list_eval_runs`, `get_eval_results`, `get_eval_result`, `compare_eval_runs`, `get_eval_failure_suggestions`, `get_eval_failure_sort_status`, `get_eval_run_export` | Read, free. See [Evals](evals.md). |
+| `evals.run` | `run_eval` (external), `try_eval_case` (external), `sort_eval_failures` (external), `cancel_eval_run` (write) | `run_eval` and `try_eval_case` call models and cost money, bounded by the eval's cost limit. `sort_eval_failures` sends failed results to an external classifier and costs a little. |
+| `evals.write` | `create_eval`, `update_eval`, `create_dataset`, `update_dataset_cases`, `convert_dataset`, `install_eval_sample`, `put_eval_review`, `accept_eval_failure_suggestions`, `dismiss_eval_failure_suggestions` | Write. |
+| `evals.cleanup` | `delete_eval_run` | Destructive. |
+| `pipelines.author` | `read_pipeline` (read), `create_pipeline`, `edit_pipeline`, `create_stage`, `edit_stage`, `create_task`, `edit_task`, `create_task_file`, `update_task_file`, `create_stage_file`, `write_catalog_file` (write), `validate_catalog_draft` (read), `import_task_file` (external) | Package edits and the standalone task, stage, and catalog-file saves. |
+| `connections` | `list_connections`, `validate_connection_target` (read), `create_connection`, `update_connection` (write), `test_connection` (external) | Secret values are stored and never returned. |
+| `connections.cleanup` | `remove_connection` | Destructive. |
+| `memories` | `list_memories`, `get_memory` (read), `create_memory`, `write_memory`, `write_memory_card` (write) | |
+| `memories.cleanup` | `delete_memory_card` | Destructive. |
 
 Rules:
 

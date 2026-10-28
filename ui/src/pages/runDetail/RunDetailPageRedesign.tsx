@@ -581,10 +581,10 @@ export function RunDetailPageRedesign({
         retrying={stage ? retryingStageIds.has(stage.stage_id) : false}
         resuming={stage ? resumingStageIds.has(stage.stage_id) : false}
         abandoning={abandoningStageId === stage?.stage_id}
+        actionError={banner}
         now={now}
       />
       <StageRunEvalBanner runId={runId} />
-      {banner ? <div className="banner banner--error">{banner}</div> : null}
       <div
         ref={paneRef}
         className={`pane flex min-h-0 flex-1 flex-col overflow-hidden${

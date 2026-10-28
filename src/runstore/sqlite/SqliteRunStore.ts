@@ -81,6 +81,7 @@ import { StoreSchemaError } from "./storeSchemaError.js";
 import { applyStorePragmas } from "./applyStorePragmas.js";
 import type { OverviewRunRow } from "../overviewSummary.js";
 import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
+import { nextFinishedAt } from "../runStatusClock.js";
 
 type SqliteRunStoreOpenerMode = "assert" | "migrate";
 
@@ -541,34 +542,56 @@ export class SqliteRunStore implements RunStore {
     return this.readSubmission(key);
   }
 
+  private applyRunStatusUpdate(
+    runId: string,
+    status: RunStatus,
+    expectedStatus: RunStatus | undefined,
+  ): number {
+    const now = new Date().toISOString();
+    const current = this.db
+      .prepare(`SELECT finished_at FROM runs WHERE run_id = ?`)
+      .get(runId) as { finished_at: string | null } | undefined;
+    if (current === undefined) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    const decision = nextFinishedAt({
+      nextStatus: status,
+      currentFinishedAt: current.finished_at,
+      now,
+    });
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      status,
+      updated_at: now,
+    };
+    let finishedSql: string;
+    if (decision.action === "stamp") {
+      finishedSql = "finished_at = @finished_at";
+      params.finished_at = decision.finishedAt;
+    } else if (decision.action === "clear") {
+      finishedSql = "finished_at = NULL";
+    } else {
+      finishedSql = "finished_at = finished_at";
+    }
+    const expectedClause =
+      expectedStatus !== undefined
+        ? " AND status = @expected_status"
+        : "";
+    if (expectedStatus !== undefined) {
+      params.expected_status = expectedStatus;
+    }
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET status = @status, updated_at = @updated_at, ${finishedSql}
+         WHERE run_id = @run_id${expectedClause}`,
+      )
+      .run(params);
+    return result.changes;
+  }
+
   async updateRunStatus(runId: string, status: RunStatus): Promise<void> {
     await this.ready();
-    const now = new Date().toISOString();
-    const isTerminal =
-      status === "succeeded" || status === "failed" || status === "cancelled";
-    const result = isTerminal
-      ? this.db
-          .prepare(
-            `UPDATE runs SET status = @status, updated_at = @updated_at,
-              finished_at = COALESCE(finished_at, @finished_at)
-             WHERE run_id = @run_id`,
-          )
-          .run({
-            run_id: runId,
-            status,
-            updated_at: now,
-            finished_at: now,
-          })
-      : this.db
-          .prepare(
-            `UPDATE runs SET status = @status, updated_at = @updated_at WHERE run_id = @run_id`,
-          )
-          .run({
-            run_id: runId,
-            status,
-            updated_at: now,
-          });
-    if (result.changes === 0) {
+    if (this.applyRunStatusUpdate(runId, status, undefined) === 0) {
       throw new Error(`Run not found: ${runId}`);
     }
   }
@@ -579,35 +602,8 @@ export class SqliteRunStore implements RunStore {
     expectedStatus: RunStatus,
   ): Promise<boolean> {
     await this.ready();
-    const now = new Date().toISOString();
-    const isTerminal =
-      status === "succeeded" || status === "failed" || status === "cancelled";
-    const result = isTerminal
-      ? this.db
-          .prepare(
-            `UPDATE runs SET status = @status, updated_at = @updated_at,
-              finished_at = COALESCE(finished_at, @finished_at)
-             WHERE run_id = @run_id AND status = @expected_status`,
-          )
-          .run({
-            run_id: runId,
-            status,
-            expected_status: expectedStatus,
-            updated_at: now,
-            finished_at: now,
-          })
-      : this.db
-          .prepare(
-            `UPDATE runs SET status = @status, updated_at = @updated_at
-             WHERE run_id = @run_id AND status = @expected_status`,
-          )
-          .run({
-            run_id: runId,
-            status,
-            expected_status: expectedStatus,
-            updated_at: now,
-          });
-    if (result.changes > 0) return true;
+    const changes = this.applyRunStatusUpdate(runId, status, expectedStatus);
+    if (changes > 0) return true;
     const exists = this.db
       .prepare(`SELECT 1 AS ok FROM runs WHERE run_id = ?`)
       .get(runId);

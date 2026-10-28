@@ -12,12 +12,16 @@ import {
   clampWorkshopChatWidth,
   defaultPackageDirectory,
   defaultWritableRootWireId,
+  draftOriginFromCatalogRoot,
   draftOriginFromResponse,
+  emptyDiskChangeState,
   escapeWorkshopAction,
   fallbackDraftOrigin,
   initialDrawerTab,
+  nextStudioGeneration,
   omitDefaultWriteProjectRoot,
   openDraftInput,
+  packageFocusInputForChat,
   draftForWorkshopSave,
   draftWithCatalogFilenames,
   mergeTaskFromAuthoritativeDraft,
@@ -32,12 +36,20 @@ import {
   catalogSaveBindingFromRelativePath,
   settledMutationCardsFromTranscript,
   seedTranscriptFromAutosave,
+  studioGenerationIsCurrent,
   writableRootOptions,
+  shouldBootWorkshopPackage,
   workshopBootTarget,
+  workshopPackageBootKey,
   workshopChangeCount,
   workshopPrimarySaveDisabled,
   workshopSaveState,
+  workshopUrlAfterNewChat,
+  workshopUrlAfterPackageOpen,
+  workshopUrlAfterSession,
 } from "./workshopPageModel";
+import { workshopPath } from "../../routes";
+import { WORKSHOP_UNTITLED_AUTOSAVE_KEY } from "./workshopAutosaveKey";
 
 function emptyDraft(): DraftPackagePayload {
   return { pipeline: { id: "untitled", stages: [] } };
@@ -131,10 +143,86 @@ describe("workshop page model", () => {
     ).toBe(false);
   });
 
-  it("opens a package only when the workshop route has a pipeline", () => {
-    expect(workshopBootTarget(undefined)).toBe("session");
-    expect(workshopBootTarget("")).toBe("session");
-    expect(workshopBootTarget("pipelines/demo.pipeline.yaml")).toBe("package");
+  it("boots session when both session and pipeline are present", () => {
+    expect(workshopBootTarget({})).toBe("session");
+    expect(workshopBootTarget({ pipelinePath: "" })).toBe("session");
+    expect(
+      workshopBootTarget({ pipelinePath: "pipelines/demo.pipeline.yaml" }),
+    ).toBe("package");
+    expect(
+      workshopBootTarget({
+        sessionId: "sess-1",
+        pipelinePath: "pipelines/demo.pipeline.yaml",
+      }),
+    ).toBe("session");
+    expect(workshopBootTarget({ sessionId: "  sess-1  " })).toBe("session");
+  });
+
+  it("builds workshop URLs that strip the loser of session vs package", () => {
+    expect(workshopPath(workshopUrlAfterNewChat())).toBe("/workshop");
+    expect(workshopPath(workshopUrlAfterSession("sess-9"))).toBe(
+      "/workshop?session=sess-9",
+    );
+    expect(
+      workshopPath(
+        workshopUrlAfterPackageOpen({
+          pipeline: "pipelines/demo.pipeline.yaml",
+          task: "pipelines/demo.task.yaml",
+          projectRoot: "examples",
+        }),
+      ),
+    ).toBe(
+      "/workshop?pipeline=pipelines%2Fdemo.pipeline.yaml&task=pipelines%2Fdemo.task.yaml&project_root=examples",
+    );
+  });
+
+  it("clears disk-change state and bumps studio generation tokens", () => {
+    expect(emptyDiskChangeState()).toEqual({
+      fingerprints: {},
+      changedPaths: [],
+      showBanner: false,
+    });
+    const ref = { current: 3 };
+    expect(nextStudioGeneration(ref)).toBe(4);
+    expect(studioGenerationIsCurrent(4, ref)).toBe(true);
+    expect(studioGenerationIsCurrent(3, ref)).toBe(false);
+    expect(WORKSHOP_UNTITLED_AUTOSAVE_KEY).toBe("__untitled__");
+  });
+
+  it("focuses the open package on first chat only when no build is selected", () => {
+    expect(
+      packageFocusInputForChat({
+        selectedBuildId: null,
+        savedPipelinePath: "pipelines/demo.pipeline.yaml",
+        projectRoot: "examples",
+      }),
+    ).toEqual({
+      projectRoot: "examples",
+      relativePath: "pipelines/demo.pipeline.yaml",
+    });
+    expect(
+      packageFocusInputForChat({
+        selectedBuildId: "build-1",
+        savedPipelinePath: "pipelines/demo.pipeline.yaml",
+        projectRoot: "examples",
+      }),
+    ).toBeNull();
+    expect(
+      packageFocusInputForChat({
+        selectedBuildId: null,
+        savedPipelinePath: null,
+        projectRoot: "examples",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not open the same package again when only the session id changes", () => {
+    const pipelinePath = "policy-check/policy-check.pipeline.yaml";
+    const projectRoot = "workspace";
+    expect(shouldBootWorkshopPackage(null, pipelinePath, undefined, projectRoot)).toBe(true);
+    const key = workshopPackageBootKey(pipelinePath, undefined, projectRoot);
+    expect(shouldBootWorkshopPackage(key, pipelinePath, undefined, projectRoot)).toBe(false);
+    expect(shouldBootWorkshopPackage(key, pipelinePath, "other.task.yaml", projectRoot)).toBe(true);
   });
 
   it("omits project_root and task when the route does not have them", () => {
@@ -180,6 +268,14 @@ describe("workshop page model", () => {
       kind: "seeded",
       readOnly: true,
     });
+    expect(draftOriginFromCatalogRoot(sampleRoots, "examples")).toEqual({
+      project_root: "examples",
+      kind: "seeded",
+      readOnly: true,
+    });
+    expect(draftOriginFromCatalogRoot(sampleRoots, "workspace")?.readOnly).toBe(
+      false,
+    );
     expect(defaultWritableRootWireId(sampleRoots)).toBe("workspace");
     expect(writableRootOptions(sampleRoots).map((row) => row.value)).toEqual([
       "workspace",
@@ -210,6 +306,17 @@ describe("workshop page model", () => {
     ).toEqual({
       kind: "dialog",
       mode: "create",
+      allowInvalidInitial: false,
+    });
+    expect(
+      saveIntentForOrigin({
+        hasDestination: true,
+        errorCount: 0,
+        originReadOnly: false,
+      }),
+    ).toEqual({
+      kind: "dialog",
+      mode: "overwrite",
       allowInvalidInitial: false,
     });
   });
@@ -287,9 +394,11 @@ describe("workshop page model", () => {
     expect(catalogSaveBindingFromRelativePath("", "demo")).toBeNull();
   });
 
-  it("chooses direct overwrite only when a destination exists and there are no errors", () => {
+  it("always opens a dialog when saving to an existing destination", () => {
     expect(saveIntent({ hasDestination: true, errorCount: 0 })).toEqual({
-      kind: "overwrite-direct",
+      kind: "dialog",
+      mode: "overwrite",
+      allowInvalidInitial: false,
     });
     expect(saveIntent({ hasDestination: true, errorCount: 2 })).toEqual({
       kind: "dialog",
@@ -300,6 +409,13 @@ describe("workshop page model", () => {
       kind: "dialog",
       mode: "create",
       allowInvalidInitial: false,
+    });
+    expect(
+      saveIntent({ hasDestination: true, errorCount: 0, invalid: true }),
+    ).toEqual({
+      kind: "dialog",
+      mode: "overwrite",
+      allowInvalidInitial: true,
     });
     expect(saveAsIntent()).toEqual({
       kind: "dialog",

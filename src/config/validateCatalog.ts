@@ -14,6 +14,7 @@ import type { LoadIssue } from "./loadOutcome.js";
 import { loadStageOutcome } from "./loadStage.js";
 import { loadTaskOutcome } from "./loadTask.js";
 import { loadTriggerOutcome } from "./loadTrigger.js";
+import { githubMatchActionError, isGithubTriggerAction } from "./githubTriggerAction.js";
 import { loadEvalCatalog } from "./evalCatalog.js";
 import { evalFindingsFromIssues } from "./validateEval.js";
 import { readYamlObject } from "./readYamlObject.js";
@@ -102,6 +103,8 @@ export type ValidationFindingCode =
   | "trigger.load_error"
   | "trigger.unknown_pipeline"
   | "trigger.unknown_task"
+  | "trigger.github_action_required"
+  | "trigger.invalid_github_action"
   | "catalog.duplicate_pipeline_id"
   | "catalog.manifest_missing"
   | "catalog.manifest_invalid"
@@ -1163,6 +1166,30 @@ export function findingsForTriggerRefs(
         "trigger.unknown_task",
       ),
     );
+  }
+  const source = trigger.event?.source;
+  if (typeof source === "string" && source.startsWith("github.")) {
+    const action = trigger.event?.match?.action;
+    if (action === undefined) {
+      findings.push(
+        findingTriggerError(
+          cwd,
+          absPath,
+          `Trigger "${trigger.id}" requires event.match.action for github.* sources`,
+          "trigger.github_action_required",
+        ),
+      );
+    } else if (!isGithubTriggerAction(action)) {
+      findings.push(
+        findingTriggerError(
+          cwd,
+          absPath,
+          githubMatchActionError(source, trigger.event?.match) ??
+            `Trigger "${trigger.id}" has an invalid event.match.action`,
+          "trigger.invalid_github_action",
+        ),
+      );
+    }
   }
   return findings;
 }

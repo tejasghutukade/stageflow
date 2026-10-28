@@ -82,7 +82,7 @@ verify:
 | Type | Required fields | Runtime evidence |
 | --- | --- | --- |
 | `command` | `id`, `run` | Stageflow runs the declared command, requires a successful exit status, and records stdout, stderr, timestamps, and exit code. Optional: `cwd`, `timeout_ms`. After-only. |
-| `artifact` | `id`, `when` | Emit: basename on `envelope.artifacts` (no disk I/O). After: Stageflow resolves the relative path inside the stage attempt's artifact directory and verifies that it exists. Optional `nonempty: true` requires content. |
+| `artifact` | `id`, `when` | Emit (YAML): basename on `envelope.artifacts` (list-only, no disk I/O). After: Stageflow resolves the relative path inside the stage attempt's artifact directory and verifies that it exists. Optional `nonempty: true` requires content. Separately, every success emit with a non-empty `artifacts` list also runs **emit disk-truth** (files must exist under this attempt) — that is not this YAML check and does not replace after-phase `artifact` verify. |
 | `checklist` | `id`, `items` | The agent gives a structured attestation that it considered every listed item. This is visible and recorded, but is not independent verification. After-only. |
 | `payload_schema` | `id` | After-only re-check of the captured payload against `io.output.schema`. Emit-time payload validation already runs when that schema is present. |
 | `gate` | `id`, `kind` | Emit: last `ask_operator` exchange of this kind in this attempt. After: relevant operator interaction over the run so far. The stage must declare the matching `gate_kinds` value. |
@@ -97,7 +97,9 @@ been captured (via repair/manual recovery) and ask a looser, retrospective quest
 instead wants to block a self-approved success emit **within the same attempt, before
 capture** should put `when: [emit]` (or omit `when` on `type: gate`) — see
 [Envelopes — emit-phase verify](envelopes.md#verify-emit). Emit and after are items on
-the same `verify` list.
+the same `verify` list. Emit disk-truth of listed `artifacts` paths always runs on
+success emits when the list is non-empty; YAML emit-phase `type: artifact` remains an
+optional basename list gate; after-phase `type: artifact` remains optional hard proof.
 
 ## Contract rules
 
@@ -123,6 +125,7 @@ The runtime lifecycle for a successful agent envelope is:
 agent proposes success
   -> envelope is structurally valid
   -> emit-phase verify items run in-session (soft reject)
+  -> emit disk-truth for non-empty artifacts[] (soft reject if missing/escaped)
   -> candidate is captured
   -> after-phase verify items run independently
   -> evidence is persisted

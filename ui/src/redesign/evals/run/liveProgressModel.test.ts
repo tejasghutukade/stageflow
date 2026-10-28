@@ -281,6 +281,20 @@ describe("subtitle", () => {
   it("copes with a queued run and missing config", () => {
     expect(liveSubtitle(run({ config: {}, started_at: null }), START)).toBe("4 cases · waiting to start");
   });
+
+  it("names the internal agent and the model it is running", () => {
+    const r = run({
+      config: {
+        settings: { repeats: 1 },
+        target: { kind: "internal_agent", profile_id: "stageflow-guide", title: "Stageflow Guide", model: "openrouter/inclusionai/ling-3.1-flash" },
+        dataset: { path: "evals/guide-behavior.dataset.jsonl" },
+      },
+      progress: { results_done: 0, results_total: 15, cost_usd: 0, max_cost_usd: 8, cases_total: 15 },
+    });
+    expect(liveSubtitle(r, START)).toBe(
+      "Stageflow Guide · openrouter/inclusionai/ling-3.1-flash · guide-behavior, 15 cases × 1 repeat · started 0.0 s ago",
+    );
+  });
 });
 
 describe("misc", () => {

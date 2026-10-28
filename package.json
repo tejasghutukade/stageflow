@@ -1,6 +1,6 @@
 {
   "name": "stageflow",
-  "version": "0.43.0",
+  "version": "0.44.0",
   "description": "Stageflow — CLI pipeline runtime for configurable stages on Pi",
   "type": "module",
   "main": "./dist/index.js",
@@ -27,7 +27,7 @@
     "type": "git",
     "url": "git+https://github.com/tejasghutukade/stageflow.git"
   },
-  "homepage": "https://stage-flow.dev",
+  "homepage": "https://tejasghutukade.github.io/stageflow/",
   "bugs": {
     "url": "https://github.com/tejasghutukade/stageflow/issues"
   },

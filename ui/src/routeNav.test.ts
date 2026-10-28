@@ -16,6 +16,7 @@ describe("railActiveId", () => {
       [{ name: "settings" }, "settings"],
       [{ name: "triggers" }, "triggers"],
       [{ name: "overview" }, "overview"],
+      [{ name: "guide", section: "chat" }, "guide"],
     ];
     for (const [route, id] of cases) expect(railActiveId(route, true)).toBe(id);
   });

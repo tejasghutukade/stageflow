@@ -21,7 +21,7 @@ import type {
   PipelineRouteLoopEntry,
   RouteTerminalState,
 } from "../types/pipeline.js";
-import { isNeedTerminalState } from "./pipelineNeeds.js";
+import { canonicalizeNeedTerminalState } from "./pipelineNeeds.js";
 import { parseRouteIf } from "./routeIf.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -123,14 +123,15 @@ function parseRouteOn(
   const seen = new Set<string>();
   const on: RouteTerminalState[] = [];
   for (const item of items) {
-    if (typeof item !== "string" || !isNeedTerminalState(item) || seen.has(item)) {
+    const canonical = canonicalizeNeedTerminalState(item);
+    if (canonical === undefined || seen.has(canonical)) {
       return {
         ok: false,
         message: `stage "${stageId}": route "${targetId}": on must be a non-empty unique subset of succeeded, failed, skipped`,
       };
     }
-    seen.add(item);
-    on.push(item);
+    seen.add(canonical);
+    on.push(canonical);
   }
   return { ok: true, value: on };
 }

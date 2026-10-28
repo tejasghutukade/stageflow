@@ -3,16 +3,30 @@ import { canResumeTimedOut, canRetry } from "./eligibility";
 import { createStageRetrySession } from "./useStageRetry";
 
 describe("canRetry eligibility", () => {
-  it("returns true only for failed", () => {
+  it("returns true for failed and plain succeeded", () => {
     expect(canRetry("failed")).toBe(true);
+    expect(canRetry("succeeded")).toBe(true);
   });
 
-  it("returns false for non-failed statuses", () => {
+  it("returns false for non-retriable statuses and blocked succeeded stages", () => {
     expect(canRetry("waiting_for_input")).toBe(false);
     expect(canRetry("running")).toBe(false);
-    expect(canRetry("succeeded")).toBe(false);
     expect(canRetry("pending")).toBe(false);
     expect(canRetry("skipped")).toBe(false);
+    expect(
+      canRetry({
+        status: "succeeded",
+        stage_id: "design-doc#1",
+        definition_id: "design-doc",
+      }),
+    ).toBe(false);
+    expect(
+      canRetry({
+        status: "succeeded",
+        stage_id: "fork",
+        envelope: { fork_choice: ["a"] },
+      }),
+    ).toBe(false);
   });
 });
 

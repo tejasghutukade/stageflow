@@ -6,6 +6,9 @@ import type { CatalogRootKind } from "./resolveCatalogRoots.js";
 /** Directory scanned for workshop-authored pipelines and tasks. */
 export const WORKSHOP_PACKAGE_ROOT = "workshop";
 
+/** Directory the Guide always uses for pipeline packages and their stage files. */
+export const GUIDE_PIPELINES_ROOT = "pipelines";
+
 export function normalizeCatalogDir(directory: string): string {
   return directory.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
 }
@@ -39,6 +42,12 @@ export function catalogScanRootForDirectory(directory: string): string {
     normalized.startsWith(`${WORKSHOP_PACKAGE_ROOT}/`)
   ) {
     return WORKSHOP_PACKAGE_ROOT;
+  }
+  if (
+    normalized === GUIDE_PIPELINES_ROOT ||
+    normalized.startsWith(`${GUIDE_PIPELINES_ROOT}/`)
+  ) {
+    return GUIDE_PIPELINES_ROOT;
   }
   return normalized;
 }

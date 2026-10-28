@@ -125,7 +125,7 @@ function StageActionGroup({
         <button
           type="button"
           className={`${STAGE_ACTION} text-[#f5b544] hover:bg-[#f5b5441a]`}
-          disabled={busy}
+          disabled={Boolean(disabled) || Boolean(abandoning)}
           onClick={onAbandon}
           title="Stop this stage and mark it failed; the rest of the run is left alone"
         >
@@ -316,6 +316,7 @@ export function RunDetailHeader({
   retrying,
   resuming,
   abandoning,
+  actionError,
   now,
 }: {
   run: RunDetail;
@@ -337,6 +338,7 @@ export function RunDetailHeader({
   retrying?: boolean;
   resuming?: boolean;
   abandoning?: boolean;
+  actionError?: string | null;
   now?: number;
 }) {
   const runBusy = Boolean(rerunning || cancelling || deleting);
@@ -348,6 +350,7 @@ export function RunDetailHeader({
         hasRetry: Boolean(onRetryStage),
         hasResume: Boolean(onResumeStage),
         hasAbandon: Boolean(onAbandonStage),
+        stage: selectedStage,
       })
     : null;
   const retryAvailable = Boolean(
@@ -479,7 +482,8 @@ export function RunDetailHeader({
           </div>
         ) : null}
       </div>
-      <div className="flex shrink-0 flex-nowrap items-center gap-2">
+      <div className="flex shrink-0 flex-col items-end gap-1.5">
+      <div className="flex flex-nowrap items-center gap-2">
         {selectedStage && stageActions ? (
           <StageActionGroup
             stage={selectedStage}
@@ -508,7 +512,7 @@ export function RunDetailHeader({
           <kbd className={KBD}>F</kbd>
         </button>
         <RunActionsMenu
-          canCancel={canCancelRun(run.status)}
+          canCancel={canCancelRun(run.status, run.stages)}
           canDelete={canDeleteRun(run.status)}
           activeRun={isActiveRunStatus(run.status)}
           cancelling={cancelling}
@@ -519,6 +523,15 @@ export function RunDetailHeader({
         />
         <span className="block w-px h-5 bg-[#ffffff12] mx-1 shrink-0" aria-hidden="true" />
         <RunDetailViewToggle viewMode={viewMode} onViewModeChange={onViewModeChange} />
+      </div>
+      {actionError ? (
+        <p
+          role="alert"
+          className="max-w-[420px] text-right font-sans text-[12px] leading-snug text-[var(--sf-fail)]"
+        >
+          {actionError}
+        </p>
+      ) : null}
       </div>
     </header>
   );

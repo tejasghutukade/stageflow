@@ -16,6 +16,15 @@ import { SF_STAGE_WORKER } from "./stageWorkerProtocol.js";
 
 export type DerivedBindingKind = "repository" | "checkout" | "unbound";
 
+export type StageArtifactGrant = {
+  /** Run-relative path from the prior envelope. */
+  listedPath: string;
+  hostPath: string;
+  /** File or directory inside the sandbox, under /workspace/grants. */
+  containerPath: string;
+  kind: "file" | "directory";
+};
+
 export type StageRoots = {
   mode: "bound" | "unbound";
   cwd: string;
@@ -33,6 +42,10 @@ export type StageRoots = {
   containerName?: string;
   /** The docker binary the container above was started with (see STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN). */
   containerDockerBin?: string;
+  /** Host folder bind-mounted read-only into the sandbox at this same path. */
+  readonlyDir?: string;
+  /** Prior artifacts mounted into the sandbox. Empty or omitted when none are granted. */
+  artifactGrants?: readonly StageArtifactGrant[];
 };
 
 export const STAGEFLOW_CHECKOUT = "STAGEFLOW_CHECKOUT";

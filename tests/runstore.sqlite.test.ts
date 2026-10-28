@@ -438,6 +438,12 @@ describe("sqlite run store", () => {
 
     const detail = await store.readRun(run.runId);
     expect(detail.finished_at).toBe(first.finished_at);
+
+    await store.updateRunStatus(run.runId, "running");
+    const resumed = await store.readRunMeta(run.runId);
+    expect(resumed.status).toBe("running");
+    expect(resumed.finished_at).toBeUndefined();
+    expect((await store.readRun(run.runId)).finished_at).toBeUndefined();
   });
 
   it("threads lifecycle meta fields through readRun and listRuns", async () => {

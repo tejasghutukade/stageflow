@@ -92,7 +92,18 @@ export function createAgentHostContext(options: {
   /** Host services the Stageflow tools need; agent services are added here. Without it agents get no Stageflow tools. */
   /** Hold streams open to AgentMail and iMessage for agents linked to them. Only a running Host does this. */
   listenOnChannels?: boolean;
-  toolkitDeps?: Pick<McpToolDeps, "manager" | "store" | "agentDir" | "providerAuthContext" | "projectRoot" | "providerBoot">;
+  toolkitDeps?: Pick<
+    McpToolDeps,
+    | "manager"
+    | "store"
+    | "agentDir"
+    | "providerAuthContext"
+    | "projectRoot"
+    | "providerBoot"
+    | "channels"
+    | "memories"
+    | "evalRunManager"
+  >;
 }): AgentHostContext {
   const service = new AgentService({
     store: new AgentStore(options.connection),

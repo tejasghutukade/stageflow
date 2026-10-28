@@ -34,6 +34,7 @@ import { CatalogPage } from "./pages/CatalogPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ProviderConnectPage } from "./pages/ProviderConnectPage";
 import { WorkshopPage } from "./pages/WorkshopPage";
+import { GuidePage } from "./redesign/guide/GuidePage";
 import { loadProviderAuthReadiness } from "./providers/readiness";
 import {
   navigate,
@@ -306,6 +307,8 @@ function ConsoleRoot() {
         }}
       />
     );
+  } else if (route.name === "guide") {
+    content = <GuidePage section={route.section} sessionId={route.sessionId} />;
   } else if (route.name === "workshop") {
     content = (
       <WorkshopPage

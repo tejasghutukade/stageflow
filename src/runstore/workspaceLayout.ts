@@ -1,6 +1,7 @@
 import { access, lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { globalCredentialRoot } from "../project/globalHome.js";
+import { buildArtifactListedPath } from "../runtime/artifactPath.js";
 import { STAGEFLOW_AGENT_AUTH_PATH_ENV } from "../runtime/credentialBinding.js";
 import { SF_STAGE_WORKER } from "../runtime/stageWorkerProtocol.js";
 
@@ -282,14 +283,11 @@ export function resolveArtifactTarget(
     throw new Error("path escapes the stage artifacts directory");
   }
 
-  const runRelativePath = path.posix.join(
-    "stages",
+  const runRelativePath = buildArtifactListedPath({
     stageId,
-    "attempts",
-    String(attempt),
-    "artifacts",
-    ...relativeToArtifacts.split(path.sep),
-  );
+    attempt,
+    relative: relativeToArtifacts.split(path.sep).join("/"),
+  });
   return {
     absolutePath: resolved,
     runRelativePath,

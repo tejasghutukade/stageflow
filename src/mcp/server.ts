@@ -76,6 +76,11 @@ function toolDepsFrom(deps: McpHttpDeps): McpToolDeps {
       ? { agentConversationBackend: deps.agentConversationBackend }
       : {}),
     ...(deps.evalRunManager !== undefined ? { evalRunManager: deps.evalRunManager } : {}),
+    ...(deps.evalEngineStatus !== undefined ? { evalEngineStatus: deps.evalEngineStatus } : {}),
+    ...(deps.triage !== undefined ? { triage: deps.triage } : {}),
+    ...(deps.channels !== undefined ? { channels: deps.channels } : {}),
+    ...(deps.memories !== undefined ? { memories: deps.memories } : {}),
+    ...(deps.issueFetch !== undefined ? { issueFetch: deps.issueFetch } : {}),
   };
 }
 
