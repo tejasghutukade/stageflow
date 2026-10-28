@@ -1,4 +1,8 @@
 import type { RunMeta, RunStatus } from "./port.js";
+import {
+  isRunClockTerminal,
+  type RunClockTerminalStatus,
+} from "./runStatusClock.js";
 
 export type RetentionDecision = "none" | "slim" | "purge";
 
@@ -24,12 +28,6 @@ export const DEFAULT_RETENTION_WINDOWS: RetentionWindows = {
 
 export const DEFAULT_BARE_CACHE_TTL_MS = 30 * DAY_MS;
 export const DEFAULT_SLIM_ARTIFACT_MAX_BYTES = 1024 * 1024;
-
-const TERMINAL: ReadonlySet<RunStatus> = new Set([
-  "succeeded",
-  "failed",
-  "cancelled",
-]);
 
 export type RetentionRow = Pick<
   RunMeta,
@@ -98,7 +96,7 @@ export function retentionDecision(
   windows: RetentionWindows = DEFAULT_RETENTION_WINDOWS,
 ): RetentionDecision {
   const status = row.status;
-  if (status === undefined || !TERMINAL.has(status)) return "none";
+  if (!isRunClockTerminal(status)) return "none";
   if (row.finished_at === undefined || row.finished_at === "") return "none";
 
   const finishedMs = Date.parse(row.finished_at);
@@ -107,7 +105,7 @@ export function retentionDecision(
   const ageMs = now.getTime() - finishedMs;
   if (ageMs < 0) return "none";
 
-  const window = windows[status as keyof RetentionWindows];
+  const window = windows[status];
   if (ageMs >= window.purgeMs) return "purge";
   if (ageMs >= window.slimMs && row.slimmed_at === undefined) return "slim";
   return "none";
@@ -115,6 +113,6 @@ export function retentionDecision(
 
 export function isTerminalRunStatus(
   status: RunStatus | undefined,
-): status is "succeeded" | "failed" | "cancelled" {
-  return status !== undefined && TERMINAL.has(status);
+): status is RunClockTerminalStatus {
+  return isRunClockTerminal(status);
 }

@@ -46,19 +46,28 @@ describe("MCP eval tools with agent targets", () => {
     const evalTools = tools.filter((t) => /eval/.test(t.name)).map((t) => t.name).sort();
     expect(evalTools).toEqual(
       [
+        "accept_eval_failure_suggestions",
         "calibrate_eval_grader",
         "cancel_eval_run",
         "compare_eval_runs",
+        "create_eval",
+        "delete_eval_run",
+        "dismiss_eval_failure_suggestions",
         "get_eval",
         "get_eval_failure_sort_status",
         "get_eval_failure_suggestions",
         "get_eval_result",
         "get_eval_results",
         "get_eval_run",
+        "get_eval_run_export",
+        "install_eval_sample",
         "list_eval_runs",
         "list_evals",
+        "put_eval_review",
         "run_eval",
         "sort_eval_failures",
+        "try_eval_case",
+        "update_eval",
         "validate_eval",
       ].sort(),
     );

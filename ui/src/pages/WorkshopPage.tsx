@@ -75,6 +75,7 @@ import {
   draftFrameApplies,
   historyBuildName,
   mutationMapAfterChange,
+  openEphemeralPackageStudio,
   openSessionStudio,
   pickerRowLabel,
   pickerRowValue,
@@ -100,7 +101,10 @@ import type { SaveDestination } from "../redesign/workshop/save/SaveToCatalogDia
 import { WorkshopChangeCard } from "../redesign/workshop/WorkshopChangeCard";
 import { WorkshopRedesignView } from "../redesign/workshop/WorkshopRedesignView";
 import { addStage, deleteStage, renameStage } from "../redesign/workshop/stageMutators";
-import { workshopAutosaveKey } from "../redesign/workshop/workshopAutosaveKey";
+import {
+  workshopAutosaveKey,
+  WORKSHOP_UNTITLED_AUTOSAVE_KEY,
+} from "../redesign/workshop/workshopAutosaveKey";
 import { workshopChatThreadRemountKey } from "../redesign/workshop/workshopChatThreadRemountKey";
 import {
   AUTOSAVE_DEBOUNCE_MS,
@@ -113,12 +117,17 @@ import {
   DEFAULT_WRITE_CATALOG_WIRE_ID,
   defaultPackageDirectory,
   defaultWritableRootWireId,
+  draftOriginFromCatalogRoot,
   draftOriginFromResponse,
+  emptyDiskChangeState,
   fallbackDraftOrigin,
   folderOptionsForSave,
+  nextStudioGeneration,
   omitDefaultWriteProjectRoot,
+  packageFocusInputForChat,
   packageReadProjectRoot,
   saveIntentForOrigin,
+  studioGenerationIsCurrent,
   writableRootOptions,
   escapeWorkshopAction,
   initialDrawerTab,
@@ -135,10 +144,15 @@ import {
   saveIntent,
   savedFileCount,
   seedTranscriptFromAutosave,
+  shouldBootWorkshopPackage,
   workshopBootTarget,
+  workshopPackageBootKey,
   workshopChangeCount,
   workshopSaveState,
   workshopPrimarySaveDisabled,
+  workshopUrlAfterNewChat,
+  workshopUrlAfterPackageOpen,
+  workshopUrlAfterSession,
   catalogSaveBindingFromRelativePath,
   settledMutationCardsFromTranscript,
   type DraftOrigin,
@@ -438,8 +452,8 @@ export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
       refs.clearActivity();
 
       let sessionId = refs.sessionId.current;
-      if (!sessionId && refs.ensureChatSession) {
-        sessionId = await refs.ensureChatSession();
+      if (refs.ensureChatSession) {
+        sessionId = (await refs.ensureChatSession()) ?? sessionId;
       }
       if (!sessionId) {
         yield {
@@ -1098,6 +1112,7 @@ export function WorkshopPage({
   const autoApplyRef = useRef(false);
   const saveTargetWireIdRef = useRef<string | undefined>(undefined);
   const defaultWriteWireIdRef = useRef(DEFAULT_WRITE_CATALOG_WIRE_ID);
+  const catalogRootsListRef = useRef<CatalogRoot[]>([]);
   const acceptMutationRef = useRef<(mutationId: string) => Promise<void>>(
     async () => {},
   );
@@ -1112,10 +1127,13 @@ export function WorkshopPage({
   const stopChatRef = useRef<(() => void) | null>(null);
   const selectedBuildIdRef = useRef<string | null>(null);
   const cardsBuildIdRef = useRef<string | null>(null);
+  const savedPipelinePathRef = useRef<string | null>(null);
+  const draftOriginRef = useRef<DraftOrigin | null>(null);
   const pickerRowsRef = useRef<StudioPickerRow[]>([]);
   const selectionRef = useRef<StudioSelection>(startNewChatStudio([]));
   const studioRequestRef = useRef(0);
   const idleStudioBootRef = useRef(false);
+  const packageBootKeyRef = useRef<string | null>(null);
   const onPointerChangeRef = useRef<
     (frame: { buildId: string; draft: DraftPackagePayload }) => void
   >(() => {});
@@ -1127,7 +1145,10 @@ export function WorkshopPage({
   autoApplyRef.current = autoApply;
   saveTargetWireIdRef.current = saveTargetWireId;
   defaultWriteWireIdRef.current = defaultWriteWireId;
+  catalogRootsListRef.current = catalogRootsList;
   saveOpenRef.current = saveOpen;
+  savedPipelinePathRef.current = savedPipelinePath;
+  draftOriginRef.current = draftOrigin;
 
   const applyDraft = useCallback((next: DraftPackagePayload) => {
     draftRef.current = next;
@@ -1237,18 +1258,33 @@ export function WorkshopPage({
     };
   }, []);
 
+  const resetDiskChangeState = useCallback(() => {
+    const cleared = emptyDiskChangeState();
+    diskFingerprintsRef.current = cleared.fingerprints;
+    setDiskChangedPaths(cleared.changedPaths);
+    setShowDiskBanner(cleared.showBanner);
+  }, []);
+
   const syncWorkshopUrl = useCallback(
-    (session: string | null) => {
-      navigate(
-        workshopPath({
-          ...(session ? { session } : {}),
-          ...(linkedPipelinePath ? { pipeline: linkedPipelinePath } : {}),
-          ...(linkedTaskPath ? { task: linkedTaskPath } : {}),
-          ...(linkedProjectRoot ? { project_root: linkedProjectRoot } : {}),
-        }),
-      );
+    (opts: {
+      session?: string | null;
+      package?: {
+        pipeline: string;
+        task?: string;
+        projectRoot?: string;
+      } | null;
+    }) => {
+      if (opts.session) {
+        navigate(workshopPath(workshopUrlAfterSession(opts.session)));
+        return;
+      }
+      if (opts.package) {
+        navigate(workshopPath(workshopUrlAfterPackageOpen(opts.package)));
+        return;
+      }
+      navigate(workshopPath(workshopUrlAfterNewChat()));
     },
-    [linkedPipelinePath, linkedProjectRoot, linkedTaskPath],
+    [],
   );
 
   const applyIdleStudio = useCallback(
@@ -1281,34 +1317,90 @@ export function WorkshopPage({
       setSaveTargetWireId(undefined);
       setAttachments([]);
       setAutosavedAt(null);
+      setAutosaveOffer(null);
+      setShowAutosaveBanner(false);
+      resetDiskChangeState();
       setDrawerTab("task");
       setFocusField(null);
     },
-    [applyStudio],
+    [applyStudio, resetDiskChangeState],
   );
 
   const startNewSession = useCallback(
     (opts?: { keepBootError?: boolean }) => {
-      ++studioRequestRef.current;
+      nextStudioGeneration(studioRequestRef);
       idleStudioBootRef.current = true;
+      if (!opts?.keepBootError) packageBootKeyRef.current = null;
       applyIdleStudio(opts);
-      syncWorkshopUrl(null);
+      void clearWorkshopAutosave({ key: WORKSHOP_UNTITLED_AUTOSAVE_KEY });
+      syncWorkshopUrl({});
     },
     [applyIdleStudio, syncWorkshopUrl],
   );
 
   const ensureChatSession = useCallback(async (): Promise<string | null> => {
-    if (sessionIdRef.current) return sessionIdRef.current;
+    let buildId = selectedBuildIdRef.current;
+    let newlyFocused = false;
+    const packageFocus = packageFocusInputForChat({
+      selectedBuildId: buildId,
+      savedPipelinePath: savedPipelinePathRef.current,
+      projectRoot: draftOriginRef.current?.project_root,
+    });
+    if (packageFocus) {
+      const focused = await focusWorkshopBuild(packageFocus);
+      if (!focused.ok) {
+        setStudioError(focused.error);
+      } else {
+        applyStudio(
+          openSessionStudio({
+            activeBuildId: focused.build.id,
+            build: {
+              id: focused.build.id,
+              draft: draftRef.current,
+              projectRoot: focused.build.projectRoot,
+              relativePath: focused.build.relativePath,
+            },
+            rows: pickerRowsRef.current,
+          }),
+        );
+        buildId = focused.build.id;
+        newlyFocused = true;
+      }
+    }
+
+    if (sessionIdRef.current) {
+      if (newlyFocused && buildId) {
+        const pointed = await updateWorkshopSessionActiveBuild({
+          sessionId: sessionIdRef.current,
+          activeBuildId: buildId,
+        });
+        if (!pointed.ok) {
+          setStudioError(pointed.error);
+        }
+      }
+      syncWorkshopUrl({ session: sessionIdRef.current });
+      return sessionIdRef.current;
+    }
+
     const created = await createWorkshopSession();
     if (!created.ok) {
       setBootError(created.error);
       return null;
     }
+    if (buildId) {
+      const pointed = await updateWorkshopSessionActiveBuild({
+        sessionId: created.session.id,
+        activeBuildId: buildId,
+      });
+      if (!pointed.ok) {
+        setStudioError(pointed.error);
+      }
+    }
     sessionIdRef.current = created.session.id;
     setSessionId(created.session.id);
-    syncWorkshopUrl(created.session.id);
+    syncWorkshopUrl({ session: created.session.id });
     return created.session.id;
-  }, [syncWorkshopUrl]);
+  }, [applyStudio, syncWorkshopUrl]);
 
   const liveRefs = useMemo<LiveChatRefs>(
     () => ({
@@ -1339,7 +1431,7 @@ export function WorkshopPage({
 
   const bootOpenedPackage = useCallback(
     async (path: string, task?: string, root?: string) => {
-      const request = ++studioRequestRef.current;
+      const request = nextStudioGeneration(studioRequestRef);
       setBootError(null);
       setHistoryOpen(false);
       setMutationCards(new Map());
@@ -1348,23 +1440,33 @@ export function WorkshopPage({
       setSavedPipelinePath(null);
       setSavedTaskPath(null);
       setSaveDestination(null);
-      const created = await createWorkshopSession();
-      if (studioRequestRef.current !== request) return;
-      if (!created.ok) {
-        setBootError(created.error);
-        void startNewSession({ keepBootError: true });
-        return;
-      }
+      resetDiskChangeState();
+      setAutosaveOffer(null);
+      setShowAutosaveBanner(false);
       const opened = await openDraftPackage(openDraftInput({ path, task, projectRoot: root }));
-      if (studioRequestRef.current !== request) return;
+      if (!studioGenerationIsCurrent(request, studioRequestRef)) return;
       if (!opened.ok) {
         setBootError(opened.error);
         void startNewSession({ keepBootError: true });
         return;
       }
-      sessionIdRef.current = created.session.id;
-      setSessionId(created.session.id);
-      applyDraft(opened.draft);
+      sessionIdRef.current = null;
+      setSessionId(null);
+      const origin =
+        draftOriginFromResponse(opened) ??
+        (root
+          ? {
+              project_root: root,
+              kind: root === "examples" ? ("seeded" as const) : ("registered" as const),
+              readOnly: root === "examples",
+            }
+          : null);
+      applyStudio(
+        openEphemeralPackageStudio({
+          draft: opened.draft,
+          rows: pickerRowsRef.current,
+        }),
+      );
       setMutationCards(new Map());
       setSelectedStageId(null);
       setSeedMessages(emptySeedMessages());
@@ -1376,25 +1478,26 @@ export function WorkshopPage({
       setDrawerTab(initialDrawerTab(opened.draft));
       setFocusField(null);
       setAttachments([]);
-      const origin =
-        draftOriginFromResponse(opened) ??
-        (root
-          ? {
-              project_root: root,
-              kind: root === "examples" ? ("seeded" as const) : ("registered" as const),
-              readOnly: root === "examples",
-            }
-          : null);
       if (origin) setDraftOrigin(origin);
       setSaveTargetWireId(undefined);
-      syncWorkshopUrl(created.session.id);
+      syncWorkshopUrl({
+        package: {
+          pipeline: opened.pipelinePath,
+          ...(task ? { task } : {}),
+          ...(origin?.project_root
+            ? { projectRoot: origin.project_root }
+            : root
+              ? { projectRoot: root }
+              : {}),
+        },
+      });
     },
-    [applyDraft, startNewSession, syncWorkshopUrl],
+    [applyStudio, resetDiskChangeState, startNewSession, syncWorkshopUrl],
   );
 
   const loadWorkshopSession = useCallback(
     async (id: string, opts?: { fromHistory?: boolean }) => {
-      const request = ++studioRequestRef.current;
+      const request = nextStudioGeneration(studioRequestRef);
       if (opts?.fromHistory) {
         setHistoryLoading(true);
         setHistoryError(null);
@@ -1403,8 +1506,9 @@ export function WorkshopPage({
         sessionId: sessionIdRef.current,
         buildId: cardsBuildIdRef.current,
       };
+      resetDiskChangeState();
       const got = await getWorkshopSession(id);
-      if (studioRequestRef.current !== request) return;
+      if (!studioGenerationIsCurrent(request, studioRequestRef)) return;
       if (opts?.fromHistory) setHistoryLoading(false);
       if (!got.ok) {
         if (opts?.fromHistory) setHistoryError(got.error);
@@ -1424,7 +1528,7 @@ export function WorkshopPage({
       let loadError: string | null = null;
       if (got.session.activeBuildId) {
         const loaded = await getWorkshopBuild(got.session.activeBuildId);
-        if (studioRequestRef.current !== request) return;
+        if (!studioGenerationIsCurrent(request, studioRequestRef)) return;
         if (loaded.ok) build = loaded.build;
         else loadError = loaded.error;
       }
@@ -1484,7 +1588,7 @@ export function WorkshopPage({
               projectRoot: openRoot,
             }),
           );
-          if (studioRequestRef.current !== request) return;
+          if (!studioGenerationIsCurrent(request, studioRequestRef)) return;
           if (opened.ok) {
             setSavedPipelinePath(opened.pipelinePath);
             setSaveDestination(opened.destination);
@@ -1510,14 +1614,37 @@ export function WorkshopPage({
       }
 
       setMutationCards(settledMutationCardsFromTranscript(got.session.transcript));
-      syncWorkshopUrl(got.session.id);
+      syncWorkshopUrl({ session: got.session.id });
     },
-    [applyStudio, redesignOn, syncWorkshopUrl],
+    [applyStudio, redesignOn, resetDiskChangeState, syncWorkshopUrl],
   );
 
   useEffect(() => {
-    if (workshopBootTarget(linkedPipelinePath) === "package" && linkedPipelinePath) {
+    if (
+      workshopBootTarget({
+        sessionId: linkedSessionId,
+        pipelinePath: linkedPipelinePath,
+      }) === "package" &&
+      linkedPipelinePath
+    ) {
+      if (
+        !shouldBootWorkshopPackage(
+          packageBootKeyRef.current,
+          linkedPipelinePath,
+          linkedTaskPath,
+          linkedProjectRoot,
+        )
+      ) {
+        return;
+      }
+      const key = workshopPackageBootKey(
+        linkedPipelinePath,
+        linkedTaskPath,
+        linkedProjectRoot,
+      );
+      packageBootKeyRef.current = key;
       let cancelled = false;
+      let committed = false;
       void (async () => {
         let root = linkedProjectRoot?.trim() || undefined;
         if (!root) {
@@ -1530,12 +1657,17 @@ export function WorkshopPage({
           }
         }
         if (cancelled) return;
+        committed = true;
         void bootOpenedPackage(linkedPipelinePath, linkedTaskPath, root);
       })();
       return () => {
         cancelled = true;
+        if (!committed && packageBootKeyRef.current === key) {
+          packageBootKeyRef.current = null;
+        }
       };
     }
+    packageBootKeyRef.current = null;
     const linked = linkedSessionId?.trim();
     if (linked) {
       if (sessionIdRef.current === linked) return;
@@ -1589,26 +1721,36 @@ export function WorkshopPage({
   const pickStudioRow = useCallback(
     async (row: StudioPickerRow) => {
       const sessionIdAtPick = sessionIdRef.current;
-      if (!sessionIdAtPick) return;
-      const request = studioRequestRef.current;
+      const request = nextStudioGeneration(studioRequestRef);
       const previous = {
         sessionId: sessionIdAtPick,
         buildId: cardsBuildIdRef.current,
       };
+      const unboundOpenedBox: {
+        current: Awaited<ReturnType<typeof openDraftPackage>> | null;
+      } = { current: null };
       const result = await chooseStudioRow({
         sessionId: sessionIdAtPick,
         row,
         selection: selectionRef.current,
-        focus: async (picked) => {
+        openUnbound: async (picked) => {
           if (!picked.projectRoot || !picked.relativePath) {
             return { ok: false, error: "project root and path are required" };
           }
-          const focused = await focusWorkshopBuild({
+          const opened = await openDraftPackage(
+            openDraftInput({
+              path: picked.relativePath,
+              projectRoot: picked.projectRoot,
+            }),
+          );
+          unboundOpenedBox.current = opened;
+          if (!opened.ok) return { ok: false, error: opened.error };
+          return {
+            ok: true,
+            draft: opened.draft,
             projectRoot: picked.projectRoot,
-            relativePath: picked.relativePath,
-          });
-          if (!focused.ok) return { ok: false, error: focused.error };
-          return { ok: true, build: focused.build };
+            relativePath: opened.pipelinePath,
+          };
         },
         updatePointer: async (sessionId, activeBuildId) => {
           const updated = await updateWorkshopSessionActiveBuild({
@@ -1625,7 +1767,7 @@ export function WorkshopPage({
         },
       });
       if (
-        studioRequestRef.current !== request ||
+        !studioGenerationIsCurrent(request, studioRequestRef) ||
         sessionIdRef.current !== sessionIdAtPick
       ) {
         return;
@@ -1642,8 +1784,76 @@ export function WorkshopPage({
         ),
       );
       setSelectedStageId(null);
+      setAttachments([]);
+      resetDiskChangeState();
+
+      const unboundOpened = unboundOpenedBox.current;
+      if (unboundOpened?.ok) {
+        setSavedPipelinePath(unboundOpened.pipelinePath);
+        setSaveDestination(unboundOpened.destination);
+        setSavedTaskPath(unboundOpened.taskPath ?? null);
+        setBaseline(cloneDraft(unboundOpened.draft));
+        const origin =
+          draftOriginFromResponse(unboundOpened) ??
+          draftOriginFromCatalogRoot(
+            catalogRootsListRef.current,
+            row.projectRoot,
+          );
+        if (origin) setDraftOrigin(origin);
+        syncWorkshopUrl({
+          package: {
+            pipeline: unboundOpened.pipelinePath,
+            ...(origin?.project_root
+              ? { projectRoot: origin.project_root }
+              : row.projectRoot
+                ? { projectRoot: row.projectRoot }
+                : {}),
+          },
+        });
+        return;
+      }
+
+      if (row.relativePath && row.projectRoot && result.selection.buildId) {
+        const filename = pipelineFilenameFor(draftRef.current.pipeline.id, {
+          id: draftRef.current.pipeline.id,
+          filename:
+            row.relativePath.split("/").pop() ??
+            `${draftRef.current.pipeline.id}.pipeline.yaml`,
+        });
+        const directory =
+          row.relativePath.split("/").slice(0, -1).join("/") || ".";
+        setSavedPipelinePath(row.relativePath);
+        setSaveDestination({ directory, pipelineFilename: filename });
+        setBaseline(cloneDraft(draftRef.current));
+        const opened = await openDraftPackage(
+          openDraftInput({
+            path: row.relativePath,
+            projectRoot: row.projectRoot,
+          }),
+        );
+        if (!studioGenerationIsCurrent(request, studioRequestRef)) return;
+        if (opened.ok) {
+          setDraftOrigin(
+            draftOriginFromResponse(opened) ??
+              draftOriginFromCatalogRoot(
+                catalogRootsListRef.current,
+                row.projectRoot,
+              ) ??
+              fallbackDraftOrigin(),
+          );
+          if (opened.taskPath) setSavedTaskPath(opened.taskPath);
+          setSaveDestination(opened.destination);
+          setSavedPipelinePath(opened.pipelinePath);
+        } else {
+          const origin = draftOriginFromCatalogRoot(
+            catalogRootsListRef.current,
+            row.projectRoot,
+          );
+          if (origin) setDraftOrigin(origin);
+        }
+      }
     },
-    [applyStudio],
+    [applyStudio, resetDiskChangeState, syncWorkshopUrl],
   );
 
   const acceptMutation = useCallback(
@@ -2143,35 +2353,14 @@ export function WorkshopPage({
       errorCount,
       originReadOnly: draftOrigin?.readOnly,
     });
-    if (intent.kind === "overwrite-direct") {
-      const wireId = saveTargetWireId ?? defaultWriteWireId;
-      const kind = catalogRootsList.find((root) => root.project_root === wireId)?.kind;
-      void commitSave(
-        {
-          catalogRoot: wireId,
-          folder:
-            saveDestination?.directory ??
-            defaultPackageDirectory(kind, draftRef.current.pipeline.id),
-          pipelineId: draftRef.current.pipeline.id,
-        },
-        false,
-        "overwrite",
-      );
-      return;
-    }
     openSaveDialog(intent);
   }, [
     baseline,
-    commitSave,
     errorCount,
     hasDestination,
     openSaveDialog,
-    catalogRootsList,
-    defaultWriteWireId,
     draftOrigin?.readOnly,
     savedPipelinePath,
-    saveDestination?.directory,
-    saveTargetWireId,
     saving,
   ]);
 
@@ -2284,29 +2473,7 @@ export function WorkshopPage({
 
   const onPickCatalogRow = useCallback(
     async (row: StudioPickerRow) => {
-      if (!sessionIdRef.current) return;
-      const request = studioRequestRef.current;
       await pickStudioRow(row);
-      if (!row.relativePath || !row.projectRoot) return;
-      if (studioRequestRef.current !== request || selectionRef.current.error) return;
-      const filename = pipelineFilenameFor(draftRef.current.pipeline.id, {
-        id: draftRef.current.pipeline.id,
-        filename:
-          row.relativePath.split("/").pop() ??
-          `${draftRef.current.pipeline.id}.pipeline.yaml`,
-      });
-      const directory = row.relativePath.split("/").slice(0, -1).join("/") || ".";
-      setSavedPipelinePath(row.relativePath);
-      setSaveDestination({ directory, pipelineFilename: filename });
-      setBaseline(cloneDraft(draftRef.current));
-      setAttachments([]);
-      if (row.projectRoot) {
-        setDraftOrigin({
-          project_root: row.projectRoot,
-          kind: "registered",
-          readOnly: false,
-        });
-      }
     },
     [pickStudioRow],
   );

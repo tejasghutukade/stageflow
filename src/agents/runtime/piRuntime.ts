@@ -221,6 +221,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
             label: `Ask ${agentId}`,
             description: `Hand a task to the "${agentId}" agent and get its reply.`,
             parameters: Type.Object({ message: Type.String({ description: "The task or question for the agent." }) }),
+            constrainedSampling: { type: "json_schema", strict: "prefer" },
             execute: async (callId: string, args: { message: string }) => {
               const reply = await input.delegateTool!(agentId, args.message, callId);
               return { content: [{ type: "text" as const, text: reply }], details: {} };
@@ -233,7 +234,10 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
 
     if (input.memory) {
       for (const definition of memorySession(input.memory).tools) {
-        customTools.push(defineTool(definition));
+        customTools.push(defineTool({
+          ...definition,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+        }));
         toolNames.push(definition.name);
       }
     }
@@ -245,6 +249,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
           label: tool.name,
           description: tool.description,
           parameters: Type.Unsafe(tool.parameters),
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: async (_id: string, args: Record<string, unknown>, signal?: AbortSignal) => {
             const result = await tool.run(args ?? {}, { signal: signal ?? new AbortController().signal, caller: { agentId: definition.id, definition } });
             if (!result.ok) throw new Error(result.text);

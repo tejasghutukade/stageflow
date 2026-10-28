@@ -442,6 +442,10 @@ export function saveAuthorDraft(sessionId: string, draft: AgentAuthorDraft): Pro
   return request(`/api/agent-author/sessions/${encodeURIComponent(sessionId)}`, "PUT", { draft });
 }
 
+export function deleteAuthorSession(sessionId: string): Promise<{ removed: true }> {
+  return request(`/api/agent-author/sessions/${encodeURIComponent(sessionId)}`, "DELETE");
+}
+
 export function undoAgentAuthorTurn(sessionId: string): Promise<{ draft: AgentAuthorDraft }> {
   return request("/api/agent-author/undo", "POST", { sessionId });
 }

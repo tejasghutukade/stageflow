@@ -19,10 +19,11 @@ describe("resolveAgentPort", () => {
     expect(port.listProfiles().map((profile) => profile.id)).toEqual([
       WORKSHOP_AUTHOR_PROFILE_ID,
       AGENT_AUTHOR_PROFILE_ID,
+      "stageflow-guide",
     ]);
     expect(
       createPiAgentPort({ cwd, projectRoot: cwd }).listProfiles().map((profile) => profile.id),
-    ).toEqual([WORKSHOP_AUTHOR_PROFILE_ID, AGENT_AUTHOR_PROFILE_ID]);
+    ).toEqual([WORKSHOP_AUTHOR_PROFILE_ID, AGENT_AUTHOR_PROFILE_ID, "stageflow-guide"]);
   });
 
   it("selects Pi when the backend is set", () => {
@@ -30,6 +31,7 @@ describe("resolveAgentPort", () => {
     expect(port.listProfiles().map((profile) => profile.id)).toEqual([
       WORKSHOP_AUTHOR_PROFILE_ID,
       AGENT_AUTHOR_PROFILE_ID,
+      "stageflow-guide",
     ]);
   });
 });

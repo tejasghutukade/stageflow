@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import type { Stats } from "node:fs";
-import { lstat, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
 import { resolveBashPath } from "../preflight/bash.js";
@@ -10,6 +9,7 @@ import { getNamedSecrets } from "../logging/namedSecrets.js";
 import type { CompletionCheck, CompletionContract } from "../types/completion.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageGateKind } from "../types/stage.js";
+import { inspectArtifactUnderRoot } from "./artifactDiskInspect.js";
 import { signalProcessGroup } from "./stageProcessLauncher.js";
 
 /**
@@ -355,55 +355,27 @@ async function runCommandCheck(
 }
 
 async function inspectArtifact(artifactsDir: string, relativePath: string): Promise<ArtifactCheckEvidence> {
-  const target = path.resolve(artifactsDir, relativePath);
-  const relative = path.relative(artifactsDir, target);
-  if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  const presence = await inspectArtifactUnderRoot(artifactsDir, relativePath);
+  if (presence.file_type === "missing") {
     return { kind: "artifact", path: relativePath, exists: false, file_type: "missing" };
   }
-  try {
-    // lstat every component rather than just the target: lstat(target) follows
-    // a symlink in a parent directory, which could otherwise prove a file that
-    // lives outside the attempt artifact root.
-    const segments = relative.split(path.sep).filter((segment) => segment !== "");
-    let current = artifactsDir;
-    let stats: Stats | undefined;
-    for (const segment of segments) {
-      current = path.join(current, segment);
-      stats = await lstat(current);
-      if (stats.isSymbolicLink()) {
-        return { kind: "artifact", path: relativePath, exists: true, file_type: "symlink" };
-      }
-      if (current !== target && !stats.isDirectory()) {
-        return { kind: "artifact", path: relativePath, exists: true, file_type: "other" };
-      }
-    }
-    if (stats === undefined) {
-      return { kind: "artifact", path: relativePath, exists: false, file_type: "missing" };
-    }
-    if (stats.isSymbolicLink()) {
-      return { kind: "artifact", path: relativePath, exists: true, file_type: "symlink" };
-    }
-    if (stats.isDirectory()) {
-      return { kind: "artifact", path: relativePath, exists: true, file_type: "directory" };
-    }
-    if (!stats.isFile()) {
-      return { kind: "artifact", path: relativePath, exists: true, file_type: "other" };
-    }
-    const content = await readFile(target);
+  if (presence.file_type !== "file" || presence.absolutePath === undefined) {
     return {
       kind: "artifact",
       path: relativePath,
       exists: true,
-      file_type: "file",
-      size_bytes: stats.size,
-      sha256: createHash("sha256").update(content).digest("hex"),
+      file_type: presence.file_type,
     };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { kind: "artifact", path: relativePath, exists: false, file_type: "missing" };
-    }
-    throw error;
   }
+  const content = await readFile(presence.absolutePath);
+  return {
+    kind: "artifact",
+    path: relativePath,
+    exists: true,
+    file_type: "file",
+    size_bytes: presence.size_bytes,
+    sha256: createHash("sha256").update(content).digest("hex"),
+  };
 }
 
 async function runArtifactCheck(

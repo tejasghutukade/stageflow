@@ -18,15 +18,16 @@ import {
 import { formatEventTime } from "./runEventsView";
 import {
   formatToolCallDuration,
+  presentToolResult,
   toolCallArgSummary,
+  toolResultSummary,
+  type ToolResultPresentation,
 } from "./runDetailTranscriptFormat";
 import {
   buildRunDetailTranscriptTurns,
   stageAgentLabel,
   type ToolCallView,
 } from "./runDetailTranscriptModel";
-
-const TOOL_VISIBLE_LIMIT = 4;
 
 function eventKey(event: StageLogEvent, index: number): string {
   return `${event.event}-${event.at ?? "na"}-${index}`;
@@ -83,9 +84,130 @@ function toolRowResultLabel(call: ToolCallView): string | undefined {
   if (call.status === "running") return undefined;
   const raw = call.result?.trim();
   if (!raw) return undefined;
-  const line = raw.split("\n")[0]?.trim();
-  if (!line) return undefined;
-  return line.length > 48 ? `${line.slice(0, 45)}…` : line;
+  return toolResultSummary(raw) || undefined;
+}
+
+function ToolResultBody({ text }: { text: string }) {
+  const view = presentToolResult(text);
+  if (view.kind === "text") {
+    return (
+      <pre className="font-['Geist_Mono',monospace] text-[11px] leading-relaxed whitespace-pre-wrap text-[var(--sf-text-2)]">
+        {view.text}
+      </pre>
+    );
+  }
+  if (view.kind === "rows") {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <p className="text-[12px] font-medium text-[var(--sf-text-1)]">
+          {view.headline}
+        </p>
+        <ul className="flex flex-col">
+          {view.rows.map((row, index) => (
+            <li
+              key={`${row.primary}-${index}`}
+              className="flex items-baseline gap-2 border-b border-b-[#ffffff0d] py-1 last:border-b-0"
+            >
+              <span className="min-w-0 flex-1 truncate font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-1)]">
+                {row.primary}
+              </span>
+              {row.secondary ? (
+                <span className="shrink-0 text-[11px] text-[var(--sf-text-3)]">
+                  {row.secondary}
+                </span>
+              ) : null}
+              {row.stat ? (
+                <span className="shrink-0 font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-2)]">
+                  {row.stat}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+        {view.more > 0 ? (
+          <p className="text-[11px] text-[var(--sf-text-3)]">
+            {view.more} more
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+  return <ToolResultCard view={view} />;
+}
+
+function ToolResultCard({
+  view,
+}: {
+  view: Extract<ToolResultPresentation, { kind: "card" }>;
+}) {
+  const [proseOpen, setProseOpen] = useState(false);
+  const prose = view.prose?.trim();
+  const proseLong = Boolean(prose && (prose.length > 280 || prose.split("\n").length > 6));
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-[12px] font-medium leading-snug text-[var(--sf-text-1)]">
+        {view.headline}
+      </p>
+      {view.fields.length > 0 ? (
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          {view.fields.map((field) => (
+            <div key={field.label} className="flex items-baseline gap-1.5">
+              <span className="text-[11px] text-[var(--sf-text-3)]">
+                {field.label}
+              </span>
+              {field.href ? (
+                <a
+                  className="text-[11px] text-[var(--sf-text-1)] underline decoration-[#ffffff24] underline-offset-2"
+                  href={field.href}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {field.value}
+                </a>
+              ) : (
+                <span className="text-[11px] text-[var(--sf-text-1)]">
+                  {field.value}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {prose ? (
+        <div className="flex flex-col gap-1">
+          <p
+            className={`text-[12px] leading-relaxed whitespace-pre-wrap text-[var(--sf-text-2)]${
+              proseLong && !proseOpen ? " line-clamp-6" : ""
+            }`}
+          >
+            {prose}
+          </p>
+          {proseLong ? (
+            <button
+              type="button"
+              className="self-start text-[11px] text-[var(--sf-text-3)] hover:text-[var(--sf-text-2)]"
+              onClick={() => setProseOpen((open) => !open)}
+            >
+              {proseOpen ? "Show less" : "Show full text"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function presentedResult(call: ToolCallView): ToolResultPresentation | undefined {
+  if (!call.result) return undefined;
+  return presentToolResult(call.result);
+}
+
+function isEmptyResult(call: ToolCallView): boolean {
+  const view = presentedResult(call);
+  return Boolean(
+    view && view.kind === "card" && !view.prose && view.fields.length === 0,
+  );
 }
 
 function ToolRow({ call }: { call: ToolCallView }) {
@@ -100,7 +222,7 @@ function ToolRow({ call }: { call: ToolCallView }) {
       : call.status === "error"
         ? call.result
         : call.result;
-  const hasDetail = Boolean(detail?.trim());
+  const hasDetail = Boolean(detail?.trim()) && !isEmptyResult(call);
 
   return (
     <div className="border-b border-b-[#ffffff12] last:border-b-0">
@@ -109,7 +231,10 @@ function ToolRow({ call }: { call: ToolCallView }) {
         className="flex h-8 w-full items-center gap-2 px-2.5 text-left disabled:cursor-default"
         disabled={!hasDetail}
         aria-expanded={hasDetail ? open : undefined}
-        onClick={() => hasDetail && setOpen((v) => !v)}
+        onClick={() => {
+          if (!hasDetail) return;
+          setOpen((v) => !v);
+        }}
       >
         <LuChevronRight
           className={`size-3 shrink-0 text-[var(--sf-text-3)] transition-transform${
@@ -174,36 +299,44 @@ function ToolRow({ call }: { call: ToolCallView }) {
         ) : null}
       </button>
       {open && hasDetail ? (
-        <pre className="max-h-40 overflow-auto border-t border-t-[#ffffff12] bg-[var(--sf-raised)] px-3 py-2 font-['Geist_Mono',monospace] text-[11px] leading-relaxed text-[var(--sf-text-2)] whitespace-pre-wrap">
-          {detail}
-        </pre>
+        <div className="max-h-40 overflow-auto border-t border-t-[#ffffff12] bg-[var(--sf-raised)] px-3 py-2">
+          <ToolResultBody text={detail ?? ""} />
+        </div>
       ) : null}
     </div>
   );
 }
 
 function ToolGroup({ calls }: { calls: ToolCallView[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const hidden =
-    !expanded && calls.length > TOOL_VISIBLE_LIMIT
-      ? calls.length - TOOL_VISIBLE_LIMIT
-      : 0;
-  const visible = hidden > 0 ? calls.slice(0, TOOL_VISIBLE_LIMIT) : calls;
-
   return (
-    <div className="ml-[30px] overflow-hidden rounded-lg border border-[#ffffff12]">
-      {visible.map((call, i) => (
+    <div className="ml-[30px] shrink-0 overflow-hidden rounded-lg border border-[#ffffff12]">
+      {calls.map((call, i) => (
         <ToolRow key={`${call.name}-${call.at ?? i}`} call={call} />
       ))}
-      {hidden > 0 ? (
-        <button
-          type="button"
-          className="h-8 w-full px-3 text-left text-[11px] text-[var(--sf-text-3)] hover:text-[var(--sf-text-2)]"
-          onClick={() => setExpanded(true)}
-        >
-          Show {hidden} more
-        </button>
-      ) : null}
+    </div>
+  );
+}
+
+function ToolResultTurn({ text, at }: { text: string; at?: string }) {
+  return (
+    <div className="ml-[30px] shrink-0 overflow-hidden rounded-lg border border-[#ffffff12]">
+      <div className="flex h-8 items-center gap-2 px-2.5">
+        <LuTerminal
+          className="size-3.5 shrink-0 text-[var(--sf-text-3)]"
+          aria-hidden="true"
+        />
+        <span className="text-xs font-medium text-[var(--sf-text-1)]">
+          Tool result
+        </span>
+        {at ? (
+          <time className="font-['Geist_Mono',monospace] text-[11px] text-[#8b8f98]">
+            {formatEventTime(at)}
+          </time>
+        ) : null}
+      </div>
+      <div className="max-h-40 overflow-auto border-t border-t-[#ffffff12] bg-[var(--sf-raised)] px-3 py-2">
+        <ToolResultBody text={text} />
+      </div>
     </div>
   );
 }
@@ -243,7 +376,7 @@ function MessageTurn({
   const isOperator = role === "user";
 
   return (
-    <div className="flex gap-2.5">
+    <div className="flex shrink-0 gap-2.5">
       {isOperator ? <OperatorAvatar /> : <AgentAvatar />}
       <div className="min-w-0 flex-1 flex flex-col gap-1">
         <div className="flex items-center gap-2">
@@ -264,7 +397,7 @@ function MessageTurn({
 
 function InboundEnvelopeTurn({ envelope }: { envelope: StageEnvelopeView }) {
   return (
-    <div className="flex gap-2.5">
+    <div className="flex shrink-0 gap-2.5">
       <AgentAvatar />
       <div className="min-w-0 flex-1 flex flex-col gap-1">
         <div className="flex items-center gap-2">
@@ -312,7 +445,7 @@ function AnswerTurn({ event }: { event: StageLogEvent }) {
   }
 
   return (
-    <div className="flex gap-2.5">
+    <div className="flex shrink-0 gap-2.5">
       <OperatorAvatar />
       <div className="min-w-0 flex-1 flex flex-col gap-1">
         <div className="flex items-center gap-2">
@@ -357,6 +490,12 @@ export function RunDetailTranscriptTurns({
     const turn = turns[t];
     if (turn.kind === "tools") {
       nodes.push(<ToolGroup key={`tools-${t}`} calls={turn.calls} />);
+      continue;
+    }
+    if (turn.kind === "tool_result") {
+      nodes.push(
+        <ToolResultTurn key={`result-${t}`} text={turn.text} at={turn.at} />,
+      );
       continue;
     }
     if (turn.kind === "message") {

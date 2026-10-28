@@ -76,14 +76,14 @@ UI tile **GitHub pull request** → `event.source: github.pull_request` (any `gi
 |-------|------|---------|-------|
 | Catalog task + repo + token | Yes (~60s poll, `STAGEFLOW_GITHUB_POLL_INTERVAL_MS`) | Yes | **Yes** |
 | Dynamic task + repo + token | Yes (task built from PR) | No | **Partial** — auto/CLI; not UI Fire |
-| `match.action` / `match.author` | Yes (exact match on normalized fields) | — | **Yes** |
+| `match.action` (required) / `match.author` | Yes (exact match on normalized fields) | — | **Yes** |
 
 **Checklist**
 
 - [ ] `kind: event`, `event.source` starts with `github.`
 - [ ] `event.config.repo` = `owner/repo`
 - [ ] `event.config.secretRef` or host env **`GITHUB_TOKEN`** / **`GH_TOKEN`** with repo read access (Docker: set in compose `.env`)
-- [ ] Optional `match.action`: `opened` \| `merged` \| `closed` \| `updated`
+- [ ] Required `match.action`: `opened` \| `synchronize` \| `updated` \| `merged` \| `closed` (`synchronize` = head SHA changed / push; `updated` = other activity with the same head)
 - [ ] Optional `match.author` (exact login match)
 - [ ] Expect **first poll to seed only** — no runs for PRs that already existed before the cursor
 - [ ] **PR list only** — not issues, pushes, or other GitHub event types

@@ -28,8 +28,11 @@ export const CANCEL_REASON_PROMPT =
 
 export const DEFAULT_CANCEL_REASON = "Cancelled from operator console";
 
-export function canCancelRun(status: RunStatus): boolean {
-  return status === "created" || status === "queued" || status === "running";
+export function canCancelRun(
+  status: RunStatus,
+  _stages?: ReadonlyArray<{ status: string }>,
+): boolean {
+  return status !== "succeeded" && status !== "failed";
 }
 
 export function canDeleteRun(status: RunStatus): boolean {

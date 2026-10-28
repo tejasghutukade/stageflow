@@ -1114,7 +1114,9 @@ See [`sf trigger fire`](cli-reference.md#sf-trigger-fire) for the `--task-inline
 
 `kind: schedule` triggers also fire on their own while the Host is running: `ScheduleSource` ticks on an interval (`STAGEFLOW_TRIGGER_TICK_INTERVAL_MS`, default 30s — see [CLI reference](cli-reference.md)), computing each trigger's next fire time from `cron`/`timezone` via `croner` and persisting it (`next_run_at`) so a Host restart doesn't lose or re-derive it. If the Host was down past a trigger's `next_run_at`, it fires **once** on the next boot for the most recent missed occurrence — a schedule does not queue one run per missed interval — then recomputes `next_run_at` from the current time. Firing a `schedule` trigger manually with `sf trigger fire` still works the same as any other trigger. A `schedule` trigger in dynamic mode is accepted (nothing blocks it at the schema level) but always fails when its timer fires, since nothing supplies a task on an automatic tick — dynamic mode is only useful for triggers fired manually with a task in hand.
 
-`kind: event` triggers whose `event.source` starts with `github.` are picked up by `GithubPollSource` (`src/runtime/githubPollSource.ts`): it ticks on an interval (`STAGEFLOW_GITHUB_POLL_INTERVAL_MS`, default 60s — see [CLI reference](cli-reference.md)), groups matching triggers by distinct `event.config.repo` (one API call per repo per tick, regardless of how many triggers watch it), and uses an `ETag`-conditioned GitHub PR list request so an unchanged repo costs nothing against rate limit. New PR activity since the last persisted cursor is normalized and checked against each trigger's `event.match`; a catalog-mode trigger fires with its own fixed task, a dynamic-mode trigger fires with a `TaskFile` built from the PR (`goal` summarizing it, `input` carrying the normalized event). A never-before-seen repo only seeds the cursor on its first tick — it doesn't fire for pre-existing PR history. A brief Host outage isn't a missed event: the next tick's diff-since-cursor naturally catches up, bounded by GitHub's own event retention, so (unlike `schedule`) no boot catch-up tick is needed.
+`kind: event` triggers whose `event.source` starts with `github.` are picked up by `GithubPollSource` (`src/runtime/githubPollSource.ts`): it ticks on an interval (`STAGEFLOW_GITHUB_POLL_INTERVAL_MS`, default 60s — see [CLI reference](cli-reference.md)), groups matching triggers by distinct `event.config.repo` (one API call per repo per tick, regardless of how many triggers watch it), and uses an `ETag`-conditioned GitHub PR list request so an unchanged repo costs nothing against rate limit. New PR activity since the last persisted cursor is normalized and checked against each trigger's `event.match`; a catalog-mode trigger fires with its own fixed task, a dynamic-mode trigger fires with a `TaskFile` built from the PR (`goal` summarizing it, `input` carrying the normalized event). A never-before-seen repo only seeds the cursor (and a per-PR head SHA map) on its first tick — it doesn't fire for pre-existing PR history. A brief Host outage isn't a missed event: the next tick's diff-since-cursor naturally catches up, bounded by GitHub's own event retention, so (unlike `schedule`) no boot catch-up tick is needed.
+
+For `github.*` sources, `event.match.action` is **required**. Omitting `match` (or omitting `action`) is invalid — create/update and `sf validate` reject it. Exact equality still applies to every other `match` key.
 
 `event.config` for the GitHub poller:
 
@@ -1123,7 +1125,17 @@ See [`sf trigger fire`](cli-reference.md#sf-trigger-fire) for the `--task-inline
 | `repo` | yes | `"owner/repo"` string identifying the watched GitHub repository |
 | `secretRef` | no | Name of the secret (resolved via `readSecretFromEnvOrFile`) holding a GitHub PAT with repo read scope; defaults to `GITHUB_TOKEN` |
 
-The normalized event handed to `match`/`input` has these fields: `action` (`"opened"` \| `"merged"` \| `"closed"` \| `"updated"`), `number`, `title`, `url`, `author`, `repo`, `updatedAt`.
+Normalized `action` values (priority: merged → closed → opened → synchronize → updated):
+
+| `action` | Meaning |
+|----------|---------|
+| `opened` | Brand-new PR: `created_at === updated_at`, or first sight of a number whose `created_at` is after the poll cursor (covers open+push before the next poll). A missing prior head SHA alone is not `opened` |
+| `synchronize` | PR head SHA changed since last seen (push / new commits) |
+| `updated` | Other activity with the same head SHA (comments, title edits, …), or first sight of an aged PR whose prior SHA was never stored |
+| `merged` | `merged_at` set |
+| `closed` | `state` closed, not merged |
+
+`synchronize` is for “every push”; `updated` is metadata-only activity that does **not** move the head. The normalized event handed to `match`/`input` has these fields: `action`, `number`, `title`, `url`, `author`, `repo`, `updatedAt`, and optional `headSha`.
 
 Dynamic mode, filtering to closed PRs only:
 
@@ -1255,6 +1267,8 @@ See [`tests/fixtures/triggers/dynamic-hello.trigger.yaml`](../tests/fixtures/tri
 | `trigger.invalid_shape` | Missing or invalid `id`, `pipeline`, `kind`, or `enabled`, or a `task` present with the wrong type (`task` itself is optional) |
 | `trigger.unknown_pipeline` | `pipeline` does not match any catalog pipeline `id` |
 | `trigger.unknown_task` | `task` does not match any catalog task `id` |
+| `trigger.github_action_required` | `event.source` starts with `github.` but `event.match.action` is missing |
+| `trigger.invalid_github_action` | `event.match.action` is present but not one of `opened` \| `synchronize` \| `updated` \| `merged` \| `closed` |
 
 See [`tests/fixtures/triggers/manual-dangling-refs.trigger.yaml`](../tests/fixtures/triggers/manual-dangling-refs.trigger.yaml) — a trigger whose `pipeline`/`task` reference ids that don't exist in the catalog.
 
@@ -1312,7 +1326,7 @@ Unknown keys at any level are an error (`eval.unknown_key`).
 | `conversation` | object | no | Agent targets only. See [Agent evals](#agent-evals) |
 | `budget` | object | no | `{ latency_ms?, cost_usd? }`, positive numbers. Per-result warnings, never failures |
 
-**Target.** `kind` is required and is `stage` or `agent` (`eval.target_kind_unsupported` otherwise). A stage target has exactly one of two forms. Paths are relative to the eval file.
+**Target.** `kind` is required and is `stage`, `agent` or `internal_agent` (`eval.target_kind_unsupported` otherwise). A stage target has exactly one of two forms. Paths are relative to the eval file. An internal-agent target is `target: { kind: internal_agent, profile: <id> }` and is valid only while the Host has `STAGEFLOW_SHOW_INTERNAL_AGENTS=1` (`eval.internal_agent_hidden` otherwise, `eval.internal_agent_unknown` for an id that is not a built-in agent, `eval.internal_agent_real_tools` when `conversation.tools` is `real`).
 
 | Form | Keys | Meaning |
 |------|------|---------|
@@ -1389,7 +1403,10 @@ On an agent target, `field` and `reference` paths start at the conversation (for
 | `eval.id_filename_mismatch` | error | `id` differs from the filename stem |
 | `eval.duplicate_id` | error | Two evals in the project share an `id` |
 | `eval.invalid_field` | error | Wrong type or range |
-| `eval.target_kind_unsupported` | error | `target.kind` is neither `stage` nor `agent` |
+| `eval.target_kind_unsupported` | error | `target.kind` is not `stage`, `agent` or `internal_agent` |
+| `eval.internal_agent_hidden` | error | `kind: internal_agent` while `STAGEFLOW_SHOW_INTERNAL_AGENTS` is not `1` |
+| `eval.internal_agent_unknown` | error | `profile` is not a built-in agent |
+| `eval.internal_agent_real_tools` | error | An internal-agent eval sets `conversation.tools: real` |
 | `eval.target_invalid` | error | Not exactly one target form |
 | `eval.target_unresolved` | error | The pipeline, stage or file is not found or does not load (for example no resolvable `model`) |
 | `eval.dataset_unresolved` | error | The dataset file is not found or is outside the project |

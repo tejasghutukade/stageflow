@@ -158,6 +158,29 @@ describe("eval and dataset scanning", () => {
     ]);
   });
 
+  it("lists a dataset that sits beside its eval", async () => {
+    const root = await project({
+      "evals/beside.eval.yaml": `version: 1
+id: beside
+target:
+  kind: stage
+  file: stages/review.stage.yaml
+dataset: ./beside.dataset.jsonl
+graders:
+  - id: output-schema
+    type: schema
+    must_pass: true
+`,
+      "evals/beside.dataset.jsonl": "",
+      "datasets/listed.dataset.jsonl": "",
+    });
+    const manifest = await load(root);
+    expect((await listDatasetFiles(manifest)).map((f) => f.relPath)).toEqual([
+      "datasets/listed.dataset.jsonl",
+      "evals/beside.dataset.jsonl",
+    ]);
+  });
+
   it("matches a custom dataset pattern array on any entry", async () => {
     const root = await project(
       {

@@ -1,15 +1,16 @@
 import { caseGoal, goalRubricText, gradeDeterministic, isDeterministicGrader } from "../graders/index.js";
 import type { GraderContext, Subject } from "../graders/types.js";
 import { combineVotes } from "../votes.js";
-import type {
-  CaseOutput,
-  EngineIo,
-  EvalEngine,
-  EvalPlan,
-  NormalizedGrade,
-  NormalizedResult,
-  PlanCase,
-  ResolvedGrader,
+import {
+  isConversationTarget,
+  type CaseOutput,
+  type EngineIo,
+  type EvalEngine,
+  type EvalPlan,
+  type NormalizedGrade,
+  type NormalizedResult,
+  type PlanCase,
+  type ResolvedGrader,
 } from "../types.js";
 
 export type FakeJudgeReply = (
@@ -116,7 +117,7 @@ export class FakeEngine implements EvalEngine {
           throw new FakeEngineError(`fake engine failed after ${emitted} results`);
         }
         const { testCase, repeatIndex } = items[next++];
-        await phase(testCase, repeatIndex, plan.target.kind === "agent" ? "agent_running" : "stage_running");
+        await phase(testCase, repeatIndex, isConversationTarget(plan.target.kind) ? "agent_running" : "stage_running");
         const run = await io.runCase({ evalRunId: plan.evalRunId, caseId: testCase.id, repeatIndex });
         const grades: NormalizedGrade[] = [];
         if (run.ok) {

@@ -9,16 +9,26 @@ import {
 } from "./runActions";
 
 describe("canCancelRun", () => {
-  it("allows created, queued, and running", () => {
+  it("allows created, queued, running, and cancelled (runtime-aligned)", () => {
     expect(canCancelRun("created")).toBe(true);
     expect(canCancelRun("queued")).toBe(true);
     expect(canCancelRun("running")).toBe(true);
+    expect(canCancelRun("cancelled")).toBe(true);
   });
 
-  it("rejects terminal statuses", () => {
+  it("rejects succeeded and failed", () => {
     expect(canCancelRun("succeeded")).toBe(false);
     expect(canCancelRun("failed")).toBe(false);
-    expect(canCancelRun("cancelled")).toBe(false);
+  });
+
+  it("allows cancel on cancelled regardless of stage liveness", () => {
+    expect(
+      canCancelRun("cancelled", [
+        { status: "succeeded" },
+        { status: "running" },
+      ]),
+    ).toBe(true);
+    expect(canCancelRun("cancelled", [{ status: "failed" }])).toBe(true);
   });
 });
 

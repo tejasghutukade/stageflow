@@ -16,6 +16,7 @@ import {
   type AgentDirectoryRow,
 } from "./agentsDirectoryModel";
 import { Dialog } from "./editor/Dialogs";
+import { InternalAgentsSection } from "./InternalAgentsSection";
 import { clampCursor, isCursorKey, moveCursor, shouldHandleCursorKey } from "./listCursor";
 import { MONO, NOWRAP, PAGE_BG } from "./agentsTokens";
 import { PageHeader as ShellPageHeader } from "../shell/PageHeader";
@@ -501,6 +502,8 @@ export function AgentsDirectoryPage({ onNewAgent }: { onNewAgent: () => void }) 
             {hint ? <p className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">{hint}</p> : null}
           </>
         ) : null}
+
+        <InternalAgentsSection />
       </div>
 
       {accessFor && rows.find((r) => r.id === accessFor) ? <AccessDialog row={rows.find((r) => r.id === accessFor)!} onClose={() => setAccessFor(null)} /> : null}

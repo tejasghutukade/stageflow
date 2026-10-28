@@ -12,6 +12,7 @@ import type {
 } from "./types";
 
 const NAV_ITEMS: PaletteNavDef[] = [
+  { id: "guide", label: "Guide", path: "/guide" },
   { id: "overview", label: "Overview", path: "/overview" },
   { id: "inbox", label: "Inbox", path: "/inbox" },
   { id: "runs", label: "Pipeline runs", path: "/runs" },

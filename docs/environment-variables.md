@@ -42,6 +42,7 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_STAGE_EXECUTION` | `process` (default) or `inprocess` |
 | `STAGEFLOW_STAGE_CONTAINER_IMAGE` | Image for the per-attempt sandbox. When set, `read`, `write`, `edit`, and `bash` run in that container. Unset keeps those tools on the host |
 | `STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN` | Docker client used to start that sandbox (default `docker`) |
+| `STAGEFLOW_STAGE_READONLY_DIR` | One absolute host directory. When set, every stage sandbox bind-mounts it read-only at that same path. The directory must exist and be at least three levels deep. If it is missing, the stage fails before the agent starts. Unset mounts nothing from the host |
 | `STAGEFLOW_STAGE_ENV_ALLOW`, `STAGEFLOW_STAGE_ENV_PASSTHROUGH` | Extend the curated stage environment. See [Stage environment](migration-stage-environment.md) |
 | `STAGEFLOW_SECRET_REGISTRY` | Comma list of Host env names stages may declare under `secrets:` |
 | `STAGEFLOW_REQUIRE_PROVIDERS` | Providers that must be configured at boot |
@@ -55,6 +56,7 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_LEGACY_YAML` | `0` rejects legacy authoring keys |
 | `STAGEFLOW_ACTIVITY_TEXT_LIMIT`, `STAGEFLOW_ACTIVITY_VERBOSE` | Transcript truncation and verbosity |
 | `STAGEFLOW_EVALS_KEEP_WORKDIR` | `1` keeps the eval engine's work directory (`$STAGEFLOW_HOME/eval-runs/<evalRunId>/`: generated config, results, logs) after a run, for debugging. Otherwise it is removed when the run ends. See [Evals](evals.md#troubleshooting) |
+| `STAGEFLOW_SHOW_INTERNAL_AGENTS` | `1` shows the console's built-in agents (Workshop author, agent author, Guide) read-only on the Agents page and in the eval agent picker, for maintainers. Unset, they stay hidden. See [Agents](agents.md#internal-agents) |
 | `TYPESAFE_API_KEY`, `JEV_API_KEY` | TypeSafe key for [sorting failed eval results](evals.md#sort-failures), read after the stored `typesafe` provider credential and `STAGEFLOW_PROVIDER_TYPESAFE_API_KEY`. Not `STAGEFLOW_` variables, so the boot check ignores them |
 | `STAGEFLOW_EVALS_SMOKE` | Test only, not read by the Host: `1` enables the opt-in real-engine test `tests/evals.promptfoo.smoke.test.ts` (needs the engine installed and network access). See [Evals](evals.md#the-engine) |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | Judge key for rubric graders when the credential file has no `api_key` entry for that provider. See [Evals: Judge models](evals.md#judge-models) |

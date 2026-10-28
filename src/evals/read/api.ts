@@ -141,6 +141,8 @@ export async function buildEvalDetail(input: {
     if (file.target.kind === "agent") {
       agent = await liveAgentOf(input.agents, projectRoot, file.target.agent);
       targetModel = file.defaults?.model ?? agent?.model ?? null;
+    } else if (file.target.kind === "internal_agent") {
+      targetModel = file.defaults?.model ?? null;
     } else {
       const target = await resolveEvalTarget(file, entry.outcome.value.path, projectRoot);
       if (target.ok) targetModel = target.value.modelResolved;
@@ -169,6 +171,7 @@ export async function planFindings(input: {
   datasetCases?: readonly unknown[];
   isKnownModel?: IsKnownModel;
   agents?: AgentCatalogPort;
+  internalAgents?: ReadonlyArray<{ id: string; title: string; playbook: string; tools: string[] }>;
 }): Promise<{ ok: boolean; findings: ValidationFinding[] }> {
   const built = await buildEvalPlan({
     projectRoot: input.projectRoot,
@@ -179,6 +182,7 @@ export async function planFindings(input: {
     engine: { name: ENGINE_NAME, version: PINNED_PROMPTFOO_VERSION, nodeVersion: process.versions.node },
     ...(input.isKnownModel ? { isKnownModel: input.isKnownModel } : {}),
     ...(input.agents ? { agents: input.agents } : {}),
+    ...(input.internalAgents ? { internalAgents: input.internalAgents } : {}),
   });
   return { ok: built.ok, findings: built.findings };
 }
@@ -190,6 +194,7 @@ export async function validateEvalText(input: {
   datasetCases?: readonly unknown[];
   isKnownModel?: IsKnownModel;
   agents?: AgentCatalogPort;
+  internalAgents?: ReadonlyArray<{ id: string; title: string; playbook: string; tools: string[] }>;
 }) {
   const { projectRoot, evalAbs, derived } = input;
   const parsed = parseEvalOutcome(derived, evalAbs, projectRoot);
@@ -200,6 +205,7 @@ export async function validateEvalText(input: {
     ...(input.datasetCases !== undefined ? { datasetCases: input.datasetCases } : {}),
     ...(input.isKnownModel ? { isKnownModel: input.isKnownModel } : {}),
     ...(input.agents ? { agents: input.agents } : {}),
+    ...(input.internalAgents ? { internalAgents: input.internalAgents } : {}),
   });
   const findings =
     checked.findings.length > 0 || parsed.ok

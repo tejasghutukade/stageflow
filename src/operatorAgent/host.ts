@@ -62,6 +62,7 @@ function createSession(
   profile: OperatorAgentProfile,
   initialContext: unknown,
   model: OperatorAgentModel,
+  evalGate?: OperatorAgentToolContext["evalGate"],
 ): OperatorAgentSession {
   let context = initialContext;
   let closed = false;
@@ -85,6 +86,7 @@ function createSession(
       lastMutationId = applied.id;
       lastEmitted = applied;
     },
+    ...(evalGate ? { evalGate } : {}),
   };
 
   function resolveMutation(
@@ -236,6 +238,16 @@ export function createOperatorAgentHost(
       }
       return createSession(profile, context, model);
     },
+    openEvalSession({ profileId, context, gate }) {
+      if (!gate) {
+        throw new Error("An internal-agent eval session requires a tool gate");
+      }
+      const profile = profiles.get(profileId);
+      if (!profile) {
+        throw new Error(`Unknown operator agent profile: ${profileId}`);
+      }
+      return createSession(profile, context, model, gate);
+    },
   };
 }
 
@@ -254,5 +266,9 @@ export async function invokeProfileTool(
   }
   const blocked = rejectUnlinkedWorkshopDraftTool(ctx.getContext(), name);
   if (blocked) return blocked;
-  return tool.handler(args, ctx);
+  const refused = ctx.evalGate?.decide(name, args);
+  if (refused) return refused;
+  const result = await tool.handler(args, ctx);
+  ctx.evalGate?.observe(name, result);
+  return result;
 }

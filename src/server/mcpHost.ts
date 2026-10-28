@@ -75,6 +75,8 @@ export async function startMcpServer(
           ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
           ...(boot.evalRunManager ? { evalRunManager: boot.evalRunManager } : {}),
           ...(boot.evalServices ? { evalServices: boot.evalServices } : {}),
+          ...(boot.channels ? { channels: boot.channels } : {}),
+          ...(boot.memories ? { memories: boot.memories } : {}),
         });
   const envelope = await createHttpHost({
     boot,

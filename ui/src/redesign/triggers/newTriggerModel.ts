@@ -11,10 +11,24 @@ const GITHUB_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 export type TriggerKind = "manual" | "schedule" | "event";
 export type TaskMode = "catalog" | "dynamic";
 export type EventSourceKind = "github" | "webhook" | "email";
-export type GithubAction = "opened" | "merged" | "closed" | "updated";
+export type GithubAction = "opened" | "synchronize" | "updated" | "merged" | "closed";
 export type WebhookScheme = "hex" | "base64";
 
-export const GITHUB_ACTIONS: GithubAction[] = ["opened", "merged", "closed", "updated"];
+export const GITHUB_ACTIONS: GithubAction[] = [
+  "opened",
+  "synchronize",
+  "updated",
+  "merged",
+  "closed",
+];
+
+export const GITHUB_ACTION_LABELS: Record<GithubAction, string> = {
+  opened: "opened",
+  synchronize: "push",
+  updated: "updated",
+  merged: "merged",
+  closed: "closed",
+};
 
 export const EVENT_SOURCE_IDS: Record<EventSourceKind, string> = {
   github: "github.pull_request",

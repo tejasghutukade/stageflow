@@ -24,11 +24,13 @@ function EnvelopeRecordBlock({
   envelope,
   emptyMessage,
   onArtifactClick,
+  diskArtifacts,
 }: {
   title: string;
   envelope: StageEnvelopeView | null;
   emptyMessage: string;
   onArtifactClick?: (path: string) => void;
+  diskArtifacts?: readonly string[];
 }) {
   if (!envelope) {
     return (
@@ -57,6 +59,7 @@ function EnvelopeRecordBlock({
         variant="redesign"
         envelope={envelope}
         onArtifactClick={onArtifactClick}
+        diskArtifacts={diskArtifacts}
       />
     </section>
   );
@@ -118,6 +121,7 @@ export function RunEnvelopePanel({
         envelope={outboundEnvelope}
         emptyMessage={outboundEmpty}
         onArtifactClick={onArtifactClick}
+        diskArtifacts={stage.artifacts}
       />
     </div>
   );

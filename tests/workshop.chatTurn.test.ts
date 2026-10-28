@@ -359,7 +359,7 @@ describe("runWorkshopChatTurn", () => {
       });
     });
 
-  it("a focus during an in-flight turn keeps the host on A and the pointer on B", async () => {
+  it("a focus during an in-flight turn moves the pin and host onto B with the pointer", async () => {
     await withIsolatedHome(async () => {
       const storeRoot = resolveWorkshopSessionStoreRoot();
       createWorkshopSession(storeRoot, { id: "sess-focus-inflight" });
@@ -382,13 +382,14 @@ describe("runWorkshopChatTurn", () => {
       });
       const pointerFrames: string[] = [];
       const model: OperatorAgentModel = {
-        async complete({ tools }) {
+        async complete({ tools, profile }) {
           proposeStageFromUserMessage(tools, "intake form review");
           markEntered();
           await gate;
+          await invokeProfileTool(profile, "edit_pipeline", { id: "beta-edited" }, tools);
           return {
             events: [
-              { type: "message", role: "assistant", text: "still on a" },
+              { type: "message", role: "assistant", text: "now on b" },
             ],
           };
         },
@@ -411,29 +412,31 @@ describe("runWorkshopChatTurn", () => {
         registry.get("sess-focus-inflight")!.getContext(),
       );
       expect(hostDuring.pipeline.id).toBe("alpha");
+      expect(registry.getPinnedBuildId("sess-focus-inflight")).toBe("build-a");
       const focus = focusWorkshopBuildPointer({
         sessionId: "sess-focus-inflight",
         buildId: "build-b",
         registry,
         storeRoot,
       });
-      expect(focus.pinMoved).toBe(false);
+      expect(focus.pinMoved).toBe(true);
+      expect(registry.getPinnedBuildId("sess-focus-inflight")).toBe("build-b");
       const hostAfterFocus = readDraftFromContext(
         registry.get("sess-focus-inflight")!.getContext(),
       );
-      expect(hostAfterFocus.pipeline.id).toBe("alpha");
-      expect(hostAfterFocus.pipeline.stages.length).toBe(1);
+      expect(hostAfterFocus.pipeline.id).toBe("beta");
+      expect(hostAfterFocus.pipeline.stages).toEqual([]);
       release();
       const result = await turnPromise;
-      expect(result.buildId).toBe("build-a");
-      expect(result.draft.pipeline.id).toBe("alpha");
+      expect(result.buildId).toBe("build-b");
+      expect(result.draft.pipeline.id).toBe("beta-edited");
       expect(pointerFrames).toEqual(["build-b"]);
       expect(getWorkshopSession(storeRoot, "sess-focus-inflight").activeBuildId).toBe(
         "build-b",
       );
       expect(getWorkshopBuild(storeRoot, "build-a").draft.pipeline.id).toBe("alpha");
-      expect(getWorkshopBuild(storeRoot, "build-a").draft.pipeline.stages.length).toBe(1);
-      expect(getWorkshopBuild(storeRoot, "build-b").draft.pipeline.id).toBe("beta");
+      expect(getWorkshopBuild(storeRoot, "build-a").draft.pipeline.stages).toEqual([]);
+      expect(getWorkshopBuild(storeRoot, "build-b").draft.pipeline.id).toBe("beta-edited");
       expect(getWorkshopBuild(storeRoot, "build-b").draft.pipeline.stages).toEqual([]);
     });
   });

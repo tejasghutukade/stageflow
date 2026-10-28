@@ -78,6 +78,9 @@ import { logger as rootLogger } from "../logging/logger.js";
 import { getModelCatalog } from "../models/catalog.js";
 import { createAgentCaseRunner } from "../evals/runner/agentCaseRunner.js";
 import { createEvalCaseRunner } from "../evals/runner/caseRunner.js";
+import { createInternalAgentCaseRunner } from "../evals/runner/internalAgentCaseRunner.js";
+import { describeInternalAgents, internalAgentsVisible } from "../operatorAgent/internalAgents.js";
+import type { OperatorAgentHost } from "../operatorAgent/types.js";
 import { defaultLoadJudgePrices } from "../evals/engine/promptfoo/judgeServices.js";
 import { createAgentHostContext, type AgentHostContext } from "../agents/hostContext.js";
 import type { ConversationBackend } from "../agents/sessions.js";
@@ -143,6 +146,8 @@ export type StageflowHostBootstrap = {
   memories?: MemoryHost;
   /** Shared agent store, chat controller, and conversation backend for HTTP/MCP. */
   agentHost?: AgentHostContext;
+  /** Filled when the operator console host is created, so internal-agent evals can open a gated session. */
+  operatorHostSlot?: { current?: OperatorAgentHost };
   email?: ReturnType<typeof emailHostFor> & { triggers: EmailTriggers; stop: () => Promise<void> };
   /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
   storeFilesystem?: StoreFilesystemClassification;
@@ -418,17 +423,23 @@ export async function bootstrapStageflowHost(
   await manager.reenqueuePersistedQueuedRuns();
   const evalLog = rootLogger.child({ component: "evals" });
   const evalStageRunner = createStageCaseRunner({ manager, store });
+  const operatorHostSlot: { current?: OperatorAgentHost } = {};
   const evalAgentRunner = createAgentCaseRunner({
     host: () => agentHost,
     loadPrices: defaultLoadJudgePrices,
   });
-  const evalRunner = createEvalCaseRunner({ stage: evalStageRunner, agent: evalAgentRunner });
+  const evalInternalRunner = createInternalAgentCaseRunner({ host: () => operatorHostSlot.current });
+  const evalRunner = createEvalCaseRunner({ stage: evalStageRunner, agent: evalAgentRunner, internalAgent: evalInternalRunner });
   const evalTokens = new RunTokenRegistry();
   let evalCallbackBase = "";
   const evalRunManager = new EvalRunManager({
     store,
     stageRunner: evalRunner,
     agents: () => agentHost?.service,
+    internalAgents: () =>
+      operatorHostSlot.current && internalAgentsVisible()
+        ? describeInternalAgents(operatorHostSlot.current).map(({ id, title, playbook, tools }) => ({ id, title, playbook, tools }))
+        : [],
     engines: (name, engineOptions) =>
       getEngine(
         name,
@@ -566,6 +577,9 @@ export async function bootstrapStageflowHost(
             store,
             agentDir,
             projectRoot: rootDir,
+            channels,
+            memories: memoryHostFor(),
+            evalRunManager,
             ...(options.providerAuthContext ? { providerAuthContext: options.providerAuthContext } : {}),
             ...(providerBoot !== undefined ? { providerBoot } : {}),
           },
@@ -585,6 +599,8 @@ export async function bootstrapStageflowHost(
       providerAuthContext: options.providerAuthContext,
       projectRoot: rootDir,
       evalRunManager,
+      channels,
+      memories: memoryHostFor(),
       ...(agentHost
         ? {
             agentService: agentHost.service,
@@ -633,5 +649,6 @@ export async function bootstrapStageflowHost(
     storeFilesystem,
     workspaceCatalog,
     ...(agentHost ? { agentHost } : {}),
+    operatorHostSlot,
   };
 }

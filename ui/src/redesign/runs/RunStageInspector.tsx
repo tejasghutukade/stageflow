@@ -170,6 +170,7 @@ export function RunStageInspector({
       hasRetry: true,
       hasResume: true,
       hasAbandon: true,
+      stage,
     });
 
   const model = stagePrimaryModel(stage);
@@ -338,7 +339,7 @@ export function RunStageInspector({
           <button
             type="button"
             className={ACTION_ROW}
-            disabled={retryBusy}
+            disabled={actionBusy.abandoningStageId === stageId}
             onClick={() => onAbandon(stageId)}
           >
             <LuSquare className="size-3.5 text-[#8b8f98]" aria-hidden />

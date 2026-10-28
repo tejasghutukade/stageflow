@@ -302,6 +302,7 @@ export function evalDirOf(filePath: string): string {
 export function targetSummary(def: EvalDefinition, agent?: { name: string; revision: number } | null): string {
   const t = def.target;
   if (t.kind === "agent") return agent ? `Agent ${agent.name} · r${agent.revision}` : `Agent ${t.agent}`;
+  if (t.kind === "internal_agent") return `Internal agent ${t.profile}`;
   if (t.file !== undefined) return t.file;
   return `${t.pipeline ?? ""}${t.stage ? ` · ${t.stage}` : ""}`;
 }
@@ -332,7 +333,7 @@ export function sameFile(a: string, b: string): boolean {
 /** The catalog stage a definition points at, as a wizard target, when it is in the stage list. */
 export function targetFromDefinition(rows: readonly StageRow[], def: EvalDefinition, evalDir: string): WizardTarget | null {
   const t = def.target;
-  if (t.kind === "agent") return null;
+  if (t.kind === "agent" || t.kind === "internal_agent") return null;
   if (t.file !== undefined) {
     const file = resolveRelative(evalDir, t.file);
     const row = rows.find((r) => r.usesPath !== undefined && sameFile(r.usesPath, file));

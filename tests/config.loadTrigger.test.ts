@@ -138,4 +138,50 @@ describe("findingsForTriggerRefs", () => {
     });
     expect(findings).toEqual([]);
   });
+
+  it("requires match.action for github.* sources", () => {
+    const githubTrigger = {
+      id: "github-pr",
+      pipeline: "hello-world",
+      kind: "event" as const,
+      enabled: true,
+      event: {
+        source: "github.pull_request",
+        config: { repo: "acme/app" },
+      },
+    };
+    const missing = findingsForTriggerRefs("/repo", "/repo/github.trigger.yaml", githubTrigger, {
+      pipelineIds: new Set(["hello-world"]),
+      taskIds: new Set(),
+    });
+    expect(missing.map((f) => f.code)).toEqual(["trigger.github_action_required"]);
+
+    const invalid = findingsForTriggerRefs(
+      "/repo",
+      "/repo/github.trigger.yaml",
+      {
+        ...githubTrigger,
+        event: {
+          ...githubTrigger.event,
+          match: { action: "reopened" },
+        },
+      },
+      { pipelineIds: new Set(["hello-world"]), taskIds: new Set() },
+    );
+    expect(invalid.map((f) => f.code)).toEqual(["trigger.invalid_github_action"]);
+
+    const ok = findingsForTriggerRefs(
+      "/repo",
+      "/repo/github.trigger.yaml",
+      {
+        ...githubTrigger,
+        event: {
+          ...githubTrigger.event,
+          match: { action: "opened" },
+        },
+      },
+      { pipelineIds: new Set(["hello-world"]), taskIds: new Set() },
+    );
+    expect(ok).toEqual([]);
+  });
 });

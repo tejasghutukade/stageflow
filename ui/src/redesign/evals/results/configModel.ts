@@ -2,7 +2,7 @@ import type { EvalRunDetail, EvalRunOptions } from "../../../api/evalTypes";
 import { formatCost } from "../format";
 import { kindLabel } from "./gradersModel";
 import { hash6, settingsOf, stageLabel, suiteTypeLabel } from "./headerModel";
-import { agentIdOf, agentNameOf, agentRevisionOf, conversationOf, isAgentRun } from "../agentRun";
+import { agentIdOf, agentNameOf, agentRevisionOf, conversationOf, isAgentRun, isConversationTarget } from "../agentRun";
 import { outcomeBadge } from "./transcriptModel";
 
 export type Chip = { text: string; tone: "ok" | "needs" | "muted" };
@@ -227,7 +227,7 @@ export function settingsCard(run: EvalRunDetail): ConfigRow[] {
   const engine = (run.config?.engine ?? {}) as Snapshot;
   const threshold = Number(s.pass_threshold);
   const limit = Number(s.max_cost_usd);
-  const noun = isAgentRun(run) ? "agent" : "stage";
+  const noun = isConversationTarget(run) ? "agent" : "stage";
   const modelNote =
     typeof overrides.model === "string" && overrides.model !== ""
       ? `${noun} model overridden: ${overrides.model}`
@@ -236,7 +236,7 @@ export function settingsCard(run: EvalRunDetail): ConfigRow[] {
     {
       label: "Judge model",
       value: typeof s.judge === "string" && s.judge !== "" ? s.judge : "—",
-      ...(s.judge_same_as_stage ? { chip: { text: `same as ${isAgentRun(run) ? "agent" : "stage"} model`, tone: "needs" as const } } : {}),
+      ...(s.judge_same_as_stage ? { chip: { text: `same as ${isConversationTarget(run) ? "agent" : "stage"} model`, tone: "needs" as const } } : {}),
     },
     {
       label: "Repeats · threshold · limit",

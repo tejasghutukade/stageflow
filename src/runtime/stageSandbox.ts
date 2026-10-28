@@ -1,5 +1,7 @@
 import {
+  assertStageReadOnlyDirExists,
   resolveSandboxContainerOptions,
+  stageReadOnlyDir,
   startSandboxContainer,
   stopSandboxContainer,
 } from "./sandboxContainer.js";
@@ -9,7 +11,7 @@ import {
   syncSandboxDesk,
   type SandboxDesk,
 } from "./sandboxDesk.js";
-import { withContainerName, type StageRoots } from "./stageRoots.js";
+import { withContainerName, type StageArtifactGrant, type StageRoots } from "./stageRoots.js";
 
 export type StageSandbox = {
   roots: StageRoots;
@@ -26,10 +28,23 @@ export async function openStageSandbox(input: {
   attempt: number;
   attemptDir: string;
   checkoutRoot?: string;
+  grants?: readonly StageArtifactGrant[];
 }): Promise<StageSandbox> {
   const options = resolveSandboxContainerOptions(input.env);
   if (!options) {
     return { roots: input.roots, close: async () => {} };
+  }
+
+  let readOnlyDir: string | undefined;
+  try {
+    readOnlyDir = stageReadOnlyDir(input.env);
+    if (readOnlyDir !== undefined) await assertStageReadOnlyDirExists(readOnlyDir);
+  } catch (err) {
+    return {
+      roots: input.roots,
+      close: async () => {},
+      failure: err instanceof Error ? err.message : String(err),
+    };
   }
 
   const started = await startSandboxContainer({
@@ -38,16 +53,19 @@ export async function openStageSandbox(input: {
     runId: input.runId,
     stageId: input.stageId,
     attempt: input.attempt,
+    ...(readOnlyDir !== undefined ? { readOnlyDir } : {}),
   });
   const roots = withContainerName(
-    input.roots,
+    readOnlyDir !== undefined ? { ...input.roots, readonlyDir: readOnlyDir } : input.roots,
     started.containerName,
     options.dockerBin,
   );
   const checkout = input.checkoutRoot?.trim();
+  const grants = input.grants ?? [];
   const desk = buildSandboxDesk({
     attemptDir: input.attemptDir,
     ...(checkout ? { checkoutRoot: checkout } : {}),
+    ...(grants.length > 0 ? { grants } : {}),
   });
 
   const session: StageSandbox = {

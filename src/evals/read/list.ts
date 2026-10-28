@@ -186,7 +186,16 @@ export async function buildEvalListItems(input: {
     const agentTarget =
       file.target.kind === "agent"
         ? await agentListTarget(file.target.agent, last, input.agents, projectRoot)
-        : undefined;
+        : file.target.kind === "internal_agent"
+          ? {
+              kind: "agent" as const,
+              agent_id: file.target.profile,
+              agent_name: file.target.profile,
+              model: file.defaults?.model ?? null,
+              revision: null,
+              label: `${file.target.profile} (internal)`,
+            }
+          : undefined;
     const conv = agentTarget ? resolveConversation(file.conversation) : undefined;
 
     const pipelinePath = paths.pipelinePath !== undefined ? posix(projectRoot, paths.pipelinePath) : undefined;

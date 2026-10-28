@@ -1,5 +1,11 @@
-export { canRetry, canAbandon, canResumeTimedOut, isStageActionBusy } from "./eligibility";
-export type { StageActionBusyState } from "./eligibility";
+export {
+  canRetry,
+  canAbandon,
+  canResumeTimedOut,
+  isStageActionBusy,
+  succeededStageRetryBlocker,
+} from "./eligibility";
+export type { StageActionBusyState, RetryStageSubject } from "./eligibility";
 export {
   createStageRetrySession,
   useStageRetry,

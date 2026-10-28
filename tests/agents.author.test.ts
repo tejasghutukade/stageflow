@@ -2,8 +2,18 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resetAgentAuthorSessionsForTests, runAgentAuthorTurn } from "../src/agents/authorChat.js";
-import { createAuthorSession, listAuthorDrafts, readAuthorSession, saveAuthorSession } from "../src/agents/authorSessionStore.js";
+import {
+  forgetAgentAuthorSession,
+  resetAgentAuthorSessionsForTests,
+  runAgentAuthorTurn,
+} from "../src/agents/authorChat.js";
+import {
+  createAuthorSession,
+  deleteAuthorSession,
+  listAuthorDrafts,
+  readAuthorSession,
+  saveAuthorSession,
+} from "../src/agents/authorSessionStore.js";
 import { invokeProfileTool, type OperatorAgentModel } from "../src/operatorAgent/host.js";
 import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
 import {
@@ -118,6 +128,39 @@ describe("agent author", () => {
     });
   });
 
+  it("merges a known-field update_agent_draft patch and rejects unknown keys", async () => {
+    const profile = createAgentAuthorProfile();
+    const update = profile.tools.find((tool) => tool.name === "update_agent_draft");
+    let context = createAgentAuthorContext({
+      projectRoot: "/tmp/project",
+      draft: { name: "Scout", instructions: "Search." },
+    });
+    const ctx = {
+      getContext: () => context,
+      setContext: (next: unknown) => {
+        context = next as typeof context;
+      },
+      emitProposal: (proposal: unknown) => {
+        context = profile.contextAdapter.applyProposal(context, proposal as never);
+      },
+    };
+    const ok = await update!.handler(
+      { patch: { name: "Scout", instructions: "1. Search.\n2. Check.", greeting: "Ready." }, summary: "Filled Scout" },
+      ctx,
+    );
+    expect(ok.ok).toBe(true);
+    expect(readAgentAuthorDraft(context)).toMatchObject({
+      id: "scout",
+      name: "Scout",
+      instructions: "1. Search.\n2. Check.",
+      greeting: "Ready.",
+    });
+    const before = readAgentAuthorDraft(context);
+    const bad = await update!.handler({ patch: { name: "Scout", mystery: true }, summary: "Bad field" }, ctx);
+    expect(bad).toMatchObject({ ok: false, error: "unknown patch field: mystery" });
+    expect(readAgentAuthorDraft(context)).toEqual(before);
+  });
+
   it("includes the current draft in the turn prompt envelope", () => {
     const prompt = formatAgentAuthorTurnPrompt(
       "Make a scout agent",
@@ -188,6 +231,48 @@ describe("agent author", () => {
     const listed = listAuthorDrafts(home);
     expect(listed.map((draft) => draft.id)).toEqual([named.id]);
     expect(listed[0]).toMatchObject({ name: "Scout", messages: 0 });
+  });
+
+  it("deletes an author session from disk and drops it from the draft list", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-agent-author-delete-"));
+    bindStageflowHomeForTests(home);
+    const created = createAuthorSession({ draft: { name: "Scout" } });
+    expect(listAuthorDrafts(home).map((draft) => draft.id)).toEqual([created.id]);
+    expect(deleteAuthorSession(created.id, home)).toBe(true);
+    expect(readAuthorSession(created.id, home)).toBeNull();
+    expect(listAuthorDrafts(home)).toEqual([]);
+    expect(deleteAuthorSession(created.id, home)).toBe(false);
+    expect(deleteAuthorSession("../escape", home)).toBe(false);
+  });
+
+  it("forgets an in-memory author chat when the session is deleted", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-agent-author-forget-"));
+    bindStageflowHomeForTests(home);
+    const host = createWorkshopOperatorHost({
+      model: {
+        async complete() {
+          return { events: [{ type: "message", role: "assistant", text: "Who is it for?" }] };
+        },
+      },
+    });
+    const first = await runAgentAuthorTurn({
+      host,
+      projectRoot: "/tmp/project",
+      message: "A scout.",
+      draft: { name: "Scout" },
+    });
+    forgetAgentAuthorSession(first.sessionId);
+    expect(deleteAuthorSession(first.sessionId, home)).toBe(true);
+    await expect(
+      runAgentAuthorTurn({
+        host,
+        projectRoot: "/tmp/project",
+        message: "Again.",
+        sessionId: first.sessionId,
+        draft: { name: "Scout" },
+      }),
+    ).rejects.toThrow("agent.session_not_found");
+    resetAgentAuthorSessionsForTests();
   });
 
   it("keeps a disk edit made during a question-only turn and appends both transcript lines", async () => {

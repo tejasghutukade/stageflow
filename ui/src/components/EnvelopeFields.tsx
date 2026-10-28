@@ -4,6 +4,8 @@ import type { StageEnvelopeView } from "../api";
 export type EnvelopeFieldsProps = {
   envelope: StageEnvelopeView;
   onArtifactClick?: (path: string) => void;
+  /** Host-disk artifact paths for this stage (`stage.artifacts`). When set, claims not on disk are muted and labeled. */
+  diskArtifacts?: readonly string[];
   payloadMaxHeight?: number;
   variant?: "legacy" | "redesign";
 };
@@ -11,11 +13,112 @@ export type EnvelopeFieldsProps = {
 const FIELD_LABEL =
   "text-[11px] uppercase tracking-[0.88px] text-[#8b8f98]";
 
+export function artifactFileName(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.split("/").pop() || normalized;
+}
+
+/**
+ * Resolve an envelope artifact claim against on-disk paths.
+ * Prefer exact run-relative match; fall back to a unique basename match when forms diverge.
+ */
+export function resolveDiskArtifactPath(
+  claim: string,
+  diskPaths: readonly string[],
+): string | null {
+  const normalizedClaim = claim.replace(/\\/g, "/");
+  for (const path of diskPaths) {
+    if (path === claim || path.replace(/\\/g, "/") === normalizedClaim) {
+      return path;
+    }
+  }
+  const claimBase = artifactFileName(normalizedClaim);
+  const byBase = diskPaths.filter(
+    (path) => artifactFileName(path) === claimBase,
+  );
+  return byBase.length === 1 ? (byBase[0] ?? null) : null;
+}
+
+export function isArtifactClaimOnDisk(
+  claim: string,
+  diskPaths: readonly string[],
+): boolean {
+  return resolveDiskArtifactPath(claim, diskPaths) != null;
+}
+
+function ArtifactChip({
+  path,
+  onDisk,
+  onArtifactClick,
+  variant,
+}: {
+  path: string;
+  onDisk: boolean;
+  onArtifactClick?: (path: string) => void;
+  variant: "legacy" | "redesign";
+}) {
+  const name = artifactFileName(path);
+  const label = onDisk ? name : `${name} · missing`;
+
+  if (variant === "redesign") {
+    const chipClass = onDisk
+      ? "rounded-md border border-[#ffffff12] bg-[#1a1c21] px-2 py-1 font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-1)]"
+      : "rounded-md border border-[#ffffff12] bg-[#1a1c21] px-2 py-1 font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-3)] opacity-60";
+    if (onArtifactClick) {
+      return (
+        <button
+          type="button"
+          className={
+            onDisk ? `${chipClass} hover:border-[#ffffff28]` : chipClass
+          }
+          aria-disabled={!onDisk}
+          title={onDisk ? path : `${path} (not on disk)`}
+          onClick={() => onArtifactClick(path)}
+        >
+          {label}
+        </button>
+      );
+    }
+    return (
+      <span
+        className={chipClass}
+        title={onDisk ? path : `${path} (not on disk)`}
+      >
+        {label}
+      </span>
+    );
+  }
+
+  if (onArtifactClick) {
+    return (
+      <button
+        type="button"
+        className={onDisk ? "chip chip--file" : "chip chip--file muted"}
+        aria-disabled={!onDisk}
+        title={onDisk ? path : `${path} (not on disk)`}
+        onClick={() => onArtifactClick(path)}
+      >
+        ◆ {label}
+      </button>
+    );
+  }
+  return (
+    <span
+      className={onDisk ? "chip chip--file" : "chip chip--file muted"}
+      title={onDisk ? path : `${path} (not on disk)`}
+    >
+      ◆ {label}
+    </span>
+  );
+}
+
 function EnvelopeFieldsRedesign({
   envelope,
   onArtifactClick,
+  diskArtifacts,
   payloadMaxHeight = 280,
 }: Omit<EnvelopeFieldsProps, "variant">) {
+  const checkDisk = diskArtifacts !== undefined;
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <section className="flex flex-col gap-1 rounded-[10px] border border-[#ffffff12] bg-[#131418] p-3">
@@ -30,28 +133,18 @@ function EnvelopeFieldsRedesign({
           <p className="text-[13px] text-[var(--sf-text-3)]">none</p>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {envelope.artifacts.map((path) => {
-              const name = path.split("/").pop() ?? path;
-              const chipClass =
-                "rounded-md border border-[#ffffff12] bg-[#1a1c21] px-2 py-1 font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-1)]";
-              if (onArtifactClick) {
-                return (
-                  <button
-                    key={path}
-                    type="button"
-                    className={`${chipClass} hover:border-[#ffffff28]`}
-                    onClick={() => onArtifactClick(path)}
-                  >
-                    {name}
-                  </button>
-                );
-              }
-              return (
-                <span key={path} className={chipClass}>
-                  {name}
-                </span>
-              );
-            })}
+            {envelope.artifacts.map((path) => (
+              <ArtifactChip
+                key={path}
+                path={path}
+                onDisk={
+                  !checkDisk ||
+                  isArtifactClaimOnDisk(path, diskArtifacts ?? [])
+                }
+                onArtifactClick={onArtifactClick}
+                variant="redesign"
+              />
+            ))}
           </div>
         )}
       </section>
@@ -83,6 +176,7 @@ function EnvelopeFieldsRedesign({
 export function EnvelopeFields({
   envelope,
   onArtifactClick,
+  diskArtifacts,
   payloadMaxHeight = 280,
   variant = "legacy",
 }: EnvelopeFieldsProps) {
@@ -91,10 +185,13 @@ export function EnvelopeFields({
       <EnvelopeFieldsRedesign
         envelope={envelope}
         onArtifactClick={onArtifactClick}
+        diskArtifacts={diskArtifacts}
         payloadMaxHeight={payloadMaxHeight}
       />
     );
   }
+
+  const checkDisk = diskArtifacts !== undefined;
 
   return (
     <div className="drawer__grid">
@@ -106,26 +203,18 @@ export function EnvelopeFields({
           {envelope.artifacts.length === 0 ? (
             <span className="muted">none</span>
           ) : (
-            envelope.artifacts.map((path) => {
-              const name = path.split("/").pop() ?? path;
-              if (onArtifactClick) {
-                return (
-                  <button
-                    key={path}
-                    type="button"
-                    className="chip chip--file"
-                    onClick={() => onArtifactClick(path)}
-                  >
-                    ◆ {name}
-                  </button>
-                );
-              }
-              return (
-                <span key={path} className="chip chip--file">
-                  ◆ {name}
-                </span>
-              );
-            })
+            envelope.artifacts.map((path) => (
+              <ArtifactChip
+                key={path}
+                path={path}
+                onDisk={
+                  !checkDisk ||
+                  isArtifactClaimOnDisk(path, diskArtifacts ?? [])
+                }
+                onArtifactClick={onArtifactClick}
+                variant="legacy"
+              />
+            ))
           )}
         </dd>
         {envelope.notes ? (
@@ -173,6 +262,7 @@ export function EnvelopeRecord({
   onBackToTranscript,
   onHide,
   onArtifactClick,
+  diskArtifacts,
   stageLabel,
 }: {
   fromStageId: string;
@@ -181,6 +271,7 @@ export function EnvelopeRecord({
   onBackToTranscript: () => void;
   onHide?: () => void;
   onArtifactClick?: (path: string) => void;
+  diskArtifacts?: readonly string[];
   stageLabel?: (stageId: string) => string;
 }) {
   const subtitle = formatEnvelopeSubtitle(fromStageId, toStageId, stageLabel);
@@ -206,6 +297,7 @@ export function EnvelopeRecord({
         <EnvelopeFields
           envelope={envelope}
           onArtifactClick={onArtifactClick}
+          diskArtifacts={diskArtifacts}
           payloadMaxHeight={480}
         />
       </div>

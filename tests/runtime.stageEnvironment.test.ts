@@ -20,6 +20,7 @@ describe("buildStageEnvironment", () => {
     STAGEFLOW_HOME: "/tmp/sf-home",
     STAGEFLOW_CURSOR_EXTENSION: "/tmp/pi-cursor-sdk/dist/index.js",
     STAGEFLOW_STAGE_CONTAINER_IMAGE: "stageflow-bash:v1",
+    STAGEFLOW_STAGE_READONLY_DIR: "/Volumes/work/policy-samples",
     STAGEFLOW_CONTROL_TOKEN: "control-token-value-32chars-min!!",
     STAGEFLOW_READ_TOKEN: "read-token-value-32-characters-ok!",
     ANTHROPIC_API_KEY: "sk-ant-secret",
@@ -41,6 +42,7 @@ describe("buildStageEnvironment", () => {
       "/tmp/pi-cursor-sdk/dist/index.js",
     );
     expect(env.STAGEFLOW_STAGE_CONTAINER_IMAGE).toBe("stageflow-bash:v1");
+    expect(env.STAGEFLOW_STAGE_READONLY_DIR).toBe("/Volumes/work/policy-samples");
     expect(env.HTTP_PROXY).toBe("http://proxy.example:8080");
     expect(env.HOME).toBe("/tmp/attempt-home");
     expect(env[SF_STAGE_WORKER]).toBe("1");

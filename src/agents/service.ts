@@ -702,7 +702,9 @@ export class AgentService {
           throw error;
         },
       );
-      if (onDisk || (existing && !existing.archived)) throw new AgentError("agent.exists");
+      if (onDisk || (existing && !existing.archived)) {
+        throw new AgentError("agent.exists", `An agent with id "${definition.id}" already exists`);
+      }
       // A new agent always starts disabled (R1); enabling is its own revision.
       await this.writeRevision(projectRoot, { ...definition, enabled: false }, actor, "Created");
     });

@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { parse as parseYaml } from "yaml";
 import { peekDefaultModel } from "../../models/catalog.js";
 import {
@@ -225,9 +226,14 @@ export function buildTaskAddProposal(
   };
 }
 
+const closed = { additionalProperties: false } as const;
+const jsonObject = Type.Record(Type.String(), Type.Unknown());
+const emptyParams = Type.Object({}, closed);
+
 const readDraftTool: OperatorAgentTool = {
   name: "read_draft",
   description: "Read the current Workshop virtual draft package",
+  parameters: emptyParams,
   handler(_args, ctx): OperatorAgentToolResult {
     return {
       ok: true,
@@ -270,6 +276,24 @@ const proposeDraftTool: OperatorAgentTool = {
   name: "propose_draft",
   description:
     "Legacy bulk draft replace. Prefer create_*/edit_* tools. Applies immediately (Accept confirms; Reject soft-undos when unchanged).",
+  parameters: Type.Union([
+    Type.Object(
+      {
+        draft: jsonObject,
+        summary: Type.Optional(Type.String()),
+      },
+      closed,
+    ),
+    Type.Object(
+      {
+        pipeline: jsonObject,
+        stages: Type.Optional(Type.Array(Type.Unknown())),
+        task: Type.Optional(jsonObject),
+        summary: Type.Optional(Type.String()),
+      },
+      closed,
+    ),
+  ]),
   handler(args, ctx): OperatorAgentToolResult {
     const summary =
       typeof args.summary === "string" && args.summary.trim()
@@ -321,6 +345,7 @@ const proposeDraftTool: OperatorAgentTool = {
 const validateDraftTool: OperatorAgentTool = {
   name: "validate_draft",
   description: "Run catalog validation against the current draft",
+  parameters: emptyParams,
   async handler(_args, ctx): Promise<OperatorAgentToolResult> {
     const draft = readDraftFromContext(ctx.getContext());
     const result = await validateDraftPackage(draft, { strict: true });
@@ -333,6 +358,16 @@ function createRetrieveDocsTool(retriever: DocsRetriever): OperatorAgentTool {
     name: "retrieve_docs",
     description:
       "Retrieve current public Stageflow docs/examples snippets by query. Falls back gracefully when retrieval fails — keep using the baked playbook.",
+    parameters: Type.Object(
+      {
+        query: Type.String({ minLength: 1 }),
+        kind: Type.Optional(
+          Type.Union([Type.Literal("docs"), Type.Literal("examples"), Type.Literal("any")]),
+        ),
+        limit: Type.Optional(Type.Number()),
+      },
+      closed,
+    ),
     async handler(args): Promise<OperatorAgentToolResult> {
       const query =
         typeof args.query === "string" && args.query.trim()

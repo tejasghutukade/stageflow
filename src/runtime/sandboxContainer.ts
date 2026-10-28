@@ -1,10 +1,14 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import { promisify } from "node:util";
 
 export const SANDBOX_CONTAINER_IMAGE_ENV = "STAGEFLOW_STAGE_CONTAINER_IMAGE";
 export const SANDBOX_CONTAINER_DOCKER_BIN_ENV =
   "STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN";
+/** One host directory bind-mounted read-only into every stage sandbox, at the same path. */
+export const STAGE_READONLY_DIR_ENV = "STAGEFLOW_STAGE_READONLY_DIR";
 
 const execFileAsync = promisify(execFile);
 
@@ -54,24 +58,62 @@ export function sandboxVolumeName(containerName: string): string {
   return `sf-bash-${safe}`;
 }
 
+export function stageReadOnlyDir(
+  env: Record<string, string | undefined>,
+): string | undefined {
+  const raw = env[STAGE_READONLY_DIR_ENV];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  return assertStageReadOnlyDir(raw);
+}
+
+export function assertStageReadOnlyDir(raw: string): string {
+  const trimmed = raw.trim();
+  if (!path.isAbsolute(trimmed)) {
+    throw new Error(`${STAGE_READONLY_DIR_ENV} must be an absolute path`);
+  }
+  if (trimmed.includes("\0") || trimmed.includes(":")) {
+    throw new Error(`${STAGE_READONLY_DIR_ENV} contains a character docker cannot mount`);
+  }
+  const resolved = path.resolve(trimmed);
+  const parts = resolved.split(path.sep).filter((part) => part.length > 0);
+  if (parts.length < 3) {
+    throw new Error(`${STAGE_READONLY_DIR_ENV} is too broad`);
+  }
+  return resolved;
+}
+
+export async function assertStageReadOnlyDirExists(dir: string): Promise<void> {
+  let info;
+  try {
+    info = await stat(dir);
+  } catch {
+    throw new Error(`read-only folder is not available: ${dir}`);
+  }
+  if (!info.isDirectory()) {
+    throw new Error(`read-only folder is not a directory: ${dir}`);
+  }
+}
+
 export function buildStartContainerArgs(params: {
   image: string;
   containerName: string;
+  readOnlyDir?: string;
 }): string[] {
   const { image, containerName } = params;
-  return [
+  const args = [
     "run",
     "-d",
     "--name",
     containerName,
     "-v",
     `${sandboxVolumeName(containerName)}:${SANDBOX_MOUNT_PATH}`,
-    "-w",
-    SANDBOX_MOUNT_PATH,
-    image,
-    "sleep",
-    "infinity",
   ];
+  if (params.readOnlyDir !== undefined) {
+    const dir = assertStageReadOnlyDir(params.readOnlyDir);
+    args.push("-v", `${dir}:${dir}:ro`);
+  }
+  args.push("-w", SANDBOX_MOUNT_PATH, image, "sleep", "infinity");
+  return args;
 }
 
 function errorMessage(err: unknown): string {
@@ -88,14 +130,19 @@ export async function startSandboxContainer(params: {
   stageId: string;
   attempt?: number;
   dockerBin?: string;
+  readOnlyDir?: string;
 }): Promise<{ containerName: string }> {
   const containerName = buildContainerName(
     { runId: params.runId, stageId: params.stageId, attempt: params.attempt },
     randomUUID().slice(0, 8),
   );
+  if (params.readOnlyDir !== undefined) {
+    await assertStageReadOnlyDirExists(params.readOnlyDir);
+  }
   const args = buildStartContainerArgs({
     image: params.image,
     containerName,
+    ...(params.readOnlyDir !== undefined ? { readOnlyDir: params.readOnlyDir } : {}),
   });
   try {
     await execFileAsync(params.dockerBin ?? "docker", args);

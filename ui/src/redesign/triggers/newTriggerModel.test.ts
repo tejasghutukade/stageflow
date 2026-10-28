@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  GITHUB_ACTIONS,
+  GITHUB_ACTION_LABELS,
   buildCreateTriggerBody,
   buildTriggerEvent,
   buildUpdateTriggerBody,
@@ -26,6 +28,13 @@ function form(patch: Partial<NewTriggerForm> = {}): NewTriggerForm {
     ...patch,
   };
 }
+
+describe("GITHUB_ACTIONS", () => {
+  it("includes synchronize and exposes compact push label", () => {
+    expect(GITHUB_ACTIONS).toEqual(["opened", "synchronize", "updated", "merged", "closed"]);
+    expect(GITHUB_ACTION_LABELS.synchronize).toBe("push");
+  });
+});
 
 describe("validateNewTriggerForm", () => {
   it("accepts a complete github trigger", () => {
@@ -179,6 +188,22 @@ describe("request bodies", () => {
 });
 
 describe("formFromInitial", () => {
+  it("round-trips synchronize as a github action", () => {
+    const f = formFromInitial({
+      id: "pr-push",
+      pipeline: "p",
+      kind: "event",
+      enabled: true,
+      event: {
+        source: "github.pull_request",
+        match: { action: "synchronize" },
+        config: { repo: "acme/app" },
+      },
+    });
+    expect(f.github.action).toBe("synchronize");
+    expect(buildTriggerEvent(f)?.match).toEqual({ action: "synchronize" });
+  });
+
   it("round-trips a github trigger and preserves unknown match/config keys", () => {
     const f = formFromInitial({
       id: "pr",

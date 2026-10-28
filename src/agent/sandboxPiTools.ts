@@ -8,7 +8,7 @@ import {
   type SandboxFileTarget,
 } from "../runtime/sandboxFiles.js";
 
-export type SandboxPiToolOptions = SandboxFileTarget;
+export type SandboxPiToolOptions = SandboxFileTarget & { readonlyDir?: string };
 
 function textResult(text: string, isError = false) {
   return {
@@ -113,10 +113,15 @@ export function createSandboxBashTool(options: SandboxPiToolOptions) {
   return {
     name: "bash",
     label: "bash",
-    description:
-      "Execute a bash command in this stage's sandbox. The working directory is /workspace. The host filesystem is not mounted.",
+    description: options.readonlyDir
+      ? `Execute a bash command in this stage's sandbox. The working directory is /workspace. One folder is mounted read-only at ${options.readonlyDir}. Read files there. If a file is missing, stop. Do not create a stand-in.`
+      : "Execute a bash command in this stage's sandbox. The working directory is /workspace. The host filesystem is not mounted.",
     promptSnippet: "Execute bash commands in /workspace",
-    promptGuidelines: ["The shell starts in /workspace. Do not use host paths."],
+    promptGuidelines: [
+      options.readonlyDir
+        ? `The shell starts in /workspace. The only host folder you can read is ${options.readonlyDir}, and it is read-only. If a file is not there, stop. Do not create stand-in documents.`
+        : "The shell starts in /workspace. Do not use host paths.",
+    ],
     parameters: Type.Object({
       command: Type.String({ description: "Shell command to execute" }),
       timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional)" })),

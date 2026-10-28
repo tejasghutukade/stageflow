@@ -320,7 +320,7 @@ describe("MCP eval tools", () => {
     expect(good.payload).toEqual(byId.payload);
     const neither = await h.tool("validate_eval", { project_root: h.root });
     expect(neither.isError).toBe(true);
-    expect(neither.payload.code).toBe("invalid_request");
+    expect(neither.content.map((block) => block.text ?? "").join("\n")).toMatch(/Invalid input/);
     expect(await readdir(path.join(h.root, "evals"))).toEqual(before);
   });
 

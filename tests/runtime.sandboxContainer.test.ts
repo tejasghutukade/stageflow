@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  assertStageReadOnlyDir,
   buildStartContainerArgs,
   SANDBOX_MOUNT_PATH,
   execInSandboxContainer,
@@ -11,6 +12,7 @@ import {
   SANDBOX_CONTAINER_DOCKER_BIN_ENV,
   SANDBOX_CONTAINER_IMAGE_ENV,
   sandboxVolumeName,
+  stageReadOnlyDir,
   startSandboxContainer,
   stopSandboxContainer,
 } from "../src/runtime/sandboxContainer.js";
@@ -85,6 +87,43 @@ describe("buildStartContainerArgs", () => {
       "infinity",
     ]);
     expect(args.join(" ")).not.toContain("/Users/");
+  });
+
+  it("bind-mounts one host directory read-only at the same path", () => {
+    const dir = "/Volumes/work/policy-samples";
+    const args = buildStartContainerArgs({
+      image: "stageflow-bash:v1",
+      containerName: "stageflow-run-1-implement-1-abc",
+      readOnlyDir: dir,
+    });
+    expect(args).toContain(`-v`);
+    expect(args).toContain(`${dir}:${dir}:ro`);
+  });
+});
+
+describe("stage read-only dir", () => {
+  it("is unset when the env is empty", () => {
+    expect(stageReadOnlyDir({})).toBeUndefined();
+    expect(stageReadOnlyDir({ STAGEFLOW_STAGE_READONLY_DIR: "  " })).toBeUndefined();
+  });
+
+  it("fails before docker when the folder is missing", async () => {
+    const missing = path.join(tmpdir(), "sf-missing-readonly", "policy-samples");
+    await expect(
+      startSandboxContainer({
+        image: "stageflow-bash:v1",
+        dockerBin: "docker-should-not-run",
+        runId: "run-1",
+        stageId: "stage",
+        readOnlyDir: missing,
+      }),
+    ).rejects.toThrow(/not available/);
+  });
+
+  it("rejects a relative path, a colon, and a path that is too broad", () => {
+    expect(() => assertStageReadOnlyDir("policy-samples")).toThrow(/absolute/);
+    expect(() => assertStageReadOnlyDir("/Volumes/work/a:b")).toThrow(/docker cannot mount/);
+    expect(() => assertStageReadOnlyDir("/Volumes/work")).toThrow(/too broad/);
   });
 });
 

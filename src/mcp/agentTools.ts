@@ -119,6 +119,28 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
   );
 
   server.registerTool(
+    "get_agent_revision",
+    {
+      description: "Get one revision of an agent, including its definition and canonical YAML.",
+      inputSchema: z.object({ id: agentId, revision: z.number().int().positive() }),
+    },
+    ({ id, revision }) => call(() => service().getRevision(root(), id, revision)),
+  );
+
+  server.registerTool(
+    "diff_agent_revisions",
+    {
+      description: "Diff two revisions of an agent, from one revision number to another.",
+      inputSchema: z.object({
+        id: agentId,
+        from: z.number().int().positive(),
+        to: z.number().int().positive(),
+      }),
+    },
+    ({ id, from, to }) => call(() => service().diffRevisions(root(), id, from, to)),
+  );
+
+  server.registerTool(
     "restore_agent_revision",
     {
       description: "Save an earlier revision's definition as the newest revision.",

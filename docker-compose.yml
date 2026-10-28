@@ -54,6 +54,7 @@ services:
       EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
       STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness,/catalog/memory,/catalog/document-policy-review
       STAGEFLOW_STAGE_CONTAINER_IMAGE: stageflow-bash:local
+      STAGEFLOW_STAGE_READONLY_DIR: ${STAGEFLOW_STAGE_READONLY_DIR:-}
       # Agents (all safe when empty). Not passed on purpose: STAGEFLOW_AGENT_SESSION_IDLE_MINUTES and
       # STAGEFLOW_AGENT_STALL_SECONDS, because an empty value parses as 0 and turns them off.
       STAGEFLOW_MCP_ENV_ALLOW: ${STAGEFLOW_MCP_ENV_ALLOW:-}
@@ -63,7 +64,7 @@ services:
       STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS: ${STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS:-}
     volumes:
       - stageflow-data:/data
-      - ./examples/memory:/catalog/memory:ro
+      - ./examples/memory:/catalog/memory
       - ./examples/document-policy-review:/catalog/document-policy-review:ro
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

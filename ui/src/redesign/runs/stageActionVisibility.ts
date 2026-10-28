@@ -1,4 +1,9 @@
-import { canAbandon, canResumeTimedOut, canRetry } from "../../stageAction";
+import {
+  canAbandon,
+  canResumeTimedOut,
+  canRetry,
+  type RetryStageSubject,
+} from "../../stageAction";
 
 export type StageActionVisibilityInput = {
   status: string;
@@ -7,6 +12,7 @@ export type StageActionVisibilityInput = {
   hasRetry: boolean;
   hasResume: boolean;
   hasAbandon: boolean;
+  stage?: RetryStageSubject;
 };
 
 export type StageActionVisibility = {
@@ -19,8 +25,12 @@ export type StageActionVisibility = {
 export function stageActionVisibility(
   input: StageActionVisibilityInput,
 ): StageActionVisibility {
+  const retrySubject: RetryStageSubject = input.stage ?? {
+    status: input.status,
+  };
   return {
-    showRetry: input.hasRetry && (canRetry(input.status) || input.retryBlocked),
+    showRetry:
+      input.hasRetry && (canRetry(retrySubject) || input.retryBlocked),
     showResume:
       input.hasResume &&
       canResumeTimedOut({ status: input.status, events: input.events }),

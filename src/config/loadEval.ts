@@ -107,6 +107,7 @@ const TOP_KEYS = [
 ];
 const TARGET_KEYS = ["kind", "pipeline", "stage", "file"];
 const AGENT_TARGET_KEYS = ["kind", "agent"];
+const INTERNAL_AGENT_TARGET_KEYS = ["kind", "profile"];
 const CONVERSATION_KEYS = [
   "mode",
   "max_turns",
@@ -252,14 +253,15 @@ function parseTarget(c: Collector, raw: unknown): EvalTarget | undefined {
     return undefined;
   }
   if (raw.kind === undefined) {
-    c.add("eval.invalid_field", `target "kind" is required ("stage" or "agent")`);
+    c.add("eval.invalid_field", `target "kind" is required ("stage", "agent" or "internal_agent")`);
     return undefined;
   }
   if (raw.kind === "agent") return parseAgentTarget(c, raw);
+  if (raw.kind === "internal_agent") return parseInternalAgentTarget(c, raw);
   if (raw.kind !== "stage") {
     c.add(
       "eval.target_kind_unsupported",
-      `target kind ${JSON.stringify(raw.kind)} is not supported (only "stage" and "agent")`,
+      `target kind ${JSON.stringify(raw.kind)} is not supported (only "stage", "agent" and "internal_agent")`,
     );
     return undefined;
   }
@@ -323,6 +325,22 @@ function parseAgentTarget(c: Collector, raw: Record<string, unknown>): EvalTarge
     return undefined;
   }
   return { kind: "agent", agent };
+}
+
+function parseInternalAgentTarget(c: Collector, raw: Record<string, unknown>): EvalTarget | undefined {
+  for (const key of ["agent", "pipeline", "stage", "file"]) {
+    if (raw[key] !== undefined) {
+      c.add("eval.target_invalid", `target "${key}" is not valid with kind: internal_agent; use "profile"`);
+      return undefined;
+    }
+  }
+  c.unknownKeys(raw, INTERNAL_AGENT_TARGET_KEYS, "target");
+  const profile = raw.profile;
+  if (typeof profile !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(profile)) {
+    c.add("eval.target_invalid", `target "profile" must be an internal agent id such as stageflow-guide`);
+    return undefined;
+  }
+  return { kind: "internal_agent", profile };
 }
 
 function parseTask(c: Collector, raw: unknown): EvalTask | undefined {
@@ -831,7 +849,7 @@ function parseGrader(
         c.add("eval.grader_invalid", `${label} "mode" must be "each_mentioned" or "equals"`);
         ok = false;
       }
-      let pathValue = kind === "agent" ? "final_reply" : "payload";
+      let pathValue = kind === "agent" || kind === "internal_agent" ? "final_reply" : "payload";
       if (raw.path !== undefined) {
         if (typeof raw.path === "string" && FIELD_PATH_PATTERN.test(raw.path)) pathValue = raw.path;
         else {

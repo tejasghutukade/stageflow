@@ -18,8 +18,11 @@ import {
 import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
+import type { ChannelService } from "../channels/service.js";
 import type { EvalRunManager } from "../evals/manager.js";
+import type { MemoryHost } from "../memory/host.js";
 import { handleTriggerRoutes } from "./triggerRoutes.js";
+import { guideWriteRoot } from "../guide/writeRoot.js";
 import { handleEvalRoutes } from "./evalRoutes.js";
 import { defaultLoadJudgePrices } from "../evals/engine/promptfoo/judgeServices.js";
 import { engineStatus as promptfooEngineStatus } from "../evals/engine/promptfoo/status.js";
@@ -198,6 +201,8 @@ import {
 } from "../agents/scheduleSource.js";
 import type { ConversationBackend } from "../agents/sessions.js";
 import { handleAgentAuthorRoutes } from "./agentAuthorRoutes.js";
+import { handleGuideRoutes } from "./guideRoutes.js";
+import { handleInternalAgentRoutes } from "./internalAgentRoutes.js";
 import { handleAgentRoutes } from "./agentRoutes.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
@@ -433,9 +438,15 @@ export type OperatorRouteDeps = {
   agentConversationBackend?: ConversationBackend;
   /** Shared with MCP when set by bootstrap. */
   agentHost?: AgentHostContext;
+  /** Bootstrap fills this once the operator host exists, so evals can run against it. */
+  operatorHostSlot?: { current?: import("../operatorAgent/types.js").OperatorAgentHost };
   evalRunManager?: EvalRunManager;
   /** Wired by the eval manager; until then the internal eval callback answers 404. */
   evalServices?: EvalServices;
+  /** Host connections. Guide and MCP use the same service the console does. */
+  channels?: ChannelService;
+  /** Host memories. Guide and MCP use the same host the console does. */
+  memories?: MemoryHost;
 };
 
 /**
@@ -495,7 +506,26 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
     resolveAgentPort({
       cwd,
       projectRoot: cwd,
+      guideDeps: {
+        manager,
+        store,
+        cwd,
+        agentDir,
+        projectRoot: guideWriteRoot(rootDir),
+        ...(providerAuthContext ? { providerAuthContext } : {}),
+        ...(deps.evalRunManager ? { evalRunManager: deps.evalRunManager } : {}),
+        ...(deps.channels ? { channels: deps.channels } : {}),
+        ...(deps.memories ? { memories: deps.memories } : {}),
+        ...(agentHost
+          ? {
+              agentService: agentHost.service,
+              agentChat: agentHost.chat,
+              agentConversationBackend: agentHost.backend,
+            }
+          : {}),
+      },
     });
+  if (deps.operatorHostSlot) deps.operatorHostSlot.current = operatorHost;
   const workshopChatRegistry =
     deps.workshopChatRegistry ?? new WorkshopChatSessionRegistry(operatorHost);
   const workshopSessionStoreRoot = (): string =>
@@ -553,6 +583,10 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         ) {
           if (await handleAgentAuthorRoutes(req, method, pathname, cwd, operatorHost, res, json)) return true;
         }
+        if (pathname === "/api/guide" || pathname.startsWith("/api/guide/")) {
+          if (await handleGuideRoutes(req, method, pathname, operatorHost, res, json)) return true;
+        }
+        if (handleInternalAgentRoutes(method, pathname, operatorHost, res, json)) return true;
         if (PublicWebChat.owns(pathname)) {
           if (!agentHost) { json(res, 503, { code: "web_chat.unavailable" }); return true; }
           return await agentHost.publicChat.handle(req, res, method, pathname);
@@ -1373,7 +1407,9 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           await readJsonBody(req);
           const runId = decodeURIComponent(retryMatch[1] ?? "");
           const stageId = decodeURIComponent(retryMatch[2] ?? "");
-          const result = await manager.retryStage(runId, stageId);
+          const result = await manager.retryStage(runId, stageId, {
+            awaitRoot: false,
+          });
           if (!result.ok) {
             json(res, result.status ?? 500, mapRetryStageFailure(result));
             return true;
@@ -3741,8 +3777,11 @@ export async function startUiServer(
             ? { workshopOperatorHost: options.workshopOperatorHost }
             : {}),
           ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
+          ...(boot.operatorHostSlot ? { operatorHostSlot: boot.operatorHostSlot } : {}),
           ...(boot.evalRunManager ? { evalRunManager: boot.evalRunManager } : {}),
           ...(boot.evalServices ? { evalServices: boot.evalServices } : {}),
+          ...(boot.channels ? { channels: boot.channels } : {}),
+          ...(boot.memories ? { memories: boot.memories } : {}),
           ...(options.agentConversationBackend
             ? { agentConversationBackend: options.agentConversationBackend }
             : {}),

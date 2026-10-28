@@ -165,9 +165,10 @@ describe("spatialNodeAction", () => {
     expect(spatialNodeAction("waiting_for_input", false)).toBeNull();
   });
 
-  it("exposes Abandon on running and Retry on ordinary failed", () => {
+  it("exposes Abandon on running and Retry on failed or succeeded", () => {
     expect(spatialNodeAction("running", false)).toBe("abandon");
     expect(spatialNodeAction("failed", false)).toBe("retry");
+    expect(spatialNodeAction("succeeded", false)).toBe("retry");
   });
 });
 

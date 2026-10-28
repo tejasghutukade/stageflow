@@ -15,6 +15,7 @@ vi.mock("octokit", () => ({
 import {
   GithubPollSource,
   defaultCreateGithubClient,
+  deriveGithubAction,
   type GithubPollClient,
   type GithubPollResponse,
   type GithubPullItem,
@@ -197,7 +198,11 @@ describe("GithubPollSource", () => {
 
       const store = await storeForCatalog(root);
       const seedPr = makePr({ number: 1 });
-      const newPr = makePr({ number: 2, updated_at: "2026-01-02T00:00:00.000Z" });
+      const newPr = makePr({
+        number: 2,
+        created_at: "2026-01-02T00:00:00.000Z",
+        updated_at: "2026-01-02T00:00:00.000Z",
+      });
 
       const { client, listPulls } = scriptedClient([
         { status: 200, etag: "W/\"etag-1\"", items: [seedPr] },
@@ -331,6 +336,372 @@ describe("GithubPollSource", () => {
       clearFindProjectRootCacheForTests();
       await cleanup();
     }
+  });
+
+  it("seeds heads on first sight without firing", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root, ["github-dynamic.trigger.yaml"]);
+      clearFindProjectRootCacheForTests();
+
+      const store = await storeForCatalog(root);
+      const seedPr = makePr({
+        number: 1,
+        head_sha: "aaa111",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      const { client } = scriptedClient([{ status: 200, etag: "W/\"etag-1\"", items: [seedPr] }]);
+      const source = new GithubPollSource({
+        store,
+        cwd: root,
+        env: { GH_TOKEN: "test-token" },
+        createGithubClient: () => client,
+      });
+      const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
+
+      await source.tick(onFire);
+
+      expect(onFire).not.toHaveBeenCalled();
+      const headsRaw = await store.getTriggerAdapterState("github:acme/widgets", "heads");
+      expect(JSON.parse(headsRaw!)).toEqual({ "1": "aaa111" });
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("backfills heads without firing when cursor exists from a pre-heads store", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root, []);
+      await writeFile(
+        path.join(root, "triggers", "github-opened.trigger.yaml"),
+        [
+          "id: github-opened",
+          "pipeline: hello",
+          "kind: event",
+          "enabled: true",
+          "event:",
+          "  source: github.pull_request",
+          "  match:",
+          "    action: opened",
+          "  config:",
+          "    repo: acme/widgets",
+          "    secretRef: GH_TOKEN",
+          "",
+        ].join("\n"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const store = await storeForCatalog(root);
+      await store.setTriggerAdapterState(
+        "github:acme/widgets",
+        "cursor",
+        JSON.stringify({ updatedAt: "2026-01-01T00:00:00.000Z", number: 1 }),
+      );
+      await store.setTriggerAdapterState("github:acme/widgets", "etag", "W/\"old\"");
+
+      const agedPush = makePr({
+        number: 98,
+        head_sha: "sha-after-rebuild",
+        created_at: "2025-12-01T00:00:00.000Z",
+        updated_at: "2026-01-02T00:00:00.000Z",
+      });
+      const { client } = scriptedClient([
+        { status: 200, etag: "W/\"etag-2\"", items: [agedPush] },
+        {
+          status: 200,
+          etag: "W/\"etag-3\"",
+          items: [
+            makePr({
+              number: 98,
+              head_sha: "sha-later-push",
+              created_at: "2025-12-01T00:00:00.000Z",
+              updated_at: "2026-01-03T00:00:00.000Z",
+            }),
+          ],
+        },
+      ]);
+      const source = new GithubPollSource({
+        store,
+        cwd: root,
+        env: { GH_TOKEN: "test-token" },
+        createGithubClient: () => client,
+      });
+      const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
+
+      await source.tick(onFire);
+      expect(onFire).not.toHaveBeenCalled();
+      expect(JSON.parse((await store.getTriggerAdapterState("github:acme/widgets", "heads"))!)).toEqual({
+        "98": "sha-after-rebuild",
+      });
+
+      await source.tick(onFire);
+      expect(onFire).not.toHaveBeenCalled();
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("does not classify an aged unknown PR as opened after heads are present", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root, []);
+      await writeFile(
+        path.join(root, "triggers", "github-opened.trigger.yaml"),
+        [
+          "id: github-opened",
+          "pipeline: hello",
+          "kind: event",
+          "enabled: true",
+          "event:",
+          "  source: github.pull_request",
+          "  match:",
+          "    action: opened",
+          "  config:",
+          "    repo: acme/widgets",
+          "    secretRef: GH_TOKEN",
+          "",
+        ].join("\n"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const store = await storeForCatalog(root);
+      const seedPr = makePr({
+        number: 1,
+        head_sha: "seed",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      const coldAged = makePr({
+        number: 50,
+        head_sha: "cold-sha",
+        created_at: "2025-06-01T00:00:00.000Z",
+        updated_at: "2026-01-02T00:00:00.000Z",
+      });
+      const { client } = scriptedClient([
+        { status: 200, etag: "W/\"etag-1\"", items: [seedPr] },
+        { status: 200, etag: "W/\"etag-2\"", items: [coldAged, seedPr] },
+      ]);
+      const source = new GithubPollSource({
+        store,
+        cwd: root,
+        env: { GH_TOKEN: "test-token" },
+        createGithubClient: () => client,
+      });
+      const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
+
+      await source.tick(onFire);
+      await source.tick(onFire);
+
+      expect(onFire).not.toHaveBeenCalled();
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("classifies a push-shaped PR (same number, new head_sha) as synchronize", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root, []);
+      await writeFile(
+        path.join(root, "triggers", "github-sync.trigger.yaml"),
+        [
+          "id: github-sync",
+          "pipeline: hello",
+          "kind: event",
+          "enabled: true",
+          "event:",
+          "  source: github.pull_request",
+          "  match:",
+          "    action: synchronize",
+          "  config:",
+          "    repo: acme/widgets",
+          "    secretRef: GH_TOKEN",
+          "",
+        ].join("\n"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const store = await storeForCatalog(root);
+      const seedPr = makePr({
+        number: 7,
+        head_sha: "sha-old",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      const pushedPr = makePr({
+        number: 7,
+        head_sha: "sha-new",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-02T00:00:00.000Z",
+      });
+      const { client } = scriptedClient([
+        { status: 200, etag: "W/\"etag-1\"", items: [seedPr] },
+        { status: 200, etag: "W/\"etag-2\"", items: [pushedPr] },
+      ]);
+      const source = new GithubPollSource({
+        store,
+        cwd: root,
+        env: { GH_TOKEN: "test-token" },
+        createGithubClient: () => client,
+      });
+      const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
+
+      await source.tick(onFire);
+      expect(onFire).not.toHaveBeenCalled();
+
+      await source.tick(onFire);
+      expect(onFire).toHaveBeenCalledTimes(1);
+      expect(onFire.mock.calls[0][0].task?.input).toMatchObject({
+        action: "synchronize",
+        number: 7,
+        headSha: "sha-new",
+      });
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("classifies metadata-only activity (same head_sha, newer updated_at) as updated", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root, []);
+      await writeFile(
+        path.join(root, "triggers", "github-updated.trigger.yaml"),
+        [
+          "id: github-updated",
+          "pipeline: hello",
+          "kind: event",
+          "enabled: true",
+          "event:",
+          "  source: github.pull_request",
+          "  match:",
+          "    action: updated",
+          "  config:",
+          "    repo: acme/widgets",
+          "    secretRef: GH_TOKEN",
+          "",
+        ].join("\n"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const store = await storeForCatalog(root);
+      const seedPr = makePr({
+        number: 8,
+        head_sha: "sha-same",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      });
+      const metaPr = makePr({
+        number: 8,
+        title: "Renamed",
+        head_sha: "sha-same",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-02T00:00:00.000Z",
+      });
+      const { client } = scriptedClient([
+        { status: 200, etag: "W/\"etag-1\"", items: [seedPr] },
+        { status: 200, etag: "W/\"etag-2\"", items: [metaPr] },
+      ]);
+      const source = new GithubPollSource({
+        store,
+        cwd: root,
+        env: { GH_TOKEN: "test-token" },
+        createGithubClient: () => client,
+      });
+      const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
+
+      await source.tick(onFire);
+      await source.tick(onFire);
+
+      expect(onFire).toHaveBeenCalledTimes(1);
+      expect(onFire.mock.calls[0][0].task?.input).toMatchObject({
+        action: "updated",
+        number: 8,
+        headSha: "sha-same",
+      });
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+});
+
+describe("deriveGithubAction", () => {
+  it("returns opened when created_at equals updated_at", () => {
+    expect(
+      deriveGithubAction(
+        makePr({
+          number: 1,
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+          head_sha: "abc",
+        }),
+        "old",
+      ),
+    ).toBe("opened");
+  });
+
+  it("returns synchronize when the head SHA changed", () => {
+    expect(
+      deriveGithubAction(
+        makePr({
+          number: 1,
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-02T00:00:00.000Z",
+          head_sha: "new",
+        }),
+        "old",
+      ),
+    ).toBe("synchronize");
+  });
+
+  it("returns updated when the head SHA is unchanged", () => {
+    expect(
+      deriveGithubAction(
+        makePr({
+          number: 1,
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-02T00:00:00.000Z",
+          head_sha: "same",
+        }),
+        "same",
+      ),
+    ).toBe("updated");
+  });
+
+  it("returns opened on first sight of a PR created after the cursor even when timestamps differ", () => {
+    expect(
+      deriveGithubAction(
+        makePr({
+          number: 9,
+          created_at: "2026-01-02T00:00:00.000Z",
+          updated_at: "2026-01-02T00:01:00.000Z",
+          head_sha: "pushed-before-poll",
+        }),
+        undefined,
+        { updatedAt: "2026-01-01T00:00:00.000Z", number: 1 },
+      ),
+    ).toBe("opened");
+  });
+
+  it("returns updated when prior SHA is unknown for a PR created before the cursor", () => {
+    expect(
+      deriveGithubAction(
+        makePr({
+          number: 98,
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-03T00:00:00.000Z",
+          head_sha: "sha-after-push",
+        }),
+        undefined,
+        { updatedAt: "2026-01-02T00:00:00.000Z", number: 10 },
+      ),
+    ).toBe("updated");
   });
 });
 

@@ -4,6 +4,8 @@ kind: event
 enabled: true
 event:
   source: github.pull_request
+  match:
+    action: opened
   config:
     repo: acme/valid
     secretRef: GH_TOKEN

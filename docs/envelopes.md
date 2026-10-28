@@ -177,6 +177,8 @@ model: anthropic/claude-sonnet-4-5
 
 A failing emit-phase check rejects the emit (`isError: true`, no `terminate`) so the agent can retry in the same turn; it never fails the stage outright. Checks run in declaration order and stop at the first failure. Emit-phase `verify` is skipped entirely on `status: "failure"` emits, and omitted/empty `verify` is a no-op — existing stages are unaffected.
 
+**Emit disk-truth (always on for non-empty `artifacts`).** Independently of YAML emit-phase `type: artifact` list checks: on every **success** emit, when `envelope.artifacts` is non-empty, each listed path must resolve to an existing regular file under **this attempt's** artifacts directory (same containment as `write_stage_artifact`). Foreign-stage or escaped paths fail closed. Empty `artifacts: []` is unchanged. A missing file rejects the emit with an error that names the basename and reminds the agent to use `write_stage_artifact`. This is not a substitute for after-phase `type: artifact` verify (optional hard proof with `nonempty` / sha256); after-phase does not replace emit disk-truth either.
+
 **Not the same as after-phase `verify`.** After-phase items (`when` includes `after`) run **after** a candidate envelope has already been captured (via repair/manual recovery), and `gate`/`artifact` there are disk- and history-aware (after-phase `gate` accepts *any* accepted decision over the run so far; after-phase `artifact` does a real on-disk `lstat`/`sha256` check). See [Verified Stage Execution](verified-stage-execution.md). Emit and after may look at overlapping facts (defense in depth) as items on the same `verify` list.
 
 ### Checklist attestations {#checklist-attestations}
@@ -214,7 +216,7 @@ Use **`write_stage_artifact`** to create files under the stage attempt directory
 stages/<stageId>/attempts/<n>/artifacts/<your-file>
 ```
 
-The tool returns a **run-relative path** for `emit_stage_envelope` and `ask_operator`.
+The tool returns a **run-relative path** for `emit_stage_envelope` and `ask_operator`. Listing a path in `emit_stage_envelope` `artifacts` is not enough: the file must already exist on disk under this attempt (emit disk-truth). Prefer `write_stage_artifact` over copying into a sandbox desk path that does not persist.
 
 Example paths referenced in fixtures:
 
@@ -230,7 +232,7 @@ Accepted envelopes persist in the SQLite run store (`SF_STORE=sqlite` only; see 
 ## Rules
 
 1. **One advancing emit per stage attempt** — later emits are ignored after the first acceptance
-2. **`artifacts` is required** — pass `[]` when there are no files
+2. **`artifacts` is required** — pass `[]` when there are no files; non-empty lists must name files that already exist under this attempt (via `write_stage_artifact`)
 3. **`summary` must be non-empty**
 4. **`ask_operator` does not complete the stage** — call `emit_stage_envelope` after gates are resolved
 

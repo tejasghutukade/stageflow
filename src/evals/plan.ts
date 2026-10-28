@@ -43,7 +43,8 @@ import {
   type ConfigSnapshot,
   type SnapshotOverrides,
 } from "./snapshot.js";
-import type { EvalFile, EvalPlan, PlanCase, ResolvedGrader } from "./types.js";
+import { planInternalAgent } from "./planInternalAgent.js";
+import { isConversationTarget, type EvalFile, type EvalPlan, type PlanCase, type ResolvedGrader } from "./types.js";
 
 export type EvalOverrides = {
   repeats?: number;
@@ -79,6 +80,8 @@ export type BuildEvalPlanInput = {
   isKnownModel?: (id: string) => Promise<boolean>;
   /** Agent service view, needed for agent targets; without it an agent eval cannot be planned. */
   agents?: AgentCatalogPort;
+  /** Built-in operator agents, when the Host is showing them. */
+  internalAgents?: ReadonlyArray<{ id: string; title: string; playbook: string; tools: string[] }>;
   /** Reserved: the snapshot carries no timestamp today. */
   now?: Date;
 };
@@ -148,7 +151,7 @@ function checkConversationOverrides(relPath: string, file: EvalFile, overrides: 
   const out: ValidationFinding[] = [];
   const keys = (["user_model", "tools", "approvals"] as const).filter((key) => overrides[key] !== undefined);
   if (keys.length === 0) return out;
-  if (file.target.kind !== "agent") {
+  if (!isConversationTarget(file.target.kind)) {
     out.push(
       evalFinding(
         relPath,
@@ -248,12 +251,14 @@ function evalDefinition(loaded: LoadedEval, projectRoot: string): Record<string,
       target:
         file.target.kind === "agent"
           ? { kind: "agent", agent: file.target.agent }
-          : {
-              kind: file.target.kind,
-              pipeline: rel(paths.pipelinePath),
-              stage: stageTarget?.stage,
-              file: rel(paths.stageFile),
-            },
+          : file.target.kind === "internal_agent"
+            ? { kind: "internal_agent", profile: file.target.profile }
+            : {
+                kind: file.target.kind,
+                pipeline: rel(paths.pipelinePath),
+                stage: stageTarget?.stage,
+                file: rel(paths.stageFile),
+              },
       dataset: rel(paths.datasetPath),
       task: file.task,
       defaults: {
@@ -263,9 +268,9 @@ function evalDefinition(loaded: LoadedEval, projectRoot: string): Record<string,
         max_cost_usd: defaults.max_cost_usd ?? EVAL_DEFAULT_MAX_COST_USD,
         concurrency: defaults.concurrency ?? EVAL_DEFAULT_CONCURRENCY,
         model: defaults.model,
-        ...(file.target.kind === "agent" && defaults.user_model !== undefined ? { user_model: defaults.user_model } : {}),
+        ...(isConversationTarget(file.target.kind) && defaults.user_model !== undefined ? { user_model: defaults.user_model } : {}),
       },
-      ...(file.target.kind === "agent" ? { conversation: file.conversation } : {}),
+      ...(isConversationTarget(file.target.kind) ? { conversation: file.conversation } : {}),
       graders: file.graders.map((g) => ({ ...g, weight: g.weight ?? 1, must_pass: g.must_pass ?? false })),
       budget: file.budget,
     }),
@@ -338,6 +343,22 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
   });
   const findings = [...validation.filter((f) => !RUN_SIZE_CODES.has(f.code)), ...dataset.findings];
   if (findings.some((f) => f.severity === "error")) return fail(findings);
+
+  if (file.target.kind === "internal_agent") {
+    return planInternalAgent({
+      input,
+      loaded,
+      dataset: {
+        path: paths.datasetPath,
+        contentHash: dataset.contentHash,
+        format: dataset.format,
+        cases: dataset.cases,
+      },
+      findings,
+      overrides,
+      ...(failedIds ? { failedIds } : {}),
+    });
+  }
 
   let agentTarget: ResolvedAgentTarget | undefined;
   let stageTarget: ResolvedEvalTarget | undefined;

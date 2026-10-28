@@ -1,11 +1,18 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   authorSessionForApi,
+  forgetAgentAuthorSession,
   parseAgentAuthorDraft,
   runAgentAuthorTurn,
   undoAgentAuthorTurn,
 } from "../agents/authorChat.js";
-import { createAuthorSession, listAuthorDrafts, readAuthorSession, saveAuthorSession } from "../agents/authorSessionStore.js";
+import {
+  createAuthorSession,
+  deleteAuthorSession,
+  listAuthorDrafts,
+  readAuthorSession,
+  saveAuthorSession,
+} from "../agents/authorSessionStore.js";
 import { parseWorkshopModel } from "../workshop/modelSettings.js";
 import type { OperatorAgentHost } from "../operatorAgent/index.js";
 
@@ -61,11 +68,20 @@ export async function handleAgentAuthorRoutes(
     json(res, 200, { drafts: listAuthorDrafts() });
     return true;
   }
-  if (sessionMatch && (method === "GET" || method === "PUT")) {
+  if (sessionMatch && (method === "GET" || method === "PUT" || method === "DELETE")) {
     const sessionId = decodeURIComponent(sessionMatch[1] ?? "");
     try {
       if (method === "GET") {
         json(res, 200, authorSessionForApi(sessionId));
+        return true;
+      }
+      if (method === "DELETE") {
+        forgetAgentAuthorSession(sessionId);
+        if (!deleteAuthorSession(sessionId)) {
+          json(res, 404, { code: "agent.session_not_found" });
+          return true;
+        }
+        json(res, 200, { removed: true });
         return true;
       }
       const body = await readBody(req);

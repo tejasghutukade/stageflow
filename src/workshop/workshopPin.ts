@@ -270,7 +270,7 @@ export function recordPinnedWorkshopSave(
 
 /**
  * Create an untitled build and move this turn's pin onto it.
- * Later edits in the turn persist on that id.
+ * When a pin already exists, return that build without creating another.
  */
 export function pinWorkshopBuildOnCreate(input: {
   sessionId: string;
@@ -278,18 +278,23 @@ export function pinWorkshopBuildOnCreate(input: {
   registry: WorkshopPinRegistry;
   storeRoot: string;
 }): WorkshopBuildRecord {
-  const build = createWorkshopBuild(input.storeRoot, { draft: input.draft });
   registerLiveWorkshopSession(input.sessionId, {
     storeRoot: input.storeRoot,
     registry: input.registry,
   });
+  const existingId = input.registry.getPinnedBuildId(input.sessionId);
+  if (existingId) {
+    const existing = readWorkshopBuild(input.storeRoot, existingId);
+    if (existing) return existing;
+  }
+  const build = createWorkshopBuild(input.storeRoot, { draft: input.draft });
   movePinOntoBuild(input.registry, input.sessionId, build, input.storeRoot);
   return build;
 }
 
 /**
- * Focus a build. When this turn already has a pin, update the pointer only.
- * When the turn started with none, move the pin and the host onto that build.
+ * Focus a build. Mid-turn, always move the mutation pin onto it so the studio
+ * pointer and draft tools stay locked to the same build.
  */
 export function focusWorkshopBuildPointer(input: {
   sessionId: string;
@@ -302,25 +307,22 @@ export function focusWorkshopBuildPointer(input: {
     storeRoot: input.storeRoot,
     registry: input.registry,
   });
-  const pinned = input.registry.getPinnedBuildId(input.sessionId);
   const turnLive = input.registry.getLiveTurn(input.sessionId);
-  const pinMoved = Boolean(turnLive) && !pinned;
-  if (pinMoved) {
+  if (turnLive) {
     movePinOntoBuild(
       input.registry,
       input.sessionId,
       build,
       input.storeRoot,
     );
-  } else {
-    enqueueSessionWrite(input.sessionId, () => {
-      updateWorkshopSessionActiveBuildId(
-        input.storeRoot,
-        input.sessionId,
-        build.id,
-      );
-    });
-    if (turnLive) emitPointerChange(input.registry, input.sessionId, build);
+    return { pinMoved: true, activeBuildId: build.id };
   }
-  return { pinMoved, activeBuildId: build.id };
+  enqueueSessionWrite(input.sessionId, () => {
+    updateWorkshopSessionActiveBuildId(
+      input.storeRoot,
+      input.sessionId,
+      build.id,
+    );
+  });
+  return { pinMoved: false, activeBuildId: build.id };
 }

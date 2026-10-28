@@ -34,9 +34,9 @@ export function RunDetailTranscriptBody({
     <div
       ref={bodyRef}
       onScroll={onScroll}
-      className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 py-3"
+      className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-3"
     >
-      {children}
+      <div className="flex flex-col gap-3">{children}</div>
     </div>
   );
 }

@@ -13,10 +13,13 @@ import { preEmitGateIssue, type QaExchange } from "../hitl/qaTrail.js";
 import { loginCheckIssue } from "../browser/loginCheck.js";
 import { EnvelopeError, type StageEnvelope } from "../types/envelope.js";
 import type { PreEmitCheck } from "../types/preEmitCheck.js";
+import type { ArtifactPresenceContext } from "./assertEmittedArtifacts.js";
 
 export type PreEmitCheckOptions = {
   checks?: PreEmitCheck[];
   readQaTrail?: () => QaExchange[] | Promise<QaExchange[]>;
+  /** Host attempt context for emit disk-truth of non-empty `envelope.artifacts`. */
+  artifactPresence?: ArtifactPresenceContext;
 };
 
 function artifactListsBasename(artifact: string, basename: string): boolean {

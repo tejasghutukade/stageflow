@@ -6,6 +6,7 @@ import {
   draftFrameApplies,
   historyBuildName,
   mutationMapAfterChange,
+  openEphemeralPackageStudio,
   openSessionStudio,
   pickerRowName,
   startNewChatStudio,
@@ -102,22 +103,29 @@ describe("workshop studio selection", () => {
     expect(next.rows).toEqual([releaseRow]);
   });
 
-  it("selecting an unbound path twice shows one build, and a failed open leaves the previous selection", async () => {
+  it("selecting an unbound path hydrates an ephemeral draft without creating a build", async () => {
     const unbound: StudioPickerRow = {
       id: null,
       name: "release",
       projectRoot: "/proj",
       relativePath: "pipelines/release.pipeline.yaml",
     };
-    const tied: WorkshopBuildView = {
-      id: "build-tied",
+    const openUnbound = vi.fn(async () => ({
+      ok: true as const,
       draft: releaseDraft,
       projectRoot: "/proj",
       relativePath: "pipelines/release.pipeline.yaml",
-    };
-    const focus = vi.fn(async () => ({ ok: true as const, build: tied }));
+    }));
     const updatePointer = vi.fn(async () => ({ ok: true as const }));
-    const loadBuild = vi.fn(async () => ({ ok: true as const, build: tied }));
+    const loadBuild = vi.fn(async () => ({
+      ok: true as const,
+      build: {
+        id: "build-tied",
+        draft: releaseDraft,
+        projectRoot: "/proj",
+        relativePath: "pipelines/release.pipeline.yaml",
+      },
+    }));
     let current = selection({
       buildId: "build-old",
       draft: previousDraft,
@@ -129,7 +137,7 @@ describe("workshop studio selection", () => {
         sessionId: "sess-1",
         row: unbound,
         selection: current,
-        focus,
+        openUnbound,
         updatePointer,
         loadBuild,
       })
@@ -137,27 +145,22 @@ describe("workshop studio selection", () => {
     current = (
       await chooseStudioRow({
         sessionId: "sess-1",
-        row: current.rows.find((row) => row.relativePath === unbound.relativePath)!,
+        row: unbound,
         selection: current,
-        focus,
+        openUnbound,
         updatePointer,
         loadBuild,
       })
     ).selection;
 
-    expect(current.rows.filter((row) => row.id === "build-tied")).toHaveLength(1);
-    expect(
-      current.rows.filter(
-        (row) =>
-          row.projectRoot === "/proj" &&
-          row.relativePath === "pipelines/release.pipeline.yaml",
-      ),
-    ).toHaveLength(1);
-    expect(current.buildId).toBe("build-tied");
+    expect(openUnbound).toHaveBeenCalledTimes(2);
+    expect(updatePointer).not.toHaveBeenCalled();
+    expect(loadBuild).not.toHaveBeenCalled();
+    expect(current.buildId).toBeNull();
     expect(current.draft).toEqual(releaseDraft);
-    expect(updatePointer).toHaveBeenCalledWith("sess-1", "build-tied");
+    expect(current.rows).toEqual([unbound]);
 
-    const failedFocus = vi.fn(async () => ({
+    const failedOpen = vi.fn(async () => ({
       ok: false as const,
       error: "cannot open pipeline",
     }));
@@ -166,15 +169,25 @@ describe("workshop studio selection", () => {
       sessionId: "sess-1",
       row: unbound,
       selection: current,
-      focus: failedFocus,
+      openUnbound: failedOpen,
       updatePointer: failedPointer,
       loadBuild,
     });
-    expect(failed.selection.buildId).toBe("build-tied");
+    expect(failed.selection.buildId).toBeNull();
     expect(failed.selection.draft).toEqual(releaseDraft);
     expect(failed.selection.rows).toEqual(current.rows);
     expect(failed.selection.error).toBe("cannot open pipeline");
     expect(failedPointer).not.toHaveBeenCalled();
+  });
+
+  it("openEphemeralPackageStudio leaves buildId null", () => {
+    const next = openEphemeralPackageStudio({
+      draft: releaseDraft,
+      rows: [releaseRow],
+    });
+    expect(next.buildId).toBeNull();
+    expect(next.draft).toEqual(releaseDraft);
+    expect(next.rows).toEqual([releaseRow]);
   });
 
   it("a history row for a chat with a pointer shows that build's pipeline id, or Untitled when it has none", () => {
@@ -222,7 +235,7 @@ describe("workshop studio selection", () => {
         draft: previousDraft,
         rows: [releaseRow],
       }),
-      focus: vi.fn(),
+      openUnbound: vi.fn(),
       updatePointer,
       loadBuild,
     });
@@ -230,6 +243,33 @@ describe("workshop studio selection", () => {
     expect(loadBuild).toHaveBeenCalledWith("build-release");
     expect(result.selection.buildId).toBe("build-release");
     expect(result.selection.draft).toEqual(releaseDraft);
+    expect(result.changed).toBe(true);
+  });
+
+  it("selecting a listed build without a session loads the studio and skips the pointer", async () => {
+    const listed: WorkshopBuildView = {
+      id: "build-release",
+      draft: releaseDraft,
+      projectRoot: "/proj",
+      relativePath: "pipelines/release.pipeline.yaml",
+    };
+    const updatePointer = vi.fn(async () => ({ ok: true as const }));
+    const loadBuild = vi.fn(async () => ({ ok: true as const, build: listed }));
+    const result = await chooseStudioRow({
+      sessionId: null,
+      row: releaseRow,
+      selection: selection({
+        buildId: null,
+        draft: previousDraft,
+        rows: [releaseRow],
+      }),
+      openUnbound: vi.fn(),
+      updatePointer,
+      loadBuild,
+    });
+    expect(updatePointer).not.toHaveBeenCalled();
+    expect(loadBuild).toHaveBeenCalledWith("build-release");
+    expect(result.selection.buildId).toBe("build-release");
     expect(result.changed).toBe(true);
   });
 

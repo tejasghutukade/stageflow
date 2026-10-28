@@ -4,7 +4,7 @@ import { acceptEvalSuggestions, dismissEvalSuggestions, putEvalGraderLabel, putE
 import { suggestionLine } from "./triageModel";
 import type { EvalSuggestion, EvalResultDetail, EvalRunDetail, EvalTryResult } from "../../../api/evalTypes";
 import { agentRunPath, datasetPath, navigate, runStreamPath } from "../../../routes";
-import { isAgentRun } from "../agentRun";
+import { isAgentRun, isConversationTarget } from "../agentRun";
 import { usedRealTools } from "./configModel";
 import { TranscriptList, TranscriptSection } from "./TranscriptView";
 import { errorLabel, expectedChecklist, sessionLink, transcriptView, SESSION_DELETED } from "./transcriptModel";
@@ -371,10 +371,11 @@ export function CaseDrawer({
   const { data, error, loading, reload } = useCaseResults(run.eval_run_id, caseId);
   const result = data ? selectRepeat(data.repeats, repeat) : null;
   const agentRun = isAgentRun(run);
+  const conversation = isConversationTarget(run);
   const link = result && agentRun ? sessionLink(result) : null;
   const session = useAgentSession(link?.agentId ?? null, link?.sessionId ?? null);
   const [section, setSection] = useState<"transcript" | "grades">("transcript");
-  const stageRunExists = useStageRunExists(agentRun ? null : (result?.stage_run_id ?? null));
+  const stageRunExists = useStageRunExists(conversation ? null : (result?.stage_run_id ?? null));
   const realTools = usedRealTools(run);
   const [rerun, setRerun] = useState<{ busy: boolean; error: string | null; result: EvalTryResult | null }>({
     busy: false,
@@ -427,8 +428,8 @@ export function CaseDrawer({
   const output = result && !errored ? outputView(result) : null;
   const expected = result && !errored ? expectedFindings(result) : null;
   const panel = rerun.result ? rerunPanelView(rerun.result) : null;
-  const view = result && agentRun ? transcriptView(result) : null;
-  const rerunView = rerun.result && agentRun ? transcriptView(rerun.result.result) : null;
+  const view = result && conversation ? transcriptView(result) : null;
+  const rerunView = rerun.result && conversation ? transcriptView(rerun.result.result) : null;
   const errorInfo = result && errored ? errorView(result) : null;
 
   return (
@@ -479,7 +480,7 @@ export function CaseDrawer({
               );
             })}
           </div>
-          {agentRun && result ? (
+          {conversation && result ? (
             <div className="flex gap-4 pt-1" role="tablist" aria-label="Case sections">
               {(
                 [
@@ -555,7 +556,7 @@ export function CaseDrawer({
                 </p>
               ) : null}
 
-              {agentRun && section === "transcript" ? (
+              {conversation && section === "transcript" ? (
                 <TranscriptSection
                   view={view}
                   expected={view ? expectedChecklist((data.case as { expected?: unknown }).expected, view.subject) : null}
@@ -563,17 +564,17 @@ export function CaseDrawer({
                 />
               ) : null}
 
-              {agentRun && section === "grades" && errored ? (
+              {conversation && section === "grades" && errored ? (
                 <p className="text-[13px] text-[var(--sf-text-2)]">The conversation failed, so it was not graded.</p>
               ) : null}
-              {agentRun && section === "grades" && !errored ? (
+              {conversation && section === "grades" && !errored ? (
                 <section className="flex flex-col gap-2">
                   <h3 className={LABEL}>Grades for repeat {result.repeat_index + 1}</h3>
                   <GradeList rows={gradeRows(result)} onLabel={(id, label) => void labelGrader(id, label)} />
                 </section>
               ) : null}
 
-              {agentRun ? null : errored ? (
+              {conversation ? null : errored ? (
                 <section className="flex flex-col gap-2">
                   <h3 className={LABEL}>Result</h3>
                   <div className="rounded-lg border border-[var(--sf-fail)] bg-[var(--sf-fail-bg)] p-3 text-[13px]">
@@ -624,7 +625,7 @@ export function CaseDrawer({
                 </>
               )}
 
-              {agentRun && section === "transcript" ? null : (
+              {conversation && section === "transcript" ? null : (
               <>
               {result.suggestion && !result.passed ? (
                 <SuggestionLine
