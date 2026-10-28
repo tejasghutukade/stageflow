@@ -112,16 +112,41 @@ export type NormalizedGithubEvent = {
 
 const HEADS_LIMIT = 200;
 
+type PollCursor = { updatedAt: string; number: number };
+
+function isCreatedAfterCursor(item: GithubPullItem, cursor: PollCursor): boolean {
+  const createdMs = new Date(item.created_at).getTime();
+  const cursorMs = new Date(cursor.updatedAt).getTime();
+  if (createdMs !== cursorMs) return createdMs > cursorMs;
+  return item.number > cursor.number;
+}
+
+/**
+ * Classify a PR list delta into a normalized GitHub action.
+ *
+ * `opened` is reserved for brand-new PRs: equal created/updated timestamps, or
+ * first sight of a number whose `created_at` is after the poll cursor. A missing
+ * prior head SHA alone is not enough — that also happens on upgrade (no `heads`
+ * row yet), eviction, or a cold PR falling into the poll window.
+ */
 export function deriveGithubAction(
   item: GithubPullItem,
   previousHeadSha: string | undefined,
+  cursor: PollCursor | null = null,
 ): NormalizedGithubEvent["action"] {
   if (item.merged_at) return "merged";
   if (item.state === "closed") return "closed";
-  if (previousHeadSha === undefined) return "opened";
   if (item.created_at === item.updated_at) return "opened";
+  if (previousHeadSha === undefined) {
+    if (cursor !== null && isCreatedAfterCursor(item, cursor)) return "opened";
+    return "updated";
+  }
   const currentSha = item.head_sha ?? null;
-  if (currentSha !== null && currentSha !== previousHeadSha) {
+  if (
+    previousHeadSha !== "" &&
+    currentSha !== null &&
+    currentSha !== previousHeadSha
+  ) {
     return "synchronize";
   }
   return "updated";
@@ -131,10 +156,11 @@ function normalizeGithubItem(
   item: GithubPullItem,
   repo: string,
   previousHeadSha: string | undefined,
+  cursor: PollCursor | null,
 ): NormalizedGithubEvent {
   const headSha = item.head_sha ?? null;
   return {
-    action: deriveGithubAction(item, previousHeadSha),
+    action: deriveGithubAction(item, previousHeadSha, cursor),
     number: item.number,
     title: item.title,
     url: item.html_url,
@@ -181,8 +207,6 @@ function boundHeads(
   }
   return next;
 }
-
-type PollCursor = { updatedAt: string; number: number };
 
 function parseCursor(raw: string | null): PollCursor | null {
   if (raw === null) return null;
@@ -232,7 +256,8 @@ export type GithubPollSourceOptions = {
  * The first tick for a never-before-seen repo only seeds the cursor and
  * per-PR head SHAs — it never fires for a repo's pre-existing PR history,
  * mirroring how `ScheduleSource` seeds `next_run_at` without firing on
- * first sight.
+ * first sight. The same quiet baseline runs when a cursor already exists
+ * but `heads` has never been written (upgrade from a pre-heads store).
  */
 export class GithubPollSource implements TriggerSourcePort {
   private readonly store: RunStore;
@@ -356,7 +381,8 @@ export class GithubPollSource implements TriggerSourcePort {
     const adapterId = `github:${repo}`;
     const etag = await this.store.getTriggerAdapterState(adapterId, "etag");
     const cursor = parseCursor(await this.store.getTriggerAdapterState(adapterId, "cursor"));
-    let heads = parseHeads(await this.store.getTriggerAdapterState(adapterId, "heads"));
+    const headsRaw = await this.store.getTriggerAdapterState(adapterId, "heads");
+    let heads = parseHeads(headsRaw);
 
     const [owner, repoName] = repo.split("/");
     let response: GithubPollResponse;
@@ -386,7 +412,9 @@ export class GithubPollSource implements TriggerSourcePort {
 
     const newest = response.items[0];
 
-    if (cursor === null) {
+    // First sight, or upgrade from a pre-heads store (cursor present, heads absent):
+    // baseline without firing so aged PRs are not misclassified as opened.
+    if (cursor === null || headsRaw === null) {
       heads = seedHeadsFromItems(response.items);
       await this.store.setTriggerAdapterState(adapterId, "heads", JSON.stringify(heads));
       await this.store.setTriggerAdapterState(
@@ -403,8 +431,10 @@ export class GithubPollSource implements TriggerSourcePort {
       const numberKey = String(item.number);
       const previousHeadSha =
         Object.prototype.hasOwnProperty.call(heads, numberKey) ? heads[numberKey] : undefined;
-      const summary = normalizeGithubItem(item, repo, previousHeadSha);
-      heads[numberKey] = item.head_sha ?? previousHeadSha ?? "";
+      const summary = normalizeGithubItem(item, repo, previousHeadSha, cursor);
+      const nextSha = item.head_sha ?? null;
+      if (nextSha) heads[numberKey] = nextSha;
+      else if (previousHeadSha !== undefined && previousHeadSha !== "") heads[numberKey] = previousHeadSha;
       for (const match of matches) {
         const { definition } = match;
         if (!matchesEventFilter(definition.event?.match, summary as unknown as Record<string, unknown>)) continue;

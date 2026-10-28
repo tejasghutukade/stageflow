@@ -1129,9 +1129,9 @@ Normalized `action` values (priority: merged → closed → opened → synchroni
 
 | `action` | Meaning |
 |----------|---------|
-| `opened` | First time this PR number is seen after the cursor seed (covers open+push before the next poll); also when `created_at === updated_at` |
+| `opened` | Brand-new PR: `created_at === updated_at`, or first sight of a number whose `created_at` is after the poll cursor (covers open+push before the next poll). A missing prior head SHA alone is not `opened` |
 | `synchronize` | PR head SHA changed since last seen (push / new commits) |
-| `updated` | Other activity with the same head SHA (comments, title edits, …) |
+| `updated` | Other activity with the same head SHA (comments, title edits, …), or first sight of an aged PR whose prior SHA was never stored |
 | `merged` | `merged_at` set |
 | `closed` | `state` closed, not merged |
 

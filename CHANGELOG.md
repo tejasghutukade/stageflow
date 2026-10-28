@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **GitHub PR trigger actions are precise.** Normalized `action` is now `opened` \| `synchronize` \| `updated` \| `merged` \| `closed`. `updated` no longer covers pushes — use `synchronize` when the PR head SHA changes. `event.match.action` is required for `github.*` sources (omit-match is invalid). See [Triggers](docs/yaml-catalog.md#triggers-trigger-yaml).
+- **GitHub poller upgrade no longer false-fires `opened`.** Missing `heads` with an existing cursor quietly backfills; `opened` requires equal created/updated timestamps or a PR created after the cursor, not merely an unknown prior SHA.
 
 ## [0.44.0] - 2026-10-27
 
