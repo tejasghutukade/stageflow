@@ -122,8 +122,45 @@ describe("parseCreateTriggerBody", () => {
       body: { ...BASE_BODY, enabled: "yes" },
       error: "enabled must be a boolean",
     },
+    {
+      name: "github.* without match.action",
+      body: {
+        ...BASE_BODY,
+        kind: "event",
+        event: { source: "github.pull_request", config: { repo: "acme/app" } },
+      },
+      error:
+        "event.match.action is required for github.* sources (one of: opened, synchronize, updated, merged, closed)",
+    },
+    {
+      name: "github.* with an invalid match.action",
+      body: {
+        ...BASE_BODY,
+        kind: "event",
+        event: {
+          source: "github.pull_request",
+          match: { action: "reopened" },
+          config: { repo: "acme/app" },
+        },
+      },
+      error:
+        'event.match.action must be one of: opened, synchronize, updated, merged, closed (got "reopened")',
+    },
   ])("rejects $name", ({ body, error }) => {
     expect(parseCreateTriggerBody(body)).toEqual({ ok: false, status: 400, error });
+  });
+
+  it("accepts github.* when match.action is a known value", () => {
+    const body = {
+      ...BASE_BODY,
+      kind: "event" as const,
+      event: {
+        source: "github.pull_request",
+        match: { action: "synchronize" },
+        config: { repo: "acme/app" },
+      },
+    };
+    expect(parseCreateTriggerBody(body)).toEqual(body);
   });
 });
 

@@ -36,6 +36,7 @@ export type GithubPullItem = {
   created_at: string;
   updated_at: string;
   user: { login: string } | null;
+  head_sha?: string | null;
 };
 
 export type GithubPollResponse = {
@@ -91,6 +92,7 @@ export function defaultCreateGithubClient(token: string): GithubPollClient {
           created_at: pr.created_at,
           updated_at: pr.updated_at,
           user: pr.user ? { login: pr.user.login } : null,
+          head_sha: pr.head?.sha ?? null,
         })),
       };
     },
@@ -98,32 +100,86 @@ export function defaultCreateGithubClient(token: string): GithubPollClient {
 }
 
 export type NormalizedGithubEvent = {
-  action: "opened" | "merged" | "closed" | "updated";
+  action: "opened" | "synchronize" | "updated" | "merged" | "closed";
   number: number;
   title: string;
   url: string;
   author: string;
   repo: string;
   updatedAt: string;
+  headSha?: string;
 };
 
-function deriveAction(item: GithubPullItem): NormalizedGithubEvent["action"] {
+const HEADS_LIMIT = 200;
+
+export function deriveGithubAction(
+  item: GithubPullItem,
+  previousHeadSha: string | undefined,
+): NormalizedGithubEvent["action"] {
   if (item.merged_at) return "merged";
   if (item.state === "closed") return "closed";
+  if (previousHeadSha === undefined) return "opened";
   if (item.created_at === item.updated_at) return "opened";
+  const currentSha = item.head_sha ?? null;
+  if (currentSha !== null && currentSha !== previousHeadSha) {
+    return "synchronize";
+  }
   return "updated";
 }
 
-function normalizeGithubItem(item: GithubPullItem, repo: string): NormalizedGithubEvent {
+function normalizeGithubItem(
+  item: GithubPullItem,
+  repo: string,
+  previousHeadSha: string | undefined,
+): NormalizedGithubEvent {
+  const headSha = item.head_sha ?? null;
   return {
-    action: deriveAction(item),
+    action: deriveGithubAction(item, previousHeadSha),
     number: item.number,
     title: item.title,
     url: item.html_url,
     author: item.user?.login ?? "unknown",
     repo,
     updatedAt: item.updated_at,
+    ...(headSha ? { headSha } : {}),
   };
+}
+
+function parseHeads(raw: string | null): Record<string, string> {
+  if (raw === null) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === "string") out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function seedHeadsFromItems(items: GithubPullItem[]): Record<string, string> {
+  const heads: Record<string, string> = {};
+  for (const item of items) {
+    const sha = item.head_sha ?? null;
+    if (sha) heads[String(item.number)] = sha;
+  }
+  return heads;
+}
+
+function boundHeads(
+  heads: Record<string, string>,
+  currentItems: GithubPullItem[],
+): Record<string, string> {
+  if (Object.keys(heads).length <= HEADS_LIMIT) return heads;
+  const currentNumbers = new Set(currentItems.map((item) => String(item.number)));
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(heads)) {
+    if (currentNumbers.has(key)) next[key] = value;
+  }
+  return next;
 }
 
 type PollCursor = { updatedAt: string; number: number };
@@ -173,9 +229,10 @@ export type GithubPollSourceOptions = {
  * per tick regardless of how many triggers watch it), and diffs each repo's
  * PR list against a persisted ETag + cursor to find genuinely new activity.
  *
- * The first tick for a never-before-seen repo only seeds the cursor — it
- * never fires for a repo's pre-existing PR history, mirroring how
- * `ScheduleSource` seeds `next_run_at` without firing on first sight.
+ * The first tick for a never-before-seen repo only seeds the cursor and
+ * per-PR head SHAs — it never fires for a repo's pre-existing PR history,
+ * mirroring how `ScheduleSource` seeds `next_run_at` without firing on
+ * first sight.
  */
 export class GithubPollSource implements TriggerSourcePort {
   private readonly store: RunStore;
@@ -299,6 +356,7 @@ export class GithubPollSource implements TriggerSourcePort {
     const adapterId = `github:${repo}`;
     const etag = await this.store.getTriggerAdapterState(adapterId, "etag");
     const cursor = parseCursor(await this.store.getTriggerAdapterState(adapterId, "cursor"));
+    let heads = parseHeads(await this.store.getTriggerAdapterState(adapterId, "heads"));
 
     const [owner, repoName] = repo.split("/");
     let response: GithubPollResponse;
@@ -329,6 +387,8 @@ export class GithubPollSource implements TriggerSourcePort {
     const newest = response.items[0];
 
     if (cursor === null) {
+      heads = seedHeadsFromItems(response.items);
+      await this.store.setTriggerAdapterState(adapterId, "heads", JSON.stringify(heads));
       await this.store.setTriggerAdapterState(
         adapterId,
         "cursor",
@@ -340,7 +400,11 @@ export class GithubPollSource implements TriggerSourcePort {
     const newItems = response.items.filter((item) => isNewerThanCursor(item, cursor)).reverse();
 
     for (const item of newItems) {
-      const summary = normalizeGithubItem(item, repo);
+      const numberKey = String(item.number);
+      const previousHeadSha =
+        Object.prototype.hasOwnProperty.call(heads, numberKey) ? heads[numberKey] : undefined;
+      const summary = normalizeGithubItem(item, repo, previousHeadSha);
+      heads[numberKey] = item.head_sha ?? previousHeadSha ?? "";
       for (const match of matches) {
         const { definition } = match;
         if (!matchesEventFilter(definition.event?.match, summary as unknown as Record<string, unknown>)) continue;
@@ -348,6 +412,8 @@ export class GithubPollSource implements TriggerSourcePort {
       }
     }
 
+    heads = boundHeads(heads, response.items);
+    await this.store.setTriggerAdapterState(adapterId, "heads", JSON.stringify(heads));
     await this.store.setTriggerAdapterState(
       adapterId,
       "cursor",

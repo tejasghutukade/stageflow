@@ -22,6 +22,7 @@ import { useHotkeys } from "../keys";
 import { nextScheduleRuns } from "./cronPreview";
 import {
   GITHUB_ACTIONS,
+  GITHUB_ACTION_LABELS,
   buildCreateTriggerBody,
   buildTriggerEvent,
   buildUpdateTriggerBody,
@@ -675,7 +676,7 @@ export function NewTriggerModal({
                             onClick={() => updateGithub({ action })}
                           >
                             {selected ? <LuCheck className="size-3" aria-hidden /> : null}
-                            {action}
+                            {GITHUB_ACTION_LABELS[action]}
                           </button>
                         );
                       })}
