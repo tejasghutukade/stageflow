@@ -95,6 +95,16 @@ export function RunDetailGateSection({
           noteRef.current?.focus();
         },
       },
+      {
+        key: "mod+enter",
+        scope: "run-detail-gate",
+        allowInInput: true,
+        when: () => Boolean(showGate && panelActions && !panelActions.locked),
+        handler: (e) => {
+          e.preventDefault();
+          void panelActions?.accept();
+        },
+      },
     ],
     "run-detail-gate",
   );

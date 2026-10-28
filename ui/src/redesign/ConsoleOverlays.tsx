@@ -98,6 +98,18 @@ export function ConsoleOverlays({
   useHotkeys(
     [
       {
+        key: "mod+,",
+        scope: "global",
+        when: () => redesignOn,
+        allowInInput: true,
+        handler: (e) => {
+          e.preventDefault();
+          setPaletteOpen(false);
+          setStartRunOpen(false);
+          navigate("/settings");
+        },
+      },
+      {
         key: "mod+k",
         scope: "global",
         when: () => redesignOn,

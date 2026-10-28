@@ -17,6 +17,7 @@ import {
 } from "../../providers/helpers";
 import { providerSupportsOauthConnect } from "../../providers/oauthSession";
 import { Keycap } from "../Keycap";
+import { useHotkeys } from "../keys";
 import {
   disconnectConfirmText,
   initialProviderActionsState,
@@ -175,6 +176,21 @@ export function SettingsProvidersPanel({
       setRefreshing(false);
     }
   }, []);
+
+  useHotkeys(
+    [
+      {
+        key: "t",
+        scope: "global",
+        when: () => !loading && !refreshing,
+        handler: (event) => {
+          event.preventDefault();
+          void refresh("background");
+        },
+      },
+    ],
+    "global",
+  );
 
   useEffect(() => {
     void (async () => {

@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { LuCheck, LuChevronDown, LuSearch } from "react-icons/lu";
+import { textFieldKeepsKey } from "../../keys";
 import { edgeEnabled, filterPickerOptions, modelPickerOptions, nextEnabled, type PickerOption } from "./runDialogModel";
 import type { SwitcherTone } from "./runSwitcherModel";
 
@@ -110,6 +111,8 @@ export function RunPicker({
       event.stopPropagation();
       event.nativeEvent.stopImmediatePropagation();
       close();
+    } else if (textFieldKeepsKey(event)) {
+      return;
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
       setActive((a) => nextEnabled(shown, a, 1));

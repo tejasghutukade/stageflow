@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-10-28
+
+### Fixed
+
+- **Console shortcuts that were only printed now run.** **⌘,** opens Settings. **T** on Providers tests connections. **Tab** in the command palette cycles the result type. **⌘↵** on a run-detail gate sends the note with Accept. **⌘S** in Workshop saves while the chat box is focused.
+- **Search fields keep caret keys.** In the command palette and model search, Option, Command, Control, or Shift with an arrow, and Home or End, move the cursor. Plain Up and Down still move the highlighted row.
+
 ### Changed
 
 - **GitHub PR trigger actions are precise.** Normalized `action` is now `opened` \| `synchronize` \| `updated` \| `merged` \| `closed`. `updated` no longer covers pushes — use `synchronize` when the PR head SHA changes. `event.match.action` is required for `github.*` sources (omit-match is invalid). See [Triggers](docs/yaml-catalog.md#triggers-trigger-yaml).
