@@ -63,3 +63,31 @@ export function calibrationBadge(c: EvalCalibration | null, current: boolean): s
   const text = `kappa ${twoDecimals(kappa)} on ${c.stats.n} labels`;
   return current ? `Calibrated: ${text}` : `Out of date: ${text}`;
 }
+
+export type Reliability = {
+  tone: "ok" | "needs" | "fail" | "muted";
+  /** A plain-words verdict for the first line. */
+  title: string;
+  /** What that means in counts, e.g. "Matches your label on 24 of 28". */
+  detail: string;
+  /** Which way the judge is wrong, or null when it never is. */
+  mistakes: string | null;
+};
+
+/** The numbers in words: the kappa bands are the usual reading (0.6 and up is decent), the counts come from the API. */
+export function reliabilityView(c: EvalCalibration): Reliability {
+  const { cohen_kappa: kappa, n, confusion } = c.stats;
+  const matches = confusion.tp + confusion.tn;
+  const detail = n === 0 ? "No labels were checked." : `Matches your label on ${matches} of ${n}.`;
+  const parts = [
+    confusion.fp > 0 ? `too lenient on ${confusion.fp} (passes what you failed)` : null,
+    confusion.fn > 0 ? `too strict on ${confusion.fn} (fails what you passed)` : null,
+  ].filter((part): part is string => part !== null);
+  const mistakes = parts.length === 0 ? null : `${parts.join(", ")}.`.replace(/^./, (ch) => ch.toUpperCase());
+  if (kappa === null || !Number.isFinite(kappa)) {
+    return { tone: "muted", title: "Not enough to tell yet", detail, mistakes };
+  }
+  if (kappa >= 0.6) return { tone: "ok", title: "Mostly agrees with you", detail, mistakes };
+  if (kappa >= 0.4) return { tone: "needs", title: "Agrees only partly", detail, mistakes };
+  return { tone: "fail", title: "Often disagrees with you", detail, mistakes };
+}

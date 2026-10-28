@@ -70,6 +70,7 @@ export function GradersTab({
                   {row.isRubric ? (
                     <CalibrationPanel
                       evalId={run.eval_id}
+                      evalRunId={run.eval_run_id}
                       graderId={row.id}
                       graderHash={run.current?.grader_hashes?.[row.id] ?? null}
                       judge={null}

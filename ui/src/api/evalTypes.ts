@@ -486,6 +486,25 @@ export type EvalCaseResults = {
   repeats: EvalResultDetail[];
 };
 
+export type EvalLabelCounts = { pass: number; fail: number };
+
+export type EvalLabelQueueItem = {
+  case: EvalCaseInput & { id: string; position?: number };
+  result: EvalResultDetail;
+  judge: { passed: boolean; score: number | null; reason: string | null };
+  label: { label: "pass" | "fail"; note: string | null } | null;
+};
+
+/** What the labeling screen reads: every result the judge graded for one grader, and the labels so far. */
+export type EvalLabelQueue = {
+  grader_id: string;
+  items: EvalLabelQueueItem[];
+  labeled_here: EvalLabelCounts;
+  labeled_eval: EvalLabelCounts;
+};
+
+export type EvalLabelSummary = { grader_id: string; labeled_eval: EvalLabelCounts };
+
 export type EvalReviewInput = { label?: "pass" | "fail"; note?: string | null; tags?: string[] };
 
 export type EvalReview = { label: "pass" | "fail" | null; note: string | null; tags: string[] };

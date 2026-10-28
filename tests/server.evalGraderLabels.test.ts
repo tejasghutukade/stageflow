@@ -126,4 +126,34 @@ describe("grader label routes", () => {
     expect((await h.call("PUT", `${base}/c1/0/graders/polite/label`, { label: "maybe" })).status).toBe(400);
     expect((await h.call("PUT", `${base}/zz/0/graders/polite/label`, { label: "pass" })).status).toBe(404);
   });
+
+  it("gives the labeling screen one read: conversation, judge answer and label so far, plus counts", async () => {
+    const h = await setup();
+    const url = `/api/eval-runs/${h.runId}/graders/polite/label-queue`;
+    const empty = await h.call("GET", url);
+    expect(empty.status).toBe(200);
+    expect(empty.body.items).toHaveLength(1);
+    expect(empty.body.items[0]).toMatchObject({
+      case: { id: "c1" },
+      result: { case_id: "c1", repeat_index: 0 },
+      judge: { passed: true },
+      label: null,
+    });
+    expect(empty.body.labeled_here).toEqual({ pass: 0, fail: 0 });
+
+    await h.call("PUT", `/api/eval-runs/${h.runId}/results/c1/0/graders/polite/label`, { label: "fail", note: "curt" });
+    const after = await h.call("GET", url);
+    expect(after.body.items[0].label).toEqual({ label: "fail", note: "curt" });
+    expect(after.body.labeled_here).toEqual({ pass: 0, fail: 1 });
+    expect(after.body.labeled_eval).toEqual({ pass: 0, fail: 1 });
+
+    const summary = await h.call("GET", `${url}?summary=true`);
+    expect(summary.body).toEqual({ grader_id: "polite", labeled_eval: { pass: 0, fail: 1 } });
+  });
+
+  it("refuses a queue for a code grader or an unknown grader", async () => {
+    const h = await setup();
+    expect((await h.call("GET", `/api/eval-runs/${h.runId}/graders/shape/label-queue`)).status).toBe(400);
+    expect((await h.call("GET", `/api/eval-runs/${h.runId}/graders/nope/label-queue`)).status).toBe(404);
+  });
 });

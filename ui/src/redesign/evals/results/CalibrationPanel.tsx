@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { calibrateEvalGrader, fetchEval, fetchEvalCalibrations, suggestEvalExamples, updateEval } from "../../../api";
-import type { EvalCalibration, EvalExampleSuggestion } from "../../../api/evalTypes";
-import { calibrationBadge, calibrationCurrent, calibrationView } from "./calibrationModel";
-import { Chip, MONO_CLASS } from "./ResultsParts";
+import { calibrateEvalGrader, fetchEval, fetchEvalCalibrations, fetchEvalLabelSummary, suggestEvalExamples, updateEval } from "../../../api";
+import type { EvalCalibration, EvalExampleSuggestion, EvalLabelCounts } from "../../../api/evalTypes";
+import { calibrationBadge, calibrationCurrent, calibrationView, reliabilityView } from "./calibrationModel";
+import { labelAdvice } from "./labelQueueModel";
+import { LabelQueue } from "./LabelQueue";
+import { Chip, MONO_CLASS, TONE_TEXT } from "./ResultsParts";
 import { compareLine, exampleLabel, MAX_RUBRIC_EXAMPLES, rubricOf, withExample, withRubric } from "./tuningModel";
 
 type Split = "all" | "dev" | "held_out";
@@ -15,6 +17,7 @@ function message(err: unknown): string {
 
 export function CalibrationPanel({
   evalId,
+  evalRunId,
   graderId,
   graderHash,
   judge,
@@ -22,6 +25,7 @@ export function CalibrationPanel({
   onEvalChanged,
 }: {
   evalId: string;
+  evalRunId: string;
   graderId: string;
   graderHash: string | null;
   judge: string | null;
@@ -38,6 +42,8 @@ export function CalibrationPanel({
   const [candidate, setCandidate] = useState<EvalCalibration | null>(null);
   const [suggestions, setSuggestions] = useState<EvalExampleSuggestion[] | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [labeling, setLabeling] = useState(false);
+  const [counts, setCounts] = useState<EvalLabelCounts | null>(null);
 
   const loadLatest = useCallback(async () => {
     try {
@@ -51,6 +57,18 @@ export function CalibrationPanel({
   useEffect(() => {
     void loadLatest();
   }, [loadLatest]);
+
+  const loadCounts = useCallback(async () => {
+    try {
+      setCounts((await fetchEvalLabelSummary(evalRunId, graderId)).labeled_eval);
+    } catch {
+      setCounts(null);
+    }
+  }, [evalRunId, graderId]);
+
+  useEffect(() => {
+    void loadCounts();
+  }, [loadCounts]);
 
   async function act<T>(name: string, fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(name);
@@ -123,57 +141,122 @@ export function CalibrationPanel({
 
   const current = calibrationCurrent(latest, graderHash, judge);
   const view = latest ? calibrationView(latest) : null;
+  const reliability = latest ? reliabilityView(latest) : null;
+  const advice = counts ? labelAdvice(counts) : null;
   const disabled = busy !== null;
+  const noLabels = counts !== null && advice?.total === 0;
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-[var(--sf-hairline)] p-3">
+    <div className="flex flex-col gap-4 rounded-lg border border-[var(--sf-hairline)] p-3">
       <div className="flex items-center justify-between gap-3">
+        <h4 className="text-[13px] font-medium text-[var(--sf-text-1)]">Is this judge reliable?</h4>
         <Chip tone={latest && current ? "ok" : "muted"}>{calibrationBadge(latest, current)}</Chip>
-        <span className="flex items-center gap-3">
-          <select
-            aria-label="Labels to measure"
-            className="rounded border border-[var(--sf-hairline)] bg-transparent text-xs"
-            value={split}
-            onChange={(e) => setSplit(e.target.value as Split)}
-          >
-            <option value="all">All labels</option>
-            <option value="dev">Dev labels (70%)</option>
-            <option value="held_out">Held-out labels (30%)</option>
-          </select>
-          <label className="flex items-center gap-1 text-xs text-[var(--sf-text-3)]" title="Judges each output three times: about 3x the cost">
-            <input type="checkbox" checked={stability} onChange={(e) => setStability(e.target.checked)} />
-            Stability
-          </label>
-          <button type="button" disabled={disabled} onClick={() => void check()} className={BUTTON}>
-            {busy === "check" ? "Judging your labels…" : "Check judge against my labels"}
-          </button>
-        </span>
       </div>
-      {!latest ? (
+
+      <section className="flex flex-col gap-2" aria-label="Step 1: label results">
+        <p className="text-xs font-medium text-[var(--sf-text-1)]">1. Label some results yourself</p>
         <p className="text-xs text-[var(--sf-text-3)]">
-          Mark Pass or Fail on this grader in a case drawer. The judge then re-reads those outputs (no stage runs) and
-          the agreement is shown here. It calls the judge model once per label.
+          You say Pass or Fail on real answers, one at a time. The judge is then checked against what you said.
         </p>
-      ) : null}
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => setLabeling(true)}
+            className="rounded-lg bg-[var(--sf-text-1)] px-3 py-1.5 text-[13px] text-[var(--sf-ground)] disabled:opacity-50"
+          >
+            {advice && advice.total > 0 ? "Label more results" : "Label results"}
+          </button>
+          {advice ? (
+            <span className="flex min-w-[200px] flex-1 flex-col gap-1">
+              <span className="flex justify-between gap-3 text-xs">
+                <span className="text-[var(--sf-text-1)]">
+                  {advice.total} labeled{counts ? ` (${counts.pass} Pass, ${counts.fail} Fail)` : ""}
+                </span>
+                <span className={advice.ready ? "text-[var(--sf-ok)]" : "text-[var(--sf-text-3)]"}>{advice.text}</span>
+              </span>
+              <span className="h-1.5 overflow-hidden rounded-full bg-[var(--sf-raised)]">
+                <span
+                  className={`block h-full rounded-full ${advice.ready ? "bg-[var(--sf-ok)]" : "bg-[var(--sf-running)]"}`}
+                  style={{ width: `${Math.round(advice.fraction * 100)}%` }}
+                />
+              </span>
+            </span>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-2" aria-label="Step 2: check the judge">
+        <p className="text-xs font-medium text-[var(--sf-text-1)]">2. Check the judge against your labels</p>
+        <p className="text-xs text-[var(--sf-text-3)]">
+          The judge re-reads the answers you labeled and gives its own verdict. Nothing is re-run, and it costs a few cents.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            disabled={disabled || noLabels}
+            onClick={() => void check()}
+            className="rounded-lg border border-[var(--sf-hairline-strong)] px-3 py-1.5 text-[13px] text-[var(--sf-text-1)] hover:bg-[var(--sf-raised)] disabled:opacity-50"
+          >
+            {busy === "check" ? "Judging your labels…" : latest ? "Check again" : "Check the judge"}
+          </button>
+          {noLabels ? <span className="text-xs text-[var(--sf-text-3)]">Label a few results first.</span> : null}
+          {advice && advice.total > 0 && !advice.ready ? (
+            <span className="text-xs text-[var(--sf-text-3)]">With fewer than 20 labels the reading is rough.</span>
+          ) : null}
+        </div>
+        <details className="text-xs text-[var(--sf-text-3)]">
+          <summary className="cursor-pointer">Advanced</summary>
+          <div className="mt-2 flex flex-wrap items-center gap-4">
+            <label className="flex items-center gap-2">
+              Measure on
+              <select
+                aria-label="Labels to measure"
+                className="rounded border border-[var(--sf-hairline)] bg-transparent text-xs"
+                value={split}
+                onChange={(e) => setSplit(e.target.value as Split)}
+              >
+                <option value="all">All labels</option>
+                <option value="dev">Tuning rows (dev, 70%)</option>
+                <option value="held_out">Fair-test rows (held-out, 30%)</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1" title="Judges each output three times: about 3x the cost">
+              <input type="checkbox" checked={stability} onChange={(e) => setStability(e.target.checked)} />
+              Also test how steady it is (3x the cost)
+            </label>
+          </div>
+        </details>
+      </section>
+
       {error ? <p className="text-xs text-[var(--sf-fail)]">{error}</p> : null}
       {note ? <p className="text-xs text-[var(--sf-text-2)]">{note}</p> : null}
-      {view ? (
-        <>
-          <p className={`${MONO_CLASS} text-xs text-[var(--sf-text-2)]`}>{view.headline}</p>
-          {view.rows.map((r) => (
-            <p key={r.label} className="flex justify-between gap-3 text-xs text-[var(--sf-text-3)]">
-              <span>{r.label}</span>
-              <span className={MONO_CLASS}>{r.value}</span>
-            </p>
-          ))}
+
+      {view && reliability ? (
+        <section className="flex flex-col gap-2 rounded-lg bg-[var(--sf-raised)] p-3" aria-label="Result">
+          <p className={`text-[14px] font-medium ${TONE_TEXT[reliability.tone]}`}>{reliability.title}</p>
+          <p className="text-xs text-[var(--sf-text-2)]">{reliability.detail}</p>
+          {reliability.mistakes ? <p className="text-xs text-[var(--sf-text-2)]">{reliability.mistakes}</p> : null}
           {view.warnings.map((w) => (
             <p key={w} className="text-xs text-[var(--sf-needs)]">
               {w}
             </p>
           ))}
+          <details className="text-xs text-[var(--sf-text-3)]">
+            <summary className="cursor-pointer">The numbers</summary>
+            <div className="mt-1 flex flex-col gap-0.5">
+              <p className={MONO_CLASS}>{view.headline}</p>
+              {view.rows.map((r) => (
+                <p key={r.label} className="flex justify-between gap-3">
+                  <span>{r.label}</span>
+                  <span className={MONO_CLASS}>{r.value}</span>
+                </p>
+              ))}
+            </div>
+          </details>
           {view.disagreements.length > 0 ? (
             <div>
-              <p className="mb-1 text-xs text-[var(--sf-text-3)]">Where the judge disagrees with you</p>
+              <p className="mb-1 text-xs text-[var(--sf-text-3)]">Where the judge disagrees with you (click to see the answer)</p>
               {view.disagreements.map((d) => (
                 <button
                   key={d.key}
@@ -188,20 +271,32 @@ export function CalibrationPanel({
               ))}
             </div>
           ) : null}
-          <div className="flex items-center gap-4 border-t border-[var(--sf-hairline)] pt-2">
-            <button type="button" disabled={disabled} onClick={() => void suggest()} className={BUTTON}>
-              {busy === "suggest" ? "Looking…" : "Suggest examples from disagreements"}
-            </button>
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => (tuning ? setTuning(false) : void openTuning())}
-              className={BUTTON}
-            >
-              {tuning ? "Close rubric trial" : "Try a different rubric"}
-            </button>
+        </section>
+      ) : null}
+
+      {view ? (
+        <section className="flex flex-col gap-2" aria-label="Step 3: improve the judge">
+          <p className="text-xs font-medium text-[var(--sf-text-1)]">3. Make the judge better (optional)</p>
+          <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+            <div className="flex max-w-[260px] flex-col gap-0.5">
+              <button type="button" disabled={disabled} onClick={() => void suggest()} className={`${BUTTON} text-left`}>
+                {busy === "suggest" ? "Looking…" : "Teach it with examples"}
+              </button>
+              <span className="text-xs text-[var(--sf-text-3)]">Turns answers it got wrong into worked examples. Nothing is saved until you add one.</span>
+            </div>
+            <div className="flex max-w-[260px] flex-col gap-0.5">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => (tuning ? setTuning(false) : void openTuning())}
+                className={`${BUTTON} text-left`}
+              >
+                {tuning ? "Close rubric trial" : "Try different wording"}
+              </button>
+              <span className="text-xs text-[var(--sf-text-3)]">Edit the rule and measure it before saving. Confirm on the fair-test rows.</span>
+            </div>
           </div>
-        </>
+        </section>
       ) : null}
       {suggestions && suggestions.length > 0 ? (
         <div className="flex flex-col gap-2">
@@ -243,6 +338,17 @@ export function CalibrationPanel({
             Tune on the dev labels, then confirm on the held-out labels before you trust the gain.
           </p>
         </div>
+      ) : null}
+      {labeling ? (
+        <LabelQueue
+          evalId={evalId}
+          evalRunId={evalRunId}
+          graderId={graderId}
+          onClose={() => {
+            setLabeling(false);
+            void loadCounts();
+          }}
+        />
       ) : null}
     </div>
   );

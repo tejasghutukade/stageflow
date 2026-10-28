@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EvalCalibration } from "../../../api/evalTypes";
-import { calibrationBadge, calibrationCurrent, calibrationView } from "./calibrationModel";
+import { calibrationBadge, calibrationCurrent, calibrationView, reliabilityView } from "./calibrationModel";
 
 const cal: EvalCalibration = {
   id: "cal_1",
@@ -61,5 +61,28 @@ describe("calibration badge", () => {
     expect(calibrationBadge(null, false)).toBe("Not calibrated");
     expect(calibrationBadge(cal, true)).toBe("Calibrated: kappa 0.50 on 12 labels");
     expect(calibrationBadge(cal, false)).toBe("Out of date: kappa 0.50 on 12 labels");
+  });
+});
+
+describe("reliabilityView", () => {
+  const withKappa = (kappa: number | null, confusion = { tp: 10, fp: 1, tn: 7, fn: 2 }): EvalCalibration => ({
+    ...cal,
+    stats: { ...cal.stats, n: 20, cohen_kappa: kappa, confusion },
+  });
+
+  it("reads kappa in bands", () => {
+    expect(reliabilityView(withKappa(0.7)).title).toBe("Mostly agrees with you");
+    expect(reliabilityView(withKappa(0.6)).tone).toBe("ok");
+    expect(reliabilityView(withKappa(0.5))).toMatchObject({ tone: "needs", title: "Agrees only partly" });
+    expect(reliabilityView(withKappa(0.1))).toMatchObject({ tone: "fail", title: "Often disagrees with you" });
+    expect(reliabilityView(withKappa(null))).toMatchObject({ tone: "muted", title: "Not enough to tell yet" });
+  });
+
+  it("says which way the judge is wrong, from the confusion counts", () => {
+    const v = reliabilityView(withKappa(0.7));
+    expect(v.detail).toBe("Matches your label on 17 of 20.");
+    expect(v.mistakes).toBe("Too lenient on 1 (passes what you failed), too strict on 2 (fails what you passed).");
+    expect(reliabilityView(withKappa(0.9, { tp: 12, fp: 0, tn: 8, fn: 0 })).mistakes).toBeNull();
+    expect(reliabilityView(withKappa(0.5, { tp: 9, fp: 3, tn: 8, fn: 0 })).mistakes).toBe("Too lenient on 3 (passes what you failed).");
   });
 });

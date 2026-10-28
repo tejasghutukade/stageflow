@@ -68,6 +68,7 @@ import {
   type TryCaseInput,
   type TryResult,
 } from "../evals/manager.js";
+import { buildLabelQueue, buildLabelSummary } from "../evals/read/labelQueue.js";
 import { buildEvalPlan, type EvalOverrides } from "../evals/plan.js";
 import {
   badRequest,
@@ -954,6 +955,11 @@ async function handleResultDetail(c: Ctx, id: string, caseId: string): Promise<v
   c.json(c.res, 200, await buildResultDetail(c.store, id, caseId));
 }
 
+async function handleLabelQueue(c: Ctx, id: string, graderId: string): Promise<void> {
+  const summary = c.url.searchParams.get("summary") === "true";
+  c.json(c.res, 200, summary ? await buildLabelSummary(c.store, id, graderId) : await buildLabelQueue(c.store, id, graderId));
+}
+
 async function handleReviewPut(c: Ctx, id: string, caseId: string, repeat: number): Promise<void> {
   const body = await readBody(c);
   await runByIdOr404(c, id);
@@ -1700,6 +1706,8 @@ export async function handleEvalRoutes(
   if (method === "PUT" && match) {
     return run(() => handleGraderLabelPut(c, seg(match![1]), seg(match![2]), Number(match![3]), seg(match![4])));
   }
+  match = m(/^\/api\/eval-runs\/([^/]+)\/graders\/([^/]+)\/label-queue$/);
+  if (method === "GET" && match) return run(() => handleLabelQueue(c, seg(match![1]), seg(match![2])));
   const triageRoute = matchEvalTriageRoute(c, seg);
   if (triageRoute) return run(triageRoute);
   match = m(/^\/api\/eval-runs\/([^/]+)\/results\/([^/]+)$/);

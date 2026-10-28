@@ -1,6 +1,8 @@
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 import type {
   EvalCalibration,
+  EvalLabelQueue,
+  EvalLabelSummary,
   EvalExampleSuggestion,
   EvalAcceptInput,
   EvalAgentTarget,
@@ -206,6 +208,14 @@ export function putEvalGraderLabel(
     `/api/eval-runs/${enc(evalRunId)}/results/${enc(caseId)}/${repeatIndex}/graders/${enc(graderId)}/label`,
     { method: "PUT", body: input },
   );
+}
+
+export function fetchEvalLabelQueue(evalRunId: string, graderId: string): Promise<EvalLabelQueue> {
+  return evalRequest(`/api/eval-runs/${enc(evalRunId)}/graders/${enc(graderId)}/label-queue`);
+}
+
+export function fetchEvalLabelSummary(evalRunId: string, graderId: string): Promise<EvalLabelSummary> {
+  return evalRequest(`/api/eval-runs/${enc(evalRunId)}/graders/${enc(graderId)}/label-queue?summary=true`);
 }
 
 export function fetchEvalCalibrations(evalId: string, graderId: string): Promise<{ items: EvalCalibration[] }> {
