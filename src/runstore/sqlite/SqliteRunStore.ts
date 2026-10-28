@@ -10,6 +10,10 @@ import type {
   EvalResultInput,
   EvalResultWithGrades,
   EvalReviewPatch,
+  EvalCalibrationInput,
+  EvalCalibrationRow,
+  EvalGraderLabelPatch,
+  EvalGraderLabelRow,
   EvalReviewRow,
   EvalRunPage,
   EvalRunProgress,
@@ -70,6 +74,7 @@ import {
 } from "../workspaceLayout.js";
 import { importDiskRunsIfEmpty } from "./migrateFromDisk.js";
 import * as evalStore from "./evalStore.js";
+import * as calibrationStore from "./calibrationStore.js";
 import * as suggestionStore from "./suggestionStore.js";
 import type { SuggestionStatus } from "../../evals/triage/constants.js";
 import type { SuggestionInput, SuggestionRow } from "../../evals/triage/types.js";
@@ -1409,6 +1414,43 @@ export class SqliteRunStore implements RunStore {
   async getEvalReviews(evalRunId: string): Promise<EvalReviewRow[]> {
     await this.ready();
     return evalStore.getEvalReviews(this.db, evalRunId);
+  }
+
+  async putEvalGraderLabel(
+    evalRunId: string,
+    caseId: string,
+    repeatIndex: number,
+    graderId: string,
+    patch: EvalGraderLabelPatch,
+  ): Promise<EvalGraderLabelRow | null> {
+    await this.ready();
+    return calibrationStore.putEvalGraderLabel(this.db, evalRunId, caseId, repeatIndex, graderId, patch);
+  }
+
+  async listEvalGraderLabels(evalRunId: string): Promise<EvalGraderLabelRow[]> {
+    await this.ready();
+    return calibrationStore.listEvalGraderLabels(this.db, evalRunId);
+  }
+
+  async listEvalGraderLabelsForEval(projectRoot: string, evalId: string, graderId: string): Promise<EvalGraderLabelRow[]> {
+    await this.ready();
+    return calibrationStore.listEvalGraderLabelsForEval(this.db, projectRoot, evalId, graderId);
+  }
+
+  async insertEvalCalibration(input: EvalCalibrationInput): Promise<EvalCalibrationRow> {
+    await this.ready();
+    return calibrationStore.insertEvalCalibration(this.db, input);
+  }
+
+  async listEvalCalibrations(
+    projectRoot: string,
+    evalId: string,
+    graderId?: string,
+    includeCandidates?: boolean,
+    limit?: number,
+  ): Promise<EvalCalibrationRow[]> {
+    await this.ready();
+    return calibrationStore.listEvalCalibrations(this.db, projectRoot, evalId, graderId, includeCandidates, limit);
   }
 
   async listFailureTypes(projectRoot: string, evalId: string): Promise<string[]> {

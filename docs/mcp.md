@@ -212,7 +212,7 @@ See [Agents](agents.md). The REST, CLI and MCP surfaces side by side are in [Age
 
 Ten tools cover [evals](evals.md). They use the same service as the REST routes in [Evals: HTTP API](evals.md#http-api). Every tool takes an optional `project_root` where it names an eval (omit it to use the Host default; see [Catalog roots](#catalog-roots-and-project_root)).
 
-**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "error", "code", "findings"? }`. Branch on `code`: `EVAL_NOT_FOUND`, `EVAL_RUN_NOT_FOUND`, `EVAL_INVALID` (with `findings`), `EVAL_RUN_ACTIVE`, `EVAL_REAL_TOOLS_NOT_CONFIRMED`, `EVAL_ENGINE_UNAVAILABLE`, `EVAL_NODE_TOO_OLD`, `invalid_request`, and the catalog path codes in [Error codes](#error-codes). A Host that does not run evals answers `EVAL_ENGINE_UNAVAILABLE`.
+**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "error", "code", "findings"? }`. Branch on `code`: `EVAL_NOT_FOUND`, `EVAL_RUN_NOT_FOUND`, `EVAL_INVALID` (with `findings`), `EVAL_RUN_ACTIVE`, `EVAL_REAL_TOOLS_NOT_CONFIRMED`, `EVAL_CALIBRATION_NO_LABELS`, `EVAL_ENGINE_UNAVAILABLE`, `EVAL_NODE_TOO_OLD`, `invalid_request`, and the catalog path codes in [Error codes](#error-codes). A Host that does not run evals answers `EVAL_ENGINE_UNAVAILABLE`.
 
 | Tool | Input | Output |
 |------|-------|--------|
@@ -228,6 +228,8 @@ Ten tools cover [evals](evals.md). They use the same service as the REST routes 
 | `compare_eval_runs` | `{ a, b }` | The comparison: verdict, per-grader and per-case changes, stage diff, warnings. `a` is the baseline |
 | `sort_eval_failures` | `{ eval_run_id, classifier?, only_unsorted?, limit? }` | `{ batch_id, classifier, model, sorted, skipped, failed, triage_cost_usd, suggestions }`. External and costs money; see below |
 | `get_eval_failure_suggestions` | `{ eval_run_id, status? }` | `{ items, summary }`: suggested bucket and failure type per failed result, with counts |
+| `list_grader_calibrations` | `{ eval_id, grader_id, include_candidates?, project_root? }` | `{ items }`: how well the judge agreed with the author's Pass/Fail labels, newest first. Read-only and free |
+| `calibrate_eval_grader` | `{ eval_id, grader_id, split?, stability?, max_cost_usd?, project_root? }` | The calibration: labels, agreement, kappa, recall, confusion, disagreements. Re-judges stored outputs; calls the judge and costs money; fails `EVAL_CALIBRATION_NO_LABELS` when nothing is labeled |
 | `get_eval_failure_sort_status` | `{ eval_run_id }` | Which classifiers can run (`jev`, `judge`), the names (never values) of the key sources, and the `auto` default |
 
 `sort_eval_failures` is an **external, manual-only action** like `run_eval`: it sends each failed result's case, output and grader reasons to TypeSafe Jev (about $0.04 per million input tokens, needs a TypeSafe key) or to the run's judge model (real model cost). It tags nothing; suggestions are accepted by the author in the console or API. It fails `EVAL_RUN_ACTIVE` while the run is running and `EVAL_CLASSIFIER_UNAVAILABLE` when neither classifier is available. See [Evals: Sort failures automatically](evals.md#sort-failures).

@@ -12,14 +12,25 @@ import {
   type EvalErrorCode,
   type EvalResultStatus,
   type EvalStartedVia,
+  CONVERSATION_RUBRIC_PROMPT_VERSION,
+  RUBRIC_PROMPT_VERSION,
 } from "./constants.js";
 import { getEngine } from "./engine/index.js";
+import { collectCalibrationSamples } from "./calibration.js";
 import { buildEvalPlan, type EvalOverrides } from "./plan.js";
 import type { StageCaseRunner } from "./runner/stageCaseRunner.js";
 import { scoreResult, type ScoringGrader } from "./scoring.js";
-import { computeStats, type Stats } from "./stats.js";
+import { computeCalibration, computeStability, computeStats, type CalibrationStats, type Stats, type StabilityStats } from "./stats.js";
 import { toGradeRecords, toResultRecord } from "./statsAdapter.js";
-import type { EvalGradeInput, EvalJson, EvalResultInput, EvalResultWithGrades, EvalRunRow } from "./storeTypes.js";
+import type {
+  EvalCalibrationDisagreement,
+  EvalCalibrationRow,
+  EvalCalibrationSplit,
+  EvalGradeInput,
+  EvalJson, EvalResultInput,
+  EvalResultWithGrades,
+  EvalRunRow,
+} from "./storeTypes.js";
 import type {
   EngineIo,
   EvalEngine,
@@ -29,6 +40,8 @@ import type {
   NormalizedResult,
   ConversationOutput,
   PlanCase,
+  JudgeSettings,
+  RubricExample,
   RunCaseFailureCode,
   RunCaseRequest,
   RunCaseResult,
@@ -48,6 +61,8 @@ export type EvalManagerStore = Pick<
   | "listEvalRuns"
   | "listEvalResults"
   | "recordGraderVersions"
+  | "listEvalGraderLabelsForEval"
+  | "insertEvalCalibration"
 >;
 
 export type EvalLogger = {
@@ -90,6 +105,29 @@ export type EvalRunManagerDeps = {
   onRunStarted?(evalRunId: string, ctx: EvalRunContext): void | Promise<void>;
   onRunFinished?(evalRunId: string): void | Promise<void>;
 };
+
+export type CalibrateInput = {
+  projectRoot: string;
+  evalPath: string;
+  graderId: string;
+  split?: EvalCalibrationSplit;
+  /** A rubric to measure instead of the saved one; the result is stored as a candidate. */
+  candidate?: { rubric?: string; examples?: RubricExample[]; judge?: string; judgeSettings?: JudgeSettings };
+  maxCostUsd?: number;
+  /** Judge each output 3 times (or the grader's own larger vote count) and report how often the verdict splits. */
+  stability?: boolean;
+};
+
+export type CalibrateResult = {
+  calibration: EvalCalibrationRow;
+  stats: CalibrationStats;
+  disagreements: EvalCalibrationDisagreement[];
+  errored: number;
+  stability?: StabilityStats;
+  costUsd: number;
+};
+
+export const CALIBRATION_DEFAULT_MAX_COST_USD = 1;
 
 export class EvalRunError extends Error {
   constructor(
@@ -865,6 +903,163 @@ export class EvalRunManager {
       await this.deps.agents?.()?.deleteEvalSessions(tried.projectRoot, [tried.subjectRef]);
     } catch (err) {
       this.deps.logger?.warn("eval.try_session_cleanup_failed", safeMessage(err));
+    }
+  }
+
+  /**
+   * Re-judges the stored outputs of results the author labeled for one grader and compares the verdicts to the
+   * labels. No stage or agent runs: the engine's case callback replays the stored output. Nothing is added to the
+   * run list; the measurement is stored as a calibration.
+   */
+  async calibrate(input: CalibrateInput): Promise<CalibrateResult> {
+    this.claim();
+    this.reserved = false;
+    this.trying = true;
+    const evalRunId = `${EVAL_RUN_ID_PREFIX}${randomBytes(6).toString("hex")}`;
+    this.tryingRunId = evalRunId;
+    const abort = new AbortController();
+    try {
+      const engine = this.engines(this.engineName);
+      const engineInfo = { name: engine.name, version: await engine.version(), nodeVersion: process.versions.node };
+      const built = await buildEvalPlan({
+        projectRoot: input.projectRoot,
+        evalPath: input.evalPath,
+        overrides: {},
+        evalRunId,
+        engine: engineInfo,
+        ...(this.deps.isKnownModel ? { isKnownModel: this.deps.isKnownModel } : {}),
+        ...this.agentsInput(),
+      });
+      if (!built.ok) throw new EvalRunError("EVAL_INVALID", "Eval is invalid", built.findings);
+      const base = built.plan;
+      const found = base.graders.find((g) => g.id === input.graderId);
+      if (!found || (found.type !== "rubric" && found.type !== "goal_reached")) {
+        throw new EvalRunError("EVAL_INVALID", `Grader ${input.graderId} is not a judged grader of this eval`);
+      }
+      let grader = found;
+      if (input.candidate !== undefined) {
+        if (grader.type === "rubric") {
+          grader = {
+            ...grader,
+            ...(input.candidate.rubric !== undefined ? { rubric: input.candidate.rubric } : {}),
+            ...(input.candidate.examples !== undefined ? { examples: input.candidate.examples } : {}),
+            ...(input.candidate.judge !== undefined ? { judge: input.candidate.judge } : {}),
+            ...(input.candidate.judgeSettings !== undefined
+              ? { judgeSettings: { ...(grader.judgeSettings ?? {}), ...input.candidate.judgeSettings } }
+              : {}),
+          };
+        } else {
+          grader = {
+            ...grader,
+            ...(input.candidate.judge !== undefined ? { judge: input.candidate.judge } : {}),
+            ...(input.candidate.judgeSettings !== undefined
+              ? { judgeSettings: { ...(grader.judgeSettings ?? {}), ...input.candidate.judgeSettings } }
+              : {}),
+          };
+        }
+      }
+      const stabilityVotes = input.stability === true ? Math.max(grader.judgeSettings?.votes ?? 1, 3) : undefined;
+      if (stabilityVotes !== undefined) {
+        grader = { ...grader, judgeSettings: { ...(grader.judgeSettings ?? {}), votes: stabilityVotes } };
+      }
+      const split = input.split ?? "all";
+      const samples = await collectCalibrationSamples(this.store, input.projectRoot, base.evalId, grader.id, split);
+      const casesById = new Map(base.cases.map((c) => [c.id, c]));
+      const usable = samples.filter((s) => casesById.has(s.caseId));
+      if (usable.length === 0) {
+        throw new EvalRunError(
+          "EVAL_CALIBRATION_NO_LABELS",
+          `No labeled results for grader ${grader.id} can be re-judged; label results in a run first`,
+        );
+      }
+      const replay = new Map(usable.map((s) => [key(s.caseId, s.repeatIndex), s]));
+      const plan: EvalPlan = {
+        ...base,
+        cases: [...new Set(usable.map((s) => s.caseId))].map((id, position) => ({
+          ...(casesById.get(id) as PlanCase),
+          position,
+        })),
+        graders: [{ ...grader, weight: 1, mustPass: false }],
+        repeats: Math.max(...usable.map((s) => s.repeatIndex)) + 1,
+        maxCostUsd: input.maxCostUsd ?? CALIBRATION_DEFAULT_MAX_COST_USD,
+      };
+      let spend = 0;
+      const verdicts = new Map<string, NormalizedGrade>();
+      const io: EngineIo = {
+        runCase: async (req) => {
+          const sample = replay.get(key(req.caseId, req.repeatIndex));
+          if (!sample) {
+            return { ok: false, code: "EVAL_ENGINE_ERROR", message: "not labeled for this grader" };
+          }
+          return { ok: true, output: sample.output, latencyMs: 0, costUsd: 0, tokensIn: 0, tokensOut: 0 };
+        },
+        onResult: (nr) => {
+          const grade = nr.grades.find((g) => g.graderId === grader.id);
+          if (grade) verdicts.set(key(nr.caseId, nr.repeatIndex), grade);
+          if (grade?.judgeCostUsd !== undefined && Number.isFinite(grade.judgeCostUsd)) spend += grade.judgeCostUsd;
+          if (spend >= plan.maxCostUsd) abort.abort();
+        },
+        reportJudgeCost: () => undefined,
+        onPhase: () => undefined,
+        log: (level, message) => {
+          if (level === "info") this.deps.logger?.info?.("eval.engine", message);
+          else this.deps.logger?.[level]("eval.engine", message);
+        },
+      };
+      await engine.run(plan, io, abort.signal);
+
+      const voteSets: boolean[][] = [];
+      const measured: Array<{ caseId: string; repeatIndex: number; label: boolean; judge: boolean }> = [];
+      const disagreements: EvalCalibrationDisagreement[] = [];
+      let errored = 0;
+      for (const s of usable) {
+        const grade = verdicts.get(key(s.caseId, s.repeatIndex));
+        if (!grade || grade.status !== "graded" || grade.passed === undefined) {
+          errored++;
+          continue;
+        }
+        const label = s.label === "pass";
+        const votes = (grade.details as { votes?: Array<{ status?: string; passed?: boolean }> } | undefined)?.votes;
+        if (Array.isArray(votes)) {
+          voteSets.push(votes.filter((v) => v.status === "graded" && typeof v.passed === "boolean").map((v) => v.passed as boolean));
+        }
+        measured.push({ caseId: s.caseId, repeatIndex: s.originalRepeatIndex, label, judge: grade.passed });
+        if (label !== grade.passed) {
+          disagreements.push({
+            evalRunId: s.originalRunId,
+            caseId: s.caseId,
+            repeatIndex: s.originalRepeatIndex,
+            label: s.label,
+            judge: grade.passed ? "pass" : "fail",
+            reason: grade.reason ?? null,
+          });
+        }
+      }
+      const stats = computeCalibration(measured);
+      const stability = stabilityVotes !== undefined ? computeStability(voteSets, stabilityVotes) : undefined;
+      const calibration = await this.store.insertEvalCalibration({
+        projectRoot: input.projectRoot,
+        evalId: base.evalId,
+        graderId: grader.id,
+        graderHash: found.hash,
+        judge: grader.judge,
+        promptVersion: base.target.kind === "agent" ? CONVERSATION_RUBRIC_PROMPT_VERSION : RUBRIC_PROMPT_VERSION,
+        split,
+        candidate: input.candidate !== undefined,
+        stats: {
+          ...stats,
+          errored,
+          skipped_missing_case: samples.length - usable.length,
+          ...(stability !== undefined ? { stability } : {}),
+        } as unknown as EvalJson,
+        disagreements,
+        costUsd: spend,
+      });
+      return { calibration, stats, disagreements, errored, ...(stability !== undefined ? { stability } : {}), costUsd: spend };
+    } finally {
+      this.trying = false;
+      this.tryingRunId = null;
+      await this.cleanupWorkDir(evalRunId);
     }
   }
 

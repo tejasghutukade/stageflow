@@ -300,11 +300,12 @@ export async function buildResultsPage(
 
 export async function buildResultDetail(store: RunStore, id: string, caseId: string) {
   const row = await runByIdOr404(store, id);
-  const [cases, results, reviews, suggestions] = await Promise.all([
+  const [cases, results, reviews, suggestions, graderLabels] = await Promise.all([
     store.getEvalCases(row.evalRunId),
     store.getEvalResultsForCase(row.evalRunId, caseId),
     store.getEvalReviews(row.evalRunId),
     store.listEvalSuggestions(row.evalRunId),
+    store.listEvalGraderLabels(row.evalRunId),
   ]);
   const caseRow = cases.find((x) => x.caseId === caseId);
   if (!caseRow || results.length === 0) {
@@ -322,6 +323,11 @@ export async function buildResultDetail(store: RunStore, id: string, caseId: str
           row.targetKind === "agent" ? (row.targetRef.agent_id ?? "") : undefined,
         ),
         suggestion: suggestionFor(suggestions, r.caseId, r.repeatIndex),
+        grader_labels: Object.fromEntries(
+          graderLabels
+            .filter((l) => l.caseId === r.caseId && l.repeatIndex === r.repeatIndex)
+            .map((l) => [l.graderId, { label: l.label, note: l.note }]),
+        ),
       })),
   };
 }

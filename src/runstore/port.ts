@@ -22,6 +22,10 @@ import type {
   EvalResultInput,
   EvalResultWithGrades,
   EvalReviewPatch,
+  EvalCalibrationInput,
+  EvalCalibrationRow,
+  EvalGraderLabelPatch,
+  EvalGraderLabelRow,
   EvalReviewRow,
   EvalRunPage,
   EvalRunProgress,
@@ -668,6 +672,25 @@ export interface RunStore {
   /** `tags` replaces the tag set and is accepted only for results with `passed = 0`. */
   putEvalReview(evalRunId: string, caseId: string, repeatIndex: number, patch: EvalReviewPatch): Promise<EvalReviewRow>;
   getEvalReviews(evalRunId: string): Promise<EvalReviewRow[]>;
+  /** `label: null` clears. Rejects a result that does not exist. */
+  putEvalGraderLabel(
+    evalRunId: string,
+    caseId: string,
+    repeatIndex: number,
+    graderId: string,
+    patch: EvalGraderLabelPatch,
+  ): Promise<EvalGraderLabelRow | null>;
+  listEvalGraderLabels(evalRunId: string): Promise<EvalGraderLabelRow[]>;
+  /** Across all runs of the eval, newest label first. */
+  listEvalGraderLabelsForEval(projectRoot: string, evalId: string, graderId: string): Promise<EvalGraderLabelRow[]>;
+  insertEvalCalibration(input: EvalCalibrationInput): Promise<EvalCalibrationRow>;
+  listEvalCalibrations(
+    projectRoot: string,
+    evalId: string,
+    graderId?: string,
+    includeCandidates?: boolean,
+    limit?: number,
+  ): Promise<EvalCalibrationRow[]>;
   /** The eval's failure-type vocabulary, most recently used first. */
   listFailureTypes(projectRoot: string, evalId: string): Promise<string[]>;
   /** Inserts unseen grader hashes with the next ordinal per grader id; returns grader id to ordinal. */

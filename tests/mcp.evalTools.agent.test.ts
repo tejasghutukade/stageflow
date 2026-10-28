@@ -46,6 +46,7 @@ describe("MCP eval tools with agent targets", () => {
     const evalTools = tools.filter((t) => /eval/.test(t.name)).map((t) => t.name).sort();
     expect(evalTools).toEqual(
       [
+        "calibrate_eval_grader",
         "cancel_eval_run",
         "compare_eval_runs",
         "get_eval",

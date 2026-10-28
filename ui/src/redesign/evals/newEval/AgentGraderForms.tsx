@@ -2,6 +2,7 @@ import { useState } from "react";
 import { LuPlus, LuTrash2 } from "react-icons/lu";
 import { INPUT, TEXTAREA } from "../datasets/DialogShell";
 import { ChipInput } from "./ChipInput";
+import { JudgeSettingsFields } from "./JudgeSettingsFields";
 import { Field, MONO, SELECT } from "./parts";
 import {
   FIELD_OPS,
@@ -261,6 +262,7 @@ export function GoalReachedForm({ grader, onChange, judgeModels, judgeDefault }:
           ))}
         </select>
       </Field>
+      <JudgeSettingsFields grader={grader} onChange={onChange} />
       <Field label="Guidance (optional)" hint="Extra instructions for the judge.">
         <textarea
           className={`${TEXTAREA} min-h-[72px]`}

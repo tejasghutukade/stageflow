@@ -1,5 +1,6 @@
 import { caseGoal, goalRubricText, gradeDeterministic, isDeterministicGrader } from "../graders/index.js";
 import type { GraderContext, Subject } from "../graders/types.js";
+import { combineVotes } from "../votes.js";
 import type {
   CaseOutput,
   EngineIo,
@@ -131,7 +132,7 @@ export class FakeEngine implements EvalEngine {
           };
           for (const grader of plan.graders) {
             if (grader.type === "rubric") {
-              grades.push(this.gradeRubric(grader, testCase, run.output, io));
+              grades.push(this.gradeJudged(grader, testCase, run.output, io));
             } else if (grader.type === "goal_reached") {
               const goal = caseGoal(testCase);
               grades.push(
@@ -144,7 +145,7 @@ export class FakeEngine implements EvalEngine {
                       reason: "case has no input.goal or expected.outcome",
                     }
                   : {
-                      ...this.gradeRubric(
+                      ...this.gradeJudged(
                         {
                           ...grader,
                           type: "rubric",
@@ -182,6 +183,19 @@ export class FakeEngine implements EvalEngine {
     );
     await Promise.all(workers);
     if (failure !== undefined) throw failure;
+  }
+
+  private gradeJudged(
+    grader: Extract<ResolvedGrader, { type: "rubric" }>,
+    testCase: PlanCase,
+    output: CaseOutput,
+    io: EngineIo,
+  ): NormalizedGrade {
+    const votes = grader.judgeSettings?.votes ?? 1;
+    return combineVotes(
+      grader,
+      Array.from({ length: votes }, () => this.gradeRubric(grader, testCase, output, io)),
+    );
   }
 
   private gradeRubric(

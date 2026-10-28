@@ -1,6 +1,6 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { mapJudge } from "../evals/judgeProviders.js";
+import { isFloatingModelId, mapJudge } from "../evals/judgeProviders.js";
 import { classifyTool } from "../agents/toolRisk.js";
 import { checkDatasetAgainstAgent } from "./datasetAgentCheck.js";
 import { checkDatasetAgainstStage } from "./datasetStageCheck.js";
@@ -184,6 +184,7 @@ export async function validateEval(
 
   const stageModel = file.defaults?.model ?? resolved?.modelResolved;
   const unknownChecked = new Set<string>();
+  const unpinnedWarned = new Set<string>();
   for (const grader of loaded.graders) {
     if (grader.type !== "rubric") continue;
     if (grader.judge === "") {
@@ -209,6 +210,14 @@ export async function validateEval(
         "warning",
         "eval.judge_same_as_stage",
         `Rubric grader "${grader.id}" uses judge "${grader.judge}", the same model as the stage (self-preference bias)`,
+      );
+    }
+    if (isFloatingModelId(grader.judge) && !unpinnedWarned.has(grader.judge)) {
+      unpinnedWarned.add(grader.judge);
+      add(
+        "warning",
+        "eval.judge_unpinned",
+        `Judge model "${grader.judge}" is a floating id; its behavior can change under stored runs. Pin a dated version`,
       );
     }
   }
@@ -358,6 +367,7 @@ async function validateAgentEval(
 
   const agentModel = file.defaults?.model ?? resolved?.modelResolved;
   const unknownChecked = new Set<string>();
+  const unpinnedWarned = new Set<string>();
   for (const grader of loaded.graders) {
     if (grader.type !== "rubric" && grader.type !== "goal_reached") continue;
     if (grader.judge === "") {
@@ -379,6 +389,14 @@ async function validateAgentEval(
         "warning",
         "eval.judge_same_as_stage",
         `Grader "${grader.id}" uses judge "${grader.judge}", the same model as the agent (self-preference bias)`,
+      );
+    }
+    if (isFloatingModelId(grader.judge) && !unpinnedWarned.has(grader.judge)) {
+      unpinnedWarned.add(grader.judge);
+      add(
+        "warning",
+        "eval.judge_unpinned",
+        `Judge model "${grader.judge}" is a floating id; its behavior can change under stored runs. Pin a dated version`,
       );
     }
   }

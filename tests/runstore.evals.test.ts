@@ -139,7 +139,7 @@ describe("migration 015", () => {
     await store.close();
 
     const after = new Database(dbPath);
-    expect(after.pragma("user_version", { simple: true })).toBe(17);
+    expect(after.pragma("user_version", { simple: true })).toBe(18);
     expect(after.prepare(`SELECT origin FROM runs WHERE run_id = 'keep-me'`).get()).toEqual({ origin: null });
     after.close();
   });
@@ -148,8 +148,8 @@ describe("migration 015", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-evals-fresh-"));
     createRunStore({ rootDir: root, kind: "sqlite" });
     const db = new Database(path.join(storeRootFor(root), "state.db"));
-    expect(CURRENT_SCHEMA_VERSION).toBe(17);
-    expect(db.pragma("user_version", { simple: true })).toBe(17);
+    expect(CURRENT_SCHEMA_VERSION).toBe(18);
+    expect(db.pragma("user_version", { simple: true })).toBe(18);
     const objects = db.prepare(`SELECT type, name, sql FROM sqlite_master`).all() as Array<{
       type: string;
       name: string;

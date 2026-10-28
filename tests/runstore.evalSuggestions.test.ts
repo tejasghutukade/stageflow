@@ -22,7 +22,6 @@ import { MIGRATION_013 } from "../src/runstore/sqlite/migrations/013-agents.js";
 import { MIGRATION_014 } from "../src/runstore/sqlite/migrations/014-agent-deliveries.js";
 import { MIGRATION_015 } from "../src/runstore/sqlite/migrations/015-evals.js";
 import { MIGRATION_016 } from "../src/runstore/sqlite/migrations/016-eval-subject-ref.js";
-import { MIGRATION_017 } from "../src/runstore/sqlite/migrations/017-eval-result-suggestions.js";
 import type { SuggestionInput } from "../src/evals/triage/types.js";
 
 const UP_TO_16 = [
@@ -95,7 +94,7 @@ describe("migration 017 and suggestion rows", () => {
     await store.close();
 
     const after = new Database(dbPath);
-    expect(CURRENT_SCHEMA_VERSION).toBe(MIGRATION_017.version);
+    expect(CURRENT_SCHEMA_VERSION).toBe(18);
     expect(after.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
     after.close();
   });

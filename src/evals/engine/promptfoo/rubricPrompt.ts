@@ -40,6 +40,13 @@ const INSTRUCTIONS: Record<"pass_fail" | "1_to_5", { instructions: string; score
 
 export const NO_EXAMPLES_TEXT = "(none)";
 
+const REPLY_LINE = `Reply with only a JSON object and nothing else: {"pass": true|false, "score": <<SCORE_SHAPE>>, "reason": "<one sentence>"}`;
+const REASONING_REPLY_LINE = `Weigh the evidence against the rubric before you decide. Reply with only a JSON object and nothing else, writing "reason" first: {"reason": "<two or three sentences that weigh the evidence>", "pass": true|false, "score": <<SCORE_SHAPE>>}`;
+
+function withReasoning(template: string, reasoning: boolean | undefined): string {
+  return reasoning === true ? template.replace(REPLY_LINE, () => REASONING_REPLY_LINE) : template;
+}
+
 export function escapeTemplate(text: string): string {
   return text.replace(/\{(?=[{%#])/g, '{{ "{" }}');
 }
@@ -63,13 +70,14 @@ function renderExample(example: RubricExample, index: number): string {
 export function renderRubricPrompt(grader: {
   scale: "pass_fail" | "1_to_5";
   examples: readonly RubricExample[];
+  reasoning?: boolean;
 }): string {
   const { instructions, scoreShape } = INSTRUCTIONS[grader.scale];
   const examples =
     grader.examples.length === 0
       ? NO_EXAMPLES_TEXT
       : grader.examples.map((example, i) => renderExample(example, i)).join("\n");
-  return RUBRIC_PROMPT_TEMPLATE.replace("<<EXAMPLES>>", () => examples)
+  return withReasoning(RUBRIC_PROMPT_TEMPLATE, grader.reasoning).replace("<<EXAMPLES>>", () => examples)
     .replace("<<INSTRUCTIONS>>", () => instructions)
     .replace("<<SCORE_SHAPE>>", () => scoreShape);
 }
@@ -113,13 +121,14 @@ const CONVERSATION_INSTRUCTIONS: Record<"pass_fail" | "1_to_5", { instructions: 
 export function renderConversationRubricPrompt(grader: {
   scale: "pass_fail" | "1_to_5";
   examples: readonly RubricExample[];
+  reasoning?: boolean;
 }): string {
   const { instructions, scoreShape } = CONVERSATION_INSTRUCTIONS[grader.scale];
   const examples =
     grader.examples.length === 0
       ? NO_EXAMPLES_TEXT
       : grader.examples.map((example, i) => renderExample(example, i)).join("\n");
-  return CONVERSATION_RUBRIC_PROMPT_TEMPLATE.replace("<<EXAMPLES>>", () => examples)
+  return withReasoning(CONVERSATION_RUBRIC_PROMPT_TEMPLATE, grader.reasoning).replace("<<EXAMPLES>>", () => examples)
     .replace("<<INSTRUCTIONS>>", () => instructions)
     .replace("<<SCORE_SHAPE>>", () => scoreShape);
 }

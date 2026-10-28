@@ -359,6 +359,56 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
   );
 
   tool(
+    "list_grader_calibrations",
+    "List how well a rubric or goal_reached grader's judge agreed with the author's own Pass/Fail labels, newest first: number of labels, agreement, Cohen's kappa, pass and fail recall, confusion counts, warnings and the results where the judge disagreed. Read-only, free, calls no model. Labels are set by the author in the console or API; this does not create them. Same as GET /api/evals/:id/graders/:grader/calibrations.",
+    z.object({
+      eval_id: z.string(),
+      grader_id: z.string(),
+      include_candidates: z.boolean().optional().describe("Also list measurements of unsaved candidate rubrics (default false)"),
+      project_root: projectRootField,
+    }),
+    async ({ eval_id, grader_id, include_candidates, project_root }) => {
+      manager();
+      const { projectRoot } = await locateEval({ store, bootCwd: cwd }, project_root, eval_id);
+      const items = await store.listEvalCalibrations(projectRoot, eval_id, grader_id, include_candidates === true);
+      return { items };
+    },
+  );
+
+  tool(
+    "calibrate_eval_grader",
+    "Check a rubric or goal_reached grader's judge against the author's own Pass/Fail labels: re-judges the stored outputs of every result labeled for that grader (no stage or agent runs) and returns the number of labels, agreement, Cohen's kappa, pass and fail recall, confusion counts and the results where the judge disagreed. This calls the judge model once per label (three times with stability true) and may cost real money, bounded by max_cost_usd (default 1). It sends the labeled outputs to the judge model's provider. split dev or held_out measures a fixed 70/30 split of the labels. Fails EVAL_CALIBRATION_NO_LABELS when nothing is labeled and EVAL_RUN_ACTIVE while a run or try is active. Same as POST /api/evals/:id/graders/:grader/calibrate.",
+    z.object({
+      eval_id: z.string(),
+      grader_id: z.string(),
+      split: z.enum(["all", "dev", "held_out"]).optional().describe("Default all"),
+      stability: z.boolean().optional().describe("Judge each output three times and report how often the verdict splits (about 3x the cost)"),
+      max_cost_usd: z.number().positive().optional().describe("Cost cap in USD (default 1)"),
+      project_root: projectRootField,
+    }),
+    async (input) => {
+      const evalRunManager = manager();
+      const { projectRoot, ref } = await locateEval({ store, bootCwd: cwd }, input.project_root, input.eval_id);
+      engineCheck((deps.evalEngineStatus ?? (() => promptfooEngineStatus({ home: globalStageflowHome() })))());
+      try {
+        const out = await evalRunManager.calibrate({
+          projectRoot,
+          evalPath: ref.absPath,
+          graderId: input.grader_id,
+          ...(input.split !== undefined ? { split: input.split } : {}),
+          ...(input.stability === true ? { stability: true } : {}),
+          ...(input.max_cost_usd !== undefined ? { maxCostUsd: input.max_cost_usd } : {}),
+        });
+        audit("eval_calibrate", "ok");
+        return out.calibration;
+      } catch (err) {
+        audit("eval_calibrate", "error", undefined, err instanceof EvalRunError ? err.code : "internal_error");
+        throw err;
+      }
+    },
+  );
+
+  tool(
     "cancel_eval_run",
     "Cancel an eval run in progress and return its detail once it has stopped (waits up to 5 seconds). Stops spending; completed results are kept. A run that already finished is returned unchanged. Same as POST /api/eval-runs/:id/cancel.",
     z.object({ eval_run_id: z.string() }),

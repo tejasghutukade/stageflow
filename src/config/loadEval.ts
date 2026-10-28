@@ -7,6 +7,7 @@ import type {
   EvalBudget,
   EvalConversation,
   EvalDefaults,
+  JudgeSettings,
   EvalFile,
   EvalTarget,
   EvalTask,
@@ -120,6 +121,7 @@ const TASK_KEYS = ["goal", "context", "constraints"];
 const DEFAULTS_KEYS = [
   "repeats",
   "judge",
+  "judge_settings",
   "pass_threshold",
   "max_cost_usd",
   "concurrency",
@@ -132,11 +134,11 @@ const GRADER_TYPE_KEYS: Record<(typeof GRADER_TYPES)[number], string[]> = {
   schema: [],
   field: ["checks"],
   reference: ["mode", "path", "expected", "pass_at"],
-  rubric: ["rubric", "scale", "pass_at", "judge", "examples"],
+  rubric: ["rubric", "scale", "pass_at", "judge", "judge_settings", "examples"],
   code: ["code"],
   tool_calls: ["must_call", "must_not_call", "must_ask_first", "max_calls", "args"],
   conversation_check: ["max_turns", "max_agent_questions_per_turn", "final_reply"],
-  goal_reached: ["judge", "guidance"],
+  goal_reached: ["judge", "judge_settings", "guidance"],
 };
 const TOOL_ARG_KEYS = ["tool", "path", "op", "value"];
 const FINAL_REPLY_KEYS = ["op", "value"];
@@ -338,6 +340,53 @@ function parseTask(c: Collector, raw: unknown): EvalTask | undefined {
   return out;
 }
 
+const JUDGE_SETTINGS_KEYS = ["temperature", "reasoning", "votes"];
+
+/** A mapping of judge call settings, or undefined when absent or invalid (findings added). */
+function parseJudgeSettings(c: Collector, raw: unknown, label: string): JudgeSettings | undefined {
+  if (raw === undefined) return undefined;
+  if (!isPlainObject(raw)) {
+    c.add("eval.invalid_field", `${label} "judge_settings" must be a mapping`);
+    return undefined;
+  }
+  c.unknownKeys(raw, JUDGE_SETTINGS_KEYS, `${label} judge_settings`);
+  const out: JudgeSettings = {};
+  let ok = true;
+  if (raw.temperature !== undefined) {
+    if (typeof raw.temperature === "number" && raw.temperature >= 0 && raw.temperature <= 1) {
+      out.temperature = raw.temperature;
+    } else {
+      c.add("eval.invalid_field", `${label} judge_settings "temperature" must be a number from 0 to 1`);
+      ok = false;
+    }
+  }
+  if (raw.reasoning !== undefined) {
+    if (typeof raw.reasoning === "boolean") out.reasoning = raw.reasoning;
+    else {
+      c.add("eval.invalid_field", `${label} judge_settings "reasoning" must be true or false`);
+      ok = false;
+    }
+  }
+  if (raw.votes !== undefined) {
+    if (typeof raw.votes === "number" && Number.isInteger(raw.votes) && raw.votes >= 1 && raw.votes <= 5 && raw.votes % 2 === 1) {
+      out.votes = raw.votes;
+    } else {
+      c.add("eval.invalid_field", `${label} judge_settings "votes" must be 1, 3 or 5`);
+      ok = false;
+    }
+  }
+  return ok ? out : undefined;
+}
+
+/** Grader settings over the eval defaults, key by key; undefined when neither sets anything. */
+export function mergeJudgeSettings(
+  base: JudgeSettings | undefined,
+  over: JudgeSettings | undefined,
+): JudgeSettings | undefined {
+  const merged = { ...(base ?? {}), ...(over ?? {}) };
+  return Object.keys(merged).length === 0 ? undefined : merged;
+}
+
 function parseDefaults(
   c: Collector,
   raw: unknown,
@@ -356,6 +405,8 @@ function parseDefaults(
   if (repeats !== undefined) out.repeats = repeats;
   const judge = optionalString(c, raw, "judge", "defaults", { min: 1 });
   if (judge !== undefined) out.judge = judge;
+  const judgeSettings = parseJudgeSettings(c, raw.judge_settings, "defaults");
+  if (judgeSettings !== undefined) out.judge_settings = judgeSettings;
   const passThreshold = optionalNumber(
     c,
     raw,
@@ -690,6 +741,7 @@ function parseGrader(
   index: number,
   defaultJudge: string | undefined,
   kind: EvalTarget["kind"] | undefined,
+  defaultJudgeSettings?: JudgeSettings,
 ): ParsedGrader | undefined {
   if (!isPlainObject(raw)) {
     c.add("eval.grader_invalid", `graders[${index}] must be a mapping`);
@@ -862,6 +914,9 @@ function parseGrader(
         examples = parseExamples(c, raw.examples, scale, label);
         if (examples === undefined) ok = false;
       }
+      const ownSettings = parseJudgeSettings(c, raw.judge_settings, label);
+      if (raw.judge_settings !== undefined && ownSettings === undefined) ok = false;
+      const judgeSettings = mergeJudgeSettings(defaultJudgeSettings, ownSettings);
       if (ok) {
         result = {
           config: {
@@ -871,6 +926,7 @@ function parseGrader(
             ...(raw.scale !== undefined ? { scale } : {}),
             ...(passAt !== undefined ? { pass_at: passAt } : {}),
             ...(judge !== undefined ? { judge } : {}),
+            ...(ownSettings !== undefined ? { judge_settings: ownSettings } : {}),
             ...(examples !== undefined ? { examples } : {}),
           },
           resolved: {
@@ -880,6 +936,7 @@ function parseGrader(
             scale,
             passAt: scale === "1_to_5" ? (passAt ?? 4) : 1,
             judge: judge ?? defaultJudge ?? "",
+            ...(judgeSettings !== undefined ? { judgeSettings } : {}),
             examples: examples ?? [],
           },
         };
@@ -999,18 +1056,23 @@ function parseGrader(
           ok = false;
         }
       }
+      const goalSettings = parseJudgeSettings(c, raw.judge_settings, label);
+      if (raw.judge_settings !== undefined && goalSettings === undefined) ok = false;
+      const goalMerged = mergeJudgeSettings(defaultJudgeSettings, goalSettings);
       if (ok) {
         result = {
           config: {
             ...common,
             type: "goal_reached",
             ...(judge !== undefined ? { judge } : {}),
+            ...(goalSettings !== undefined ? { judge_settings: goalSettings } : {}),
             ...(guidance !== undefined ? { guidance } : {}),
           },
           resolved: {
             ...resolvedCommon,
             type: "goal_reached",
             judge: judge ?? defaultJudge ?? "",
+            ...(goalMerged !== undefined ? { judgeSettings: goalMerged } : {}),
             ...(guidance !== undefined ? { guidance } : {}),
           },
         };
@@ -1050,6 +1112,7 @@ function graderHashObject(grader: UnhashedGrader): Record<string, unknown> {
         scale: grader.scale,
         ...(grader.scale === "1_to_5" ? { pass_at: grader.passAt } : {}),
         judge: grader.judge,
+        ...(grader.judgeSettings !== undefined ? { judge_settings: grader.judgeSettings } : {}),
         examples: grader.examples,
       };
     case "code":
@@ -1071,7 +1134,12 @@ function graderHashObject(grader: UnhashedGrader): Record<string, unknown> {
         final_reply: grader.finalReply,
       };
     case "goal_reached":
-      return { ...base, judge: grader.judge, guidance: grader.guidance };
+      return {
+        ...base,
+        judge: grader.judge,
+        ...(grader.judgeSettings !== undefined ? { judge_settings: grader.judgeSettings } : {}),
+        guidance: grader.guidance,
+      };
   }
 }
 
@@ -1172,7 +1240,7 @@ export function parseEvalOutcome(
   } else {
     const seen = new Set<string>();
     raw.graders.forEach((rawGrader, index) => {
-      const parsed = parseGrader(c, rawGrader, index, defaults?.judge, target?.kind);
+      const parsed = parseGrader(c, rawGrader, index, defaults?.judge, target?.kind, defaults?.judge_settings);
       if (isPlainObject(rawGrader) && typeof rawGrader.id === "string") {
         if (seen.has(rawGrader.id)) {
           c.add("eval.grader_duplicate_id", `Duplicate grader id "${rawGrader.id}"`);

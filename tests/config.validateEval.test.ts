@@ -262,6 +262,26 @@ describe("validateEval: judge findings", () => {
   });
 });
 
+describe("validateEval: judge drift findings", () => {
+  async function findingsWith(replaceModel: string, replaceJudge?: string) {
+    const evalPath = path.join(root, "evals", "valid.eval.yaml");
+    let text = (await import("node:fs")).readFileSync(evalPath, "utf8");
+    text = text.replace("  concurrency: 4", `  concurrency: 4\n  model: ${replaceModel}`);
+    if (replaceJudge) text = text.replace("judge: anthropic/claude-sonnet-4-5", `judge: ${replaceJudge}`);
+    await writeFile(evalPath, text);
+    return validateEval(await load(evalPath, root), { projectRoot: root });
+  }
+
+  it("eval.judge_unpinned warns once for a floating judge id", async () => {
+    const findings = await findingsWith("openai/gpt-4o", "anthropic/claude-sonnet-latest");
+    expect(codes(findings).filter((c) => c === "eval.judge_unpinned")).toHaveLength(1);
+  });
+
+  it("a pinned or alias judge id is not flagged", async () => {
+    expect(codes(await findingsWith("openai/gpt-4o"))).not.toContain("eval.judge_unpinned");
+  });
+});
+
 describe("validateEval: dataset file", () => {
   it("eval.dataset_unresolved when the file is missing", async () => {
     const loaded = await load(path.join(EVAL_FIXTURES, "dataset-unresolved.eval.yaml"), FIXTURES_ROOT);

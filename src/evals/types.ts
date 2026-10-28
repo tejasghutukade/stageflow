@@ -57,9 +57,19 @@ export type ResolvedConversation = {
 
 export type EvalTask = { goal?: string; context?: string; constraints?: string };
 
+export type JudgeSettings = {
+  /** Sampling temperature for the judge call; unset leaves the provider default. */
+  temperature?: number;
+  /** The judge writes its reason before the verdict. */
+  reasoning?: boolean;
+  /** Judge calls per grade (odd, 1 to 5); the majority verdict wins. */
+  votes?: number;
+};
+
 export type EvalDefaults = {
   repeats?: number;
   judge?: string;
+  judge_settings?: JudgeSettings;
   pass_threshold?: number;
   max_cost_usd?: number;
   concurrency?: number;
@@ -95,6 +105,7 @@ export type GraderConfig =
       scale?: "pass_fail" | "1_to_5";
       pass_at?: number;
       judge?: string;
+      judge_settings?: JudgeSettings;
       examples?: RubricExample[];
     })
   | (GraderCommon & { type: "code"; code: string })
@@ -112,7 +123,7 @@ export type GraderConfig =
       max_agent_questions_per_turn?: number;
       final_reply?: FinalReplyCheck[];
     })
-  | (GraderCommon & { type: "goal_reached"; judge?: string; guidance?: string });
+  | (GraderCommon & { type: "goal_reached"; judge?: string; judge_settings?: JudgeSettings; guidance?: string });
 
 export type EvalFile = {
   version: 1;
@@ -164,6 +175,7 @@ export type ResolvedGrader =
       scale: "pass_fail" | "1_to_5";
       passAt: number;
       judge: string;
+      judgeSettings?: JudgeSettings;
       examples: RubricExample[];
     })
   | (ResolvedGraderCommon & { type: "code"; code: string })
@@ -181,7 +193,7 @@ export type ResolvedGrader =
       maxAgentQuestionsPerTurn?: number;
       finalReply: FinalReplyCheck[];
     })
-  | (ResolvedGraderCommon & { type: "goal_reached"; judge: string; guidance?: string });
+  | (ResolvedGraderCommon & { type: "goal_reached"; judge: string; judgeSettings?: JudgeSettings; guidance?: string });
 
 export type PlanCase = {
   id: string;

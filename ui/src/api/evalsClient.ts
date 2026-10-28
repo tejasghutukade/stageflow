@@ -1,5 +1,7 @@
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 import type {
+  EvalCalibration,
+  EvalExampleSuggestion,
   EvalAcceptInput,
   EvalAgentTarget,
   EvalClassifierStatus,
@@ -191,6 +193,52 @@ export function putEvalReview(
     method: "PUT",
     body: input,
   });
+}
+
+export function putEvalGraderLabel(
+  evalRunId: string,
+  caseId: string,
+  repeatIndex: number,
+  graderId: string,
+  input: { label: "pass" | "fail" | null; note?: string | null },
+): Promise<{ label: "pass" | "fail" | null; note: string | null }> {
+  return evalRequest(
+    `/api/eval-runs/${enc(evalRunId)}/results/${enc(caseId)}/${repeatIndex}/graders/${enc(graderId)}/label`,
+    { method: "PUT", body: input },
+  );
+}
+
+export function fetchEvalCalibrations(evalId: string, graderId: string): Promise<{ items: EvalCalibration[] }> {
+  return evalRequest(`/api/evals/${enc(evalId)}/graders/${enc(graderId)}/calibrations`);
+}
+
+export function suggestEvalExamples(
+  evalId: string,
+  graderId: string,
+  calibrationId?: string,
+): Promise<{ calibration_id: string; items: EvalExampleSuggestion[] }> {
+  return evalRequest(`/api/evals/${enc(evalId)}/graders/${enc(graderId)}/suggest-examples`, {
+    method: "POST",
+    body: calibrationId !== undefined ? { calibration_id: calibrationId } : {},
+  });
+}
+
+export function calibrateEvalGrader(
+  evalId: string,
+  graderId: string,
+  input: {
+    split?: "all" | "dev" | "held_out";
+    max_cost_usd?: number;
+    stability?: boolean;
+    candidate?: {
+      rubric?: string;
+      judge?: string;
+      examples?: EvalExampleSuggestion["example"][];
+      judge_settings?: { temperature?: number; reasoning?: boolean; votes?: number };
+    };
+  } = {},
+): Promise<EvalCalibration> {
+  return evalRequest(`/api/evals/${enc(evalId)}/graders/${enc(graderId)}/calibrate`, { method: "POST", body: input });
 }
 
 export function cancelEvalRun(evalRunId: string): Promise<EvalRunDetail> {

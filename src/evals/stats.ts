@@ -340,3 +340,89 @@ export function computeStats(input: ComputeStatsInput): Stats {
     ...(hasAgentData ? { mean_turns: mean(turnValues), mean_tool_calls: mean(toolCallValues) } : {}),
   };
 }
+
+export const CALIBRATION_MIN_LABELS = 20;
+export const CALIBRATION_MINORITY_SHARE = 0.2;
+
+export interface CalibrationSample {
+  caseId: string;
+  repeatIndex: number;
+  label: boolean;
+  judge: boolean;
+}
+
+export interface CalibrationStats {
+  n: number;
+  agreement: number | null;
+  cohen_kappa: number | null;
+  tpr: number | null;
+  tnr: number | null;
+  confusion: { tp: number; fp: number; tn: number; fn: number };
+  warnings: Array<"low_n" | "imbalanced" | "no_variance">;
+}
+
+/** Judge pass is the positive class; the human label is the truth. */
+export function computeCalibration(samples: CalibrationSample[]): CalibrationStats {
+  let tp = 0;
+  let fp = 0;
+  let tn = 0;
+  let fn = 0;
+  for (const s of samples) {
+    if (s.judge && s.label) tp++;
+    else if (s.judge && !s.label) fp++;
+    else if (!s.judge && !s.label) tn++;
+    else fn++;
+  }
+  const n = tp + fp + tn + fn;
+  const warnings: CalibrationStats["warnings"] = [];
+  if (n < CALIBRATION_MIN_LABELS) warnings.push("low_n");
+  const labelPass = tp + fn;
+  const labelFail = fp + tn;
+  if (n > 0 && Math.min(labelPass, labelFail) / n < CALIBRATION_MINORITY_SHARE) warnings.push("imbalanced");
+  const agreement = n > 0 ? (tp + tn) / n : null;
+  const judgePass = tp + fp;
+  const judgeFail = fn + tn;
+  const expected = n > 0 ? (judgePass * labelPass + judgeFail * labelFail) / (n * n) : 0;
+  let kappa: number | null = null;
+  if (n > 0 && agreement !== null) {
+    if (expected >= 1) warnings.push("no_variance");
+    else kappa = (agreement - expected) / (1 - expected);
+  }
+  return {
+    n,
+    agreement,
+    cohen_kappa: kappa,
+    tpr: labelPass > 0 ? tp / labelPass : null,
+    tnr: labelFail > 0 ? tn / labelFail : null,
+    confusion: { tp, fp, tn, fn },
+    warnings,
+  };
+}
+
+/** Deterministic 70/30 split by a stable hash of the sample identity. */
+export function calibrationSplitOf(caseId: string, repeatIndex: number): "dev" | "held_out" {
+  let h = 2166136261;
+  const text = `${caseId}\u0000${repeatIndex}`;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h % 10 < 7 ? "dev" : "held_out";
+}
+
+export interface StabilityStats {
+  /** Judge calls per output. */
+  k: number;
+  /** Outputs with at least two valid votes. */
+  n: number;
+  /** Outputs whose valid votes were not all the same verdict. */
+  unstable: number;
+  flip_rate: number | null;
+}
+
+/** How often the judge changes its mind on the same output: the share of outputs with a split vote. */
+export function computeStability(voteSets: boolean[][], k: number): StabilityStats {
+  const counted = voteSets.filter((votes) => votes.length >= 2);
+  const unstable = counted.filter((votes) => votes.some((v) => v !== votes[0])).length;
+  return { k, n: counted.length, unstable, flip_rate: counted.length > 0 ? unstable / counted.length : null };
+}

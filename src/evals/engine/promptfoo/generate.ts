@@ -2,6 +2,7 @@ import { GUARD_FILENAME, GUARD_SOURCE } from "./guard.js";
 import { EngineError } from "./errors.js";
 import { mapJudge, unsupportedJudgeMessage } from "../../judgeProviders.js";
 import { caseGoal, goalRubricText } from "../../graders/goal.js";
+import { VOTE_METRIC_SEPARATOR } from "./normalize.js";
 import { escapeTemplate, renderConversationRubricPrompt, renderRubricPrompt } from "./rubricPrompt.js";
 import type { EvalPlan, PlanCase, ResolvedGrader } from "../../types.js";
 
@@ -299,33 +300,52 @@ ${exports.join("\n")}
 `;
 }
 
+/** The metric of vote `n` (1-based) for a judged grader; vote 1 keeps the grader id. */
+export function voteMetric(graderId: string, vote: number): string {
+  return vote === 1 ? graderId : `${graderId}${VOTE_METRIC_SEPARATOR}${vote}`;
+}
+
+function judgeAssertions(
+  grader: Extract<ResolvedGrader, { type: "rubric" | "goal_reached" }>,
+  options: GenerateOptions,
+  agent: boolean,
+  testCase: PlanCase,
+): Array<Record<string, unknown>> {
+  const votes = grader.judgeSettings?.votes ?? 1;
+  return Array.from({ length: votes }, (_, i) => judgeAssertion(grader, options, agent, testCase, voteMetric(grader.id, i + 1)));
+}
+
 function judgeAssertion(
   grader: Extract<ResolvedGrader, { type: "rubric" | "goal_reached" }>,
   options: GenerateOptions,
   agent: boolean,
   testCase: PlanCase,
+  metric: string,
 ): Record<string, unknown> {
   const mapping = mapJudge(grader.judge);
   if (mapping === null) throw new EngineError("EVAL_INVALID", unsupportedJudgeMessage(grader.judge));
+  const reasoning = grader.judgeSettings?.reasoning;
   let rubric: string;
   let prompt: string;
   if (grader.type === "goal_reached") {
     rubric = escapeTemplate(goalRubricText(caseGoal(testCase) ?? "", grader.guidance));
-    prompt = renderConversationRubricPrompt({ scale: "pass_fail", examples: [] });
+    prompt = renderConversationRubricPrompt({ scale: "pass_fail", examples: [], ...(reasoning ? { reasoning } : {}) });
   } else {
     rubric = grader.rubric;
-    prompt = agent ? renderConversationRubricPrompt(grader) : renderRubricPrompt(grader);
+    const withSettings = reasoning ? { ...grader, reasoning } : grader;
+    prompt = agent ? renderConversationRubricPrompt(withSettings) : renderRubricPrompt(withSettings);
   }
+  const temperature = grader.judgeSettings?.temperature;
+  const providerConfig =
+    temperature === undefined ? options.judgeProviderConfig : { ...(options.judgeProviderConfig ?? {}), temperature };
   return {
     type: "llm-rubric",
     value: rubric,
-    metric: grader.id,
+    metric,
     weight: 1,
     rubricPrompt: prompt,
     provider:
-      options.judgeProviderConfig === undefined
-        ? mapping.providerSpec
-        : { id: mapping.providerSpec, config: options.judgeProviderConfig },
+      providerConfig === undefined ? mapping.providerSpec : { id: mapping.providerSpec, config: providerConfig },
   };
 }
 
@@ -335,16 +355,18 @@ function assertionsFor(
   testCase: PlanCase,
 ): Array<Record<string, unknown>> {
   const agent = plan.target.kind === "agent";
-  return plan.graders.map((grader, index) => {
+  return plan.graders.flatMap((grader, index) => {
     if (isJudged(grader) && !(grader.type === "goal_reached" && caseGoal(testCase) === undefined)) {
-      return judgeAssertion(grader, options, agent, testCase);
+      return judgeAssertions(grader, options, agent, testCase);
     }
-    return {
-      type: "javascript",
-      value: `file://${ASSERTIONS_FILE}:${assertionFnName(index)}`,
-      metric: grader.id,
-      weight: 1,
-    };
+    return [
+      {
+        type: "javascript",
+        value: `file://${ASSERTIONS_FILE}:${assertionFnName(index)}`,
+        metric: grader.id,
+        weight: 1,
+      },
+    ];
   });
 }
 

@@ -168,7 +168,7 @@ With `[*]`, every matched node must pass. If `[*]` matches nothing (the array is
 
 A case with nothing at the `expected` path gets an error grade `EVAL_CASE_MISSING_EXPECTED`, not a failure, and is excluded from that grader's statistics.
 
-**`rubric`.** A judge model grades the output against your words. `scale: pass_fail` (default) or `1_to_5` with `pass_at` (1 to 5, default 4). Optional `judge` overrides the default judge and up to 6 `examples` (`{ verdict: pass|fail, output, reason? }` for `pass_fail`; `{ score: 1-5, output, reason? }` for `1_to_5`) show the judge what each outcome looks like.
+**`rubric`.** A judge model grades the output against your words. `scale: pass_fail` (default) or `1_to_5` with `pass_at` (1 to 5, default 4). Optional `judge` overrides the default judge, `judge_settings` tune the judge call (see [Judge settings](#judge-settings)) and up to 6 `examples` (`{ verdict: pass|fail, output, reason? }` for `pass_fail`; `{ score: 1-5, output, reason? }` for `1_to_5`) show the judge what each outcome looks like.
 
 ```yaml
 - id: no-invented-files
@@ -180,7 +180,7 @@ A case with nothing at the `expected` path gets an error grade `EVAL_CASE_MISSIN
   scale: pass_fail
 ```
 
-The judge sees the rubric, the examples, the case input, the case `expected` if present, and the stage output. It must reply with JSON; a reply that is not JSON, or an HTTP error from the provider, becomes an error grade (`EVAL_JUDGE_ERROR`) that is left out of the score. 1-to-5 scores are normalized to (v-1)/4 for statistics; the raw value is stored too. Rubrics are **not calibrated**: nothing checks the judge against your own labels (see [What is not built](#not-built)). Pick a judge that is not the stage's model; if they match, validation warns (`eval.judge_same_as_stage`) because models tend to favor their own output.
+The judge sees the rubric, the examples, the case input, the case `expected` if present, and the stage output. It must reply with JSON; a reply that is not JSON, or an HTTP error from the provider, becomes an error grade (`EVAL_JUDGE_ERROR`) that is left out of the score. 1-to-5 scores are normalized to (v-1)/4 for statistics; the raw value is stored too. A rubric is only as good as its agreement with you: you can [check the judge against your own labels](#calibrate-judge). Pick a judge that is not the stage's model; if they match, validation warns (`eval.judge_same_as_stage`) because models tend to favor their own output.
 
 **`code`.** The body of a JavaScript function that receives `(output, testCase, context)` where `output` is the envelope, `testCase` is the case, and `context = { evalId, runId, repeat }`. It returns a boolean, a number from 0 to 1, or `{ pass, score?, reason? }`. A number passes when it is at least `pass_threshold`. A thrown error, a bad return value or running past 5 seconds is an error grade (`EVAL_GRADER_CODE_ERROR`), not a failure.
 
@@ -600,7 +600,7 @@ The judge's key comes from a Pi `auth.json` entry of type `api_key` for that pro
 ## Privacy and trust
 
 - Running an eval sends **each case's input to the stage's model** as a normal stage run.
-- For **rubric graders**, each case's input and the stage output are also sent to **the judge model's provider**.
+- For **rubric graders**, each case's input and the stage output are also sent to **the judge model's provider**. Checking the judge against your labels sends the labeled outputs again.
 - **Nothing is sent to promptfoo's services.** Telemetry and remote features are blocked.
 - **`code` graders run JavaScript on your machine with your permissions**, the same trust level as `verify: command`.
 - Results, outputs and your reviews are stored in the local run store ([Data directory](data-directory.md)). Stage runs started by evals are retained and purged like other runs.
@@ -681,6 +681,7 @@ Agent evals have their own table in [Troubleshooting agent evals](#troubleshooti
 | `DATASET_NAME_INVALID` | 400 | The dataset name does not match the name pattern |
 | `EVAL_TAGS_ON_PASSED_RESULT` | 400 | Failure-type tags apply only to results marked failed |
 | `EVAL_REAL_TOOLS_NOT_CONFIRMED` | 422 | `tools: real` without the per-run consent |
+| `EVAL_CALIBRATION_NO_LABELS` | 422 | No labeled result can be re-judged for that grader; label results first |
 | `EVAL_CLASSIFIER_UNAVAILABLE` | 422 | No failure classifier can run (`missing: "typesafe_key"` or `"judge_model"`) |
 | `EVAL_COMPARE_MISMATCH` | 400 | The two runs have different targets |
 | `EVAL_ENGINE_UNAVAILABLE`, `EVAL_NODE_TOO_OLD` | 503 | The engine is not installed, or Node is older than 22.22.0 |
@@ -717,12 +718,57 @@ For agent targets, `POST /api/evals/:id/runs` also takes `user_model`, `allow_re
 
 The console formats numbers and never computes them. Run detail carries `lowest_cases_by_grader` (per grader id, up to five `{ case_id, mean_score, worst_repeat_index }` ordered by mean grade score); result rows carry `pass_fraction` and `mean_score`; every compare delta (`deltas.*`) is `{ a, b, delta, percent_change }`, where `percent_change` is `(b - a) / a * 100`, or `null` when `a` is 0 or a side is missing.
 
+## Judge settings {#judge-settings}
+
+`judge_settings` sits under `defaults` (all judged graders) and on a `rubric` or `goal_reached` grader (wins over the defaults, key by key):
+
+```yaml
+defaults:
+  judge: anthropic/claude-sonnet-4-5-20250929
+  judge_settings:
+    temperature: 0     # 0 to 1; unset keeps the provider's setting
+    votes: 3           # 1, 3 or 5 judge calls per grade; the majority wins (a tie fails)
+graders:
+  - id: clear
+    type: rubric
+    rubric: Is the review actionable?
+    judge_settings: { reasoning: true }   # the judge writes its reason before it decides
+```
+
+- **`temperature`** is passed to the judge call. Lower is steadier.
+- **`votes`** calls the judge several times per grade. For `pass_fail` the majority verdict wins; for `1_to_5` the mean score is used and passes at `pass_at`. A vote that errors is left out; if all error, the grade is an error. Tokens and cost add up, the cost estimate counts every call, and each vote is recorded in the grade's details.
+- **`reasoning`** uses a prompt variant that asks for the reason before the verdict. The default prompt is unchanged.
+
+Settings are part of the grader's hash and the run fingerprint (a grader with no settings hashes as before), so changing them marks the grader as changed in Compare. Compare also warns when the judge model or the judge prompt version differs between two runs (`judge_differs`).
+
+## Check the judge against your labels {#calibrate-judge}
+
+A rubric grader is a model's opinion. To see how well it agrees with yours:
+
+1. Open a result in the console. Under each judged grade (`rubric`, `goal_reached`) press **Pass** or **Fail** for **Your verdict**. This is separate from the result-level review; it is stored per grader (`PUT /api/eval-runs/:id/results/:case/:repeat/graders/:grader/label`, body `{ "label": "pass"|"fail"|null }`, `null` clears it). Labels are deleted with their run.
+2. On the run's **Graders** tab, expand the rubric and press **Check judge against my labels** (or run `sf eval calibrate <evalId> <graderId>`, or `POST /api/evals/:id/graders/:grader/calibrate`).
+
+The judge then re-reads the **stored outputs** of every result you labeled for that grader, across all runs of the eval. **No stage or agent runs.** Identical outputs count once (newest label wins). A labeled case that is no longer in the dataset is skipped. The call costs one judge call per label, is capped by `max_cost_usd` (default 1), and cannot start while a run is active.
+
+You get the number of labels, **agreement**, **Cohen's kappa** (agreement beyond chance), how often the judge passes when you pass and fails when you fail, the confusion counts, and the list of results where it disagrees with you, each with the judge's reason. Warnings: fewer than 20 labels (`low_n`), a label set that is mostly one verdict (`imbalanced`), and a judge and label set that each gave a single verdict, where kappa cannot be computed (`no_variance`). There is no universal kappa cutoff; compare it with how much two people would agree on the same task. Re-run it after you change the rubric, its examples or the judge: the badge reads "Out of date" when the grader changed since the last check.
+
+`--split dev|held_out` measures a fixed 70/30 split of your labels (by a hash of the case and repeat), so you can tune the rubric on `dev` and confirm on `held_out`.
+
+**Stability.** `--stability` (or `stability: true`) judges each output three times (or the grader's own larger `votes`) and reports the **flip rate**: the share of outputs where the judge's votes were not all the same. It costs about three times as much, and the agreement it reports is the majority verdict, as a run with that setting would give.
+
+**Tune the rubric.** In the console, expand the rubric on the Graders tab after a check:
+
+- **Suggest examples from disagreements** proposes up to three few-shot examples from where the judge and you disagreed (one too lenient, one too strict first). The example text is the stored output, the reason is your label note, and nothing changes until you press **Add to the rubric's examples** (up to 6 per rubric). The API is `POST /api/evals/:id/graders/:grader/suggest-examples`.
+- **Try a different rubric** measures new rubric text on the chosen split without saving it (the API takes a `candidate` with `rubric`, `examples`, `judge` or `judge_settings`) and shows the kappa change against the saved rubric. **Save rubric to the eval** writes it through the normal eval update. Candidate measurements are stored but never shown as the grader's calibration. Tune on `dev`, then confirm on `held_out`.
+
+Calibration sends your labeled outputs to the judge model's provider, like a run does. It is manual only. The MCP tools are `calibrate_eval_grader` (costs money, never available to eval sessions) and `list_grader_calibrations` (read-only).
+
 ## Not built {#not-built}
 
 These are not part of this release:
 
 - **`command` graders** (graders that run a command in a workspace).
-- **Judge calibration.** Rubrics are shown as "Not calibrated": nothing checks the judge against your labels, and reviews are not used for that.
+- **Automatic rubric rewriting, judge ensembles across models and pairwise judging.** Calibration measures and suggests examples; it never rewrites your rubric. Result-level reviews are not used for calibration.
 - **Pipeline evals** (evaluating a whole pipeline end to end).
 - **CI triggers or scheduled eval runs.** `sf eval run` works in CI, but nothing starts evals on a schedule.
 - Synthetic data generation, production monitoring, red-teaming and deleting an eval from the console.
@@ -733,7 +779,7 @@ Not built for **agent evals**:
 - **Red-teaming and adversarial scenario generators**, and **auto-generated scenarios**. You write or import scenarios.
 - **Production or online evals.** Evals run on scenarios, not on live traffic.
 - **Multi-agent topologies as a target.** One agent is the target; its sub-agents run inside it.
-- **Human labelling and judge calibration** for conversations, as for stages.
+- **A labeling queue** and golden labels in datasets. Per-grader labels work on conversations, but you label whole conversations in the case drawer.
 - **Scheduled or CI triggers.** `sf eval run` and its exit codes work in CI, but nothing starts runs for you.
 - **A `groundedness` grader**, and a revision picker in the run dialog (a run uses the agent's current revision).
 - **A shipped simulated sample.** The sample is script mode; the README shows how to make it simulated.

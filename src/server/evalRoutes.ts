@@ -50,6 +50,7 @@ import {
   updateEvalFile,
 } from "../config/writeEval.js";
 import { CompareMismatchError } from "../evals/compare.js";
+import { suggestExamples } from "../evals/calibrationSuggest.js";
 import { EVAL_LIMITS, EVAL_REVIEW_LABELS, EVAL_STARTED_VIA } from "../evals/constants.js";
 import { PINNED_PROMPTFOO_VERSION } from "../evals/engine/promptfoo/pinned.js";
 import type { EngineStatus } from "../evals/engine/promptfoo/status.js";
@@ -110,8 +111,8 @@ import {
   type WireResultDetail,
 } from "../evals/read/runs.js";
 import { EvalStoreError } from "../evals/storeError.js";
-import type { EvalRunRow } from "../evals/storeTypes.js";
-import type { EvalFile, EvalPlan } from "../evals/types.js";
+import type { EvalCalibrationRow, EvalRunRow } from "../evals/storeTypes.js";
+import type { EvalFile, EvalPlan, JudgeSettings, RubricExample } from "../evals/types.js";
 import { writeAudit } from "../logging/audit.js";
 import type { Logger } from "../logging/logger.js";
 import type { RunStore } from "../runstore/port.js";
@@ -160,6 +161,7 @@ const RUN_ERROR_STATUS: Record<string, number> = {
   EVAL_ENGINE_UNAVAILABLE: 503,
   EVAL_NODE_TOO_OLD: 503,
   EVAL_TAGS_ON_PASSED_RESULT: 400,
+  EVAL_CALIBRATION_NO_LABELS: 422,
 };
 
 function sendError(c: Ctx, status: number, code: string, message: string, extra: Record<string, unknown> = {}): void {
@@ -780,7 +782,10 @@ async function sendEstimate(c: Ctx, plan: EvalPlan, previous: EstimatePreviousRu
   const agent = plan.target.kind === "agent" ? await agentEstimateBlock(c, plan) : undefined;
   const estimate = estimateRun({
     resultsTotal: plan.cases.length * plan.repeats,
-    rubricGraderCount: plan.graders.filter((g) => g.type === "rubric" || g.type === "goal_reached").length,
+    rubricGraderCount: plan.graders.reduce(
+      (calls, g) => (g.type === "rubric" || g.type === "goal_reached" ? calls + (g.judgeSettings?.votes ?? 1) : calls),
+      0,
+    ),
     previous,
     recentStageCosts: await recentStageCosts(c, {
       ...(plan.target.kind === "stage" && plan.target.pipelinePath !== undefined ? { pipelinePath: plan.target.pipelinePath } : {}),
@@ -947,6 +952,176 @@ async function handleReviewPut(c: Ctx, id: string, caseId: string, repeat: numbe
   } catch (err) {
     if (err instanceof EvalStoreError) throw err;
     if (err instanceof Error) throw bad(err.message);
+    throw err;
+  }
+}
+
+const CALIBRATION_SPLITS = ["all", "dev", "held_out"] as const;
+
+type CandidateInput = { rubric?: string; examples?: RubricExample[]; judge?: string; judgeSettings?: JudgeSettings };
+
+function candidateFrom(raw: unknown): CandidateInput | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!isRecord(raw)) throw bad(`"candidate" must be an object`);
+  const out: CandidateInput = {};
+  if (raw.judge_settings !== undefined) {
+    if (!isRecord(raw.judge_settings)) throw bad(`"candidate.judge_settings" must be an object`);
+    const js = raw.judge_settings;
+    const settings: JudgeSettings = {};
+    if (js.temperature !== undefined) {
+      if (typeof js.temperature !== "number" || js.temperature < 0 || js.temperature > 1) {
+        throw bad(`"candidate.judge_settings.temperature" must be a number from 0 to 1`);
+      }
+      settings.temperature = js.temperature;
+    }
+    if (js.reasoning !== undefined) {
+      if (typeof js.reasoning !== "boolean") throw bad(`"candidate.judge_settings.reasoning" must be a boolean`);
+      settings.reasoning = js.reasoning;
+    }
+    if (js.votes !== undefined) {
+      if (typeof js.votes !== "number" || ![1, 3, 5].includes(js.votes)) throw bad(`"candidate.judge_settings.votes" must be 1, 3 or 5`);
+      settings.votes = js.votes;
+    }
+    out.judgeSettings = settings;
+  }
+  if (raw.rubric !== undefined) {
+    if (typeof raw.rubric !== "string" || raw.rubric.trim() === "") throw bad(`"candidate.rubric" must be a non-empty string`);
+    out.rubric = raw.rubric;
+  }
+  if (raw.judge !== undefined) {
+    if (typeof raw.judge !== "string" || raw.judge.trim() === "") throw bad(`"candidate.judge" must be a non-empty string`);
+    out.judge = raw.judge;
+  }
+  if (raw.examples !== undefined) {
+    if (!Array.isArray(raw.examples) || raw.examples.length > 6) throw bad(`"candidate.examples" must be an array of at most 6`);
+    out.examples = raw.examples.map((e): RubricExample => {
+      if (!isRecord(e) || typeof e.output !== "string") throw bad(`Each candidate example needs an "output" string`);
+      const reason = typeof e.reason === "string" ? { reason: e.reason } : {};
+      if (e.verdict === "pass" || e.verdict === "fail") return { verdict: e.verdict, output: e.output, ...reason };
+      if (typeof e.score === "number" && Number.isInteger(e.score) && e.score >= 1 && e.score <= 5) {
+        return { score: e.score, output: e.output, ...reason };
+      }
+      throw bad(`Each candidate example needs a verdict (pass or fail) or a score from 1 to 5`);
+    });
+  }
+  return out;
+}
+
+async function handleGraderLabelPut(c: Ctx, id: string, caseId: string, repeat: number, graderId: string): Promise<void> {
+  const body = await readBody(c);
+  await runByIdOr404(c, id);
+  let label: "pass" | "fail" | null;
+  if (body.label === null) label = null;
+  else if (typeof body.label === "string" && (EVAL_REVIEW_LABELS as readonly string[]).includes(body.label)) {
+    label = body.label as "pass" | "fail";
+  } else throw bad(`"label" must be pass, fail or null`);
+  if (body.note !== undefined && body.note !== null) {
+    if (typeof body.note !== "string" || body.note.length > EVAL_LIMITS.reviewNoteMaxChars) {
+      throw bad(`"note" must be a string of at most ${EVAL_LIMITS.reviewNoteMaxChars} characters or null`);
+    }
+  }
+  const results = await c.store.getEvalResultsForCase(id, caseId);
+  const result = results.find((r) => r.repeatIndex === repeat);
+  if (!result) throw new EvalStoreError("EVAL_RUN_NOT_FOUND", `No result for ${caseId}#${repeat} in ${id}`);
+  const grade = result.grades.find((g) => g.graderId === graderId);
+  if (!grade || (grade.graderType !== "rubric" && grade.graderType !== "goal_reached")) {
+    throw bad(`Grader ${graderId} is not a judged grader on this result`);
+  }
+  const row = await c.store.putEvalGraderLabel(id, caseId, repeat, graderId, {
+    label,
+    ...(body.note !== undefined ? { note: body.note as string | null } : {}),
+  });
+  audit(c, "eval_grader_label", "ok", id);
+  c.json(c.res, 200, row === null ? { label: null, note: null } : { label: row.label, note: row.note });
+}
+
+function calibrationToWire(r: EvalCalibrationRow): Record<string, unknown> {
+  return {
+    id: r.id,
+    grader_id: r.graderId,
+    grader_hash: r.graderHash,
+    judge: r.judge,
+    prompt_version: r.promptVersion,
+    split: r.split,
+    candidate: r.candidate,
+    stats: r.stats,
+    disagreements: r.disagreements.map((d) => ({
+      ...(d.evalRunId !== undefined ? { eval_run_id: d.evalRunId } : {}),
+      case_id: d.caseId,
+      repeat_index: d.repeatIndex,
+      label: d.label,
+      judge: d.judge,
+      reason: d.reason,
+    })),
+    cost_usd: r.costUsd,
+    created_at: r.createdAt,
+  };
+}
+
+async function handleCalibrationList(c: Ctx, id: string, graderId: string): Promise<void> {
+  const root = await locateEvalRoot(rootOptions(c), wireFromQuery(c), id);
+  const candidates = c.url.searchParams.get("include_candidates") === "true";
+  const items = await c.store.listEvalCalibrations(root.path, id, graderId, candidates);
+  c.json(c.res, 200, { items: items.map(calibrationToWire), next_cursor: null });
+}
+
+async function handleSuggestExamples(c: Ctx, id: string, graderId: string): Promise<void> {
+  const body = await readBody(c);
+  if (body.calibration_id !== undefined && typeof body.calibration_id !== "string") {
+    throw bad(`"calibration_id" must be a string`);
+  }
+  const { projectRoot, ref } = await evalRootFor(c, wireFromBody(body), id);
+  const outcome = await loadEvalOutcome(ref.absPath, projectRoot);
+  if (!outcome.ok) throw new EvalApiError(422, "EVAL_INVALID", "Eval definition is invalid");
+  const grader = outcome.value.graders.find((g) => g.id === graderId);
+  if (!grader || grader.type !== "rubric") {
+    throw new EvalApiError(422, "EVAL_INVALID", `Grader ${graderId} is not a rubric grader of this eval`);
+  }
+  const calibrations = await c.store.listEvalCalibrations(projectRoot, id, graderId, true, 50);
+  const calibration =
+    body.calibration_id !== undefined
+      ? calibrations.find((x) => x.id === body.calibration_id)
+      : calibrations.find((x) => !x.candidate);
+  if (!calibration) {
+    throw new EvalApiError(404, "EVAL_RUN_NOT_FOUND", "No calibration to suggest examples from; check the judge against your labels first");
+  }
+  const items = await suggestExamples(c.store, {
+    projectRoot,
+    evalId: id,
+    graderId,
+    scale: grader.scale,
+    calibration,
+  });
+  c.json(c.res, 200, { calibration_id: calibration.id, items });
+}
+
+async function handleCalibrate(c: Ctx, id: string, graderId: string): Promise<void> {
+  const body = await readBody(c);
+  const split = body.split === undefined ? "all" : body.split;
+  if (typeof split !== "string" || !(CALIBRATION_SPLITS as readonly string[]).includes(split)) {
+    throw bad(`"split" must be one of ${CALIBRATION_SPLITS.join(", ")}`);
+  }
+  if (body.max_cost_usd !== undefined && (typeof body.max_cost_usd !== "number" || !(body.max_cost_usd > 0))) {
+    throw bad(`"max_cost_usd" must be a positive number`);
+  }
+  const candidate = candidateFrom(body.candidate);
+  if (body.stability !== undefined && typeof body.stability !== "boolean") throw bad(`"stability" must be a boolean`);
+  const { projectRoot, ref } = await evalRootFor(c, wireFromBody(body), id);
+  engineCheck(c);
+  try {
+    const out = await c.evalRunManager.calibrate({
+      projectRoot,
+      evalPath: ref.absPath,
+      graderId,
+      split: split as (typeof CALIBRATION_SPLITS)[number],
+      ...(candidate !== undefined ? { candidate } : {}),
+      ...(body.max_cost_usd !== undefined ? { maxCostUsd: body.max_cost_usd as number } : {}),
+      ...(body.stability === true ? { stability: true } : {}),
+    });
+    audit(c, "eval_calibrate", "ok");
+    c.json(c.res, 200, calibrationToWire(out.calibration));
+  } catch (err) {
+    audit(c, "eval_calibrate", "error", undefined, err instanceof EvalRunError ? err.code : "internal_error");
     throw err;
   }
 }
@@ -1460,6 +1635,12 @@ export async function handleEvalRoutes(
   if (method === "GET" && match) return run(() => handleRunByNumber(c, seg(match![1]), Number(match![2])));
   match = m(/^\/api\/evals\/([^/]+)\/runs$/);
   if (method === "POST" && match) return run(() => handleRunStart(c, seg(match![1])));
+  match = m(/^\/api\/evals\/([^/]+)\/graders\/([^/]+)\/calibrations$/);
+  if (method === "GET" && match) return run(() => handleCalibrationList(c, seg(match![1]), seg(match![2])));
+  match = m(/^\/api\/evals\/([^/]+)\/graders\/([^/]+)\/suggest-examples$/);
+  if (method === "POST" && match) return run(() => handleSuggestExamples(c, seg(match![1]), seg(match![2])));
+  match = m(/^\/api\/evals\/([^/]+)\/graders\/([^/]+)\/calibrate$/);
+  if (method === "POST" && match) return run(() => handleCalibrate(c, seg(match![1]), seg(match![2])));
   match = m(/^\/api\/evals\/([^/]+)\/failure-types$/);
   if (method === "GET" && match) return run(() => handleFailureTypes(c, seg(match![1])));
   match = m(/^\/api\/evals\/([^/]+)$/);
@@ -1481,6 +1662,10 @@ export async function handleEvalRoutes(
   match = m(/^\/api\/eval-runs\/([^/]+)\/results\/([^/]+)\/(\d+)\/review$/);
   if (method === "PUT" && match) {
     return run(() => handleReviewPut(c, seg(match![1]), seg(match![2]), Number(match![3])));
+  }
+  match = m(/^\/api\/eval-runs\/([^/]+)\/results\/([^/]+)\/(\d+)\/graders\/([^/]+)\/label$/);
+  if (method === "PUT" && match) {
+    return run(() => handleGraderLabelPut(c, seg(match![1]), seg(match![2]), Number(match![3]), seg(match![4])));
   }
   const triageRoute = matchEvalTriageRoute(c, seg);
   if (triageRoute) return run(triageRoute);

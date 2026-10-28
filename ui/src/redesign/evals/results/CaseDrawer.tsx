@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { LuChevronLeft, LuChevronRight, LuCheck, LuExternalLink, LuRefreshCw, LuX } from "react-icons/lu";
-import { acceptEvalSuggestions, dismissEvalSuggestions, putEvalReview, tryEvalCase } from "../../../api";
+import { acceptEvalSuggestions, dismissEvalSuggestions, putEvalGraderLabel, putEvalReview, tryEvalCase } from "../../../api";
 import { suggestionLine } from "./triageModel";
 import type { EvalSuggestion, EvalResultDetail, EvalRunDetail, EvalTryResult } from "../../../api/evalTypes";
 import { agentRunPath, datasetPath, navigate, runStreamPath } from "../../../routes";
@@ -42,7 +42,46 @@ import { useAgentSession, useCaseResults, useStageRunExists } from "./useResults
 
 const LABEL = "text-[11px] font-medium uppercase tracking-wide text-[var(--sf-text-3)]";
 
-function GradeList({ rows }: { rows: GradeRowView[] }) {
+function HumanLabel({
+  row,
+  onLabel,
+}: {
+  row: GradeRowView;
+  onLabel: (graderId: string, label: "pass" | "fail" | null) => void;
+}) {
+  const pick = (label: "pass" | "fail") => onLabel(row.id, row.humanLabel === label ? null : label);
+  return (
+    <div className="flex items-center gap-2 pl-5 text-xs text-[var(--sf-text-3)]">
+      <span>Your verdict</span>
+      {(["pass", "fail"] as const).map((label) => (
+        <button
+          key={label}
+          type="button"
+          aria-pressed={row.humanLabel === label}
+          onClick={() => pick(label)}
+          className={`rounded border px-2 py-0.5 ${
+            row.humanLabel === label
+              ? "border-[var(--sf-text-1)] text-[var(--sf-text-1)]"
+              : "border-[var(--sf-hairline)] hover:text-[var(--sf-text-1)]"
+          }`}
+        >
+          {label === "pass" ? "Pass" : "Fail"}
+        </button>
+      ))}
+      {row.humanLabel !== null && row.ok !== null && (row.humanLabel === "pass") !== row.ok ? (
+        <span className="text-[var(--sf-needs)]">Differs from the judge</span>
+      ) : null}
+    </div>
+  );
+}
+
+function GradeList({
+  rows,
+  onLabel,
+}: {
+  rows: GradeRowView[];
+  onLabel?: (graderId: string, label: "pass" | "fail" | null) => void;
+}) {
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
       {rows.map((row, i) => (
@@ -64,6 +103,7 @@ function GradeList({ rows }: { rows: GradeRowView[] }) {
             <span className={`${MONO_CLASS} ${row.failed ? "text-[var(--sf-fail)]" : "text-[var(--sf-ok)]"}`}>{row.valueText}</span>
           </div>
           {row.reason ? <p className="pl-5 text-xs text-[var(--sf-text-2)]">{row.reason}</p> : null}
+          {onLabel && row.judged ? <HumanLabel row={row} onLabel={onLabel} /> : null}
         </div>
       ))}
     </div>
@@ -356,6 +396,16 @@ export function CaseDrawer({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  async function labelGrader(graderId: string, label: "pass" | "fail" | null) {
+    if (!result) return;
+    try {
+      await putEvalGraderLabel(run.eval_run_id, result.case_id, result.repeat_index, graderId, { label });
+      reload();
+    } catch {
+      reload();
+    }
+  }
+
   async function runAgain() {
     setRerun({ busy: true, error: null, result: null });
     try {
@@ -519,7 +569,7 @@ export function CaseDrawer({
               {agentRun && section === "grades" && !errored ? (
                 <section className="flex flex-col gap-2">
                   <h3 className={LABEL}>Grades for repeat {result.repeat_index + 1}</h3>
-                  <GradeList rows={gradeRows(result)} />
+                  <GradeList rows={gradeRows(result)} onLabel={(id, label) => void labelGrader(id, label)} />
                 </section>
               ) : null}
 
@@ -569,7 +619,7 @@ export function CaseDrawer({
                   ) : null}
                   <section className="flex flex-col gap-2">
                     <h3 className={LABEL}>Grades for repeat {result.repeat_index + 1}</h3>
-                    <GradeList rows={gradeRows(result)} />
+                    <GradeList rows={gradeRows(result)} onLabel={(id, label) => void labelGrader(id, label)} />
                   </section>
                 </>
               )}

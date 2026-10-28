@@ -167,6 +167,7 @@ describe("strip", () => {
 
   it("words the other warnings", () => {
     expect(warningText({ code: "engine_differs" })).toMatch(/engine differs/);
+    expect(warningText({ code: "judge_differs" })).toMatch(/judge model or judge prompt differs/);
     expect(warningText({ code: "few_shared_cases", shared_cases: 3 })).toBe(
       "Only 3 shared cases; at least 5 are needed for a verdict.",
     );
