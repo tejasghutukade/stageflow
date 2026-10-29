@@ -225,6 +225,13 @@ export async function validateEval(
         `Judge model "${grader.judge}" is a floating id; its behavior can change under stored runs. Pin a dated version`,
       );
     }
+    if ((grader.judgeSettings?.votes ?? 1) > 1 && grader.judgeSettings?.temperature === 0) {
+      add(
+        "warning",
+        "eval.judge_votes_no_variation",
+        `Grader "${grader.id}" asks for ${grader.judgeSettings?.votes} votes at temperature 0, so every vote is the same call and the cost is multiplied for nothing`,
+      );
+    }
   }
 
   const paths = resolveEvalPaths(file, loaded.path);
@@ -441,6 +448,13 @@ async function validateAgentEval(
         "warning",
         "eval.judge_unpinned",
         `Judge model "${grader.judge}" is a floating id; its behavior can change under stored runs. Pin a dated version`,
+      );
+    }
+    if ((grader.judgeSettings?.votes ?? 1) > 1 && grader.judgeSettings?.temperature === 0) {
+      add(
+        "warning",
+        "eval.judge_votes_no_variation",
+        `Grader "${grader.id}" asks for ${grader.judgeSettings?.votes} votes at temperature 0, so every vote is the same call and the cost is multiplied for nothing`,
       );
     }
   }

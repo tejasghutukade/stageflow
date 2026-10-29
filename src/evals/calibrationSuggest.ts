@@ -55,7 +55,7 @@ export async function suggestExamples(
   const limit = input.limit ?? EXAMPLE_SUGGESTION_LIMIT;
   const labels = await store.listEvalGraderLabelsForEval(input.projectRoot, input.evalId, input.graderId);
   const notes = new Map(labels.map((l) => [`${l.evalRunId}#${l.caseId}#${l.repeatIndex}`, l.note]));
-  const dev = input.calibration.disagreements.filter((d) => calibrationSplitOf(d.caseId, d.repeatIndex) === "dev");
+  const dev = input.calibration.disagreements.filter((d) => calibrationSplitOf(d.caseId) === "dev");
   const lenient = dev.filter((d) => d.judge === "pass");
   const strict = dev.filter((d) => d.judge === "fail");
   const ordered: typeof lenient = [];

@@ -51,10 +51,10 @@ export function calibrationView(c: EvalCalibration): CalibrationView {
 }
 
 /** True while a stored calibration still describes the grader as it is now. */
-export function calibrationCurrent(c: EvalCalibration | null, graderHash: string | null, judge: string | null): boolean {
+export function calibrationCurrent(c: EvalCalibration | null, graderHash: string | null): boolean {
   if (c === null || c.candidate) return false;
   if (graderHash === null) return false;
-  return c.grader_hash === graderHash && (judge === null || c.judge === judge);
+  return c.grader_hash === graderHash;
 }
 
 export function calibrationBadge(c: EvalCalibration | null, current: boolean): string {

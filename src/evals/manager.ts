@@ -284,6 +284,7 @@ export class EvalRunManager {
   private reserved = false;
   private trying = false;
   private tryingRunId: string | null = null;
+  private calibrationCancel: AbortController | null = null;
 
   constructor(private readonly deps: EvalRunManagerDeps) {
     this.store = deps.store;
@@ -750,6 +751,10 @@ export class EvalRunManager {
   }
 
   async cancel(evalRunId: string): Promise<boolean> {
+    if (this.calibrationCancel !== null && this.tryingRunId === evalRunId) {
+      this.calibrationCancel.abort();
+      return true;
+    }
     const live = this.live;
     if (live === undefined || live.evalRunId !== evalRunId) {
       if ((await this.store.getEvalRun(evalRunId)) === null) {
@@ -907,6 +912,11 @@ export class EvalRunManager {
     const evalRunId = `${EVAL_RUN_ID_PREFIX}${randomBytes(6).toString("hex")}`;
     this.tryingRunId = evalRunId;
     const abort = new AbortController();
+    const cancel = new AbortController();
+    this.calibrationCancel = cancel;
+    const relay = () => cancel.abort();
+    if (input.signal?.aborted) relay();
+    input.signal?.addEventListener("abort", relay, { once: true });
     try {
       const engine = this.engines(this.engineName);
       const engineInfo = { name: engine.name, version: await engine.version(), nodeVersion: process.versions.node };
@@ -931,8 +941,11 @@ export class EvalRunManager {
         base,
         found,
         abort,
+        cancel.signal,
       );
     } finally {
+      input.signal?.removeEventListener("abort", relay);
+      this.calibrationCancel = null;
       this.trying = false;
       this.tryingRunId = null;
       await this.cleanupWorkDir(evalRunId);

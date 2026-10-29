@@ -22,6 +22,8 @@ export type CalibrateInput = {
   maxCostUsd?: number;
   /** Judge each output 3 times (or the grader's own larger vote count) and report how often the verdict splits. */
   stability?: boolean;
+  /** Cancels the check (for example when the request closes); nothing is stored when it fires. */
+  signal?: AbortSignal;
 };
 
 export type CalibrateResult = {
@@ -54,6 +56,8 @@ export async function measureCalibration(
   base: EvalPlan,
   found: JudgedGrader,
   abort: AbortController,
+  /** Fires when the caller cancels; the budget limit uses `abort` instead and still stores the partial reading. */
+  cancel: AbortSignal,
 ): Promise<CalibrateResult> {
   let grader = found;
   if (input.candidate !== undefined) {
@@ -125,7 +129,15 @@ export async function measureCalibration(
       else log(level, message);
     },
   };
-  await engine.run(plan, io, abort.signal);
+  const stop = () => abort.abort();
+  if (cancel.aborted) stop();
+  cancel.addEventListener("abort", stop, { once: true });
+  try {
+    await engine.run(plan, io, abort.signal);
+  } finally {
+    cancel.removeEventListener("abort", stop);
+  }
+  if (cancel.aborted) throw new EvalRunError("EVAL_CALIBRATION_CANCELLED", "The check was cancelled");
 
   const voteSets: boolean[][] = [];
   const measured: Array<{ caseId: string; repeatIndex: number; label: boolean; judge: boolean }> = [];

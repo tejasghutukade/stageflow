@@ -48,13 +48,11 @@ describe("stability row", () => {
 
 describe("calibration badge", () => {
   it("is current only for the same grader hash and judge, never for a candidate", () => {
-    expect(calibrationCurrent(cal, "h1", "anthropic/j")).toBe(true);
-    expect(calibrationCurrent(cal, "h2", "anthropic/j")).toBe(false);
-    expect(calibrationCurrent(cal, "h1", "anthropic/other")).toBe(false);
-    expect(calibrationCurrent({ ...cal, candidate: true }, "h1", "anthropic/j")).toBe(false);
-    expect(calibrationCurrent(null, "h1", "anthropic/j")).toBe(false);
-    expect(calibrationCurrent(cal, null, null)).toBe(false);
-    expect(calibrationCurrent(cal, "h1", null)).toBe(true);
+    expect(calibrationCurrent(cal, "h1")).toBe(true);
+    expect(calibrationCurrent(cal, "h2")).toBe(false);
+    expect(calibrationCurrent({ ...cal, candidate: true }, "h1")).toBe(false);
+    expect(calibrationCurrent(null, "h1")).toBe(false);
+    expect(calibrationCurrent(cal, null)).toBe(false);
   });
 
   it("labels the states", () => {

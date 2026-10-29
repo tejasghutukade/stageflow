@@ -52,9 +52,9 @@ describe("computeCalibration", () => {
 
 describe("calibrationSplitOf", () => {
   it("is stable and roughly 70/30", () => {
-    expect(calibrationSplitOf("a", 0)).toBe(calibrationSplitOf("a", 0));
+    expect(calibrationSplitOf("a")).toBe(calibrationSplitOf("a"));
     let dev = 0;
-    for (let i = 0; i < 1000; i++) if (calibrationSplitOf(`case-${i}`, 0) === "dev") dev++;
+    for (let i = 0; i < 1000; i++) if (calibrationSplitOf(`case-${i}`) === "dev") dev++;
     expect(dev).toBeGreaterThan(640);
     expect(dev).toBeLessThan(760);
   });

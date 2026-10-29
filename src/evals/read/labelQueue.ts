@@ -28,7 +28,7 @@ export async function buildLabelQueue(store: RunStore, id: string, graderId: str
   const gradeOf = (grades: EvalGradeRow[]) => grades.find((g) => g.graderId === graderId);
   const known = results.some((r) => gradeOf(r.grades) !== undefined);
   if (!known) {
-    throw new EvalApiError(404, "EVAL_RUN_NOT_FOUND", `Grader ${graderId} has no grades in run ${id}`);
+    throw new EvalApiError(404, "EVAL_GRADER_NOT_FOUND", `Grader ${graderId} has no grades in run ${id}`);
   }
   const judged = results.find((r) => {
     const g = gradeOf(r.grades);
@@ -71,14 +71,13 @@ export async function buildLabelQueue(store: RunStore, id: string, graderId: str
  */
 export async function buildLabelSummary(store: RunStore, id: string, graderId: string) {
   const row = await runByIdOr404(store, id);
-  const [labels, runLabels, results] = await Promise.all([
+  const [labels, runLabels, graded] = await Promise.all([
     store.listEvalGraderLabelsForEval(row.projectRoot, row.evalId, graderId),
     store.listEvalGraderLabels(row.evalRunId),
-    store.listEvalResults(row.evalRunId),
+    store.listGradedResultKeys(row.evalRunId, graderId),
   ]);
   const labeled = new Set(runLabels.filter((l) => l.graderId === graderId).map((l) => resultKey(l.caseId, l.repeatIndex)));
-  const unlabeled = results
-    .filter((r) => r.grades.some((g) => g.graderId === graderId && g.status === "graded"))
+  const unlabeled = graded
     .filter((r) => !labeled.has(resultKey(r.caseId, r.repeatIndex)))
     .map((r) => ({ case_id: r.caseId, repeat_index: r.repeatIndex }));
   return {

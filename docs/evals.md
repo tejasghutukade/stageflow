@@ -682,6 +682,7 @@ Agent evals have their own table in [Troubleshooting agent evals](#troubleshooti
 | `EVAL_TAGS_ON_PASSED_RESULT` | 400 | Failure-type tags apply only to results marked failed |
 | `EVAL_REAL_TOOLS_NOT_CONFIRMED` | 422 | `tools: real` without the per-run consent |
 | `EVAL_CALIBRATION_NO_LABELS` | 422 | No labeled result can be re-judged for that grader; label results first |
+| `EVAL_CALIBRATION_CANCELLED` | 409 | The check was cancelled (the request closed, or the run was cancelled) before it finished; nothing was stored |
 | `EVAL_CLASSIFIER_UNAVAILABLE` | 422 | No failure classifier can run (`missing: "typesafe_key"` or `"judge_model"`) |
 | `EVAL_COMPARE_MISMATCH` | 400 | The two runs have different targets |
 | `EVAL_ENGINE_UNAVAILABLE`, `EVAL_NODE_TOO_OLD` | 503 | The engine is not installed, or Node is older than 22.22.0 |
@@ -752,7 +753,7 @@ The judge then re-reads the **stored outputs** of every result you labeled for t
 
 You get the number of labels, **agreement**, **Cohen's kappa** (agreement beyond chance), how often the judge passes when you pass and fails when you fail, the confusion counts, and the list of results where it disagrees with you, each with the judge's reason. Warnings: fewer than 20 labels (`low_n`), a label set that is mostly one verdict (`imbalanced`), and a judge and label set that each gave a single verdict, where kappa cannot be computed (`no_variance`). There is no universal kappa cutoff; compare it with how much two people would agree on the same task. Re-run it after you change the rubric, its examples or the judge: the badge reads "Out of date" when the grader changed since the last check.
 
-`--split dev|held_out` measures a fixed 70/30 split of your labels (by a hash of the case and repeat), so you can tune the rubric on `dev` and confirm on `held_out`.
+`--split dev|held_out` measures a fixed 70/30 split of your labels (by a hash of the case, so every repeat of a case stays on one side), so you can tune the rubric on `dev` and confirm on `held_out`.
 
 **Stability.** `--stability` (or `stability: true`) judges each output three times (or the grader's own larger `votes`) and reports the **flip rate**: the share of outputs where the judge's votes were not all the same. It costs about three times as much, and the agreement it reports is the majority verdict, as a run with that setting would give.
 

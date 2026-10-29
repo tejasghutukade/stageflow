@@ -681,6 +681,8 @@ export interface RunStore {
     patch: EvalGraderLabelPatch,
   ): Promise<EvalGraderLabelRow | null>;
   listEvalGraderLabels(evalRunId: string): Promise<EvalGraderLabelRow[]>;
+  /** Which results a grader graded in a run, keys only. */
+  listGradedResultKeys(evalRunId: string, graderId: string): Promise<Array<{ caseId: string; repeatIndex: number }>>;
   /** Across all runs of the eval, newest label first. */
   listEvalGraderLabelsForEval(projectRoot: string, evalId: string, graderId: string): Promise<EvalGraderLabelRow[]>;
   insertEvalCalibration(input: EvalCalibrationInput): Promise<EvalCalibrationRow>;

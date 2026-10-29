@@ -1,3 +1,5 @@
+import { normalizeOneToFive } from "./scoring.js";
+import { majorityPasses, meanOf } from "./stats.js";
 import type { NormalizedGrade } from "./types.js";
 
 export const JUDGE_ERROR_CODE = "EVAL_JUDGE_ERROR";
@@ -39,11 +41,11 @@ export function combineVotes(
   let rawValue: number;
   let score: number;
   if (grader.scale === "1_to_5") {
-    rawValue = valid.reduce((total, g) => total + (g.rawValue ?? 0), 0) / valid.length;
-    score = (rawValue - 1) / 4;
+    rawValue = meanOf(valid.map((g) => g.rawValue ?? 0));
+    score = normalizeOneToFive(rawValue);
     passed = rawValue >= grader.passAt;
   } else {
-    passed = valid.filter((g) => g.passed === true).length * 2 > valid.length;
+    passed = majorityPasses(valid.filter((g) => g.passed === true).length, valid.length);
     rawValue = passed ? 1 : 0;
     score = rawValue;
   }

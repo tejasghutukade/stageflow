@@ -61,7 +61,7 @@ export async function collectCalibrationSamples(
   const perCase = new Map<string, number>();
   const out: CalibrationSampleSource[] = [];
   for (const label of labels) {
-    if (split !== "all" && calibrationSplitOf(label.caseId, label.repeatIndex) !== split) continue;
+    if (split !== "all" && calibrationSplitOf(label.caseId) !== split) continue;
     let results = resultsByRun.get(label.evalRunId);
     if (!results) {
       results = new Map((await store.listEvalResults(label.evalRunId)).map((r) => [`${r.caseId}#${r.repeatIndex}`, r]));

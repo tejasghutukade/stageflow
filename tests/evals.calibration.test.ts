@@ -184,6 +184,22 @@ describe("EvalRunManager.calibrate", () => {
     expect(await store.listEvalCalibrations(root, "review", "clear", true)).toHaveLength(1);
   });
 
+  it("stores nothing and frees the claim when the check is cancelled", async () => {
+    const first = manager(new FakeEngine({ judge: () => ({ verdict: "pass" }) }));
+    const { evalRunId } = await first.start({ projectRoot: root, evalPath: EVAL_REL, startedVia: "cli" });
+    await first.awaitFinished(evalRunId, 10_000);
+    await store.putEvalGraderLabel(evalRunId, "c1", 0, "clear", { label: "pass" });
+    const m = manager(new FakeEngine({ judge: () => ({ verdict: "pass" }) }));
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await expect(
+      m.calibrate({ projectRoot: root, evalPath: EVAL_REL, graderId: "clear", signal: cancelled.signal }),
+    ).rejects.toMatchObject({ code: "EVAL_CALIBRATION_CANCELLED" });
+    expect(await store.listEvalCalibrations(root, "review", "clear", true)).toHaveLength(0);
+    const again = await m.calibrate({ projectRoot: root, evalPath: EVAL_REL, graderId: "clear" });
+    expect(again.stats.n).toBe(1);
+  });
+
   it("refuses with no labels and for a non-judged grader", async () => {
     const m = manager(new FakeEngine());
     await expect(m.calibrate({ projectRoot: root, evalPath: EVAL_REL, graderId: "clear" })).rejects.toMatchObject({
@@ -215,12 +231,12 @@ describe("suggestExamples", () => {
     const first = manager(new FakeEngine({ judge: () => ({ verdict: "pass" }) }));
     const { evalRunId } = await first.start({ projectRoot: root, evalPath: EVAL_REL, startedVia: "cli" });
     await first.awaitFinished(evalRunId, 10_000);
-    await store.putEvalGraderLabel(evalRunId, "c1", 0, "clear", { label: "fail", note: "not actionable" });
+    await store.putEvalGraderLabel(evalRunId, "c1", 0, "clear", { label: "fail" });
     await store.putEvalGraderLabel(evalRunId, "c4", 0, "clear", { label: "pass" });
-    await store.putEvalGraderLabel(evalRunId, "c2", 0, "clear", { label: "fail" });
+    await store.putEvalGraderLabel(evalRunId, "c2", 0, "clear", { label: "fail", note: "not actionable" });
     await store.putEvalGraderLabel(evalRunId, "c3", 0, "clear", { label: "pass" });
 
-    // c1 and c4 are dev rows, c2 and c3 are held-out rows. The judge is wrong on all four.
+    // c2 and c4 are dev rows, c1 and c3 are held-out rows. The judge is wrong on all four.
     const m = manager(
       new FakeEngine({ judge: (_g, testCase) => ({ verdict: ["c3", "c4"].includes(testCase.id) ? "fail" : "pass", reason: "r" }) }),
     );
@@ -236,9 +252,9 @@ describe("suggestExamples", () => {
       limit: 3,
     });
     expect(items.map((i) => i.judge)).toEqual(["pass", "fail"]);
-    expect(items.map((i) => i.case_id)).toEqual(["c1", "c4"]);
+    expect(items.map((i) => i.case_id)).toEqual(["c2", "c4"]);
     const byCase = new Map(items.map((i) => [i.case_id, i.example]));
-    expect(byCase.get("c1")).toEqual({ verdict: "fail", output: expect.stringContaining("out c1"), reason: "not actionable" });
+    expect(byCase.get("c2")).toEqual({ verdict: "fail", output: expect.stringContaining("out c2"), reason: "not actionable" });
     expect(byCase.get("c4")).toMatchObject({ verdict: "pass" });
     expect("reason" in byCase.get("c4")!).toBe(false);
 

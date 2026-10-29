@@ -25,13 +25,10 @@ import { MONO_CLASS } from "./ResultsParts";
 import { TranscriptList } from "./TranscriptView";
 import { transcriptView } from "./transcriptModel";
 import { rubricOf } from "./tuningModel";
+import { errorMessage } from "./errorText";
 
 const AUTO_ADVANCE_MS = 900;
 const SECTION = "text-[11px] font-medium uppercase tracking-wide text-[var(--sf-text-3)]";
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function browserStorage(): Storage | null {
   try {
@@ -138,7 +135,7 @@ export function LabelQueue({
         setEntries(list);
         if (startKey) setIndex(Math.max(0, list.findIndex((e) => e.key === startKey)));
       },
-      (err) => !cancelled && setError(message(err)),
+      (err) => !cancelled && setError(errorMessage(err)),
     );
     fetchEval(evalId).then(
       (detail) => !cancelled && setRubric(rubricOf(detail.definition, graderId)),
@@ -202,7 +199,7 @@ export function LabelQueue({
         setRevealed(true);
         if (result.agrees) timer.current = window.setTimeout(() => go(index + 1), AUTO_ADVANCE_MS);
       } catch (err) {
-        setError(message(err));
+        setError(errorMessage(err));
       } finally {
         setSaving(false);
       }

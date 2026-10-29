@@ -18,6 +18,6 @@ export function CalibrationChip({ evalId, graderId, graderHash }: { evalId: stri
       cancelled = true;
     };
   }, [evalId, graderId]);
-  const current = calibrationCurrent(latest, graderHash, null);
+  const current = calibrationCurrent(latest, graderHash);
   return <Chip tone={latest && current ? "ok" : "muted"}>{calibrationBadge(latest, current)}</Chip>;
 }

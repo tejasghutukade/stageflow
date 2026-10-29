@@ -73,7 +73,6 @@ export function GradersTab({
                       evalRunId={run.eval_run_id}
                       graderId={row.id}
                       graderHash={run.current?.grader_hashes?.[row.id] ?? null}
-                      judge={null}
                       onOpenCase={onOpenCase}
                       {...(onEvalChanged ? { onEvalChanged } : {})}
                     />

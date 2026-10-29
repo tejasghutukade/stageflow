@@ -8,17 +8,13 @@ import { Chip, MONO_CLASS, TONE_TEXT } from "./ResultsParts";
 import { SPLIT_INFO, SPLIT_ORDER, type Split } from "./splits";
 import { TeachDialog } from "./TeachDialog";
 import { WordingDialog } from "./WordingDialog";
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
+import { errorMessage } from "./errorText";
 
 export function CalibrationPanel({
   evalId,
   evalRunId,
   graderId,
   graderHash,
-  judge,
   onOpenCase,
   onEvalChanged,
 }: {
@@ -26,7 +22,6 @@ export function CalibrationPanel({
   evalRunId: string;
   graderId: string;
   graderHash: string | null;
-  judge: string | null;
   onOpenCase: (caseId: string, repeat: number) => void;
   onEvalChanged?: () => void;
 }) {
@@ -72,7 +67,7 @@ export function CalibrationPanel({
     try {
       return await fn();
     } catch (err) {
-      setError(message(err));
+      setError(errorMessage(err));
       return undefined;
     } finally {
       setBusy(null);
@@ -94,7 +89,7 @@ export function CalibrationPanel({
     void check();
   };
 
-  const current = calibrationCurrent(latest, graderHash, judge);
+  const current = calibrationCurrent(latest, graderHash);
   const view = latest ? calibrationView(latest) : null;
   const reliability = latest ? reliabilityView(latest) : null;
   const advice = counts ? labelAdvice(counts) : null;
@@ -271,7 +266,6 @@ export function CalibrationPanel({
           evalId={evalId}
           graderId={graderId}
           graderHash={graderHash}
-          judge={judge}
           onClose={() => setDialog(null)}
           onSaved={evalChanged}
           onCheckNow={checkNow}

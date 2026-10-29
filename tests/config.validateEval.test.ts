@@ -280,6 +280,19 @@ describe("validateEval: judge drift findings", () => {
   it("a pinned or alias judge id is not flagged", async () => {
     expect(codes(await findingsWith("openai/gpt-4o"))).not.toContain("eval.judge_unpinned");
   });
+
+  it("eval.judge_votes_no_variation warns for several votes at temperature 0 only", async () => {
+    const evalPath = path.join(root, "evals", "valid.eval.yaml");
+    const original = (await import("node:fs")).readFileSync(evalPath, "utf8");
+    const withSettings = (settings: string) =>
+      original.replace("  concurrency: 4", `  concurrency: 4\n  judge_settings:\n${settings}`);
+    await writeFile(evalPath, withSettings("    temperature: 0\n    votes: 3"));
+    const flagged = await validateEval(await load(evalPath, root), { projectRoot: root });
+    expect(codes(flagged)).toContain("eval.judge_votes_no_variation");
+    await writeFile(evalPath, withSettings("    temperature: 0.7\n    votes: 3"));
+    const varied = await validateEval(await load(evalPath, root), { projectRoot: root });
+    expect(codes(varied)).not.toContain("eval.judge_votes_no_variation");
+  });
 });
 
 describe("validateEval: dataset file", () => {

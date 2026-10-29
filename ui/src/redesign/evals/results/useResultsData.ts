@@ -14,12 +14,9 @@ import type {
 } from "../../../api/evalTypes";
 import { agentsApi } from "../../../api/agents";
 import { fetchRunExport, type RunExport } from "./resultsApi";
+import { errorMessage } from "./errorText";
 
 type Async<T> = { data: T | null; error: string | null; loading: boolean };
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 export function useRunNumbers(evalId: string, projectRoot?: string): number[] {
   const [numbers, setNumbers] = useState<number[]>([]);
@@ -75,7 +72,7 @@ export function useResultsPage(evalRunId: string, query: EvalResultsQuery, nonce
         if (!cancelled) setState({ data, error: null, loading: false });
       },
       (err) => {
-        if (!cancelled) setState((prev) => ({ ...prev, error: message(err), loading: false }));
+        if (!cancelled) setState((prev) => ({ ...prev, error: errorMessage(err), loading: false }));
       },
     );
     return () => {
@@ -103,7 +100,7 @@ export function useAllResultsFor(evalRunId: string, query: EvalResultsQuery, ena
       } while (cursor);
       if (!cancelled) setState({ data: all, error: null, loading: false });
     })().catch((err) => {
-      if (!cancelled) setState({ data: null, error: message(err), loading: false });
+      if (!cancelled) setState({ data: null, error: errorMessage(err), loading: false });
     });
     return () => {
       cancelled = true;
@@ -124,7 +121,7 @@ export function useCaseResults(evalRunId: string, caseId: string | null) {
         if (!cancelled) setState({ data, error: null, loading: false });
       },
       (err) => {
-        if (!cancelled) setState({ data: null, error: message(err), loading: false });
+        if (!cancelled) setState({ data: null, error: errorMessage(err), loading: false });
       },
     );
     return () => {
@@ -168,7 +165,7 @@ export function useRunExport(evalRunId: string, enabled: boolean): Async<RunExpo
         if (!cancelled) setState({ data, error: null, loading: false });
       },
       (err) => {
-        if (!cancelled) setState({ data: null, error: message(err), loading: false });
+        if (!cancelled) setState({ data: null, error: errorMessage(err), loading: false });
       },
     );
     return () => {

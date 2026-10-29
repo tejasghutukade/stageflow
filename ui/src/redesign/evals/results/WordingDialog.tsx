@@ -7,14 +7,12 @@ import { TONE_TEXT } from "./ResultsParts";
 import { SPLIT_INFO, type Split } from "./splits";
 import { editEvalDefinition } from "./evalEdit";
 import { changeText, rubricOf, withRubric, wordingVerdict, type SplitResult } from "./tuningModel";
+import { ErrorBanner, SavedFooter } from "./DialogParts";
+import { errorMessage } from "./errorText";
 
 type TestSplit = Exclude<Split, "all">;
 
 const SPLITS: TestSplit[] = ["dev", "held_out"];
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function ResultCard({
   title,
@@ -68,7 +66,6 @@ export function WordingDialog({
   evalId,
   graderId,
   graderHash,
-  judge,
   onClose,
   onSaved,
   onCheckNow,
@@ -76,7 +73,6 @@ export function WordingDialog({
   evalId: string;
   graderId: string;
   graderHash: string | null;
-  judge: string | null;
   onClose: () => void;
   /** The eval file changed, so the caller can refresh what depends on it. */
   onSaved: () => void;
@@ -98,7 +94,7 @@ export function WordingDialog({
         setSaved(text);
         setRubric(text);
       },
-      (err) => !cancelled && setError(message(err)),
+      (err) => !cancelled && setError(errorMessage(err)),
     );
     return () => {
       cancelled = true;
@@ -118,14 +114,14 @@ export function WordingDialog({
     try {
       setBusy({ split, text: "Checking the saved wording…" });
       const known = (await fetchEvalCalibrations(evalId, graderId)).items.find(
-        (c: EvalCalibration) => !c.candidate && c.split === split && calibrationCurrent(c, graderHash, judge),
+        (c: EvalCalibration) => !c.candidate && c.split === split && calibrationCurrent(c, graderHash),
       );
       const base = known ?? (await calibrateEvalGrader(evalId, graderId, { split }));
       setBusy({ split, text: "Measuring your wording…" });
       const candidate = await calibrateEvalGrader(evalId, graderId, { split, candidate: { rubric } });
       setResults((r) => ({ ...r, [split]: { saved: base, candidate } }));
     } catch (err) {
-      setError(message(err));
+      setError(errorMessage(err));
     } finally {
       setBusy(null);
     }
@@ -143,7 +139,7 @@ export function WordingDialog({
       setDone(true);
       onSaved();
     } catch (err) {
-      setError(message(err));
+      setError(errorMessage(err));
     } finally {
       setBusy(null);
     }
@@ -160,17 +156,7 @@ export function WordingDialog({
       onClose={onClose}
       footer={
         done ? (
-          <>
-            <span className="text-xs text-[var(--sf-text-3)]">The judge changed, so its old check is out of date.</span>
-            <span className="flex gap-2">
-              <button type="button" className={BTN} onClick={onClose}>
-                Later
-              </button>
-              <button type="button" className={BTN_PRIMARY} onClick={onCheckNow}>
-                Check the judge now
-              </button>
-            </span>
-          </>
+          <SavedFooter onClose={onClose} onCheckNow={onCheckNow} />
         ) : (
           <>
             <span className="text-xs text-[var(--sf-text-3)]">{changed ? "You have unsaved changes." : "No changes yet."}</span>
@@ -186,11 +172,7 @@ export function WordingDialog({
         )
       }
     >
-      {error ? (
-        <p role="alert" className="rounded-lg bg-[var(--sf-fail-bg)] px-3 py-2 text-[13px] text-[var(--sf-fail)]">
-          {error}
-        </p>
-      ) : null}
+      <ErrorBanner text={error} />
       {done ? (
         <p className="text-[13px] text-[var(--sf-text-1)]">
           The new wording is saved on <span className={MONO}>{graderId}</span>. Check the judge again to see its agreement with you on all your labels.

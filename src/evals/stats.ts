@@ -399,12 +399,20 @@ export function computeCalibration(samples: CalibrationSample[]): CalibrationSta
   };
 }
 
-/** Deterministic 70/30 split by a stable hash of the sample identity. */
-export function calibrationSplitOf(caseId: string, repeatIndex: number): "dev" | "held_out" {
+/** A strict majority of valid votes passes; a tie fails. */
+export function majorityPasses(passes: number, valid: number): boolean {
+  return passes * 2 > valid;
+}
+
+export function meanOf(values: readonly number[]): number {
+  return values.reduce((total, v) => total + v, 0) / values.length;
+}
+
+/** Deterministic 70/30 split by a stable hash of the case id, so every repeat of a case lands on the same side. */
+export function calibrationSplitOf(caseId: string): "dev" | "held_out" {
   let h = 2166136261;
-  const text = `${caseId}\u0000${repeatIndex}`;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
+  for (let i = 0; i < caseId.length; i++) {
+    h ^= caseId.charCodeAt(i);
     h = Math.imul(h, 16777619) >>> 0;
   }
   return h % 10 < 7 ? "dev" : "held_out";

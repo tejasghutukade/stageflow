@@ -164,6 +164,7 @@ const RUN_ERROR_STATUS: Record<string, number> = {
   EVAL_NODE_TOO_OLD: 503,
   EVAL_TAGS_ON_PASSED_RESULT: 400,
   EVAL_CALIBRATION_NO_LABELS: 422,
+  EVAL_CALIBRATION_CANCELLED: 409,
 };
 
 function sendError(c: Ctx, status: number, code: string, message: string, extra: Record<string, unknown> = {}): void {
@@ -1034,7 +1035,7 @@ function candidateFrom(raw: unknown): CandidateInput | undefined {
   if (raw.examples !== undefined) {
     if (!Array.isArray(raw.examples) || raw.examples.length > EVAL_LIMITS.rubricExamplesMax) {
       throw bad(`"candidate.examples" must be an array of at most ${EVAL_LIMITS.rubricExamplesMax}`);
-    };
+    }
     out.examples = raw.examples.map((e): RubricExample => {
       if (!isRecord(e) || typeof e.output !== "string") throw bad(`Each candidate example needs an "output" string`);
       const reason = typeof e.reason === "string" ? { reason: e.reason } : {};
@@ -1149,8 +1150,12 @@ async function handleCalibrate(c: Ctx, id: string, graderId: string): Promise<vo
   if (body.stability !== undefined && typeof body.stability !== "boolean") throw bad(`"stability" must be a boolean`);
   const { projectRoot, ref } = await evalRootFor(c, wireFromBody(body), id);
   engineCheck(c);
+  const closed = new AbortController();
+  const onClose = () => closed.abort();
+  c.res.once("close", onClose);
   try {
     const out = await c.evalRunManager.calibrate({
+      signal: closed.signal,
       projectRoot,
       evalPath: ref.absPath,
       graderId,
@@ -1164,6 +1169,8 @@ async function handleCalibrate(c: Ctx, id: string, graderId: string): Promise<vo
   } catch (err) {
     audit(c, "eval_calibrate", "error", undefined, err instanceof EvalRunError ? err.code : "internal_error");
     throw err;
+  } finally {
+    c.res.off("close", onClose);
   }
 }
 

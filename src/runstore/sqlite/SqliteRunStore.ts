@@ -1423,6 +1423,11 @@ export class SqliteRunStore implements RunStore {
     return calibrationStore.putEvalGraderLabel(this.db, evalRunId, caseId, repeatIndex, graderId, patch);
   }
 
+  async listGradedResultKeys(evalRunId: string, graderId: string): Promise<Array<{ caseId: string; repeatIndex: number }>> {
+    await this.ready();
+    return evalStore.listGradedResultKeys(this.db, evalRunId, graderId);
+  }
+
   async listEvalGraderLabels(evalRunId: string): Promise<EvalGraderLabelRow[]> {
     await this.ready();
     return calibrationStore.listEvalGraderLabels(this.db, evalRunId);

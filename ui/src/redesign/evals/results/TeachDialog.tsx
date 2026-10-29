@@ -4,14 +4,12 @@ import type { EvalDefinition, EvalExampleSuggestion } from "../../../api/evalTyp
 import { BTN, BTN_PRIMARY, DialogShell, INPUT, LABEL, MONO } from "../datasets/DialogShell";
 import { editEvalDefinition } from "./evalEdit";
 import { MAX_RUBRIC_EXAMPLES, exampleCount, exampleKind, exampleSlots, withExamples, withReason } from "./tuningModel";
+import { ErrorBanner, SavedFooter } from "./DialogParts";
+import { errorMessage } from "./errorText";
 
 const EXCERPT_CHARS = 420;
 
 const keyOf = (s: EvalExampleSuggestion): string => `${s.eval_run_id}#${s.case_id}#${s.repeat_index}`;
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function Suggestion({
   item,
@@ -100,7 +98,7 @@ export function TeachDialog({
         setReasons(Object.fromEntries(suggested.items.map((s) => [keyOf(s), s.example.reason ?? ""])));
         setChosen(new Set(suggested.items.slice(0, exampleSlots(detail.definition, graderId)).map(keyOf)));
       },
-      (err) => !cancelled && setError(message(err)),
+      (err) => !cancelled && setError(errorMessage(err)),
     );
     return () => {
       cancelled = true;
@@ -134,7 +132,7 @@ export function TeachDialog({
       setPhase("done");
       onAdded();
     } catch (err) {
-      setError(message(err));
+      setError(errorMessage(err));
       setPhase("pick");
     }
   }
@@ -153,17 +151,7 @@ export function TeachDialog({
       onClose={onClose}
       footer={
         phase === "done" ? (
-          <>
-            <span className="text-xs text-[var(--sf-text-3)]">The judge changed, so its old check is out of date.</span>
-            <span className="flex gap-2">
-              <button type="button" className={BTN} onClick={onClose}>
-                Later
-              </button>
-              <button type="button" className={BTN_PRIMARY} onClick={onCheckNow}>
-                Check the judge now
-              </button>
-            </span>
-          </>
+          <SavedFooter onClose={onClose} onCheckNow={onCheckNow} />
         ) : (
           <>
             <span className="text-xs text-[var(--sf-text-3)]">
@@ -183,11 +171,7 @@ export function TeachDialog({
         )
       }
     >
-      {error ? (
-        <p role="alert" className="rounded-lg bg-[var(--sf-fail-bg)] px-3 py-2 text-[13px] text-[var(--sf-fail)]">
-          {error}
-        </p>
-      ) : null}
+      <ErrorBanner text={error} />
       {phase === "done" ? (
         <p className="text-[13px] text-[var(--sf-text-1)]">
           Added {added} {added === 1 ? "example" : "examples"} to <span className={MONO}>{graderId}</span>. Check the judge again to see whether it helped. For a fair

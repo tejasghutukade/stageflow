@@ -1421,6 +1421,7 @@ On an agent target, `field` and `reference` paths start at the conversation (for
 | `eval.judge_unknown_model` | warning | The judge id is not in the model catalog (the catalog may be offline) |
 | `eval.judge_same_as_stage` | warning | The effective judge is the stage's own model |
 | `eval.judge_unpinned` | warning | The judge id ends in `latest`, so its behavior can change under stored runs |
+| `eval.judge_votes_no_variation` | warning | A judged grader asks for more than one vote at temperature 0, so every vote is the same call |
 | `eval.stage_has_gates` | warning | The target stage declares `gate_kinds` |
 | `eval.stage_needs_checkout` | warning | The stage `requires` a repository |
 | `eval.cases_missing_expected` | warning | A `reference` grader and some cases lack the `expected` path |
