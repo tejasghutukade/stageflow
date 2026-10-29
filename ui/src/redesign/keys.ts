@@ -72,6 +72,32 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return target.isContentEditable;
 }
 
+function editableField(target: EventTarget | null): boolean {
+  if (!target || typeof target !== "object") return false;
+  const el = target as { tagName?: string; isContentEditable?: boolean };
+  if (el.isContentEditable) return true;
+  const tag = el.tagName?.toUpperCase();
+  return tag === "INPUT" || tag === "TEXTAREA";
+}
+
+export function textFieldKeepsKey(event: {
+  key: string;
+  altKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  target: EventTarget | null;
+}): boolean {
+  if (!editableField(event.target)) return false;
+  const key = event.key;
+  const vertical = key === "ArrowUp" || key === "ArrowDown";
+  const horizontal =
+    key === "ArrowLeft" || key === "ArrowRight" || key === "Home" || key === "End";
+  if (!vertical && !horizontal) return false;
+  if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return true;
+  return horizontal;
+}
+
 export function dispatchHotkeys(e: KeyboardEvent): void {
   if (e.defaultPrevented) return;
   const pressed = normalizeHotkeyKey(e);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeHotkeyKey } from "./keys";
+import { normalizeHotkeyKey, textFieldKeepsKey } from "./keys";
 
 function fakeKey(
   key: string,
@@ -26,5 +26,36 @@ describe("normalizeHotkeyKey", () => {
   it("uses the physical letter when alt changes the produced key", () => {
     const event = { ...fakeKey("Ï", { altKey: true, shiftKey: true }), code: "KeyF" } as KeyboardEvent;
     expect(normalizeHotkeyKey(event)).toBe("alt+shift+f");
+  });
+});
+
+const field = { tagName: "INPUT" } as unknown as EventTarget;
+
+describe("textFieldKeepsKey", () => {
+  const base = {
+    altKey: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    target: field,
+  };
+
+  it("leaves word and line movement in the field", () => {
+    expect(textFieldKeepsKey({ ...base, key: "ArrowLeft", altKey: true })).toBe(true);
+    expect(textFieldKeepsKey({ ...base, key: "ArrowRight", metaKey: true })).toBe(true);
+    expect(textFieldKeepsKey({ ...base, key: "ArrowUp", shiftKey: true })).toBe(true);
+    expect(textFieldKeepsKey({ ...base, key: "Home" })).toBe(true);
+    expect(textFieldKeepsKey({ ...base, key: "End" })).toBe(true);
+  });
+
+  it("lets a one-line search keep plain up and down for the list", () => {
+    expect(textFieldKeepsKey({ ...base, key: "ArrowDown" })).toBe(false);
+    expect(textFieldKeepsKey({ ...base, key: "ArrowUp" })).toBe(false);
+  });
+
+  it("ignores arrows when focus is not in a field", () => {
+    expect(
+      textFieldKeepsKey({ ...base, key: "ArrowLeft", altKey: true, target: { tagName: "DIV" } as unknown as EventTarget }),
+    ).toBe(false);
   });
 });
