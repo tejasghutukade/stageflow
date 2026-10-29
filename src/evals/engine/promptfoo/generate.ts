@@ -6,6 +6,7 @@ import { caseGoal, goalRubricText } from "../../graders/goal.js";
 import { VOTE_METRIC_SEPARATOR } from "./normalize.js";
 import { escapeTemplate, renderConversationRubricPrompt, renderRubricPrompt } from "./rubricPrompt.js";
 import { isConversationTarget, type EvalPlan, type PlanCase, type ResolvedGrader } from "../../types.js";
+import { isJudged } from "../../judged.js";
 
 export const CALLBACK_URL_ENV = "STAGEFLOW_EVAL_CALLBACK_URL";
 export const RUN_TOKEN_ENV = "STAGEFLOW_EVAL_TOKEN";
@@ -228,10 +229,6 @@ const MISSING_GOAL_GRADE = `function missingGoal(index) {
 }
 
 `;
-
-function isJudged(grader: ResolvedGrader): grader is Extract<ResolvedGrader, { type: "rubric" | "goal_reached" }> {
-  return grader.type === "rubric" || grader.type === "goal_reached";
-}
 
 export function buildAssertionsSource(plan: EvalPlan, graderModuleUrl: string): string {
   const agent = isConversationTarget(plan.target.kind);

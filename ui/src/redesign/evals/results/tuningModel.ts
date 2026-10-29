@@ -1,5 +1,6 @@
 import type { EvalCalibration, EvalDefinition, EvalExampleSuggestion } from "../../../api/evalTypes";
 
+/** Mirrors `EVAL_LIMITS.rubricExamplesMax` on the server, which rejects more. */
 export const MAX_RUBRIC_EXAMPLES = 6;
 
 type Grader = EvalDefinition["graders"][number];

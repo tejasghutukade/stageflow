@@ -3,6 +3,7 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { AGENT_ID_PATTERN, isReservedAgentId } from "../agents/agentId.js";
 import { canonicalJson, hash6, sha256Hex } from "../evals/canonical.js";
+import { EVAL_LIMITS } from "../evals/constants.js";
 import type {
   EvalBudget,
   EvalConversation,
@@ -614,8 +615,8 @@ function parseExamples(
   scale: "pass_fail" | "1_to_5",
   where: string,
 ): RubricExample[] | undefined {
-  if (!Array.isArray(raw) || raw.length > 6) {
-    c.add("eval.grader_invalid", `${where} "examples" must be an array of at most 6 items`);
+  if (!Array.isArray(raw) || raw.length > EVAL_LIMITS.rubricExamplesMax) {
+    c.add("eval.grader_invalid", `${where} "examples" must be an array of at most ${EVAL_LIMITS.rubricExamplesMax} items`);
     return undefined;
   }
   const out: RubricExample[] = [];

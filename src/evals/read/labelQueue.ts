@@ -3,8 +3,8 @@ import type { EvalGradeRow } from "../storeTypes.js";
 import { resultKey } from "../statsTypes.js";
 import { EvalApiError, runByIdOr404 } from "./api.js";
 import { resultToWire } from "./runs.js";
+import { isJudgedType } from "../judged.js";
 
-const JUDGED_TYPES = new Set(["rubric", "goal_reached"]);
 
 export type LabelCounts = { pass: number; fail: number };
 
@@ -32,7 +32,7 @@ export async function buildLabelQueue(store: RunStore, id: string, graderId: str
   }
   const judged = results.find((r) => {
     const g = gradeOf(r.grades);
-    return g !== undefined && JUDGED_TYPES.has(g.graderType);
+    return g !== undefined && isJudgedType(g.graderType);
   });
   if (!judged) {
     throw new EvalApiError(400, "invalid_request", `Grader ${graderId} is not judged by a model, so it has nothing to label`);

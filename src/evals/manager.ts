@@ -47,6 +47,7 @@ import type {
   RunCaseResult,
 } from "./types.js";
 import { isConversationTarget } from "./types.js";
+import { isJudged } from "./judged.js";
 
 export const EVAL_HOST_STOPPED_REASON = "Host stopped while the run was in progress";
 export const EVAL_DEFAULT_ENGINE = "promptfoo";
@@ -944,7 +945,7 @@ export class EvalRunManager {
       if (!built.ok) throw new EvalRunError("EVAL_INVALID", "Eval is invalid", built.findings);
       const base = built.plan;
       const found = base.graders.find((g) => g.id === input.graderId);
-      if (!found || (found.type !== "rubric" && found.type !== "goal_reached")) {
+      if (!found || !isJudged(found)) {
         throw new EvalRunError("EVAL_INVALID", `Grader ${input.graderId} is not a judged grader of this eval`);
       }
       let grader = found;

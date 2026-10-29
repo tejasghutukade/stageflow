@@ -91,6 +91,8 @@ export const EVAL_LIMITS = {
   labelMaxChars: 80,
   failureTypeNameMaxChars: 60,
   reviewNoteMaxChars: 500,
+  /** Worked examples one rubric may hold. The console mirrors this in `tuningModel.ts`. */
+  rubricExamplesMax: 6,
 } as const;
 
 export const EVAL_RUN_ID_PREFIX = "er_";

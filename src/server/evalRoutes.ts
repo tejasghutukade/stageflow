@@ -131,6 +131,7 @@ import {
 } from "./evalRouteContext.js";
 import { matchEvalTriageRoute } from "./evalTriageRoutes.js";
 import { callerIdFromRequestAuth } from "./requestAuthContext.js";
+import { isJudged, isJudgedType } from "../evals/judged.js";
 
 export type { EvalRoutesDeps };
 
@@ -769,7 +770,7 @@ async function handleRunEstimate(c: Ctx, id: string): Promise<void> {
       resultsExecuted: stats.results_executed,
       rubricGradesGraded: results
         .flatMap((r) => r.grades)
-        .filter((g) => (g.graderType === "rubric" || g.graderType === "goal_reached") && g.status === "graded").length,
+        .filter((g) => isJudgedType(g.graderType) && g.status === "graded").length,
       wallSeconds:
         last.startedAt !== null && last.finishedAt !== null
           ? Math.max(0, (Date.parse(last.finishedAt) - Date.parse(last.startedAt)) / 1000)
@@ -795,7 +796,7 @@ async function agentEstimateBlock(c: Ctx, plan: EvalPlan): Promise<AgentEstimate
     }
   }
   const count = Math.max(1, plan.cases.length);
-  const judge = plan.graders.find((g) => g.type === "rubric" || g.type === "goal_reached");
+  const judge = plan.graders.find(isJudged);
   const judgeModel = judge !== undefined && "judge" in judge && judge.judge !== "" ? judge.judge : undefined;
   const wanted = [plan.stageModel, plan.userModel ?? undefined, judgeModel].filter(
     (id): id is string => typeof id === "string" && id !== "",
@@ -816,7 +817,7 @@ async function sendEstimate(c: Ctx, plan: EvalPlan, previous: EstimatePreviousRu
   const estimate = estimateRun({
     resultsTotal: plan.cases.length * plan.repeats,
     rubricGraderCount: plan.graders.reduce(
-      (calls, g) => (g.type === "rubric" || g.type === "goal_reached" ? calls + (g.judgeSettings?.votes ?? 1) : calls),
+      (calls, g) => (isJudged(g) ? calls + (g.judgeSettings?.votes ?? 1) : calls),
       0,
     ),
     previous,
@@ -1031,7 +1032,9 @@ function candidateFrom(raw: unknown): CandidateInput | undefined {
     out.judge = raw.judge;
   }
   if (raw.examples !== undefined) {
-    if (!Array.isArray(raw.examples) || raw.examples.length > 6) throw bad(`"candidate.examples" must be an array of at most 6`);
+    if (!Array.isArray(raw.examples) || raw.examples.length > EVAL_LIMITS.rubricExamplesMax) {
+      throw bad(`"candidate.examples" must be an array of at most ${EVAL_LIMITS.rubricExamplesMax}`);
+    };
     out.examples = raw.examples.map((e): RubricExample => {
       if (!isRecord(e) || typeof e.output !== "string") throw bad(`Each candidate example needs an "output" string`);
       const reason = typeof e.reason === "string" ? { reason: e.reason } : {};
@@ -1062,7 +1065,7 @@ async function handleGraderLabelPut(c: Ctx, id: string, caseId: string, repeat: 
   const result = results.find((r) => r.repeatIndex === repeat);
   if (!result) throw new EvalStoreError("EVAL_RUN_NOT_FOUND", `No result for ${caseId}#${repeat} in ${id}`);
   const grade = result.grades.find((g) => g.graderId === graderId);
-  if (!grade || (grade.graderType !== "rubric" && grade.graderType !== "goal_reached")) {
+  if (!grade || !isJudgedType(grade.graderType)) {
     throw bad(`Grader ${graderId} is not a judged grader on this result`);
   }
   const row = await c.store.putEvalGraderLabel(id, caseId, repeat, graderId, {
