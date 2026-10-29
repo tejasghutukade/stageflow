@@ -12,14 +12,25 @@ import {
   type EvalErrorCode,
   type EvalResultStatus,
   type EvalStartedVia,
+  CONVERSATION_RUBRIC_PROMPT_VERSION,
+  RUBRIC_PROMPT_VERSION,
 } from "./constants.js";
 import { getEngine } from "./engine/index.js";
+import { collectCalibrationSamples } from "./calibration.js";
 import { buildEvalPlan, type EvalOverrides } from "./plan.js";
 import type { StageCaseRunner } from "./runner/stageCaseRunner.js";
 import { scoreResult, type ScoringGrader } from "./scoring.js";
-import { computeStats, type Stats } from "./stats.js";
+import { computeCalibration, computeStability, computeStats, type CalibrationStats, type Stats, type StabilityStats } from "./stats.js";
 import { toGradeRecords, toResultRecord } from "./statsAdapter.js";
-import type { EvalGradeInput, EvalJson, EvalResultInput, EvalResultWithGrades, EvalRunRow } from "./storeTypes.js";
+import type {
+  EvalCalibrationDisagreement,
+  EvalCalibrationRow,
+  EvalCalibrationSplit,
+  EvalGradeInput,
+  EvalJson, EvalResultInput,
+  EvalResultWithGrades,
+  EvalRunRow,
+} from "./storeTypes.js";
 import type {
   EngineIo,
   EvalEngine,
@@ -29,11 +40,20 @@ import type {
   NormalizedResult,
   ConversationOutput,
   PlanCase,
+  JudgeSettings,
+  RubricExample,
   RunCaseFailureCode,
   RunCaseRequest,
   RunCaseResult,
 } from "./types.js";
 import { isConversationTarget } from "./types.js";
+import { isJudged } from "./judged.js";
+import { measureCalibration } from "./calibrator.js";
+import { EvalRunError } from "./errors.js";
+
+import type { CalibrateInput, CalibrateResult } from "./calibrator.js";
+export { CALIBRATION_DEFAULT_MAX_COST_USD, type CalibrateInput, type CalibrateResult } from "./calibrator.js";
+export { EvalRunError };
 
 export const EVAL_HOST_STOPPED_REASON = "Host stopped while the run was in progress";
 export const EVAL_DEFAULT_ENGINE = "promptfoo";
@@ -49,6 +69,8 @@ export type EvalManagerStore = Pick<
   | "listEvalRuns"
   | "listEvalResults"
   | "recordGraderVersions"
+  | "listEvalGraderLabelsForEval"
+  | "insertEvalCalibration"
 >;
 
 export type EvalLogger = {
@@ -93,17 +115,6 @@ export type EvalRunManagerDeps = {
   onRunStarted?(evalRunId: string, ctx: EvalRunContext): void | Promise<void>;
   onRunFinished?(evalRunId: string): void | Promise<void>;
 };
-
-export class EvalRunError extends Error {
-  constructor(
-    readonly code: EvalErrorCode,
-    message: string,
-    readonly findings?: ValidationFinding[],
-  ) {
-    super(message);
-    this.name = "EvalRunError";
-  }
-}
 
 export type StartEvalRunInput = {
   projectRoot: string;
@@ -273,6 +284,7 @@ export class EvalRunManager {
   private reserved = false;
   private trying = false;
   private tryingRunId: string | null = null;
+  private calibrationCancel: AbortController | null = null;
 
   constructor(private readonly deps: EvalRunManagerDeps) {
     this.store = deps.store;
@@ -739,6 +751,10 @@ export class EvalRunManager {
   }
 
   async cancel(evalRunId: string): Promise<boolean> {
+    if (this.calibrationCancel !== null && this.tryingRunId === evalRunId) {
+      this.calibrationCancel.abort();
+      return true;
+    }
     const live = this.live;
     if (live === undefined || live.evalRunId !== evalRunId) {
       if ((await this.store.getEvalRun(evalRunId)) === null) {
@@ -876,6 +892,63 @@ export class EvalRunManager {
       await this.deps.agents?.()?.deleteEvalSessions(tried.projectRoot, [tried.subjectRef]);
     } catch (err) {
       this.deps.logger?.warn("eval.try_session_cleanup_failed", safeMessage(err));
+    }
+  }
+
+  private logEngine(level: "info" | "warn" | "error", message: string): void {
+    if (level === "info") this.deps.logger?.info?.("eval.engine", message);
+    else this.deps.logger?.[level]("eval.engine", message);
+  }
+
+  /**
+   * Re-judges the stored outputs of results the author labeled for one grader and compares the verdicts to the
+   * labels. No stage or agent runs: the engine's case callback replays the stored output. Nothing is added to the
+   * run list; the measurement is stored as a calibration.
+   */
+  async calibrate(input: CalibrateInput): Promise<CalibrateResult> {
+    this.claim();
+    this.reserved = false;
+    this.trying = true;
+    const evalRunId = `${EVAL_RUN_ID_PREFIX}${randomBytes(6).toString("hex")}`;
+    this.tryingRunId = evalRunId;
+    const abort = new AbortController();
+    const cancel = new AbortController();
+    this.calibrationCancel = cancel;
+    const relay = () => cancel.abort();
+    if (input.signal?.aborted) relay();
+    input.signal?.addEventListener("abort", relay, { once: true });
+    try {
+      const engine = this.engines(this.engineName);
+      const engineInfo = { name: engine.name, version: await engine.version(), nodeVersion: process.versions.node };
+      const built = await buildEvalPlan({
+        projectRoot: input.projectRoot,
+        evalPath: input.evalPath,
+        overrides: {},
+        evalRunId,
+        engine: engineInfo,
+        ...(this.deps.isKnownModel ? { isKnownModel: this.deps.isKnownModel } : {}),
+        ...this.agentsInput(),
+      });
+      if (!built.ok) throw new EvalRunError("EVAL_INVALID", "Eval is invalid", built.findings);
+      const base = built.plan;
+      const found = base.graders.find((g) => g.id === input.graderId);
+      if (!found || !isJudged(found)) {
+        throw new EvalRunError("EVAL_INVALID", `Grader ${input.graderId} is not a judged grader of this eval`);
+      }
+      return await measureCalibration(
+        { store: this.store, engine, log: (level, message) => this.logEngine(level, message) },
+        input,
+        base,
+        found,
+        abort,
+        cancel.signal,
+      );
+    } finally {
+      input.signal?.removeEventListener("abort", relay);
+      this.calibrationCancel = null;
+      this.trying = false;
+      this.tryingRunId = null;
+      await this.cleanupWorkDir(evalRunId);
     }
   }
 

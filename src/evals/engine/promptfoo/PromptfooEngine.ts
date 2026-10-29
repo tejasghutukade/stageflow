@@ -34,6 +34,7 @@ import { normalizeRecord, recordIdentity, recordsFromResultsFile, type JudgePric
 import { assertNode } from "./nodeVersion.js";
 import { PINNED_PROMPTFOO_VERSION } from "./pinned.js";
 import type { RunTokenRegistry } from "./runTokens.js";
+import { isJudged } from "../../judged.js";
 
 export const PROMPTFOO_KILL_GRACE_MS = 5_000;
 export const PROMPTFOO_STREAM_POLL_MS = 100;
@@ -191,7 +192,7 @@ export class PromptfooEngine implements EvalEngine {
     const judgeEnv: Record<string, string> = {};
     const judgeModels = new Set<string>();
     for (const grader of plan.graders) {
-      if (grader.type !== "rubric" && grader.type !== "goal_reached") continue;
+      if (!isJudged(grader)) continue;
       judgeModels.add(grader.judge);
       const mapping = mapJudge(grader.judge) as JudgeMapping;
       if (judgeEnv[mapping.envVar] !== undefined) continue;

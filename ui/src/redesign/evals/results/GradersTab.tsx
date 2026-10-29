@@ -2,6 +2,7 @@ import { useState } from "react";
 import { LuChevronDown, LuChevronRight } from "react-icons/lu";
 import type { EvalRunDetail } from "../../../api/evalTypes";
 import { graderRows, judgeSummary, lowestCases } from "./gradersModel";
+import { CalibrationPanel } from "./CalibrationPanel";
 import { Bar, KindChip, MONO_CLASS, TONE_TEXT } from "./ResultsParts";
 import { useRunExport } from "./useResultsData";
 
@@ -9,10 +10,12 @@ export function GradersTab({
   run,
   onOpenCase,
   onShowFailing,
+  onEvalChanged,
 }: {
   run: EvalRunDetail;
   onOpenCase: (caseId: string, repeat: number) => void;
   onShowFailing: (graderId: string) => void;
+  onEvalChanged?: () => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const exported = useRunExport(run.eval_run_id, open !== null);
@@ -64,6 +67,16 @@ export function GradersTab({
                       </p>
                     ))}
                   </div>
+                  {row.isRubric ? (
+                    <CalibrationPanel
+                      evalId={run.eval_id}
+                      evalRunId={run.eval_run_id}
+                      graderId={row.id}
+                      graderHash={run.current?.grader_hashes?.[row.id] ?? null}
+                      onOpenCase={onOpenCase}
+                      {...(onEvalChanged ? { onEvalChanged } : {})}
+                    />
+                  ) : null}
                   {judge ? (
                     <p className="text-xs text-[var(--sf-text-3)]">
                       Judge {judge.model} · {judge.tokensText} · {judge.costText}

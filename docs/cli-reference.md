@@ -804,6 +804,7 @@ sf eval runs show <evalRunId> [--json]
 sf eval runs cancel <evalRunId>
 sf eval runs delete <evalRunId>
 sf eval sort <evalRunId> [--classifier auto|jev|judge] [--limit <n>] [--resort] [--json]
+sf eval calibrate <evalId> <graderId> [--split all|dev|held_out] [--max-cost <usd>] [--stability] [--json]
 sf eval suggestions <evalRunId> [--status pending|accepted|dismissed] [--json]
 sf eval compare <evalRunIdA> <evalRunIdB> [--json]
 sf eval datasets [--json]
@@ -882,6 +883,10 @@ Errors with `--json` are `{ "error", "code"?, "status"? }` on stdout, with exit 
 ### `sf eval runs`, `compare`, `datasets`
 
 `sf eval runs` prints one tab-separated line per run: eval id, `#run_number`, status, pass rate, cost, `eval_run_id`. Filter by eval id. `sf eval runs show` prints the run's id and status, the reason when it stopped early, pass rate, progress, cost and fingerprint; with `--json` it is the full run detail (status, progress, stats, config snapshot, per-grader summary). `cancel` and `delete` print one line and have no `--json`. `sf eval compare --json` and the default output are the comparison document (verdict, per-grader and per-case changes, stage diff, warnings). `sf eval datasets` lists dataset files with their case counts.
+
+### `sf eval calibrate`
+
+`sf eval calibrate <evalId> <graderId>` re-judges the stored outputs of results you labeled for one `rubric` or `goal_reached` grader and prints the label count, agreement, Cohen's kappa, pass and fail recall, the confusion counts, warnings and each disagreement (case, your verdict, the judge's, its reason). No stage runs; it costs one judge call per label, capped by `--max-cost` (default 1). `--stability` judges each output three times and prints the flip rate (about three times the cost). Label results in the console first. Exit `1` for `EVAL_CALIBRATION_NO_LABELS`, `EVAL_RUN_ACTIVE`, an unknown grader or bad usage. See [Evals: Check the judge against your labels](evals.md#calibrate-judge).
 
 ### `sf eval sort`, `suggestions`
 

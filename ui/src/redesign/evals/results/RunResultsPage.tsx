@@ -194,7 +194,14 @@ export function RunResultsPage({
           />
         ) : null}
         {activeTab === "graders" ? (
-          <GradersTab run={run} onOpenCase={openCase} onShowFailing={(id) => showCases(filterWithGrader(id))} />
+          <GradersTab
+            run={run}
+            onOpenCase={openCase}
+            onShowFailing={(id) => showCases(filterWithGrader(id))}
+            onEvalChanged={() => {
+              fetchEvalRunByNumber(evalId, runNumber).then(setFresh, () => undefined);
+            }}
+          />
         ) : null}
         {activeTab === "config" ? (
           <ConfigTab

@@ -178,6 +178,7 @@ export type EvalDefinition = {
   defaults?: {
     repeats?: number;
     judge?: string;
+    judge_settings?: { temperature?: number; reasoning?: boolean; votes?: number };
     user_model?: string;
     pass_threshold?: number;
     max_cost_usd?: number;
@@ -272,6 +273,8 @@ export type EvalResultDetail = {
   tags: string[];
   /** Failure sorting: the suggestion for this repeat, when one exists. */
   suggestion?: EvalSuggestion | null;
+  /** Human verdicts on judged graders, by grader id. */
+  grader_labels?: Record<string, { label: "pass" | "fail"; note: string | null }>;
 };
 
 export type EvalTryResult = {
@@ -483,6 +486,30 @@ export type EvalCaseResults = {
   repeats: EvalResultDetail[];
 };
 
+export type EvalLabelCounts = { pass: number; fail: number };
+
+export type EvalLabelQueueItem = {
+  case: EvalCaseInput & { id: string; position?: number };
+  result: EvalResultDetail;
+  judge: { passed: boolean; score: number | null; reason: string | null };
+  label: { label: "pass" | "fail"; note: string | null } | null;
+};
+
+/** What the labeling screen reads: every result the judge graded for one grader, and the labels so far. */
+export type EvalLabelQueue = {
+  grader_id: string;
+  items: EvalLabelQueueItem[];
+  labeled_here: EvalLabelCounts;
+  labeled_eval: EvalLabelCounts;
+};
+
+export type EvalLabelSummary = {
+  grader_id: string;
+  labeled_eval: EvalLabelCounts;
+  /** Results of this run the judge graded that have no label from you yet. */
+  unlabeled: Array<{ case_id: string; repeat_index: number }>;
+};
+
 export type EvalReviewInput = { label?: "pass" | "fail"; note?: string | null; tags?: string[] };
 
 export type EvalReview = { label: "pass" | "fail" | null; note: string | null; tags: string[] };
@@ -545,7 +572,7 @@ export type EvalCompareResult = {
   components: Array<{ key: string; status: "same" | "changed"; a: unknown; b: unknown }>;
   same_config: boolean;
   warnings: Array<{
-    code: "dataset_differs" | "graders_differ" | "engine_differs" | "few_shared_cases";
+    code: "dataset_differs" | "graders_differ" | "engine_differs" | "judge_differs" | "few_shared_cases";
     shared_cases?: number;
     cases_a?: number;
     cases_b?: number;
@@ -728,4 +755,46 @@ export type EvalClassifierAvailability = { available: boolean; model: string | n
 export type EvalClassifierStatus = {
   classifiers: Record<EvalClassifierName, EvalClassifierAvailability>;
   default: EvalClassifierName | null;
+};
+
+export type EvalCalibrationStats = {
+  n: number;
+  agreement: number | null;
+  cohen_kappa: number | null;
+  tpr: number | null;
+  tnr: number | null;
+  confusion: { tp: number; fp: number; tn: number; fn: number };
+  warnings: Array<"low_n" | "imbalanced" | "no_variance">;
+  errored?: number;
+  skipped_missing_case?: number;
+  stability?: { k: number; n: number; unstable: number; flip_rate: number | null };
+};
+
+export type EvalExampleSuggestion = {
+  eval_run_id: string;
+  case_id: string;
+  repeat_index: number;
+  judge: "pass" | "fail";
+  example: { verdict?: "pass" | "fail"; score?: number; output: string; reason?: string };
+};
+
+export type EvalCalibration = {
+  id: string;
+  grader_id: string;
+  grader_hash: string;
+  judge: string;
+  prompt_version: number;
+  split: "all" | "dev" | "held_out";
+  candidate: boolean;
+  stats: EvalCalibrationStats;
+  disagreements: Array<{
+    eval_run_id?: string;
+    case_id: string;
+    repeat_index: number;
+    label: "pass" | "fail";
+    judge: "pass" | "fail";
+    reason: string | null;
+  }>;
+  cost_usd: number;
+  created_at: string;
 };

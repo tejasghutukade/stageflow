@@ -15,6 +15,7 @@ import {
   type Chip as ChipModel,
   type ConfigRow,
 } from "./configModel";
+import { CalibrationChip } from "./CalibrationChip";
 import { Card, Chip, ButtonLike, MONO_CLASS } from "./ResultsParts";
 import { isAgentRun } from "../agentRun";
 import { copyText, downloadRunExport } from "./resultsApi";
@@ -127,7 +128,7 @@ export function ConfigTab({
                   <span className={`${MONO_CLASS} text-[var(--sf-text-1)]`}>{g.id}</span>
                   <span className={`flex items-center gap-2 text-xs text-[var(--sf-text-3)] ${MONO_CLASS}`}>
                     {g.edited ? <Chip tone="needs">{g.edited.text}</Chip> : null}
-                    {g.notCalibrated ? <Chip>Not calibrated</Chip> : null}
+                    {g.notCalibrated ? <CalibrationChip evalId={run.eval_id} graderId={g.id} graderHash={run.current?.grader_hashes?.[g.id] ?? null} /> : null}
                     {g.kind}
                     {g.versionText ? ` ${g.versionText}` : ""} · {g.weightText} · {g.hash}
                   </span>

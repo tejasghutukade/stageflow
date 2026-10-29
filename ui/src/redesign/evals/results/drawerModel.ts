@@ -125,7 +125,20 @@ export function expectedFindings(result: EvalResultDetail): ExpectedRow[] | null
   return rows.length === 0 ? null : rows;
 }
 
-export type GradeRowView = { id: string; ok: boolean | null; valueText: string; reason: string | null; failed: boolean };
+export type GradeRowView = {
+  id: string;
+  ok: boolean | null;
+  valueText: string;
+  reason: string | null;
+  failed: boolean;
+  /** A rubric or goal grader: the author can record their own verdict on it. */
+  judged: boolean;
+  humanLabel: "pass" | "fail" | null;
+};
+
+export function isJudgedGrader(type: string): boolean {
+  return type === "rubric" || type === "goal_reached";
+}
 
 function gradeValueText(grade: EvalGrade): string {
   if (grade.status === "error") return "error";
@@ -155,6 +168,8 @@ export function gradeRows(result: EvalResultDetail): GradeRowView[] {
       valueText: gradeValueText(grade),
       reason,
       failed,
+      judged: !errored && isJudgedGrader(grade.grader_type),
+      humanLabel: result.grader_labels?.[grade.grader_id]?.label ?? null,
     };
   });
 }

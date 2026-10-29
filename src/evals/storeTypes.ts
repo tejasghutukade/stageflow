@@ -223,3 +223,48 @@ export type EvalReviewRow = {
 };
 
 export type EvalGraderVersionInput = { graderId: string; graderHash: string };
+
+export type EvalGraderLabelRow = {
+  evalRunId: string;
+  caseId: string;
+  repeatIndex: number;
+  graderId: string;
+  label: EvalReviewLabel;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type EvalGraderLabelPatch = { label: EvalReviewLabel | null; note?: string | null };
+
+export type EvalCalibrationSplit = "all" | "dev" | "held_out";
+
+export type EvalCalibrationDisagreement = {
+  /** The run the labeled result came from; absent on calibrations stored before this field existed. */
+  evalRunId?: string;
+  caseId: string;
+  repeatIndex: number;
+  label: EvalReviewLabel;
+  judge: EvalReviewLabel;
+  reason: string | null;
+};
+
+export type EvalCalibrationInput = {
+  projectRoot: string;
+  evalId: string;
+  graderId: string;
+  graderHash: string;
+  judge: string;
+  promptVersion: number;
+  split: EvalCalibrationSplit;
+  candidate: boolean;
+  stats: EvalJson;
+  disagreements: EvalCalibrationDisagreement[];
+  costUsd: number;
+};
+
+export type EvalCalibrationRow = Omit<EvalCalibrationInput, "stats"> & {
+  id: string;
+  stats: EvalJson;
+  createdAt: string;
+};

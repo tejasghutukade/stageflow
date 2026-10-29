@@ -129,10 +129,20 @@ describe("drawerModel grades", () => {
   it("builds grade rows with values and reasons", () => {
     const rows = gradeRows(fixtureResult());
     expect(rows).toEqual([
-      { id: "output-schema", ok: true, valueText: "pass", reason: null, failed: false },
-      { id: "finds-expected-issues", ok: false, valueText: "0.50", reason: "1 of 2 found.", failed: true },
-      { id: "clear-and-actionable", ok: false, valueText: "3 / 5", reason: "Gives no fix.", failed: true },
+      { id: "output-schema", ok: true, valueText: "pass", reason: null, failed: false, judged: false, humanLabel: null },
+      { id: "finds-expected-issues", ok: false, valueText: "0.50", reason: "1 of 2 found.", failed: true, judged: false, humanLabel: null },
+      { id: "clear-and-actionable", ok: false, valueText: "3 / 5", reason: "Gives no fix.", failed: true, judged: true, humanLabel: null },
     ]);
+  });
+
+  it("marks judged graders and carries the author's label", () => {
+    const rows = gradeRows(
+      fixtureResult({
+        grades: [fixtureGrade({ grader_id: "r", grader_type: "rubric", passed: true, score: 1, raw_value: 1 })],
+        grader_labels: { r: { label: "fail", note: null } },
+      }),
+    );
+    expect(rows[0]).toMatchObject({ judged: true, humanLabel: "fail" });
   });
 
   it("formats pass/fail rubrics, passing reasons and error grades", () => {

@@ -15,6 +15,24 @@ export function graderDefinitions(run: Pick<EvalRunDetail, "config">): Definitio
   return Array.isArray(list) ? (list as Definition[]) : [];
 }
 
+/** The graders a model judges (`rubric`, `goal_reached`): the ones you can label. */
+export function judgedGraderIds(run: Pick<EvalRunDetail, "config">): string[] {
+  const snapshot: Array<Record<string, unknown>> = Array.isArray(run.config?.graders) ? run.config.graders : [];
+  const fromSnapshot = snapshot.filter((g) => g.type === "rubric" || g.type === "goal_reached").map((g) => String(g.id));
+  if (fromSnapshot.length > 0) return fromSnapshot;
+  return graderDefinitions(run)
+    .filter((g) => g.type === "rubric" || g.type === "goal_reached")
+    .map((g) => String(g.id));
+}
+
+/** Grader ids for filters: the saved definition's, else the run's own grader list (older internal-agent runs saved none). */
+export function graderIdsOf(run: Pick<EvalRunDetail, "config">): string[] {
+  const defined = graderDefinitions(run).map((g) => String(g.id));
+  if (defined.length > 0) return defined;
+  const snapshot: Array<Record<string, unknown>> = Array.isArray(run.config?.graders) ? run.config.graders : [];
+  return snapshot.map((g) => String(g.id));
+}
+
 export function graderDefinition(run: Pick<EvalRunDetail, "config">, id: string): Definition | null {
   return graderDefinitions(run).find((g) => g.id === id) ?? null;
 }

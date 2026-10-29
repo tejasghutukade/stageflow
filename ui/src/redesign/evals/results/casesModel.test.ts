@@ -1,23 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  EMPTY_FILTER,
-  FIRST_PAGE,
-  buildResultsQuery,
-  caseRowView,
-  caseTabs,
-  countFor,
-  currentCursor,
-  dotKind,
-  emptyText,
-  filterWithGrader,
-  filterWithTag,
-  isFiltered,
-  pageLabel,
-  pagingNext,
-  pagingPrevious,
-  scoreTone,
-  tagOptions,
-} from "./casesModel";
+import { EMPTY_FILTER, FIRST_PAGE, buildResultsQuery, caseRowView, caseTabs, countFor, currentCursor, dotKind, emptyText, filterNeedsLabel, filterWithGrader, filterWithTag, isFiltered, pageLabel, pagingNext, pagingPrevious, scoreTone, tagOptions } from "./casesModel";
 import { fixtureRow } from "./fixtures";
 
 describe("casesModel", () => {
@@ -102,5 +84,20 @@ describe("casesModel", () => {
   it("merges tag options case-insensitively", () => {
     const rows = [fixtureRow({ tags: ["Edge"], failure_tags: ["too vague"] })];
     expect(tagOptions(["Too vague", "Missed"], rows)).toEqual(["Edge", "Missed", "Too vague"]);
+  });
+});
+
+describe("needs-my-label filter", () => {
+  it("counts as a filter and explains an empty result", () => {
+    expect(isFiltered(EMPTY_FILTER)).toBe(false);
+    const filter = filterNeedsLabel("steers-well");
+    expect(filter).toMatchObject({ tab: "all", labelNeeded: "steers-well" });
+    expect(isFiltered(filter)).toBe(true);
+    expect(emptyText(filter)).toContain("steers-well");
+    expect(emptyText(filter)).toContain("is labeled");
+  });
+
+  it("is not sent to the server as a query: it filters on the client", () => {
+    expect(buildResultsQuery(filterNeedsLabel("steers-well"), null)).toEqual({ limit: expect.any(Number) });
   });
 });

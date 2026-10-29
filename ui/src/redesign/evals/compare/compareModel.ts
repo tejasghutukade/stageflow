@@ -319,6 +319,8 @@ export function warningText(warning: EvalCompareResult["warnings"][number]): str
       return "Graders differ; scores are not comparable.";
     case "engine_differs":
       return "The eval engine differs between the runs.";
+    case "judge_differs":
+      return "The judge model or judge prompt differs between the runs; rubric scores are not comparable.";
     case "few_shared_cases":
       return `Only ${warning.shared_cases ?? 0} shared cases; at least 5 are needed for a verdict.`;
   }

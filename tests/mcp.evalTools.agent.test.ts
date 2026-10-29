@@ -47,6 +47,7 @@ describe("MCP eval tools with agent targets", () => {
     expect(evalTools).toEqual(
       [
         "accept_eval_failure_suggestions",
+        "calibrate_eval_grader",
         "cancel_eval_run",
         "compare_eval_runs",
         "create_eval",

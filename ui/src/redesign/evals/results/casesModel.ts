@@ -64,6 +64,8 @@ export type CasesFilter = {
   bucket?: EvalBucket | null;
   needsReview?: boolean;
   suggestedType?: string | null;
+  /** A judged grader: show only cases with a result you have not labeled for it. */
+  labelNeeded?: string | null;
 };
 
 export const EMPTY_FILTER: CasesFilter = { tab: "all", grader: null, tag: null, q: "" };
@@ -80,12 +82,16 @@ export function filterNeedsReview(): CasesFilter {
   return { ...EMPTY_FILTER, tab: "failed", needsReview: true };
 }
 
+export function filterNeedsLabel(grader: string): CasesFilter {
+  return { ...EMPTY_FILTER, labelNeeded: grader };
+}
+
 export function filterWithGrader(grader: string): CasesFilter {
   return { ...EMPTY_FILTER, tab: "failed", grader };
 }
 
 export function isFiltered(filter: CasesFilter): boolean {
-  return filter.tab !== "all" || filter.grader !== null || filter.tag !== null || filter.q.trim() !== "" || suggestionFilterActive(filter);
+  return filter.tab !== "all" || filter.grader !== null || filter.tag !== null || filter.q.trim() !== "" || suggestionFilterActive(filter) || Boolean(filter.labelNeeded);
 }
 
 export function caseTabs(counts: EvalResultsPage["counts"] | null): Array<{ id: CasesTabId; label: string; count?: number }> {
@@ -139,6 +145,7 @@ export function pageLabel(paging: Paging, shown: number, total: number | null): 
 }
 
 export function emptyText(filter: CasesFilter): string {
+  if (filter.labelNeeded) return `Every result for ${filter.labelNeeded} is labeled, or no result matches your other filters.`;
   return isFiltered(filter) ? "No cases match these filters." : "No cases in this run.";
 }
 

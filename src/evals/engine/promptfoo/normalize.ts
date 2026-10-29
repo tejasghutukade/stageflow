@@ -1,4 +1,5 @@
 import { CONVERSATION_RUBRIC_PROMPT_VERSION } from "../../constants.js";
+import { combineVotes, JUDGE_ERROR_CODE } from "../../votes.js";
 import type {
   CaseOutput,
   EvalPlan,
@@ -53,7 +54,10 @@ export type NormalizeContext = {
   judgePrice?: (modelId: string) => JudgePrice | undefined;
 };
 
-export const JUDGE_ERROR_CODE = "EVAL_JUDGE_ERROR";
+/** Votes after the first are separate assertions whose metric is the grader id, this, and the vote number. */
+export const VOTE_METRIC_SEPARATOR = "#vote";
+
+export { JUDGE_ERROR_CODE };
 export const ENGINE_ERROR_CODE = "EVAL_ENGINE_ERROR";
 
 const META_KEYS = [
@@ -339,13 +343,18 @@ export function normalizeRecord(
         (grader.type === "rubric" || grader.type === "goal_reached") &&
         component.type !== "javascript"
       ) {
-        const { grade, priceUnknown } = rubricGrade(
-          judgedView(grader),
-          component,
-          ctx.judgePrice,
-          plan.target?.kind === "agent",
-        );
-        if (priceUnknown && !priceUnknownModels.includes(grader.judge)) priceUnknownModels.push(grader.judge);
+        const view = judgedView(grader);
+        const conversation = plan.target?.kind === "agent";
+        const components = [component];
+        for (let vote = 2; vote <= (grader.judgeSettings?.votes ?? 1); vote++) {
+          const extra = byMetric.get(`${grader.id}${VOTE_METRIC_SEPARATOR}${vote}`);
+          if (extra !== undefined) components.push(extra);
+        }
+        const results = components.map((comp) => rubricGrade(view, comp, ctx.judgePrice, conversation));
+        const grade = combineVotes(view, results.map((r) => r.grade));
+        if (results.some((r) => r.priceUnknown) && !priceUnknownModels.includes(grader.judge)) {
+          priceUnknownModels.push(grader.judge);
+        }
         judgeCostUsd += grade.judgeCostUsd ?? 0;
         grades.push(grade);
       } else {

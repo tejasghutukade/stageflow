@@ -1339,6 +1339,7 @@ Unknown keys at any level are an error (`eval.unknown_key`).
 |-----|------|---------|------|
 | `repeats` | integer | 3 | 1 to 10 |
 | `judge` | string | none | A model id `provider/model`. Required when a `rubric` grader has none of its own. Judge-capable providers: `anthropic`, `openai`, `openrouter` |
+| `judge_settings` | mapping | none | `temperature` (0 to 1), `reasoning` (boolean), `votes` (1, 3 or 5). Applies to every `rubric` and `goal_reached` grader; a grader's own `judge_settings` wins key by key. See [Evals: Judge settings](evals.md#judge-settings) |
 | `pass_threshold` | number | 0.8 | `0 < x <= 1` |
 | `max_cost_usd` | number | 2 (agents: 1) | `> 0`. Stage runs plus judge calls; for agents, agent turns, simulator calls and judge calls |
 | `concurrency` | integer | 4 (agents: 2) | 1 to 8 |
@@ -1352,11 +1353,11 @@ Unknown keys at any level are an error (`eval.unknown_key`).
 | `schema` | none | Envelope `status` is `success` and the payload validates against the stage's `io.output.schema` (required) |
 | `field` | `checks`: non-empty array of `{ path, op, value? }` | All checks must hold. `path` is a dotted path over `{ status, summary, artifacts, payload }`, with `[n]` and `[*]`. `op`: `exists`, `not_empty`, `equals`, `not_equals`, `contains`, `matches`, `gte`, `lte`, `between`, `in`, `length_gte`, `length_lte` |
 | `reference` | `mode`: `each_mentioned` \| `equals` (required); `path` (default `payload`); `expected` (path into the case, required); `pass_at` (0 to 1, default 1) | `each_mentioned` needs an array of strings and scores the share found, case-insensitively |
-| `rubric` | `rubric` (1 to 4,000 characters, required); `scale`: `pass_fail` (default) \| `1_to_5`; `pass_at` (integer 1 to 5, default 4, only with `1_to_5`); `judge`; `examples` (up to 6) | Judged by a model. Examples are `{ verdict: pass\|fail, output, reason? }` for `pass_fail` and `{ score: 1-5, output, reason? }` for `1_to_5` |
+| `rubric` | `rubric` (1 to 4,000 characters, required); `scale`: `pass_fail` (default) \| `1_to_5`; `pass_at` (integer 1 to 5, default 4, only with `1_to_5`); `judge`; `judge_settings`; `examples` (up to 6) | Judged by a model. Examples are `{ verdict: pass\|fail, output, reason? }` for `pass_fail` and `{ score: 1-5, output, reason? }` for `1_to_5` |
 | `code` | `code`: body of a JavaScript function (required) | Receives `(output, testCase, context)`; returns a boolean, a number 0 to 1, or `{ pass, score?, reason? }`. 5 second limit. Runs on the author's machine with the author's permissions. On an agent target `output` is the conversation |
 | `tool_calls` | `must_call`, `must_not_call`, `must_ask_first`: string arrays; `max_calls`: 0 to 200; `args`: up to 20 of `{ tool, path, op, value? }` | Agent targets only. Reads the recorded tool calls. A call counts whatever its outcome. `must_call` and `must_not_call` default to the case's `expected.tools` and `expected.forbidden_tools`; `[]` opts out |
 | `conversation_check` | `max_turns` (1 to 100), `max_agent_questions_per_turn` (0 to 10), `final_reply`: up to 10 of `{ op, value? }` | Agent targets only. At least one key. Deterministic |
-| `goal_reached` | `judge` (optional), `guidance` (up to 2,000 characters) | Agent targets only. A judge reads the conversation and the case's `input.goal` (else `expected.outcome`). Pass or fail |
+| `goal_reached` | `judge` (optional), `judge_settings` (optional), `guidance` (up to 2,000 characters) | Agent targets only. A judge reads the conversation and the case's `input.goal` (else `expected.outcome`). Pass or fail |
 
 `command` and `groundedness` graders are not available. `schema` applies to stage targets only; `tool_calls`, `conversation_check` and `goal_reached` apply to agent targets only (`eval.grader_not_applicable` otherwise). The grader types, scoring and statistics are explained in [Evals](evals.md#writing-an-eval).
 
@@ -1419,6 +1420,8 @@ On an agent target, `field` and `reference` paths start at the conversation (for
 | `eval.judge_missing` | error | A rubric needs a judge and none is set |
 | `eval.judge_unknown_model` | warning | The judge id is not in the model catalog (the catalog may be offline) |
 | `eval.judge_same_as_stage` | warning | The effective judge is the stage's own model |
+| `eval.judge_unpinned` | warning | The judge id ends in `latest`, so its behavior can change under stored runs |
+| `eval.judge_votes_no_variation` | warning | A judged grader asks for more than one vote at temperature 0, so every vote is the same call |
 | `eval.stage_has_gates` | warning | The target stage declares `gate_kinds` |
 | `eval.stage_needs_checkout` | warning | The stage `requires` a repository |
 | `eval.cases_missing_expected` | warning | A `reference` grader and some cases lack the `expected` path |

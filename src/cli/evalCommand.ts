@@ -27,6 +27,7 @@ import {
   httpListDatasets,
   httpListEvalRuns,
   httpListEvalSuggestions,
+  httpCalibrateEvalGrader,
   httpSortEvalFailures,
   httpListEvals,
   httpStartEvalRun,
@@ -50,6 +51,7 @@ export const EVAL_USAGE = `Usage:
   sf eval runs cancel <evalRunId>
   sf eval runs delete <evalRunId>
   sf eval sort <evalRunId> [--classifier auto|jev|judge] [--limit <n>] [--resort] [--json]
+  sf eval calibrate <evalId> <graderId> [--split all|dev|held_out] [--max-cost <usd>] [--stability] [--json]
   sf eval suggestions <evalRunId> [--status pending|accepted|dismissed] [--json]
   sf eval compare <evalRunIdA> <evalRunIdB> [--json]
   sf eval datasets [--json]
@@ -112,6 +114,7 @@ const FLAGS: Record<string, Record<string, FlagSpec>> = {
   runs: {},
   sort: { "--classifier": { value: true }, "--limit": { value: true }, "--resort": {} },
   suggestions: { "--status": { value: true } },
+  calibrate: { "--split": { value: true }, "--max-cost": { value: true }, "--stability": {} },
   compare: {},
   datasets: {},
   engine: {},
@@ -133,7 +136,9 @@ type Parsed = {
   classifier?: "auto" | "jev" | "judge";
   limit?: number;
   resort: boolean;
+  stability: boolean;
   status?: string;
+  split?: "all" | "dev" | "held_out";
   cases: string[];
   tags: string[];
   positionals: string[];
@@ -150,6 +155,7 @@ function parseArgs(command: string, rest: string[]): Parsed {
     noWait: false,
     allowRealTools: false,
     resort: false,
+    stability: false,
     cases: [],
     tags: [],
     positionals: [],
@@ -219,6 +225,15 @@ function parseArgs(command: string, rest: string[]): Parsed {
       }
       case "--resort":
         parsed.resort = true;
+        break;
+      case "--stability":
+        parsed.stability = true;
+        break;
+      case "--split":
+        if (value !== "all" && value !== "dev" && value !== "held_out") {
+          throw new UsageError("--split must be all, dev or held_out");
+        }
+        parsed.split = value;
         break;
       case "--status":
         if (value !== "pending" && value !== "accepted" && value !== "dismissed") {
@@ -486,7 +501,9 @@ export async function runEvalCommand(
             ? expectArgs(2, 2, "<evalRunIdA> <evalRunIdB>")
             : command === "sort" || command === "suggestions"
               ? expectArgs(1, 1, "<evalRunId>")
-              : null;
+              : command === "calibrate"
+                ? expectArgs(2, 2, "<evalId> <graderId>")
+                : null;
   if (argError) return usageError(argError);
 
   let runsSub: string | undefined;
@@ -642,6 +659,33 @@ export async function runEvalCommand(
         );
         for (const s of b.suggestions as Array<Record<string, any>>) out.log(suggestionLine(s));
         out.log(`Review and accept in the console, or POST /api/eval-runs/${positionals[0]}/failures/suggestions/accept`);
+      });
+    }
+
+    case "calibrate": {
+      const result = await httpCalibrateEvalGrader(base, positionals[0], positionals[1], {
+        project_root: wireRoot,
+        ...(parsed.split !== undefined ? { split: parsed.split } : {}),
+        ...(parsed.maxCost !== undefined ? { max_cost_usd: parsed.maxCost } : {}),
+        ...(parsed.stability ? { stability: true } : {}),
+      });
+      return show(result, (b) => {
+        const st = b.stats as Record<string, any>;
+        const num = (v: unknown): string => (typeof v === "number" ? v.toFixed(2) : "n/a");
+        out.log(
+          `${b.grader_id} (${b.judge}): ${st.n} labels, agreement ${num(st.agreement)}, kappa ${num(st.cohen_kappa)}, pass recall ${num(st.tpr)}, fail recall ${num(st.tnr)}; cost ${usd(b.cost_usd)}`,
+        );
+        const cm = st.confusion as Record<string, number>;
+        out.log(`judge pass / human pass ${cm.tp}\tjudge pass / human fail ${cm.fp}\tjudge fail / human fail ${cm.tn}\tjudge fail / human pass ${cm.fn}`);
+        if (st.stability) {
+          out.log(
+            `stability over ${st.stability.k} judge calls per output: ${st.stability.unstable} of ${st.stability.n} outputs split (flip rate ${num(st.stability.flip_rate)})`,
+          );
+        }
+        for (const w of st.warnings as string[]) out.log(`warning: ${w}`);
+        for (const d of b.disagreements as Array<Record<string, any>>) {
+          out.log(`${d.case_id}#${d.repeat_index}\thuman ${d.label}\tjudge ${d.judge}\t${d.reason ?? ""}`);
+        }
       });
     }
 

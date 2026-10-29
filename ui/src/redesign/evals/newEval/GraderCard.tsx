@@ -3,6 +3,7 @@ import { LuChevronDown, LuChevronRight, LuGripVertical, LuPlus, LuTrash2 } from 
 import { INPUT, TEXTAREA } from "../datasets/DialogShell";
 import { JudgeModelPicker } from "../run/RunPicker";
 import { ConversationCheckForm, GoalReachedForm, ToolCallsForm } from "./AgentGraderForms";
+import { JudgeSettingsFields } from "./JudgeSettingsFields";
 import { CARD, Chip, Field, MONO, SELECT } from "./parts";
 import {
   CODE_HINT,
@@ -277,6 +278,7 @@ export function GraderCard(p: Props) {
                   />
                 </Field>
               </div>
+              <JudgeSettingsFields grader={g} onChange={p.onChange} />
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between text-[13px] text-[var(--sf-text-2)]">
                   <span>Examples the judge sees <span className="text-[var(--sf-text-3)]">{examplesOf(g).length}</span></span>

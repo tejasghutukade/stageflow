@@ -92,7 +92,7 @@ export function createConfirmActionTool(): OperatorAgentTool {
         content: {
           confirmation_id: confirmation.id,
           tool,
-          next: "STOP. Do not call another tool. The person has not answered. Wait for their next message.",
+          next: "STOP. Do not call another tool. Write one plain sentence beside the card that says what will happen if they agree. Do not ask a question. The person has not answered, so wait for their next message.",
           ui: buildChoicesUi({
             question: summary,
             options: [

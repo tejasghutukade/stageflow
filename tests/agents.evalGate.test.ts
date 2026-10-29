@@ -150,9 +150,9 @@ describe("eval gate: declared read-only cannot upgrade builtin or Stageflow tool
     expect(outcomes(run.gate)).toMatchObject({ write: "stubbed", bash: expect.stringMatching(/stubbed|would_ask_first/), "stageflow.archive_agent": "stubbed" });
   });
 
-  it("blocks sort_eval_failures and cancel_eval_run even under real", async () => {
+  it("blocks sort_eval_failures, calibrate_eval_grader and cancel_eval_run even under real", async () => {
     const fx = await setup();
-    const run = await converse(fx, policyOf({ tools: "real" }), [["stageflow.sort_eval_failures"], ["stageflow.cancel_eval_run"]]);
+    const run = await converse(fx, policyOf({ tools: "real" }), [["stageflow.sort_eval_failures"], ["stageflow.calibrate_eval_grader"], ["stageflow.cancel_eval_run"]]);
     expect(run.bodies).toEqual([]);
     expect(run.gate.records().every((r) => r.policyOutcome === "denied")).toBe(true);
   });

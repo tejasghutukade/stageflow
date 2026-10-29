@@ -34,3 +34,20 @@ export function judgeCapableModels(modelIds: readonly string[]): string[] {
 export function unsupportedJudgeMessage(modelId: string): string {
   return `Judge model "${modelId}" cannot be used: supported judge providers are ${supportedJudgeProviders().join(", ")}.`;
 }
+
+/** The model line a model id belongs to (`claude`, `gpt`, `gemini`), ignoring provider, size and version. */
+export function modelFamily(modelId: string): string {
+  const name = modelId.slice(modelId.lastIndexOf("/") + 1).toLowerCase();
+  const token = name.split(/[-:._@\d]/)[0] ?? "";
+  return token === "" ? name : token;
+}
+
+/** True when two different model ids come from the same model line, so a judge may favor the stage's output. */
+export function sameModelFamily(a: string, b: string): boolean {
+  return a !== b && modelFamily(a) !== "" && modelFamily(a) === modelFamily(b);
+}
+
+/** A floating id (`-latest`) that can change under a stored run. */
+export function isFloatingModelId(modelId: string): boolean {
+  return /(^|[-:/@])latest$/i.test(modelId);
+}

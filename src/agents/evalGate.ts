@@ -46,6 +46,7 @@ const ALWAYS_BLOCKED = new Set([
   "stageflow.agent_chat",
   "stageflow.fire_trigger",
   "stageflow.sort_eval_failures",
+  "stageflow.calibrate_eval_grader",
   "stageflow.cancel_eval_run",
 ]);
 const BLOCKED_UNLESS_REAL = new Set(["stageflow.probe_project_mcp"]);

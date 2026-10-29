@@ -64,6 +64,7 @@ export type CompareWarningCode =
   | "dataset_differs"
   | "graders_differ"
   | "engine_differs"
+  | "judge_differs"
   | "few_shared_cases";
 
 export interface CompareWarning {
@@ -277,6 +278,9 @@ export function compareRuns(a: CompareRunInput, b: CompareRunInput): CompareResu
   if (graders.some((g) => g.status !== "compared")) warnings.push({ code: "graders_differ" });
   if (components.find((c) => c.key === "engine")?.status === "changed") {
     warnings.push({ code: "engine_differs" });
+  }
+  if (["judge", "rubric_prompt_version"].some((key) => components.find((c) => c.key === key)?.status === "changed")) {
+    warnings.push({ code: "judge_differs" });
   }
   if (m < 5) warnings.push({ code: "few_shared_cases", shared_cases: m });
 

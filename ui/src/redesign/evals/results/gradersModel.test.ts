@@ -6,6 +6,8 @@ import {
   definitionSummary,
   deltaView,
   graderDefinition,
+  graderIdsOf,
+  judgedGraderIds,
   graderRows,
   judgeSummary,
   kindLabel,
@@ -107,5 +109,53 @@ describe("gradersModel", () => {
     });
     expect(judgeSummary([fixtureResult({ grades: [] })], "r")).toBeNull();
     expect(judgeSummary([fixtureResult({ grades: [fixtureGrade({ grader_id: "r" })] })], "r")).toBeNull();
+  });
+});
+
+describe("graderIdsOf", () => {
+  it("reads the saved definition", () => {
+    const run = fixtureRun();
+    expect(graderIdsOf(run).length).toBeGreaterThan(0);
+  });
+
+  it("falls back to the run's own grader list when the saved definition has none", () => {
+    const base = fixtureRun();
+    const run = fixtureRun({
+      config: {
+        ...base.config,
+        eval: { ...base.config.eval, definition: { version: 1, id: "x" } },
+        graders: [{ id: "a", type: "rubric" }, { id: "b", type: "code" }],
+      },
+    });
+    expect(graderIdsOf(run)).toEqual(["a", "b"]);
+  });
+});
+
+describe("judgedGraderIds", () => {
+  it("lists the graders a model judges, from the run's own grader list", () => {
+    const base = fixtureRun();
+    const run = fixtureRun({
+      config: {
+        ...base.config,
+        graders: [
+          { id: "a", type: "rubric" },
+          { id: "b", type: "code" },
+          { id: "c", type: "goal_reached" },
+        ],
+      },
+    });
+    expect(judgedGraderIds(run)).toEqual(["a", "c"]);
+  });
+
+  it("falls back to the saved definition", () => {
+    const base = fixtureRun();
+    const run = fixtureRun({
+      config: {
+        ...base.config,
+        graders: undefined,
+        eval: { ...base.config.eval, definition: { graders: [{ id: "x", type: "rubric" }, { id: "y", type: "field" }] } },
+      },
+    });
+    expect(judgedGraderIds(run)).toEqual(["x"]);
   });
 });

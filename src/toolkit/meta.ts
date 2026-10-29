@@ -181,6 +181,8 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   get_eval_run_export: t("evals.read", "read"),
   run_eval: t("evals.run", "external"),
   sort_eval_failures: t("evals.run", "external"),
+  list_grader_calibrations: t("evals.read", "read"),
+  calibrate_eval_grader: t("evals.run", "external"),
   cancel_eval_run: t("evals.run", "write"),
   try_eval_case: t("evals.run", "external"),
 

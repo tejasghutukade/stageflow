@@ -72,6 +72,8 @@ export const EVAL_REQUEST_ERROR_CODES = [
   "EVAL_TAGS_ON_PASSED_RESULT",
   "EVAL_REAL_TOOLS_NOT_CONFIRMED",
   "EVAL_CLASSIFIER_UNAVAILABLE",
+  "EVAL_CALIBRATION_NO_LABELS",
+  "EVAL_CALIBRATION_CANCELLED",
 ] as const;
 
 export const EVAL_ERROR_CODES = [
@@ -90,6 +92,8 @@ export const EVAL_LIMITS = {
   labelMaxChars: 80,
   failureTypeNameMaxChars: 60,
   reviewNoteMaxChars: 500,
+  /** Worked examples one rubric may hold. The console mirrors this in `tuningModel.ts`. */
+  rubricExamplesMax: 6,
 } as const;
 
 export const EVAL_RUN_ID_PREFIX = "er_";

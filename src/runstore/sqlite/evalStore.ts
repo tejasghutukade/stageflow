@@ -477,6 +477,22 @@ export function listEvalResults(db: Database.Database, evalRunId: string): EvalR
   return attachGrades(db, rows.map(resultFromDb), evalRunId);
 }
 
+/** Keys of the results one grader graded in a run, without their outputs. */
+export function listGradedResultKeys(
+  db: Database.Database,
+  evalRunId: string,
+  graderId: string,
+): Array<{ caseId: string; repeatIndex: number }> {
+  return (
+    db
+      .prepare(
+        `SELECT DISTINCT case_id, repeat_index FROM eval_grades
+          WHERE eval_run_id = ? AND grader_id = ? AND status = 'graded' ORDER BY case_id, repeat_index`,
+      )
+      .all(evalRunId, graderId) as Array<{ case_id: string; repeat_index: number }>
+  ).map((r) => ({ caseId: r.case_id, repeatIndex: r.repeat_index }));
+}
+
 export function getEvalResultsForCase(
   db: Database.Database,
   evalRunId: string,

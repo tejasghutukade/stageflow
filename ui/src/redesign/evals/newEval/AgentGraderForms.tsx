@@ -3,6 +3,7 @@ import { LuPlus, LuTrash2 } from "react-icons/lu";
 import { INPUT, TEXTAREA } from "../datasets/DialogShell";
 import { JudgeModelPicker } from "../run/RunPicker";
 import { ChipInput } from "./ChipInput";
+import { JudgeSettingsFields } from "./JudgeSettingsFields";
 import { Field, MONO, SELECT } from "./parts";
 import {
   FIELD_OPS,
@@ -262,6 +263,7 @@ export function GoalReachedForm({ grader, onChange, judgeModels, judgeDefault }:
           onChange={(judge) => onChange(setJudge(grader, judge ?? ""))}
         />
       </Field>
+      <JudgeSettingsFields grader={grader} onChange={onChange} />
       <Field label="Guidance (optional)" hint="Extra instructions for the judge.">
         <textarea
           className={`${TEXTAREA} min-h-[72px]`}

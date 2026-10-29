@@ -3,8 +3,10 @@ import { EngineError } from "./errors.js";
 import { JUDGE_MAX_OUTPUT_TOKENS } from "../../constants.js";
 import { mapJudge, unsupportedJudgeMessage } from "../../judgeProviders.js";
 import { caseGoal, goalRubricText } from "../../graders/goal.js";
+import { VOTE_METRIC_SEPARATOR } from "./normalize.js";
 import { escapeTemplate, renderConversationRubricPrompt, renderRubricPrompt } from "./rubricPrompt.js";
 import { isConversationTarget, type EvalPlan, type PlanCase, type ResolvedGrader } from "../../types.js";
+import { isJudged } from "../../judged.js";
 
 export const CALLBACK_URL_ENV = "STAGEFLOW_EVAL_CALLBACK_URL";
 export const RUN_TOKEN_ENV = "STAGEFLOW_EVAL_TOKEN";
@@ -228,10 +230,6 @@ const MISSING_GOAL_GRADE = `function missingGoal(index) {
 
 `;
 
-function isJudged(grader: ResolvedGrader): grader is Extract<ResolvedGrader, { type: "rubric" | "goal_reached" }> {
-  return grader.type === "rubric" || grader.type === "goal_reached";
-}
-
 export function buildAssertionsSource(plan: EvalPlan, graderModuleUrl: string): string {
   const agent = isConversationTarget(plan.target.kind);
   const graders = plan.graders.map((g, index) => ({ index, grader: g }));
@@ -300,32 +298,56 @@ ${exports.join("\n")}
 `;
 }
 
+/** The metric of vote `n` (1-based) for a judged grader; vote 1 keeps the grader id. */
+export function voteMetric(graderId: string, vote: number): string {
+  return vote === 1 ? graderId : `${graderId}${VOTE_METRIC_SEPARATOR}${vote}`;
+}
+
+function judgeAssertions(
+  grader: Extract<ResolvedGrader, { type: "rubric" | "goal_reached" }>,
+  options: GenerateOptions,
+  agent: boolean,
+  testCase: PlanCase,
+): Array<Record<string, unknown>> {
+  const votes = grader.judgeSettings?.votes ?? 1;
+  return Array.from({ length: votes }, (_, i) => judgeAssertion(grader, options, agent, testCase, voteMetric(grader.id, i + 1)));
+}
+
 function judgeAssertion(
   grader: Extract<ResolvedGrader, { type: "rubric" | "goal_reached" }>,
   options: GenerateOptions,
   agent: boolean,
   testCase: PlanCase,
+  metric: string,
 ): Record<string, unknown> {
   const mapping = mapJudge(grader.judge);
   if (mapping === null) throw new EngineError("EVAL_INVALID", unsupportedJudgeMessage(grader.judge));
+  const reasoning = grader.judgeSettings?.reasoning;
   let rubric: string;
   let prompt: string;
   if (grader.type === "goal_reached") {
     rubric = escapeTemplate(goalRubricText(caseGoal(testCase) ?? "", grader.guidance));
-    prompt = renderConversationRubricPrompt({ scale: "pass_fail", examples: [] });
+    prompt = renderConversationRubricPrompt({ scale: "pass_fail", examples: [], ...(reasoning ? { reasoning } : {}) });
   } else {
     rubric = grader.rubric;
-    prompt = agent ? renderConversationRubricPrompt(grader) : renderRubricPrompt(grader);
+    const withSettings = reasoning ? { ...grader, reasoning } : grader;
+    prompt = agent ? renderConversationRubricPrompt(withSettings) : renderRubricPrompt(withSettings);
   }
+  const temperature = grader.judgeSettings?.temperature;
+  const providerConfig = {
+    max_tokens: JUDGE_MAX_OUTPUT_TOKENS,
+    ...options.judgeProviderConfig,
+    ...(temperature === undefined ? {} : { temperature }),
+  };
   return {
     type: "llm-rubric",
     value: rubric,
-    metric: grader.id,
+    metric,
     weight: 1,
     rubricPrompt: prompt,
     provider: {
       id: mapping.providerSpec,
-      config: { max_tokens: JUDGE_MAX_OUTPUT_TOKENS, ...options.judgeProviderConfig },
+      config: providerConfig,
     },
   };
 }
@@ -336,16 +358,18 @@ function assertionsFor(
   testCase: PlanCase,
 ): Array<Record<string, unknown>> {
   const agent = isConversationTarget(plan.target.kind);
-  return plan.graders.map((grader, index) => {
+  return plan.graders.flatMap((grader, index) => {
     if (isJudged(grader) && !(grader.type === "goal_reached" && caseGoal(testCase) === undefined)) {
-      return judgeAssertion(grader, options, agent, testCase);
+      return judgeAssertions(grader, options, agent, testCase);
     }
-    return {
-      type: "javascript",
-      value: `file://${ASSERTIONS_FILE}:${assertionFnName(index)}`,
-      metric: grader.id,
-      weight: 1,
-    };
+    return [
+      {
+        type: "javascript",
+        value: `file://${ASSERTIONS_FILE}:${assertionFnName(index)}`,
+        metric: grader.id,
+        weight: 1,
+      },
+    ];
   });
 }
 

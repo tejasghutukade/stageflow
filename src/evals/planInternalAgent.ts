@@ -15,7 +15,7 @@ import { EVAL_LARGE_RUN, EVAL_TOO_LARGE_RUN, evalFinding } from "../config/valid
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { sha256Hex } from "./canonical.js";
 import { EVAL_LIMITS, SIMULATOR_PROMPT_VERSION } from "./constants.js";
-import type { BuildEvalPlanInput, BuildEvalPlanResult, EvalOverrides } from "./plan.js";
+import { evalDefinition, type BuildEvalPlanInput, type BuildEvalPlanResult, type EvalOverrides } from "./plan.js";
 import { buildComponents, buildSnapshot, computeFingerprint, type SnapshotOverrides } from "./snapshot.js";
 import type { EvalPlan, PlanCase } from "./types.js";
 
@@ -163,12 +163,7 @@ export function planInternalAgent(args: {
     evalId: loaded.id,
     evalPath: loaded.relPath,
     evalHash: loaded.fileHash,
-    evalDefinition: {
-      version: 1,
-      id: loaded.id,
-      target: { kind: "internal_agent", profile: profileId },
-      dataset: posix(projectRoot, paths.datasetPath),
-    },
+    evalDefinition: evalDefinition(loaded, projectRoot),
     overrides: snapshotOverrides,
     target: {
       profile_id: profileId,

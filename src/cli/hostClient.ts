@@ -592,6 +592,20 @@ export async function httpSortEvalFailures(
   return status === 200 ? { ok: true, body: body as Record<string, any> } : evalFailure(status, body);
 }
 
+export async function httpCalibrateEvalGrader(
+  base: string,
+  evalId: string,
+  graderId: string,
+  input: { project_root?: string; split?: "all" | "dev" | "held_out"; max_cost_usd?: number; stability?: boolean },
+): Promise<HttpEvalResult<Record<string, any>>> {
+  const { status, body } = await postJson(
+    base,
+    `/api/evals/${enc(evalId)}/graders/${enc(graderId)}/calibrate`,
+    input,
+  );
+  return status === 200 ? { ok: true, body: body as Record<string, any> } : evalFailure(status, body);
+}
+
 export function httpListEvalSuggestions(base: string, evalRunId: string, status?: string) {
   return evalGet<{ items: Array<Record<string, any>>; summary: Record<string, any> }>(
     base,

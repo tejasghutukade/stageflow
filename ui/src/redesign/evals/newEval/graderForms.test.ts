@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   addCheck,
+  judgeCallsPerGrade,
+  judgeSettingsOf,
+  setJudgeSetting,
   addExample,
   newGrader,
   nextGraderId,
@@ -130,5 +133,30 @@ describe("rubric", () => {
   it("reports problems", () => {
     expect(graderProblems(newGrader("rubric", []))).toContain("Describe what the judge looks for");
     expect(graderProblems({ ...newGrader("rubric", []), rubric: "ok" })).toEqual([]);
+  });
+});
+
+describe("judge settings", () => {
+  const base = { id: "r", type: "rubric", rubric: "x" } as any;
+
+  it("sets a setting and removes the whole key when none are left", () => {
+    const withVotes = setJudgeSetting(base, "votes", 3);
+    expect(withVotes.judge_settings).toEqual({ votes: 3 });
+    const both = setJudgeSetting(withVotes, "reasoning", true);
+    expect(judgeSettingsOf(both)).toEqual({ votes: 3, reasoning: true });
+    const back = setJudgeSetting(setJudgeSetting(both, "votes", 1), "reasoning", false);
+    expect("judge_settings" in back).toBe(false);
+  });
+
+  it("clears temperature with undefined and counts judge calls", () => {
+    const t = setJudgeSetting(base, "temperature", 0);
+    expect(judgeSettingsOf(t)).toEqual({ temperature: 0 });
+    expect("judge_settings" in setJudgeSetting(t, "temperature", undefined)).toBe(false);
+    expect(judgeCallsPerGrade(base)).toBe(1);
+    expect(judgeCallsPerGrade(setJudgeSetting(base, "votes", 5))).toBe(5);
+  });
+
+  it("ignores a malformed judge_settings value", () => {
+    expect(judgeSettingsOf({ ...base, judge_settings: [1] })).toEqual({});
   });
 });

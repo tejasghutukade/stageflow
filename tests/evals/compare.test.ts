@@ -112,6 +112,16 @@ describe("compareRuns", () => {
     expect(compareRuns(run(all(5, true)), run(all(5, true))).stage_diff).toBeNull();
   });
 
+  it("warns when the judge model or judge prompt version changed", () => {
+    const a = run(all(5, true), { configComponents: { judge: "anthropic/a", rubric_prompt_version: 1 } });
+    const same = run(all(5, true), { configComponents: { judge: "anthropic/a", rubric_prompt_version: 1 } });
+    const model = run(all(5, true), { configComponents: { judge: "anthropic/b", rubric_prompt_version: 1 } });
+    const prompt = run(all(5, true), { configComponents: { judge: "anthropic/a", rubric_prompt_version: 2 } });
+    expect(compareRuns(a, same).warnings.map((w) => w.code)).not.toContain("judge_differs");
+    expect(compareRuns(a, model).warnings.map((w) => w.code)).toContain("judge_differs");
+    expect(compareRuns(a, prompt).warnings.map((w) => w.code)).toContain("judge_differs");
+  });
+
   it("rejects runs of different evals", () => {
     expect(() => compareRuns(run(all(5, true)), run(all(5, true), { evalId: "other" }))).toThrow(/different evals/);
   });

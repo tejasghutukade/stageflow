@@ -45,6 +45,7 @@ import {
 } from "./snapshot.js";
 import { planInternalAgent } from "./planInternalAgent.js";
 import { isConversationTarget, type EvalFile, type EvalPlan, type PlanCase, type ResolvedGrader } from "./types.js";
+import { isJudged, isJudgedType } from "./judged.js";
 
 export type EvalOverrides = {
   repeats?: number;
@@ -204,9 +205,9 @@ function withOverrides(loaded: LoadedEval, overrides: EvalOverrides): LoadedEval
     ...(overrides.max_cost_usd !== undefined ? { max_cost_usd: overrides.max_cost_usd } : {}),
   };
   const graders = loaded.graders.map((grader): ResolvedGrader => {
-    if ((grader.type !== "rubric" && grader.type !== "goal_reached") || overrides.judge === undefined) return grader;
+    if (!isJudged(grader) || overrides.judge === undefined) return grader;
     const raw = loaded.file.graders.find((g) => g.id === grader.id);
-    if ((raw?.type === "rubric" || raw?.type === "goal_reached") && raw.judge !== undefined) return grader;
+    if (raw !== undefined && isJudgedType(raw.type) && "judge" in raw && raw.judge !== undefined) return grader;
     const { hash: _old, ...rest } = { ...grader, judge: overrides.judge };
     return { ...rest, hash: graderHash(rest) };
   });
@@ -234,7 +235,7 @@ function selectCases(
   return [...cases];
 }
 
-function evalDefinition(loaded: LoadedEval, projectRoot: string): Record<string, unknown> {
+export function evalDefinition(loaded: LoadedEval, projectRoot: string): Record<string, unknown> {
   const { file } = loaded;
   const paths = resolveEvalPaths(file, loaded.path);
   const rel = (abs: string | undefined): string | undefined =>
@@ -686,7 +687,7 @@ async function buildAgentResult(a: AgentResultInput): Promise<BuildEvalPlanResul
   const fingerprint = computeFingerprint(components);
 
   const { overrides } = a;
-  const hasRubric = loaded.graders.some((g) => g.type === "rubric" || g.type === "goal_reached");
+  const hasRubric = loaded.graders.some(isJudged);
   const plainDefinition = JSON.parse(JSON.stringify(definition)) as Record<string, unknown>;
   const snapshot = buildSnapshot({
     evalId: loaded.id,

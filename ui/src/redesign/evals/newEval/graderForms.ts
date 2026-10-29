@@ -341,6 +341,41 @@ export function setJudge(g: GraderConfig, judge: string): GraderConfig {
   return (judge === "" ? rest : { ...rest, judge }) as GraderConfig;
 }
 
+export type JudgeSettingsView = { temperature?: number; reasoning?: boolean; votes?: number };
+
+export const VOTE_CHOICES = [1, 3, 5] as const;
+export const TEMPERATURE_CHOICES = [0, 0.3, 0.7, 1] as const;
+
+export function judgeSettingsOf(g: GraderConfig): JudgeSettingsView {
+  const raw = g.judge_settings;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const out: JudgeSettingsView = {};
+  const r = raw as Record<string, unknown>;
+  if (typeof r.temperature === "number") out.temperature = r.temperature;
+  if (typeof r.reasoning === "boolean") out.reasoning = r.reasoning;
+  if (typeof r.votes === "number") out.votes = r.votes;
+  return out;
+}
+
+/** Sets or clears (undefined) one judge setting; an empty mapping removes the key. */
+export function setJudgeSetting<K extends keyof JudgeSettingsView>(
+  g: GraderConfig,
+  key: K,
+  value: JudgeSettingsView[K] | undefined,
+): GraderConfig {
+  const next: JudgeSettingsView = { ...judgeSettingsOf(g) };
+  if (value === undefined || (key === "votes" && value === 1) || (key === "reasoning" && value === false)) delete next[key];
+  else next[key] = value;
+  const { judge_settings: _s, ...rest } = g;
+  void _s;
+  return (Object.keys(next).length === 0 ? rest : { ...rest, judge_settings: next }) as GraderConfig;
+}
+
+/** Judge calls per grade, for the cost hint. */
+export function judgeCallsPerGrade(g: GraderConfig): number {
+  return judgeSettingsOf(g).votes ?? 1;
+}
+
 export function graderProblems(g: GraderConfig): string[] {
   const out: string[] = [];
   if (g.type === "rubric" && (typeof g.rubric !== "string" || g.rubric.trim() === "")) {

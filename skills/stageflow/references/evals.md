@@ -19,6 +19,7 @@ An eval is `evals/<id>.eval.yaml` (target stage or agent, dataset, graders, defa
 | **Run an eval** | `sf eval run <id\|path> --json` | `run_eval` | **Calls models and costs real money** |
 | Read failure suggestions | `sf eval suggestions <evalRunId> [--status ...] --json` | `get_eval_failure_suggestions`, `get_eval_failure_sort_status` | Free |
 | **Sort failures** | `sf eval sort <evalRunId> [--classifier auto\|jev\|judge] [--limit n] [--resort] --json` | `sort_eval_failures` | **Sends failed results to TypeSafe Jev or the judge model; small cost.** Manual only; tags nothing |
+| **Check a judge against the author's labels** | `sf eval calibrate <evalId> <graderId> [--split dev\|held_out] [--stability] --json` | `calibrate_eval_grader`, `list_grader_calibrations` (read-only) | **Re-judges the author's labeled outputs with the judge model (one call per label); costs money.** Never label results yourself: labels are the author's ground truth |
 | Stop a run | `sf eval runs cancel <evalRunId>` | `cancel_eval_run` | Stops spending |
 
 Never start an eval run on your own. Tell the human what it will do (cases x repeats stage calls, plus judge calls for rubric graders; for an agent, conversations of several turns, plus a simulator model for simulated scenarios and a judge for `rubric` and `goal_reached`) and the cost cap (`defaults.max_cost_usd`, default 2; `--max-cost` overrides it), and wait for a yes. Only one eval run is active per Host.
