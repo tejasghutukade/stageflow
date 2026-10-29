@@ -12,7 +12,7 @@ import { relativeTime, runShortId } from "../catalogJoin";
 import { useRunCatalog } from "../catalog/useRunCatalog";
 import { bucketViews, inboxWaitingView } from "../catalog/views";
 import { Keycap } from "./Keycap";
-import { useHotkeys } from "./keys";
+import { textFieldKeepsKey, useHotkeys } from "./keys";
 import {
   OVERLAY_SCRIM_CLASS,
   PALETTE_SCRIM_PT,
@@ -48,6 +48,31 @@ const GROUP_LABEL: Record<PaletteGroup, string> = {
   navigation: "Navigation",
 };
 
+const TYPE_FILTERS = ["all", "actions", "runs", "pipelines", "navigation"] as const;
+type PaletteTypeFilter = (typeof TYPE_FILTERS)[number];
+
+const TYPE_FILTER_LABEL: Record<PaletteTypeFilter, string> = {
+  all: "All",
+  actions: "Actions",
+  runs: "Runs",
+  pipelines: "Pipelines",
+  navigation: "Navigation",
+};
+
+function nextTypeFilter(
+  current: PaletteTypeFilter,
+  items: PaletteItem[],
+  direction: 1 | -1,
+): PaletteTypeFilter {
+  let index = TYPE_FILTERS.indexOf(current);
+  for (let step = 0; step < TYPE_FILTERS.length; step++) {
+    index = (index + direction + TYPE_FILTERS.length) % TYPE_FILTERS.length;
+    const next = TYPE_FILTERS[index] ?? "all";
+    if (next === "all" || items.some((item) => item.group === next)) return next;
+  }
+  return current;
+}
+
 function paletteRunRef(runId: string): string {
   const short = runShortId(runId);
   return short.startsWith("run_") ? short : `run_${short}`;
@@ -63,6 +88,7 @@ export function CommandPalette({
   const { snapshot } = useRunCatalog();
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
+  const [typeFilter, setTypeFilter] = useState<PaletteTypeFilter>("all");
   const [tasks, setTasks] = useState<TaskListing[]>([]);
   const [pipelines, setPipelines] = useState<PipelineListing[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -73,6 +99,7 @@ export function CommandPalette({
     if (!open) {
       setQuery("");
       setHighlight(0);
+      setTypeFilter("all");
       return;
     }
     const t = window.setTimeout(() => inputRef.current?.focus(), 0);
@@ -123,42 +150,68 @@ export function CommandPalette({
     ],
   );
 
-  const groups = useMemo(() => groupPaletteItems(items), [items]);
+  const visibleItems = useMemo(
+    () => (typeFilter === "all" ? items : items.filter((item) => item.group === typeFilter)),
+    [items, typeFilter],
+  );
+  const groups = useMemo(() => groupPaletteItems(visibleItems), [visibleItems]);
 
   useEffect(() => {
     setHighlight(0);
-  }, [query, items.length]);
+  }, [query, typeFilter, items.length]);
 
   useHotkeys(
     [
       {
         key: "arrowdown",
         scope: "global",
-        when: () => open && items.length > 0,
+        when: () => open && visibleItems.length > 0,
         allowInInput: true,
         handler: (e) => {
+          if (textFieldKeepsKey(e)) return;
           e.preventDefault();
-          setHighlight((i) => (i + 1) % items.length);
+          setHighlight((i) => (i + 1) % visibleItems.length);
         },
       },
       {
         key: "arrowup",
         scope: "global",
-        when: () => open && items.length > 0,
+        when: () => open && visibleItems.length > 0,
         allowInInput: true,
         handler: (e) => {
+          if (textFieldKeepsKey(e)) return;
           e.preventDefault();
-          setHighlight((i) => (i - 1 + items.length) % items.length);
+          setHighlight((i) => (i - 1 + visibleItems.length) % visibleItems.length);
         },
       },
       {
         key: "enter",
         scope: "global",
-        when: () => open && items.length > 0,
+        when: () => open && visibleItems.length > 0,
         allowInInput: true,
         handler: (e) => {
           e.preventDefault();
-          items[highlight]?.run();
+          visibleItems[highlight]?.run();
+        },
+      },
+      {
+        key: "tab",
+        scope: "global",
+        when: () => open,
+        allowInInput: true,
+        handler: (e) => {
+          e.preventDefault();
+          setTypeFilter((current) => nextTypeFilter(current, items, 1));
+        },
+      },
+      {
+        key: "shift+tab",
+        scope: "global",
+        when: () => open,
+        allowInInput: true,
+        handler: (e) => {
+          e.preventDefault();
+          setTypeFilter((current) => nextTypeFilter(current, items, -1));
         },
       },
     ],
@@ -167,10 +220,10 @@ export function CommandPalette({
 
   if (!open) return null;
 
-  const flatIndex = (item: PaletteItem) => items.findIndex((i) => i.id === item.id);
+  const flatIndex = (item: PaletteItem) => visibleItems.findIndex((i) => i.id === item.id);
 
   const resultCountLabel =
-    items.length === 1 ? "1 result" : `${items.length} results`;
+    visibleItems.length === 1 ? "1 result" : `${visibleItems.length} results`;
 
   return createPortal(
     <div
@@ -203,7 +256,7 @@ export function CommandPalette({
           className="flex min-h-0 flex-1 flex-col overflow-y-auto px-0 py-1.5"
           role="listbox"
         >
-          {items.length === 0 ? (
+          {visibleItems.length === 0 ? (
             <p className="px-4 py-6 text-center font-sans text-[13px] text-[var(--sf-text-3)]">
               No matches
             </p>
@@ -262,7 +315,9 @@ export function CommandPalette({
           <span className="font-sans text-xs text-[var(--sf-text-3)]">·</span>
           <span className="flex items-center gap-1.5">
             <Keycap>tab</Keycap>
-            <span className="font-sans text-xs text-[var(--sf-text-3)]">filter by type</span>
+            <span className="font-sans text-xs text-[var(--sf-text-3)]">
+              {TYPE_FILTER_LABEL[typeFilter]}
+            </span>
           </span>
           <span className="block flex-1" />
           <span className="font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-3)]">

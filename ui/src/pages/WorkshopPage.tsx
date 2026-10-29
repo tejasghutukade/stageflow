@@ -2585,6 +2585,7 @@ export function WorkshopPage({
           {
             key: "mod+s",
             scope: "workshop",
+            allowInInput: true,
             when: () =>
               !saveOpen &&
               !workshopPrimarySaveDisabled({

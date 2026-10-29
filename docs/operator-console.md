@@ -60,7 +60,7 @@ Below the groups, **Pinned pipelines** lists pipelines you pinned. The Workshop 
 
 ### Command palette
 
-**⌘K** (Ctrl+K) opens the palette from any page; **Esc** closes it. Type to filter, **↑/↓** to move, **Enter** to run.
+**⌘K** (Ctrl+K) opens the palette from any page; **Esc** closes it. Type to filter, **↑/↓** to move, **Enter** to run. **Tab** cycles the result type (All, Actions, Runs, Pipelines, Navigation); **Shift+Tab** cycles the other way. Option, Command, or Shift with an arrow, and Home or End, stay in the search text.
 
 | Group | Entries |
 |-------|---------|
@@ -75,12 +75,12 @@ Single keys are ignored while you type in a field. A shortcut works only on the 
 
 | Where | Keys |
 |-------|------|
-| Anywhere | **⌘K** palette · **Esc** close dialog |
+| Anywhere | **⌘K** palette · **⌘,** Settings · **Esc** close dialog |
 | Inbox | **J / K** move · **O** open the run or agent session · **R** retry a failed run's stage (Failed tab) · **G** go to Pipeline runs (empty Needs you) |
 | Inbox, a gate or agent approval selected | **1** Approve / Accept · **3** Deny / Reject · **N** focus the note (gates) · **O** open |
 | Pipeline runs | **J / K** move · **Enter** open · **R** retry · **A** answer the waiting gate |
 | Run detail | **F** start fresh (rerun) · **R** retry the failed stage · **C** copy the run id |
-| Run detail, a stage waiting on you | **1** Accept · **3** Reject · **N** focus the note |
+| Run detail, a stage waiting on you | **1** Accept · **3** Reject · **N** focus the note · **⌘↵** send the note with Accept |
 | Pipelines | **J / K** move · **Enter** open the editor · **S** start a run · **W** open in Workshop · **N** new pipeline · **/** search · **Esc** clear search |
 | Pipeline editor | **⌘S** save · **A** add a stage · **⌥⇧F** format YAML · **⌘.** apply a quick fix |
 | Tasks | **J / K** move · **Enter** open the last run · **S** start a run · **N** new task · **E** edit |
@@ -90,6 +90,7 @@ Single keys are ignored while you type in a field. A shortcut works only on the 
 | Evals list | **↑ / ↓** move the selection · **Enter** open |
 | Agents list | **↑ / ↓** move the cursor · **Enter** or **Space** open |
 | Agent editor | **⌘S** save |
+| Settings, Providers | **T** test connections |
 
 ## Start a run
 
