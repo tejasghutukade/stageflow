@@ -249,7 +249,7 @@ export type MultiQuestionItem = {
 
 /** `live_view.url` is an http(s) URL or a root-relative path such as `/api/runs/<id>/stages/<id>/live-view`. */
 export type GateHandoff =
-  | { kind: "local_window" }
+  | { kind: "local_window"; window?: "own_browser" }
   | { kind: "live_view"; url: string };
 
 export type PendingPrompt = (

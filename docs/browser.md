@@ -218,7 +218,7 @@ open -na "Google Chrome" --args --remote-debugging-port=9222 --remote-debugging-
 
 - The Host only attaches. It never starts, restarts or closes this Chrome. When a stage ends the Host closes that stage's tab; when the run ends it detaches. Your other tabs and the browser stay open.
 - A stage gets its own new tab. Tabs you opened yourself are not touched.
-- A human login stage shows "log in in the browser window" (`local_window`) even when the Host has no screen, because the window is yours. The login is saved in that Chrome's profile.
+- A human login stage uses a `local_window` handoff even when the Host has no screen, because the window is yours. The gate is stamped `{ kind: "local_window", window: "own_browser" }` and the console shows a "Use your own Chrome" note naming the site; the agent's prompt says the login page is in a new tab of the operator's own Chrome. The login is saved in that Chrome's profile.
 - The `profile:` name in a stage still names the run lease (one run at a time), but the cookies are whatever your Chrome holds. Different `profile:` names do not separate logins.
 - Chrome refuses debugging requests addressed by name, so the Host resolves a host name in `cdp_url` to an IPv4 address first (`localhost` becomes `127.0.0.1`). From Docker Desktop, `host.docker.internal` works this way; Chrome must listen where Docker can reach it. On other Docker setups use the address your container sees for the host.
 - The debugging port has no password. While Chrome is open with it, any local process can drive that browser and everything logged in there. Bind it to `127.0.0.1`, use a dedicated profile, and close Chrome when you are done.

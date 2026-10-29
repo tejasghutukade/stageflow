@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { LuCheck, LuMaximize2, LuMinimize2 } from "react-icons/lu";
+import { LuCheck, LuExternalLink, LuMaximize2, LuMinimize2 } from "react-icons/lu";
 import { LiveView } from "../../liveView/LiveView";
 
 export const BROWSER_HANDOFF_DONE_LABEL = "I've logged in";
@@ -57,6 +57,32 @@ export function BrowserHandoff({
             </button>
           ) : null}
         </div>
+      </div>
+    </div>
+  );
+}
+
+export function localWindowNote(own: boolean, site: string | undefined): { title: string; body: string } {
+  const where = site !== undefined ? ` (${site})` : "";
+  return own
+    ? {
+        title: "Use your own Chrome",
+        body: `Stageflow is attached to the Chrome you started with a debugging port. Switch to that window and use the new tab it opened${where}. Stageflow never closes that browser.`,
+      }
+    : {
+        title: "Use the browser window on this computer",
+        body: `A browser window${where} is open on the machine running Stageflow. Switch to it to act, then answer here.`,
+      };
+}
+
+export function LocalWindowNote({ own, site }: { own: boolean; site?: string }) {
+  const note = localWindowNote(own, site);
+  return (
+    <div className="bh-note" role="note">
+      <LuExternalLink className="bh-note__icon" aria-hidden="true" />
+      <div>
+        <div className="bh-note__title">{note.title}</div>
+        <p className="bh-note__body">{note.body}</p>
       </div>
     </div>
   );

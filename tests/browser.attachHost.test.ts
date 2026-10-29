@@ -112,9 +112,9 @@ describe("attach browser host", () => {
 
   it("offers a real window to a human login, even with no screen on the Host", () => {
     const { host } = setup();
-    expect(resolveBrowserHostCapabilities(host.capabilities)).toMatchObject({ display: "local_window", attach: "cdp", liveView: "none" });
+    expect(resolveBrowserHostCapabilities(host.capabilities)).toMatchObject({ display: "local_window", attach: "cdp", liveView: "none", ownBrowser: true });
     const support = { host, profiles: createVolumeProfileStore() } as StageBrowserSupport;
-    expect(resolveStageHandoffCapabilities(support, { humanLogin: true })).toEqual({ display: "local_window", liveView: "none" });
+    expect(resolveStageHandoffCapabilities(support, { humanLogin: true })).toEqual({ display: "local_window", liveView: "none", ownBrowser: true });
   });
 
   it("reports the live view relay when the process serves the console", () => {

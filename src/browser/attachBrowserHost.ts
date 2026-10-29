@@ -50,6 +50,7 @@ export function createAttachBrowserHost(options: AttachBrowserHostOptions): Brow
     attach: "cdp",
     profilePersistence: "none",
     gracefulCloseRequired: false,
+    ownBrowser: true,
   };
 
   return {

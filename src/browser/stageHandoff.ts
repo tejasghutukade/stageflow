@@ -17,7 +17,7 @@ import { defaultDisplayProbe, noScreenError } from "./humanLogin.js";
 const BROWSER_CAPABILITIES_FILENAME = "browser-capabilities.json";
 
 /** The slice of the host capability record a stage's handoff depends on; persisted per stage. */
-export type StageHandoffCapabilities = Pick<BrowserHostCapabilities, "display" | "liveView">;
+export type StageHandoffCapabilities = Pick<BrowserHostCapabilities, "display" | "liveView"> & { ownBrowser?: true };
 
 type HandoffInput = { runDir: string; runId: string; stageId: string };
 
@@ -52,7 +52,11 @@ export function resolveStageHandoffCapabilities(
       "A human login stage needs an interactive live view, but this browser host offers a view-only one (missing capability viewer_input: interactive).",
     );
   }
-  return { display: capabilities.display, liveView: capabilities.liveView };
+  return {
+    display: capabilities.display,
+    liveView: capabilities.liveView,
+    ...(capabilities.ownBrowser && capabilities.display === "local_window" ? { ownBrowser: true as const } : {}),
+  };
 }
 
 export async function persistStageHandoff(
@@ -63,7 +67,7 @@ export async function persistStageHandoff(
   await mkdir(dir, { recursive: true });
   await writeFile(
     path.join(dir, BROWSER_CAPABILITIES_FILENAME),
-    `${JSON.stringify({ display: capabilities.display, liveView: capabilities.liveView })}\n`,
+    `${JSON.stringify({ display: capabilities.display, liveView: capabilities.liveView, ...(capabilities.ownBrowser === true ? { ownBrowser: true } : {}) })}\n`,
     { mode: 0o600 },
   );
 }
@@ -77,8 +81,8 @@ export async function readStageHandoff(input: {
   try {
     const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const { display, liveView } = resolveBrowserHostCapabilities(parsed as Partial<BrowserHostCapabilities>);
-      return { display, liveView };
+      const { display, liveView, ownBrowser } = resolveBrowserHostCapabilities(parsed as Partial<BrowserHostCapabilities>);
+      return { display, liveView, ...(ownBrowser && display === "local_window" ? { ownBrowser: true as const } : {}) };
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
@@ -92,7 +96,9 @@ export function gateHandoffFor(context: {
   capabilities: StageHandoffCapabilities;
 }): GateHandoff | undefined {
   const { capabilities } = context;
-  if (capabilities.display === "local_window") return { kind: "local_window" };
+  if (capabilities.display === "local_window") {
+    return capabilities.ownBrowser === true ? { kind: "local_window", window: "own_browser" } : { kind: "local_window" };
+  }
   if (capabilities.liveView !== "none") {
     return {
       kind: "live_view",

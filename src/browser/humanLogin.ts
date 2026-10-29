@@ -44,7 +44,7 @@ export function noScreenError(docker: boolean): Error {
 
 export function humanLoginPromptBlock(
   url: string | undefined,
-  handoff: "local_window" | "live_view" = "local_window",
+  handoff: "local_window" | "live_view" | "own_browser" = "local_window",
 ): string {
   if (handoff === "live_view") {
     return [
@@ -55,10 +55,14 @@ export function humanLoginPromptBlock(
       "After the operator accepts, emit the envelope. The Host re-checks the login itself; if it still sees a logged-out session, this stage runs again.",
     ].join("\n");
   }
+  const where =
+    handoff === "own_browser"
+      ? "a new tab of the operator's own Chrome, which the Host attached to"
+      : "a visible browser window on the operator's screen";
   return [
     "## Human login",
     "",
-    `The Host has opened ${url !== undefined ? JSON.stringify(url) : "the login page"} in a visible browser window on the operator's screen.`,
+    `The Host has opened ${url !== undefined ? JSON.stringify(url) : "the login page"} in ${where}.`,
     "Do not type credentials and do not drive the browser. Call ask_operator with kind confirm: ask the operator to log in in that window and confirm when done. Leave the browser open.",
     "After the operator accepts, emit the envelope. The Host re-checks the login itself; if it still sees a logged-out session, this stage runs again.",
   ].join("\n");

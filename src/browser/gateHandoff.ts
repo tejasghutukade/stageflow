@@ -1,7 +1,7 @@
 import type { StageBrowserConfig } from "../types/stage.js";
 
 export type GateHandoff =
-  | { kind: "local_window" }
+  | { kind: "local_window"; window?: "own_browser" }
   | { kind: "live_view"; url: string };
 
 /** Host-owned fields on a gate prompt for stages with a `browser`. Never a path. */
@@ -18,7 +18,9 @@ export function parseGateHandoff(value: unknown): GateHandoff | undefined {
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  if (record.kind === "local_window") return { kind: "local_window" };
+  if (record.kind === "local_window") {
+    return record.window === "own_browser" ? { kind: "local_window", window: "own_browser" } : { kind: "local_window" };
+  }
   if (record.kind === "live_view" && typeof record.url === "string") {
     if (isRootRelativePath(record.url)) return { kind: "live_view", url: record.url };
     try {

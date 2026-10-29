@@ -8,7 +8,7 @@ import {
 } from "../../stageAnswer/answerRules";
 import { useOperatorAnswer } from "../../stageAnswer/useOperatorAnswer";
 import { liveViewHandoffUrl } from "../../liveView/handoff";
-import { BrowserHandoff } from "./BrowserHandoff";
+import { BrowserHandoff, LocalWindowNote } from "./BrowserHandoff";
 import {
   buildAcceptIntent,
   buildRejectIntent,
@@ -211,6 +211,9 @@ export function GateAnswerPanel({
       </div>
       {error ? (
         <p className="max-w-[680px] text-sm text-[var(--sf-fail)]">{error}</p>
+      ) : null}
+      {pendingPrompt.handoff?.kind === "local_window" ? (
+        <LocalWindowNote own={pendingPrompt.handoff.window === "own_browser"} site={pendingPrompt.site} />
       ) : null}
       {liveViewUrl !== null ? (
         <BrowserHandoff

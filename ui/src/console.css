@@ -3934,3 +3934,18 @@ a.topbar__back { text-decoration: none; }
 
 .liveview__nav-btn:hover:not(:disabled) { background: var(--color-background-hover, var(--color-border)); color: var(--color-text-primary); }
 .liveview__nav-btn:disabled { opacity: 0.4; cursor: default; }
+
+.bh-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  max-width: 42rem;
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  background: var(--color-background-surface);
+}
+
+.bh-note__icon { flex: none; margin-top: 2px; color: var(--color-text-secondary); }
+.bh-note__title { font-size: var(--font-size-sm); font-weight: 600; color: var(--color-text-primary); }
+.bh-note__body { margin: var(--spacing-1) 0 0; font-size: var(--font-size-sm); color: var(--color-text-secondary); }

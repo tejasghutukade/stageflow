@@ -484,7 +484,7 @@ async function openStageWithOperatorCatalog(
         system_prompt: `${stampStagePromptArtifactsDir(
           input.stage.system_prompt,
           artifactsDir,
-        )}${loginCheck !== undefined ? `\n\n${loginCheckPromptBlock(loginCheck)}` : ""}${humanLogin ? `\n\n${humanLoginPromptBlock(input.stage.browser?.login_url ?? input.stage.browser?.check?.url, humanLoginHandoff?.kind === "live_view" ? "live_view" : "local_window")}` : ""}`,
+        )}${loginCheck !== undefined ? `\n\n${loginCheckPromptBlock(loginCheck)}` : ""}${humanLogin ? `\n\n${humanLoginPromptBlock(input.stage.browser?.login_url ?? input.stage.browser?.check?.url, humanLoginHandoff?.kind === "live_view" ? "live_view" : humanLoginHandoff?.kind === "local_window" && humanLoginHandoff.window === "own_browser" ? "own_browser" : "local_window")}` : ""}`,
         ...(loginCheck !== undefined
           ? {
               pre_emit_checks: [
