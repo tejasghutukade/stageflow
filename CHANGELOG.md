@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Blocked sites escalate instead of failing.** A stage that reports `site blocked this browser:` pins its profile to your Chrome and retries once in the same run.
 - **Saved browser logins in the console, CLI and API.** Connections shows each login with its sites, last login and last check, and offers Delete, Switch back, Check now and Log in again. New: `GET/DELETE /api/browser/profiles…`, `…/pin`, `…/check`, `…/login`, `…/login/finish`, and `sf browser unpin`; `sf browser profiles` lists more fields.
 - **Live browser in the redesigned gate** with a window frame and back, forward and reload (`POST …/live-view/navigate`).
-- **Docs and agent skills** cover the login handoff and which sites suit it; see `examples/browser-login-handoff/`.
+- **Docs and agent guidance** cover the login handoff and which sites suit it: browser docs, the browser and `stageflow-author` skills, and the Guide's built-in knowledge (browser sessions, limits, troubleshooting). See `examples/browser-login-handoff/`.
 
 ## [0.46.0] - 2026-10-29
 

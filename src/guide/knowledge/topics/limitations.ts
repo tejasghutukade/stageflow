@@ -81,7 +81,7 @@ Each item: the limit, what the user sees, and the workaround.
 
 - **OAuth-signed-in MCP servers do not work in pipeline stages.** Use a bearer-token secret.
 - **MCP elicitation is not supported.**
-- **Browser \`allow_domains\` is not enforced for profile stages**; passkeys and native prompts do not work; a login stage fails on a Host with no screen and no live view; another run waits for a leased profile with no time limit.
+- **Browser \`allow_domains\` is not enforced for profile stages**; passkeys and native prompts do not work; a login stage fails on a Host with no screen and no live view; another run waits for a leased profile with no time limit. Some sites reject a copied session or a headless browser (Indeed rejects true headless); the Host then pins the profile to the operator's Chrome, which needs \`browser.attach\` in Host config. A login made in the operator's own Chrome lives in that Chrome, and deleting a saved login does not sign out of the site.
 - **Hosted multi-user use is not built.** Browser profiles and connections use a single local owner.
 `,
 };

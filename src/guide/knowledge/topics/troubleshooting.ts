@@ -48,6 +48,9 @@ Run \`validate\` (or \`validate_catalog_draft\` for a draft, \`validate_agent\`,
 | Stage failed after-phase verify | See the stage's verification history (\`get_stage_verification\`). With \`mode: manual\`, use Retry with guidance or Stop recovery; plain retry is refused. |
 | Join never runs | One parent failed. A join does not run on a failed parent. |
 | "waiting for browser profile" | Another run holds the browser profile until it ends. |
+| Stage fails with \`site blocked this browser:\` | The site challenged or rejected the Host's browser. With \`browser.attach\` configured the Host pins the profile to the operator's Chrome and retries the stage once; without it the stage fails. Console Connections → Browser logins shows the pin, and Switch back tries the Host's browser again. |
+| Login worked but a headless stage sees a logged-out page | The site rejected the copied session. Try the stage headed (drop \`headed: false\`), or pin the profile to the operator's Chrome with \`browser.profile_hosts\`. |
+| Check now or Log in again is disabled | No recorded check yet (run a pipeline whose stage has \`browser.check\` and this profile once), a run holds the profile, or the Host has no window to offer (set \`browser.login_host: attach\`). |
 
 ## Triggers
 
