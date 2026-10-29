@@ -1,6 +1,6 @@
 import { authorizationHeaders } from "../api/controlToken";
 import type { DialogAnswerBody } from "./dialogState";
-import type { LiveViewInput, LiveViewMode } from "./types";
+import type { LiveViewInput, LiveViewMode, LiveViewNavigateAction } from "./types";
 import type { TicketResult } from "./connection";
 
 export const LIVE_VIEW_CSRF_HEADER = "x-stageflow-live-view";
@@ -41,6 +41,16 @@ export async function postLiveViewReopenTab(baseUrl: string): Promise<number> {
     method: "POST",
     credentials: "same-origin",
     headers: { [LIVE_VIEW_CSRF_HEADER]: "1" },
+  });
+  return res.status;
+}
+
+export async function postLiveViewNavigate(baseUrl: string, action: LiveViewNavigateAction): Promise<number> {
+  const res = await fetch(`${baseUrl}/navigate`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", [LIVE_VIEW_CSRF_HEADER]: "1" },
+    body: JSON.stringify({ action }),
   });
   return res.status;
 }

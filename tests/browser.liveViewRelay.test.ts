@@ -1037,6 +1037,79 @@ describe("agent-browser live view relay: reopen tab", () => {
   });
 });
 
+describe("agent-browser live view relay: navigate", () => {
+  type Cmd = { id: number; method: string; params?: Record<string, any>; sessionId?: string };
+
+  async function ready() {
+    const h = await setupRelay();
+    h.tabs.push({ tabId: "t1", targetId: "o1", url: "http://a/login" });
+    h.created("o1", "http://a/login");
+    await until(() => h.got.some((m) => m.type === "url"), "url");
+    h.cdp.emit({
+      method: "Target.attachedToTarget",
+      params: { sessionId: "S1", waitingForDebugger: false, targetInfo: { targetId: "o1", type: "page", url: "http://a/login" } },
+    });
+    const cmds = (method: string): Cmd[] => h.cdp.received.map((r) => JSON.parse(r) as Cmd).filter((c) => c.method === method);
+    await until(() => cmds("Page.enable").length > 0, "attach processed");
+    const reply = async (method: string, payload: Record<string, unknown>) => {
+      await until(() => cmds(method).length > 0, method);
+      h.cdp.emit({ id: cmds(method).at(-1)!.id, ...payload });
+    };
+    return { ...h, cmds, reply };
+  }
+
+  it("goes back by navigating to the previous history entry of the current tab's session", async () => {
+    const h = await ready();
+    const pending = h.session.navigate("back");
+    await h.reply("Page.getNavigationHistory", { result: { currentIndex: 1, entries: [{ id: 11 }, { id: 12 }] } });
+    await h.reply("Page.navigateToHistoryEntry", { result: {} });
+    await expect(pending).resolves.toEqual({ ok: true });
+    expect(h.cmds("Page.navigateToHistoryEntry")[0]).toMatchObject({ params: { entryId: 11 }, sessionId: "S1" });
+  });
+
+  it("goes forward and reports no_history at either end", async () => {
+    const h = await ready();
+    const fwd = h.session.navigate("forward");
+    await h.reply("Page.getNavigationHistory", { result: { currentIndex: 0, entries: [{ id: 11 }, { id: 12 }] } });
+    await h.reply("Page.navigateToHistoryEntry", { result: {} });
+    await expect(fwd).resolves.toEqual({ ok: true });
+    expect(h.cmds("Page.navigateToHistoryEntry")[0]!.params).toEqual({ entryId: 12 });
+
+    const back = h.session.navigate("back");
+    await until(() => h.cmds("Page.getNavigationHistory").length === 2, "second history call");
+    h.cdp.emit({ id: h.cmds("Page.getNavigationHistory")[1]!.id, result: { currentIndex: 0, entries: [{ id: 11 }] } });
+    await expect(back).resolves.toEqual({ ok: false, reason: "no_history" });
+    expect(h.cmds("Page.navigateToHistoryEntry")).toHaveLength(1);
+  });
+
+  it("reloads the current tab", async () => {
+    const h = await ready();
+    const pending = h.session.navigate("reload");
+    await h.reply("Page.reload", { result: {} });
+    await expect(pending).resolves.toEqual({ ok: true });
+    expect(h.cmds("Page.reload")[0]).toMatchObject({ sessionId: "S1" });
+  });
+
+  it("rejects with no tab, no CDP, upstream errors, and once closed", async () => {
+    const empty = await setupRelay();
+    await expect(empty.session.navigate("back")).resolves.toEqual({ ok: false, reason: "no_tab" });
+
+    const failing = await ready();
+    const pending = failing.session.navigate("reload");
+    await failing.reply("Page.reload", { error: { code: -32000, message: "boom" } });
+    await expect(pending).resolves.toEqual({ ok: false, reason: "failed" });
+
+    const noCdp = await ready();
+    noCdp.cdp.dropClients();
+    await new Promise((r) => setTimeout(r, 40));
+    await expect(noCdp.session.navigate("back")).resolves.toEqual({ ok: false, reason: "upstream_unavailable" });
+
+    const h = await ready();
+    await h.session.close();
+    await expect(h.session.navigate("back")).resolves.toEqual({ ok: false, reason: "closed" });
+  });
+});
+
 describe("agent-browser live view relay: page dialogs", () => {
   type Cmd = { id: number; method: string; params?: Record<string, any>; sessionId?: string };
 

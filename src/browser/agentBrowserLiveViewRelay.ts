@@ -10,6 +10,8 @@ import type {
   LiveViewInputResult,
   LiveViewMessage,
   LiveViewRelay,
+  LiveViewNavigateAction,
+  LiveViewNavigateResult,
   LiveViewReopenResult,
   LiveViewSession,
   LiveViewSessionRequest,
@@ -757,6 +759,29 @@ export function createAgentBrowserLiveViewRelay(
         }
       };
 
+      const navigate = async (action: LiveViewNavigateAction): Promise<LiveViewNavigateResult> => {
+        if (closed) return { ok: false, reason: "closed" };
+        if (cdp === undefined || cdp.readyState !== WS_OPEN) return { ok: false, reason: "upstream_unavailable" };
+        const sessionId = current === undefined ? undefined : targetSessions.get(current);
+        if (sessionId === undefined) return { ok: false, reason: "no_tab" };
+        if (action === "reload") {
+          const reply = await cdpCall("Page.reload", {}, sessionId);
+          if (closed) return { ok: false, reason: "closed" };
+          return reply === undefined || reply.error !== undefined ? { ok: false, reason: "failed" } : { ok: true };
+        }
+        const history = await cdpCall("Page.getNavigationHistory", {}, sessionId);
+        if (closed) return { ok: false, reason: "closed" };
+        const result = history?.result;
+        if (!isPlainObject(result) || typeof result.currentIndex !== "number" || !Array.isArray(result.entries)) {
+          return { ok: false, reason: "failed" };
+        }
+        const entry: unknown = result.entries[result.currentIndex + (action === "back" ? -1 : 1)];
+        if (!isPlainObject(entry) || typeof entry.id !== "number") return { ok: false, reason: "no_history" };
+        const reply = await cdpCall("Page.navigateToHistoryEntry", { entryId: entry.id }, sessionId);
+        if (closed) return { ok: false, reason: "closed" };
+        return reply === undefined || reply.error !== undefined ? { ok: false, reason: "failed" } : { ok: true };
+      };
+
       const reject = (reason: LiveViewInputRejection): LiveViewInputResult => ({ ok: false, reason });
 
       return {
@@ -829,6 +854,7 @@ export function createAgentBrowserLiveViewRelay(
           return { ok: true };
         },
         reopenTab,
+        navigate,
         clearFrame() {
           latest.delete("frame");
         },

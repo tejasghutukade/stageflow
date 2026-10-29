@@ -10,6 +10,7 @@ import type {
   LiveViewInputRejection,
   LiveViewMessage,
   LiveViewRelay,
+  LiveViewNavigateRejection,
   LiveViewReopenRejection,
 } from "../browser/liveViewRelay.js";
 import { loadHostConfig } from "../config/hostConfig.js";
@@ -38,6 +39,7 @@ export const LIVE_VIEW_CSRF_HEADER = "x-stageflow-live-view";
 export const LIVE_VIEW_MAX_INPUT_BYTES = 64 * 1024;
 export const LIVE_VIEW_MAX_DIALOG_BYTES = 8 * 1024;
 export const LIVE_VIEW_MAX_REOPEN_BYTES = 256;
+export const LIVE_VIEW_MAX_NAVIGATE_BYTES = 256;
 export const LIVE_VIEW_HEARTBEAT_MS = 15_000;
 
 const MAX_TICKET_BODY_BYTES = 1024;
@@ -75,6 +77,18 @@ const REOPEN_STATUS: Record<LiveViewReopenRejection, number> = {
   rate_limited: 429,
   failed: 502,
 };
+
+const NAVIGATE_STATUS: Record<LiveViewNavigateRejection, number> = {
+  closed: 409,
+  no_tab: 409,
+  upstream_unavailable: 409,
+  no_history: 409,
+  failed: 502,
+};
+
+export function isLiveViewNavigatePath(method: string, pathname: string): boolean {
+  return method === "POST" && matchLiveViewRoute(pathname)?.kind === "navigate";
+}
 
 export function isLiveViewReopenTabPath(method: string, pathname: string): boolean {
   return method === "POST" && matchLiveViewRoute(pathname)?.kind === "reopen-tab";
@@ -579,6 +593,40 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
     send(res, REOPEN_STATUS[result.reason], { error: result.reason, code: result.reason });
   }
 
+  async function postNavigate(
+    req: IncomingMessage,
+    res: ServerResponse,
+    target: LiveViewTarget,
+  ): Promise<void> {
+    const read = await readControlBody(
+      req,
+      res,
+      target,
+      LIVE_VIEW_MAX_NAVIGATE_BYTES,
+      "This live view session cannot navigate",
+      "Request too large",
+    );
+    if (read === undefined) return;
+    const session = sessions.peek(target.runId, target.stageId);
+    if (session === undefined) {
+      send(res, 409, { error: "Live view is closed", code: "closed" });
+      return;
+    }
+    const body = read.body;
+    const action =
+      typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>).action : undefined;
+    if (action !== "back" && action !== "forward" && action !== "reload") {
+      send(res, 400, { error: "invalid", code: "invalid" });
+      return;
+    }
+    const result = await session.navigate(action);
+    if (result.ok) {
+      send(res, 200, { ok: true });
+      return;
+    }
+    send(res, NAVIGATE_STATUS[result.reason], { error: result.reason, code: result.reason });
+  }
+
   async function postInput(
     req: IncomingMessage,
     res: ServerResponse,
@@ -654,6 +702,8 @@ export function createLiveViewRoutes(options: LiveViewRoutesOptions): LiveViewRo
           await postDialog(req, res, target);
         } else if (action === "reopen-tab" && method === "POST") {
           await postReopenTab(req, res, target);
+        } else if (action === "navigate" && method === "POST") {
+          await postNavigate(req, res, target);
         } else {
           send(res, 405, { error: "Method not allowed" });
         }

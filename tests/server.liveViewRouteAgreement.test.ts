@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { requiredScopeFor } from "../src/server/controlToken.js";
-import { createLiveViewRoutes, isLiveViewDialogPath, isLiveViewInputPath, isLiveViewPath, isLiveViewReopenTabPath } from "../src/server/liveViewRoutes.js";
+import { createLiveViewRoutes, isLiveViewDialogPath, isLiveViewInputPath, isLiveViewNavigatePath, isLiveViewPath, isLiveViewReopenTabPath } from "../src/server/liveViewRoutes.js";
 import { matchLiveViewRoute } from "../src/server/liveViewPath.js";
 
 const base = "/api/runs/r1/stages/s1/live-view";
@@ -12,6 +12,8 @@ const cases: Array<[string, string]> = [
   ["POST", `${base}/dialog`],
   ["POST", `${base}/reopen-tab`],
   ["GET", `${base}/reopen-tab`],
+  ["POST", `${base}/navigate`],
+  ["GET", `${base}/navigate`],
   ["GET", `${base}/viewer`],
   ["POST", `${base}/viewer`],
   ["GET", `${base}/ticket`],
@@ -56,6 +58,7 @@ describe("live-view route / bearer exemption agreement", () => {
     expect(isLiveViewDialogPath(method, pathname)).toBe(method === "POST" && kind === "dialog");
 
     expect(isLiveViewReopenTabPath(method, pathname)).toBe(method === "POST" && kind === "reopen-tab");
+    expect(isLiveViewNavigatePath(method, pathname)).toBe(method === "POST" && kind === "navigate");
 
     const wrongMethod =
       ((kind === "events" || kind === "viewer") && method !== "GET") ||

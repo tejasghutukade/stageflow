@@ -52,6 +52,17 @@ export type LiveViewReopenRejection =
 
 export type LiveViewReopenResult = { ok: true } | { ok: false; reason: LiveViewReopenRejection };
 
+export type LiveViewNavigateAction = "back" | "forward" | "reload";
+
+export type LiveViewNavigateRejection =
+  | "closed"
+  | "no_tab"
+  | "upstream_unavailable"
+  | "no_history"
+  | "failed";
+
+export type LiveViewNavigateResult = { ok: true } | { ok: false; reason: LiveViewNavigateRejection };
+
 export type LiveViewSessionRequest = {
   runId: string;
   stageId: string;
@@ -72,6 +83,8 @@ export interface LiveViewSession {
   answerDialog(answer: LiveViewDialogAnswer): Promise<LiveViewDialogResult>;
   /** Replaces the stage's current tab with a fresh one at the same URL (same browser context); the old tab closes only after the new one streams. */
   reopenTab(): Promise<LiveViewReopenResult>;
+  /** Goes back or forward one history entry of the current tab, or reloads it. History is the tab's own; nothing new is opened. */
+  navigate(action: LiveViewNavigateAction): Promise<LiveViewNavigateResult>;
   /** Drops the cached frame so a re-target does not replay a stale page. */
   clearFrame(): void;
   /** Idempotent; subscribers receive a `closed` message. */

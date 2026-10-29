@@ -1,3 +1,5 @@
+export type LiveViewNavigateAction = "back" | "forward" | "reload";
+
 export type LiveViewMode = "control" | "view";
 
 export type MouseButton = "left" | "middle" | "right";
