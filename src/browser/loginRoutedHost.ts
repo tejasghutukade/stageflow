@@ -14,6 +14,7 @@ import { closeBrowserSession } from "./browserTeardown.js";
 import type { BrowserHostCapabilityRecord } from "./hostCapabilities.js";
 import { type LoginCheckConfig, type LoginCheckOptions, runLoginCheck } from "./loginCheck.js";
 import type { ProfileHostHints } from "./profileHostHint.js";
+import type { ProfileHandle } from "./profileStore.js";
 import { copySession } from "./sessionSeed.js";
 
 export type LoginRoutedHostOptions = {
@@ -40,6 +41,7 @@ export function createLoginRoutedHost(options: LoginRoutedHostOptions): BrowserH
   const { work, login, hints } = options;
   const pinned = options.pinnedProfiles ?? new Set<string>();
   const loginChecks = new Map<string, LoginCheckConfig>();
+  const profilesSeen = new Map<string, ProfileHandle>();
   const keyOf = (r: Pick<ProfileBrowserRequest, "runId" | "profile">) =>
     `${r.runId}\0${r.profile.key.scope}\0${r.profile.key.name}`;
 
@@ -82,8 +84,15 @@ export function createLoginRoutedHost(options: LoginRoutedHostOptions): BrowserH
       return request.humanLogin === true ? login.capabilities : work.capabilities;
     },
 
+    async noteSiteBlocked(input) {
+      const profile = profilesSeen.get(`${input.scope}\0${input.profile}`);
+      if (profile === undefined) return;
+      await hints.set(profile, { mode: "attach", reason: input.reason });
+    },
+
     async ensureProfileBrowser(request: ProfileBrowserRequest): Promise<ProfileBrowserResult> {
       const previous = request.previous;
+      profilesSeen.set(`${request.profile.key.scope}\0${request.profile.key.name}`, request.profile);
       if (request.humanLogin === true && request.browser.check !== undefined) {
         loginChecks.set(keyOf(request), request.browser.check);
       }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserEnv, BrowserHost, BrowserRunner, ProfileBrowserRequest } from "../src/browser/browserHost.js";
 import { createLoginRoutedHost } from "../src/browser/loginRoutedHost.js";
 import { createProfileHostHints } from "../src/browser/profileHostHint.js";
+import { isSiteBlockedReport } from "../src/browser/siteBlocked.js";
 import { createVolumeProfileStore } from "../src/browser/volumeProfileStore.js";
 import { createLocalProfileStore } from "../src/browser/localProfileStore.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
@@ -184,6 +185,25 @@ describe("login routed host", () => {
     expect((await t.hints.get(t.profile))?.mode).toBe("attach");
     await t.hints.clear(t.profile);
     expect(await t.hints.get(t.profile)).toBeUndefined();
+  });
+
+  it("remembers a profile as attach-only when a stage reports the site blocked this browser", async () => {
+    const t = await setup();
+    await t.host.noteSiteBlocked?.({ scope: "local", profile: "acct", reason: "unknown profile is ignored" });
+    expect(await t.hints.get(t.profile)).toBeUndefined();
+    await t.host.ensureProfileBrowser(t.request());
+    await t.host.noteSiteBlocked?.({ scope: "local", profile: "acct", reason: "a stage reported that the site blocked this browser" });
+    expect(await t.hints.get(t.profile)).toMatchObject({ mode: "attach", reason: "a stage reported that the site blocked this browser" });
+    const next = await t.host.ensureProfileBrowser(t.request());
+    expect(next.via).toBe("login");
+    await t.host.noteSiteBlocked?.({ scope: "local", profile: "other", reason: "x" });
+  });
+
+  it("recognises the blocked-site report phrase", () => {
+    expect(isSiteBlockedReport("Site blocked this browser: Cloudflare challenge")).toBe(true);
+    expect(isSiteBlockedReport("  site blocked this browser")).toBe(true);
+    expect(isSiteBlockedReport("login lost")).toBe(false);
+    expect(isSiteBlockedReport(undefined)).toBe(false);
   });
 
   it("keeps hints in the profile's state folder across processes", async () => {

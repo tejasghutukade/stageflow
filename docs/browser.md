@@ -250,7 +250,8 @@ How a run goes:
 2. Logged out: the human login stage runs in **your own Chrome** (a new tab, a real window, passkeys and password manager work). You log in and accept the gate. The Host re-checks the login there (`verify: browser_login`).
 3. When the next stage starts, the Host copies the session (cookies and web storage) once from your Chrome into the headless browser's profile, and deletes the temporary file at once. The session then lives only in that profile, and later runs find it with no Chrome of yours.
 4. The Host runs the login stage's own `check` in the headless browser. If it reports logged in, the rest of the run is headless. If it does not, the site rejects a copied session or blocks that browser: the Host keeps the run in your Chrome and **remembers the profile** (`host-hint.json` in the profile's state folder), so later stages and runs of that profile use your Chrome from the start, and the site is not retried headless.
-5. When a saved session expires, the check in step 1 reports logged out and the cycle repeats.
+5. Some sites accept the copied session on the login check page and still challenge the headless browser on other pages (Indeed showed a Cloudflare verification on its home page after the account page passed). A work stage that meets such a page stops and fails with a summary that begins `site blocked this browser:` (the browser skill tells it to; it never tries to solve or get around the challenge). The Host reads that phrase and remembers the profile as attach-only, exactly like a rejected copy. That run fails; the next run of the profile uses your Chrome from the start.
+6. When a saved session expires, the check in step 1 reports logged out and the cycle repeats.
 
 To pin a profile to your Chrome without waiting to learn it, list it in Host config:
 

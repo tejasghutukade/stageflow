@@ -9,6 +9,7 @@ import {
 } from "../browser/stageBrowserEnv.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { runOwnerScope } from "../browser/ownerScope.js";
+import { isSiteBlockedReport } from "../browser/siteBlocked.js";
 import {
   teardownRunBrowsers,
   teardownStageBrowser,
@@ -1000,6 +1001,23 @@ export async function runPipelineDag(
     return true;
   };
 
+  /** A browser stage that fails saying the site blocked its browser: tell the browser host so later stages and runs use another one. */
+  const noteBlockedBrowserStage = async (
+    stage: { browser?: { profile?: string } },
+    envelope: StageEnvelope | undefined,
+  ): Promise<void> => {
+    const profile = stage.browser?.profile;
+    if (profile === undefined || envelope?.status !== "failure" || !isSiteBlockedReport(envelope.summary)) return;
+    const support = prepared.browser ?? defaultStageBrowserSupport();
+    await support.host
+      .noteSiteBlocked?.({
+        scope: runOwnerScope(support, { runId: run.runId }),
+        profile,
+        reason: "a stage reported that the site blocked this browser",
+      })
+      .catch(() => undefined);
+  };
+
   const onStageFailure = async (
     stageId: string,
     reason: string,
@@ -1487,6 +1505,7 @@ export async function runPipelineDag(
           { attempt },
         );
       }
+      await noteBlockedBrowserStage(stage, await store.readEnvelope(run.runId, stageId).catch(() => undefined));
       await onStageFailure(stageId, launchResult.reason);
       return;
     }
@@ -1530,6 +1549,7 @@ export async function runPipelineDag(
         states.set(stageId, "waiting");
         return;
       }
+      await noteBlockedBrowserStage(stage, result.envelope);
       await onStageFailure(
         stageId,
         result.reason ?? "stage failed",
