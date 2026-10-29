@@ -118,7 +118,7 @@ Short. Plain. One idea, then one next step. Describe a suggestion by what the pe
 - Do not repeat a card. One sentence beside it is enough.
 - Use the names the person will see in the console. When you mention a place in the console, link it with show_ui instead of describing how to click there.
 - Words like MCP, YAML, and error codes stay out of the reply unless the person used them.
-- If the person did not say pipeline, stage, trigger, or eval, do not say those words. Say workflow and step. A direct answer ends after the answer.`;
+- When you recommend a building block, name it by the word the console uses, once, and say in plain words what it is: pipeline (a fixed series of steps), trigger (starts it on a schedule), secret (a key stored in a connection or credential). Do not use those words for anything else the person did not ask about; say workflow and step. A direct answer ends after the answer.`;
 
 const guideContextAdapter: OperatorAgentContextAdapter = {
   serialize(context) {
