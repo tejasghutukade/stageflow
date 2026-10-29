@@ -206,6 +206,7 @@ import { handleGuideRoutes } from "./guideRoutes.js";
 import { handleInternalAgentRoutes } from "./internalAgentRoutes.js";
 import { handleAgentRoutes } from "./agentRoutes.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
+import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
 import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
 import { handleMemoryRoutes } from "./memoryRoutes.js";
 import { EmailTriggers } from "../email/triggers.js";
@@ -657,6 +658,11 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
           if (!boot.channels) { json(res, 503, { code: "CHANNEL_CONNECTION_FAILED" }); return true; }
           if (await handleChannelRoutes(req, method, pathname, boot.channels, res, json)) return true;
+        }
+        if (pathname === "/api/browser/profiles" || pathname.startsWith("/api/browser/profiles/")) {
+          if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
+          if (!boot.browserProfiles) { json(res, 503, { code: "browser_profiles_unavailable" }); return true; }
+          if (await handleBrowserProfileRoutes(method, pathname, boot.browserProfiles, res, json)) return true;
         }
         if (pathname.startsWith("/api/email/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: ["POST", "PATCH", "DELETE"].includes(method) })) return true;

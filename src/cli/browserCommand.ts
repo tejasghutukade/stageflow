@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { localAuditLogPath, type AuditSink } from "../browser/auditSink.js";
+import { auditLastUsedByProfile, type AuditSink } from "../browser/auditSink.js";
 import type {
   BrowserEnv,
   BrowserHost,
@@ -25,6 +25,9 @@ import {
   validateProfileName,
 } from "../browser/profileStore.js";
 import { cliRunLive, createRunLiveness } from "../browser/runLiveness.js";
+import { createProfileCatalog, ProfileCatalogError } from "../browser/profileCatalog.js";
+import { createProfileHostHints, type ProfileHostHints } from "../browser/profileHostHint.js";
+import { defaultProfileMetaStore, type ProfileMetaStore } from "../browser/profileMeta.js";
 import { loadHostConfig } from "../config/hostConfig.js";
 import { BlockedSiteError, hostOf, isBlockedHost } from "../browser/sitePolicy.js";
 import { globalStageflowHome } from "../project/globalHome.js";
@@ -38,8 +41,10 @@ export const BROWSER_USAGE = `Usage:
   sf browser check <name> --url <url> --logged-in <glob> [--logged-out <glob>]... [--headless] [--json]
   sf browser login <name> --url <login-url> --logged-in <glob> [--timeout-sec <n>] [--json]
   sf browser clear <name> [--yes] [--json]
+  sf browser unpin <name> [--json]
 
 Manage saved browser logins (profiles) on this computer. Output never shows profile paths or cookie values.
+\`profiles\` lists the sites each login is for, where it was made (host_browser or own_chrome) and whether the profile is pinned to your own Chrome; \`unpin\` makes the Host try its own browser again for a profile it learned to pin.
 Exit codes: 0 ok / logged in; 1 error; 2 profile in use by a live run; 3 logged out; 4 unknown; 5 login not completed (timeout or window closed); 130 interrupted.`;
 
 export const BROWSER_EXIT = {
@@ -77,6 +82,12 @@ export type BrowserCommandDeps = {
   /** profile name -> ISO time of last recorded use (from the audit log). */
   auditLastUsed: (scope: string) => Promise<Record<string, string>>;
   confirm: (question: string) => Promise<boolean>;
+  /** Remembered "use the operator's Chrome" pins; defaults to the Host's own store. */
+  hints?: ProfileHostHints;
+  /** What a profile is logged in to; defaults to the Host's own store. */
+  meta?: ProfileMetaStore;
+  /** Profiles pinned in Host config; defaults to `browser.profile_hosts`. */
+  pinnedByConfig?: ReadonlySet<string>;
   interactive: boolean;
   signal?: AbortSignal;
   sleep: (ms: number) => Promise<void>;
@@ -134,34 +145,6 @@ function defaultSessionOpen(env: BrowserEnv): boolean {
   }
 }
 
-async function defaultAuditLastUsed(scope: string): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
-  let text: string;
-  try {
-    text = readFileSync(localAuditLogPath(), "utf8");
-  } catch {
-    return out;
-  }
-  for (const line of text.split("\n")) {
-    if (line.length === 0) continue;
-    try {
-      const rec = JSON.parse(line) as { at?: string; event?: string; scope?: string; profile?: string };
-      if (
-        rec.event === "profile_used" &&
-        rec.scope === scope &&
-        typeof rec.profile === "string" &&
-        typeof rec.at === "string" &&
-        (out[rec.profile] === undefined || rec.at > out[rec.profile]!)
-      ) {
-        out[rec.profile] = rec.at;
-      }
-    } catch {
-      // skip bad line
-    }
-  }
-  return out;
-}
-
 async function defaultConfirm(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   try {
@@ -184,7 +167,7 @@ function defaultDeps(): BrowserCommandDeps {
     display: () => defaultDisplayProbe(),
     isRunLive,
     sessionOpen: defaultSessionOpen,
-    auditLastUsed: defaultAuditLastUsed,
+    auditLastUsed: auditLastUsedByProfile,
     confirm: defaultConfirm,
     interactive: Boolean(process.stdin.isTTY),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -211,7 +194,7 @@ function parse(args: string[]): Parsed {
     return out;
   }
   out.sub = args[0];
-  if (!["profiles", "status", "check", "login", "clear"].includes(out.sub)) {
+  if (!["profiles", "status", "check", "login", "clear", "unpin"].includes(out.sub)) {
     throw new Error(`Unknown browser subcommand: ${out.sub}`);
   }
   const value = (i: number, flag: string): string => {
@@ -303,26 +286,50 @@ function closeOpts(deps: BrowserCommandDeps) {
   };
 }
 
+function catalogFor(deps: BrowserCommandDeps) {
+  return createProfileCatalog({
+    scope: scopeOf(deps),
+    profiles: deps.store,
+    locks: deps.locks,
+    isRunLive: deps.isRunLive,
+    hints: deps.hints ?? createProfileHostHints(),
+    meta: deps.meta ?? defaultProfileMetaStore(),
+    auditLastUsed: deps.auditLastUsed,
+    pinnedByConfig: deps.pinnedByConfig ?? new Set(Object.keys(loadHostConfig().browserProfileHosts)),
+    closeProfileSession: async () => undefined,
+  });
+}
+
 async function profilesCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
-  const names = await deps.store.list(scopeOf(deps));
-  const audited = await deps.auditLastUsed(scopeOf(deps)).catch(() => ({}) as Record<string, string>);
-  const profiles: { name: string; last_used: string | null }[] = [];
-  for (const name of names) {
-    let last = audited[name];
-    try {
-      const handle = await deps.store.open({ scope: scopeOf(deps), name });
-      if (handle.profileDir !== undefined) {
-        const iso = (await stat(handle.profileDir)).mtime.toISOString();
-        if (last === undefined || iso > last) last = iso;
-      }
-    } catch {
-      // store without a real folder
-    }
-    profiles.push({ name, last_used: last ?? null });
-  }
+  const summaries = await catalogFor(deps).list();
+  const profiles = summaries.map((s) => ({
+    name: s.name,
+    last_used: s.last_used_at,
+    sites: s.sites,
+    login_where: s.login_where,
+    last_login_at: s.last_login_at,
+    last_verified_at: s.last_verified_at,
+    pinned: s.pinned,
+    in_use: s.in_use,
+  }));
   emit(deps, p.json, { profiles }, profiles.length === 0
     ? []
-    : profiles.map((x) => `${x.name}\t${x.last_used ?? "never"}`));
+    : profiles.map((x) =>
+        [
+          x.name,
+          x.last_used ?? "never",
+          x.sites.length > 0 ? x.sites.join(",") : "-",
+          x.login_where ?? "-",
+          x.pinned !== null ? `pinned:${x.pinned.by}` : "-",
+        ].join("\t"),
+      ));
+  return BROWSER_EXIT.ok;
+}
+
+async function unpinCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
+  const name = requireName(p);
+  const summary = await catalogFor(deps).unpin(name);
+  emit(deps, p.json, { unpinned: true, name, profile: summary }, [`"${name}" will use the Host's own browser again.`]);
   return BROWSER_EXIT.ok;
 }
 
@@ -524,12 +531,14 @@ export async function runBrowserCommand(
         return await checkCmd(resolved, parsed);
       case "login":
         return await loginCmd(resolved, parsed);
+      case "unpin":
+        return await unpinCmd(resolved, parsed);
       default:
         return await clearCmd(resolved, parsed);
     }
   } catch (err) {
     const cli = err instanceof CliError ? err : undefined;
-    const code = cli?.code ?? (err instanceof InvalidProfileKeyError || err instanceof BlockedSiteError
+    const code = cli?.code ?? (err instanceof ProfileCatalogError || err instanceof InvalidProfileKeyError || err instanceof BlockedSiteError
         ? err.code
         : "error");
     const message = (err as Error).message;

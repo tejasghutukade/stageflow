@@ -8,6 +8,7 @@ import {
 import { ageLabel } from "../../pages/channelStatus";
 import { connectionPath, navigate } from "../../routes";
 import { AddConnectionDialog } from "./AddConnectionDialog";
+import { BrowserLoginsSection } from "./BrowserLoginsSection";
 import { errorReason, useChannelMeta } from "./channelMeta";
 import { providerIcon } from "./providerIcons";
 import {
@@ -266,6 +267,8 @@ export function ConnectionsRedesign() {
               </a>
             ) : null}
           </section>
+
+          <BrowserLoginsSection />
         </div>
       </div>
 

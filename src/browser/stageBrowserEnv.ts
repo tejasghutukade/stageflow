@@ -24,6 +24,7 @@ import { ensureStageLoginCheck, OPEN_COMMAND_TIMEOUT_MS } from "./loginCheck.js"
 import { readPersistedBrowserEnv } from "./persistedEnv.js";
 import { createAttachBrowserHost } from "./attachBrowserHost.js";
 import { createLoginRoutedHost } from "./loginRoutedHost.js";
+import { recordProfileSession, stageSites } from "./profileMeta.js";
 import { createProfileHostHints } from "./profileHostHint.js";
 import { createContainerBrowserHost } from "./containerBrowserHost.js";
 import { createDockerSandboxOrchestrator } from "./dockerSandboxOrchestrator.js";
@@ -255,7 +256,7 @@ export async function resolveStageBrowserEnv(
       }
     }
   } else if (browser.check !== undefined) {
-    await ensureStageLoginCheck({
+    const checked = await ensureStageLoginCheck({
       runDir: input.runDir,
       stageId: input.stageId,
       attempt: input.attempt ?? 1,
@@ -264,6 +265,13 @@ export async function resolveStageBrowserEnv(
       ...(support.runner !== undefined ? { runner: support.runner } : {}),
       ...(support.loginCheck !== undefined ? { options: support.loginCheck } : {}),
     });
+    if (checked.logged_in === true && profile !== undefined) {
+      await recordProfileSession(profile, {
+        sites: stageSites(browser),
+        verified_at: new Date().toISOString(),
+        where: anchor?.via === "login" ? "own_chrome" : "host_browser",
+      });
+    }
   }
   return env;
 }

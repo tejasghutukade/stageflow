@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { appendFile, chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { globalStageflowHome } from "../project/globalHome.js";
@@ -83,3 +84,33 @@ export async function safeAudit(
     // best-effort
   }
 }
+
+/** Profile name to ISO time of its last recorded use, read from the local audit log. */
+export async function auditLastUsedByProfile(scope: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  let text: string;
+  try {
+    text = readFileSync(localAuditLogPath(), "utf8");
+  } catch {
+    return out;
+  }
+  for (const line of text.split("\n")) {
+    if (line.length === 0) continue;
+    try {
+      const rec = JSON.parse(line) as { at?: string; event?: string; scope?: string; profile?: string };
+      if (
+        rec.event === "profile_used" &&
+        rec.scope === scope &&
+        typeof rec.profile === "string" &&
+        typeof rec.at === "string" &&
+        (out[rec.profile] === undefined || rec.at > out[rec.profile]!)
+      ) {
+        out[rec.profile] = rec.at;
+      }
+    } catch {
+      // skip bad line
+    }
+  }
+  return out;
+}
+

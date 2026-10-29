@@ -729,15 +729,17 @@ sf browser status <name> [--json]
 sf browser check <name> --url <url> --logged-in <glob> [--logged-out <glob>]... [--headless] [--json]
 sf browser login <name> --url <login-url> --logged-in <glob> [--timeout-sec <n>] [--json]
 sf browser clear <name> [--yes] [--json]
+sf browser unpin <name> [--json]
 ```
 
 | Subcommand | Description |
 |------------|-------------|
-| `profiles` | Lists profile names and last use. Text is TSV `name\tlast_used` (`never` if unknown). JSON: `{ "profiles": [ { "name", "last_used" } ] }`. |
+| `profiles` | Lists profiles. Text is TSV `name\tlast_used\tsites\tlogin_where\tpin` (`never` / `-` when unknown; `pin` is `pinned:learned` or `pinned:config` when the profile uses your own Chrome). JSON: `{ "profiles": [ { "name", "last_used", "sites", "login_where": "host_browser" \| "own_chrome" \| null, "last_login_at", "last_verified_at", "pinned": { "by", "reason", "at" } \| null, "in_use": { "run_id", "stage_id", "live" } \| null } ] }`. Never cookies or paths. |
 | `status` | Shows whether the profile exists, who holds its lock (run and stage), and whether a browser session is open. JSON: `{ "name", "exists", "locked", "lock": { "run_id", "stage_id", "live" } \| null, "session_open" }`. |
 | `check` | Opens `--url` with the profile the same way a stage does and prints the Host-computed result. JSON: `{ "logged_in": true \| false \| null, "url", "state": "logged_in" \| "logged_out" \| "unknown" }`. Closes the session after. The profile must exist. |
 | `login` | Opens a visible window on `--url` and waits until the page address matches `--logged-in`, the timeout passes (default 300 s), the window is closed, or you press Ctrl-C. Then closes the session so the login is saved. Creates the profile if it is new. Needs a screen. |
-| `clear` | Closes any open session and deletes the profile. Asks to confirm on a terminal. Without a terminal it needs `--yes`. |
+| `clear` | Closes any open session and deletes the profile. Asks to confirm on a terminal. Without a terminal it needs `--yes`. This removes the Host's copy only; it does not sign you out on the site. |
+| `unpin` | Forgets the Host's learned "use the operator's Chrome" pin for a profile, so its stages try the Host's own browser again. Refuses a profile pinned in Host config (`browser.profile_hosts`) and a profile that is not pinned. JSON: `{ "unpinned": true, "name", "profile" }`. |
 
 | Flag | Description |
 |------|-------------|

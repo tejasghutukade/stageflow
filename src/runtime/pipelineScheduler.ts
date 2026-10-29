@@ -10,6 +10,9 @@ import {
 import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { runOwnerScope } from "../browser/ownerScope.js";
 import { isSiteBlockedReport } from "../browser/siteBlocked.js";
+import type { StageBrowserConfig } from "../types/stage.js";
+import { recordProfileSession, stageSites } from "../browser/profileMeta.js";
+import { readStageHandoff } from "../browser/stageHandoff.js";
 import {
   teardownRunBrowsers,
   teardownStageBrowser,
@@ -1027,6 +1030,28 @@ export async function runPipelineDag(
     return outcome?.switched === true;
   };
 
+  /** A human login stage passed its login check: remember, for the console, which sites the profile is logged in to and where. */
+  const noteLoginCompleted = async (
+    stage: { id: string; browser?: StageBrowserConfig },
+    stageId: string,
+  ): Promise<void> => {
+    const name = stage.browser?.profile;
+    if (name === undefined || !isHumanLoginStage(dag, stage.id, stage.browser)) return;
+    const support = prepared.browser ?? defaultStageBrowserSupport();
+    const handle = await support.profiles
+      .open({ scope: runOwnerScope(support, { runId: run.runId }), name })
+      .catch(() => undefined);
+    if (handle === undefined) return;
+    const handoff = await readStageHandoff({ runDir: run.workspaceDir, stageId }).catch(() => undefined);
+    const now = new Date().toISOString();
+    await recordProfileSession(handle, {
+      sites: stageSites(stage.browser),
+      login_at: now,
+      verified_at: now,
+      where: handoff?.ownBrowser === true ? "own_chrome" : "host_browser",
+    });
+  };
+
   /** The browser host moved a blocked stage's profile to the operator's own browser: run the stage once more there. */
   const retryBlockedStage = async (stageId: string, switched: boolean): Promise<boolean> => {
     if (!switched) return false;
@@ -1499,6 +1524,7 @@ export async function runPipelineDag(
         try {
           const envelope = await store.readEnvelope(run.runId, stageId);
           await onStageSuccess(stageId, envelope);
+          await noteLoginCompleted(stage, stageId);
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
           await handlePostSuccessError(stageId, reason);
@@ -1578,6 +1604,7 @@ export async function runPipelineDag(
     if (result.envelope) {
       try {
         await onStageSuccess(stageId, result.envelope);
+        await noteLoginCompleted(stage, stageId);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         await handlePostSuccessError(stageId, reason);

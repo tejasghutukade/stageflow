@@ -36,6 +36,20 @@ Use the join topology. Only the `check` to `login` edge has an `if` on `logged_i
 
 Runnable walkthrough: [`examples/browser-session/`](../examples/browser-session/). Fixtures: `tests/fixtures/pipelines/browser-login-check.pipeline.yaml` and `browser-human-login.pipeline.yaml`.
 
+## See and delete saved logins {#saved-logins}
+
+A profile is a saved login. The **Browser logins** section of the console's Connections page lists them: the sites each one is for, where the login was made (the Host's own browser, or your own Chrome), when you logged in, when it was last used, whether the profile is **pinned to your Chrome** (and why), and whether a run is holding it. The CLI shows the same with `sf browser profiles`, and the API is `GET /api/browser/profiles`.
+
+| Action | Console | CLI | API |
+|--------|---------|-----|-----|
+| Delete the Host's saved login for a profile | Delete (asks you to confirm) | `sf browser clear <name>` | `DELETE /api/browser/profiles/<name>` |
+| Try the Host's own browser again for a profile the Host learned to pin to your Chrome | Switch back | `sf browser unpin <name>` | `DELETE /api/browser/profiles/<name>/pin` |
+
+- **Delete is not a sign-out.** It removes the cookies this Host holds. The session stays valid on the site until you sign out in the site's own account settings (GitHub, for example, lists sessions at `github.com/settings/sessions`).
+- **A login made in your own Chrome lives in that Chrome.** Stageflow cannot list or remove it from there; sign out in Chrome.
+- A profile held by a **live run** cannot be deleted. A pin set in Host config (`browser.profile_hosts`) cannot be switched back here; remove it from the config.
+- The page and the API show sites, times and flags only, never cookie values or folders. The sites and times come from a small `meta.json` in the profile's state folder, written when a login stage passes its check or a stage's login check reports logged in. Profiles saved before this existed show "No site recorded yet" until they log in again. For a container or volume profile the record lives in memory and is lost when the Host restarts.
+
 ## Shared browser and tabs {#shared-browser-and-tabs}
 
 A profile is leased to one run, from the first stage that needs it until the run ends. All stages of that run share the lease and one Chrome. Stages of the same run never block each other, including parallel stages.
