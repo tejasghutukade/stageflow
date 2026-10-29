@@ -22,6 +22,7 @@ import { defaultDisplayProbe, loginPageUrl } from "./humanLogin.js";
 import { persistStageHandoff, resolveStageHandoffCapabilities } from "./stageHandoff.js";
 import { ensureStageLoginCheck, OPEN_COMMAND_TIMEOUT_MS } from "./loginCheck.js";
 import { readPersistedBrowserEnv } from "./persistedEnv.js";
+import { createAttachBrowserHost } from "./attachBrowserHost.js";
 import { createContainerBrowserHost } from "./containerBrowserHost.js";
 import { createDockerSandboxOrchestrator } from "./dockerSandboxOrchestrator.js";
 import { createVolumeProfileStore } from "./volumeProfileStore.js";
@@ -52,7 +53,18 @@ export function hostLaunchOptions(): { launchArgs: string[]; executablePath?: st
 
 function configuredBrowserSupport(liveView: "relay" | "none"): StageBrowserSupport {
   const config = loadHostConfig();
-  if (browserHostForOwner(config, localOwnerScope()) === "container") {
+  const kind = browserHostForOwner(config, localOwnerScope());
+  if (kind === "attach" && config.browserAttach !== undefined) {
+    return {
+      host: createAttachBrowserHost({
+        cdpUrl: config.browserAttach.cdpUrl,
+        liveView,
+        local: hostLaunchOptions(),
+      }),
+      profiles: createVolumeProfileStore(),
+    };
+  }
+  if (kind === "container") {
     const container = config.browserContainer;
     return {
       host: createContainerBrowserHost({

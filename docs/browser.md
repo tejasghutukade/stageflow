@@ -198,6 +198,36 @@ browser:
 - Image and `docker run` flags are described in the [Docker guide](docker.md#container-browser-host).
 - `browser.owner_hosts` (map of owner scope to `local` or `container`) overrides `browser.host` for one owner scope; scopes not listed use `browser.host`. Today every run belongs to the single `local` owner, so only `local` is consulted.
 
+### Attach host: use your own Chrome {#attach-host}
+
+With `browser.host: attach` the Host does not start a browser. It attaches to a Chrome you started yourself, so a human login happens in a real window on your screen, with your passkeys, password manager and an ordinary browser fingerprint. Sites that refuse sign-in from automated or containerized browsers (for example Google) usually accept it. This is the way to log in when the Host runs in Docker.
+
+```yaml
+browser:
+  host: attach
+  attach:
+    cdp_url: http://host.docker.internal:9222
+```
+
+Start Chrome on your machine with a debugging port and **a profile folder that is not your everyday one** (Chrome refuses the default folder for a debugging port anyway):
+
+```bash
+# macOS
+open -na "Google Chrome" --args --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --user-data-dir="$HOME/.stageflow-chrome"
+```
+
+- The Host only attaches. It never starts, restarts or closes this Chrome. When a stage ends the Host closes that stage's tab; when the run ends it detaches. Your other tabs and the browser stay open.
+- A stage gets its own new tab. Tabs you opened yourself are not touched.
+- A human login stage shows "log in in the browser window" (`local_window`) even when the Host has no screen, because the window is yours. The login is saved in that Chrome's profile.
+- The `profile:` name in a stage still names the run lease (one run at a time), but the cookies are whatever your Chrome holds. Different `profile:` names do not separate logins.
+- Chrome refuses debugging requests addressed by name, so the Host resolves a host name in `cdp_url` to an IPv4 address first (`localhost` becomes `127.0.0.1`). From Docker Desktop, `host.docker.internal` works this way; Chrome must listen where Docker can reach it. On other Docker setups use the address your container sees for the host.
+- The debugging port has no password. While Chrome is open with it, any local process can drive that browser and everything logged in there. Bind it to `127.0.0.1`, use a dedicated profile, and close Chrome when you are done.
+- `allow_domains` cannot be enforced through an attached browser (agent-browser refuses it together with CDP), so it stays prompt-only. `blocked_sites` still applies.
+- `sf browser login|check` stay local-host tools; the attach host has no profile folder.
+- `browser.host` is read when the Host starts. `owner_hosts` can select `attach` for one owner scope.
+
+Verified against Chrome 156 on macOS from a Docker Desktop container (opening pages, own tab per stage, tab-only close, Google sign-in). Native Linux, Windows and a Chrome on another machine are not verified.
+
 ### Linux hosts with no screen
 
 A Linux Host with no `DISPLAY` or `WAYLAND_DISPLAY` but with `Xvfb` on `PATH` runs browsers headed on a private virtual display that agent-browser starts itself. Nothing is shown on the Host, but the browser behaves like a headed one (same user agent as a desktop). A stage that sets `headed: false` still runs headless. Without Xvfb the Host falls back to headless as before. For Docker, the [browser image recipe](docker.md#browser-stages) installs Xvfb, Chromium and agent-browser.

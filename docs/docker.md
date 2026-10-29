@@ -217,6 +217,8 @@ Notes:
 - **Resources.** Spikes measured about 230 to 420 MB of memory for an idle browser, more on heavy pages. Budget at least 1 GB per concurrent browser run and set a container memory limit. Chromium also needs shared memory: add `--shm-size=1g` to `docker run` (or `shm_size` in Compose) if pages crash.
 - **Limits.** Passkeys, hardware keys and native OS prompts cannot be driven through the live view. See [Browser sessions](browser.md).
 
+**Logging in with your own Chrome.** The Chromium in this image is a poor fit for sites that block automated browsers (Google sign-in is refused). To log in in a real window on your machine instead, point the Host at a Chrome you started yourself: copy [`docker/browser.attach.config.example.yaml`](../docker/browser.attach.config.example.yaml) to `/data/config.yaml` and follow [Attach host](browser.md#attach-host).
+
 An opt-in smoke test builds this recipe and checks it with real Chromium (`tests/docker.browserRecipe.smoke.test.ts`; needs Docker and several minutes):
 
 ```bash

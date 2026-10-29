@@ -1,0 +1,8 @@
+# Host config for attaching the containerized Host to a Chrome on your machine.
+# Place at $STAGEFLOW_HOME/config.yaml (/data/config.yaml in the container).
+# See docs/browser.md#attach-host. Start that Chrome with:
+#   --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --user-data-dir=<a dedicated folder>
+browser:
+  host: attach
+  attach:
+    cdp_url: http://host.docker.internal:9222
