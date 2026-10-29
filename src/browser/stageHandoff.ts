@@ -29,11 +29,12 @@ export function resolveStageHandoffCapabilities(
   support: StageBrowserSupport,
   options: { humanLogin?: boolean } = {},
 ): StageHandoffCapabilities {
-  const capabilities = resolveBrowserHostCapabilities(support.host.capabilities);
+  const record = support.host.capabilitiesFor?.({ ...(options.humanLogin === true ? { humanLogin: true } : {}) }) ?? support.host.capabilities;
+  const capabilities = resolveBrowserHostCapabilities(record);
   const probe = support.display ?? defaultDisplayProbe;
-  if (support.host.capabilities === undefined) {
+  if (record === undefined) {
     capabilities.display = probe().hasDisplay ? "local_window" : "headless_only";
-  } else if (capabilities.display === "local_window" && support.display !== undefined && !support.display().hasDisplay) {
+  } else if (capabilities.display === "local_window" && !capabilities.ownBrowser && support.display !== undefined && !support.display().hasDisplay) {
     capabilities.display = "headless_only";
   }
   if (

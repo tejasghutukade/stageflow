@@ -23,6 +23,8 @@ import { persistStageHandoff, resolveStageHandoffCapabilities } from "./stageHan
 import { ensureStageLoginCheck, OPEN_COMMAND_TIMEOUT_MS } from "./loginCheck.js";
 import { readPersistedBrowserEnv } from "./persistedEnv.js";
 import { createAttachBrowserHost } from "./attachBrowserHost.js";
+import { createLoginRoutedHost } from "./loginRoutedHost.js";
+import { createProfileHostHints } from "./profileHostHint.js";
 import { createContainerBrowserHost } from "./containerBrowserHost.js";
 import { createDockerSandboxOrchestrator } from "./dockerSandboxOrchestrator.js";
 import { createVolumeProfileStore } from "./volumeProfileStore.js";
@@ -54,37 +56,46 @@ export function hostLaunchOptions(): { launchArgs: string[]; executablePath?: st
 function configuredBrowserSupport(liveView: "relay" | "none"): StageBrowserSupport {
   const config = loadHostConfig();
   const kind = browserHostForOwner(config, localOwnerScope());
-  if (kind === "attach" && config.browserAttach !== undefined) {
+  const attached =
+    config.browserAttach !== undefined
+      ? createAttachBrowserHost({ cdpUrl: config.browserAttach.cdpUrl, liveView, local: hostLaunchOptions() })
+      : undefined;
+  if (kind === "attach" && attached !== undefined) {
+    return { host: attached, profiles: createVolumeProfileStore() };
+  }
+  const support: StageBrowserSupport =
+    kind === "container"
+      ? {
+          host: createContainerBrowserHost({
+            orchestrator: createDockerSandboxOrchestrator({
+              image: config.browserContainer.image,
+              shmSize: config.browserContainer.shmSize,
+              memory: config.browserContainer.memory,
+              pidsLimit: config.browserContainer.pidsLimit,
+              user: "1000:1000",
+            }),
+            liveView,
+            local: hostLaunchOptions(),
+          }),
+          profiles: createVolumeProfileStore(),
+        }
+      : {
+          host: createLocalBrowserHost({ liveView, ...hostLaunchOptions() }),
+          profiles: createLocalProfileStore(),
+        };
+  const routed = config.browserLoginHost === "attach" || Object.keys(config.browserProfileHosts).length > 0;
+  if (routed && attached !== undefined) {
     return {
-      host: createAttachBrowserHost({
-        cdpUrl: config.browserAttach.cdpUrl,
-        liveView,
-        local: hostLaunchOptions(),
+      ...support,
+      host: createLoginRoutedHost({
+        work: support.host,
+        login: attached,
+        hints: createProfileHostHints(),
+        pinnedProfiles: new Set(Object.keys(config.browserProfileHosts)),
       }),
-      profiles: createVolumeProfileStore(),
     };
   }
-  if (kind === "container") {
-    const container = config.browserContainer;
-    return {
-      host: createContainerBrowserHost({
-        orchestrator: createDockerSandboxOrchestrator({
-          image: container.image,
-          shmSize: container.shmSize,
-          memory: container.memory,
-          pidsLimit: container.pidsLimit,
-          user: "1000:1000",
-        }),
-        liveView,
-        local: hostLaunchOptions(),
-      }),
-      profiles: createVolumeProfileStore(),
-    };
-  }
-  return {
-    host: createLocalBrowserHost({ liveView, ...hostLaunchOptions() }),
-    profiles: createLocalProfileStore(),
-  };
+  return support;
 }
 
 export function defaultStageBrowserSupport(): StageBrowserSupport {

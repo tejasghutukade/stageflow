@@ -23,6 +23,8 @@ export type BrowserStageRequest = {
 export type ProfileBrowser = {
   cdpAddress: string;
   anchorEnv: BrowserEnv;
+  /** Which browser host of a routing host started this anchor (`login` or `work`); absent for a plain host. */
+  via?: "login" | "work";
 };
 
 export type ProfileBrowserRequest = {
@@ -49,6 +51,8 @@ export type ProfileBrowserRelease = {
 export interface BrowserHost {
   /** What this host can do; read through `resolveBrowserHostCapabilities` so unset fields get safe defaults. */
   readonly capabilities?: BrowserHostCapabilityRecord;
+  /** Capabilities for one request when they differ from `capabilities` (a routing host sends login stages to another browser). */
+  capabilitiesFor?(request: { humanLogin?: boolean }): BrowserHostCapabilityRecord | undefined;
   /**
    * Starts or reuses the one browser for (run, profile) and returns its CDP
    * address. Callers serialize per (run, profile) and persist the result.

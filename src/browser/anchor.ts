@@ -121,16 +121,24 @@ export function ensureRunProfileBrowser(
       runner: support.runner ?? defaultBrowserRunner,
       ...(input.humanLogin === true ? { humanLogin: true } : {}),
       ...(stored !== undefined
-        ? { previous: { cdpAddress: stored.cdpAddress, anchorEnv: stored.anchorEnv } }
+        ? {
+            previous: {
+              cdpAddress: stored.cdpAddress,
+              anchorEnv: stored.anchorEnv,
+              ...(stored.via !== undefined ? { via: stored.via } : {}),
+            },
+          }
         : {}),
     });
     const changed =
       stored === undefined ||
       stored.cdpAddress !== result.cdpAddress ||
+      stored.via !== result.via ||
       JSON.stringify(stored.anchorEnv) !== JSON.stringify(result.anchorEnv);
     const persisted: PersistedAnchor = {
       cdpAddress: result.cdpAddress,
       anchorEnv: result.anchorEnv,
+      ...(result.via !== undefined ? { via: result.via } : {}),
       runId: input.runId,
       profile: input.profile.key.name,
       scope: input.profile.key.scope,
