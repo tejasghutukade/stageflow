@@ -37,6 +37,7 @@ import {
   type GradeRowView,
   type ReviewState,
 } from "./drawerModel";
+import { LabelQueue } from "./LabelQueue";
 import { Chip, MONO_CLASS, TONE_TEXT } from "./ResultsParts";
 import { useAgentSession, useCaseResults, useStageRunExists } from "./useResultsData";
 
@@ -45,9 +46,11 @@ const LABEL = "text-[11px] font-medium uppercase tracking-wide text-[var(--sf-te
 function HumanLabel({
   row,
   onLabel,
+  onQueue,
 }: {
   row: GradeRowView;
   onLabel: (graderId: string, label: "pass" | "fail" | null) => void;
+  onQueue?: (graderId: string) => void;
 }) {
   const pick = (label: "pass" | "fail") => onLabel(row.id, row.humanLabel === label ? null : label);
   return (
@@ -71,6 +74,11 @@ function HumanLabel({
       {row.humanLabel !== null && row.ok !== null && (row.humanLabel === "pass") !== row.ok ? (
         <span className="text-[var(--sf-needs)]">Differs from the judge</span>
       ) : null}
+      {onQueue ? (
+        <button type="button" onClick={() => onQueue(row.id)} className="ml-auto underline hover:text-[var(--sf-text-1)]">
+          Label more like this
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -78,9 +86,11 @@ function HumanLabel({
 function GradeList({
   rows,
   onLabel,
+  onQueue,
 }: {
   rows: GradeRowView[];
   onLabel?: (graderId: string, label: "pass" | "fail" | null) => void;
+  onQueue?: (graderId: string) => void;
 }) {
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--sf-hairline)]">
@@ -103,7 +113,7 @@ function GradeList({
             <span className={`${MONO_CLASS} ${row.failed ? "text-[var(--sf-fail)]" : "text-[var(--sf-ok)]"}`}>{row.valueText}</span>
           </div>
           {row.reason ? <p className="pl-5 text-xs text-[var(--sf-text-2)]">{row.reason}</p> : null}
-          {onLabel && row.judged ? <HumanLabel row={row} onLabel={onLabel} /> : null}
+          {onLabel && row.judged ? <HumanLabel row={row} onLabel={onLabel} {...(onQueue ? { onQueue } : {})} /> : null}
         </div>
       ))}
     </div>
@@ -382,6 +392,7 @@ export function CaseDrawer({
     error: null,
     result: null,
   });
+  const [queueFor, setQueueFor] = useState<string | null>(null);
   const { previous, next } = caseNeighbours(caseIds, caseId);
 
   useEffect(() => {
@@ -391,11 +402,11 @@ export function CaseDrawer({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && queueFor === null) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, queueFor]);
 
   async function labelGrader(graderId: string, label: "pass" | "fail" | null) {
     if (!result) return;
@@ -570,7 +581,7 @@ export function CaseDrawer({
               {conversation && section === "grades" && !errored ? (
                 <section className="flex flex-col gap-2">
                   <h3 className={LABEL}>Grades for repeat {result.repeat_index + 1}</h3>
-                  <GradeList rows={gradeRows(result)} onLabel={(id, label) => void labelGrader(id, label)} />
+                  <GradeList rows={gradeRows(result)} onLabel={(id, label) => void labelGrader(id, label)} onQueue={setQueueFor} />
                 </section>
               ) : null}
 
@@ -620,7 +631,7 @@ export function CaseDrawer({
                   ) : null}
                   <section className="flex flex-col gap-2">
                     <h3 className={LABEL}>Grades for repeat {result.repeat_index + 1}</h3>
-                    <GradeList rows={gradeRows(result)} onLabel={(id, label) => void labelGrader(id, label)} />
+                    <GradeList rows={gradeRows(result)} onLabel={(id, label) => void labelGrader(id, label)} onQueue={setQueueFor} />
                   </section>
                 </>
               )}
@@ -699,6 +710,19 @@ export function CaseDrawer({
           ) : null}
         </footer>
       </aside>
+      {queueFor && result ? (
+        <LabelQueue
+          evalId={run.eval_id}
+          evalRunId={run.eval_run_id}
+          graderId={queueFor}
+          startKey={`${result.case_id}#${result.repeat_index}`}
+          onClose={() => {
+            setQueueFor(null);
+            reload();
+            onReviewSaved();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

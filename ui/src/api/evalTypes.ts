@@ -503,7 +503,12 @@ export type EvalLabelQueue = {
   labeled_eval: EvalLabelCounts;
 };
 
-export type EvalLabelSummary = { grader_id: string; labeled_eval: EvalLabelCounts };
+export type EvalLabelSummary = {
+  grader_id: string;
+  labeled_eval: EvalLabelCounts;
+  /** Results of this run the judge graded that have no label from you yet. */
+  unlabeled: Array<{ case_id: string; repeat_index: number }>;
+};
 
 export type EvalReviewInput = { label?: "pass" | "fail"; note?: string | null; tags?: string[] };
 

@@ -148,7 +148,11 @@ describe("grader label routes", () => {
     expect(after.body.labeled_eval).toEqual({ pass: 0, fail: 1 });
 
     const summary = await h.call("GET", `${url}?summary=true`);
-    expect(summary.body).toEqual({ grader_id: "polite", labeled_eval: { pass: 0, fail: 1 } });
+    expect(summary.body).toEqual({ grader_id: "polite", labeled_eval: { pass: 0, fail: 1 }, unlabeled: [] });
+
+    await h.call("PUT", `/api/eval-runs/${h.runId}/results/c1/0/graders/polite/label`, { label: null });
+    const open = await h.call("GET", `${url}?summary=true`);
+    expect(open.body.unlabeled).toEqual([{ case_id: "c1", repeat_index: 0 }]);
   });
 
   it("refuses a queue for a code grader or an unknown grader", async () => {

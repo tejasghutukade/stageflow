@@ -91,11 +91,14 @@ export function LabelQueue({
   evalId,
   evalRunId,
   graderId,
+  startKey,
   onClose,
 }: {
   evalId: string;
   evalRunId: string;
   graderId: string;
+  /** Open at this result (`case#repeat`) with everything in order, instead of at the first unlabeled one. */
+  startKey?: string;
   /** Called when the screen closes, so the caller can reread its label counts. */
   onClose: () => void;
 }) {
@@ -126,9 +129,11 @@ export function LabelQueue({
         if (cancelled) return;
         setQueue(loaded);
         setItems(loaded.items);
-        const start: QueueOrder = loaded.items.some((i) => i.label === null) ? "mixed" : "all";
+        const start: QueueOrder = startKey ? "all" : loaded.items.some((i) => i.label === null) ? "mixed" : "all";
+        const list = orderQueue(loaded.items, start);
         setOrder(start);
-        setEntries(orderQueue(loaded.items, start));
+        setEntries(list);
+        if (startKey) setIndex(Math.max(0, list.findIndex((e) => e.key === startKey)));
       },
       (err) => !cancelled && setError(message(err)),
     );

@@ -7,6 +7,7 @@ import {
   deltaView,
   graderDefinition,
   graderIdsOf,
+  judgedGraderIds,
   graderRows,
   judgeSummary,
   kindLabel,
@@ -127,5 +128,34 @@ describe("graderIdsOf", () => {
       },
     });
     expect(graderIdsOf(run)).toEqual(["a", "b"]);
+  });
+});
+
+describe("judgedGraderIds", () => {
+  it("lists the graders a model judges, from the run's own grader list", () => {
+    const base = fixtureRun();
+    const run = fixtureRun({
+      config: {
+        ...base.config,
+        graders: [
+          { id: "a", type: "rubric" },
+          { id: "b", type: "code" },
+          { id: "c", type: "goal_reached" },
+        ],
+      },
+    });
+    expect(judgedGraderIds(run)).toEqual(["a", "c"]);
+  });
+
+  it("falls back to the saved definition", () => {
+    const base = fixtureRun();
+    const run = fixtureRun({
+      config: {
+        ...base.config,
+        graders: undefined,
+        eval: { ...base.config.eval, definition: { graders: [{ id: "x", type: "rubric" }, { id: "y", type: "field" }] } },
+      },
+    });
+    expect(judgedGraderIds(run)).toEqual(["x"]);
   });
 });

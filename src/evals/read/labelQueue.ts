@@ -65,15 +65,28 @@ export async function buildLabelQueue(store: RunStore, id: string, graderId: str
   };
 }
 
-/** Just the label counts, for a progress line that needs no conversations. */
+/**
+ * The label counts across the eval's runs, and which results of this run the judge graded that still have no label
+ * from you. No conversations: this is for a progress line and the Cases filter.
+ */
 export async function buildLabelSummary(store: RunStore, id: string, graderId: string) {
   const row = await runByIdOr404(store, id);
-  const labels = await store.listEvalGraderLabelsForEval(row.projectRoot, row.evalId, graderId);
+  const [labels, runLabels, results] = await Promise.all([
+    store.listEvalGraderLabelsForEval(row.projectRoot, row.evalId, graderId),
+    store.listEvalGraderLabels(row.evalRunId),
+    store.listEvalResults(row.evalRunId),
+  ]);
+  const labeled = new Set(runLabels.filter((l) => l.graderId === graderId).map((l) => resultKey(l.caseId, l.repeatIndex)));
+  const unlabeled = results
+    .filter((r) => r.grades.some((g) => g.graderId === graderId && g.status === "graded"))
+    .filter((r) => !labeled.has(resultKey(r.caseId, r.repeatIndex)))
+    .map((r) => ({ case_id: r.caseId, repeat_index: r.repeatIndex }));
   return {
     grader_id: graderId,
     labeled_eval: {
       pass: labels.filter((l) => l.label === "pass").length,
       fail: labels.filter((l) => l.label === "fail").length,
     },
+    unlabeled,
   };
 }

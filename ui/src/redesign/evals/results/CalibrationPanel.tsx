@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { calibrateEvalGrader, fetchEval, fetchEvalCalibrations, fetchEvalLabelSummary, suggestEvalExamples, updateEval } from "../../../api";
-import type { EvalCalibration, EvalExampleSuggestion, EvalLabelCounts } from "../../../api/evalTypes";
+import { calibrateEvalGrader, fetchEvalCalibrations, fetchEvalLabelSummary } from "../../../api";
+import type { EvalCalibration, EvalLabelCounts } from "../../../api/evalTypes";
 import { calibrationBadge, calibrationCurrent, calibrationView, reliabilityView } from "./calibrationModel";
 import { labelAdvice } from "./labelQueueModel";
 import { LabelQueue } from "./LabelQueue";
 import { Chip, MONO_CLASS, TONE_TEXT } from "./ResultsParts";
-import { compareLine, exampleLabel, MAX_RUBRIC_EXAMPLES, rubricOf, withExample, withRubric } from "./tuningModel";
+import { TeachDialog } from "./TeachDialog";
+import { WordingDialog } from "./WordingDialog";
 
 type Split = "all" | "dev" | "held_out";
-
-const BUTTON = "text-xs text-[var(--sf-text-1)] underline disabled:opacity-50";
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -37,10 +36,7 @@ export function CalibrationPanel({
   const [stability, setStability] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tuning, setTuning] = useState(false);
-  const [rubric, setRubric] = useState("");
-  const [candidate, setCandidate] = useState<EvalCalibration | null>(null);
-  const [suggestions, setSuggestions] = useState<EvalExampleSuggestion[] | null>(null);
+  const [dialog, setDialog] = useState<"teach" | "wording" | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [labeling, setLabeling] = useState(false);
   const [counts, setCounts] = useState<EvalLabelCounts | null>(null);
@@ -87,57 +83,17 @@ export function CalibrationPanel({
   const check = () =>
     act("check", async () => {
       setLatest(await calibrateEvalGrader(evalId, graderId, { split, ...(stability ? { stability: true } : {}) }));
-      setCandidate(null);
     });
 
-  const openTuning = () =>
-    act("open", async () => {
-      const detail = await fetchEval(evalId);
-      setRubric(rubricOf(detail.definition, graderId));
-      setTuning(true);
-    });
+  const evalChanged = () => {
+    void loadLatest();
+    onEvalChanged?.();
+  };
 
-  const measure = () =>
-    act("measure", async () => {
-      setCandidate(await calibrateEvalGrader(evalId, graderId, { split, candidate: { rubric } }));
-    });
-
-  const saveRubric = () =>
-    act("save", async () => {
-      const detail = await fetchEval(evalId);
-      const next = detail.definition ? withRubric(detail.definition, graderId, rubric) : null;
-      if (next === null) {
-        setNote("The saved rubric already has this text.");
-        return;
-      }
-      await updateEval(evalId, { definition: next, base_hash: detail.file_hash });
-      setNote("Rubric saved. Check the judge again to measure it.");
-      setCandidate(null);
-      await loadLatest();
-      onEvalChanged?.();
-    });
-
-  const suggest = () =>
-    act("suggest", async () => {
-      const res = await suggestEvalExamples(evalId, graderId, latest?.id);
-      setSuggestions(res.items);
-      if (res.items.length === 0) setNote("No dev-split disagreements to learn from. Held-out rows are never offered, so the held-out check stays fair.");
-    });
-
-  const addExample = (item: EvalExampleSuggestion) =>
-    act("add", async () => {
-      const detail = await fetchEval(evalId);
-      const next = detail.definition ? withExample(detail.definition, graderId, item.example) : null;
-      if (next === null) {
-        setNote(`A rubric holds at most ${MAX_RUBRIC_EXAMPLES} examples.`);
-        return;
-      }
-      await updateEval(evalId, { definition: next, base_hash: detail.file_hash });
-      setSuggestions((list) => (list ?? []).filter((x) => x !== item));
-      setNote("Example added to the rubric. Check the judge again to measure it.");
-      await loadLatest();
-      onEvalChanged?.();
-    });
+  const checkNow = () => {
+    setDialog(null);
+    void check();
+  };
 
   const current = calibrationCurrent(latest, graderHash, judge);
   const view = latest ? calibrationView(latest) : null;
@@ -277,67 +233,48 @@ export function CalibrationPanel({
       {view ? (
         <section className="flex flex-col gap-2" aria-label="Step 3: improve the judge">
           <p className="text-xs font-medium text-[var(--sf-text-1)]">3. Make the judge better (optional)</p>
-          <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
-            <div className="flex max-w-[260px] flex-col gap-0.5">
-              <button type="button" disabled={disabled} onClick={() => void suggest()} className={`${BUTTON} text-left`}>
-                {busy === "suggest" ? "Looking…" : "Teach it with examples"}
-              </button>
-              <span className="text-xs text-[var(--sf-text-3)]">Turns answers it got wrong into worked examples. Nothing is saved until you add one.</span>
-            </div>
-            <div className="flex max-w-[260px] flex-col gap-0.5">
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => (tuning ? setTuning(false) : void openTuning())}
-                className={`${BUTTON} text-left`}
-              >
-                {tuning ? "Close rubric trial" : "Try different wording"}
-              </button>
-              <span className="text-xs text-[var(--sf-text-3)]">Edit the rule and measure it before saving. Confirm on the fair-test rows.</span>
-            </div>
+          <div className="flex flex-wrap items-stretch gap-3">
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => setDialog("teach")}
+              className="flex w-[260px] flex-col gap-0.5 rounded-lg border border-[var(--sf-hairline-strong)] p-3 text-left hover:bg-[var(--sf-raised)] disabled:opacity-50"
+            >
+              <span className="text-[13px] font-medium text-[var(--sf-text-1)]">Teach it with examples</span>
+              <span className="text-xs text-[var(--sf-text-3)]">Pick answers it got wrong and add them as worked examples. You review each one first.</span>
+            </button>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => setDialog("wording")}
+              className="flex w-[260px] flex-col gap-0.5 rounded-lg border border-[var(--sf-hairline-strong)] p-3 text-left hover:bg-[var(--sf-raised)] disabled:opacity-50"
+            >
+              <span className="text-[13px] font-medium text-[var(--sf-text-1)]">Try different wording</span>
+              <span className="text-xs text-[var(--sf-text-3)]">Edit the rule, test it on your labels, and save it only if it holds up.</span>
+            </button>
           </div>
         </section>
       ) : null}
-      {suggestions && suggestions.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          {suggestions.map((item) => (
-            <div key={`${item.eval_run_id}${item.case_id}${item.repeat_index}`} className="rounded border border-[var(--sf-hairline)] p-2">
-              <p className="mb-1 text-xs text-[var(--sf-text-2)]">{exampleLabel(item)}</p>
-              <pre className={`${MONO_CLASS} max-h-24 overflow-auto whitespace-pre-wrap text-xs text-[var(--sf-text-3)]`}>{item.example.output}</pre>
-              {item.example.reason ? <p className="mt-1 text-xs text-[var(--sf-text-2)]">Reason: {item.example.reason}</p> : null}
-              <button type="button" disabled={disabled} onClick={() => void addExample(item)} className={`${BUTTON} mt-1`}>
-                Add to the rubric's examples
-              </button>
-            </div>
-          ))}
-        </div>
+      {dialog === "teach" ? (
+        <TeachDialog
+          evalId={evalId}
+          graderId={graderId}
+          calibrationId={latest?.id}
+          onClose={() => setDialog(null)}
+          onAdded={evalChanged}
+          onCheckNow={checkNow}
+        />
       ) : null}
-      {tuning ? (
-        <div className="flex flex-col gap-2 rounded border border-[var(--sf-hairline)] p-2">
-          <textarea
-            aria-label="Candidate rubric"
-            className="min-h-[88px] w-full rounded border border-[var(--sf-hairline)] bg-transparent p-2 text-xs"
-            value={rubric}
-            maxLength={4000}
-            onChange={(e) => setRubric(e.target.value)}
-          />
-          <div className="flex items-center gap-4">
-            <button type="button" disabled={disabled || rubric.trim() === ""} onClick={() => void measure()} className={BUTTON}>
-              {busy === "measure" ? "Measuring…" : "Measure this rubric"}
-            </button>
-            <button type="button" disabled={disabled || rubric.trim() === ""} onClick={() => void saveRubric()} className={BUTTON}>
-              Save rubric to the eval
-            </button>
-          </div>
-          {candidate ? (
-            <p className={`${MONO_CLASS} text-xs text-[var(--sf-text-2)]`}>
-              {compareLine(latest && latest.split === candidate.split ? latest : null, candidate)}
-            </p>
-          ) : null}
-          <p className="text-xs text-[var(--sf-text-3)]">
-            Tune on the dev labels, then confirm on the held-out labels before you trust the gain.
-          </p>
-        </div>
+      {dialog === "wording" ? (
+        <WordingDialog
+          evalId={evalId}
+          graderId={graderId}
+          graderHash={graderHash}
+          judge={judge}
+          onClose={() => setDialog(null)}
+          onSaved={evalChanged}
+          onCheckNow={checkNow}
+        />
       ) : null}
       {labeling ? (
         <LabelQueue
