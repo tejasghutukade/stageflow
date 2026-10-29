@@ -86,8 +86,10 @@ export function createLoginRoutedHost(options: LoginRoutedHostOptions): BrowserH
 
     async noteSiteBlocked(input) {
       const profile = profilesSeen.get(`${input.scope}\0${input.profile}`);
-      if (profile === undefined) return;
-      await hints.set(profile, { mode: "attach", reason: input.reason });
+      if (profile === undefined) return { switched: false };
+      const alreadyThere = pinned.has(input.profile) || (await hints.get(profile)) !== undefined;
+      if (!alreadyThere) await hints.set(profile, { mode: "attach", reason: input.reason });
+      return { switched: !alreadyThere };
     },
 
     async ensureProfileBrowser(request: ProfileBrowserRequest): Promise<ProfileBrowserResult> {

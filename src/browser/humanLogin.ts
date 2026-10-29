@@ -42,6 +42,16 @@ export function noScreenError(docker: boolean): Error {
   return new Error(`${NO_SCREEN_MESSAGE}${docker ? DOCKER_HINT : ""}`);
 }
 
+/** For a work stage whose browser is a tab of the operator's own Chrome (the Host attached to it). */
+export function ownBrowserPromptBlock(): string {
+  return [
+    "## Your browser is the operator's own Chrome",
+    "",
+    "This stage's browser is a new tab in the operator's own Chrome, which the Host attached to. The operator can see it.",
+    "If a page needs a human (a \"verify you are human\" checkbox, a verification or sign-in step), do not click it yourself and do not try to get around it. If you have ask_operator, call it with kind confirm: ask the operator to finish that step in the open tab of their Chrome and confirm. After they confirm, take a fresh snapshot and carry on. If you do not have ask_operator, fail with a summary that begins \"site blocked this browser:\".",
+  ].join("\n");
+}
+
 export function humanLoginPromptBlock(
   url: string | undefined,
   handoff: "local_window" | "live_view" | "own_browser" = "local_window",

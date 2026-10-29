@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserEnv, BrowserHost, BrowserRunner, ProfileBrowserRequest } from "../src/browser/browserHost.js";
 import { createLoginRoutedHost } from "../src/browser/loginRoutedHost.js";
 import { createProfileHostHints } from "../src/browser/profileHostHint.js";
+import { ownBrowserPromptBlock } from "../src/browser/humanLogin.js";
 import { isSiteBlockedReport } from "../src/browser/siteBlocked.js";
 import { createVolumeProfileStore } from "../src/browser/volumeProfileStore.js";
 import { createLocalProfileStore } from "../src/browser/localProfileStore.js";
@@ -189,14 +190,27 @@ describe("login routed host", () => {
 
   it("remembers a profile as attach-only when a stage reports the site blocked this browser", async () => {
     const t = await setup();
-    await t.host.noteSiteBlocked?.({ scope: "local", profile: "acct", reason: "unknown profile is ignored" });
+    expect(await t.host.noteSiteBlocked?.({ scope: "local", profile: "acct", reason: "unknown profile is ignored" })).toEqual({ switched: false });
     expect(await t.hints.get(t.profile)).toBeUndefined();
     await t.host.ensureProfileBrowser(t.request());
-    await t.host.noteSiteBlocked?.({ scope: "local", profile: "acct", reason: "a stage reported that the site blocked this browser" });
+    const first = await t.host.noteSiteBlocked?.({ scope: "local", profile: "acct", reason: "a stage reported that the site blocked this browser" });
+    expect(first).toEqual({ switched: true });
     expect(await t.hints.get(t.profile)).toMatchObject({ mode: "attach", reason: "a stage reported that the site blocked this browser" });
     const next = await t.host.ensureProfileBrowser(t.request());
     expect(next.via).toBe("login");
-    await t.host.noteSiteBlocked?.({ scope: "local", profile: "other", reason: "x" });
+    expect(await t.host.noteSiteBlocked?.({ scope: "local", profile: "acct", reason: "again" })).toEqual({ switched: false });
+    expect(await t.host.noteSiteBlocked?.({ scope: "local", profile: "other", reason: "x" })).toEqual({ switched: false });
+    const pinned = await setup({ pinned: ["acct"] });
+    await pinned.host.ensureProfileBrowser(pinned.request());
+    expect(await pinned.host.noteSiteBlocked?.({ scope: "local", profile: "acct", reason: "x" })).toEqual({ switched: false });
+  });
+
+  it("tells a stage in the operator's own Chrome to hand verification to the operator, not to click it", () => {
+    const block = ownBrowserPromptBlock();
+    expect(block).toContain("operator's own Chrome");
+    expect(block).toContain("ask_operator");
+    expect(block).toContain("do not click it yourself");
+    expect(block).toContain("site blocked this browser:");
   });
 
   it("recognises the blocked-site report phrase", () => {

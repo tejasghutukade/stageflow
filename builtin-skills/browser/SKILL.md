@@ -39,5 +39,7 @@ Always set a timeout on `wait`.
 - Read slowly. Pause between page loads. Stop at the limits the task sets.
 - Do not try to solve a CAPTCHA. Stop and report it.
 - If a login or checkpoint page appears unexpectedly, stop and report "login lost". Do not try to log in.
-- If a page says the browser is blocked or shows a bot check ("Blocked", "verify you are human", an unusual-traffic page), stop and fail the stage with a summary that begins "site blocked this browser:" followed by what you saw. The Host reads that phrase and remembers the site. Do not retry, wait it out, or change the browser's identity. The operator decides whether to use their own Chrome for this site.
+- If a page says the browser is blocked or shows a bot check ("Blocked", "verify you are human", an unusual-traffic page), do not retry, wait it out, click the check yourself, or change the browser's identity. What you do next depends on where you are:
+  - Your prompt says your browser is the operator's own Chrome, and you have `ask_operator`: ask the operator (kind `confirm`) to finish the step in the open tab of their Chrome, then take a fresh `snapshot -i` and carry on.
+  - Otherwise: fail the stage with a summary that begins "site blocked this browser:" followed by what you saw. The Host reads that phrase. If the operator's own Chrome is available it runs this stage again there; if not, the run fails.
 - If this stage can submit forms, do not press an irreversible button before an operator gate. Irreversible means submit, send, pay, delete, or post. Ask the operator first.

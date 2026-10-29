@@ -173,6 +173,12 @@ export async function resolveStageBrowserEnv(
           ...(input.humanLogin === true ? { humanLogin: true } : {}),
         })
       : undefined;
+  if (anchor?.via === "login" && input.humanLogin !== true) {
+    await persistStageHandoff(
+      { runDir: input.runDir, stageId: input.stageId },
+      { display: "local_window", liveView: capabilities.liveView, ownBrowser: true },
+    );
+  }
   const fresh = await support.host.stageEnv({
     runId: input.runId,
     stageId: input.stageId,

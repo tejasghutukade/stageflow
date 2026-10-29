@@ -17,7 +17,7 @@ Check, human login, then work. The same `profile` on every stage that touches th
 The Host decides, not YAML. Do not write a host, a path or a flag into a stage.
 
 - If the Host has `browser.login_host: attach`, login happens in the operator's own Chrome and work runs headless. After a login the Host copies the session once into the headless browser and runs the login stage's `check` there. That `check` is how it learns whether the site accepts a copied session, so always give the login stage a `check`.
-- If the site rejects the copy, or a work stage fails with a summary starting `site blocked this browser:`, the Host keeps the profile on the operator's Chrome from then on (a blocked work stage fails its run once; the next run uses the operator's Chrome). The work stages still run, visibly, in that Chrome. Do not assume a work stage is headless.
+- If the site rejects the copy, or a work stage fails with a summary starting `site blocked this browser:`, the Host moves the profile to the operator's Chrome for good and re-runs a blocked stage once in the same run. In the operator's Chrome the stage is told where it is and, when it has `ask_operator`, asks the operator to finish a verification step instead of failing. The work stages still run, visibly, in that Chrome. Do not assume a work stage is headless.
 - Whether a site accepts a copied session can depend on headed versus headless. Indeed (tested) accepted a copied session in a headed browser on a virtual display and rejected it headless, where the Host fell back to the operator's Chrome. The operator can pin a site to their Chrome with `browser.profile_hosts`. Say so in the pipeline's README rather than in a stage.
 - Sites with strict bot or device checks (Google, LinkedIn) are untested for copied sessions. Never add steps that disguise the browser, solve a bot check, or change its user agent.
 
@@ -25,4 +25,5 @@ The Host decides, not YAML. Do not write a host, a path or a flag into a stage.
 
 - The login stage prompt asks the operator to log in in "the open browser" and confirm. It never types credentials and never drives the page.
 - Work stage prompts must say what to do when the page shows a login or a "Blocked" page: stop and emit `failure`. For a blocked page the summary must begin `site blocked this browser:` so the Host can remember the site. They never try to get around it.
+- Give a work stage that may meet a verification page `gate_kinds: [confirm]`. Its prompt needs no escape hatch: the Host adds the "you are in the operator's own Chrome" instructions when it applies.
 - Keep work read-only unless an operator gate precedes the irreversible click.

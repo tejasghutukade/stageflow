@@ -63,8 +63,11 @@ export interface BrowserHost {
    * what hosts it. Only hosts whose browser lives outside the Host's own sockets implement it.
    */
   releaseProfileBrowser?(request: ProfileBrowserRelease): Promise<void>;
-  /** A stage reported that a site blocked this host's browser; a routing host remembers the profile so later stages use another browser. */
-  noteSiteBlocked?(input: { scope: string; profile: string; reason: string }): Promise<void>;
+  /**
+   * A stage reported that a site blocked this host's browser. A routing host remembers the profile so its stages use
+   * another browser, and says whether that is a change (`switched`), so the scheduler can retry the stage there.
+   */
+  noteSiteBlocked?(input: { scope: string; profile: string; reason: string }): Promise<{ switched: boolean } | void>;
   /** At Host start: releases browsers of runs that are no longer live; returns what it released. */
   sweepOrphans?(input: { isRunLive: (runId: string) => Promise<boolean> }): Promise<{ released: string[] }>;
   /** Env of one stage's agent-browser session; with a profile it attaches to `cdpAddress` in its own tab. */
