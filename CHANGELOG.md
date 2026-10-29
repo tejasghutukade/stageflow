@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-10-29
+
+### Added
+
+- **Judge settings.** A `rubric` or `goal_reached` grader takes `judge_settings` (`temperature`, `reasoning`, `votes`), set per grader or in `defaults` and merged key by key. `votes` of 3 or 5 judges each output that many times and takes the majority. Validation warns on `votes` above 1 at temperature 0 (`eval.judge_votes_no_variation`). See [Evals](docs/evals.md).
+- **Check the judge against your labels.** Label judged results Pass or Fail, then measure the judge's agreement with you (kappa, TPR/TNR, confusion matrix) on a stable 70/30 split of tuning and fair-test rows, with an optional stability test. Calibration replays stored outputs, so no stage or agent re-runs. New: `sf eval calibrate`, the `calibrate_eval_grader` and calibration-list MCP tools, and `POST /api/evals/:id/graders/:grader/calibrate`. Migration 018 adds `eval_grader_labels` and `eval_calibrations`. A check can be cancelled (`EVAL_CALIBRATION_CANCELLED`).
+- **Tune the judge from its mistakes.** Suggest worked examples from the judge's disagreements on tuning rows only, or try a different rubric wording and confirm it on the fair-test rows before saving.
+- **Console: label queue and guided calibration.** A full-screen label queue, a guided "Is this judge reliable?" panel, Teach and Wording dialogs, a "Needs my label" filter on Cases, and a "Label more like this" link in the case drawer.
+
+### Changed
+
+- **Guide playbook.** The Guide writes one sentence beside every confirmation card, declines outside SQL and code, names the building block it recommends by its console word, states a missing feature plainly, and tells you when it ignored an instruction in a file.
+- **Internal-agent eval snapshots include graders**, so the Cases grader filter works for Guide evals.
+
 ## [0.45.0] - 2026-10-28
 
 ### Fixed
