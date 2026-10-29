@@ -10,6 +10,7 @@ import { createProfileHostHints } from "../src/browser/profileHostHint.js";
 import { createProfileMetaStore, stageSites } from "../src/browser/profileMeta.js";
 import { createVolumeProfileStore } from "../src/browser/volumeProfileStore.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import { LoginFlowError } from "../src/browser/profileLoginFlow.js";
 import { handleBrowserProfileRoutes } from "../src/server/browserProfileRoutes.js";
 
 let home: string;
@@ -168,6 +169,37 @@ describe("browser profile routes", () => {
     expect(sent[5]).toMatchObject({ status: 404, body: { code: "not_found" } });
     await handleBrowserProfileRoutes("GET", "/api/browser/profiles/..%2Fx", t.catalog, res, json);
     expect(sent[6]!.status).toBe(400);
+  });
+
+  it("routes Check now and Log in again, and maps their errors to a status and code", async () => {
+    const t = await setup();
+    const summary = { name: "acct" };
+    const calls: string[] = [];
+    const stub = {
+      ...t.catalog,
+      checkNow: async (n: string) => (calls.push(`check ${n}`), { state: "logged_in", site: "site.test", profile: summary }),
+      startLogin: async (n: string) => (calls.push(`start ${n}`), { where: "own_chrome", site: "site.test", profile: summary }),
+      finishLogin: async (n: string) => (calls.push(`finish ${n}`), { ok: false, state: "logged_out", where: "own_chrome", profile: summary }),
+      cancelLogin: async (n: string) => (calls.push(`cancel ${n}`), summary),
+    } as unknown as typeof t.catalog;
+    const { sent, json, res } = fakeRes();
+    await handleBrowserProfileRoutes("POST", "/api/browser/profiles/acct/check", stub, res, json);
+    await handleBrowserProfileRoutes("POST", "/api/browser/profiles/acct/login", stub, res, json);
+    await handleBrowserProfileRoutes("POST", "/api/browser/profiles/acct/login/finish", stub, res, json);
+    await handleBrowserProfileRoutes("DELETE", "/api/browser/profiles/acct/login", stub, res, json);
+    expect(calls).toEqual(["check acct", "start acct", "finish acct", "cancel acct"]);
+    expect(sent.map((x) => x.status)).toEqual([200, 200, 200, 200]);
+    expect(sent[0]!.body).toMatchObject({ state: "logged_in", site: "site.test" });
+    expect(sent[2]!.body).toMatchObject({ ok: false, state: "logged_out" });
+    const failing = {
+      ...stub,
+      checkNow: async () => {
+        throw new LoginFlowError("No login check is recorded", "no_recipe", 409);
+      },
+    } as unknown as typeof t.catalog;
+    await handleBrowserProfileRoutes("POST", "/api/browser/profiles/acct/check", failing, res, json);
+    expect(sent[4]).toMatchObject({ status: 409, body: { code: "no_recipe" } });
+    expect(await handleBrowserProfileRoutes("GET", "/api/browser/profiles/acct/check", stub, res, json)).toBe(false);
   });
 
   it("ignores other paths and unsupported methods", async () => {

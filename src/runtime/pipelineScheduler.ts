@@ -1049,6 +1049,8 @@ export async function runPipelineDag(
       login_at: now,
       verified_at: now,
       where: handoff?.ownBrowser === true ? "own_chrome" : "host_browser",
+      ...(stage.browser?.check !== undefined ? { check: stage.browser.check } : {}),
+      ...(stage.browser?.login_url !== undefined ? { login_url: stage.browser.login_url } : {}),
     });
   };
 

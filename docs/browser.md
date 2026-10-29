@@ -42,9 +42,13 @@ A profile is a saved login. The **Browser logins** section of the console's Conn
 
 | Action | Console | CLI | API |
 |--------|---------|-----|-----|
+| Check whether a profile is still logged in | Check now | `sf browser check <name> --url …` | `POST /api/browser/profiles/<name>/check` |
+| Log in again | Log in again, then "I've logged in" (or Cancel) | `sf browser login <name> --url …` (needs a screen) | `POST …/login`, `POST …/login/finish`, `DELETE …/login` |
 | Delete the Host's saved login for a profile | Delete (asks you to confirm) | `sf browser clear <name>` | `DELETE /api/browser/profiles/<name>` |
 | Try the Host's own browser again for a profile the Host learned to pin to your Chrome | Switch back | `sf browser unpin <name>` | `DELETE /api/browser/profiles/<name>/pin` |
 
+- **Check now** runs the login check a stage of this profile uses, in the browser those stages use: the Host's own browser, or your Chrome when the profile is pinned. It reports logged in, logged out, or could not tell, and closes everything it opened. **Log in again** opens the login page where you can use it (a new tab in your own Chrome, or a window on the Host's screen) and keeps the profile reserved until you press "I've logged in" or Cancel (it cancels itself after 15 minutes). When you finish, the Host checks the login, then copies it into its own browser the same way a login stage does, and remembers the profile as pinned to your Chrome if the site rejects the copy. A Host with no window to offer (no `browser.login_host: attach`, no screen) says so; use a pipeline with a login stage and the live view instead.
+- Both actions need the **recorded check**: the check URL and login URL of the stage that last used the profile are saved in its `meta.json` (URLs and globs only). A profile no stage has used since this was added shows "Run a pipeline that uses this login once" instead. They also refuse a profile a live run holds.
 - **Delete is not a sign-out.** It removes the cookies this Host holds. The session stays valid on the site until you sign out in the site's own account settings (GitHub, for example, lists sessions at `github.com/settings/sessions`).
 - **A login made in your own Chrome lives in that Chrome.** Stageflow cannot list or remove it from there; sign out in Chrome.
 - A profile held by a **live run** cannot be deleted. A pin set in Host config (`browser.profile_hosts`) cannot be switched back here; remove it from the config.

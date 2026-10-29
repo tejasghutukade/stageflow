@@ -1,4 +1,7 @@
 import type {
+  BrowserLoginCheckResult,
+  BrowserLoginFinish,
+  BrowserLoginStart,
   BrowserProfile,
   CapacityHealth,
   CreateStageInput,
@@ -2401,6 +2404,22 @@ export async function fetchBrowserProfiles(): Promise<BrowserProfile[]> {
 
 export async function deleteBrowserProfile(name: string): Promise<void> {
   await browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}`, "DELETE");
+}
+
+export function checkBrowserProfile(name: string): Promise<BrowserLoginCheckResult> {
+  return browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}/check`, "POST");
+}
+
+export function startBrowserLogin(name: string): Promise<BrowserLoginStart> {
+  return browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}/login`, "POST");
+}
+
+export function finishBrowserLogin(name: string): Promise<BrowserLoginFinish> {
+  return browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}/login/finish`, "POST");
+}
+
+export function cancelBrowserLogin(name: string): Promise<BrowserProfile> {
+  return browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}/login`, "DELETE");
 }
 
 export function unpinBrowserProfile(name: string): Promise<BrowserProfile> {

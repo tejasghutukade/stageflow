@@ -270,6 +270,8 @@ export async function resolveStageBrowserEnv(
         sites: stageSites(browser),
         verified_at: new Date().toISOString(),
         where: anchor?.via === "login" ? "own_chrome" : "host_browser",
+        check: browser.check,
+        ...(browser.login_url !== undefined ? { login_url: browser.login_url } : {}),
       });
     }
   }

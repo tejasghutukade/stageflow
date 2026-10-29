@@ -1,5 +1,6 @@
 import type { ServerResponse } from "node:http";
 import { InvalidProfileKeyError } from "../browser/profileStore.js";
+import { LoginFlowError } from "../browser/profileLoginFlow.js";
 import { ProfileCatalogError, type ProfileCatalog } from "../browser/profileCatalog.js";
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
@@ -15,7 +16,7 @@ export async function handleBrowserProfileRoutes(
   res: ServerResponse,
   json: Json,
 ): Promise<boolean> {
-  const match = pathname.match(/^\/api\/browser\/profiles(?:\/([^/]+)(\/pin)?)?$/);
+  const match = pathname.match(/^\/api\/browser\/profiles(?:\/([^/]+)(\/pin|\/check|\/login|\/login\/finish)?)?$/);
   if (match === null) return false;
   try {
     if (match[1] === undefined) {
@@ -43,8 +44,24 @@ export async function handleBrowserProfileRoutes(
       json(res, 200, await catalog.unpin(name));
       return true;
     }
+    if (match[2] === "/check" && method === "POST") {
+      json(res, 200, await catalog.checkNow(name));
+      return true;
+    }
+    if (match[2] === "/login" && method === "POST") {
+      json(res, 200, await catalog.startLogin(name));
+      return true;
+    }
+    if (match[2] === "/login/finish" && method === "POST") {
+      json(res, 200, await catalog.finishLogin(name));
+      return true;
+    }
+    if (match[2] === "/login" && method === "DELETE") {
+      json(res, 200, await catalog.cancelLogin(name));
+      return true;
+    }
   } catch (error) {
-    if (error instanceof ProfileCatalogError) {
+    if (error instanceof ProfileCatalogError || error instanceof LoginFlowError) {
       json(res, error.status, { code: error.code, error: error.message });
       return true;
     }

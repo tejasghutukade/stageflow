@@ -1,4 +1,4 @@
-import type { BrowserProfile } from "../../api";
+import type { BrowserLoginFinish, BrowserLoginState, BrowserLoginStart, BrowserProfile } from "../../api";
 
 export type BrowserLoginRow = {
   name: string;
@@ -10,6 +10,10 @@ export type BrowserLoginRow = {
   busy: string | null;
   canDelete: boolean;
   deleteWarning: string[];
+  canCheck: boolean;
+  loggingIn: boolean;
+  /** Why Check now and Log in again are off, when they are. */
+  actionHint: string | null;
 };
 
 function age(iso: string | null, now: number): string {
@@ -52,8 +56,39 @@ export function browserLoginRow(profile: BrowserProfile, now: number): BrowserLo
         : profile.pinned.by === "config"
           ? { label: "Uses your Chrome", detail: "Pinned in Host config (browser.profile_hosts). Change it there.", canUnpin: false }
           : { label: "Uses your Chrome", detail: `The Host learned this: ${profile.pinned.reason}.`, canUnpin: true },
-    busy: profile.in_use === null ? null : `${live ? "In use by" : "Held by finished"} run ${profile.in_use.run_id.slice(-6)}`,
-    canDelete: !live,
+    busy:
+      profile.logging_in
+        ? "Waiting for you to log in"
+        : profile.in_use === null
+          ? null
+          : `${live ? "In use by" : "Held by finished"} run ${profile.in_use.run_id.slice(-6)}`,
+    canDelete: !live && !profile.logging_in,
     deleteWarning: deleteWarning(profile),
+    canCheck: profile.can_check && !live,
+    loggingIn: profile.logging_in,
+    actionHint: !profile.can_check ? "Run a pipeline that uses this login once, and Check now and Log in again will appear." : live ? "A run is using this login." : null,
   };
+}
+
+/** What the Host saw when it checked the login now. */
+export function checkResultText(state: BrowserLoginState, site: string | null): { tone: "ok" | "needs" | "muted"; text: string } {
+  const where = site !== null ? ` to ${site}` : "";
+  if (state === "logged_in") return { tone: "ok", text: `Still logged in${where}.` };
+  if (state === "logged_out") return { tone: "needs", text: `Logged out${site !== null ? ` of ${site}` : ""}. Use Log in again.` };
+  return { tone: "muted", text: "Could not tell. The site may be showing a check the Host's browser cannot pass. Try Log in again." };
+}
+
+/** What the operator does after Log in again opened a page. */
+export function loginInstructions(where: BrowserLoginStart["where"] | null, site: string | null): string {
+  const on = site !== null ? ` for ${site}` : "";
+  if (where === "own_chrome") return `A new tab${on} opened in your Chrome. Log in there, then press "I've logged in".`;
+  if (where === "host_window") return `A browser window${on} opened on the computer running Stageflow. Log in there, then press "I've logged in".`;
+  return `Log in in the tab Stageflow opened${on}, then press "I've logged in".`;
+}
+
+/** Message after "I've logged in" when the Host still sees a logged-out page. */
+export function stillWaitingText(result: Pick<BrowserLoginFinish, "state">): string {
+  return result.state === "unknown"
+    ? "The Host could not confirm the login yet. Finish any check on the page, then try again."
+    : "The Host still sees a logged-out page. Finish logging in, then try again.";
 }

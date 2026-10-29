@@ -1367,4 +1367,13 @@ export type BrowserProfile = {
   /** Why this profile's stages use the operator's own Chrome, when they do. */
   pinned: { by: "learned" | "config"; reason: string; at: string | null } | null;
   in_use: { run_id: string; stage_id: string | null; live: boolean } | null;
+  /** A stage has recorded how to check this login; Check now and Log in again need it. */
+  can_check: boolean;
+  /** Log in again is waiting for the operator. */
+  logging_in: boolean;
 };
+
+export type BrowserLoginState = "logged_in" | "logged_out" | "unknown";
+export type BrowserLoginCheckResult = { state: BrowserLoginState; site: string | null; profile: BrowserProfile };
+export type BrowserLoginStart = { where: "own_chrome" | "host_window"; site: string | null; profile: BrowserProfile };
+export type BrowserLoginFinish = { ok: boolean; state: BrowserLoginState; where: "host_browser" | "own_chrome"; profile: BrowserProfile };
