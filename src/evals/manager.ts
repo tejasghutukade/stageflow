@@ -48,6 +48,12 @@ import type {
 } from "./types.js";
 import { isConversationTarget } from "./types.js";
 import { isJudged } from "./judged.js";
+import { measureCalibration } from "./calibrator.js";
+import { EvalRunError } from "./errors.js";
+
+import type { CalibrateInput, CalibrateResult } from "./calibrator.js";
+export { CALIBRATION_DEFAULT_MAX_COST_USD, type CalibrateInput, type CalibrateResult } from "./calibrator.js";
+export { EvalRunError };
 
 export const EVAL_HOST_STOPPED_REASON = "Host stopped while the run was in progress";
 export const EVAL_DEFAULT_ENGINE = "promptfoo";
@@ -109,40 +115,6 @@ export type EvalRunManagerDeps = {
   onRunStarted?(evalRunId: string, ctx: EvalRunContext): void | Promise<void>;
   onRunFinished?(evalRunId: string): void | Promise<void>;
 };
-
-export type CalibrateInput = {
-  projectRoot: string;
-  evalPath: string;
-  graderId: string;
-  split?: EvalCalibrationSplit;
-  /** A rubric to measure instead of the saved one; the result is stored as a candidate. */
-  candidate?: { rubric?: string; examples?: RubricExample[]; judge?: string; judgeSettings?: JudgeSettings };
-  maxCostUsd?: number;
-  /** Judge each output 3 times (or the grader's own larger vote count) and report how often the verdict splits. */
-  stability?: boolean;
-};
-
-export type CalibrateResult = {
-  calibration: EvalCalibrationRow;
-  stats: CalibrationStats;
-  disagreements: EvalCalibrationDisagreement[];
-  errored: number;
-  stability?: StabilityStats;
-  costUsd: number;
-};
-
-export const CALIBRATION_DEFAULT_MAX_COST_USD = 1;
-
-export class EvalRunError extends Error {
-  constructor(
-    readonly code: EvalErrorCode,
-    message: string,
-    readonly findings?: ValidationFinding[],
-  ) {
-    super(message);
-    this.name = "EvalRunError";
-  }
-}
 
 export type StartEvalRunInput = {
   projectRoot: string;
@@ -918,6 +890,11 @@ export class EvalRunManager {
     }
   }
 
+  private logEngine(level: "info" | "warn" | "error", message: string): void {
+    if (level === "info") this.deps.logger?.info?.("eval.engine", message);
+    else this.deps.logger?.[level]("eval.engine", message);
+  }
+
   /**
    * Re-judges the stored outputs of results the author labeled for one grader and compares the verdicts to the
    * labels. No stage or agent runs: the engine's case callback replays the stored output. Nothing is added to the
@@ -948,126 +925,13 @@ export class EvalRunManager {
       if (!found || !isJudged(found)) {
         throw new EvalRunError("EVAL_INVALID", `Grader ${input.graderId} is not a judged grader of this eval`);
       }
-      let grader = found;
-      if (input.candidate !== undefined) {
-        if (grader.type === "rubric") {
-          grader = {
-            ...grader,
-            ...(input.candidate.rubric !== undefined ? { rubric: input.candidate.rubric } : {}),
-            ...(input.candidate.examples !== undefined ? { examples: input.candidate.examples } : {}),
-            ...(input.candidate.judge !== undefined ? { judge: input.candidate.judge } : {}),
-            ...(input.candidate.judgeSettings !== undefined
-              ? { judgeSettings: { ...(grader.judgeSettings ?? {}), ...input.candidate.judgeSettings } }
-              : {}),
-          };
-        } else {
-          grader = {
-            ...grader,
-            ...(input.candidate.judge !== undefined ? { judge: input.candidate.judge } : {}),
-            ...(input.candidate.judgeSettings !== undefined
-              ? { judgeSettings: { ...(grader.judgeSettings ?? {}), ...input.candidate.judgeSettings } }
-              : {}),
-          };
-        }
-      }
-      const stabilityVotes = input.stability === true ? Math.max(grader.judgeSettings?.votes ?? 1, 3) : undefined;
-      if (stabilityVotes !== undefined) {
-        grader = { ...grader, judgeSettings: { ...(grader.judgeSettings ?? {}), votes: stabilityVotes } };
-      }
-      const split = input.split ?? "all";
-      const samples = await collectCalibrationSamples(this.store, input.projectRoot, base.evalId, grader.id, split);
-      const casesById = new Map(base.cases.map((c) => [c.id, c]));
-      const usable = samples.filter((s) => casesById.has(s.caseId));
-      if (usable.length === 0) {
-        throw new EvalRunError(
-          "EVAL_CALIBRATION_NO_LABELS",
-          `No labeled results for grader ${grader.id} can be re-judged; label results in a run first`,
-        );
-      }
-      const replay = new Map(usable.map((s) => [key(s.caseId, s.repeatIndex), s]));
-      const plan: EvalPlan = {
-        ...base,
-        cases: [...new Set(usable.map((s) => s.caseId))].map((id, position) => ({
-          ...(casesById.get(id) as PlanCase),
-          position,
-        })),
-        graders: [{ ...grader, weight: 1, mustPass: false }],
-        repeats: Math.max(...usable.map((s) => s.repeatIndex)) + 1,
-        maxCostUsd: input.maxCostUsd ?? CALIBRATION_DEFAULT_MAX_COST_USD,
-      };
-      let spend = 0;
-      const verdicts = new Map<string, NormalizedGrade>();
-      const io: EngineIo = {
-        runCase: async (req) => {
-          const sample = replay.get(key(req.caseId, req.repeatIndex));
-          if (!sample) {
-            return { ok: false, code: "EVAL_ENGINE_ERROR", message: "not labeled for this grader" };
-          }
-          return { ok: true, output: sample.output, latencyMs: 0, costUsd: 0, tokensIn: 0, tokensOut: 0 };
-        },
-        onResult: (nr) => {
-          const grade = nr.grades.find((g) => g.graderId === grader.id);
-          if (grade) verdicts.set(key(nr.caseId, nr.repeatIndex), grade);
-          if (grade?.judgeCostUsd !== undefined && Number.isFinite(grade.judgeCostUsd)) spend += grade.judgeCostUsd;
-          if (spend >= plan.maxCostUsd) abort.abort();
-        },
-        reportJudgeCost: () => undefined,
-        onPhase: () => undefined,
-        log: (level, message) => {
-          if (level === "info") this.deps.logger?.info?.("eval.engine", message);
-          else this.deps.logger?.[level]("eval.engine", message);
-        },
-      };
-      await engine.run(plan, io, abort.signal);
-
-      const voteSets: boolean[][] = [];
-      const measured: Array<{ caseId: string; repeatIndex: number; label: boolean; judge: boolean }> = [];
-      const disagreements: EvalCalibrationDisagreement[] = [];
-      let errored = 0;
-      for (const s of usable) {
-        const grade = verdicts.get(key(s.caseId, s.repeatIndex));
-        if (!grade || grade.status !== "graded" || grade.passed === undefined) {
-          errored++;
-          continue;
-        }
-        const label = s.label === "pass";
-        const votes = (grade.details as { votes?: Array<{ status?: string; passed?: boolean }> } | undefined)?.votes;
-        if (Array.isArray(votes)) {
-          voteSets.push(votes.filter((v) => v.status === "graded" && typeof v.passed === "boolean").map((v) => v.passed as boolean));
-        }
-        measured.push({ caseId: s.caseId, repeatIndex: s.originalRepeatIndex, label, judge: grade.passed });
-        if (label !== grade.passed) {
-          disagreements.push({
-            evalRunId: s.originalRunId,
-            caseId: s.caseId,
-            repeatIndex: s.originalRepeatIndex,
-            label: s.label,
-            judge: grade.passed ? "pass" : "fail",
-            reason: grade.reason ?? null,
-          });
-        }
-      }
-      const stats = computeCalibration(measured);
-      const stability = stabilityVotes !== undefined ? computeStability(voteSets, stabilityVotes) : undefined;
-      const calibration = await this.store.insertEvalCalibration({
-        projectRoot: input.projectRoot,
-        evalId: base.evalId,
-        graderId: grader.id,
-        graderHash: found.hash,
-        judge: grader.judge,
-        promptVersion: base.target.kind === "agent" ? CONVERSATION_RUBRIC_PROMPT_VERSION : RUBRIC_PROMPT_VERSION,
-        split,
-        candidate: input.candidate !== undefined,
-        stats: {
-          ...stats,
-          errored,
-          skipped_missing_case: samples.length - usable.length,
-          ...(stability !== undefined ? { stability } : {}),
-        } as unknown as EvalJson,
-        disagreements,
-        costUsd: spend,
-      });
-      return { calibration, stats, disagreements, errored, ...(stability !== undefined ? { stability } : {}), costUsd: spend };
+      return measureCalibration(
+        { store: this.store, engine, log: (level, message) => this.logEngine(level, message) },
+        input,
+        base,
+        found,
+        abort,
+      );
     } finally {
       this.trying = false;
       this.tryingRunId = null;
