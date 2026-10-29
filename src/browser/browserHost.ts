@@ -23,6 +23,8 @@ export type BrowserStageRequest = {
 export type ProfileBrowser = {
   cdpAddress: string;
   anchorEnv: BrowserEnv;
+  /** Which browser host of a routing host started this anchor (`login` or `work`); absent for a plain host. */
+  via?: "login" | "work";
 };
 
 export type ProfileBrowserRequest = {
@@ -49,6 +51,8 @@ export type ProfileBrowserRelease = {
 export interface BrowserHost {
   /** What this host can do; read through `resolveBrowserHostCapabilities` so unset fields get safe defaults. */
   readonly capabilities?: BrowserHostCapabilityRecord;
+  /** Capabilities for one request when they differ from `capabilities` (a routing host sends login stages to another browser). */
+  capabilitiesFor?(request: { humanLogin?: boolean }): BrowserHostCapabilityRecord | undefined;
   /**
    * Starts or reuses the one browser for (run, profile) and returns its CDP
    * address. Callers serialize per (run, profile) and persist the result.
@@ -59,6 +63,11 @@ export interface BrowserHost {
    * what hosts it. Only hosts whose browser lives outside the Host's own sockets implement it.
    */
   releaseProfileBrowser?(request: ProfileBrowserRelease): Promise<void>;
+  /**
+   * A stage reported that a site blocked this host's browser. A routing host remembers the profile so its stages use
+   * another browser, and says whether that is a change (`switched`), so the scheduler can retry the stage there.
+   */
+  noteSiteBlocked?(input: { scope: string; profile: string; reason: string }): Promise<{ switched: boolean } | void>;
   /** At Host start: releases browsers of runs that are no longer live; returns what it released. */
   sweepOrphans?(input: { isRunLive: (runId: string) => Promise<boolean> }): Promise<{ released: string[] }>;
   /** Env of one stage's agent-browser session; with a profile it attaches to `cdpAddress` in its own tab. */

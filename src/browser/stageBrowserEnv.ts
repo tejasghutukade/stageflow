@@ -22,6 +22,10 @@ import { defaultDisplayProbe, loginPageUrl } from "./humanLogin.js";
 import { persistStageHandoff, resolveStageHandoffCapabilities } from "./stageHandoff.js";
 import { ensureStageLoginCheck, OPEN_COMMAND_TIMEOUT_MS } from "./loginCheck.js";
 import { readPersistedBrowserEnv } from "./persistedEnv.js";
+import { createAttachBrowserHost } from "./attachBrowserHost.js";
+import { createLoginRoutedHost } from "./loginRoutedHost.js";
+import { recordProfileSession, stageSites } from "./profileMeta.js";
+import { createProfileHostHints } from "./profileHostHint.js";
 import { createContainerBrowserHost } from "./containerBrowserHost.js";
 import { createDockerSandboxOrchestrator } from "./dockerSandboxOrchestrator.js";
 import { createVolumeProfileStore } from "./volumeProfileStore.js";
@@ -52,27 +56,47 @@ export function hostLaunchOptions(): { launchArgs: string[]; executablePath?: st
 
 function configuredBrowserSupport(liveView: "relay" | "none"): StageBrowserSupport {
   const config = loadHostConfig();
-  if (browserHostForOwner(config, localOwnerScope()) === "container") {
-    const container = config.browserContainer;
+  const kind = browserHostForOwner(config, localOwnerScope());
+  const attached =
+    config.browserAttach !== undefined
+      ? createAttachBrowserHost({ cdpUrl: config.browserAttach.cdpUrl, liveView, local: hostLaunchOptions() })
+      : undefined;
+  if (kind === "attach" && attached !== undefined) {
+    return { host: attached, profiles: createVolumeProfileStore() };
+  }
+  const support: StageBrowserSupport =
+    kind === "container"
+      ? {
+          host: createContainerBrowserHost({
+            orchestrator: createDockerSandboxOrchestrator({
+              image: config.browserContainer.image,
+              shmSize: config.browserContainer.shmSize,
+              memory: config.browserContainer.memory,
+              pidsLimit: config.browserContainer.pidsLimit,
+              user: "1000:1000",
+            }),
+            liveView,
+            local: hostLaunchOptions(),
+          }),
+          profiles: createVolumeProfileStore(),
+        }
+      : {
+          host: createLocalBrowserHost({ liveView, ...hostLaunchOptions() }),
+          profiles: createLocalProfileStore(),
+        };
+  const routed = config.browserLoginHost === "attach" || Object.keys(config.browserProfileHosts).length > 0;
+  if (routed && attached !== undefined) {
     return {
-      host: createContainerBrowserHost({
-        orchestrator: createDockerSandboxOrchestrator({
-          image: container.image,
-          shmSize: container.shmSize,
-          memory: container.memory,
-          pidsLimit: container.pidsLimit,
-          user: "1000:1000",
-        }),
-        liveView,
-        local: hostLaunchOptions(),
+      ...support,
+      host: createLoginRoutedHost({
+        work: support.host,
+        login: attached,
+        hints: createProfileHostHints(),
+        pinnedProfiles: new Set(Object.keys(config.browserProfileHosts)),
       }),
-      profiles: createVolumeProfileStore(),
     };
   }
-  return {
-    host: createLocalBrowserHost({ liveView, ...hostLaunchOptions() }),
-    profiles: createLocalProfileStore(),
-  };
+  return support;
 }
 
 export function defaultStageBrowserSupport(): StageBrowserSupport {
@@ -150,6 +174,12 @@ export async function resolveStageBrowserEnv(
           ...(input.humanLogin === true ? { humanLogin: true } : {}),
         })
       : undefined;
+  if (anchor?.via === "login" && input.humanLogin !== true) {
+    await persistStageHandoff(
+      { runDir: input.runDir, stageId: input.stageId },
+      { display: "local_window", liveView: capabilities.liveView, ownBrowser: true },
+    );
+  }
   const fresh = await support.host.stageEnv({
     runId: input.runId,
     stageId: input.stageId,
@@ -226,7 +256,7 @@ export async function resolveStageBrowserEnv(
       }
     }
   } else if (browser.check !== undefined) {
-    await ensureStageLoginCheck({
+    const checked = await ensureStageLoginCheck({
       runDir: input.runDir,
       stageId: input.stageId,
       attempt: input.attempt ?? 1,
@@ -235,6 +265,15 @@ export async function resolveStageBrowserEnv(
       ...(support.runner !== undefined ? { runner: support.runner } : {}),
       ...(support.loginCheck !== undefined ? { options: support.loginCheck } : {}),
     });
+    if (checked.logged_in === true && profile !== undefined) {
+      await recordProfileSession(profile, {
+        sites: stageSites(browser),
+        verified_at: new Date().toISOString(),
+        where: anchor?.via === "login" ? "own_chrome" : "host_browser",
+        check: browser.check,
+        ...(browser.login_url !== undefined ? { login_url: browser.login_url } : {}),
+      });
+    }
   }
   return env;
 }

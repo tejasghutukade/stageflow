@@ -36,6 +36,24 @@ Use the join topology. Only the `check` to `login` edge has an `if` on `logged_i
 
 Runnable walkthrough: [`examples/browser-session/`](../examples/browser-session/). Fixtures: `tests/fixtures/pipelines/browser-login-check.pipeline.yaml` and `browser-human-login.pipeline.yaml`.
 
+## See and delete saved logins {#saved-logins}
+
+A profile is a saved login. The **Browser logins** section of the console's Connections page lists them: the sites each one is for, where the login was made (the Host's own browser, or your own Chrome), when you logged in, when it was last used, whether the profile is **pinned to your Chrome** (and why), and whether a run is holding it. The CLI shows the same with `sf browser profiles`, and the API is `GET /api/browser/profiles`.
+
+| Action | Console | CLI | API |
+|--------|---------|-----|-----|
+| Check whether a profile is still logged in | Check now | `sf browser check <name> --url …` | `POST /api/browser/profiles/<name>/check` |
+| Log in again | Log in again, then "I've logged in" (or Cancel) | `sf browser login <name> --url …` (needs a screen) | `POST …/login`, `POST …/login/finish`, `DELETE …/login` |
+| Delete the Host's saved login for a profile | Delete (asks you to confirm) | `sf browser clear <name>` | `DELETE /api/browser/profiles/<name>` |
+| Try the Host's own browser again for a profile the Host learned to pin to your Chrome | Switch back | `sf browser unpin <name>` | `DELETE /api/browser/profiles/<name>/pin` |
+
+- **Check now** runs the login check a stage of this profile uses, in the browser those stages use: the Host's own browser, or your Chrome when the profile is pinned. It reports logged in, logged out, or could not tell, and closes everything it opened. **Log in again** opens the login page where you can use it (a new tab in your own Chrome, or a window on the Host's screen) and keeps the profile reserved until you press "I've logged in" or Cancel (it cancels itself after 15 minutes). When you finish, the Host checks the login, then copies it into its own browser the same way a login stage does, and remembers the profile as pinned to your Chrome if the site rejects the copy. A Host with no window to offer (no `browser.login_host: attach`, no screen) says so; use a pipeline with a login stage and the live view instead.
+- Both actions need the **recorded check**: the check URL and login URL of the stage that last used the profile are saved in its `meta.json` (URLs and globs only). A profile no stage has used since this was added shows "Run a pipeline that uses this login once" instead. They also refuse a profile a live run holds.
+- **Delete is not a sign-out.** It removes the cookies this Host holds. The session stays valid on the site until you sign out in the site's own account settings (GitHub, for example, lists sessions at `github.com/settings/sessions`).
+- **A login made in your own Chrome lives in that Chrome.** Stageflow cannot list or remove it from there; sign out in Chrome.
+- A profile held by a **live run** cannot be deleted. A pin set in Host config (`browser.profile_hosts`) cannot be switched back here; remove it from the config.
+- The page and the API show sites, times and flags only, never cookie values or folders. The sites and times come from a small `meta.json` in the profile's state folder, written when a login stage passes its check or a stage's login check reports logged in. Profiles saved before this existed show "No site recorded yet" until they log in again. For a container or volume profile the record lives in memory and is lost when the Host restarts.
+
 ## Shared browser and tabs {#shared-browser-and-tabs}
 
 A profile is leased to one run, from the first stage that needs it until the run ends. All stages of that run share the lease and one Chrome. Stages of the same run never block each other, including parallel stages.
@@ -100,6 +118,8 @@ The live view needs the process that serves the console routes: `sf ui`, or the 
 3. If the site opens a popup (for example "Sign in with a provider"), the view follows the popup. When the popup closes, the view returns to the page that opened it. The opener still receives the result.
 4. When the page shows you are logged in, press Accept. The Host then re-checks the login itself (`verify: browser_login`). If it still sees a logged-out page, the stage runs again with a new gate, and the live view works there too.
 5. Accepting, rejecting, cancelling or ending the run closes the live view and revokes its ticket. Input sent after that is refused.
+
+The toolbar above the picture has **Back**, **Forward** and **Reload** buttons for the page in view. They act on that tab's own history and open nothing new; Back or Forward at the end of the history does nothing. The control-only route is `POST /api/runs/<run>/stages/<stage>/live-view/navigate` with `{ "action": "back" | "forward" | "reload" }`. A view-only session is refused. The console shows the picture in a window frame with a **Full screen** button (Esc leaves it) and the **I've logged in** button.
 
 If typing and clicking do nothing (a known issue after submitting some login forms), open "Page seems stuck?" under the picture and press **Reopen browser tab**. The Host opens the same address in a fresh tab of the same browser (you stay signed in; page state held only in the old tab is lost), moves the view to it and closes the old tab. It can be pressed once every couple of seconds.
 
@@ -195,6 +215,88 @@ browser:
 - `browser.host` is read when the Host starts.
 - Image and `docker run` flags are described in the [Docker guide](docker.md#container-browser-host).
 - `browser.owner_hosts` (map of owner scope to `local` or `container`) overrides `browser.host` for one owner scope; scopes not listed use `browser.host`. Today every run belongs to the single `local` owner, so only `local` is consulted.
+
+### Attach host: use your own Chrome {#attach-host}
+
+With `browser.host: attach` the Host does not start a browser. It attaches to a Chrome you started yourself, so a human login happens in a real window on your screen, with your passkeys, password manager and an ordinary browser fingerprint. Sites that refuse sign-in from automated or containerized browsers (for example Google) usually accept it. This is the way to log in when the Host runs in Docker.
+
+```yaml
+browser:
+  host: attach
+  attach:
+    cdp_url: http://host.docker.internal:9222
+```
+
+Start Chrome on your machine with a debugging port and **a profile folder that is not your everyday one** (Chrome refuses the default folder for a debugging port anyway):
+
+```bash
+# macOS
+open -na "Google Chrome" --args --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --user-data-dir="$HOME/.stageflow-chrome"
+```
+
+- The Host only attaches. It never starts, restarts or closes this Chrome. When a stage ends the Host closes that stage's tab; when the run ends it detaches. Your other tabs and the browser stay open.
+- A stage gets its own new tab. Tabs you opened yourself are not touched.
+- A human login stage uses a `local_window` handoff even when the Host has no screen, because the window is yours. The gate is stamped `{ kind: "local_window", window: "own_browser" }` and the console shows a "Use your own Chrome" note naming the site; the agent's prompt says the login page is in a new tab of the operator's own Chrome. The login is saved in that Chrome's profile.
+- The `profile:` name in a stage still names the run lease (one run at a time), but the cookies are whatever your Chrome holds. Different `profile:` names do not separate logins.
+- Chrome refuses debugging requests addressed by name, so the Host resolves a host name in `cdp_url` to an IPv4 address first (`localhost` becomes `127.0.0.1`). From Docker Desktop, `host.docker.internal` works this way; Chrome must listen where Docker can reach it. On other Docker setups use the address your container sees for the host.
+- The debugging port has no password. While Chrome is open with it, any local process can drive that browser and everything logged in there. Bind it to `127.0.0.1`, use a dedicated profile, and close Chrome when you are done.
+- `allow_domains` cannot be enforced through an attached browser (agent-browser refuses it together with CDP), so it stays prompt-only. `blocked_sites` still applies.
+- `sf browser login|check` stay local-host tools; the attach host has no profile folder.
+- `browser.host` is read when the Host starts. `owner_hosts` can select `attach` for one owner scope.
+
+Verified against Chrome 156 on macOS from a Docker Desktop container (opening pages, own tab per stage, tab-only close, Google sign-in). Native Linux, Windows and a Chrome on another machine are not verified.
+
+### Log in with your own Chrome, run headless {#login-handoff}
+
+Some sites refuse sign-in from the browser Stageflow starts (Google rejects an automated or containerized Chromium). Other sites are fine once you are logged in, and you would rather not keep a visible browser open for every run. This mode splits the two: **login happens in your own Chrome, every other stage runs in the Host's own (headless) browser.**
+
+```yaml
+browser:
+  login_host: attach
+  attach:
+    cdp_url: http://host.docker.internal:9222
+  # the Host's own browser, for example in the Docker image:
+  executable_path: /usr/bin/chromium
+  launch_args: [--no-sandbox]
+```
+
+Start your Chrome as described under [Attach host](#attach-host) (a dedicated profile folder and a debugging port).
+
+How a run goes:
+
+1. A stage with `browser.check` asks the Host to open the check page in the headless browser. Logged in: the run continues, and no Chrome of yours is involved.
+2. Logged out: the human login stage runs in **your own Chrome** (a new tab, a real window, passkeys and password manager work). You log in and accept the gate. The Host re-checks the login there (`verify: browser_login`).
+3. When the next stage starts, the Host copies the session (cookies and web storage) once from your Chrome into the headless browser's profile, and deletes the temporary file at once. The session then lives only in that profile, and later runs find it with no Chrome of yours.
+4. The Host runs the login stage's own `check` in the headless browser. If it reports logged in, the rest of the run is headless. If it does not, the site rejects a copied session or blocks that browser: the Host keeps the run in your Chrome and **remembers the profile** (`host-hint.json` in the profile's state folder), so later stages and runs of that profile use your Chrome from the start, and the site is not retried headless.
+5. Some sites accept the copied session on the login check page and still challenge the headless browser on other pages (Indeed showed a Cloudflare verification on its home page after the account page passed). A work stage that meets such a page stops and fails with a summary that begins `site blocked this browser:` (the browser skill tells it to; it never tries to solve or get around the challenge). The Host reads that phrase and remembers the profile as attach-only, exactly like a rejected copy. The Host then runs the same stage **once more in the same run, in your Chrome**, and every later stage and run of that profile uses your Chrome from the start. If the page still needs a human there (a "verify you are human" step), the stage is told it is in your own Chrome and asks you with a `confirm` gate to finish it in the open tab, then carries on. It never clicks the check itself. The retry happens once per stage; a stage blocked in your Chrome too fails.
+6. When a saved session expires, the check in step 1 reports logged out and the cycle repeats.
+
+To pin a profile to your Chrome without waiting to learn it, list it in Host config:
+
+```yaml
+browser:
+  login_host: attach
+  profile_hosts:
+    indeed-test: attach
+  attach:
+    cdp_url: http://host.docker.internal:9222
+```
+
+`login_host` and `profile_hosts` need `browser.attach.cdp_url`. YAML never names the host. To forget a remembered profile, delete `host-hint.json` in `$STAGEFLOW_HOME/browser/<scope>/<profile>/state/`.
+
+**Which sites accept a copied session?** It depends on the site, not on Stageflow. What was tried:
+
+| Site | Headless with a copied session |
+|------|-------------------------------|
+| A local fixture site, GitHub | Works, headless. The session stays logged in, and survives closing and reopening the headless browser. |
+| Indeed | Depends on the mode. With a **headed** browser (the container's virtual display) it accepted the copied session. With true **headless** (`headed: false`) Indeed answers "Blocked", the Host sees the check fail, and falls back to your Chrome (verified, including that the next run goes straight to your Chrome). |
+| Google, LinkedIn and other sites with strict bot or device checks | Not verified. Expect rejection; the Host falls back to your Chrome. Do not try to disguise the browser. |
+
+So headed versus headless is part of the answer. If a site rejects headless, try the stages without `headed: false` (a virtual display in Docker) before giving up on running them in the Host's browser.
+
+**Writing pipelines for it.** Give work stages that may meet a verification page `gate_kinds: [confirm]` so they can ask you instead of failing. Give the check stage and the login stage the same `profile` and the same `check` (URL and globs). The Host uses the login stage's `check` to decide whether the headless browser accepted the copied session. Put `headed: false` on the work stages only for sites that accept a headless browser. A stage that can run in either browser must not assume which one it got: a remembered profile runs visibly in your Chrome.
+
+**Security.** The session file is owner-only, exists only while the copy runs, and never reaches an envelope, a log or an artifact. Stages never see cookies. While your Chrome is open with a debugging port, any local process can drive it, so use a dedicated profile folder and close it when you are done. Copying a session moves your login to another browser, so on some sites it appears as a second device in the account's security settings. Revoke it there if you want.
 
 ### Linux hosts with no screen
 

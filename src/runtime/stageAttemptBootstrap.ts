@@ -25,7 +25,7 @@ import {
   readStageLoginCheck,
 } from "../browser/loginCheck.js";
 import { stageGateHandoff } from "../browser/stageHandoff.js";
-import { humanLoginPromptBlock, isHumanLoginStage } from "../browser/humanLogin.js";
+import { humanLoginPromptBlock, isHumanLoginStage, ownBrowserPromptBlock } from "../browser/humanLogin.js";
 import {
   BROWSER_SKILL_NAME,
   resolveBuiltinSkillFile,
@@ -468,14 +468,18 @@ async function openStageWithOperatorCatalog(
       return { ok: false, reason: "browser login check result is missing" };
     }
   }
-  const humanLoginHandoff = humanLogin
-    ? await stageGateHandoff({
-        runDir: resolveOptions.workspaceDir,
-        runId: resolveOptions.runId,
-        stageId: input.stage.id,
-        dirStageId: stageIdForManifest,
-      })
-    : undefined;
+  const stageHandoff =
+    input.stage.browser !== undefined
+      ? await stageGateHandoff({
+          runDir: resolveOptions.workspaceDir,
+          runId: resolveOptions.runId,
+          stageId: input.stage.id,
+          dirStageId: stageIdForManifest,
+        })
+      : undefined;
+  const humanLoginHandoff = humanLogin ? stageHandoff : undefined;
+  const inOwnBrowser =
+    !humanLogin && stageHandoff?.kind === "local_window" && stageHandoff.window === "own_browser";
   try {
     const handle = agent.openStage({
       ...input,
@@ -484,7 +488,7 @@ async function openStageWithOperatorCatalog(
         system_prompt: `${stampStagePromptArtifactsDir(
           input.stage.system_prompt,
           artifactsDir,
-        )}${loginCheck !== undefined ? `\n\n${loginCheckPromptBlock(loginCheck)}` : ""}${humanLogin ? `\n\n${humanLoginPromptBlock(input.stage.browser?.login_url ?? input.stage.browser?.check?.url, humanLoginHandoff?.kind === "live_view" ? "live_view" : "local_window")}` : ""}`,
+        )}${loginCheck !== undefined ? `\n\n${loginCheckPromptBlock(loginCheck)}` : ""}${inOwnBrowser ? `\n\n${ownBrowserPromptBlock()}` : ""}${humanLogin ? `\n\n${humanLoginPromptBlock(input.stage.browser?.login_url ?? input.stage.browser?.check?.url, humanLoginHandoff?.kind === "live_view" ? "live_view" : humanLoginHandoff?.kind === "local_window" && humanLoginHandoff.window === "own_browser" ? "own_browser" : "local_window")}` : ""}`,
         ...(loginCheck !== undefined
           ? {
               pre_emit_checks: [

@@ -7,6 +7,8 @@ import {
   type MultiDraft,
 } from "../../stageAnswer/answerRules";
 import { useOperatorAnswer } from "../../stageAnswer/useOperatorAnswer";
+import { liveViewHandoffUrl } from "../../liveView/handoff";
+import { BrowserHandoff, LocalWindowNote } from "./BrowserHandoff";
 import {
   buildAcceptIntent,
   buildRejectIntent,
@@ -175,6 +177,8 @@ export function GateAnswerPanel({
     );
   }
 
+  const liveViewUrl = liveViewHandoffUrl(pendingPrompt);
+
   const question =
     pendingPrompt.kind === "multi_question"
       ? run.waiting_summary ?? "Answer each question"
@@ -207,6 +211,18 @@ export function GateAnswerPanel({
       </div>
       {error ? (
         <p className="max-w-[680px] text-sm text-[var(--sf-fail)]">{error}</p>
+      ) : null}
+      {pendingPrompt.handoff?.kind === "local_window" ? (
+        <LocalWindowNote own={pendingPrompt.handoff.window === "own_browser"} site={pendingPrompt.site} />
+      ) : null}
+      {liveViewUrl !== null ? (
+        <BrowserHandoff
+          handoffUrl={liveViewUrl}
+          reopenKey={pendingPrompt.id}
+          onDone={() => void accept()}
+          disabled={locked}
+          compact={inline}
+        />
       ) : null}
       {rationale ? (
         <div className="flex max-w-[680px] flex-col gap-2 border-l-2 border-l-[#ffffff1a] pl-3.5">

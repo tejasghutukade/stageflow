@@ -9,6 +9,8 @@ import type {
 } from "../../api";
 import { relativeTime } from "../../catalogJoin";
 import { stageCloneLabel } from "../../workspace/resolveRunWorkspace";
+import { BROWSER_HANDOFF_DONE_LABEL } from "../gate/BrowserHandoff";
+import { liveViewHandoffUrl } from "../../liveView/handoff";
 import { GateAnswerPanel, type GateAnswerActions } from "../gate/GateAnswerPanel";
 import { GateDecisionBar } from "../inbox/GateDecisionBar";
 import { useHotkeys } from "../keys";
@@ -53,7 +55,11 @@ export function RunDetailGateSection({
     run.waiting_artifacts?.[0];
   const answerKind = pendingPrompt?.kind;
   const acceptLabel =
-    answerKind === "free_text" || answerKind === "multi_question" ? "Send answer" : "Accept";
+    pendingPrompt && liveViewHandoffUrl(pendingPrompt) !== null
+      ? BROWSER_HANDOFF_DONE_LABEL
+      : answerKind === "free_text" || answerKind === "multi_question"
+        ? "Send answer"
+        : "Accept";
 
   useEffect(() => {
     setNote("");

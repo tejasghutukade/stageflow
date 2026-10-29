@@ -10,7 +10,7 @@ import { REOPEN_TAB_FAILED_NOTICE } from "./helpText";
 import { dialogOutcome, DIALOG_FAILED_NOTICE, type DialogAnswerBody, type ViewerDialog } from "./dialogState";
 import { registerInput, type EventTargetLike, type TextareaLike } from "./inputHandlers";
 import { createInputQueue, type InputQueue, type QueueNotice } from "./inputQueue";
-import type { ImageSize, LiveViewInput, LiveViewMode, ViewRect } from "./types";
+import type { ImageSize, LiveViewInput, LiveViewMode, LiveViewNavigateAction, ViewRect } from "./types";
 
 export const INPUT_NOTICE_TEXT: Record<QueueNotice, string> = {
   rejected: "Some input was rejected.",
@@ -35,6 +35,7 @@ export type ViewerSessionDeps = {
   postInput(baseUrl: string, batch: LiveViewInput[]): Promise<number>;
   postDialog(baseUrl: string, body: DialogAnswerBody): Promise<number>;
   postReopenTab(baseUrl: string): Promise<number>;
+  postNavigate(baseUrl: string, action: LiveViewNavigateAction): Promise<number>;
   openEventSource: ConnectionDeps["openEventSource"];
   setTimer(fn: () => void, ms: number): () => void;
   now(): number;
@@ -62,6 +63,8 @@ export type ViewerSession = {
   answerDialog(body: DialogAnswerBody): void;
   /** Asks the Host to replace the stage's browser tab; the stream and input keep running through the re-target. */
   reopenTab(): void;
+  /** Back, forward or reload in the stage's current tab. No-ops quietly when there is no history in that direction. */
+  navigate(action: LiveViewNavigateAction): void;
   dispose(): void;
 };
 
@@ -272,6 +275,10 @@ export function createViewerSession(deps: ViewerSessionDeps): ViewerSession {
           reopeningTab = false;
           emit();
         });
+    },
+    navigate(action) {
+      if (disposed || !control) return;
+      deps.postNavigate(deps.baseUrl, action).catch(() => undefined);
     },
     dispose() {
       if (disposed) return;

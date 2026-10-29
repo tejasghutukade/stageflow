@@ -27,6 +27,8 @@ import {
 } from "../runstore/sqlite/applyStorePragmas.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { consoleStageBrowserSupport } from "../browser/stageBrowserEnv.js";
+import { createHostProfileCatalog, type ProfileCatalog } from "../browser/profileCatalog.js";
+import { createRunLiveness } from "../browser/runLiveness.js";
 import { RunManager } from "../runtime/runManager.js";
 import { EvalRunManager } from "../evals/manager.js";
 import { createStageCaseRunner } from "../evals/runner/stageCaseRunner.js";
@@ -142,6 +144,8 @@ export type StageflowHostBootstrap = {
   stopEmailSource: () => void;
   /** Connections page read model and background health checks. */
   channels?: ChannelService;
+  /** Saved browser logins: the console list and the Delete and Switch back actions. */
+  browserProfiles?: ProfileCatalog;
   /** Named markdown pages under `$STAGEFLOW_HOME/memories`. */
   memories?: MemoryHost;
   /** Shared agent store, chat controller, and conversation backend for HTTP/MCP. */
@@ -645,6 +649,11 @@ export async function bootstrapStageflowHost(
     stopEmailSource,
     email: { ...emailHost, triggers: emailTriggers, stop: stopAccountEmail },
     channels,
+    browserProfiles: createHostProfileCatalog({
+      support: options.browser ?? consoleStageBrowserSupport(),
+      isRunLive: createRunLiveness(store),
+      pinnedByConfig: new Set(Object.keys(hostConfig?.browserProfileHosts ?? {})),
+    }),
     memories: memoryHostFor(),
     storeFilesystem,
     workspaceCatalog,

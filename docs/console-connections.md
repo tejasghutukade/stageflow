@@ -5,13 +5,14 @@ title: Console - Connections
 
 # Connections
 
-`#/connections` lists everything Stageflow talks to, in three sections:
+`#/connections` lists everything Stageflow talks to, in four sections:
 
 | Section | Contents |
 |---------|----------|
 | **Communication channels** | Connections from `connections.yaml`: AgentMail, Slack, Telegram, iMessage (Photon), WhatsApp (Photon). Used by stages (`channels:`) and by [agents](agents.md) (send and receive) |
 | **Email accounts** | IMAP accounts for email triggers; see [Email accounts](email-accounts.md). An IMAP account cannot be an agent channel (AgentMail can) |
 | **Tools** | MCP tool servers from the project `.mcp.json` and the ones saved from the console. Add and edit them in [Settings → Project MCP](console-settings.md#project-mcp); see [MCP servers](mcp-servers.md) |
+| **Browser logins** | Saved browser logins (profiles) used by stages with `browser:`: sites, where each login was made, last login and check, and whether it is pinned to your own Chrome. Actions: Check now, Log in again, Switch back, Delete. See [Browser sessions](browser.md#saved-logins) |
 
 On a first run the page shows the providers you can connect. **Add connection** opens the connect dialog for a provider: fill the fields (secrets are write-only), **Test connection** checks the values without saving, then save.
 

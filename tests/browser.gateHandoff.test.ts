@@ -41,6 +41,24 @@ describe("gate handoff", () => {
     ).toEqual({ kind: "local_window" });
   });
 
+  it("marks the window as the operator's own browser when the host attached to it", () => {
+    const own = { ...desktop, capabilities: { display: "local_window", liveView: "none", ownBrowser: true } } as const;
+    expect(hostGateContextFor({}, own)?.handoff).toEqual({ kind: "local_window", window: "own_browser" });
+    expect(parseHostGateContext({ handoff: { kind: "local_window", window: "own_browser" } }).handoff).toEqual({
+      kind: "local_window",
+      window: "own_browser",
+    });
+    expect(parseHostGateContext({ handoff: { kind: "local_window", window: "other" } }).handoff).toEqual({ kind: "local_window" });
+    expect(hostGateContextFor({}, { ...own, capabilities: { display: "local_window", liveView: "none" } })?.handoff).toEqual({ kind: "local_window" });
+  });
+
+  it("the login prompt names the operator's own Chrome", () => {
+    const own = humanLoginPromptBlock("https://x.test/login", "own_browser");
+    expect(own).toContain("operator's own Chrome");
+    expect(own).not.toContain("operator's screen");
+    expect(humanLoginPromptBlock("https://x.test/login")).toContain("operator's screen");
+  });
+
   it("overwrites an agent-forged handoff", () => {
     const context = hostGateContextFor({}, desktop);
     expect(

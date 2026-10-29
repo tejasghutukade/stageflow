@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { validateProfileScope } from "../browser/profileStore.js";
+import { validateProfileName, validateProfileScope } from "../browser/profileStore.js";
 import { readSecretFromEnvOrFile } from "./secretFromEnvOrFile.js";
 
 export class HostConfigError extends Error {
@@ -118,6 +118,14 @@ export type CallerQuotaConfig = {
 
 export const DEFAULT_BROWSER_DIALOG_TIMEOUT_SECONDS = 60;
 
+export type BrowserHostKind = "local" | "container" | "attach";
+
+/** An existing Chrome the Host attaches to (`browser.attach`); the Host never starts or closes it. */
+export type BrowserAttachConfig = {
+  /** Debugging address of that Chrome, as given (`http://`, `https://`, `ws://` or `wss://`). */
+  cdpUrl: string;
+};
+
 export type BrowserContainerConfig = {
   image: string;
   shmSize: string;
@@ -147,9 +155,15 @@ export type HostConfig = {
   /** Seconds an unanswered live view page dialog waits before the Host dismisses it (`browser.dialog_timeout_seconds`). */
   browserDialogTimeoutSeconds: number;
   /** Where shared profile browsers run (`browser.host`): this machine, or one container per run. */
-  browserHost: "local" | "container";
+  browserHost: BrowserHostKind;
   /** Per-owner adapter override (`browser.owner_hosts`, owner scope to host); scopes absent here use `browserHost`. */
-  browserOwnerHosts: Record<string, "local" | "container">;
+  browserOwnerHosts: Record<string, BrowserHostKind>;
+  /** Attach host settings (`browser.attach`); undefined when unset. */
+  browserAttach: BrowserAttachConfig | undefined;
+  /** Where human login stages run (`browser.login_host`); undefined keeps them in the same browser as other stages. */
+  browserLoginHost: "attach" | undefined;
+  /** Profiles pinned to the attached browser for every stage (`browser.profile_hosts`, profile name to `attach`). */
+  browserProfileHosts: Record<string, "attach">;
   /** Container host settings (`browser.container`); defaults apply when unset. */
   browserContainer: BrowserContainerConfig;
   /** Absolute path of config.yaml when loaded; undefined if absent. */
@@ -182,7 +196,7 @@ export type HostConfigPublicEcho = {
 export function browserHostForOwner(
   config: Pick<HostConfig, "browserHost" | "browserOwnerHosts">,
   scope: string,
-): "local" | "container" {
+): BrowserHostKind {
   return config.browserOwnerHosts[scope] ?? config.browserHost;
 }
 
@@ -540,8 +554,11 @@ export function loadHostConfig(options?: {
   let browserLaunchArgs: string[] = [];
   let browserExecutablePath: string | undefined;
   let browserDialogTimeoutSeconds = DEFAULT_BROWSER_DIALOG_TIMEOUT_SECONDS;
-  let browserHost: "local" | "container" = "local";
-  const browserOwnerHosts: Record<string, "local" | "container"> = {};
+  let browserHost: BrowserHostKind = "local";
+  const browserOwnerHosts: Record<string, BrowserHostKind> = {};
+  let browserAttach: BrowserAttachConfig | undefined;
+  let browserLoginHost: "attach" | undefined;
+  const browserProfileHosts: Record<string, "attach"> = {};
   const browserContainer: BrowserContainerConfig = {
     image: DEFAULT_BROWSER_CONTAINER_IMAGE,
     shmSize: "1g",
@@ -554,7 +571,7 @@ export function loadHostConfig(options?: {
       throw new HostConfigError(`Invalid value for browser`, "config_invalid", "browser");
     }
     for (const sub of Object.keys(raw)) {
-      if (sub !== "blocked_sites" && sub !== "launch_args" && sub !== "executable_path" && sub !== "dialog_timeout_seconds" && sub !== "host" && sub !== "container" && sub !== "owner_hosts") {
+      if (sub !== "blocked_sites" && sub !== "launch_args" && sub !== "executable_path" && sub !== "dialog_timeout_seconds" && sub !== "host" && sub !== "container" && sub !== "owner_hosts" && sub !== "attach" && sub !== "login_host" && sub !== "profile_hosts") {
         throw new HostConfigError(
           `Unknown key "${sub}" under browser`,
           "config_unknown_key",
@@ -614,9 +631,9 @@ export function loadHostConfig(options?: {
     }
     const host = (raw as Record<string, unknown>).host;
     if (host !== undefined && host !== null) {
-      if (host !== "local" && host !== "container") {
+      if (host !== "local" && host !== "container" && host !== "attach") {
         throw new HostConfigError(
-          'Invalid value for browser.host; expected "local" or "container"',
+          'Invalid value for browser.host; expected "local", "container" or "attach"',
           "config_invalid",
           "browser.host",
         );
@@ -638,14 +655,76 @@ export function loadHostConfig(options?: {
             "browser.owner_hosts",
           );
         }
-        if (value !== "local" && value !== "container") {
+        if (value !== "local" && value !== "container" && value !== "attach") {
           throw new HostConfigError(
-            `Invalid value for browser.owner_hosts.${scope}; expected "local" or "container"`,
+            `Invalid value for browser.owner_hosts.${scope}; expected "local", "container" or "attach"`,
             "config_invalid",
             `browser.owner_hosts.${scope}`,
           );
         }
         browserOwnerHosts[scope] = value;
+      }
+    }
+    const loginHost = (raw as Record<string, unknown>).login_host;
+    if (loginHost !== undefined && loginHost !== null) {
+      if (loginHost !== "attach") {
+        throw new HostConfigError('Invalid value for browser.login_host; expected "attach"', "config_invalid", "browser.login_host");
+      }
+      browserLoginHost = "attach";
+    }
+    const profileHosts = (raw as Record<string, unknown>).profile_hosts;
+    if (profileHosts !== undefined && profileHosts !== null) {
+      if (typeof profileHosts !== "object" || Array.isArray(profileHosts)) {
+        throw new HostConfigError("Invalid value for browser.profile_hosts", "config_invalid", "browser.profile_hosts");
+      }
+      for (const [name, value] of Object.entries(profileHosts)) {
+        try {
+          validateProfileName(name);
+        } catch {
+          throw new HostConfigError(`Invalid profile name "${name}" in browser.profile_hosts`, "config_invalid", "browser.profile_hosts");
+        }
+        if (value !== "attach") {
+          throw new HostConfigError(
+            `Invalid value for browser.profile_hosts.${name}; expected "attach"`,
+            "config_invalid",
+            `browser.profile_hosts.${name}`,
+          );
+        }
+        browserProfileHosts[name] = "attach";
+      }
+    }
+    const attach = (raw as Record<string, unknown>).attach;
+    if (attach !== undefined && attach !== null) {
+      if (typeof attach !== "object" || Array.isArray(attach)) {
+        throw new HostConfigError("Invalid value for browser.attach", "config_invalid", "browser.attach");
+      }
+      for (const sub of Object.keys(attach)) {
+        if (sub !== "cdp_url") {
+          throw new HostConfigError(`Unknown key "${sub}" under browser.attach`, "config_unknown_key", `browser.attach.${sub}`);
+        }
+      }
+      const cdpUrl = (attach as Record<string, unknown>).cdp_url;
+      if (cdpUrl !== undefined && cdpUrl !== null) {
+        let parsed: URL | undefined;
+        try {
+          parsed = typeof cdpUrl === "string" ? new URL(cdpUrl.trim()) : undefined;
+        } catch {
+          parsed = undefined;
+        }
+        if (
+          parsed === undefined ||
+          !["http:", "https:", "ws:", "wss:"].includes(parsed.protocol) ||
+          parsed.hostname === "" ||
+          parsed.username !== "" ||
+          parsed.password !== ""
+        ) {
+          throw new HostConfigError(
+            "Invalid value for browser.attach.cdp_url; expected an http(s) or ws(s) address with no credentials",
+            "config_invalid",
+            "browser.attach.cdp_url",
+          );
+        }
+        browserAttach = { cdpUrl: (cdpUrl as string).trim() };
       }
     }
     const container = (raw as Record<string, unknown>).container;
@@ -707,6 +786,20 @@ export function loadHostConfig(options?: {
     }
   }
 
+  if (
+    browserAttach === undefined &&
+    (browserHost === "attach" ||
+      Object.values(browserOwnerHosts).includes("attach") ||
+      browserLoginHost !== undefined ||
+      Object.keys(browserProfileHosts).length > 0)
+  ) {
+    throw new HostConfigError(
+      'browser.host "attach", browser.login_host and browser.profile_hosts need browser.attach.cdp_url (the debugging address of your Chrome)',
+      "config_invalid",
+      "browser.attach.cdp_url",
+    );
+  }
+
   return {
     maxConcurrentRuns,
     maxConcurrentRunsPerProject,
@@ -724,6 +817,9 @@ export function loadHostConfig(options?: {
     browserHost,
     browserOwnerHosts,
     browserContainer,
+    browserAttach,
+    browserLoginHost,
+    browserProfileHosts,
     configFilePath:
       configFilePath !== undefined && existsSync(configFilePath)
         ? configFilePath

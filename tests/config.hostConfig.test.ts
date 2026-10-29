@@ -265,6 +265,49 @@ describe("loadHostConfig", () => {
       });
     });
 
+    it("reads the attach host and its debugging address", () => {
+      const c = load("browser:\n  host: attach\n  attach:\n    cdp_url: http://host.docker.internal:9222\n");
+      expect(c.browserHost).toBe("attach");
+      expect(c.browserAttach).toEqual({ cdpUrl: "http://host.docker.internal:9222" });
+      expect(load("browser: {}\n").browserAttach).toBeUndefined();
+      const owner = load("browser:\n  owner_hosts:\n    local: attach\n  attach:\n    cdp_url: ws://127.0.0.1:9222\n");
+      expect(browserHostForOwner(owner, "local")).toBe("attach");
+    });
+
+    it.each([
+      ["attach without an address", "browser:\n  host: attach\n"],
+      ["owner attach without an address", "browser:\n  owner_hosts:\n    local: attach\n"],
+      ["unknown attach key", "browser:\n  attach:\n    cdp_url: http://127.0.0.1:9222\n    token: x\n"],
+      ["bad scheme", "browser:\n  attach:\n    cdp_url: ftp://127.0.0.1:9222\n"],
+      ["not a url", "browser:\n  attach:\n    cdp_url: not a url\n"],
+      ["credentials in the address", "browser:\n  attach:\n    cdp_url: http://user:pw@127.0.0.1:9222\n"],
+      ["non-string address", "browser:\n  attach:\n    cdp_url: 9222\n"],
+    ])("rejects %s", (_name, yaml) => {
+      expect(() => load(yaml)).toThrow(HostConfigError);
+    });
+
+    it("reads the login host and pinned profiles", () => {
+      const c = load(
+        "browser:\n  login_host: attach\n  profile_hosts:\n    indeed-test: attach\n  attach:\n    cdp_url: http://host.docker.internal:9222\n",
+      );
+      expect(c.browserLoginHost).toBe("attach");
+      expect(c.browserProfileHosts).toEqual({ "indeed-test": "attach" });
+      const plain = load("browser: {}\n");
+      expect(plain.browserLoginHost).toBeUndefined();
+      expect(plain.browserProfileHosts).toEqual({});
+    });
+
+    it.each([
+      ["login_host without an address", "browser:\n  login_host: attach\n"],
+      ["profile_hosts without an address", "browser:\n  profile_hosts:\n    a: attach\n"],
+      ["unknown login host", "browser:\n  login_host: cloud\n  attach:\n    cdp_url: http://127.0.0.1:9222\n"],
+      ["bad pinned profile name", "browser:\n  profile_hosts:\n    ../x: attach\n  attach:\n    cdp_url: http://127.0.0.1:9222\n"],
+      ["bad pinned host", "browser:\n  profile_hosts:\n    a: local\n  attach:\n    cdp_url: http://127.0.0.1:9222\n"],
+      ["profile_hosts not a map", "browser:\n  profile_hosts: [a]\n  attach:\n    cdp_url: http://127.0.0.1:9222\n"],
+    ])("rejects %s", (_name, yaml) => {
+      expect(() => load(yaml)).toThrow(HostConfigError);
+    });
+
     it("selects the adapter per owner scope with the global host as the default", () => {
       expect(load("browser: {}\n").browserOwnerHosts).toEqual({});
       const c = load("browser:\n  host: local\n  owner_hosts:\n    tenant-2: container\n");

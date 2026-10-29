@@ -1,0 +1,6 @@
+id: github-handoff
+goal: Log in to GitHub once in your own Chrome, then read a logged-in page headlessly.
+context: |
+  Needs browser.login_host: attach in the Host config (see docs/browser.md). The first run asks you to log in once
+  in your own Chrome. After that the Host copies the session into its headless browser and later runs skip the gate.
+constraints: Read-only. Do not change any GitHub setting.

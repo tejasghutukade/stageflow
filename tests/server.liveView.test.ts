@@ -657,6 +657,46 @@ describe("live view reopen tab", () => {
   });
 });
 
+describe("live view navigate", () => {
+  it("requires a control session with the anti-forgery header, and validates the action", async () => {
+    const h = await startHarness();
+    const { cookie } = await h.openControl();
+    const url = `${BASE}/navigate`;
+    const body = JSON.stringify({ action: "back" });
+    expect((await h.post(url, body, { origin: h.origin, [LIVE_VIEW_CSRF_HEADER]: "1" }, true)).status).toBe(401);
+    expect((await h.post(url, body, { cookie, origin: h.origin }, true)).status).toBe(403);
+    expect(h.fake.sessions[0]!.navigations).toEqual([]);
+    const headers = h.inputHeaders(cookie);
+    expect((await h.post(url, JSON.stringify({ action: "sideways" }), headers, true)).status).toBe(400);
+    expect((await h.post(url, "{nope", headers, true)).status).toBe(400);
+    for (const action of ["back", "forward", "reload"]) {
+      const ok = await h.post(url, JSON.stringify({ action }), headers, true);
+      expect(ok.status).toBe(200);
+      expect(ok.body).toEqual({ ok: true });
+    }
+    expect(h.fake.sessions[0]!.navigations).toEqual(["back", "forward", "reload"]);
+  });
+
+  it("forbids view sessions and maps relay results to statuses", async () => {
+    const h = await startHarness();
+    const s = await h.stream(`${BASE}/events?ticket=${(await h.ticket("view")).body.ticket}`);
+    const viewCookie = String(s.headers["set-cookie"]).split(";")[0]!;
+    const body = JSON.stringify({ action: "back" });
+    expect((await h.post(`${BASE}/navigate`, body, h.inputHeaders(viewCookie), true)).status).toBe(403);
+    s.close();
+
+    const { cookie } = await h.openControl();
+    const session = h.fake.sessions[0]!;
+    const expected = { closed: 409, no_tab: 409, upstream_unavailable: 409, no_history: 409, failed: 502 } as const;
+    for (const [reason, status] of Object.entries(expected)) {
+      session.navigateResult = { ok: false, reason: reason as keyof typeof expected };
+      const res = await h.post(`${BASE}/navigate`, body, h.inputHeaders(cookie), true);
+      expect(res.status, reason).toBe(status);
+      expect(res.body.code).toBe(reason);
+    }
+  });
+});
+
 describe("live view page dialogs", () => {
   const confirmDialog = { id: "d1", kind: "confirm", message: "Sure?", defaultPrompt: "", targetId: "t1", answerable: true };
   const alertDialog = { id: "d2", kind: "alert", message: "Hi", defaultPrompt: "", targetId: "t1", answerable: false };

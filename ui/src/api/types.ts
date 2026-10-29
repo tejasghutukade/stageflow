@@ -249,7 +249,7 @@ export type MultiQuestionItem = {
 
 /** `live_view.url` is an http(s) URL or a root-relative path such as `/api/runs/<id>/stages/<id>/live-view`. */
 export type GateHandoff =
-  | { kind: "local_window" }
+  | { kind: "local_window"; window?: "own_browser" }
   | { kind: "live_view"; url: string };
 
 export type PendingPrompt = (
@@ -1352,3 +1352,28 @@ export type OverviewSummary = {
 };
 
 export * from "./evalTypes";
+
+
+/** A saved browser login as the console shows it: sites, times and flags only, never a cookie or a folder. */
+export type BrowserProfile = {
+  name: string;
+  scope: string;
+  sites: string[];
+  /** Where the login was made: the Host's own browser, or the operator's own Chrome. */
+  login_where: "host_browser" | "own_chrome" | null;
+  last_login_at: string | null;
+  last_verified_at: string | null;
+  last_used_at: string | null;
+  /** Why this profile's stages use the operator's own Chrome, when they do. */
+  pinned: { by: "learned" | "config"; reason: string; at: string | null } | null;
+  in_use: { run_id: string; stage_id: string | null; live: boolean } | null;
+  /** A stage has recorded how to check this login; Check now and Log in again need it. */
+  can_check: boolean;
+  /** Log in again is waiting for the operator. */
+  logging_in: boolean;
+};
+
+export type BrowserLoginState = "logged_in" | "logged_out" | "unknown";
+export type BrowserLoginCheckResult = { state: BrowserLoginState; site: string | null; profile: BrowserProfile };
+export type BrowserLoginStart = { where: "own_chrome" | "host_window"; site: string | null; profile: BrowserProfile };
+export type BrowserLoginFinish = { ok: boolean; state: BrowserLoginState; where: "host_browser" | "own_chrome"; profile: BrowserProfile };

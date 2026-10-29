@@ -17,6 +17,8 @@ export type BrowserHostCapabilities = {
   dialogs: DialogHandling;
   popups: PopupHandling;
   permissionPolicy: boolean;
+  /** The window the operator logs in with is their own browser, which the Host attached to rather than started. */
+  ownBrowser: boolean;
 };
 
 /** Every field is optional; an unset field reads as its conservative default. */
@@ -33,6 +35,7 @@ export const DEFAULT_BROWSER_HOST_CAPABILITIES: Readonly<BrowserHostCapabilities
   dialogs: "unsupported",
   popups: "unsupported",
   permissionPolicy: false,
+  ownBrowser: false,
 };
 
 export function resolveBrowserHostCapabilities(

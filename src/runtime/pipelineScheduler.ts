@@ -9,6 +9,10 @@ import {
 } from "../browser/stageBrowserEnv.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { runOwnerScope } from "../browser/ownerScope.js";
+import { isSiteBlockedReport } from "../browser/siteBlocked.js";
+import type { StageBrowserConfig } from "../types/stage.js";
+import { recordProfileSession, stageSites } from "../browser/profileMeta.js";
+import { readStageHandoff } from "../browser/stageHandoff.js";
 import {
   teardownRunBrowsers,
   teardownStageBrowser,
@@ -102,6 +106,9 @@ import {
 } from "../logging/logger.js";
 import { registerNamedSecrets, REDACTION_SECRETS_FILENAME } from "../logging/namedSecrets.js";
 import { finaliseStoredRunManifest } from "../runstore/runManifest.js";
+
+/** A stage blocked by a site gets one more attempt, in the operator's own browser. */
+const BLOCKED_STAGE_MAX_ATTEMPTS = 2;
 
 type SchedulerPreparedPipeline = {
   task: TaskFile;
@@ -973,16 +980,8 @@ export async function runPipelineDag(
     }
   };
 
-  const scheduleAutomaticRepair = async (
-    stageId: string,
-  ): Promise<boolean> => {
-    const recovery = dag.nodes.find((node) => node.id === stageId)?.recovery;
-    if (recovery?.mode !== "repair") return false;
-    const latestAttempt = await store.getLatestStageExecution(run.runId, stageId);
-    if (latestAttempt?.verification_outcome !== "failed") return false;
-    const attempts = await store.countStageAttempts(run.runId, stageId);
-    if (attempts >= recovery.max_attempts) return false;
-
+  /** Opens a new attempt of the stage and makes it runnable again. */
+  const startNextAttempt = async (stageId: string): Promise<void> => {
     const nextAttempt = await store.createStageExecution(run.runId, stageId);
     if (retryContext !== undefined) {
       retryContext.retryRoots.set(stageId, nextAttempt.attempt);
@@ -997,6 +996,69 @@ export async function runPipelineDag(
     }
     states.set(stageId, "pending");
     completedEnvelopes.delete(stageId);
+  };
+
+  const scheduleAutomaticRepair = async (
+    stageId: string,
+  ): Promise<boolean> => {
+    const recovery = dag.nodes.find((node) => node.id === stageId)?.recovery;
+    if (recovery?.mode !== "repair") return false;
+    const latestAttempt = await store.getLatestStageExecution(run.runId, stageId);
+    if (latestAttempt?.verification_outcome !== "failed") return false;
+    const attempts = await store.countStageAttempts(run.runId, stageId);
+    if (attempts >= recovery.max_attempts) return false;
+
+    await startNextAttempt(stageId);
+    return true;
+  };
+
+  /** A browser stage that fails saying the site blocked its browser: tell the browser host so later stages and runs use another one. */
+  const noteBlockedBrowserStage = async (
+    stage: { browser?: { profile?: string } },
+    envelope: StageEnvelope | undefined,
+  ): Promise<boolean> => {
+    const profile = stage.browser?.profile;
+    if (profile === undefined || envelope?.status !== "failure" || !isSiteBlockedReport(envelope.summary)) return false;
+    const support = prepared.browser ?? defaultStageBrowserSupport();
+    const outcome = await support.host
+      .noteSiteBlocked?.({
+        scope: runOwnerScope(support, { runId: run.runId }),
+        profile,
+        reason: "a stage reported that the site blocked this browser",
+      })
+      .catch(() => undefined);
+    return outcome?.switched === true;
+  };
+
+  /** A human login stage passed its login check: remember, for the console, which sites the profile is logged in to and where. */
+  const noteLoginCompleted = async (
+    stage: { id: string; browser?: StageBrowserConfig },
+    stageId: string,
+  ): Promise<void> => {
+    const name = stage.browser?.profile;
+    if (name === undefined || !isHumanLoginStage(dag, stage.id, stage.browser)) return;
+    const support = prepared.browser ?? defaultStageBrowserSupport();
+    const handle = await support.profiles
+      .open({ scope: runOwnerScope(support, { runId: run.runId }), name })
+      .catch(() => undefined);
+    if (handle === undefined) return;
+    const handoff = await readStageHandoff({ runDir: run.workspaceDir, stageId }).catch(() => undefined);
+    const now = new Date().toISOString();
+    await recordProfileSession(handle, {
+      sites: stageSites(stage.browser),
+      login_at: now,
+      verified_at: now,
+      where: handoff?.ownBrowser === true ? "own_chrome" : "host_browser",
+      ...(stage.browser?.check !== undefined ? { check: stage.browser.check } : {}),
+      ...(stage.browser?.login_url !== undefined ? { login_url: stage.browser.login_url } : {}),
+    });
+  };
+
+  /** The browser host moved a blocked stage's profile to the operator's own browser: run the stage once more there. */
+  const retryBlockedStage = async (stageId: string, switched: boolean): Promise<boolean> => {
+    if (!switched) return false;
+    if ((await store.countStageAttempts(run.runId, stageId)) >= BLOCKED_STAGE_MAX_ATTEMPTS) return false;
+    await startNextAttempt(stageId);
     return true;
   };
 
@@ -1464,6 +1526,7 @@ export async function runPipelineDag(
         try {
           const envelope = await store.readEnvelope(run.runId, stageId);
           await onStageSuccess(stageId, envelope);
+          await noteLoginCompleted(stage, stageId);
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
           await handlePostSuccessError(stageId, reason);
@@ -1487,6 +1550,8 @@ export async function runPipelineDag(
           { attempt },
         );
       }
+      const blocked = await noteBlockedBrowserStage(stage, await store.readEnvelope(run.runId, stageId).catch(() => undefined));
+      if (await retryBlockedStage(stageId, blocked)) return;
       await onStageFailure(stageId, launchResult.reason);
       return;
     }
@@ -1530,6 +1595,7 @@ export async function runPipelineDag(
         states.set(stageId, "waiting");
         return;
       }
+      if (await retryBlockedStage(stageId, await noteBlockedBrowserStage(stage, result.envelope))) return;
       await onStageFailure(
         stageId,
         result.reason ?? "stage failed",
@@ -1540,6 +1606,7 @@ export async function runPipelineDag(
     if (result.envelope) {
       try {
         await onStageSuccess(stageId, result.envelope);
+        await noteLoginCompleted(stage, stageId);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         await handlePostSuccessError(stageId, reason);

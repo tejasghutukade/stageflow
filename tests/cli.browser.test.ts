@@ -9,6 +9,8 @@ import type { BrowserRunner } from "../src/browser/browserHost.js";
 import { createLocalBrowserHost } from "../src/browser/localBrowserHost.js";
 import { createLocalProfileStore } from "../src/browser/localProfileStore.js";
 import { createInMemoryProfileLock } from "../src/browser/memoryProfileLock.js";
+import { createProfileHostHints } from "../src/browser/profileHostHint.js";
+import { createProfileMetaStore } from "../src/browser/profileMeta.js";
 import { LOCAL_BROWSER_SCOPE } from "../src/browser/profileStore.js";
 import {
   BROWSER_EXIT,
@@ -103,6 +105,41 @@ describe("sf browser profiles", () => {
     const doc = JSON.parse(out.join("\n"));
     expect(doc.profiles.map((p: { name: string }) => p.name)).toEqual(["alt", "work"]);
     expect(JSON.stringify(doc)).not.toContain(home);
+  });
+});
+
+describe("sf browser profiles: sites, pin and unpin", () => {
+  it("shows where each login is for and whether it is pinned, and unpins a learned pin", async () => {
+    const hints = createProfileHostHints();
+    const meta = createProfileMetaStore();
+    const d = deps({ hints, meta, pinnedByConfig: new Set<string>() });
+    await mkProfile("work", d);
+    const handle = await d.store!.open({ scope: LOCAL_BROWSER_SCOPE, name: "work" });
+    await meta.record(handle, { sites: ["site.test"], login_at: "2030-01-02T00:00:00.000Z", where: "own_chrome" });
+    await hints.set(handle, { mode: "attach", reason: "blocked" });
+    expect(await runBrowserCommand(["profiles"], d)).toBe(0);
+    expect(out.join("\n")).toMatch(/^work\t[^\t]+\tsite\.test\town_chrome\tpinned:learned$/m);
+    out.length = 0;
+    expect(await runBrowserCommand(["profiles", "--json"], d)).toBe(0);
+    expect(JSON.parse(out.join("\n")).profiles[0]).toMatchObject({
+      name: "work",
+      sites: ["site.test"],
+      login_where: "own_chrome",
+      pinned: { by: "learned", reason: "blocked" },
+    });
+    out.length = 0;
+    expect(await runBrowserCommand(["unpin", "work", "--json"], d)).toBe(0);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ unpinned: true, name: "work", profile: { pinned: null } });
+    out.length = 0;
+    expect(await runBrowserCommand(["unpin", "work", "--json"], d)).toBe(1);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ code: "not_pinned" });
+  });
+
+  it("will not unpin a profile pinned in Host config", async () => {
+    const d = deps({ hints: createProfileHostHints(), meta: createProfileMetaStore(), pinnedByConfig: new Set(["work"]) });
+    await mkProfile("work", d);
+    expect(await runBrowserCommand(["unpin", "work", "--json"], d)).toBe(1);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ code: "pinned_by_config" });
   });
 });
 

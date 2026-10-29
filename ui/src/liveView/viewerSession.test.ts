@@ -57,6 +57,7 @@ function setup(opts: { tickets?: TicketResult[]; inputStatuses?: number[]; mode?
   const inputStatuses = opts.inputStatuses ?? [];
   let n = 0;
   let clock = 0;
+  const navigations: string[] = [];
   const deps: ViewerSessionDeps = {
     mode: opts.mode ?? "control",
     baseUrl: "/live",
@@ -76,6 +77,10 @@ function setup(opts: { tickets?: TicketResult[]; inputStatuses?: number[]; mode?
     postDialog: async (_url, body) => {
       dialogPosts.push(body);
       return dialogStatuses.shift() ?? 200;
+    },
+    postNavigate: async (_url, action) => {
+      navigations.push(action);
+      return 200;
     },
     postReopenTab: async () => {
       reopenPosts += 1;
@@ -107,6 +112,7 @@ function setup(opts: { tickets?: TicketResult[]; inputStatuses?: number[]; mode?
     await tick();
   };
   return {
+    navigations,
     reopenStatuses,
     reopenPostCount: () => reopenPosts,
     hold: () => (holdReopen = true),
@@ -254,6 +260,18 @@ describe("viewer session", () => {
     h.session.reopen();
     await h.tick();
     expect(h.sources).toHaveLength(1);
+  });
+
+  it("navigate posts the action for control sessions and is ignored for view sessions", async () => {
+    const h = setup();
+    h.session.navigate("back");
+    h.session.navigate("reload");
+    await h.tick();
+    expect(h.navigations).toEqual(["back", "reload"]);
+    const view = setup({ mode: "view" });
+    view.session.navigate("back");
+    await view.tick();
+    expect(view.navigations).toEqual([]);
   });
 
   it("reopenTab flags progress, keeps the stream and input working, and reports failures", async () => {

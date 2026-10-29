@@ -1,4 +1,8 @@
 import type {
+  BrowserLoginCheckResult,
+  BrowserLoginFinish,
+  BrowserLoginStart,
+  BrowserProfile,
   CapacityHealth,
   CreateStageInput,
   CreateStageResult,
@@ -2371,4 +2375,53 @@ export function replaceMemoryCover(id: string, body: string): Promise<MemoryDeta
 
 export function fetchPreviousMemoryCover(id: string): Promise<string | null> {
   return optionalMemoryBody(`/api/memories/${encodeURIComponent(id)}/previous`);
+}
+
+
+export class BrowserProfileApiError extends Error {
+  constructor(public readonly code: string, message: string) {
+    super(message);
+    this.name = "BrowserProfileApiError";
+  }
+}
+
+async function browserProfileRequest<T>(path: string, method: string): Promise<T> {
+  const res = await fetch(path, { method, headers: { "Content-Type": "application/json", ...authorizationHeaders() } });
+  const parsed = (await res.json().catch(() => ({}))) as T & { code?: string; error?: string };
+  if (res.status === 401) notifyControlTokenRequired();
+  if (!res.ok) {
+    throw new BrowserProfileApiError(
+      typeof parsed.code === "string" ? parsed.code : `HTTP_${res.status}`,
+      typeof parsed.error === "string" ? parsed.error : `Request failed (${res.status})`,
+    );
+  }
+  return parsed;
+}
+
+export async function fetchBrowserProfiles(): Promise<BrowserProfile[]> {
+  return (await browserProfileRequest<{ profiles: BrowserProfile[] }>("/api/browser/profiles", "GET")).profiles;
+}
+
+export async function deleteBrowserProfile(name: string): Promise<void> {
+  await browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}`, "DELETE");
+}
+
+export function checkBrowserProfile(name: string): Promise<BrowserLoginCheckResult> {
+  return browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}/check`, "POST");
+}
+
+export function startBrowserLogin(name: string): Promise<BrowserLoginStart> {
+  return browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}/login`, "POST");
+}
+
+export function finishBrowserLogin(name: string): Promise<BrowserLoginFinish> {
+  return browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}/login/finish`, "POST");
+}
+
+export function cancelBrowserLogin(name: string): Promise<BrowserProfile> {
+  return browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}/login`, "DELETE");
+}
+
+export function unpinBrowserProfile(name: string): Promise<BrowserProfile> {
+  return browserProfileRequest(`/api/browser/profiles/${encodeURIComponent(name)}/pin`, "DELETE");
 }

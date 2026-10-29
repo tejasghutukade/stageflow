@@ -3,6 +3,8 @@ import { fetchRun, type PendingPrompt, type RunDetail, type RunSummary } from ".
 import { GateAnswerPanel, type GateAnswerActions } from "../gate/GateAnswerPanel";
 import { GateDecisionBar } from "./GateDecisionBar";
 import { GateFocusHeader } from "./GateFocusHeader";
+import { liveViewHandoffUrl } from "../../liveView/handoff";
+import { BROWSER_HANDOFF_DONE_LABEL } from "../gate/BrowserHandoff";
 import { gateRationaleFromEvents } from "./inboxViews";
 
 const detailCache = new Map<string, RunDetail>();
@@ -163,6 +165,11 @@ export function GateFocusPane({
           onReject={() => void panelActions?.reject()}
           disabled={panelActions?.locked}
           canReject={panelActions?.canReject}
+          acceptLabel={
+            pendingPrompt && liveViewHandoffUrl(pendingPrompt) !== null
+              ? BROWSER_HANDOFF_DONE_LABEL
+              : undefined
+          }
         />
       ) : null}
     </div>

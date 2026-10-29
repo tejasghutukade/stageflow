@@ -4,6 +4,8 @@ import type {
   LiveViewInputEvent,
   LiveViewMessage,
   LiveViewRelay,
+  LiveViewNavigateAction,
+  LiveViewNavigateResult,
   LiveViewReopenResult,
   LiveViewSession,
   LiveViewSessionRequest,
@@ -17,6 +19,10 @@ export type FakeLiveViewSession = LiveViewSession & {
   readonly answers: readonly LiveViewDialogAnswer[];
   readonly closed: boolean;
   readonly reopens: number;
+  /** Navigate actions received, in order. */
+  readonly navigations: LiveViewNavigateAction[];
+  /** Result the next navigate() returns; defaults to ok. */
+  navigateResult: LiveViewNavigateResult;
   /** Result the next reopenTab() returns; defaults to ok. */
   reopenResult: LiveViewReopenResult;
 };
@@ -43,6 +49,8 @@ export function createFakeLiveViewRelay(): FakeLiveViewRelay {
         answers,
         closed: false,
         reopens: 0,
+        navigations: [],
+        navigateResult: { ok: true },
         reopenResult: { ok: true },
         emit(message) {
           if (message.type === "dialog") {
@@ -93,6 +101,11 @@ export function createFakeLiveViewRelay(): FakeLiveViewRelay {
           if (session.closed) return { ok: false, reason: "closed" };
           (session as { reopens: number }).reopens += 1;
           return session.reopenResult;
+        },
+        async navigate(action) {
+          if (session.closed) return { ok: false, reason: "closed" };
+          session.navigations.push(action);
+          return session.navigateResult;
         },
         clearFrame() {
           latest.delete("frame");
