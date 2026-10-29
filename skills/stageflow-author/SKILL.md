@@ -54,6 +54,7 @@ Author these contracts explicitly. They come from long runs that failed after ho
 | Use configured models on every sibling | Same configured `model` family after fan-out unless the human asks otherwise. Reliable model on publish/PR stages. |
 | Finish publish in the accept attempt | After `artifact_backed` accept: side effects (commit/push/PR) → final artifact → emit in the same attempt. Declare `secrets:` for those side effects; do not assume ambient `GITHUB_TOKEN`. Fix emit/schema errors by re-emitting. |
 | Declare credentials the stage needs | Stages get a curated env — not Host `process.env`. Put `secrets:` on the stage body or pipeline entry. Never put `STAGEFLOW_CONTROL_TOKEN` / read tokens in `secrets:`. See [`catalog-mapping.md`](references/catalog-mapping.md#stage-secrets). |
+| Browse a site that needs a login | Check, human login, work, all on one `profile`; same `check` on the check and login stages; `headed: false` on work stages only for sites known to accept headless. Never assume which browser a work stage runs in. See [`references/browser-logins.md`](references/browser-logins.md). |
 | Author a sealed Clone Chain | One run per list item is emitter → clone child → Join. Never write `clonable`, `clone_forks`, or emit-time `skip` / `once` / `fanout`. See [YAML catalog — Clone Chain](../../docs/yaml-catalog.md#clone-chain). |
 
 Throwaway checkout deliverables (HTML spike, scratch file): prompt builtin `write` at a checkout-relative path, `artifacts: []` on emit, path in `payload`.

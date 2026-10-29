@@ -904,6 +904,8 @@ channels:
 
 Stages of one run that name the same `profile` share one browser, each in its own tab, and the run holds the profile until it ends. See [Browser sessions](browser.md#shared-browser-and-tabs).
 
+**Authenticated sites.** To log in with the operator's own Chrome and run headless afterwards, see [Log in with your own Chrome, run headless](browser.md#login-handoff): give the check stage and the login stage the same `profile` and `check`, and set `headed: false` on work stages only for sites that accept a headless browser. Whether a site accepts a copied session is per site; the Host falls back to the operator's Chrome when it does not.
+
 Unknown keys fail load with `stage.invalid_browser`. So do `path`, `scope`, and `secret`: the Host chooses where profiles live and which scope owns them, never YAML. A stage with `browser` automatically requires the `agent-browser` binary; it merges with an explicit `requires` entry for the same tool, and `sf validate` reports a missing binary with the distinct toolchain error (see [Toolchain requires](#toolchain-requires)).
 
 ```yaml

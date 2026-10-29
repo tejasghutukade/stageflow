@@ -228,6 +228,57 @@ open -na "Google Chrome" --args --remote-debugging-port=9222 --remote-debugging-
 
 Verified against Chrome 156 on macOS from a Docker Desktop container (opening pages, own tab per stage, tab-only close, Google sign-in). Native Linux, Windows and a Chrome on another machine are not verified.
 
+### Log in with your own Chrome, run headless {#login-handoff}
+
+Some sites refuse sign-in from the browser Stageflow starts (Google rejects an automated or containerized Chromium). Other sites are fine once you are logged in, and you would rather not keep a visible browser open for every run. This mode splits the two: **login happens in your own Chrome, every other stage runs in the Host's own (headless) browser.**
+
+```yaml
+browser:
+  login_host: attach
+  attach:
+    cdp_url: http://host.docker.internal:9222
+  # the Host's own browser, for example in the Docker image:
+  executable_path: /usr/bin/chromium
+  launch_args: [--no-sandbox]
+```
+
+Start your Chrome as described under [Attach host](#attach-host) (a dedicated profile folder and a debugging port).
+
+How a run goes:
+
+1. A stage with `browser.check` asks the Host to open the check page in the headless browser. Logged in: the run continues, and no Chrome of yours is involved.
+2. Logged out: the human login stage runs in **your own Chrome** (a new tab, a real window, passkeys and password manager work). You log in and accept the gate. The Host re-checks the login there (`verify: browser_login`).
+3. When the next stage starts, the Host copies the session (cookies and web storage) once from your Chrome into the headless browser's profile, and deletes the temporary file at once. The session then lives only in that profile, and later runs find it with no Chrome of yours.
+4. The Host runs the login stage's own `check` in the headless browser. If it reports logged in, the rest of the run is headless. If it does not, the site rejects a copied session or blocks that browser: the Host keeps the run in your Chrome and **remembers the profile** (`host-hint.json` in the profile's state folder), so later stages and runs of that profile use your Chrome from the start, and the site is not retried headless.
+5. When a saved session expires, the check in step 1 reports logged out and the cycle repeats.
+
+To pin a profile to your Chrome without waiting to learn it, list it in Host config:
+
+```yaml
+browser:
+  login_host: attach
+  profile_hosts:
+    indeed-test: attach
+  attach:
+    cdp_url: http://host.docker.internal:9222
+```
+
+`login_host` and `profile_hosts` need `browser.attach.cdp_url`. YAML never names the host. To forget a remembered profile, delete `host-hint.json` in `$STAGEFLOW_HOME/browser/<scope>/<profile>/state/`.
+
+**Which sites accept a copied session?** It depends on the site, not on Stageflow. What was tried:
+
+| Site | Headless with a copied session |
+|------|-------------------------------|
+| A local fixture site, GitHub | Works, headless. The session stays logged in, and survives closing and reopening the headless browser. |
+| Indeed | Depends on the mode. With a **headed** browser (the container's virtual display) it accepted the copied session. With true **headless** (`headed: false`) Indeed answers "Blocked", the Host sees the check fail, and falls back to your Chrome (verified, including that the next run goes straight to your Chrome). |
+| Google, LinkedIn and other sites with strict bot or device checks | Not verified. Expect rejection; the Host falls back to your Chrome. Do not try to disguise the browser. |
+
+So headed versus headless is part of the answer. If a site rejects headless, try the stages without `headed: false` (a virtual display in Docker) before giving up on running them in the Host's browser.
+
+**Writing pipelines for it.** Give the check stage and the login stage the same `profile` and the same `check` (URL and globs). The Host uses the login stage's `check` to decide whether the headless browser accepted the copied session. Put `headed: false` on the work stages only for sites that accept a headless browser. A stage that can run in either browser must not assume which one it got: a remembered profile runs visibly in your Chrome.
+
+**Security.** The session file is owner-only, exists only while the copy runs, and never reaches an envelope, a log or an artifact. Stages never see cookies. While your Chrome is open with a debugging port, any local process can drive it, so use a dedicated profile folder and close it when you are done. Copying a session moves your login to another browser, so on some sites it appears as a second device in the account's security settings. Revoke it there if you want.
+
 ### Linux hosts with no screen
 
 A Linux Host with no `DISPLAY` or `WAYLAND_DISPLAY` but with `Xvfb` on `PATH` runs browsers headed on a private virtual display that agent-browser starts itself. Nothing is shown on the Host, but the browser behaves like a headed one (same user agent as a desktop). A stage that sets `headed: false` still runs headless. Without Xvfb the Host falls back to headless as before. For Docker, the [browser image recipe](docker.md#browser-stages) installs Xvfb, Chromium and agent-browser.

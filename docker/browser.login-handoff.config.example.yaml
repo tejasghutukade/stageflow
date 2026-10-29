@@ -1,0 +1,13 @@
+# Host config for logging in with your own Chrome and running headless in the container.
+# Place at $STAGEFLOW_HOME/config.yaml (/data/config.yaml in the container).
+# See docs/browser.md#login-handoff. Start your Chrome with:
+#   --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --user-data-dir=<a dedicated folder>
+browser:
+  login_host: attach
+  attach:
+    cdp_url: http://host.docker.internal:9222
+  # profile_hosts:          # sites that reject a copied session can be pinned to your Chrome
+  #   indeed-test: attach
+  executable_path: /usr/bin/chromium
+  launch_args:
+    - --no-sandbox

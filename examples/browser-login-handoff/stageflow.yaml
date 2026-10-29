@@ -1,0 +1,10 @@
+version: 1
+model: openrouter/nvidia/nemotron-3.5-lightning:free
+catalog:
+  pipelines:
+    - .
+  tasks:
+    - .
+  patterns:
+    pipeline: "*.pipeline.yaml"
+    task: "*.task.yaml"

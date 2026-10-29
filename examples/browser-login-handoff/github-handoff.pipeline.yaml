@@ -1,0 +1,40 @@
+id: github-handoff
+stages:
+  - id: check-login
+    uses: ./check-login.yaml
+    entry: true
+    browser:
+      profile: github-seed
+      headed: false
+      check:
+        url: https://github.com/settings/profile
+        logged_in_url: https://github.com/settings/*
+        logged_out_url: [https://github.com/login*, https://github.com/session*]
+    route:
+      - to: human-login
+        if:
+          field: logged_in
+          op: eq
+          value: false
+      - to: read-profile
+  - id: human-login
+    uses: ./human-login.yaml
+    browser:
+      profile: github-seed
+      login_url: https://github.com/login
+      check:
+        url: https://github.com/settings/profile
+        logged_in_url: https://github.com/settings/*
+        logged_out_url: [https://github.com/login*, https://github.com/session*]
+    on_verify_fail:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+    route:
+      - to: read-profile
+  - id: read-profile
+    uses: ./read-profile.yaml
+    browser:
+      profile: github-seed
+      headed: false
