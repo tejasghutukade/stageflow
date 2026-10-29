@@ -925,7 +925,7 @@ export class EvalRunManager {
       if (!found || !isJudged(found)) {
         throw new EvalRunError("EVAL_INVALID", `Grader ${input.graderId} is not a judged grader of this eval`);
       }
-      return measureCalibration(
+      return await measureCalibration(
         { store: this.store, engine, log: (level, message) => this.logEngine(level, message) },
         input,
         base,
