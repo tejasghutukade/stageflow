@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { EvalLabelQueueItem, EvalResultDetail } from "../../../api/evalTypes";
 import {
   agreementText,
+  clampIndex,
+  judgeVisible,
+  queueScreen,
+  queueTotals,
   countLabels,
   keyAction,
   labelAdvice,
@@ -111,5 +115,42 @@ describe("wantedText", () => {
     expect(wantedText(withCase({ goal: "Reach the goal" }))).toBe("Reach the goal");
     expect(wantedText(withCase({ expected: { tools: [] } }))).toBeNull();
     expect(wantedText(withCase({}))).toBeNull();
+  });
+});
+
+describe("queueScreen", () => {
+  it("covers loading, empty, finished and item", () => {
+    expect(queueScreen(false, 0, 0)).toBe("loading");
+    expect(queueScreen(true, 0, 0)).toBe("empty");
+    expect(queueScreen(true, 3, 0)).toBe("item");
+    expect(queueScreen(true, 3, 2)).toBe("item");
+    expect(queueScreen(true, 3, 3)).toBe("finished");
+  });
+});
+
+describe("queueTotals", () => {
+  it("adds other runs' labels to this run's edited ones", () => {
+    const items = [{ label: { label: "pass" as const } }, { label: null }, { label: { label: "fail" as const } }];
+    expect(queueTotals({ pass: 7, fail: 3 }, { pass: 2, fail: 1 }, items)).toEqual({ pass: 6, fail: 3 });
+  });
+
+  it("never goes negative and copes with a missing summary", () => {
+    expect(queueTotals({ pass: 1, fail: 0 }, { pass: 4, fail: 2 }, [])).toEqual({ pass: 0, fail: 0 });
+    expect(queueTotals(null, null, [{ label: { label: "pass" as const } }])).toEqual({ pass: 1, fail: 0 });
+  });
+});
+
+describe("judgeVisible and clampIndex", () => {
+  it("hides the judge only while undecided and not asked", () => {
+    expect(judgeVisible(true, false, false)).toBe(false);
+    expect(judgeVisible(true, true, false)).toBe(true);
+    expect(judgeVisible(true, false, true)).toBe(true);
+    expect(judgeVisible(false, false, false)).toBe(true);
+  });
+
+  it("clamps between the first result and one past the last", () => {
+    expect(clampIndex(-2, 5)).toBe(0);
+    expect(clampIndex(9, 5)).toBe(5);
+    expect(clampIndex(3, 5)).toBe(3);
   });
 });

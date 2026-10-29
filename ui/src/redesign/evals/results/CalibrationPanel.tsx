@@ -5,10 +5,9 @@ import { calibrationBadge, calibrationCurrent, calibrationView, reliabilityView 
 import { labelAdvice } from "./labelQueueModel";
 import { LabelQueue } from "./LabelQueue";
 import { Chip, MONO_CLASS, TONE_TEXT } from "./ResultsParts";
+import { SPLIT_INFO, SPLIT_ORDER, type Split } from "./splits";
 import { TeachDialog } from "./TeachDialog";
 import { WordingDialog } from "./WordingDialog";
-
-type Split = "all" | "dev" | "held_out";
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -172,9 +171,11 @@ export function CalibrationPanel({
                 value={split}
                 onChange={(e) => setSplit(e.target.value as Split)}
               >
-                <option value="all">All labels</option>
-                <option value="dev">Tuning rows (dev, 70%)</option>
-                <option value="held_out">Fair-test rows (held-out, 30%)</option>
+                {SPLIT_ORDER.map((id) => (
+                  <option key={id} value={id}>
+                    {SPLIT_INFO[id].option}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="flex items-center gap-1" title="Judges each output three times: about 3x the cost">

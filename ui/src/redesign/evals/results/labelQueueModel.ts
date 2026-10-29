@@ -138,3 +138,35 @@ export function wantedText(item: EvalLabelQueueItem): string | null {
   if (typeof item.case.goal === "string" && item.case.goal.trim() !== "") return item.case.goal.trim();
   return null;
 }
+
+export type QueueScreen = "loading" | "empty" | "finished" | "item";
+
+/** Which of the queue's screens to draw. `index` may equal `count` once the last result is passed. */
+export function queueScreen(loaded: boolean, count: number, index: number): QueueScreen {
+  if (!loaded) return "loading";
+  if (count === 0) return "empty";
+  return index >= count ? "finished" : "item";
+}
+
+/** Label totals across the whole eval: other runs' labels from the server plus this run's, as edited here. */
+export function queueTotals(
+  labeledEval: EvalLabelCounts | null,
+  labeledHere: EvalLabelCounts | null,
+  items: Array<{ label: { label: "pass" | "fail" } | null }>,
+): EvalLabelCounts {
+  const mine = countLabels(items);
+  const others = {
+    pass: Math.max(0, (labeledEval?.pass ?? 0) - (labeledHere?.pass ?? 0)),
+    fail: Math.max(0, (labeledEval?.fail ?? 0) - (labeledHere?.fail ?? 0)),
+  };
+  return { pass: others.pass + mine.pass, fail: others.fail + mine.fail };
+}
+
+/** The judge's answer stays hidden while the author decides, unless they asked to see it or already labeled. */
+export function judgeVisible(hideJudge: boolean, revealed: boolean, labeled: boolean): boolean {
+  return !hideJudge || revealed || labeled;
+}
+
+export function clampIndex(to: number, count: number): number {
+  return Math.max(0, Math.min(count, to));
+}

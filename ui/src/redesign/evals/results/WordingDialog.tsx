@@ -1,17 +1,16 @@
 import { useEffect, useState } from "react";
-import { calibrateEvalGrader, fetchEval, fetchEvalCalibrations, updateEval } from "../../../api";
+import { calibrateEvalGrader, fetchEval, fetchEvalCalibrations } from "../../../api";
 import type { EvalCalibration } from "../../../api/evalTypes";
 import { BTN, BTN_PRIMARY, DialogShell, LABEL, MONO, TEXTAREA } from "../datasets/DialogShell";
 import { calibrationCurrent, reliabilityView } from "./calibrationModel";
 import { TONE_TEXT } from "./ResultsParts";
+import { SPLIT_INFO, type Split } from "./splits";
+import { editEvalDefinition } from "./evalEdit";
 import { changeText, rubricOf, withRubric, wordingVerdict, type SplitResult } from "./tuningModel";
 
-type Split = "dev" | "held_out";
+type TestSplit = Exclude<Split, "all">;
 
-const SPLITS: Array<{ id: Split; title: string; what: string }> = [
-  { id: "dev", title: "Tuning rows", what: "The labeled answers you write the wording against." },
-  { id: "held_out", title: "Fair-test rows", what: "Labeled answers kept aside. A wording only counts as better if it holds up here." },
-];
+const SPLITS: TestSplit[] = ["dev", "held_out"];
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -85,8 +84,8 @@ export function WordingDialog({
 }) {
   const [saved, setSaved] = useState<string | null>(null);
   const [rubric, setRubric] = useState("");
-  const [results, setResults] = useState<Record<Split, SplitResult | null>>({ dev: null, held_out: null });
-  const [busy, setBusy] = useState<{ split: Split | "save"; text: string } | null>(null);
+  const [results, setResults] = useState<Record<TestSplit, SplitResult | null>>({ dev: null, held_out: null });
+  const [busy, setBusy] = useState<{ split: TestSplit | "save"; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
@@ -114,7 +113,7 @@ export function WordingDialog({
     setError(null);
   };
 
-  async function test(split: Split) {
+  async function test(split: TestSplit) {
     setError(null);
     try {
       setBusy({ split, text: "Checking the saved wording…" });
@@ -136,13 +135,11 @@ export function WordingDialog({
     setBusy({ split: "save", text: "Saving…" });
     setError(null);
     try {
-      const detail = await fetchEval(evalId);
-      const next = detail.definition ? withRubric(detail.definition, graderId, rubric) : null;
-      if (next === null) {
+      const outcome = await editEvalDefinition(evalId, (definition) => withRubric(definition, graderId, rubric));
+      if (outcome === "unchanged") {
         setError("The saved rubric already has this wording.");
         return;
       }
-      await updateEval(evalId, { definition: next, base_hash: detail.file_hash });
       setDone(true);
       onSaved();
     } catch (err) {
@@ -234,14 +231,14 @@ export function WordingDialog({
             <span className={LABEL}>Does it help?</span>
             {SPLITS.map((split) => (
               <ResultCard
-                key={split.id}
-                title={split.title}
-                what={split.what}
-                result={results[split.id]}
-                busyText={busy?.split === split.id ? busy.text : null}
-                canRun={changed && (split.id === "dev" || results.dev !== null)}
+                key={split}
+                title={SPLIT_INFO[split].title}
+                what={SPLIT_INFO[split].what}
+                result={results[split]}
+                busyText={busy?.split === split ? busy.text : null}
+                canRun={changed && (split === "dev" || results.dev !== null)}
                 blockedText={!changed ? "Change the wording first." : "Test on the tuning rows first."}
-                onRun={() => void test(split.id)}
+                onRun={() => void test(split)}
               />
             ))}
             <p className="text-xs text-[var(--sf-text-3)]">

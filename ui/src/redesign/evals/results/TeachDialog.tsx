@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchEval, suggestEvalExamples, updateEval } from "../../../api";
+import { fetchEval, suggestEvalExamples } from "../../../api";
 import type { EvalDefinition, EvalExampleSuggestion } from "../../../api/evalTypes";
 import { BTN, BTN_PRIMARY, DialogShell, INPUT, LABEL, MONO } from "../datasets/DialogShell";
+import { editEvalDefinition } from "./evalEdit";
 import { MAX_RUBRIC_EXAMPLES, exampleCount, exampleKind, exampleSlots, withExamples, withReason } from "./tuningModel";
 
 const EXCERPT_CHARS = 420;
@@ -122,20 +123,13 @@ export function TeachDialog({
     setPhase("saving");
     setError(null);
     try {
-      const detail = await fetchEval(evalId);
-      const next = detail.definition
-        ? withExamples(
-            detail.definition,
-            graderId,
-            picked.map((s) => withReason(s.example, reasons[keyOf(s)] ?? "")),
-          )
-        : null;
-      if (next === null) {
+      const examples = picked.map((s) => withReason(s.example, reasons[keyOf(s)] ?? ""));
+      const outcome = await editEvalDefinition(evalId, (definition) => withExamples(definition, graderId, examples));
+      if (outcome === "unchanged") {
         setError(`This rubric already has ${MAX_RUBRIC_EXAMPLES} examples. Remove one in the eval editor first.`);
         setPhase("pick");
         return;
       }
-      await updateEval(evalId, { definition: next, base_hash: detail.file_hash });
       setAdded(picked.length);
       setPhase("done");
       onAdded();

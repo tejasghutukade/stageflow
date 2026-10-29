@@ -1,4 +1,5 @@
 import type { EvalCalibration, EvalDefinition, EvalExampleSuggestion } from "../../../api/evalTypes";
+import { SPLIT_INFO } from "./splits";
 
 /** Mirrors `EVAL_LIMITS.rubricExamplesMax` on the server, which rejects more. */
 export const MAX_RUBRIC_EXAMPLES = 6;
@@ -51,7 +52,7 @@ function kappaText(c: EvalCalibration): string {
 
 /** "Candidate on dev: kappa 0.40 to 0.62 (+0.22)", using only numbers the API computed. */
 export function compareLine(before: EvalCalibration | null, after: EvalCalibration): string {
-  const where = after.split === "all" ? "all labels" : after.split === "dev" ? "dev labels" : "held-out labels";
+  const where = SPLIT_INFO[after.split].short;
   const head = `${after.candidate ? "Candidate" : "Saved rubric"} on ${where}: kappa ${kappaText(after)}`;
   if (before === null || before.split !== after.split) return head;
   const a = before.stats.cohen_kappa;

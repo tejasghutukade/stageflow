@@ -6,12 +6,15 @@ import { outputView } from "./drawerModel";
 import {
   ORDER_LABELS,
   agreementText,
-  countLabels,
+  clampIndex,
   entryOf,
   keyAction,
+  judgeVisible,
   keyOf,
   labelAdvice,
   orderQueue,
+  queueScreen,
+  queueTotals,
   readHideJudge,
   wantedText,
   writeHideJudge,
@@ -169,7 +172,7 @@ export function LabelQueue({
   const go = useCallback(
     (to: number) => {
       clearTimer();
-      setIndex(Math.max(0, Math.min(entries.length, to)));
+      setIndex(clampIndex(to, entries.length));
     },
     [entries.length],
   );
@@ -230,15 +233,12 @@ export function LabelQueue({
     writeHideJudge(browserStorage(), hide);
   };
 
-  const mine = countLabels(items);
-  const others = queue
-    ? { pass: queue.labeled_eval.pass - queue.labeled_here.pass, fail: queue.labeled_eval.fail - queue.labeled_here.fail }
-    : { pass: 0, fail: 0 };
-  const totals = { pass: Math.max(0, others.pass) + mine.pass, fail: Math.max(0, others.fail) + mine.fail };
+  const totals = queueTotals(queue?.labeled_eval ?? null, queue?.labeled_here ?? null, items);
   const advice = labelAdvice(totals);
-  const finished = queue !== null && entries.length > 0 && index >= entries.length;
-  const emptyQueue = queue !== null && entries.length === 0;
-  const judgeShown = !hideJudge || revealed || (item?.label ?? null) !== null;
+  const screen = queueScreen(queue !== null, entries.length, index);
+  const finished = screen === "finished";
+  const emptyQueue = screen === "empty";
+  const judgeShown = judgeVisible(hideJudge, revealed, (item?.label ?? null) !== null);
   const wanted = item ? wantedText(item) : null;
 
   return (
