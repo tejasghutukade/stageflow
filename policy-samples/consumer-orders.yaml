@@ -1,0 +1,20 @@
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  resource: order
+  version: consumer_v1
+  rules:
+    - actions: [read]
+      effect: EFFECT_ALLOW
+      roles: [consumer]
+      condition:
+        match:
+          all:
+            of:
+              - expr: request.principal.attr.workspace == request.resource.attr.workspace
+              - expr: request.principal.attr.policy_revision == 'consumer_v1'
+              - any:
+                  of:
+                    - expr: request.principal.attr.scope == 'own' && request.principal.attr.account == request.resource.attr.owner
+                    - expr: request.principal.attr.scope == 'assigned' && request.principal.attr.account in request.resource.attr.assigned
+                    - expr: request.principal.attr.scope == 'selected' && request.resource.id in request.principal.attr.selected
+                    - expr: request.principal.attr.scope == 'workspace'

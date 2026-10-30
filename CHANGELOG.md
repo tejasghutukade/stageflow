@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Customer identity for protected agent chat.** A Host can admit a business's own customers with a signed handoff or OIDC, map them to accounts, and authorize order reads. Consumers stay separate from Workspace owners. Operators manage connections on the Identity page. See [Consumer identity](docs/consumer-identity.md).
+
 ## [0.47.0] - 2026-10-29
 
 ### Added

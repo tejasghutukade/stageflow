@@ -85,12 +85,13 @@ export function scriptedBackend(
         messages: input.messages,
         hooks: input.hooks,
         signal: input.signal,
-        async tool(tool, toolInput = {}, run = () => `ran ${tool}`) {
+        async tool(tool, toolInput = {}, run) {
           const call = { id: `call_${(seq += 1)}`, tool, input: toolInput };
           const decision = await input.hooks.gate(call);
           if (!decision.allow) return { ran: false, output: decision.reason };
           input.hooks.toolStarted(call);
-          const output = await run();
+          const bound = input.consumerTools?.find((entry) => entry.grantId === tool);
+          const output = bound ? await bound.execute(toolInput, input.signal) : await (run ?? (() => `ran ${tool}`))();
           outputs.push(output);
           input.hooks.toolFinished(call, { ok: true, output });
           return { ran: true, output };

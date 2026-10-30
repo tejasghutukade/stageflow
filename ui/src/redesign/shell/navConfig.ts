@@ -8,6 +8,7 @@ import {
   LuList,
   LuMessagesSquare,
   LuPlug,
+  LuShield,
   LuBookOpen,
   LuCompass,
   LuSparkles,
@@ -59,6 +60,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "triggers", label: "Triggers", href: "#/triggers", icon: LuZap },
       { id: "connections", label: "Connections", href: "#/connections", icon: LuPlug },
+      { id: "identity", label: "Identity", href: "#/identity", icon: LuShield },
       { id: "memories", label: "Memories", href: "#/memories", icon: LuBookOpen },
     ],
   },

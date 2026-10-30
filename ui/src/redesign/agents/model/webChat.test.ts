@@ -12,14 +12,15 @@ import {
 
 describe("web chat model", () => {
   it("is on for new agents and off in the schema defaults", () => {
-    expect(newAgentDefinition().web_chat).toEqual({ enabled: true, rate_limit_per_minute: 10, max_message_chars: 4000 });
+    expect(newAgentDefinition().web_chat).toEqual({ enabled: true, access: "public", rate_limit_per_minute: 10, max_message_chars: 4000 });
     expect(newAgentDefinition().web_chat.slug).toBeUndefined();
-    expect(defaultDefinition().web_chat).toEqual({ enabled: false, rate_limit_per_minute: 10, max_message_chars: 4000 });
+    expect(defaultDefinition().web_chat).toEqual({ enabled: false, access: "public", rate_limit_per_minute: 10, max_message_chars: 4000 });
   });
 
   it("keeps web chat on when an author draft is completed", () => {
     expect(completeDefinition({ name: "A", web_chat: { rate_limit_per_minute: 30 } }).web_chat).toEqual({
       enabled: true,
+      access: "public",
       rate_limit_per_minute: 30,
       max_message_chars: 4000,
     });

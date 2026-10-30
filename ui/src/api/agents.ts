@@ -8,6 +8,7 @@ export type CaptureMode = "off" | "metadata" | "full";
 
 /** Public chat page. `slug` is the server-generated link credential; omit it on a save to get a new one (rotate). */
 export type WebChatConfig = {
+  access: "public" | "authenticated";
   enabled: boolean;
   slug?: string;
   rate_limit_per_minute: number;

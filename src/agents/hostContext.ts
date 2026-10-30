@@ -82,6 +82,7 @@ export function createAgentEnvironment(options: {
  * since nothing can resume them.
  */
 export function createAgentHostContext(options: {
+  consumerAuthorization?: import("../identity/authorization.js").ConsumerAuthorization;
   cwd: string;
   agentDir: string;
   connection: Database.Database;
@@ -137,6 +138,7 @@ export function createAgentHostContext(options: {
     });
   const evalGates = new EvalGateRegistry();
   const chat = new AgentChatController({
+    ...(options.consumerAuthorization ? { consumerAuthorization: options.consumerAuthorization } : {}),
     service,
     backend,
     evalGates,
@@ -164,6 +166,7 @@ export function createAgentHostContext(options: {
     delivery,
   });
   const publicChat = new PublicWebChat({
+    ...(options.consumerAuthorization ? { consumerAuthorization: options.consumerAuthorization } : {}),
     service,
     chat,
     projectRoot: defaultAgentProjectRoot(options.cwd),

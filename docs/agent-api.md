@@ -141,7 +141,7 @@ A stream that ends with neither `done` nor `error` was cut off (the CLI reports 
 
 ## Public web chat API
 
-The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes. The link slug is the credential; there is no control token. They are only live while the agent is enabled and `web_chat.enabled` is true. Each visitor sends a stable id the page keeps in the browser as the `X-Visitor-Id` header (16–64 characters of `A–Z a–z 0–9 _ -`); conversations are scoped to it.
+The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes for tool-less public agents without shared private context. The link slug is the public-access credential; there is no control token. They are only live while the agent is enabled and `web_chat.enabled` is true. Each visitor sends a stable id the page keeps in the browser as the `X-Visitor-Id` header (16–64 characters of `A–Z a–z 0–9 _ -`); conversations are scoped to it. Authenticated agents instead require verified admission and a bearer on every thread request. Their experimental embedded API, unsupported paths and migration limits are documented in [Consumer identity](consumer-identity.md); the existing page has no sign-in flow.
 
 | Method and path | Response |
 |-----------------|----------|

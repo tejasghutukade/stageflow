@@ -39,8 +39,8 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 
 ## Safety
 
-- The agent's tools still apply: do not give a public agent write, shell or Stageflow tools it does not need. A web-chat agent allowed to read agent sessions is flagged, because those hold visitors' messages.
-- Tools that ask first wait for an operator; the visitor sees "waiting".
+- Anonymous public agents must be tool-less, with project context, shared memory, browser, skills and sub-agents off. Unsafe publications return `identity.setup_required`; old unscoped histories are not adopted.
+- Protected tools require [consumer identity](consumer-identity.md), explicit Host setup and an authenticated embedded client. Only the constrained order binding is supported in this experimental increment. Its ask-first tools still wait for an operator and reauthorize after the wait.
 
 ## Troubleshooting
 
