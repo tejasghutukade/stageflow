@@ -52,6 +52,31 @@ function fakeOpen(script: (emit: (event: unknown) => void, input: OpenSessionInp
 const assistantEnd = { type: "message_end", message: { role: "assistant", model: "m", content: [{ type: "text", text: "hi" }], usage: { input: 7, output: 3, cost: { total: 0.002 } } } };
 
 describe("Pi agent runtime", () => {
+  it("strips ambient capabilities and gates consumer tools by their trusted grant ids", async () => {
+    const gate = vi.fn(async () => ({ allow: false as const, reason: "identity.not_available" }));
+    let decision: unknown;
+    const fake = fakeOpen(async (_emit, input) => {
+      decision = await input.gate({ toolCallId: "consumer-call", toolName: "consumer_order_status", input: { orderId: "order-1" } });
+    });
+    const runtime = createPiAgentRuntime({ cwd: "/p", agentDir: "/a", openSession: fake.open });
+    const consumerTool = { name: "consumer_order_status", grantId: "orders.status", description: "Order status",
+      parameters: { type: "object", properties: {} }, execute: vi.fn(async () => "private") };
+    await runtime.complete({ sessionId: "consumer", projectRoot: "/p", definition: definition({
+      project_context: true, sub_agents: ["worker"], tools: { builtin: ["read", "shell"], mcp: { orders: ["status"] }, browser: true },
+    }), consumerTools: [consumerTool], messages: [{ role: "user", text: "order-1" }],
+    signal: new AbortController().signal, onDelta: () => undefined, hooks: hooks({ gate }) });
+    expect(fake.opened[0]!.definition).toMatchObject({ project_context: false, memories: [], sub_agents: [],
+      tools: { builtin: [], builtin_tools: [], mcp: {}, skills: [], browser: false, stageflow: { groups: [], tools: [] } } });
+    expect(fake.opened[0]!.toolNames).toEqual([]);
+    expect(fake.opened[0]!.memory).toBeUndefined();
+    expect(fake.opened[0]!.delegateTool).toBeUndefined();
+    expect(fake.opened[0]!.consumerTools).toEqual([consumerTool]);
+    expect(gate).toHaveBeenCalledWith({ id: "consumer-call", tool: "orders.status", input: { orderId: "order-1" } });
+    expect(decision).toEqual({ block: true, reason: "identity.not_available" });
+    expect(consumerTool.execute).not.toHaveBeenCalled();
+    await runtime.release!("consumer");
+  });
+
   it("opens a session with only the Stageflow tools the definition grants", async () => {
     const run = vi.fn(async () => ({ ok: true, text: "ok" }));
     const tool = (name: string) => ({ name, grantId: `stageflow.${name}`, group: "runs.read", risk: "read", description: name, parameters: { type: "object", properties: {} }, run }) as never;

@@ -35,7 +35,7 @@ export function defaultDefinition(): AgentDefinition {
 }
 
 /** Schema defaults of `web_chat`: off, no slug (the server picks one on save). */
-export const DEFAULT_WEB_CHAT: WebChatConfig = { enabled: false, rate_limit_per_minute: 10, max_message_chars: 4000 };
+export const DEFAULT_WEB_CHAT: WebChatConfig = { enabled: false, access: "public", rate_limit_per_minute: 10, max_message_chars: 4000 };
 
 /** Starting point of the create flow: like the schema defaults, but web chat is on for new agents. */
 export function newAgentDefinition(): AgentDefinition {

@@ -108,6 +108,7 @@ export type StageflowHostOptions = {
   browser?: StageBrowserSupport;
   emailTriggerQueue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"];
   agentConversationBackend?: ConversationBackend;
+  consumerAuthorization?: import("../identity/authorization.js").ConsumerAuthorization;
 };
 
 export type StageflowHostBootstrap = {
@@ -570,6 +571,7 @@ export async function bootstrapStageflowHost(
   const agentHost =
     sqliteConnection !== undefined
       ? createAgentHostContext({
+          ...(options.consumerAuthorization ? { consumerAuthorization: options.consumerAuthorization } : {}),
           cwd,
           agentDir,
           connection: sqliteConnection,

@@ -128,6 +128,7 @@ Create the memory in the console (**Memories**) before attaching it. The operato
 ```yaml
 web_chat:
   enabled: true
+  access: public
   slug: k7x9m2qp4h8d3w6n
   rate_limit_per_minute: 10
   max_message_chars: 4000
@@ -136,7 +137,8 @@ web_chat:
 | Field | Type | Default | Rules |
 |-------|------|---------|-------|
 | `web_chat.enabled` | boolean | `false` in a hand-written file | A new agent created through the console, API, CLI or MCP starts with it on. |
-| `web_chat.slug` | string | made on save | 16–32 lowercase letters or digits. The link is the credential. An enabled block with no slug gets a random one when saved through the console, API, CLI or MCP; a hand-written file shows the warning `agent.web_chat_slug_missing` until then. Saving with `slug: ""` rotates the link. |
+| `web_chat.access` | `public` or `authenticated` | `public` | Public chat is tool-less and has no shared private context. Authenticated chat requires explicit Host identity setup; see [Consumer identity](consumer-identity.md) for the experimental embedded API and restrictions. |
+| `web_chat.slug` | string | made on save | 16–32 lowercase letters or digits. The link grants access to public chat, not protected identity. An enabled block with no slug gets a random one when saved through the console, API, CLI or MCP; a hand-written file shows the warning `agent.web_chat_slug_missing` until then. Saving with `slug: ""` rotates the link. |
 | `web_chat.rate_limit_per_minute` | integer | `10` | 1–120 messages per visitor per minute. |
 | `web_chat.max_message_chars` | integer | `4000` | 1–20,000. |
 

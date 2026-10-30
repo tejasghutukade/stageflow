@@ -99,6 +99,10 @@ describe("parseHash", () => {
     expect(parseHash("#/overview")).toEqual({ name: "overview" });
   });
 
+  it("parses the identity page", () => {
+    expect(parseHash("#/identity")).toEqual({ name: "identity" });
+  });
+
   it("parses memories list and detail routes", () => {
     expect(parseHash(`#${memoriesPath()}`)).toEqual({ name: "memories" });
     expect(parseHash(`#${memoryPath("candidate-pool")}`)).toEqual({

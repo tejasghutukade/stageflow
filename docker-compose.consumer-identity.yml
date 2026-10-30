@@ -1,0 +1,19 @@
+services:
+  consumer-pdp:
+    image: ghcr.io/cerbos/cerbos:0.57.0@sha256:e5e3b150b3cb0090975605254f255164567d67e233634199fb20972e3eaff300
+    command: [server, --config=/config/cerbos.yaml]
+    ports: ["127.0.0.1:3592:3592"]
+    volumes:
+      - ./docker/consumer-cerbos.yaml:/config/cerbos.yaml:ro
+      - ./policy-samples/consumer-orders.yaml:/policies/consumer-orders.yaml:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      test: [CMD, /cerbos, healthcheck, --config=/config/cerbos.yaml, --kind=http]
+      interval: 2s
+      timeout: 2s
+      retries: 10

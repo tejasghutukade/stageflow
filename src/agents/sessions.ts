@@ -13,10 +13,15 @@ import type { AgentService, AgentSessionDetail } from "./service.js";
 import { scrubSecrets } from "../compaction/scrub.js";
 import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
 import { prepareSpan, type SpanKind } from "./trace.js";
+import { loadConsumerSubAgents } from "./consumerSafety.js";
+import type { ConsumerAuthorization } from "../identity/authorization.js";
+import { ORDER_TOOL_ID } from "../identity/orders.js";
+import { ConsumerAccessError } from "../identity/types.js";
 
 export type { ConversationBackend, ConversationMessage } from "./runtime/types.js";
 
 export type SendTurnInput = {
+  consumerSessionId?: string;
   projectRoot: string;
   agentId: string;
   sessionId?: string;
@@ -36,6 +41,7 @@ export type SendTurnInput = {
 };
 
 export type ConversationOptions = {
+  consumerAuthorization?: ConsumerAuthorization;
   service: AgentService;
   backend: ConversationBackend;
   otlpSink?: OtlpSink | undefined;
@@ -84,20 +90,43 @@ export class AgentConversation {
 
   async send(input: SendTurnInput): Promise<AgentSessionDetail> {
     const { service, backend } = this.options;
+    if (input.source === "service") throw new ConsumerAccessError("identity.verification_required");
+    if (input.source === "schedule" && this.options.consumerAuthorization) {
+      const agent = await service.get(input.projectRoot, input.agentId);
+      input = agent.definition?.web_chat.access === "authenticated"
+        ? { ...input, consumerSessionId: this.options.consumerAuthorization.store.openServiceAuthority(input.agentId).sessionId }
+        : { ...input, consumerSessionId: undefined };
+    }
     const controller = new AbortController();
     this.controller = controller;
     const onParentAbort = () => controller.abort();
+    const unsubscribe = input.consumerSessionId ? this.options.consumerAuthorization?.store.onChange(() => controller.abort()) : undefined;
     this.parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+    let releaseSessionId = input.sessionId;
     try {
       let sessionId = input.sessionId;
       if (!sessionId) {
+        if (input.source === "web_consumer") throw new ConsumerAccessError("identity.verification_required");
         const opened = await service.openSession(input.projectRoot, input.agentId, {
           source: input.source ?? "console",
           sourceRef: input.sourceRef !== undefined ? input.sourceRef : (input.author ?? null),
           ...(input.eval ? { eval: input.eval } : {}),
         });
         sessionId = opened.id;
+        releaseSessionId = sessionId;
         input.onSessionOpened?.(sessionId);
+      }
+      const existing = (await service.getSession(input.projectRoot, sessionId)).session;
+      if (input.source === "schedule" && input.consumerSessionId && this.options.consumerAuthorization) {
+        try {
+          this.options.consumerAuthorization.store.conversation(sessionId, input.consumerSessionId, input.agentId, existing.revision);
+        } catch {
+          this.options.consumerAuthorization.store.bind(sessionId, input.consumerSessionId, input.agentId, existing.revision);
+        }
+      }
+      if (existing.source === "web_consumer") {
+        if (!input.consumerSessionId || !this.options.consumerAuthorization) throw new ConsumerAccessError("identity.verification_required");
+        await this.options.consumerAuthorization.validateConversation(sessionId, input.consumerSessionId, input.agentId, existing.revision);
       }
       const active = await service.beginTurn(input.projectRoot, sessionId, {
         text: input.text,
@@ -122,6 +151,8 @@ export class AgentConversation {
         throw error;
       }
     } finally {
+      unsubscribe?.();
+      if (input.consumerSessionId && releaseSessionId) await backend.release?.(releaseSessionId).catch(() => undefined);
       this.parentSignal?.removeEventListener("abort", onParentAbort);
       if (this.controller === controller) this.controller = null;
     }
@@ -135,7 +166,25 @@ export class AgentConversation {
   ): Promise<AgentSessionDetail> {
     const { service, backend } = this.options;
     const { definition, turn } = active;
-    const capture = definition.observability.capture;
+    const scheduleService = active.session.source === "schedule" && definition.web_chat.access === "authenticated" && !!input.consumerSessionId;
+    const consumer = active.session.source === "web_consumer" || scheduleService;
+    const external = consumer || active.session.source === "web" || active.session.source === "web_public";
+    if (definition.web_chat.access === "authenticated" && !consumer && !["console", "cli", "mcp"].includes(active.session.source)) {
+      throw new ConsumerAccessError("identity.verification_required");
+    }
+    const safeSubAgents = external ? await loadConsumerSubAgents(definition, async (id) => {
+      try { return (await service.get(input.projectRoot, id)).definition; } catch { return null; }
+    }) : null;
+    if (external && (!safeSubAgents || (!consumer && definition.sub_agents.length > 0))) throw new ConsumerAccessError("identity.setup_required");
+    const consumerAuth = this.options.consumerAuthorization;
+    const assertDelivery = async () => {
+      if (consumer) {
+        const live = await service.get(input.projectRoot, input.agentId);
+        if (!live.definition?.enabled || live.agent.revision !== active.session.revision) throw new ConsumerAccessError("identity.not_available");
+        await consumerAuth!.validateConversation(sessionId, input.consumerSessionId!, input.agentId, active.session.revision);
+      }
+    };
+    const capture = external ? "off" as const : definition.observability.capture;
     const rootId = spanId();
     const startedAt = new Date();
     const record = (draft: Parameters<typeof prepareSpan>[1]) => {
@@ -171,14 +220,30 @@ export class AgentConversation {
       if (!isToolGranted(definition, call.tool)) {
         return { allow: false, reason: `Tool ${call.tool} is not granted to this agent.` };
       }
-      if (!requiresAskFirst(definition, call.tool)) return { allow: true };
+      const checkConsumer = async (): Promise<GateDecision> => {
+        if (!external) return { allow: true };
+        if (!consumer) return { allow: false, reason: "identity.verification_required" };
+        try {
+          await assertDelivery();
+          if (call.tool.startsWith("agent:")) {
+            if (!definition.sub_agents.includes(call.tool.slice("agent:".length))) return { allow: false, reason: "identity.not_available" };
+            return { allow: true };
+          }
+          if (call.tool !== ORDER_TOOL_ID) return { allow: false, reason: "identity.not_available" };
+          await consumerAuth!.check(sessionId, input.consumerSessionId!, input.agentId, call.tool, call.input, controller.signal);
+          return { allow: true };
+        } catch { return { allow: false, reason: "identity.not_available" }; }
+      };
+      const allowed = await checkConsumer();
+      if (!allowed.allow) return allowed;
+      if (!requiresAskFirst(definition, call.tool)) return allowed;
       const gateStart = new Date();
       const approval = await service.requestApproval(input.projectRoot, sessionId, {
         tool: call.tool,
         payload: call.input,
         turnId: turn.id,
       });
-      if (approval.status === "approved") return { allow: true };
+      if (approval.status === "approved") return checkConsumer();
       // Parked unless the decision already landed between the request and now.
       const parked = await service.waitOnApproval(input.projectRoot, turn.id, approval.id);
       let outcome: "approved" | "denied" | "expired" | "aborted";
@@ -201,7 +266,7 @@ export class AgentConversation {
         endedAt: new Date(),
         attributes: { "stageflow.approval.outcome": outcome, "gen_ai.tool.name": call.tool },
       });
-      if (outcome === "approved") return { allow: true };
+      if (outcome === "approved") return checkConsumer();
       if (outcome === "aborted") return { allow: false, reason: "The turn was stopped.", stopTurn: true };
       if (outcome === "denied") return { allow: false, reason: `The operator denied ${call.tool}. Do not retry it; continue without it or explain.` };
       if (definition.approvals.on_timeout === "deny") {
@@ -258,6 +323,8 @@ export class AgentConversation {
         });
       },
       delegate: async (agentId, message, callId) => {
+        if (external && !consumer) throw new ConsumerAccessError("identity.not_available");
+        if (consumer) return this.delegateConsumer(input, sessionId, definition, active.session.agentId, controller, agentId, message, callId, childSessions);
         assertDelegateAllowed(definition, agentId, this.depth);
         const child = new AgentConversation(this.options, this.depth + 1, controller.signal);
         const inEval = isEvalSession(active.session);
@@ -284,9 +351,11 @@ export class AgentConversation {
       },
     };
 
-    const stream = guardedStream(definition.guardrails, input.onDelta);
+    const stream = guardedStream(definition.guardrails, consumer ? undefined : input.onDelta);
     let result: Awaited<ReturnType<ConversationBackend["complete"]>>;
     try {
+      await assertDelivery();
+      if (consumer && controller.signal.aborted) throw new ConsumerAccessError("identity.not_available");
       const transcript = [...active.history, active.userMessage].map((m) => ({ role: m.role, text: m.text }));
       result = await backend.complete({
         sessionId,
@@ -296,7 +365,18 @@ export class AgentConversation {
         signal: controller.signal,
         onDelta: (text) => stream.push(text),
         hooks,
+        ...(consumer && safeSubAgents ? { consumerSafeSubAgents: safeSubAgents } : {}),
+        ...(external ? { consumerTools: consumer ? consumerAuth!.tools(sessionId, input.consumerSessionId!, input.agentId)
+          .filter((tool) => isToolGranted(definition, tool.grantId)).map((tool) => ({ ...tool,
+            execute: async (args: Record<string, unknown>, signal: AbortSignal) => {
+              await assertDelivery();
+              const output = await tool.execute(args, signal);
+              await assertDelivery();
+              return output;
+            },
+          })) : [] } : {}),
       });
+      await assertDelivery();
     } catch (error) {
       stream.discard();
       const code = isAgentError(error) ? error.code : "agent.backend_failed";
@@ -341,7 +421,8 @@ export class AgentConversation {
       throw new AgentError("agent.guardrail_blocked", `Reply blocked by guardrail ${guard.pattern}`);
     }
 
-    const evalScores = await this.score(input.projectRoot, definition, turn.id, rootId, result, controller.signal, cancelled || stopReason !== undefined || isEvalSession(active.session));
+    const evalScores = await this.score(input.projectRoot, definition, turn.id, rootId, result, controller.signal, external || cancelled || stopReason !== undefined || isEvalSession(active.session));
+    await assertDelivery();
     const failed = stopReason !== undefined;
     endRoot(cancelled ? "cancelled" : failed ? "error" : "ok");
     const detail = await service.completeTurn(input.projectRoot, turn.id, {
@@ -352,7 +433,50 @@ export class AgentConversation {
       ...(evalScores.length > 0 ? { evalScores } : {}),
     });
     this.exportLive(input.projectRoot, active.session, definition, turn.id);
+    if (consumer) {
+      await assertDelivery();
+      input.onDelta?.(result.text);
+    }
     return detail;
+  }
+
+  private async delegateConsumer(
+    input: SendTurnInput,
+    sessionId: string,
+    definition: AgentDefinition,
+    parentAgentId: string,
+    controller: AbortController,
+    agentId: string,
+    message: string,
+    callId: string | undefined,
+    childSessions: Map<string, string>,
+  ): Promise<string> {
+    const { service } = this.options;
+    const consumerAuth = this.options.consumerAuthorization;
+    try {
+      if (!input.consumerSessionId || !consumerAuth) throw new ConsumerAccessError("identity.not_available");
+      assertDelegateAllowed(definition, agentId, this.depth);
+      const childDefinition = await service.get(input.projectRoot, agentId).then((detail) => detail.definition, () => null);
+      const safe = childDefinition ? await loadConsumerSubAgents(childDefinition, async (id) => {
+        try { return (await service.get(input.projectRoot, id)).definition; } catch { return null; }
+      }) : null;
+      if (!safe) throw new ConsumerAccessError("identity.not_available");
+      const parent = consumerAuth.store.conversation(sessionId, input.consumerSessionId, input.agentId);
+      const childAuthority = consumerAuth.store.narrowAuthority(parent, agentId, {
+        actions: parent.actions, resources: parent.resources, expiresAt: parent.expiresAt,
+      });
+      const opened = await service.openSession(input.projectRoot, agentId, { source: "web_consumer", sourceRef: sessionId });
+      consumerAuth.store.bind(opened.id, childAuthority.sessionId, agentId, opened.revision);
+      const child = new AgentConversation(this.options, this.depth + 1, controller.signal);
+      const detail = await child.send({
+        projectRoot: input.projectRoot, agentId, sessionId: opened.id, consumerSessionId: childAuthority.sessionId,
+        text: message, source: "web_consumer", author: parentAgentId,
+        onSessionOpened: (childId) => { childSessions.set(callId ?? `agent:${agentId}`, childId); },
+      });
+      return [...detail.messages].reverse().find((messageRow) => messageRow.role === "assistant")?.text ?? "(no reply)";
+    } catch (error) {
+      return `Sub-agent ${agentId} failed: ${isAgentError(error) ? error.code : "error"}${error instanceof Error && error.message !== (error as AgentError).code ? ` (${error.message})` : ""}`;
+    }
   }
 
   private async score(
@@ -387,7 +511,8 @@ export class AgentConversation {
   /** Best-effort push to the configured OTLP collector; a collector outage never fails a turn. */
   private exportLive(projectRoot: string, session: { source: string }, definition: AgentDefinition, turnId: string): void {
     const sink = this.options.otlpSink;
-    if (!sink || isEvalSession(session) || !definition.observability.otlp || definition.observability.capture === "off") return;
+    if (!sink || isEvalSession(session) || ["web", "web_public", "web_consumer"].includes(session.source)
+      || !definition.observability.otlp || definition.observability.capture === "off") return;
     void (async () => {
       try {
         await sink(this.options.service.exportTurnOtlp(projectRoot, turnId));

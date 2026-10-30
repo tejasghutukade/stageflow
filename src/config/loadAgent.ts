@@ -130,6 +130,7 @@ export const WEB_CHAT_SLUG_PATTERN = /^[a-z0-9]{16,32}$/;
 const webChatSchema = z
   .strictObject({
     enabled: z.boolean().default(false),
+    access: z.enum(["public", "authenticated"]).default("public"),
     slug: z.string().regex(WEB_CHAT_SLUG_PATTERN, "Use 16 to 32 lowercase letters or digits").optional(),
     rate_limit_per_minute: z.number().int().min(1).max(120).default(10),
     max_message_chars: z.number().int().min(1).max(20_000).default(4_000),

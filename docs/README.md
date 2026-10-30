@@ -32,6 +32,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Agents](agents.md) | Project-owned agents (`agents/*.agent.yaml`): overview and where the pieces live |
 | [Agent definition](agent-definition.md) | Every field of an agent file, defaults and limits, reserved ids, revisions, validation issues |
 | [Agent runtime](agent-runtime.md) | Turns, tool grants, ask-first approvals, guardrails, sub-agents, limits, restart behaviour |
+| [Consumer identity](consumer-identity.md) | Opt-in consumer admission, OIDC sign-in, order authorization, operator Identity page, and the package Cloud consumes |
 | [Agent observability](agent-observability.md) | Spans, capture modes, redaction, OTLP export, groundedness evals |
 | [Agent API](agent-api.md) | REST routes, CLI and MCP tools for agents, webhooks and the public chat API |
 | [Set up your first agent](guides-agents-first-agent.md) | Create, test and enable an agent |
