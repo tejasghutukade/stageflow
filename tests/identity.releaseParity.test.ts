@@ -59,7 +59,7 @@ async function deployment(directory: string, name: string) {
 async function decide(opened: Awaited<ReturnType<typeof deployment>>) {
   const assertion = await sign(opened, "alice", "jti-alice");
   opened.assertion = assertion;
-  opened.token = await opened.authorization.admit("app", "support", assertion);
+  opened.token = (await opened.authorization.admit("app", "support", assertion)).token;
   const authority = opened.store.authenticate(opened.token, "support");
   opened.store.bind("chat-alice", authority.sessionId, "support", authority.principal.revision);
   const tool = opened.authorization.tools("chat-alice", authority.sessionId, "support")[0]!;

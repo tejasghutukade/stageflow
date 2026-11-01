@@ -13,9 +13,8 @@ import type { AgentService, AgentSessionDetail } from "./service.js";
 import { scrubSecrets } from "../compaction/scrub.js";
 import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
 import { prepareSpan, type SpanKind } from "./trace.js";
-import { loadConsumerSubAgents } from "./consumerSafety.js";
+import { loadConsumerSubAgents, allowConsumerToolCall } from "./consumerSafety.js";
 import type { ConsumerAuthorization } from "../identity/authorization.js";
-import { ORDER_TOOL_ID } from "../identity/orders.js";
 import { ConsumerAccessError } from "../identity/types.js";
 
 export type { ConversationBackend, ConversationMessage } from "./runtime/types.js";
@@ -94,13 +93,13 @@ export class AgentConversation {
     if (input.source === "schedule" && this.options.consumerAuthorization) {
       const agent = await service.get(input.projectRoot, input.agentId);
       input = agent.definition?.web_chat.access === "authenticated"
-        ? { ...input, consumerSessionId: this.options.consumerAuthorization.store.openServiceAuthority(input.agentId).sessionId }
+        ? { ...input, consumerSessionId: this.options.consumerAuthorization.openServiceAuthority(input.agentId).sessionId }
         : { ...input, consumerSessionId: undefined };
     }
     const controller = new AbortController();
     this.controller = controller;
     const onParentAbort = () => controller.abort();
-    const unsubscribe = input.consumerSessionId ? this.options.consumerAuthorization?.store.onChange(() => controller.abort()) : undefined;
+    const unsubscribe = input.consumerSessionId ? this.options.consumerAuthorization?.onChange(() => controller.abort()) : undefined;
     this.parentSignal?.addEventListener("abort", onParentAbort, { once: true });
     let releaseSessionId = input.sessionId;
     try {
@@ -119,9 +118,9 @@ export class AgentConversation {
       const existing = (await service.getSession(input.projectRoot, sessionId)).session;
       if (input.source === "schedule" && input.consumerSessionId && this.options.consumerAuthorization) {
         try {
-          this.options.consumerAuthorization.store.conversation(sessionId, input.consumerSessionId, input.agentId, existing.revision);
+          this.options.consumerAuthorization.conversation(sessionId, input.consumerSessionId, input.agentId, existing.revision);
         } catch {
-          this.options.consumerAuthorization.store.bind(sessionId, input.consumerSessionId, input.agentId, existing.revision);
+          this.options.consumerAuthorization.bind(sessionId, input.consumerSessionId, input.agentId, existing.revision);
         }
       }
       if (existing.source === "web_consumer") {
@@ -226,10 +225,10 @@ export class AgentConversation {
         try {
           await assertDelivery();
           if (call.tool.startsWith("agent:")) {
-            if (!definition.sub_agents.includes(call.tool.slice("agent:".length))) return { allow: false, reason: "identity.not_available" };
+            if (!allowConsumerToolCall(call.tool, definition.sub_agents)) return { allow: false, reason: "identity.not_available" };
             return { allow: true };
           }
-          if (call.tool !== ORDER_TOOL_ID) return { allow: false, reason: "identity.not_available" };
+          if (!allowConsumerToolCall(call.tool, definition.sub_agents)) return { allow: false, reason: "identity.not_available" };
           await consumerAuth!.check(sessionId, input.consumerSessionId!, input.agentId, call.tool, call.input, controller.signal);
           return { allow: true };
         } catch { return { allow: false, reason: "identity.not_available" }; }
@@ -461,12 +460,12 @@ export class AgentConversation {
         try { return (await service.get(input.projectRoot, id)).definition; } catch { return null; }
       }) : null;
       if (!safe) throw new ConsumerAccessError("identity.not_available");
-      const parent = consumerAuth.store.conversation(sessionId, input.consumerSessionId, input.agentId);
-      const childAuthority = consumerAuth.store.narrowAuthority(parent, agentId, {
+      const parent = consumerAuth.conversation(sessionId, input.consumerSessionId, input.agentId);
+      const childAuthority = consumerAuth.narrowAuthority(parent, agentId, {
         actions: parent.actions, resources: parent.resources, expiresAt: parent.expiresAt,
       });
       const opened = await service.openSession(input.projectRoot, agentId, { source: "web_consumer", sourceRef: sessionId });
-      consumerAuth.store.bind(opened.id, childAuthority.sessionId, agentId, opened.revision);
+      consumerAuth.bind(opened.id, childAuthority.sessionId, agentId, opened.revision);
       const child = new AgentConversation(this.options, this.depth + 1, controller.signal);
       const detail = await child.send({
         projectRoot: input.projectRoot, agentId, sessionId: opened.id, consumerSessionId: childAuthority.sessionId,

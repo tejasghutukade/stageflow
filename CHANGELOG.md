@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Identity console.** Connections, People & access, Check access, Activity and Setup as guided tabs, with drawers and dialogs for handoff/OIDC go-live, grants, and preview. Secrets and order contents never appear in the UI.
 - **Identity documentation.** A start-to-finish guide ([Protect an agent's chat with customer sign-in](docs/guides-agents-protected-chat.md)), a console walkthrough ([Console: Identity](docs/console-identity.md)), and an [Order API contract](docs/order-api-contract.md) for the engineer who owns the order system, plus operator API, glossary, data-directory and environment entries.
 
+### Changed
+
+- **Consumer identity host port.** Operator routes and agent chat talk to `ConsumerAuthorization` only; admission returns a bearer token with expiry in one step, and the identity store stays internal to the identity module.
+
 ### Fixed
 
 - **Granting access again to a person who was revoked now works.** Saving their access reactivates it with a new revision; their old sessions stay invalid.

@@ -79,8 +79,9 @@ async function fixture() {
 describe("service identity for scheduled consumer turns", () => {
   it("runs a schedule turn under the service principal and hides it from public chat", async () => {
     const host = await fixture();
-    const customerToken = await host.auth.admit("app", "support", await host.assertion("bob"));
-    const customer = host.identities.authenticate(customerToken, "support");
+    const admission = await host.auth.admit("app", "support", await host.assertion("bob"));
+    const customerToken = admission.token;
+    const customer = host.auth.authenticate(customerToken, "support");
     const customerSession = await host.agents.service.openSession(host.agents.project, "support", { source: "web_consumer", sourceRef: customer.sessionId });
     host.identities.bind(customerSession.id, customer.sessionId, "support", customerSession.revision);
     const detail = await host.conversation.send({ projectRoot: host.agents.project, agentId: "support", text: "alice-order", source: "schedule" });

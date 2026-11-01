@@ -89,4 +89,4 @@ export { createScopeAuthorizationEngine } from "./identity/scope.js";
 export { createOrderApiAdapter, ORDER_TOOL_ID } from "./identity/orders.js";
 export type { OrderDataAdapter, OrderStatus } from "./identity/orders.js";
 export { ConsumerAccessError } from "./identity/types.js";
-export type { AuthorizationEngine, AuthorizationInput, ConsumerAuthority, ConsumerPermission, ConsumerPrincipal, ConsumerScope, OwnedResource } from "./identity/types.js";
+export type { AuthorizationEngine, AuthorizationInput, ConsumerAdmission, ConsumerAuthority, ConsumerPermission, ConsumerPrincipal, ConsumerScope, OwnedResource } from "./identity/types.js";

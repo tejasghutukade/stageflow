@@ -46,14 +46,14 @@ describe("managed consumer identity runtime", () => {
     const first = runtimeFor(dir);
     first.init();
     first.enable();
-    first.current()!.store.registerService("nightly", "acct-reports", { scope: "workspace", agents: ["support"], actions: ["order:read", "conversation:use"] });
+    first.current()!.registerService("nightly", "acct-reports", { scope: "workspace", agents: ["support"], actions: ["order:read", "conversation:use"] });
     first.close();
 
     const second = runtimeFor(dir);
     second.init();
     expect(second.status().enabled).toBe(true);
-    expect(second.current()!.store.listConnections().map((row) => row.id)).toEqual(["nightly"]);
-    expect(second.current()!.store.listAssignments()).toEqual([expect.objectContaining({ subject: "service:nightly", accountId: "acct-reports" })]);
+    expect(second.current()!.listConnections().map((row) => row.id)).toEqual(["nightly"]);
+    expect(second.current()!.listAssignments()).toEqual([expect.objectContaining({ subject: "service:nightly", accountId: "acct-reports" })]);
     expect((await stat(path.join(dir, "identity"))).mode & 0o077).toBe(0);
   });
 
@@ -169,11 +169,11 @@ describe("managed consumer identity runtime", () => {
     const runtime = runtimeFor(dir);
     runtime.init();
     runtime.enable();
-    runtime.current()!.store.registerService("nightly", "acct", { scope: "own", agents: ["support"], actions: ["order:read", "conversation:use"] });
+    runtime.current()!.registerService("nightly", "acct", { scope: "own", agents: ["support"], actions: ["order:read", "conversation:use"] });
     runtime.disable();
     expect(runtime.current()).toBeUndefined();
     runtime.enable();
-    expect(runtime.current()!.store.listConnections()).toHaveLength(1);
+    expect(runtime.current()!.listConnections()).toHaveLength(1);
   });
 
   it("refuses a database that belongs to another Workspace", async () => {

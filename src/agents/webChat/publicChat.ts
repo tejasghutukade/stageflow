@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { grantedToolIds, type AgentDefinition } from "../../config/loadAgent.js";
-import { isConsumerSafeAgent, loadConsumerSubAgents } from "../consumerSafety.js";
+import type { AgentDefinition } from "../../config/loadAgent.js";
+import { assertConsumerWebChatPublication } from "../consumerSafety.js";
 import type { AgentChatController } from "../chatTurn.js";
 import { isAgentError } from "../errors.js";
 import type { AgentService } from "../service.js";
@@ -111,9 +111,8 @@ export class PublicWebChat {
         if (Object.keys(body).some((key) => key !== "connectionId" && key !== "assertion")
           || typeof body.connectionId !== "string" || typeof body.assertion !== "string") throw new WebChatError("web_chat.invalid");
         this.throttle(slug, req.socket.remoteAddress ?? "unknown", req, target, "thread");
-        const token = await this.options.consumerAuthorization.admit(body.connectionId, target.agentId, body.assertion);
-        const admitted = this.options.consumerAuthorization.store.authenticate(token, target.agentId);
-        return this.json(res, 201, { token, tokenType: "Bearer", expiresIn: Math.max(0, Math.floor((admitted.expiresAt - this.now()) / 1000)) });
+        const admitted = await this.options.consumerAuthorization.admit(body.connectionId, target.agentId, body.assertion);
+        return this.json(res, 201, { token: admitted.token, tokenType: "Bearer", expiresIn: Math.max(0, Math.floor((admitted.expiresAt - this.now()) / 1000)) });
       }
       if (parts.length === 3 && threads === "oidc" && (threadId === "start" || threadId === "callback")) {
         const target = await this.resolve(slug);
@@ -132,10 +131,9 @@ export class PublicWebChat {
         const currentUrl = this.options.consumerAuthorization.requestUrl(typeof req.headers.host === "string" ? req.headers.host : undefined, req.url ?? "/");
         const state = currentUrl.searchParams.get("state") ?? "";
         if (readCookie(req, "sf_oidc") !== state) throw new ConsumerAccessError("identity.verification_required");
-        const token = await this.options.consumerAuthorization.completeOidc(target.agentId, currentUrl);
-        const admitted = this.options.consumerAuthorization.store.authenticate(token, target.agentId);
+        const admitted = await this.options.consumerAuthorization.completeOidc(target.agentId, currentUrl);
         res.setHeader("Set-Cookie", oidcCookie(slug, "", 0));
-        return this.json(res, 201, { token, tokenType: "Bearer", expiresIn: Math.max(0, Math.floor((admitted.expiresAt - this.now()) / 1000)) });
+        return this.json(res, 201, { token: admitted.token, tokenType: "Bearer", expiresIn: Math.max(0, Math.floor((admitted.expiresAt - this.now()) / 1000)) });
       }
       const shapeOk =
         parts.length === 1 || (threads === "threads" && (parts.length === 2 || parts.length === 3 || (parts.length === 4 && messages === "messages")));
@@ -193,7 +191,7 @@ export class PublicWebChat {
       throw new WebChatError("web_chat.limit_reached", undefined, "You have too many conversations. Please reuse an earlier one.");
     }
     const session = await service.openSession(projectRoot, target.agentId, { source: this.source(target), sourceRef: visitor });
-    if (target.definition.web_chat.access === "authenticated") this.options.consumerAuthorization!.store.bind(session.id, visitor, target.agentId, session.revision);
+    if (target.definition.web_chat.access === "authenticated") this.options.consumerAuthorization!.bind(session.id, visitor, target.agentId, session.revision);
     return this.json(res, 201, { thread: this.threadView(session) });
   }
 
@@ -298,7 +296,7 @@ export class PublicWebChat {
     if (!auth) throw new ConsumerAccessError("identity.setup_required");
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer ")) throw new ConsumerAccessError("identity.verification_required");
-    return auth.store.authenticate(header.slice(7), target.agentId).sessionId;
+    return auth.authenticate(header.slice(7), target.agentId).sessionId;
   }
 
   private assertOrigin(req: IncomingMessage): void {
@@ -329,18 +327,12 @@ export class PublicWebChat {
   }
 
   private async assertPublication(target: Resolved): Promise<void> {
-    const definition = target.definition;
-    const authenticated = definition.web_chat.access === "authenticated";
-    if (!isConsumerSafeAgent(definition) || (definition.sub_agents.length > 0 && !authenticated)) throw new ConsumerAccessError("identity.setup_required");
-    const safeSubAgents = definition.sub_agents.length === 0 ? [] : await loadConsumerSubAgents(definition, async (id) => {
-      try { return (await this.options.service.get(this.options.projectRoot, id)).definition; } catch { return null; }
+    await assertConsumerWebChatPublication(target.definition, {
+      hasConsumerAuthorization: Boolean(this.options.consumerAuthorization),
+      loadSubAgent: async (id) => {
+        try { return (await this.options.service.get(this.options.projectRoot, id)).definition; } catch { return null; }
+      },
     });
-    if (!safeSubAgents) throw new ConsumerAccessError("identity.setup_required");
-    const allowed = new Set(["orders.status", ...safeSubAgents.map((id) => `agent:${id}`)]);
-    const tools = [...grantedToolIds(definition)];
-    if (tools.some((tool) => !authenticated || !allowed.has(tool)) || (authenticated && !this.options.consumerAuthorization)) {
-      throw new ConsumerAccessError("identity.setup_required");
-    }
   }
 
   private visitorOf(req: IncomingMessage): string {

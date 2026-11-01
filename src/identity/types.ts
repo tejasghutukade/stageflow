@@ -28,6 +28,8 @@ export type ConsumerAuthority = {
   resources: string[] | null;
 };
 
+export type ConsumerAdmission = { token: string; expiresAt: number; sessionId: string };
+
 export type OwnedResource = {
   id: string;
   workspaceId: string;

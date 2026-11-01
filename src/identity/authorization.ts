@@ -1,27 +1,151 @@
 import { admitEmbeddedConsumer } from "./handoff.js";
-import { boundedGet } from "./http.js";
-import { completeOidcSignIn, loopbackRequestUrl, refreshOidcEvidence, startOidcSignIn } from "./oidc.js";
+import { completeOidcSignIn, loopbackRequestUrl, prepareOidcConnection, refreshOidcEvidence, startOidcSignIn } from "./oidc.js";
 import { ORDER_TOOL_ID, orderInput, orderOwnership, type OrderDataAdapter } from "./orders.js";
-import { ConsumerIdentityStore } from "./store.js";
+import {
+  ConsumerIdentityStore,
+  type ConsumerAssignmentView,
+  type ConsumerAuditView,
+  type ConsumerConnectionView,
+  type HandoffConnection,
+  type OidcConnection,
+} from "./store.js";
+import { sessionContinuityFailure } from "./sessionContinuity.js";
 import { allowWithinScope, previewAuthority } from "./scope.js";
-import { ConsumerAccessError, type AuthorizationEngine, type ConsumerAuthority, type ConsumerRuntimeTool, type ConsumerScope, type OwnedResource } from "./types.js";
+import {
+  ConsumerAccessError,
+  type AuthorizationEngine,
+  type ConsumerAdmission,
+  type ConsumerAuthority,
+  type ConsumerPermission,
+  type ConsumerRuntimeTool,
+  type ConsumerScope,
+  type OwnedResource,
+} from "./types.js";
 
 export class ConsumerAuthorization {
-  constructor(readonly store: ConsumerIdentityStore, private readonly engine: AuthorizationEngine,
+  constructor(private readonly store: ConsumerIdentityStore, private readonly engine: AuthorizationEngine,
     private readonly orders: OrderDataAdapter, readonly policyRevision: string, private readonly oidcAllowLoopback = false) {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(policyRevision)) throw new ConsumerAccessError("identity.setup_required");
   }
 
-  admit(connectionId: string, agentId: string, assertion: string): Promise<string> {
-    return admitEmbeddedConsumer(this.store, connectionId, agentId, assertion);
+  get workspaceId(): string {
+    return this.store.workspaceId;
+  }
+
+  listConnections(): ConsumerConnectionView[] {
+    return this.store.listConnections();
+  }
+
+  listAssignments(): ConsumerAssignmentView[] {
+    return this.store.listAssignments();
+  }
+
+  listAudit(limit: number): ConsumerAuditView[] {
+    return this.store.listAudit(limit);
+  }
+
+  registerHandoff(connection: HandoffConnection): void {
+    this.store.registerHandoff(connection);
+  }
+
+  registerOidc(input: Omit<OidcConnection, "status" | "subjectClaim"> & { freshnessMs?: number }, clientSecret: string, allowLoopback = false): void {
+    this.store.registerOidc(input, clientSecret, allowLoopback);
+  }
+
+  registerService(id: string, accountId: string, permission: ConsumerPermission): void {
+    this.store.registerService(id, accountId, permission);
+  }
+
+  disableConnection(id: string): void {
+    this.store.disableConnection(id);
+  }
+
+  prepareOidc(connectionId: string): Promise<void> {
+    return prepareOidcConnection(this.store, connectionId, this.oidcAllowLoopback);
+  }
+
+  markOidcTested(id: string): void {
+    this.store.markOidcTested(id);
+  }
+
+  oidcTested(id: string): boolean {
+    return this.store.oidcTested(id);
+  }
+
+  activateOidc(id: string): void {
+    this.store.activateOidc(id);
+  }
+
+  rotateOidcSecret(id: string, clientSecret: string): void {
+    this.store.rotateOidcSecret(id, clientSecret);
+  }
+
+  setRevocationSource(connectionId: string, url: string | null): void {
+    this.store.setRevocationSource(connectionId, url);
+  }
+
+  assign(connectionId: string, subject: string, accountId: string, mappingSource: string, permission: ConsumerPermission, expectedRevision?: number): string {
+    return this.store.assign(connectionId, subject, accountId, mappingSource, permission, expectedRevision);
+  }
+
+  revokePrincipal(id: string): void {
+    this.store.revoke("principal", id);
+  }
+
+  connectionView(id: string): ConsumerConnectionView | undefined {
+    return this.store.listConnections().find((row) => row.id === id);
+  }
+
+  oidcSummary(id: string): Record<string, unknown> {
+    const setup = this.store.oidcSetup(id);
+    const listed = this.connectionView(id);
+    const summary: Record<string, unknown> = {
+      ...setup,
+      ...(listed ? { callbackPath: listed.callbackPath, issuerChecks: listed.issuerChecks } : {}),
+    };
+    delete summary.clientSecret;
+    delete summary.secret;
+    return summary;
+  }
+
+  bind(conversation: string, sessionId: string, agentId: string, revision: number): void {
+    this.store.bind(conversation, sessionId, agentId, revision);
+  }
+
+  conversation(conversation: string, sessionId: string, agentId: string, revision?: number): ConsumerAuthority {
+    return this.store.conversation(conversation, sessionId, agentId, revision);
+  }
+
+  authenticate(token: string, agentId: string): ConsumerAuthority {
+    return this.store.authenticate(token, agentId);
+  }
+
+  openServiceAuthority(agentId: string): ConsumerAuthority {
+    return this.store.openServiceAuthority(agentId);
+  }
+
+  narrowAuthority(parent: ConsumerAuthority, childAgentId: string, narrowing: { actions?: string[]; resources?: string[] | null; expiresAt?: number }): ConsumerAuthority {
+    return this.store.narrowAuthority(parent, childAgentId, narrowing);
+  }
+
+  onChange(listener: () => void): () => void {
+    return this.store.onChange(listener);
+  }
+
+  async admit(connectionId: string, agentId: string, assertion: string): Promise<ConsumerAdmission> {
+    const token = await admitEmbeddedConsumer(this.store, connectionId, agentId, assertion);
+    const authority = this.store.authenticate(token, agentId);
+    return { token, expiresAt: authority.expiresAt, sessionId: authority.sessionId };
   }
 
   startOidc(connectionId: string, agentId: string): Promise<{ authorizationUrl: string; state: string }> {
     return startOidcSignIn(this.store, connectionId, agentId, this.oidcAllowLoopback);
   }
 
-  completeOidc(agentId: string, currentUrl: URL): Promise<string> {
-    return completeOidcSignIn(this.store, agentId, currentUrl, this.oidcAllowLoopback);
+  async completeOidc(agentId: string, currentUrl: URL): Promise<ConsumerAdmission> {
+    const token = await completeOidcSignIn(this.store, agentId, currentUrl, this.oidcAllowLoopback);
+    const authority = this.store.authenticate(token, agentId);
+    return { token, expiresAt: authority.expiresAt, sessionId: authority.sessionId };
   }
 
   requestUrl(hostHeader: string | undefined, rawUrl: string): URL {
@@ -101,32 +225,13 @@ export class ConsumerAuthorization {
 
   private async protectionFailure(authority: ConsumerAuthority, signal: AbortSignal): Promise<string | null> {
     const protection = this.store.sessionProtection(authority.sessionId);
-    if (protection.revocationUrl) {
-      try {
-        const active = await this.upstreamActive(protection.revocationUrl, protection.issuer, authority.principal.subject, signal);
-        if (!active) {
-          this.store.revoke("principal", authority.principal.id);
-          return "upstream_revoked";
-        }
-      } catch {
-        return "upstream_unavailable";
-      }
-    }
-    if (protection.kind !== "oidc") return null;
-    const evidence = protection.evidenceAt;
-    if (evidence !== null && this.store.currentTime() - evidence <= protection.freshnessMs) return null;
-    const refreshed = protection.hasRefresh ? await refreshOidcEvidence(this.store, authority.sessionId, this.oidcAllowLoopback) : false;
-    return refreshed ? null : "evidence_stale";
-  }
-
-  private async upstreamActive(url: string, issuer: string | null, subject: string, signal: AbortSignal): Promise<boolean> {
-    if (!issuer) throw new Error("request_failed");
-    const endpoint = new URL(url);
-    const issuerUrl = new URL(issuer);
-    if (endpoint.origin !== issuerUrl.origin || endpoint.username || endpoint.password) throw new Error("request_failed");
-    endpoint.searchParams.set("subject", subject);
-    const body = await boundedGet(endpoint, signal);
-    if (typeof body !== "object" || body === null || typeof (body as { active?: unknown }).active !== "boolean") throw new Error("request_failed");
-    return (body as { active: boolean }).active;
+    return sessionContinuityFailure(
+      protection,
+      authority,
+      this.store.currentTime(),
+      signal,
+      () => (protection.hasRefresh ? refreshOidcEvidence(this.store, authority.sessionId, this.oidcAllowLoopback) : Promise.resolve(false)),
+      (id) => { this.store.revoke("principal", id); },
+    );
   }
 }

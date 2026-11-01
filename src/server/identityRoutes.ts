@@ -2,8 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { ZodError } from "zod";
 import { BodyError, readJsonBody } from "../agents/ndjson.js";
 import type { ConsumerAuthorization } from "../identity/authorization.js";
-import { prepareOidcConnection } from "../identity/oidc.js";
-import type { ConsumerIdentityStore, HandoffConnection, OidcSigningAlgorithm } from "../identity/store.js";
+import type { HandoffConnection, OidcSigningAlgorithm } from "../identity/store.js";
 import {
   ConsumerAccessError,
   type ConsumerPermission,
@@ -155,22 +154,6 @@ function auditLimit(url: URL): number {
   return limit;
 }
 
-function connectionRow(store: ConsumerIdentityStore, id: string) {
-  return store.listConnections().find((row) => row.id === id);
-}
-
-function oidcSummary(store: ConsumerIdentityStore, id: string): Record<string, unknown> {
-  const setup = store.oidcSetup(id);
-  const listed = connectionRow(store, id);
-  const summary: Record<string, unknown> = {
-    ...setup,
-    ...(listed ? { callbackPath: listed.callbackPath, issuerChecks: listed.issuerChecks } : {}),
-  };
-  delete summary.clientSecret;
-  delete summary.secret;
-  return summary;
-}
-
 function permission(scope: ConsumerScope, agents: string[], resources: string[] | undefined): ConsumerPermission {
   return {
     scope,
@@ -185,7 +168,7 @@ const routes: Route[] = [
     method: "GET",
     pattern: /^\/api\/identity\/connections$/,
     handle: async (ctx) => {
-      ctx.json(ctx.res, 200, { workspaceId: ctx.authorization.store.workspaceId, connections: ctx.authorization.store.listConnections() });
+      ctx.json(ctx.res, 200, { workspaceId: ctx.authorization.workspaceId, connections: ctx.authorization.listConnections() });
     },
   },
   {
@@ -193,8 +176,8 @@ const routes: Route[] = [
     pattern: /^\/api\/identity\/connections\/handoff$/,
     handle: async (ctx) => {
       const connection = handoffConnection(await readBody(ctx.req));
-      ctx.authorization.store.registerHandoff(connection);
-      const summary = connectionRow(ctx.authorization.store, connection.id);
+      ctx.authorization.registerHandoff(connection);
+      const summary = ctx.authorization.connectionView(connection.id);
       ctx.json(ctx.res, 201, summary ?? { id: connection.id });
     },
   },
@@ -212,8 +195,8 @@ const routes: Route[] = [
         redirectUri: requireText(body.redirectUri),
         algorithms: algorithmsOf(body.algorithms),
       };
-      ctx.authorization.store.registerOidc(input, clientSecret, false);
-      ctx.json(ctx.res, 201, oidcSummary(ctx.authorization.store, input.id));
+      ctx.authorization.registerOidc(input, clientSecret, false);
+      ctx.json(ctx.res, 201, ctx.authorization.oidcSummary(input.id));
     },
   },
   {
@@ -223,8 +206,8 @@ const routes: Route[] = [
       const body = await readBody(ctx.req);
       const resources = optionalResources(body.resources);
       const id = requireText(body.id);
-      ctx.authorization.store.registerService(id, requireText(body.accountId), permission(requireScope(body.scope), requireAgents(body.agents), resources));
-      ctx.json(ctx.res, 201, connectionRow(ctx.authorization.store, id) ?? { id });
+      ctx.authorization.registerService(id, requireText(body.accountId), permission(requireScope(body.scope), requireAgents(body.agents), resources));
+      ctx.json(ctx.res, 201, ctx.authorization.connectionView(id) ?? { id });
     },
   },
   {
@@ -232,8 +215,8 @@ const routes: Route[] = [
     pattern: /^\/api\/identity\/connections\/([^/]+)\/disable$/,
     handle: async (ctx) => {
       const id = ctx.params[0]!;
-      await ctx.authorization.store.disableConnection(id);
-      ctx.json(ctx.res, 200, connectionRow(ctx.authorization.store, id) ?? { id });
+      ctx.authorization.disableConnection(id);
+      ctx.json(ctx.res, 200, ctx.authorization.connectionView(id) ?? { id });
     },
   },
   {
@@ -242,13 +225,13 @@ const routes: Route[] = [
     handle: async (ctx) => {
       const id = ctx.params[0]!;
       try {
-        await prepareOidcConnection(ctx.authorization.store, id, false);
+        await ctx.authorization.prepareOidc(id);
       } catch (error) {
         const code = identityCode(error) ?? "identity.setup_required";
         ctx.json(ctx.res, statusFor(code), { code, message: "OIDC preparation failed" });
         return;
       }
-      ctx.json(ctx.res, 200, oidcSummary(ctx.authorization.store, id));
+      ctx.json(ctx.res, 200, ctx.authorization.oidcSummary(id));
     },
   },
   {
@@ -258,7 +241,7 @@ const routes: Route[] = [
       const body = await readBody(ctx.req);
       if (Object.keys(body).some((key) => TOKEN_FIELDS.has(key))) throw new ConsumerAccessError("identity.setup_required");
       const id = ctx.params[0]!;
-      await ctx.authorization.store.markOidcTested(id);
+      ctx.authorization.markOidcTested(id);
       ctx.json(ctx.res, 200, { id, tested: true });
     },
   },
@@ -267,12 +250,12 @@ const routes: Route[] = [
     pattern: /^\/api\/identity\/connections\/([^/]+)\/oidc\/activate$/,
     handle: async (ctx) => {
       const id = ctx.params[0]!;
-      if (await ctx.authorization.store.oidcTested(id) !== true) {
+      if (ctx.authorization.oidcTested(id) !== true) {
         ctx.json(ctx.res, 409, { code: "identity.verification_required" });
         return;
       }
-      ctx.authorization.store.activateOidc(id);
-      ctx.json(ctx.res, 200, oidcSummary(ctx.authorization.store, id));
+      ctx.authorization.activateOidc(id);
+      ctx.json(ctx.res, 200, ctx.authorization.oidcSummary(id));
     },
   },
   {
@@ -281,8 +264,8 @@ const routes: Route[] = [
     handle: async (ctx) => {
       const id = ctx.params[0]!;
       const clientSecret = requireSecret((await readBody(ctx.req)).clientSecret);
-      await ctx.authorization.store.rotateOidcSecret(id, clientSecret);
-      ctx.json(ctx.res, 200, oidcSummary(ctx.authorization.store, id));
+      ctx.authorization.rotateOidcSecret(id, clientSecret);
+      ctx.json(ctx.res, 200, ctx.authorization.oidcSummary(id));
     },
   },
   {
@@ -294,15 +277,15 @@ const routes: Route[] = [
       const url = body.url;
       if (url !== null && (typeof url !== "string" || url.length === 0)) throw new ConsumerAccessError("identity.setup_required");
       const id = ctx.params[0]!;
-      await ctx.authorization.store.setRevocationSource(id, url);
-      ctx.json(ctx.res, 200, connectionRow(ctx.authorization.store, id) ?? { id });
+      ctx.authorization.setRevocationSource(id, url);
+      ctx.json(ctx.res, 200, ctx.authorization.connectionView(id) ?? { id });
     },
   },
   {
     method: "GET",
     pattern: /^\/api\/identity\/assignments$/,
     handle: async (ctx) => {
-      ctx.json(ctx.res, 200, { assignments: ctx.authorization.store.listAssignments() });
+      ctx.json(ctx.res, 200, { assignments: ctx.authorization.listAssignments() });
     },
   },
   {
@@ -319,7 +302,7 @@ const routes: Route[] = [
         expectedRevision = body.expectedRevision;
       }
       const mappingSource = body.mappingSource === undefined ? "operator" : requireText(body.mappingSource);
-      const id = await ctx.authorization.store.assign(
+      const id = ctx.authorization.assign(
         requireText(body.connectionId),
         requireText(body.subject),
         requireText(body.accountId),
@@ -327,7 +310,7 @@ const routes: Route[] = [
         permission(requireScope(body.scope), requireAgents(body.agents), resources),
         expectedRevision,
       );
-      const assignment = ctx.authorization.store.listAssignments().find((row) => row.id === id);
+      const assignment = ctx.authorization.listAssignments().find((row) => row.id === id);
       ctx.json(ctx.res, 201, assignment ?? { id });
     },
   },
@@ -336,8 +319,8 @@ const routes: Route[] = [
     pattern: /^\/api\/identity\/assignments\/([^/]+)\/revoke$/,
     handle: async (ctx) => {
       const id = ctx.params[0]!;
-      ctx.authorization.store.revoke("principal", id);
-      const assignment = ctx.authorization.store.listAssignments().find((row) => row.id === id);
+      ctx.authorization.revokePrincipal(id);
+      const assignment = ctx.authorization.listAssignments().find((row) => row.id === id);
       ctx.json(ctx.res, 200, assignment ?? { id, active: false });
     },
   },
@@ -360,7 +343,7 @@ const routes: Route[] = [
     method: "GET",
     pattern: /^\/api\/identity\/audit$/,
     handle: async (ctx) => {
-      ctx.json(ctx.res, 200, { audit: ctx.authorization.store.listAudit(auditLimit(ctx.url)) });
+      ctx.json(ctx.res, 200, { audit: ctx.authorization.listAudit(auditLimit(ctx.url)) });
     },
   },
 ];

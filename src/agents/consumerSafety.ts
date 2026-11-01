@@ -1,4 +1,6 @@
-import type { AgentDefinition } from "../config/loadAgent.js";
+import { grantedToolIds, type AgentDefinition } from "../config/loadAgent.js";
+import { ORDER_TOOL_ID } from "../identity/orders.js";
+import { ConsumerAccessError } from "../identity/types.js";
 
 export function isConsumerSafeAgent(definition: Pick<AgentDefinition, "model" | "project_context" | "memories" | "tools">): boolean {
   const tools = definition.tools;
@@ -45,4 +47,24 @@ async function childIsSafe(id: string, load: (id: string) => Promise<AgentDefini
     if (!(await childIsSafe(nested, load, seen))) return false;
   }
   return true;
+}
+
+export async function assertConsumerWebChatPublication(
+  definition: AgentDefinition,
+  options: { hasConsumerAuthorization: boolean; loadSubAgent: (id: string) => Promise<AgentDefinition | null> },
+): Promise<void> {
+  const authenticated = definition.web_chat.access === "authenticated";
+  if (!isConsumerSafeAgent(definition) || (definition.sub_agents.length > 0 && !authenticated)) throw new ConsumerAccessError("identity.setup_required");
+  const safeSubAgents = definition.sub_agents.length === 0 ? [] : await loadConsumerSubAgents(definition, options.loadSubAgent);
+  if (!safeSubAgents) throw new ConsumerAccessError("identity.setup_required");
+  const allowed = new Set(["orders.status", ...safeSubAgents.map((id) => `agent:${id}`)]);
+  const tools = [...grantedToolIds(definition)];
+  if (tools.some((tool) => !authenticated || !allowed.has(tool)) || (authenticated && !options.hasConsumerAuthorization)) {
+    throw new ConsumerAccessError("identity.setup_required");
+  }
+}
+
+export function allowConsumerToolCall(tool: string, subAgentIds: string[]): boolean {
+  if (tool.startsWith("agent:")) return subAgentIds.includes(tool.slice("agent:".length));
+  return tool === ORDER_TOOL_ID;
 }
