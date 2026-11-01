@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-11-01
+
 ### Added
 
 - **Customer identity for protected agent chat.** A Host can admit a business's own customers with a signed handoff or OIDC Authorization Code and PKCE, map them to accounts, and authorize order reads. Consumers stay separate from Workspace owners. Admission stays opt-in: `sf ui` leaves it off until the Host manages identity or an embedder passes `consumerAuthorization`. See [Consumer identity](docs/consumer-identity.md).
