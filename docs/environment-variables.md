@@ -82,6 +82,8 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_AGENT_CHANNEL_LISTENERS` | on | `0` stops the Host holding AgentMail and iMessage streams |
 | `STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS` | off | `1` lets agents use `cursor/*` models, whose own file and shell tools bypass grants and approvals |
 | `STAGEFLOW_PUBLIC_CHAT_ORIGINS` | none | Comma list of extra browser origins allowed to call the public chat API. See [Web chat](guides-agents-web-chat.md) |
+| `STAGEFLOW_WORKSPACE_ID` | `local` | Workspace id the [consumer identity](consumer-identity.md#turn-identity-on-from-the-console) database is bound to. Sign-in tokens must carry the same value. A database made for another id is refused |
+| `STAGEFLOW_IDENTITY_ALLOW_LOOPBACK` | off | `1` lets the identity order API and OIDC fixtures use plain http on `localhost`, `127.0.0.1` and `::1`. For local testing only |
 | `STAGEFLOW_MCP_ENV_ALLOW` | none | Comma list of Host env names agents and **Check** may use to fill `${NAME}` in MCP servers. Provider and cloud credential names and the control tokens are never allowed |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | none | Collector base URL; spans go to `<endpoint>/v1/traces` when an agent sets `observability.otlp: true` |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | none | Full traces URL; wins over the base endpoint |

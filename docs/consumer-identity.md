@@ -1,6 +1,12 @@
 # Consumer identity and protected web conversations
 
-**Status: experimental.** Identity is opt-in. The CLI does not provision connections, and the public chat page does not include a sign-in button. Operators manage connections, assignments, and audit on the Identity page. A Host embedder supplies `consumerAuthorization` to `startUiServer`.
+> **Where to start**
+> - Setting it up: [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md), a start-to-finish guide.
+> - The console screens: [Console: Identity](console-identity.md).
+> - Building the system that holds the orders: [Order API contract](order-api-contract.md).
+> - This page: the security model, interfaces and limits, for operators, embedders and reviewers.
+
+**Status: experimental.** Identity is opt-in. The CLI does not provision connections, and the public chat page does not include a sign-in button. Operators turn identity on and manage connections, assignments, and audit on the Identity page (see [Turn identity on from the console](#turn-identity-on-from-the-console)). A Host embedder can instead supply its own `consumerAuthorization` to `startUiServer`.
 
 Consumers are people using a business's agents. They are separate from Workspace owners and operators. This increment does not change Cloud's Supabase owner login or move passwords, MFA or account administration into Stageflow.
 
@@ -18,7 +24,60 @@ Generic MCP, filesystem, shell, browser, skills, project context, shared memory,
 
 Anonymous public chat is limited to tool-less agents without shared private context. Tool-enabled anonymous publications now return `identity.setup_required`. New anonymous threads use source `web_public`; legacy `web` histories are not adopted because they may contain unscoped private results. Back up existing histories and migrate only after ownership has been established; do not simply relabel old rows.
 
-## Trusted Host setup
+## Turn identity on from the console
+
+A Host started without an embedder-supplied `consumerAuthorization` (for example `sf ui` or the Docker image) manages identity itself through `ConsumerIdentityRuntime`. Open the Identity page and choose **Turn on identity**. There is nothing to install and no restart. The screens are in [Console: Identity](console-identity.md); this section is what the Host does.
+
+- **Store.** One SQLite database per Workspace at `$STAGEFLOW_HOME/identity/consumer-identity.db`, in an owner-only (`0700`) directory, with non-secret settings in `identity/settings.json`. The Workspace id is `local` unless `STAGEFLOW_WORKSPACE_ID` is set. A database that belongs to another Workspace is refused. Turning identity off keeps the data; protected chats fail closed until it is on again. Back the database up with the Host's conversation store; `sf backup` does not include `identity/` or the secrets file.
+- **Policy engine.** The default is the built-in scope rules. A Cerbos server on the same machine can be chosen to add a policy that can narrow, never widen, access. Switching takes effect immediately for every conversation. An engine that errors or does not answer denies.
+- **Order API.** Optional. Without it people can sign in and be mapped, but no private order is read. The address must be https (plain http on this machine only with `STAGEFLOW_IDENTITY_ALLOW_LOOPBACK=1`). The credential and the signing key are stored owner-only (`0600`) in `identity-secrets.json` in the credential root, never in `settings.json`, a response, a log or the browser.
+- **Signing key.** The Host generates an ES256 key and signs each order read's `Stageflow-Authorization` token with it (`typ` `stageflow-order-context+jwt`). The Setup tab shows only the public key. Rotation replaces the key at once. The token and your API's side of it are in [Order API contract](order-api-contract.md).
+- **One authority object.** The Host builds a single `ConsumerAuthorization` when identity is enabled and swaps the engine and the order adapter behind it in place, so a change applies to running conversations without a restart and without a second authority object.
+- **Access.** Setup routes need the control token and, for writes, an `Origin` header. If the embedding app passes its own `consumerAuthorization`, that wins: the console shows identity as managed by that app and setup writes return `identity.managed_externally`.
+
+### Settings that matter
+
+| Setting | Where | Effect |
+|---------|-------|--------|
+| `STAGEFLOW_WORKSPACE_ID` | Host environment | Workspace id the identity database is bound to. Default `local` |
+| `STAGEFLOW_IDENTITY_ALLOW_LOOPBACK` | Host environment | `1` allows plain http to `localhost`, `127.0.0.1` and `::1` for the order API and OIDC fixtures. For local testing only |
+| `STAGEFLOW_PUBLIC_CHAT_ORIGINS`, `STAGEFLOW_ALLOWED_HOSTS` | Host environment | Browser origins and public hostnames for the embedded client; see [Web chat](guides-agents-web-chat.md#behind-a-reverse-proxy) |
+| `identity/settings.json` | `$STAGEFLOW_HOME` | Engine choice and the order API address and audience. No secret |
+| `identity-secrets.json` | credential root | Order API credential and signing key. `0600`, plaintext at the same trust level as `channel-secrets.json` |
+
+## Operator API
+
+The Identity page is a client of these routes. All answer JSON and need the control token. Errors are `{ "code": "identity.…" }` only: a code, never a response body, token or secret. `503 identity.setup_required` means identity is off.
+
+| Route | Purpose |
+|-------|---------|
+| `GET /api/identity/setup` | Setup state: `mode` (`managed` or `embedded`), `enabled`, `workspaceId`, `engine`, and the order API address, audience, whether a credential is saved and the **public** signing key |
+| `POST /api/identity/setup/enable`, `…/disable` | Turn identity on or off |
+| `POST /api/identity/setup/engine` | Body `{ "kind": "scope" }` or `{ "kind": "cerbos", "endpoint": "http://127.0.0.1:3592" }` |
+| `POST /api/identity/setup/engine/test` | `{ ok, allowsOwn, deniesOther, reason }` with `reason` `ok`, `unreachable` or `too_broad` |
+| `POST /api/identity/setup/orders` | Body `{ endpoint, audience, credential? }`. `credential` is required the first time and optional after, to keep the saved one |
+| `POST /api/identity/setup/orders/clear` | Remove the order API, its credential and its key |
+| `POST /api/identity/setup/orders/signing-key` | Rotate the signing key |
+| `POST /api/identity/setup/orders/test` | Body `{ orderId }`. Asks the order API for ownership metadata only |
+| `GET /api/identity/connections` | `{ workspaceId, connections }`: id, kind, status, active, issuer, agent, audience, whether a test sign-in was recorded, callback path, and whether provider-side removals are checked. Never a secret or a key |
+| `POST /api/identity/connections/handoff` | `{ id, issuer, agentId, audience, algorithms, publicJwks }`. Active at once. A private key in the set is refused |
+| `POST /api/identity/connections/oidc` | `{ id, issuer, clientId, agentId, redirectUri, algorithms, clientSecret }`. Saved as a draft |
+| `POST /api/identity/connections/service` | `{ id, accountId, scope, agents, resources? }` |
+| `POST /api/identity/connections/:id/oidc/prepare`, `…/oidc/tested`, `…/oidc/activate` | Check the provider, record a test sign-in, go live (409 `identity.verification_required` until tested) |
+| `POST /api/identity/connections/:id/oidc/rotate` | `{ clientSecret }` |
+| `POST /api/identity/connections/:id/revocation-source` | `{ "url": "https://issuer/revoked" }`, or `{ "url": null }` to clear |
+| `POST /api/identity/connections/:id/disable` | Stop new sign-ins |
+| `GET /api/identity/assignments`, `POST /api/identity/assignments` | List, or save `{ connectionId, subject, accountId, scope, agents, resources?, expectedRevision? }`. A stale `expectedRevision` is `409 identity.conflict`. Saving for a revoked person grants access again |
+| `POST /api/identity/assignments/:id/revoke` | Revoke a person |
+| `POST /api/identity/preview` | `{ accountId, scope, resources?, order: { id, workspaceId, ownerAccountId, assignedAccountIds, version } }` returns `{ allow }`. Reads no data and saves nothing |
+| `GET /api/identity/audit?limit=50` | Allow and deny events: time, person, conversation, outcome, reason code. No order payloads or secrets |
+
+Public chat cannot reach any of these.
+
+## Trusted Host setup (embedders)
+
+The rest of this page describes wiring identity in code. A Host that uses the console setup above needs none of it.
+
 
 The public package exports `ConsumerIdentityStore`, `ConsumerAuthorization`, `prepareOidcConnection`, `createCerbosAuthorizationEngine`, `createOrderApiAdapter`, their contract types, and `startUiServer`. Embedders must consume these exports, not private runtime imports.
 
@@ -69,6 +128,8 @@ The handoff bearer expires with the verified proof, within five minutes. OIDC ad
 Protected assistant output is buffered until current authorization is checked, not streamed straight from the model. NDJSON uses the existing `delta`, `waiting`, `done` and `error` shapes. A denial after headers have been sent is an error frame, not a new HTTP status. Safe codes are `identity.verification_required` (401), `identity.not_available` (404), `identity.setup_required` (503), and `identity.conflict` (409 on the operator API).
 
 ## Read-only order API contract
+
+The endpoint-by-endpoint contract, with examples and a verification snippet, is in [Order API contract](order-api-contract.md). What follows is the summary and the security rules.
 
 `createOrderApiAdapter` takes a fixed trusted HTTPS `endpoint`, an `audience`, a server-side `credential(workspaceId)` resolver and a `signContext(claims)` callback. Pass `allowLoopback: true` only for the local fixture. Requests cannot select endpoints, identities, roles, credentials, Workspace IDs or decisions. Redirects are refused; responses are bounded to 64 KiB and requests to three seconds. The Host's downstream credential is distinct from the chat bearer, a provider ID token, and an administrator credential.
 

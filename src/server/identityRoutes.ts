@@ -185,7 +185,7 @@ const routes: Route[] = [
     method: "GET",
     pattern: /^\/api\/identity\/connections$/,
     handle: async (ctx) => {
-      ctx.json(ctx.res, 200, { connections: ctx.authorization.store.listConnections() });
+      ctx.json(ctx.res, 200, { workspaceId: ctx.authorization.store.workspaceId, connections: ctx.authorization.store.listConnections() });
     },
   },
   {

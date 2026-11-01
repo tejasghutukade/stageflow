@@ -82,6 +82,8 @@ export { ConsumerIdentityStore } from "./identity/store.js";
 export type { HandoffConnection, OidcConnection } from "./identity/store.js";
 export { prepareOidcConnection } from "./identity/oidc.js";
 export { ConsumerAuthorization } from "./identity/authorization.js";
+export { ConsumerIdentityRuntime } from "./identity/runtime.js";
+export type { ConsumerIdentityRuntimeOptions, IdentitySetupStatus } from "./identity/runtime.js";
 export { createCerbosAuthorizationEngine } from "./identity/cerbos.js";
 export { createScopeAuthorizationEngine } from "./identity/scope.js";
 export { createOrderApiAdapter, ORDER_TOOL_ID } from "./identity/orders.js";

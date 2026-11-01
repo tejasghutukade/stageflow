@@ -62,6 +62,9 @@ export type ConsumerConnectionView = {
   issuerChecks: string[];
   upstreamRevocation: "connected" | "local_only";
   upstreamNote: string;
+  agentId: string | null;
+  audience: string | null;
+  tested: boolean;
 };
 
 export type ConsumerAssignmentView = {
@@ -71,6 +74,7 @@ export type ConsumerAssignmentView = {
   accountId: string;
   scope: ConsumerScope;
   resources: string[] | null;
+  agents: string[];
   revision: number;
   active: boolean;
 };
@@ -278,7 +282,7 @@ export class ConsumerIdentityStore {
       const principalId = existing?.id ?? randomUUID();
       this.db.prepare(`INSERT INTO identity_principals(workspace, id, connection, subject, account, mapping_source, permission, revision)
         VALUES (?, ?, ?, ?, ?, ?, ?, 1) ON CONFLICT(workspace, connection, subject) DO UPDATE SET
-        account = excluded.account, mapping_source = excluded.mapping_source, permission = excluded.permission, revision = revision + 1`)
+        account = excluded.account, mapping_source = excluded.mapping_source, permission = excluded.permission, revision = revision + 1, active = 1`)
         .run(this.workspaceId, principalId, connectionId, subject, accountId, mappingSource, JSON.stringify(parsed));
       this.audit(principalId, null, "allow", "permission_assigned");
       return principalId;
@@ -413,7 +417,7 @@ export class ConsumerIdentityStore {
     return rows.map((row) => {
       const permission = permissionSchema.parse(JSON.parse(row.permission));
       return { id: row.id, connectionId: row.connection, subject: row.subject, accountId: row.account, scope: permission.scope,
-        resources: permission.resources ?? null, revision: row.revision, active: row.active === 1 };
+        resources: permission.resources ?? null, agents: permission.agents, revision: row.revision, active: row.active === 1 };
     });
   }
 
@@ -667,7 +671,10 @@ export class ConsumerIdentityStore {
       issuer: kind === "service" || typeof config.issuer !== "string" ? null : config.issuer,
       issuerChecks: kind === "oidc" ? [...OIDC_ISSUER_CHECKS] : [],
       upstreamRevocation: connected ? "connected" : "local_only",
-      upstreamNote: connected ? CONNECTED_REVOCATION_NOTE : LOCAL_REVOCATION_NOTE };
+      upstreamNote: connected ? CONNECTED_REVOCATION_NOTE : LOCAL_REVOCATION_NOTE,
+      agentId: typeof config.agentId === "string" ? config.agentId : null,
+      audience: typeof config.audience === "string" ? config.audience : null,
+      tested: config.tested === true };
   }
 
   private deactivateDescendants(sessionId: string): void {

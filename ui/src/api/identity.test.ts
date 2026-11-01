@@ -6,12 +6,18 @@ import { railActiveId } from "../routeNav";
 import {
   IdentityApiError,
   identityApi,
+  projectIdentityAssignment,
+  projectEngineTest,
   projectIdentityAudit,
+  projectIdentitySetup,
+  projectOrdersTest,
   projectIdentityConnection,
   projectIdentityPreview,
   type IdentityConnection,
 } from "./identity";
 import { IdentityPage } from "../redesign/identity/IdentityPage";
+import { CheckAccessPanel } from "../redesign/identity/CheckAccessPanel";
+import { SetupRequired } from "../redesign/identity/SetupRequired";
 import {
   IdentityAuditTable,
   IdentityConnectionFacts,
@@ -51,14 +57,53 @@ describe("identity route", () => {
     expect(railActiveId({ name: "identity" }, true)).toBe("identity");
   });
 
-  it("renders the page without key material", () => {
+  it("renders the page shell without key material", () => {
     const html = renderToStaticMarkup(createElement(IdentityPage));
-    expect(html).toContain(PREVIEW_COPY);
-    expect(html).toContain(JWKS_WRITE_ONLY_COPY);
-    expect(html).toContain(SECRET_WRITE_ONLY_COPY);
-    expect(html).toContain(">Preview<");
+    expect(html).toContain("Identity");
+    expect(html).toContain("Add connection");
+    expect(html).toContain("People &amp; access");
+    expect(html).toContain("Check access");
     expect(html).not.toContain(SECRET);
     expect(html).not.toContain("clientSecret");
+  });
+
+  it("explains a preview without activating anything", () => {
+    const html = renderToStaticMarkup(createElement(CheckAccessPanel, {
+      workspaceId: "business-a",
+      assignments: [{
+        id: "a1",
+        connectionId: "directory",
+        subject: "sam",
+        accountId: "acct_1",
+        scope: "own",
+        resources: [],
+        agents: ["support"],
+        revision: 1,
+        active: true,
+      }],
+    }));
+    expect(html).toContain(PREVIEW_COPY);
+    expect(html).toContain(">Preview<");
+    expect(html).not.toContain("Activate");
+  });
+
+  it("offers to turn identity on when the Host manages it", () => {
+    const html = renderToStaticMarkup(createElement(SetupRequired, { mode: "managed", busy: false, onEnable: () => undefined, onRetry: () => undefined }));
+    expect(html).toContain("Turn on identity for this Host");
+    expect(html).toContain(">Turn on identity<");
+    expect(html).toContain("docs/consumer-identity.md");
+  });
+
+  it("explains an embedded Host without offering a switch", () => {
+    const html = renderToStaticMarkup(createElement(SetupRequired, { mode: "embedded", busy: false, onRetry: () => undefined }));
+    expect(html).toContain("isn&#x27;t switched on");
+    expect(html).toContain("consumerAuthorization");
+    expect(html).not.toContain(">Turn on identity<");
+  });
+
+  it("keeps the write-only copy", () => {
+    expect(JWKS_WRITE_ONLY_COPY).toContain("write-only");
+    expect(SECRET_WRITE_ONLY_COPY).toContain("not shown again");
   });
 });
 
@@ -76,6 +121,9 @@ describe("identity connection view", () => {
       issuerChecks: ["issuer origin"],
       upstreamRevocation: "local_only",
       upstreamNote: "Local revoke only. Do not rewrite this sentence.",
+      agentId: "",
+      audience: "",
+      tested: false,
     });
     expect(JSON.stringify(connection)).not.toContain(SECRET);
     const dirty = { ...connection!, clientSecret: SECRET, publicJwks: { keys: [{ d: SECRET }] } } as IdentityConnection;
@@ -96,6 +144,8 @@ describe("identity connection view", () => {
       clientId: "app",
       agentId: "support",
       clientSecret: SECRET,
+      redirectUri: "https://chat.example/api/public/chat/support/oidc/callback",
+      algorithms: ["RS256"],
     });
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body)).clientSecret).toBe(SECRET);
     expect(JSON.stringify(created)).not.toContain(SECRET);
@@ -193,6 +243,7 @@ describe("assignment save", () => {
       accountId: "acct",
       scope: "own",
       resources: [],
+      agents: ["support"],
       expectedRevision: 3,
     });
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body)).expectedRevision).toBe(3);
@@ -205,5 +256,140 @@ describe("projectIdentityConnection", () => {
   it("keeps a local-only note unchanged", () => {
     const note = "  exact note\nsecond line";
     expect(projectIdentityConnection({ ...connectionPayload, upstreamNote: note }).upstreamNote).toBe(note);
+  });
+});
+
+describe("requests match the Host routes", () => {
+  it("sends a preview as an order object and reads the allow flag", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ allow: false }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await identityApi.preview({
+      accountId: "acct_1",
+      scope: "selected",
+      resources: ["ord_1"],
+      order: { id: "ord_1", workspaceId: "business-a", ownerAccountId: "acct_2", assignedAccountIds: [], version: "3" },
+    });
+    expect(result).toEqual({ outcome: "deny" });
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/identity/preview");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toEqual({
+      accountId: "acct_1",
+      scope: "selected",
+      resources: ["ord_1"],
+      order: { id: "ord_1", workspaceId: "business-a", ownerAccountId: "acct_2", assignedAccountIds: [], version: "3" },
+    });
+  });
+
+  it("sends a revocation source as url and null clears it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(connectionPayload));
+    vi.stubGlobal("fetch", fetchMock);
+    await identityApi.setRevocationSource("directory", "https://idp.example/revoked");
+    await identityApi.setRevocationSource("directory", null);
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/identity/connections/directory/revocation-source");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toEqual({ url: "https://idp.example/revoked" });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1].body))).toEqual({ url: null });
+  });
+
+  it("registers a service identity with an account, scope and agents", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "nightly", kind: "service", active: true, status: "active" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await identityApi.registerService({ id: "nightly", accountId: "acct_reports", scope: "workspace", agents: ["support"], resources: [] });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toEqual({
+      id: "nightly",
+      accountId: "acct_reports",
+      scope: "workspace",
+      agents: ["support"],
+      resources: [],
+    });
+  });
+
+  it("keeps the workspace id from the connection list", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ workspaceId: "business-a", connections: [connectionPayload] })));
+    const overview = await identityApi.overview();
+    expect(overview.workspaceId).toBe("business-a");
+    expect(overview.connections).toHaveLength(1);
+  });
+
+  it("keeps the agents on an assignment", () => {
+    const row = projectIdentityAssignment({ id: "a1", connectionId: "c", subject: "s", accountId: "a", scope: "own", resources: null, agents: ["support", 4], revision: 1, active: true });
+    expect(row?.agents).toEqual(["support"]);
+  });
+});
+
+describe("setup client", () => {
+  const status = {
+    mode: "managed",
+    enabled: true,
+    workspaceId: "local",
+    allowLoopback: false,
+    engine: { kind: "cerbos", endpoint: "http://127.0.0.1:3592", token: SECRET },
+    orders: {
+      configured: true,
+      endpoint: "https://orders.example",
+      audience: "orders-api",
+      hasCredential: true,
+      credential: SECRET,
+      signingKey: { keyId: "ctx-1", publicJwk: { kty: "EC", x: "a", y: "b", d: SECRET, n: 5 }, private: SECRET },
+    },
+  };
+
+  it("keeps only the public parts of the setup status", () => {
+    const projected = projectIdentitySetup(status);
+    expect(projected).toEqual({
+      mode: "managed",
+      enabled: true,
+      workspaceId: "local",
+      allowLoopback: false,
+      engine: { kind: "cerbos", endpoint: "http://127.0.0.1:3592" },
+      orders: {
+        configured: true,
+        endpoint: "https://orders.example",
+        audience: "orders-api",
+        hasCredential: true,
+        signingKey: { keyId: "ctx-1", publicJwk: { kty: "EC", x: "a", y: "b" } },
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain(SECRET);
+  });
+
+  it("falls back to an off, built-in setup for an unknown reply", () => {
+    expect(projectIdentitySetup({})).toMatchObject({ mode: "managed", enabled: false, engine: { kind: "scope" }, orders: { configured: false, signingKey: null } });
+    expect(projectIdentitySetup({ mode: "embedded", enabled: true }).mode).toBe("embedded");
+  });
+
+  it("posts each setup action to its route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(status));
+    vi.stubGlobal("fetch", fetchMock);
+    await identityApi.setup();
+    await identityApi.enableIdentity();
+    await identityApi.setEngine({ kind: "cerbos", endpoint: "http://127.0.0.1:3592" });
+    await identityApi.saveOrders({ endpoint: "https://orders.example", audience: "orders-api", credential: SECRET });
+    await identityApi.rotateSigningKey();
+    await identityApi.clearOrders();
+    await identityApi.disableIdentity();
+    const calls = fetchMock.mock.calls.map((call) => [call[0], call[1]?.method ?? "GET"]);
+    expect(calls).toEqual([
+      ["/api/identity/setup", "GET"],
+      ["/api/identity/setup/enable", "POST"],
+      ["/api/identity/setup/engine", "POST"],
+      ["/api/identity/setup/orders", "POST"],
+      ["/api/identity/setup/orders/signing-key", "POST"],
+      ["/api/identity/setup/orders/clear", "POST"],
+      ["/api/identity/setup/disable", "POST"],
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[3]![1].body))).toEqual({ endpoint: "https://orders.example", audience: "orders-api", credential: SECRET });
+  });
+
+  it("reads test results without keeping anything else", async () => {
+    expect(projectEngineTest({ ok: false, reason: "too_broad", allowsOwn: true })).toEqual({ ok: false, reason: "too_broad" });
+    expect(projectEngineTest({ ok: true, reason: "ok" })).toEqual({ ok: true, reason: "ok" });
+    expect(projectOrdersTest({ ok: true, signingVerified: true, ownership: { version: "v1", assignedAccounts: 2, ownerAccountId: SECRET } }))
+      .toEqual({ ok: true, signingVerified: true, version: "v1", assignedAccounts: 2 });
+    expect(projectOrdersTest({ ok: false, reason: "no_credential", detail: SECRET })).toEqual({ ok: false, reason: "no_credential" });
+    expect(projectOrdersTest({ ok: false, reason: "surprise" })).toEqual({ ok: false, reason: "failed" });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: false, reason: "failed" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await identityApi.testOrders("ord_1");
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/identity/setup/orders/test");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toEqual({ orderId: "ord_1" });
   });
 });

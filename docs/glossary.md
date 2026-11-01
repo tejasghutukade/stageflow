@@ -27,6 +27,11 @@ Terms that are easy to mix up.
 | **Project MCP** | Tool servers (from `.mcp.json` or saved in the console) that agents and stages can use | The Stageflow MCP endpoint |
 | **Check** | A probe that starts a Project MCP server in isolation and lists its tools | A connection **Check now** (a live provider check) |
 | **Console secret** | A write-only value saved in Settings → Project MCP that fills `${NAME}` in MCP servers | A stage `secrets:` entry from the Host environment |
+| **Consumer** | A person using a business's agent (its customer or employee), verified by a handoff or OIDC sign-in. Separate from the Workspace owner and operators who use the console. See [Consumer identity](consumer-identity.md) | An operator, a visitor of an anonymous public chat |
+| **Protected agent** | An agent with `web_chat.access: authenticated`. It only talks to verified consumers and may read order status | A public web chat, which is anonymous and tool-less |
+| **Handoff** | A signed one-time token your own server issues for a person who is already signed in to your product. Stageflow verifies it and opens a chat session | An OIDC sign-in, an API login token |
+| **Access level** | How much a consumer may see: their own records, assigned records, specific records, or everything in the Workspace. Set per person on **People & access** | A tool grant, a Workspace role |
+| **Order API** | The endpoints on your own system that Stageflow asks who owns an order and what its status is. See [Order API contract](order-api-contract.md) | An MCP server |
 | **Grant** | A tool an agent may call (`tools:`), enforced on every call | An approval |
 | **Ask first** | A grant that needs a person's approval each time the call is new in a session | A block |
 | **Eval** | The file `evals/<id>.eval.yaml` that names one stage or one agent, a dataset, graders and run defaults. See [Evals](evals.md) | An eval run, or an agent's `evals:` groundedness setting ([Agent observability](agent-observability.md)) |

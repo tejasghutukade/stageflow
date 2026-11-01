@@ -9,7 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Customer identity for protected agent chat.** A Host can admit a business's own customers with a signed handoff or OIDC, map them to accounts, and authorize order reads. Consumers stay separate from Workspace owners. Operators manage connections on the Identity page. See [Consumer identity](docs/consumer-identity.md).
+- **Customer identity for protected agent chat.** A Host can admit a business's own customers with a signed handoff or OIDC Authorization Code and PKCE, map them to accounts, and authorize order reads. Consumers stay separate from Workspace owners. Admission stays opt-in: `sf ui` leaves it off until the Host manages identity or an embedder passes `consumerAuthorization`. See [Consumer identity](docs/consumer-identity.md).
+- **Turn identity on from the console.** On a Host that manages identity itself, **Turn on identity** creates the Workspace store under `$STAGEFLOW_HOME/identity/`, starts with the built-in access rules, and needs no restart. Setup covers the order API (write-only credential, Host-generated ES256 signing key, ownership contract test) and the authorization engine (built-in rules or a Workspace-local Cerbos server, with a test that rejects unreachable servers and allow-all policies). An embedder-supplied authorization wins and makes setup read-only (`identity.managed_externally`).
+- **Identity console.** Connections, People & access, Check access, Activity and Setup as guided tabs, with drawers and dialogs for handoff/OIDC go-live, grants, and preview. Secrets and order contents never appear in the UI.
+- **Identity documentation.** A start-to-finish guide ([Protect an agent's chat with customer sign-in](docs/guides-agents-protected-chat.md)), a console walkthrough ([Console: Identity](docs/console-identity.md)), and an [Order API contract](docs/order-api-contract.md) for the engineer who owns the order system, plus operator API, glossary, data-directory and environment entries.
+
+### Fixed
+
+- **Granting access again to a person who was revoked now works.** Saving their access reactivates it with a new revision; their old sessions stay invalid.
 
 ## [0.47.0] - 2026-10-29
 

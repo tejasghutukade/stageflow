@@ -148,6 +148,33 @@ describe("operator identity routes", () => {
     expect(connectionsOf((await call("GET", "/api/identity/connections")).body).some((row) => row.id === "private")).toBe(false);
   });
 
+  it("lists what the console needs: workspace, agent, audience, test state and agents", async () => {
+    const { call } = await harness();
+    const { publicKey } = await generateKeyPair("ES256");
+    expect((await call("POST", "/api/identity/connections/handoff", handoffBody("app", [await exportJWK(publicKey)]))).status).toBe(201);
+    expect((await call("POST", "/api/identity/assignments", assignmentBody("alice", "own"))).status).toBe(201);
+    const listed = (await call("GET", "/api/identity/connections")).body;
+    expect(typeof listed.workspaceId).toBe("string");
+    expect(listed.workspaceId.length).toBeGreaterThan(0);
+    expect(connectionsOf(listed)).toEqual([expect.objectContaining({ id: "app", agentId: "support", audience: "stageflow:business-a:support", tested: false })]);
+    expect(assignmentsOf((await call("GET", "/api/identity/assignments")).body)).toEqual([expect.objectContaining({ subject: "alice", agents: ["support"] })]);
+    expect(JSON.stringify(listed)).not.toContain("keys");
+  });
+
+  it("lets an operator grant access again after a revoke", async () => {
+    const { call, store } = await harness();
+    const { publicKey } = await generateKeyPair("ES256");
+    expect((await call("POST", "/api/identity/connections/handoff", handoffBody("app", [await exportJWK(publicKey)]))).status).toBe(201);
+    const first = (await call("POST", "/api/identity/assignments", assignmentBody("alice", "own"))).body;
+    expect((await call("POST", `/api/identity/assignments/${first.id}/revoke`)).body).toMatchObject({ active: false });
+    expect(assignmentsOf((await call("GET", "/api/identity/assignments")).body)[0]).toMatchObject({ active: false, revision: 1 });
+
+    const again = await call("POST", "/api/identity/assignments", { ...assignmentBody("alice", "assigned"), expectedRevision: 1 });
+    expect(again.status).toBe(201);
+    expect(again.body).toMatchObject({ id: first.id, active: true, scope: "assigned", revision: 2 });
+    expect(store.listAssignments()).toEqual([expect.objectContaining({ id: first.id, active: true, revision: 2 })]);
+  });
+
   it("assigns each scope, previews without writing, then records the assignment", async () => {
     const { call, ownershipReads, payloadReads } = await harness();
     const { publicKey } = await generateKeyPair("ES256");

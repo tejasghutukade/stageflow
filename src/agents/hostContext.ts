@@ -83,6 +83,8 @@ export function createAgentEnvironment(options: {
  */
 export function createAgentHostContext(options: {
   consumerAuthorization?: import("../identity/authorization.js").ConsumerAuthorization;
+  /** Looked up on every request, so identity can be switched on or off without rebuilding the Host. */
+  consumerAuthorizationSource?: () => import("../identity/authorization.js").ConsumerAuthorization | undefined;
   cwd: string;
   agentDir: string;
   connection: Database.Database;
@@ -137,8 +139,9 @@ export function createAgentHostContext(options: {
         : {}),
     });
   const evalGates = new EvalGateRegistry();
+  const consumerAuthorization = () => options.consumerAuthorizationSource?.() ?? options.consumerAuthorization;
   const chat = new AgentChatController({
-    ...(options.consumerAuthorization ? { consumerAuthorization: options.consumerAuthorization } : {}),
+    get consumerAuthorization() { return consumerAuthorization(); },
     service,
     backend,
     evalGates,
@@ -166,7 +169,7 @@ export function createAgentHostContext(options: {
     delivery,
   });
   const publicChat = new PublicWebChat({
-    ...(options.consumerAuthorization ? { consumerAuthorization: options.consumerAuthorization } : {}),
+    get consumerAuthorization() { return consumerAuthorization(); },
     service,
     chat,
     projectRoot: defaultAgentProjectRoot(options.cwd),
