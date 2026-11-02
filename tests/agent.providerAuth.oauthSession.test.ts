@@ -13,6 +13,7 @@ import {
 import {
   answerLoginSession,
   cancelLoginSession,
+  DEVICE_CODE_UNAVAILABLE_MESSAGE,
   getLoginSession,
   resetSessionsForTests,
   startOAuthLoginSession,
@@ -362,6 +363,210 @@ describe("providerAuth oauth sessions", () => {
     const started = await startOAuthLoginSession(root, "oauth-provider", ctx);
     await waitFor(() => getLoginSession(started.id)?.status === "failed");
     const failed = getLoginSession(started.id)!;
+    expect(failed.error?.message).toBe("Provider login failed");
+    expect(JSON.stringify(failed)).not.toContain(secret);
+  });
+
+  const codexMethodPrompt = {
+    type: "select" as const,
+    message: "Select OpenAI Codex login method:",
+    options: [
+      { id: "browser", label: "Browser login (default)" },
+      { id: "device_code", label: "Device code login (headless)" },
+    ],
+  };
+
+  it("local select that offers device_code still waits for the operator", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-oauth-local-method-"));
+    writeCredentialSourceToFile(root, "sf_owned");
+    let chosen: string | undefined;
+    const runtime = createFakeRuntime({
+      onLogin: async (_id, _type, interaction) => {
+        chosen = await interaction.prompt(codexMethodPrompt);
+        if (chosen === "device_code") {
+          interaction.notify({
+            type: "device_code",
+            userCode: "LOCAL-CODE",
+            verificationUri: "https://example.test/device",
+          });
+        }
+      },
+    });
+    const ctx = makeTestContext(runtime);
+
+    const started = await startOAuthLoginSession(root, "oauth-provider", ctx);
+    expect(started.hosted).toBe(false);
+    await waitFor(
+      () => getLoginSession(started.id)?.pendingPrompt?.type === "select",
+    );
+    expect(chosen).toBeUndefined();
+    expect(
+      getLoginSession(started.id)?.pendingPrompt?.options?.map((option) => option.id),
+    ).toEqual(["browser", "device_code"]);
+    answerLoginSession(started.id, "browser");
+    await waitFor(() => getLoginSession(started.id)?.status === "completed");
+    expect(chosen).toBe("browser");
+  });
+
+  it("hosted select that offers device_code is answered without a method choice", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-oauth-hosted-device-"));
+    writeCredentialSourceToFile(root, "sf_owned");
+    let chosen: string | undefined;
+    const runtime = createFakeRuntime({
+      onLogin: async (_id, _type, interaction) => {
+        chosen = await interaction.prompt(codexMethodPrompt);
+        await new Promise((r) => setTimeout(r, 20));
+        if (chosen === "device_code") {
+          interaction.notify({
+            type: "device_code",
+            userCode: "HOSTED-CODE",
+            verificationUri: "https://example.test/device",
+          });
+        }
+      },
+    });
+    const ctx = makeTestContext(runtime);
+
+    const started = await startOAuthLoginSession(root, "oauth-provider", ctx, {
+      hosted: true,
+    });
+    expect(started.hosted).toBe(true);
+    await waitFor(() =>
+      Boolean(
+        getLoginSession(started.id)?.events.some((event) => event.type === "device_code"),
+      ),
+    );
+    const mid = getLoginSession(started.id)!;
+    expect(mid.pendingPrompt).toBeUndefined();
+    expect(chosen).toBe("device_code");
+    await waitFor(() => getLoginSession(started.id)?.status === "completed");
+  });
+
+  it("hosted does not auto-answer a select that has no device_code option", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-oauth-hosted-other-"));
+    writeCredentialSourceToFile(root, "sf_owned");
+    let chosen: string | undefined;
+    const runtime = createFakeRuntime({
+      onLogin: async (_id, _type, interaction) => {
+        chosen = await interaction.prompt({
+          type: "select",
+          message: "Account type",
+          options: [
+            { id: "enterprise", label: "Enterprise" },
+            { id: "personal", label: "Personal" },
+          ],
+        });
+      },
+    });
+    const ctx = makeTestContext(runtime);
+
+    const started = await startOAuthLoginSession(root, "oauth-provider", ctx, {
+      hosted: true,
+    });
+    await waitFor(
+      () => getLoginSession(started.id)?.pendingPrompt?.type === "select",
+    );
+    expect(chosen).toBeUndefined();
+    answerLoginSession(started.id, "personal");
+    await waitFor(() => getLoginSession(started.id)?.status === "completed");
+    expect(chosen).toBe("personal");
+  });
+
+  it("hosted device-code failure falls back to browser login", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-oauth-hosted-fallback-"));
+    writeCredentialSourceToFile(root, "sf_owned");
+    const canary = "PASTE-URL-CANARY-hosted";
+    const methods: string[] = [];
+    const runtime = createFakeRuntime({
+      onLogin: async (_id, _type, interaction) => {
+        const method = await interaction.prompt({
+          type: "select",
+          message: "Select OpenAI Codex login method:",
+          options: [
+            { id: "browser", label: "Browser login (default)" },
+            { id: "device_code", label: "Device code login (headless)" },
+          ],
+        });
+        methods.push(method);
+        if (method === "device_code") {
+          throw new Error(
+            "OpenAI Codex device code login is not enabled for this server. Use browser login or verify the server URL. SECRET-LEAK",
+          );
+        }
+        interaction.notify({
+          type: "auth_url",
+          url: "https://example.test/oauth",
+          instructions: "Open and sign in",
+        });
+        const pasted = await interaction.prompt({
+          type: "manual_code",
+          message: "Paste redirect URL",
+          placeholder: "https://...",
+        });
+        if (pasted !== canary) throw new Error("wrong answer");
+      },
+    });
+    const ctx = makeTestContext(runtime);
+
+    const started = await startOAuthLoginSession(root, "oauth-provider", ctx, {
+      hosted: true,
+    });
+    await waitFor(
+      () => getLoginSession(started.id)?.pendingPrompt?.type === "manual_code",
+    );
+    const mid = getLoginSession(started.id)!;
+    expect(methods).toEqual(["device_code", "browser"]);
+    expect(mid.status).toBe("running");
+    expect(mid.pendingPrompt?.type).toBe("manual_code");
+    expect(
+      mid.events.some(
+        (event) =>
+          event.type === "info" &&
+          event.message === DEVICE_CODE_UNAVAILABLE_MESSAGE,
+      ),
+    ).toBe(true);
+    expect(DEVICE_CODE_UNAVAILABLE_MESSAGE).toMatch(
+      /Device code login is not available/,
+    );
+    expect(JSON.stringify(mid)).not.toContain("SECRET-LEAK");
+    expect(JSON.stringify(mid)).not.toContain(canary);
+
+    answerLoginSession(started.id, canary);
+    await waitFor(() => getLoginSession(started.id)?.status === "completed");
+    const done = getLoginSession(started.id)!;
+    expect(done.status).toBe("completed");
+    expect(done.error).toBeUndefined();
+    expect(JSON.stringify(done)).not.toContain(canary);
+    expect(JSON.stringify(done)).not.toContain("SECRET-LEAK");
+  });
+
+  it("hosted login still fails when device code fails for another reason", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-oauth-hosted-other-fail-"));
+    writeCredentialSourceToFile(root, "sf_owned");
+    const secret = "DEVICE-BODY-SECRET";
+    let calls = 0;
+    const runtime = createFakeRuntime({
+      onLogin: async (_id, _type, interaction) => {
+        calls += 1;
+        await interaction.prompt({
+          type: "select",
+          message: "Select OpenAI Codex login method:",
+          options: [
+            { id: "browser", label: "Browser login (default)" },
+            { id: "device_code", label: "Device code login (headless)" },
+          ],
+        });
+        throw new Error(`OpenAI Codex device code request failed with status 500: ${secret}`);
+      },
+    });
+    const ctx = makeTestContext(runtime);
+
+    const started = await startOAuthLoginSession(root, "oauth-provider", ctx, {
+      hosted: true,
+    });
+    await waitFor(() => getLoginSession(started.id)?.status === "failed");
+    const failed = getLoginSession(started.id)!;
+    expect(calls).toBe(1);
     expect(failed.error?.message).toBe("Provider login failed");
     expect(JSON.stringify(failed)).not.toContain(secret);
   });

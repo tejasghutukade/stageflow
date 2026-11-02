@@ -33,11 +33,21 @@ export type LoginSessionProjection = {
   authType: "oauth";
   status: LoginSessionStatus;
   events: AuthEvent[];
+  hosted: boolean;
   pendingPrompt?: LoginSessionPendingPrompt;
   error?: { message: string };
   warning?: { message: string };
   provider?: ProviderAuthStatus;
 };
+
+export type OAuthLoginOptions = {
+  hosted?: boolean;
+};
+
+export const DEVICE_CODE_UNAVAILABLE_MESSAGE =
+  "Device code login is not available. Continue with browser login.";
+
+type HostedLoginMode = "auto-device" | "browser-fallback" | "ask";
 
 type PendingPromptWait = {
   meta: LoginSessionPendingPrompt;
@@ -50,6 +60,7 @@ type InternalLoginSession = {
   providerId: string;
   authType: "oauth";
   status: LoginSessionStatus;
+  hosted: boolean;
   events: AuthEvent[];
   pendingPrompt?: PendingPromptWait;
   error?: { message: string };
@@ -60,6 +71,24 @@ type InternalLoginSession = {
 
 const loginSessions = new Map<string, InternalLoginSession>();
 let runningLoginSessionId: string | undefined;
+
+function automaticSelectAnswer(
+  prompt: AuthPrompt,
+  mode: HostedLoginMode,
+): string | undefined {
+  if (mode === "ask" || prompt.type !== "select") return undefined;
+  const ids = prompt.options.map((option) => option.id);
+  if (!ids.includes("device_code")) return undefined;
+  if (mode === "auto-device") return "device_code";
+  return ids.includes("browser") ? "browser" : undefined;
+}
+
+function deviceCodeUnavailable(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.includes("not enabled for this server")
+  );
+}
 
 function promptMeta(prompt: AuthPrompt): LoginSessionPendingPrompt {
   if (prompt.type === "select") {
@@ -90,6 +119,7 @@ function projectLoginSession(
     providerId: session.providerId,
     authType: "oauth",
     status: session.status,
+    hosted: session.hosted,
     events: [...session.events],
     ...(session.pendingPrompt
       ? { pendingPrompt: session.pendingPrompt.meta }
@@ -180,6 +210,7 @@ export async function startOAuthLoginSession(
   cwd: string,
   providerId: string,
   ctx: ProviderAuthContext = defaultContext,
+  options?: OAuthLoginOptions,
 ): Promise<LoginSessionProjection> {
   if (runningLoginSessionId !== undefined) {
     throw new ProviderAuthError("An OAuth login is already in progress", 409);
@@ -196,11 +227,14 @@ export async function startOAuthLoginSession(
 
   const sessionId = randomUUID();
   const abortController = new AbortController();
+  const hosted = options?.hosted === true;
+  let loginMode: HostedLoginMode = hosted ? "auto-device" : "ask";
   const session: InternalLoginSession = {
     id: sessionId,
     providerId,
     authType: "oauth",
     status: "running",
+    hosted,
     events: [],
     abortController,
   };
@@ -219,6 +253,10 @@ export async function startOAuthLoginSession(
       }
       if (abortController.signal.aborted || prompt.signal?.aborted) {
         return Promise.reject(new Error("Login cancelled"));
+      }
+      const automatic = automaticSelectAnswer(prompt, loginMode);
+      if (automatic !== undefined) {
+        return Promise.resolve(automatic);
       }
       return new Promise<string>((resolve, reject) => {
         const onAbort = () => {
@@ -252,7 +290,25 @@ export async function startOAuthLoginSession(
 
   void (async () => {
     try {
-      await runtime.login(providerId, "oauth", interaction);
+      try {
+        await runtime.login(providerId, "oauth", interaction);
+      } catch (err) {
+        if (
+          loginMode === "auto-device" &&
+          session.status === "running" &&
+          !abortController.signal.aborted &&
+          deviceCodeUnavailable(err)
+        ) {
+          loginMode = "browser-fallback";
+          session.events.push({
+            type: "info",
+            message: DEVICE_CODE_UNAVAILABLE_MESSAGE,
+          });
+          await runtime.login(providerId, "oauth", interaction);
+        } else {
+          throw err;
+        }
+      }
       if (session.status !== "running") return;
       session.status = "completed";
       session.provider = await statusForProvider(runtime, providerId);

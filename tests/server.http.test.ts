@@ -3362,6 +3362,7 @@ describe("localhost HTTP API", () => {
         expect(started.status).toBe(200);
         expect(started.body.ok).toBe(true);
         expect(started.body.session.status).toBe("running");
+        expect(typeof started.body.session.hosted).toBe("boolean");
         const sessionId = started.body.session.id as string;
 
         let pending: { body: { session: { pendingPrompt?: { type: string } } } } | undefined;

@@ -1049,6 +1049,7 @@ export type LoginSessionProjection = {
   authType: "oauth";
   status: LoginSessionStatus;
   events: LoginSessionEvent[];
+  hosted?: boolean;
   pendingPrompt?: LoginSessionPendingPrompt;
   error?: { message: string };
   warning?: { message: string };

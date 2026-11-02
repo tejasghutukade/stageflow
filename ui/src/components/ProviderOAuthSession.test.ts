@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { LoginSessionProjection } from "../api";
 import {
+  OAUTH_HOSTED_API_KEY_HINT,
+  OAUTH_HOSTED_PASTE_INSTRUCTIONS,
+  apiKeyHint,
   isTerminalSession,
   latestAuthUrl,
+  manualCodeHint,
   promptInputKind,
 } from "../providers/oauthSession";
 
@@ -126,6 +130,39 @@ describe("ProviderOAuthSession wiring projections", () => {
     };
     expect(isTerminalSession(completed)).toBe(true);
     expect(completed.error).toBeUndefined();
+  });
+
+  it("hosted manual_code explains the localhost page and mentions an API key", () => {
+    const running: LoginSessionProjection = {
+      id: "s6",
+      providerId: "openai-codex",
+      authType: "oauth",
+      status: "running",
+      hosted: true,
+      events: [
+        {
+          type: "auth_url",
+          url: "https://auth.openai.com/oauth/authorize",
+          instructions: "A browser window should open. Complete login to finish.",
+        },
+      ],
+      pendingPrompt: {
+        type: "manual_code",
+        message: "Paste redirect URL",
+        placeholder: "http://localhost:1455/auth/callback",
+      },
+    };
+    expect(running.hosted).toBe(true);
+    expect(running.pendingPrompt?.type).toBe("manual_code");
+    expect(manualCodeHint(running.hosted)).toBe(OAUTH_HOSTED_PASTE_INSTRUCTIONS);
+    expect(OAUTH_HOSTED_PASTE_INSTRUCTIONS).toBe(
+      "Your browser will say it cannot reach localhost. That is expected. Copy the full address from the address bar and paste it here.",
+    );
+    expect(apiKeyHint(running.hosted)).toBe(OAUTH_HOSTED_API_KEY_HINT);
+    expect(OAUTH_HOSTED_API_KEY_HINT).toMatch(/Settings, Keys/);
+    expect(manualCodeHint(false)).not.toBe(OAUTH_HOSTED_PASTE_INSTRUCTIONS);
+    expect(apiKeyHint(false)).toBeUndefined();
+    expect(apiKeyHint(undefined)).toBeUndefined();
   });
 
   it("CredentialSynchronizationError warning is soft success copy", () => {
