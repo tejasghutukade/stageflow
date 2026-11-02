@@ -3,9 +3,10 @@ import {
   type ExtensionFactory,
   type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+import type { IndependenceLevel } from "../types/stage.js";
 import { applyClearing, planClearing, type ClearingPolicy } from "./mask.js";
 import {
-  COMPACTION_FOCUS,
+  compactionFocus,
   composeCompactionSummary,
   readStageflowDetails,
   stageflowDetails,
@@ -30,6 +31,7 @@ export type CompactionExtensionOptions = {
   policy?: CompactionPolicy;
   compact?: CompactFn;
   onWarn?: (message: string) => void;
+  independence?: IndependenceLevel;
 };
 
 type PreCompactContext = {
@@ -68,25 +70,29 @@ export function createCompactionExtension(options: CompactionExtensionOptions = 
           messages: [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages] as LooseMessage[],
           ...(preparation.previousSummary !== undefined ? { previousSummary: preparation.previousSummary } : {}),
           ...(previousDetails ? { previousDetails } : {}),
+          ...(options.independence !== undefined ? { independence: options.independence } : {}),
           state: getWorkingStateSections(ctx.sessionManager.getEntries() as never),
           ...(policy.clearInSummary ? { clearInSummary: policy.clearInSummary } : {}),
-          summarize: ({ messages, previousSummary }) =>
-            compact(
-              {
-                ...preparation,
-                messagesToSummarize: messages.slice(0, historyCount) as CompactionPreparation["messagesToSummarize"],
-                turnPrefixMessages: messages.slice(historyCount) as CompactionPreparation["turnPrefixMessages"],
-                ...(previousSummary !== undefined ? { previousSummary } : {}),
-              },
+          summarize: ({ messages, previousSummary }) => {
+            const nextPreparation: CompactionPreparation = {
+              ...preparation,
+              messagesToSummarize: messages.slice(0, historyCount) as CompactionPreparation["messagesToSummarize"],
+              turnPrefixMessages: messages.slice(historyCount) as CompactionPreparation["turnPrefixMessages"],
+            };
+            if (previousSummary !== undefined) nextPreparation.previousSummary = previousSummary;
+            else delete nextPreparation.previousSummary;
+            return compact(
+              nextPreparation,
               model as never,
               auth.apiKey,
               auth.headers,
-              COMPACTION_FOCUS,
+              compactionFocus(options.independence),
               event.signal,
               ctx.thinkingLevel as never,
               undefined,
               auth.env,
-            ),
+            );
+          },
         });
         const { result, prepared } = composed;
         return {
@@ -95,7 +101,14 @@ export function createCompactionExtension(options: CompactionExtensionOptions = 
             firstKeptEntryId: result.firstKeptEntryId,
             tokensBefore: result.tokensBefore,
             ...(result.usage ? { usage: result.usage } : {}),
-            details: stageflowDetails(result.details as never, previousDetails, prepared.pinned, prepared.cleared, prepared.directives),
+            details: stageflowDetails(
+              result.details as never,
+              previousDetails,
+              prepared.pinned,
+              prepared.cleared,
+              prepared.directives,
+              options.independence,
+            ),
           },
         };
       } catch (err) {

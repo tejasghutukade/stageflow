@@ -234,6 +234,7 @@ async function preparePipeline(options: {
   const pairing = checkTaskEntryInput(task, loaded, {
     cwd: options.cwd,
     taskPath: options.taskPath,
+    checkoutOverride: options.checkoutOverride,
   });
   if (pairing.some((finding) => finding.severity === "error")) {
     throw new PipelineValidationError(

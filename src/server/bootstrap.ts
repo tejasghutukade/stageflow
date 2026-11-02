@@ -8,7 +8,8 @@ import type Database from "better-sqlite3";
 import { createRunStoreWithConnection, sqliteConnectionFromStore, type RunStoreKind } from "../runstore/createStore.js";
 import { resolveA2aConfigPath } from "../a2a/configDiscovery.js";
 import { ensureProjectRootsFromEnv } from "../project/ensureProjectRootsFromEnv.js";
-import { ensureGlobalHome, globalStageflowHome } from "../project/globalHome.js";
+import { ensureGlobalHome, globalCredentialRoot, globalStageflowHome } from "../project/globalHome.js";
+import { ConsumerIdentityRuntime } from "../identity/runtime.js";
 import {
   ensureWorkspaceCatalog,
   type WorkspaceProvisionResult,
@@ -108,6 +109,7 @@ export type StageflowHostOptions = {
   browser?: StageBrowserSupport;
   emailTriggerQueue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"];
   agentConversationBackend?: ConversationBackend;
+  consumerAuthorization?: import("../identity/authorization.js").ConsumerAuthorization;
 };
 
 export type StageflowHostBootstrap = {
@@ -150,6 +152,8 @@ export type StageflowHostBootstrap = {
   memories?: MemoryHost;
   /** Shared agent store, chat controller, and conversation backend for HTTP/MCP. */
   agentHost?: AgentHostContext;
+  /** Host-managed consumer identity; absent when an embedder supplied its own `consumerAuthorization`. */
+  consumerIdentity?: ConsumerIdentityRuntime;
   /** Filled when the operator console host is created, so internal-agent evals can open a gated session. */
   operatorHostSlot?: { current?: OperatorAgentHost };
   email?: ReturnType<typeof emailHostFor> & { triggers: EmailTriggers; stop: () => Promise<void> };
@@ -567,9 +571,20 @@ export async function bootstrapStageflowHost(
   void getModelCatalog(cwd)
     .defaultModel()
     .catch((error) => bootLog.warn("models.catalog_warm_failed", String(error)));
+  const consumerIdentity = options.consumerAuthorization
+    ? undefined
+    : new ConsumerIdentityRuntime({
+        homeDir: ctx.globalHome,
+        secretsFile: path.join(globalCredentialRoot(), "identity-secrets.json"),
+        ...((options.env ?? process.env).STAGEFLOW_WORKSPACE_ID ? { workspaceId: (options.env ?? process.env).STAGEFLOW_WORKSPACE_ID! } : {}),
+        allowLoopback: (options.env ?? process.env).STAGEFLOW_IDENTITY_ALLOW_LOOPBACK === "1",
+      });
+  consumerIdentity?.init();
   const agentHost =
     sqliteConnection !== undefined
       ? createAgentHostContext({
+          ...(options.consumerAuthorization ? { consumerAuthorization: options.consumerAuthorization } : {}),
+          ...(consumerIdentity ? { consumerAuthorizationSource: () => consumerIdentity.current() } : {}),
           cwd,
           agentDir,
           connection: sqliteConnection,
@@ -658,6 +673,7 @@ export async function bootstrapStageflowHost(
     storeFilesystem,
     workspaceCatalog,
     ...(agentHost ? { agentHost } : {}),
+    ...(consumerIdentity ? { consumerIdentity } : {}),
     operatorHostSlot,
   };
 }

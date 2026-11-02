@@ -7,6 +7,7 @@ import {
   lastTurnProviderError,
   MAX_TOTAL_EMIT_REMINDERS,
   remindUntilEmitted,
+  stageIndependencePolicy,
   type StageTurnSession,
 } from "../src/agent/stageTurnDriver.js";
 import type { EmitCapture } from "../src/tools/emitStageEnvelope.js";
@@ -38,6 +39,7 @@ function fakeSession(
 }
 
 const opts = { emitToolName: "emit_stage_envelope", shouldStop: () => false };
+const strictOpts = { ...opts, policy: stageIndependencePolicy("strict") };
 
 describe("remindUntilEmitted", () => {
   it("does nothing when the first turn already emitted", async () => {
@@ -55,7 +57,7 @@ describe("remindUntilEmitted", () => {
         messages.push(ok);
       },
     ]);
-    expect(await remindUntilEmitted(session, capture, opts)).toEqual({ reminders: 1 });
+    expect(await remindUntilEmitted(session, capture, strictOpts)).toEqual({ reminders: 1 });
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain(`Reminder 1 of ${DEFAULT_EMIT_REMINDERS}`);
     expect(prompts[0]).toContain("call emit_stage_envelope");
@@ -81,17 +83,20 @@ describe("remindUntilEmitted", () => {
     expect(prompts[0]).toContain("was rejected: payload.count must be integer");
   });
 
-  it("never nudges after a provider error and reports it", async () => {
+  it.each(["strict", "persistent", "open"] as const)(
+    "never nudges after a provider error at %s",
+    async (level) => {
     const capture: EmitCapture = {};
     const { session, prompts } = fakeSession(capture, [], [
       { role: "assistant", stopReason: "error", errorMessage: "Cursor SDK runs require a Cursor SDK API key." },
     ]);
-    expect(await remindUntilEmitted(session, capture, opts)).toEqual({
+    expect(await remindUntilEmitted(session, capture, { ...opts, policy: stageIndependencePolicy(level) })).toEqual({
       reminders: 0,
       providerError: "Cursor SDK runs require a Cursor SDK API key.",
     });
     expect(prompts).toEqual([]);
-  });
+  },
+  );
 
   it("stops nudging when a reminder turn itself hits a provider error", async () => {
     const capture: EmitCapture = {};
@@ -107,18 +112,29 @@ describe("remindUntilEmitted", () => {
     expect(prompts).toHaveLength(1);
   });
 
-  it("does not nudge an aborted turn or a stopping stage", async () => {
+  it.each(["strict", "persistent", "open"] as const)(
+    "does not nudge an aborted turn or a stopping stage at %s",
+    async (level) => {
     const capture: EmitCapture = {};
     const aborted = fakeSession(capture, [], [{ role: "assistant", stopReason: "aborted" }]);
-    expect(await remindUntilEmitted(aborted.session, capture, opts)).toEqual({ reminders: 0 });
+    expect(
+      await remindUntilEmitted(aborted.session, capture, { ...opts, policy: stageIndependencePolicy(level) }),
+    ).toEqual({ reminders: 0 });
     expect(aborted.prompts).toEqual([]);
 
     const closing = fakeSession(capture, []);
-    expect(await remindUntilEmitted(closing.session, capture, { ...opts, shouldStop: () => true })).toEqual({
+    expect(
+      await remindUntilEmitted(closing.session, capture, {
+        ...opts,
+        policy: stageIndependencePolicy(level),
+        shouldStop: () => true,
+      }),
+    ).toEqual({
       reminders: 0,
     });
     expect(closing.prompts).toEqual([]);
-  });
+  },
+  );
 
   it("stops between reminders once the stage starts closing", async () => {
     const capture: EmitCapture = {};
@@ -175,14 +191,14 @@ describe("remindUntilEmitted progress", () => {
         messages.push(ok);
       },
     ]);
-    expect(await remindUntilEmitted(session, capture, opts)).toEqual({ reminders: 4 });
+    expect(await remindUntilEmitted(session, capture, strictOpts)).toEqual({ reminders: 4 });
     expect(prompts[2]).toContain("Reminder 1 of 2");
   });
 
   it("gives up after the budget of reminders in a row with no tool call", async () => {
     const capture: EmitCapture = {};
     const { session } = fakeSession(capture, [toolTurn, (m) => m.push(ok), (m) => m.push(ok), (m) => m.push(ok)]);
-    expect(await remindUntilEmitted(session, capture, opts)).toEqual({ reminders: 3 });
+    expect(await remindUntilEmitted(session, capture, strictOpts)).toEqual({ reminders: 3 });
   });
 
   it("stops at the hard ceiling even when every reminder makes progress", async () => {
@@ -198,7 +214,7 @@ describe("remindUntilEmitted progress", () => {
     const leaked = { role: "assistant", stopReason: "stop", content: [{ type: "thinking", thinking: "x<｜tool▁calls▁begin｜>read" }] };
     const capture: EmitCapture = {};
     const { session } = fakeSession(capture, [(m) => m.push(leaked), (m) => m.push(leaked)], [leaked]);
-    const out = await remindUntilEmitted(session, capture, opts);
+    const out = await remindUntilEmitted(session, capture, strictOpts);
     expect(out.providerError).toBe(LEAKED_TOOL_CALL_ERROR);
     expect(out.providerError).toContain("provider");
     const plain = fakeSession({}, [], [ok]);
@@ -227,5 +243,92 @@ describe("emitReminderPrompt", () => {
     expect(text).toContain("Reminder 2 of 2");
     expect(text).toContain('status "failure"');
     expect(text).toContain("Do not end your turn without calling it.");
+  });
+});
+
+describe("omitted independence keeps going", () => {
+  it("sends continuation reminders until the hard ceiling and does not offer failure", async () => {
+    const capture: EmitCapture = {};
+    const { session, prompts } = fakeSession(capture, []);
+    expect(await remindUntilEmitted(session, capture, opts)).toEqual({ reminders: MAX_TOTAL_EMIT_REMINDERS });
+    expect(prompts).toHaveLength(MAX_TOTAL_EMIT_REMINDERS);
+    expect(capture.envelope).toBeUndefined();
+    for (const prompt of prompts) {
+      expect(prompt).toContain("Keep working");
+      expect(prompt).not.toMatch(/Reminder \d+ of \d+/);
+      expect(prompt).not.toContain('status "failure"');
+    }
+  });
+
+  it("quotes a rejected emit and still does not offer failure", async () => {
+    const capture: EmitCapture = { error: "payload.count must be integer" };
+    const { session, prompts } = fakeSession(capture, [
+      (messages, c) => {
+        c.envelope = envelope;
+        messages.push(ok);
+      },
+    ]);
+    await remindUntilEmitted(session, capture, opts);
+    expect(prompts[0]).toContain("Keep working");
+    expect(prompts[0]).toContain("was rejected: payload.count must be integer");
+    expect(prompts[0]).not.toContain('status "failure"');
+  });
+
+  it("resets the quiet count when a reminder turn uses a tool and still stops at twenty", async () => {
+    const capture: EmitCapture = {};
+    const toolTurn = (messages: unknown[]) => {
+      messages.push({ role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", name: "read" }] });
+      messages.push(ok);
+    };
+    const { session, prompts } = fakeSession(
+      capture,
+      Array.from({ length: MAX_TOTAL_EMIT_REMINDERS + 5 }, () => toolTurn),
+    );
+    expect(await remindUntilEmitted(session, capture, opts)).toEqual({ reminders: MAX_TOTAL_EMIT_REMINDERS });
+    expect(prompts[0]).toContain("Keep working");
+    expect(prompts[0]).not.toMatch(/Reminder \d+ of \d+/);
+    expect(prompts.every((prompt) => !prompt.includes('status "failure"'))).toBe(true);
+    expect(capture.envelope).toBeUndefined();
+  });
+
+  it("ends a leaked tool call as the provider error once the ceiling is spent", async () => {
+    const leaked = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "thinking", thinking: "x<｜tool▁calls▁begin｜>read" }],
+    };
+    const capture: EmitCapture = {};
+    const { session, prompts } = fakeSession(
+      capture,
+      Array.from({ length: MAX_TOTAL_EMIT_REMINDERS }, () => (messages: unknown[]) => {
+        messages.push(leaked);
+      }),
+      [leaked],
+    );
+    const out = await remindUntilEmitted(session, capture, opts);
+    expect(out.reminders).toBe(MAX_TOTAL_EMIT_REMINDERS);
+    expect(out.providerError).toBe(LEAKED_TOOL_CALL_ERROR);
+    expect(prompts[0]).toContain("Keep working");
+    expect(prompts[0]).toContain("was written out as plain text");
+    expect(prompts[0]).not.toContain('status "failure"');
+  });
+
+  it("open uses the same continuation reminder as persistent", async () => {
+    const persistentCapture: EmitCapture = {};
+    const persistent = fakeSession(persistentCapture, []);
+    await remindUntilEmitted(persistent.session, persistentCapture, {
+      ...opts,
+      policy: stageIndependencePolicy("persistent"),
+    });
+    const openCapture: EmitCapture = {};
+    const open = fakeSession(openCapture, []);
+    const out = await remindUntilEmitted(open.session, openCapture, {
+      ...opts,
+      policy: stageIndependencePolicy("open"),
+    });
+    expect(out).toEqual({ reminders: MAX_TOTAL_EMIT_REMINDERS });
+    expect(open.prompts[0]).toBe(persistent.prompts[0]);
+    expect(open.prompts[0]).toContain("Keep working");
+    expect(open.prompts[0]).not.toContain('status "failure"');
   });
 });

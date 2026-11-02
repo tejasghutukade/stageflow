@@ -52,6 +52,7 @@ export type PiRuntimeOptions = {
 };
 
 export type OpenSessionInput = {
+  consumerTools?: import("../../identity/types.js").ConsumerRuntimeTool[];
   projectRoot: string;
   definition: AgentDefinition;
   systemPrompt: string;
@@ -120,7 +121,7 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
   const { definition, projectRoot } = input;
   const modelId = definition.model.id ?? (await getModelCatalog(options.cwd).defaultModel());
   // Cursor's SDK agent runs its own file and shell tools beside Pi's, so grants and ask-first cannot hold.
-  if (isCursorModelRef(modelId) && process.env.STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS !== "1") {
+  if (isCursorModelRef(modelId) && (input.consumerTools !== undefined || process.env.STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS !== "1")) {
     throw new AgentError(
       "agent.backend_unavailable",
       "Cursor models run their own file and shell tools outside this agent's grants and approvals. Choose another provider's model, or set STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS=1 on the Host to accept that.",
@@ -213,6 +214,19 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
       );
     }
     const customTools = [];
+    for (const tool of input.consumerTools ?? []) {
+      customTools.push(defineTool({
+        name: tool.name,
+        label: tool.name,
+        description: tool.description,
+        parameters: Type.Unsafe(tool.parameters),
+        constrainedSampling: { type: "json_schema", strict: "prefer" },
+        execute: async (_id: string, args: Record<string, unknown>, signal?: AbortSignal) => ({
+          content: [{ type: "text" as const, text: await tool.execute(args, signal ?? new AbortController().signal) }], details: {},
+        }),
+      }));
+      toolNames.push(tool.name);
+    }
     if (input.delegateTool) {
       for (const agentId of definition.sub_agents) {
         customTools.push(
@@ -358,7 +372,16 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
   async function ensure(input: CompleteInput): Promise<{ state: Bound; fresh: boolean }> {
     const existing = bound.get(input.sessionId);
     if (existing) return { state: existing, fresh: false };
-    const { definition, projectRoot } = input;
+    const { projectRoot } = input;
+    const allowedSubAgents = new Set(input.consumerSafeSubAgents ?? []);
+    const definition = input.consumerTools === undefined ? input.definition : {
+      ...input.definition,
+      project_context: false,
+      memories: [],
+      tools: { ...input.definition.tools, builtin: [], builtin_tools: [], mcp: {}, skills: [], browser: false,
+        stageflow: { groups: [], tools: [] } },
+      sub_agents: input.definition.sub_agents.filter((id) => allowedSubAgents.has(id)),
+    };
     if (definition.model.backend !== "pi") {
       throw new AgentError("agent.backend_unavailable", `The ${definition.model.backend} backend is not available for agents yet.`);
     }
@@ -385,13 +408,15 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       systemPrompt,
       toolNames: piToolNames(definition),
       hooks: () => state.hooks,
+      ...(input.consumerTools !== undefined ? { consumerTools: input.consumerTools } : {}),
       ...(memory ? { memory } : {}),
       ...(stageflowTools.length > 0 ? { stageflowTools } : {}),
       ...(subAgents.length > 0 ? { delegateTool: (agentId, message, callId) => state.hooks!.delegate(agentId, message, callId) } : {}),
       gate: async (call) => {
         const hooks = state.hooks;
         if (!hooks) return { block: true, reason: "No turn is active" };
-        const tool = grantIdForPiTool(call.toolName, mcpServers, subAgents);
+        const tool = input.consumerTools?.find((tool) => tool.name === call.toolName)?.grantId
+          ?? grantIdForPiTool(call.toolName, mcpServers, subAgents);
         // Every tool whose arguments name a path is checked, not only write/edit. `bash` cannot be: see forbiddenWriteTarget.
         if (forbiddenWriteTarget(projectRoot, globalStageflowHome(), call.toolName, call.input) !== undefined) {
           return { block: true, reason: "Agent definitions and Stageflow state cannot be written by an agent." };

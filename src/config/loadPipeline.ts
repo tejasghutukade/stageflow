@@ -10,7 +10,7 @@ import type {
   ResolvedPipelineDag,
 } from "../types/pipeline.js";
 import type { CompletionContract } from "../types/completion.js";
-import type { StageConfig } from "../types/stage.js";
+import type { IndependenceLevel, StageConfig } from "../types/stage.js";
 import {
   compilePayloadSchema,
   expandPayloadSchemaRefs,
@@ -225,6 +225,7 @@ async function buildLoadedPipelineFromMerge(
     pipelineId: string;
     agent?: string;
     model?: string;
+    independence?: IndependenceLevel;
     schemas?: PayloadSchemaMap;
     requires?: ToolRequirement[];
     channels?: StageChannel[];
@@ -239,6 +240,7 @@ async function buildLoadedPipelineFromMerge(
     pipelineId,
     agent: pipelineAgent,
     model: pipelineModel,
+    independence: pipelineIndependence,
     schemas: pipelineSchemas,
     requires: pipelineRequires,
     channels: pipelineChannels,
@@ -443,6 +445,7 @@ async function buildLoadedPipelineFromMerge(
 
   const materializeOutcome = await materializeStageModels(stages, {
     pipelineModel,
+    pipelineIndependence,
     pipelineId,
     projectRoot,
   });
@@ -458,6 +461,7 @@ async function buildLoadedPipelineFromMerge(
     stages: stageIds,
     ...(pipelineAgent !== undefined ? { agent: pipelineAgent } : {}),
     ...(pipelineModel !== undefined ? { model: pipelineModel } : {}),
+    ...(pipelineIndependence !== undefined ? { independence: pipelineIndependence } : {}),
     ...(pipelineSchemas !== undefined ? { schemas: pipelineSchemas } : {}),
     ...(pipelineRequires !== undefined ? { requires: pipelineRequires } : {}),
     ...(pipelineChannels !== undefined ? { channels: pipelineChannels } : {}),

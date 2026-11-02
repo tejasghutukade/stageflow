@@ -7,11 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.47.1] - 2026-11-02
+## [0.49.1] - 2026-11-02
 
 ### Fixed
 
 - **Hosted provider login no longer stops on a localhost page.** When the console is reached by a public hostname (`STAGEFLOW_ALLOWED_HOSTS`) or listens outside loopback (`STAGEFLOW_BIND`), Codex sign-in uses device code and skips the browser-or-device choice. If device code is not enabled, browser sign-in continues, and the paste field explains that a localhost error page is expected. When the provider also accepts an API key, the panel says it can be added in Settings, Providers.
+
+## [0.49.0] - 2026-11-02
+
+### Added
+
+- **A stage can keep working instead of being steered into failure.** `independence` is `strict`, `persistent`, or `open`. Omitted means `persistent`: after a turn with no envelope the stage is told to keep working, up to twenty quiet reminders, and a tool call resets that count. `strict` keeps the previous short budget, including its offer to emit failure. `open` adds permission to try another approach with the tools and inputs already given, and does not add tools or load `AGENTS.md`. Set it on the stage, the pipeline, or the manifest; the stage wins. A fragment's copy is ignored. See [YAML catalog](docs/yaml-catalog.md).
+- **Checkout `AGENTS.md` is a separate opt-in.** `checkout_context: true` on the stage body loads that checkout's `AGENTS.md` as extra context. The stage assignment wins where they conflict. The author's `system_prompt` is not rewritten. A stage with no checkout fails prepare (`stage.checkout_context_unbound`). A missing file does not fail the stage. A symlink or hard link is not read.
+- **Every stage can `grep`, `find`, and `ls`.** Inside a sandbox those tools see `/workspace` and, when one is mounted, the read-only folder. Outside a sandbox they search the stage working tree. A host path, a `~` path, a `..` escape, and a symlink used as the search path are rejected. Search skips `.git` and `node_modules`.
+
+### Changed
+
+- **A stage that does not set `independence` keeps working.** It used to get the short reminder budget. That behavior is now `independence: strict`.
+- **Compaction for a persistent or open stage records the next approach.** A summary written at one level is not reused at another. Compaction stays on.
+- **Eval snapshots record the effective independence and `checkout_context`.** Agent eval fingerprints omit both, so they stay comparable.
+
+## [0.48.0] - 2026-11-01
+
+### Added
+
+- **Customer identity for protected agent chat.** A Host can admit a business's own customers with a signed handoff or OIDC Authorization Code and PKCE, map them to accounts, and authorize order reads. Consumers stay separate from Workspace owners. Admission stays opt-in: `sf ui` leaves it off until the Host manages identity or an embedder passes `consumerAuthorization`. See [Consumer identity](docs/consumer-identity.md).
+- **Turn identity on from the console.** On a Host that manages identity itself, **Turn on identity** creates the Workspace store under `$STAGEFLOW_HOME/identity/`, starts with the built-in access rules, and needs no restart. Setup covers the order API (write-only credential, Host-generated ES256 signing key, ownership contract test) and the authorization engine (built-in rules or a Workspace-local Cerbos server, with a test that rejects unreachable servers and allow-all policies). An embedder-supplied authorization wins and makes setup read-only (`identity.managed_externally`).
+- **Identity console.** Connections, People & access, Check access, Activity and Setup as guided tabs, with drawers and dialogs for handoff/OIDC go-live, grants, and preview. Secrets and order contents never appear in the UI.
+- **Identity documentation.** A start-to-finish guide ([Protect an agent's chat with customer sign-in](docs/guides-agents-protected-chat.md)), a console walkthrough ([Console: Identity](docs/console-identity.md)), and an [Order API contract](docs/order-api-contract.md) for the engineer who owns the order system, plus operator API, glossary, data-directory and environment entries.
+
+### Changed
+
+- **Consumer identity host port.** Operator routes and agent chat talk to `ConsumerAuthorization` only; admission returns a bearer token with expiry in one step, and the identity store stays internal to the identity module.
+
+### Fixed
+
+- **Granting access again to a person who was revoked now works.** Saving their access reactivates it with a new revision; their old sessions stay invalid.
+- **Rebinding a protected conversation no longer fails when the Access Grant changes.** `bind` updates the existing row; expired consumer sessions are removed when a new session is established.
 
 ## [0.47.0] - 2026-10-29
 

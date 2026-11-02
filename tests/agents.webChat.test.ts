@@ -115,7 +115,7 @@ describe("public web chat", () => {
     expect(stolen.status).toBe(404);
 
     const console = (await host.admin("GET", "/api/agents/helper/sessions")).body.sessions as Array<{ source: string; sourceRef: string }>;
-    expect(console).toEqual([expect.objectContaining({ source: "web", sourceRef: VISITOR })]);
+    expect(console).toEqual([expect.objectContaining({ source: "web_public", sourceRef: VISITOR })]);
   });
 
   it("rate limits a visitor and rejects over-long messages with friendly errors", async () => {
@@ -134,35 +134,18 @@ describe("public web chat", () => {
     expect(await limited.json()).toMatchObject({ code: "web_chat.rate_limited", retryAfterSec: expect.any(Number) });
   });
 
-  it("tells the visitor an operator is checking, and never shows tool details", async () => {
+  it("requires setup for legacy published tools instead of letting approval bypass consumer authorization", async () => {
     const backend = scriptedBackend(async (_messages, ctx) => {
       const result = await ctx.tool("web.fetch", { url: "https://secret.example/token" });
       return result.ran ? "all done" : "skipped";
     });
     const host = await startHost(backend);
     const { slug } = await liveAgent(host, { tools: { mcp: { web: ["fetch"] } }, approvals: { ask_first: ["web.fetch"] } });
-    const { thread } = (await (await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR })).json()) as { thread: { id: string } };
-    const pending = host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "go" } }).then((r) => r.text());
-
-    let approvals: Array<{ sessionId: string }> = [];
-    for (let attempt = 0; attempt < 100 && approvals.length === 0; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      approvals = (await host.admin("GET", "/api/agents/approvals")).body.approvals ?? [];
-    }
-    expect(approvals).toHaveLength(1);
-    const status = await (await host.pub(slug, `/threads/${thread.id}`, { visitor: VISITOR })).json();
-    expect(status.status).toBe("waiting");
-    const busy = await host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "again" } });
-    expect(busy.status).toBe(409);
-    expect(await busy.json()).toMatchObject({ code: "web_chat.busy" });
-
-    await new Promise((resolve) => setTimeout(resolve, 1_300));
-    await host.admin("POST", `/api/agents/helper/sessions/${approvals[0]!.sessionId}/approval/approve`);
-    const text = await pending;
-    const stream = text.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, any>);
-    expect(stream.map((f) => f.type)).toContain("waiting");
-    expect(stream.at(-1)).toMatchObject({ type: "done", message: { text: "all done" } });
-    expect(text).not.toContain("secret.example");
+    const response = await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "identity.setup_required" });
+    expect(backend.calls).toBe(0);
+    expect((await host.admin("GET", "/api/agents/approvals")).body.approvals).toEqual([]);
   });
 
   it("rotates the link: the old one stops working", async () => {

@@ -58,6 +58,7 @@ Optional top-level fields:
 | Field | Type | Description |
 |-------|------|-------------|
 | `model` | string | Pipeline default LLM/provider id for stages that omit their own `model` (see [Model defaults and precedence](#model-defaults-and-precedence)) |
+| `independence` | string | Pipeline default for stages that omit their own `independence`: `strict`, `persistent`, or `open` (see [Independence](#independence)) |
 | `agent` | string | Pipeline default execution backend (`pi` or Claude-family). Backend selection is separate from `model`; see [Architecture](architecture.md) |
 | `schemas` | object | Named JSON Schema map for `$ref: "#/schemas/NAME"` on stage `io` (see [Pipeline schemas](#pipeline-schemas)) |
 | `browser` | object | Browser session settings (see [Stage browser](#stage-browser)); adds the `agent-browser` requirement |
@@ -74,13 +75,13 @@ Each stage is an object with one of:
 | Form | Fields | Use when |
 |------|--------|----------|
 | External | `uses: path/to/stage.yaml` | Stage body lives in another YAML file |
-| Inline | `system_prompt`, optional `model`, … | Single-file pipeline |
+| Inline | `system_prompt`, optional `model`, optional `independence`, optional `checkout_context`, … | Single-file pipeline |
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
 **Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `mcp`, `browser`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Stage MCP](#stage-mcp), [Stage browser](#stage-browser), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `skill` is body-only — see [Skill binding](#skill-binding). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
 
-**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `secrets`, `requires`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
+**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `independence` (**optional** — `strict`, `persistent`, or `open`; omitted means `persistent`; see [Independence](#independence)), `checkout_context` (**optional** boolean, stage body only; omitted means off; see [Checkout context](#checkout-context)), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `secrets`, `requires`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
 
 `gate_kinds` controls whether `ask_operator` is registered on the sealed stage session: omit or `gate_kinds: []` → tool **off**; a non-empty list → tool **on** with that kinds allowlist. See [HITL — Gate kinds](hitl.md#gate-kinds).
 
@@ -213,6 +214,54 @@ Canonical fixtures:
 | Pipeline-only fill | [`tests/fixtures/model-hierarchy/pipeline-default/`](../tests/fixtures/model-hierarchy/pipeline-default/) |
 | Stage overrides pipeline and global | [`tests/fixtures/model-hierarchy/stage-override/`](../tests/fixtures/model-hierarchy/stage-override/) |
 | All three tiers empty (must fail) | [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/) |
+
+### Independence {#independence}
+
+`independence` chooses what a stage does after a turn that ends with no accepted envelope. It does not change the stage prompt, a success envelope, or a failure envelope.
+
+| Value | Meaning |
+|-------|---------|
+| `strict` | Today's short reminder budget. The reminder may still offer a failure envelope. On Pi that is two quiet reminders, a reset when a reminder turn uses a tool, and a hard ceiling of twenty. On Claude that is two reminders with no progress reset. |
+| `persistent` | A quiet turn is a continuation. The reminder tells the stage to keep working and does not tell it to emit failure. The no-progress budget is the hard ceiling of twenty. A reminder turn that uses a tool resets the quiet count. The ceiling still ends the attempt. |
+| `open` | The same reminder policy as `persistent`. |
+
+Omitted means `persistent`. Effective independence is materialized at pipeline load, in the same tier order as [`model`](#model-defaults-and-precedence):
+
+```text
+stage.independence ?? pipeline.independence ?? stageflow.yaml independence ?? persistent
+```
+
+| Tier | Source | Wins when |
+|------|--------|-----------|
+| Stage | Inline body or external stage YAML | Stage sets `independence` |
+| Pipeline | Top-level `independence` on the **root** `*.pipeline.yaml` | Stage omits `independence` |
+| Global | Top-level `independence` on `stageflow.yaml` | Stage and root pipeline omit `independence` |
+
+A stage body wins over the root pipeline, which wins over the manifest. Top-level `independence` on an [include fragment](#pipeline-fragments-include) is ignored. A stage body inside a fragment is still the stage tier. An unknown value fails catalog load (`stage.invalid_independence`, `pipeline.invalid_independence`, or `catalog.manifest_invalid`). Absence of `stageflow.yaml` does not fail load and means there is no global default, so the result is `persistent` unless a higher tier sets one. A present but invalid manifest still fails load.
+
+A failure envelope remains valid when the stage chooses it. A success envelope still has to match the output schema, pass emit-time checks, and name real artifact files. Search is available at every level — see [Search](#search).
+
+### Checkout context {#checkout-context}
+
+`checkout_context` is a boolean on the stage body. Omitted means off. It is separate from [`independence`](#independence): `strict`, `persistent`, and `open` load nothing from the checkout unless this flag is `true`.
+
+It is stage-body only. It is not a pipeline field, not a manifest field, and not inherited. A fragment may set it on a stage body. A top-level copy on a pipeline or a fragment is not a default. A non-boolean value fails catalog load (`stage.invalid_checkout_context`). A stage file that only contains the flag still parses.
+
+When the flag is `true`, the task must be bound to a checkout: `checkout` or `repository` on the task, or a start-time checkout path that binds the run. The Stageflow project root is not that checkout. If the binding is absent, the prepare step that joins the pipeline and the task fails before the stage starts (`stage.checkout_context_unbound`).
+
+When the flag is on and `<checkout>/AGENTS.md` exists, that file is extra context for the stage. The stage assignment wins where it conflicts with the file. The author's `system_prompt` is not rewritten. A missing file starts the stage with no extra context and does not fail it. The read stops at the checkout root. Skills, extensions, prompt templates, `CLAUDE.md`, and other instruction files stay unloaded.
+
+### Search {#search}
+
+Every stage can `grep`, `find`, and `ls`. `strict`, `persistent`, and `open` all have them. The level does not add or remove them.
+
+Without a sandbox, the tools search that stage's working tree.
+
+With a sandbox, they run inside the container. They can see `/workspace`, including granted artifacts that already live under that tree. When `STAGEFLOW_STAGE_READONLY_DIR` mounts one folder read-only at the same path, search can see that folder too. A host path, a `~` path, and a path that escapes with `..` are rejected. No other path outside `/workspace` is visible. `read`, `write`, and `edit` stay limited to `/workspace`.
+
+A symlink used as the search path is rejected. Search skips `.git` and `node_modules`.
+
+A large `grep`, `find`, or `ls` result shares the per-turn inline cap with `read` and `bash`. The first result of a turn is returned. A later result in that turn can be deferred once the turn's budget is spent.
 
 ### Verify {#verify}
 
@@ -451,7 +500,7 @@ stages:
     uses: ./finish.yaml
 ```
 
-Fragment files contain a `stages:` array (same entry shapes as the parent pipeline). Paths in `local:` are relative to the pipeline file's directory. Top-level `model` / `agent` on a fragment are ignored; only the root pipeline file supplies those defaults (see [Model defaults and precedence](#model-defaults-and-precedence)).
+Fragment files contain a `stages:` array (same entry shapes as the parent pipeline). Paths in `local:` are relative to the pipeline file's directory. Top-level `model` / `agent` / `independence` on a fragment are ignored; only the root pipeline file supplies those defaults (see [Model defaults and precedence](#model-defaults-and-precedence) and [Independence](#independence)). Top-level `checkout_context` on a pipeline or a fragment is not a default; set it on the stage body (see [Checkout context](#checkout-context)).
 
 Nested `include:` is allowed. Cycles and duplicate stage ids across files are rejected. Includes merge before the declaring file's own `stages`.
 
@@ -805,7 +854,7 @@ Project `.mcp.json` lives at the same root as `stageflow.yaml`:
 | Validate | `sf validate` checks names, shape, reserved-name collision, and that each catalog `command` is on `PATH`. It does not require env vars to be set or a live connect. |
 | Run | A required var that is still unset, and a passed server that will not connect, fail the stage at run time before the agent is treated as having those tools. Connect default is 30s. |
 | Tools | On Pi, a stage gets the named tools of its listed servers (for example `exa_web_fetch_exa`). The adapter's `mcpScript` JavaScript tool and its `mcp` gateway tool are not exposed. On a first attempt Stageflow connects the listed servers once before the session starts so their tools are known when the stage tool list is fixed. |
-| Large results | On Pi, every stage tool result except `read`, `bash`, and the Stageflow tools is measured against the remaining context window (with a reserve for the rest of the stage, and at most 30% of the window per result). A result that does not fit is written to `stages/<stageId>/attempts/<n>/artifacts/tool-output/<toolCallId>-<tool>.json` (pretty-printed when the body is JSON) or `.txt`, and the model sees the path, the size, and a short preview. A result the MCP adapter already cut at its 8 MiB backstop is always spilled, with the full body taken from the adapter's temp file (which is then removed); if the adapter could not save that file, the notice says the rest is not available. The file is an ordinary attempt artifact: list it in the envelope `artifacts` and let the model `read` or grep it. Stage prompts should treat that file as the source and should not ask the model to copy tool output into `write_stage_artifact`. `read` and `bash` results stay inline but share a per-turn cap: the first one in a turn always returns, and later ones in the same turn (parallel calls) are replaced by a short notice once the turn's results would pass 40% of the window or the remaining window after the reserve. For `read` nothing is lost and the model repeats the call in a later turn; for `bash` the command has already run, so the notice says not to run it again and to re-read its output with a read-only command. Pi also compacts a long session automatically; that is always on and not configurable (see [Context and compaction](context-and-compaction.md)). |
+| Large results | On Pi, every stage tool result except `read`, `bash`, `grep`, `find`, `ls`, and the Stageflow tools is measured against the remaining context window (with a reserve for the rest of the stage, and at most 30% of the window per result). A result that does not fit is written to `stages/<stageId>/attempts/<n>/artifacts/tool-output/<toolCallId>-<tool>.json` (pretty-printed when the body is JSON) or `.txt`, and the model sees the path, the size, and a short preview. A result the MCP adapter already cut at its 8 MiB backstop is always spilled, with the full body taken from the adapter's temp file (which is then removed); if the adapter could not save that file, the notice says the rest is not available. The file is an ordinary attempt artifact: list it in the envelope `artifacts` and let the model `read` or grep it. Stage prompts should treat that file as the source and should not ask the model to copy tool output into `write_stage_artifact`. `read`, `bash`, `grep`, `find`, and `ls` results stay inline but share a per-turn cap: the first one in a turn always returns, and later ones in the same turn (parallel calls) are replaced by a short notice once the turn's results would pass 40% of the window or the remaining window after the reserve. For `read`, `grep`, `find`, and `ls` nothing is lost and the model repeats the call in a later turn; for `bash` the command has already run, so the notice says not to run it again and to re-read its output with a read-only command. Pi also compacts a long session automatically; that is always on and not configurable (see [Context and compaction](context-and-compaction.md)). |
 | Reserved | The server name `stageflow` is reserved. Stageflow stage tools (`emit_stage_envelope`, `write_stage_artifact`, and `ask_operator` when the stage allows it) stay available without being listed in `mcp`. |
 | Settings inspect | Operator console Settings lists project `.mcp.json` and console server names and Check connects without a run. Inspect is not attach. |
 
@@ -1035,8 +1084,11 @@ Optional when a pipeline or manifest default can fill it:
 | Field | Description |
 |-------|-------------|
 | `model` | Provider/model string; resolved via [Model defaults and precedence](#model-defaults-and-precedence) |
+| `independence` | `strict`, `persistent`, or `open`. Omitted means `persistent`. See [Independence](#independence) |
 
-Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.output.schema`. Optional body fields: `model` (when inherited from a higher default), `verify`, `gate_kinds`, `timeout_ms`, `skill` — see [Envelopes — io schemas](envelopes.md#io-schemas), [Verify](#verify), and [Skill binding](#skill-binding). The loader also accepts `mcp:` here; prefer binding MCP on the pipeline entry (see [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `entry`, `on_verify_fail`, `needs`, `fork`, `route_select`, `allow_none`, `clonable`, `clone_cap`, `clone_mode`) are errors on an external stage file (body only — put wiring on the pipeline entry). `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes). When it elapses the attempt fails and the session is kept for `sf runs resume`.
+`checkout_context` is an optional boolean on the stage body. Omitted means off. Nothing fills it from the pipeline or the manifest. See [Checkout context](#checkout-context).
+
+Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.output.schema`. Optional body fields: `model` (when inherited from a higher default), `independence` (omitted means `persistent`), `checkout_context` (omitted means off; stage body only), `verify`, `gate_kinds`, `timeout_ms`, `skill` — see [Envelopes — io schemas](envelopes.md#io-schemas), [Independence](#independence), [Checkout context](#checkout-context), [Verify](#verify), and [Skill binding](#skill-binding). The loader also accepts `mcp:` here; prefer binding MCP on the pipeline entry (see [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `entry`, `on_verify_fail`, `needs`, `fork`, `route_select`, `allow_none`, `clonable`, `clone_cap`, `clone_mode`) are errors on an external stage file (body only — put wiring on the pipeline entry). `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes). When it elapses the attempt fails and the session is kept for `sf runs resume`.
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
@@ -1482,7 +1534,7 @@ Formats: JSONL (one object per line, blank lines ignored), JSON (an array or `{ 
 
 ## Manifest (`stageflow.yaml`)
 
-Declares catalog roots for **`sf validate`** (manifest-all) and operator-console browse. Optional top-level `model` is the global default LLM id for stages that omit both stage and pipeline `model` (see [Model defaults and precedence](#model-defaults-and-precedence)). Optional top-level `agent` selects the default execution backend and is independent of `model`.
+Declares catalog roots for **`sf validate`** (manifest-all) and operator-console browse. Optional top-level `model` is the global default LLM id for stages that omit both stage and pipeline `model` (see [Model defaults and precedence](#model-defaults-and-precedence)). Optional top-level `independence` is the global default for stages that omit it on the stage and the root pipeline (`strict`, `persistent`, or `open`; see [Independence](#independence)). `checkout_context` is not a manifest field (see [Checkout context](#checkout-context)). Optional top-level `agent` selects the default execution backend and is independent of `model`.
 
 ```yaml
 version: 1
@@ -1509,6 +1561,7 @@ catalog:
 ```
 
 - **`model`**: optional global default; participates in `stage → pipeline → global` resolution.
+- **`independence`**: optional global default (`strict`, `persistent`, or `open`). Same tier order as `model`. Omitted, with no stage or root-pipeline value, means `persistent`.
 - **`agent`**: optional global default backend; separate from `model`.
 - **`exclude`**: paths omitted from console browse (fixtures may still be loaded by explicit CLI path in tests).
 - **`patterns`**: glob for directory scans (defaults shown above).

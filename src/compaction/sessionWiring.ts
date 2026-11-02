@@ -1,5 +1,6 @@
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { createOpenRouterRoutingExtension } from "../agent/openRouterRouting.js";
+import type { IndependenceLevel } from "../types/stage.js";
 import { createWorkingStateExtension } from "../tools/workingState.js";
 import { createCompactionExtension } from "./extension.js";
 import { WORKING_STATE_TOOL_NAME } from "./types.js";
@@ -26,12 +27,21 @@ const warn = (message: string): void => console.error(message);
  * gate and budget exemptions. Stage sessions, project agents and the operator agent all call this, so the
  * pieces cannot drift apart.
  */
-export function createSessionContextWiring(options: { workingState: boolean }): SessionContextWiring {
+export function createSessionContextWiring(options: {
+  workingState: boolean;
+  independence?: IndependenceLevel;
+}): SessionContextWiring {
   const withState = options.workingState;
   return {
     extensions: [
       { name: "stageflow-openrouter-routing", factory: createOpenRouterRoutingExtension() },
-      { name: "stageflow-compaction", factory: createCompactionExtension({ onWarn: warn }) },
+      {
+        name: "stageflow-compaction",
+        factory: createCompactionExtension({
+          onWarn: warn,
+          ...(options.independence !== undefined ? { independence: options.independence } : {}),
+        }),
+      },
       ...(withState ? [{ name: "stageflow-working-state", factory: createWorkingStateExtension() }] : []),
     ],
     toolNames: withState ? [WORKING_STATE_TOOL_NAME] : [],

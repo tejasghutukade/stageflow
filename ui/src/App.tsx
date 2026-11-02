@@ -28,6 +28,7 @@ import { TriggersPage } from "./pages/TriggersPage";
 import { ConnectionsPage } from "./pages/ConnectionsPage";
 import { MemoriesPage } from "./redesign/memories/MemoriesPage";
 import { ConnectionDetailPage } from "./redesign/connections/ConnectionDetailPage";
+import { IdentityPage } from "./redesign/identity/IdentityPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { CatalogPage } from "./pages/CatalogPage";
@@ -236,6 +237,8 @@ function ConsoleRoot() {
     content = <DatasetsPage />;
   } else if (route.name === "datasetDetail") {
     content = <DatasetsPage datasetId={route.datasetId} evalId={route.evalId} />;
+  } else if (route.name === "identity") {
+    content = <IdentityPage />;
   } else if (route.name === "connections") {
     content = <ConnectionsPage />;
   } else if (route.name === "memories") {

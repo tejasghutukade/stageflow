@@ -73,7 +73,9 @@ Every stage body declares `io.output.schema`. On success, `payload` is validated
 
 ### When the agent stops without emitting {#emit-reminders}
 
-An invalid emit returns an error to the agent and the session continues, so the agent can fix the envelope and call the tool again. If the agent ends its turn with no accepted envelope (it replied with text, or gave up after a rejected emit), Stageflow sends up to two short reminder turns asking it to finish and emit, quoting the last rejection when there was one. Both agent backends do this: Pi continues the same session; the Claude backend resumes the same Claude session (`resume: <session_id>`) for each reminder. The stage fails as `missing emit_stage_envelope` only after those reminders go unanswered.
+An invalid emit returns an error to the agent and the session continues, so the agent can fix the envelope and call the tool again. If the agent ends its turn with no accepted envelope (it replied with text, or gave up after a rejected emit), Stageflow sends another turn in the same session, quoting the last rejection when there was one. Both agent backends do this: Pi continues the same session; the Claude backend resumes the same Claude session (`resume: <session_id>`) for each reminder.
+
+What that turn says depends on the stage's [`independence`](yaml-catalog.md#independence). Omitted, `persistent`, and `open` ask the stage to keep working. They do not tell it to emit failure, and they do not count down from two. A quiet stage is reminded until twenty; a reminder turn that uses a tool resets that quiet count, and the hard ceiling of twenty still ends the attempt. `strict` keeps the short budget: Pi sends two quiet reminders (a tool use resets the quiet count, with a ceiling of twenty) and Claude sends two reminders. A `strict` reminder may still offer a failure envelope. The stage fails as `missing emit_stage_envelope` only after that budget is spent. A failure envelope the stage chooses is still a real ending.
 
 No reminder is sent when:
 

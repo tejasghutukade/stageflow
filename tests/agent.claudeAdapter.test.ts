@@ -1,14 +1,16 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LEAKED_TOOL_CALL_ERROR } from "../src/agent/stageTurnDriver.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { claudeSessionMarkerPath } from "../src/agent/claudeSession.js";
 import type { StageRunInput } from "../src/agent/port.js";
 
 type MockToolDef = {
   name: string;
+  description: string;
   handler: (args: unknown, extra: unknown) => Promise<{ content: unknown[]; isError?: boolean }>;
 };
 
@@ -22,7 +24,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
     description: string,
     _inputSchema: unknown,
     handler: MockToolDef["handler"],
-  ): MockToolDef => ({ name, handler }),
+  ): MockToolDef => ({ name, description, handler }),
   createSdkMcpServer: (opts: { name: string; tools: MockToolDef[] }) => ({
     type: "sdk",
     name: opts.name,
@@ -521,8 +523,151 @@ describe("ClaudeAgentAdapter — bash-in-a-box toolAliases", () => {
         "sandbox_read",
         "sandbox_write",
         "sandbox_edit",
+        "grep",
+        "find",
+        "ls",
       ]),
     );
+    for (const name of ["grep", "find", "ls", "Grep", "Glob"]) {
+      expect(lastQueryOptions?.tools).not.toContain(name);
+    }
+    for (const name of ["grep", "find", "ls"]) {
+      expect(toolNames.filter((entry) => entry === name)).toHaveLength(1);
+    }
+  });
+
+  it("offers grep, find, and ls pointed at the stage working tree when there is no sandbox", async () => {
+    queryImpl = emptyStream;
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-claude-search-host-"));
+    await writeFile(path.join(cwd, "notes.txt"), "tree-needle\n");
+    const adapter = await newAdapter();
+    const input = baseInput();
+    await adapter.runStage({ ...input, roots: { ...input.roots, cwd } });
+
+    expect(lastQueryOptions?.cwd).toBe(cwd);
+    expect(lastQueryOptions?.tools).toEqual(["Read", "Write", "Edit", "Bash"]);
+    for (const name of ["grep", "find", "ls", "Grep", "Glob"]) {
+      expect(lastQueryOptions?.tools).not.toContain(name);
+    }
+    const grep = findTool(lastQueryOptions!, "grep");
+    const found = await findTool(lastQueryOptions!, "find").handler({ pattern: "*.txt" }, {});
+    const listed = await findTool(lastQueryOptions!, "ls").handler({}, {});
+    const grepped = await grep.handler({ pattern: "tree-needle" }, {});
+    expect(grepped.isError).toBeFalsy();
+    expect((grepped.content[0] as { text: string }).text).toContain("notes.txt");
+    expect((grepped.content[0] as { text: string }).text).toContain("tree-needle");
+    expect((found.content[0] as { text: string }).text).toContain("notes.txt");
+    expect((listed.content[0] as { text: string }).text).toContain("notes.txt");
+    const outside = await grep.handler({ pattern: "root", path: "/etc/passwd" }, {});
+    expect(outside.isError).toBe(true);
+    expect((outside.content[0] as { text: string }).text).not.toContain("root:");
+
+    await rm(cwd, { recursive: true, force: true });
+  });
+});
+
+describe("ClaudeAgentAdapter — open change of approach", () => {
+  const authorPrompt = "Fail closed if the source file is missing.";
+  const missingFileStop =
+    "If a file you were given is not in that folder, stop and say so. Do not create stand-in documents.";
+  const changeApproach =
+    "A rejected emit, a failed command, or a missing file ends that approach. Try another approach with the tools and inputs already given. Emit failure only when the stage can name a blocker none of those can get past. Do not create a stand-in for an input that could not be read.";
+  const sandboxBashDescription =
+    "Run a shell command inside this stage attempt's sandbox. The working directory is /workspace. The host filesystem is not mounted.";
+  const notAddedByLevel = [
+    "ask_operator",
+    "send_message",
+    "read_memory",
+    "replace_memory",
+    "add_memory_card",
+    "update_memory_card",
+    "read_memory_card",
+    "search_memory_cards",
+    "send_email",
+    "reply_email",
+  ];
+
+  function registeredNames(options: Record<string, unknown>): string[] {
+    const builtins = options.tools as string[];
+    const servers = options.mcpServers as Record<string, { instance: { tools: MockToolDef[] } }>;
+    const mcp = Object.entries(servers).flatMap(([server, entry]) =>
+      entry.instance.tools.map((tool) => `${server}:${tool.name}`),
+    );
+    return [...builtins, ...mcp].sort();
+  }
+
+  async function userPrompts(): Promise<string[]> {
+    const queryMock = (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as {
+      mock: { calls: Array<[{ prompt: AsyncIterable<{ message: { content: string } }> }]> };
+    };
+    const texts: string[] = [];
+    for (const [params] of queryMock.mock.calls) {
+      for await (const message of params.prompt) texts.push(message.message.content);
+    }
+    return texts;
+  }
+
+  it("sends the change-approach instruction as host text and adds no tool", async () => {
+    queryImpl = emptyStream;
+    const queryMock = (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as {
+      mockClear(): void;
+    };
+    queryMock.mockClear();
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-claude-open-"));
+    const marker = "PROJECT-INSTRUCTION-MUST-NOT-LOAD";
+    await writeFile(path.join(cwd, "AGENTS.md"), marker);
+    await writeFile(path.join(cwd, "CLAUDE.md"), marker);
+
+    const sandboxed = (independence?: "strict" | "persistent" | "open") => ({
+      ...baseInput({
+        system_prompt: authorPrompt,
+        ...(independence !== undefined ? { independence } : {}),
+      }),
+      roots: {
+        ...buildStageRoots(cwd, "review"),
+        containerName: "stageflow-run-review-1-abc",
+        readonlyDir: "/sandbox/inputs",
+      },
+    });
+
+    const adapter = await newAdapter();
+    await adapter.runStage(sandboxed("persistent"));
+    const persistentNames = registeredNames(lastQueryOptions!);
+    for (const name of ["stageflow:grep", "stageflow:find", "stageflow:ls"]) {
+      expect(persistentNames).toContain(name);
+    }
+    const persistentPrompt = (await userPrompts())[0];
+    expect(persistentPrompt).toContain(missingFileStop);
+    expect(persistentPrompt).not.toContain("ends that approach");
+    expect(lastQueryOptions?.systemPrompt).toEqual({ type: "custom", prompt: authorPrompt });
+
+    queryMock.mockClear();
+    await adapter.runStage(sandboxed("strict"));
+    const strictPrompt = (await userPrompts())[0];
+    expect(strictPrompt).toContain(missingFileStop);
+    expect(strictPrompt).not.toContain("ends that approach");
+    expect(registeredNames(lastQueryOptions!)).toEqual(persistentNames);
+    expect(lastQueryOptions?.systemPrompt).toEqual({ type: "custom", prompt: authorPrompt });
+
+    queryMock.mockClear();
+    await adapter.runStage(sandboxed("open"));
+    const openPrompt = (await userPrompts())[0];
+    expect(openPrompt).toContain(changeApproach);
+    expect(openPrompt).not.toContain(missingFileStop);
+    expect(openPrompt).not.toContain(marker);
+    expect(lastQueryOptions?.systemPrompt).toEqual({ type: "custom", prompt: authorPrompt });
+    expect(lastQueryOptions?.settingSources).toEqual([]);
+    expect(registeredNames(lastQueryOptions!)).toEqual(persistentNames);
+    for (const name of notAddedByLevel) {
+      expect(persistentNames.join("\n")).not.toContain(name);
+    }
+    expect(Object.keys((lastQueryOptions?.mcpServers as object) ?? {})).toEqual(["stageflow"]);
+    const bash = findTool(lastQueryOptions!, "sandbox_bash");
+    expect(bash.description).toBe(sandboxBashDescription);
+    expect(bash.description).not.toContain("If a file is missing, stop");
+    expect(bash.description).not.toContain("stop and say so");
+
+    await rm(cwd, { recursive: true, force: true });
   });
 });
 
@@ -1092,7 +1237,10 @@ describe("ClaudeAgentAdapter — turn ends without an envelope", () => {
       },
     ]);
     const activity: unknown[] = [];
-    const result = await (await newAdapter()).runStage({ ...input(), onActivity: (e) => activity.push(e) });
+    const result = await (await newAdapter()).runStage({
+      ...input({ independence: "strict" }),
+      onActivity: (e) => activity.push(e),
+    });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.envelope.summary).toBe("emitted after reminder");
     expect(activity).toContainEqual(
@@ -1103,9 +1251,100 @@ describe("ClaudeAgentAdapter — turn ends without an envelope", () => {
     expect(prompts[1]).toContain("Reminder 1 of 2");
   });
 
+  it("uses the same continuation reminder for open", async () => {
+    scriptTurns([
+      noEmitTurn("session-open"),
+      async function* (options) {
+        yield initMessage("session-open");
+        await findTool(options, "emit_stage_envelope").handler(
+          { status: "success", summary: "done", artifacts: [] },
+          undefined,
+        );
+        yield userToolResultMessage("emit-open", "ok");
+      },
+    ]);
+    const result = await (await newAdapter()).runStage(input({ independence: "open" }));
+    expect(result.ok).toBe(true);
+    const prompts = await promptsSent();
+    expect(prompts[1]).toContain("Keep working");
+    expect(prompts[1]).not.toMatch(/Reminder \d+ of \d+/);
+    expect(prompts[1]).not.toContain('status "failure"');
+  });
+
+  it("keeps working after a reminder turn uses a tool", async () => {
+    scriptTurns([
+      noEmitTurn("session-tool"),
+      async function* () {
+        yield initMessage("session-tool");
+        yield {
+          type: "assistant",
+          message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }] },
+        };
+        yield { type: "result", subtype: "success", is_error: false, result: "saw the file" };
+      },
+      async function* (options) {
+        yield initMessage("session-tool");
+        await findTool(options, "emit_stage_envelope").handler(
+          { status: "success", summary: "done after tool", artifacts: [] },
+          undefined,
+        );
+        yield userToolResultMessage("emit-tool", "ok");
+      },
+    ]);
+    const result = await (await newAdapter()).runStage(input());
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.envelope.summary).toBe("done after tool");
+    const prompts = await promptsSent();
+    expect(prompts).toHaveLength(3);
+    expect(prompts[1]).toContain("Keep working");
+    expect(prompts[2]).toContain("Keep working");
+    expect(prompts[2]).not.toContain('status "failure"');
+  });
+
+  it("keeps going with continuation text when the stage omits independence", async () => {
+    const calls = scriptTurns(Array.from({ length: 25 }, () => noEmitTurn("session-persist")));
+    const result = await (await newAdapter()).runStage(input());
+    expect(result).toMatchObject({ ok: false, reason: "missing emit_stage_envelope" });
+    expect(calls).toHaveLength(21);
+    const prompts = await promptsSent();
+    expect(prompts[1]).toContain("Keep working");
+    expect(prompts[1]).not.toMatch(/Reminder \d+ of \d+/);
+    expect(prompts[1]).not.toContain('status "failure"');
+    expect(prompts.slice(1).every((prompt) => prompt.includes("Keep working"))).toBe(true);
+  });
+
+  it("fails with the leaked-tool provider error after the strict reminder budget", async () => {
+    function leakedTurn(sessionId: string) {
+      return async function* () {
+        yield initMessage(sessionId);
+        yield {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "<tool_call>emit_stage_envelope</tool_call>" }],
+          },
+        };
+        yield { type: "result", subtype: "success", is_error: false, result: "wrote it out" };
+      };
+    }
+    const calls = scriptTurns([
+      leakedTurn("session-leak"),
+      leakedTurn("session-leak"),
+      leakedTurn("session-leak"),
+    ]);
+    const result = await (await newAdapter()).runStage(input({ independence: "strict" }));
+    expect(result).toMatchObject({
+      ok: false,
+      reason: `provider error: ${LEAKED_TOOL_CALL_ERROR}`,
+    });
+    expect(calls).toHaveLength(3);
+    const prompts = await promptsSent();
+    expect(prompts[1]).toContain("plain text");
+  });
+
   it("fails as missing emit after two unanswered reminders", async () => {
     const calls = scriptTurns([noEmitTurn("session-b"), noEmitTurn("session-b"), noEmitTurn("session-b")]);
-    const result = await (await newAdapter()).runStage(input());
+    const result = await (await newAdapter()).runStage(input({ independence: "strict" }));
     expect(result).toMatchObject({ ok: false, reason: "missing emit_stage_envelope" });
     expect(calls).toHaveLength(3);
   });
@@ -1183,5 +1422,139 @@ describe("ClaudeAgentAdapter — turn ends without an envelope", () => {
     const event = await handle.next();
     expect(event.status).toBe("waiting_for_input");
     await handle.close();
+  });
+});
+
+describe("checkout context AGENTS.md", () => {
+  const authorPrompt = "Fail closed if the source file is missing.";
+  const wins = "The stage assignment wins where it conflicts with the file.";
+  const checkoutMarker = "CHECKOUT-AGENTS-RULE";
+  const parentMarker = "PARENT-AGENTS-RULE";
+  const claudeMarker = "CLAUDE-MD-MUST-STAY-OUT";
+  const piMarker = "PI-APPEND-MUST-STAY-OUT";
+  const runMarker = "RUN-WS-AGENTS-MUST-STAY-OUT";
+
+  async function userPrompts(): Promise<string[]> {
+    const queryMock = (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as {
+      mock: { calls: Array<[{ prompt: AsyncIterable<{ message: { content: string } }> }]> };
+    };
+    const texts: string[] = [];
+    for (const [params] of queryMock.mock.calls) {
+      for await (const message of params.prompt) texts.push(message.message.content);
+    }
+    return texts;
+  }
+
+  async function plant(checkoutAgents: string | undefined) {
+    const parent = await mkdtemp(path.join(tmpdir(), "sf-claude-checkout-ctx-"));
+    const checkout = path.join(parent, "checkout");
+    const runWs = path.join(parent, "run");
+    await mkdir(checkout, { recursive: true });
+    await mkdir(runWs, { recursive: true });
+    await writeFile(path.join(parent, "AGENTS.md"), parentMarker);
+    await writeFile(path.join(runWs, "AGENTS.md"), runMarker);
+    await writeFile(path.join(checkout, "CLAUDE.md"), claudeMarker);
+    await mkdir(path.join(checkout, ".pi"), { recursive: true });
+    await writeFile(path.join(checkout, ".pi", "APPEND_SYSTEM.md"), piMarker);
+    if (checkoutAgents !== undefined) {
+      await writeFile(path.join(checkout, "AGENTS.md"), checkoutAgents);
+    }
+    return { parent, checkout, runWs };
+  }
+
+  function inputFor(
+    runWs: string,
+    checkout: string | undefined,
+    independence: "strict" | "persistent" | "open" | undefined,
+    checkoutContext: boolean,
+  ): StageRunInput {
+    return {
+      ...baseInput({
+        system_prompt: authorPrompt,
+        ...(independence !== undefined ? { independence } : {}),
+        ...(checkoutContext ? { checkout_context: true } : {}),
+      }),
+      roots: checkout !== undefined ? buildStageRoots(runWs, "review", checkout) : buildStageRoots(runWs, "review"),
+    };
+  }
+
+  beforeEach(() => {
+    queryImpl = emptyStream;
+  });
+
+  afterEach(async () => {
+    const queryMock = (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as {
+      mockClear(): void;
+    };
+    queryMock.mockClear();
+  });
+
+  it("includes the checkout file for every independence level and leaves the author prompt intact", async () => {
+    const { checkout, runWs } = await plant(`${checkoutMarker}\nUse the repo style.`);
+    const adapter = await newAdapter();
+    for (const independence of ["strict", "persistent", "open", undefined] as const) {
+      const queryMock = (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as {
+        mockClear(): void;
+      };
+      queryMock.mockClear();
+      const stageInput = inputFor(runWs, checkout, independence, true);
+      await adapter.runStage(stageInput);
+      const prompt = (await userPrompts())[0] ?? "";
+      expect(prompt).toContain(checkoutMarker);
+      expect(prompt).toContain(wins);
+      expect(prompt).not.toContain(parentMarker);
+      expect(prompt).not.toContain(claudeMarker);
+      expect(prompt).not.toContain(piMarker);
+      expect(prompt).not.toContain(runMarker);
+      expect(stageInput.stage.system_prompt).toBe(authorPrompt);
+      expect(lastQueryOptions?.systemPrompt).toEqual({ type: "custom", prompt: authorPrompt });
+      expect(lastQueryOptions?.settingSources).toEqual([]);
+    }
+  });
+
+  it("loads nothing when the flag is off, at every independence level", async () => {
+    const { checkout, runWs } = await plant(checkoutMarker);
+    const adapter = await newAdapter();
+    for (const independence of ["strict", "persistent", "open", undefined] as const) {
+      const queryMock = (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as {
+        mockClear(): void;
+      };
+      queryMock.mockClear();
+      const stageInput = inputFor(runWs, checkout, independence, false);
+      await adapter.runStage(stageInput);
+      const prompt = (await userPrompts())[0] ?? "";
+      expect(prompt).not.toContain(checkoutMarker);
+      expect(prompt).not.toContain(wins);
+      expect(prompt).not.toContain(parentMarker);
+      expect(stageInput.stage.system_prompt).toBe(authorPrompt);
+      expect(lastQueryOptions?.systemPrompt).toEqual({ type: "custom", prompt: authorPrompt });
+      expect(lastQueryOptions?.settingSources).toEqual([]);
+    }
+  });
+
+  it("starts with no extra context when the checkout has no AGENTS.md", async () => {
+    const { checkout, runWs } = await plant(undefined);
+    const adapter = await newAdapter();
+    const stageInput = inputFor(runWs, checkout, "open", true);
+    const result = await adapter.runStage(stageInput);
+    const prompt = (await userPrompts())[0] ?? "";
+    expect(prompt).not.toContain(wins);
+    expect(prompt).not.toContain(parentMarker);
+    expect(lastQueryOptions?.systemPrompt).toEqual({ type: "custom", prompt: authorPrompt });
+    expect(lastQueryOptions?.settingSources).toEqual([]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).not.toMatch(/AGENTS\.md/);
+  });
+
+  it("does not read AGENTS.md from the run workspace when the stage has no checkout", async () => {
+    const { runWs } = await plant(checkoutMarker);
+    const adapter = await newAdapter();
+    await adapter.runStage(inputFor(runWs, undefined, "persistent", true));
+    const prompt = (await userPrompts())[0] ?? "";
+    expect(prompt).not.toContain(checkoutMarker);
+    expect(prompt).not.toContain(runMarker);
+    expect(prompt).not.toContain(parentMarker);
+    expect(prompt).not.toContain(wins);
+    expect(lastQueryOptions?.settingSources).toEqual([]);
   });
 });

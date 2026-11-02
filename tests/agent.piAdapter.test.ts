@@ -336,11 +336,75 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
         | undefined
     )?.customTools;
     const byName = new Map((customTools ?? []).map((tool) => [tool.name, tool]));
-    for (const name of ["read", "write", "edit", "bash"]) {
+    for (const name of ["read", "write", "edit", "bash", "grep", "find", "ls"]) {
       expect(byName.get(name)?.description).toContain("/workspace");
+    }
+    const toolNames = lastSessionTools();
+    for (const name of ["grep", "find", "ls"]) {
+      expect(toolNames.filter((entry) => entry === name)).toHaveLength(1);
     }
     expect(byName.has("write_stage_artifact")).toBe(true);
     expect(byName.has("emit_stage_envelope")).toBe(true);
+  });
+
+  it("offers grep, find, and ls on the stage working tree when there is no sandbox", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-search-host-"));
+    const roots = buildStageRoots(runWs, "clarify");
+    await new PiAgentAdapter().runStage(wiringInput(runWs, { roots }));
+    const options = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
+      | { cwd?: string; tools?: string[]; customTools?: Array<{ name: string; description?: string }> }
+      | undefined;
+    expect(options?.cwd).toBe(roots.cwd);
+    expect(options?.tools).toEqual(expect.arrayContaining(["grep", "find", "ls"]));
+    const custom = options?.customTools ?? [];
+    const byName = new Map(custom.map((tool) => [tool.name, tool]));
+    for (const name of ["grep", "find", "ls"]) {
+      expect(byName.get(name)?.description).toContain("working tree");
+    }
+    expect(custom.filter((tool) => tool.name === "read")).toHaveLength(0);
+    expect(custom.filter((tool) => tool.name === "bash")).toHaveLength(0);
+  });
+
+  it("returns the first search result of a turn and can defer a later one", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-search-cap-"));
+    await new PiAgentAdapter().runStage(wiringInput(runWs));
+    const factories = lastLoaderOptions().extensionFactories as Array<{
+      name: string;
+      factory: (pi: ExtensionAPI) => void;
+    }>;
+    const toolOutput = factories.find((entry) => entry.name === STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME);
+    if (!toolOutput) throw new Error("tool output extension missing");
+    const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => Promise<unknown>>>();
+    toolOutput.factory({
+      on(event: string, handler: (event: unknown, ctx: unknown) => Promise<unknown>) {
+        handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+      },
+    } as unknown as ExtensionAPI);
+    const ctx = { getContextUsage: () => ({ tokens: 120_000, contextWindow: 128_000 }) };
+    const shard = [{ type: "text", text: "x".repeat(60_000) }];
+    const call = async (toolName: string, toolCallId: string) => {
+      const [handler] = handlers.get("tool_result") ?? [];
+      if (!handler) throw new Error("tool_result handler missing");
+      return handler(
+        {
+          type: "tool_result",
+          toolCallId,
+          toolName,
+          input: {},
+          isError: false,
+          content: shard,
+          details: {},
+        },
+        ctx,
+      );
+    };
+    expect(await call("find", "f1")).toBeUndefined();
+    const deferred = (await call("ls", "l1")) as { content: Array<{ text?: string }> };
+    expect(deferred.content[0]?.text).toContain("ls output not returned");
+    const [end] = handlers.get("message_end") ?? [];
+    if (!end) throw new Error("message_end handler missing");
+    await end({ type: "message_end", message: { role: "assistant" } }, ctx);
+    expect(await call("grep", "g1")).toBeUndefined();
   });
 
   it("empty resolvedMcpServers matches omitted", async () => {
@@ -766,5 +830,284 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
       }),
     ]);
     expect(settled).toBe("settled");
+  });
+
+  it("tells an open stage to change approach, keeps the stop line otherwise, and adds no tool", async () => {
+    const authorPrompt = "Fail closed if the source file is missing.";
+    const missingFileStop =
+      "If a file you were given is not in that folder, stop and say so. Do not create stand-in documents.";
+    const changeApproach =
+      "A rejected emit, a failed command, or a missing file ends that approach. Try another approach with the tools and inputs already given. Emit failure only when the stage can name a blocker none of those can get past. Do not create a stand-in for an input that could not be read.";
+    const bashStop = "If a file is missing, stop. Do not create a stand-in.";
+    const bashGuidelineStop = "If a file is not there, stop. Do not create stand-in documents.";
+    const marker = "PROJECT-INSTRUCTION-MUST-NOT-LOAD";
+    const notAddedByLevel = [
+      "ask_operator",
+      "send_message",
+      "read_memory",
+      "replace_memory",
+      "add_memory_card",
+      "update_memory_card",
+      "read_memory_card",
+      "search_memory_cards",
+      "send_email",
+      "reply_email",
+    ];
+
+    function sessionToolNames(): string[] {
+      const options = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
+        | { tools?: string[]; customTools?: Array<{ name: string }> }
+        | undefined;
+      return [...(options?.tools ?? []), ...(options?.customTools ?? []).map((tool) => tool.name)].sort();
+    }
+
+    function bashTool(): { description: string; promptGuidelines?: string[] } {
+      const options = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
+        | { customTools?: Array<{ name: string; description: string; promptGuidelines?: string[] }> }
+        | undefined;
+      const bash = options?.customTools?.find((tool) => tool.name === "bash");
+      if (bash === undefined) throw new Error("bash tool was not registered");
+      return bash;
+    }
+
+    function loader(): {
+      getAgentsFiles(): { agentsFiles: Array<{ content: string }> };
+      getSkills(): { skills: Array<{ name: string }> };
+      getAppendSystemPrompt(): string[];
+      getSystemPrompt(): string | undefined;
+      getExtensions(): { extensions: Array<{ path: string }> };
+    } {
+      const options = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
+        | { resourceLoader?: ReturnType<typeof loader> }
+        | undefined;
+      if (options?.resourceLoader === undefined) throw new Error("resource loader missing");
+      return options.resourceLoader;
+    }
+
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-open-"));
+    const roots = {
+      ...buildStageRoots(runWs, "clarify"),
+      containerName: "stageflow-run-clarify-1-abc",
+      readonlyDir: "/sandbox/inputs",
+    };
+    await writeFile(path.join(roots.cwd, "AGENTS.md"), marker);
+    await writeFile(path.join(roots.cwd, "CLAUDE.md"), marker);
+    await mkdir(path.join(roots.cwd, ".pi"), { recursive: true });
+    await writeFile(path.join(roots.cwd, ".pi", "APPEND_SYSTEM.md"), marker);
+    await writeFile(path.join(roots.cwd, ".pi", "SYSTEM.md"), marker);
+    await writeSkill(path.join(roots.agentDir, "skills"), "host-skill");
+    await writeExtension(path.join(roots.cwd, ".pi", "extensions"), "project-canary.ts");
+
+    const stage = (independence?: "strict" | "persistent" | "open") =>
+      wiringInput(runWs, {
+        roots,
+        sessionMode: "new_session",
+        stage: {
+          id: "clarify",
+          system_prompt: authorPrompt,
+          model: "anthropic/claude-sonnet-4-5",
+          ...(independence !== undefined ? { independence } : {}),
+        },
+      });
+
+    await new PiAgentAdapter().runStage(stage("persistent"));
+    const persistentNames = sessionToolNames();
+    for (const name of ["grep", "find", "ls"]) {
+      expect(persistentNames).toContain(name);
+    }
+    const persistentPrompt = loader().getSystemPrompt() ?? "";
+    expect(persistentPrompt.startsWith(authorPrompt)).toBe(true);
+    expect(persistentPrompt).toContain(missingFileStop);
+    expect(persistentPrompt).not.toContain("ends that approach");
+    expect(bashTool().description).toContain(bashStop);
+    expect(bashTool().promptGuidelines?.join("\n")).toContain(bashGuidelineStop);
+
+    await new PiAgentAdapter().runStage(stage("strict"));
+    expect(sessionToolNames()).toEqual(persistentNames);
+    const strictPrompt = loader().getSystemPrompt() ?? "";
+    expect(strictPrompt.startsWith(authorPrompt)).toBe(true);
+    expect(strictPrompt).toContain(missingFileStop);
+    expect(strictPrompt).not.toContain("ends that approach");
+    expect(bashTool().description).toContain(bashStop);
+    expect(bashTool().description).not.toContain("ends that approach");
+    expect(bashTool().promptGuidelines?.join("\n")).toContain(bashGuidelineStop);
+
+    await new PiAgentAdapter().runStage(stage("open"));
+    expect(sessionToolNames()).toEqual(persistentNames);
+    for (const name of notAddedByLevel) {
+      expect(persistentNames).not.toContain(name);
+    }
+    const openPrompt = loader().getSystemPrompt() ?? "";
+    expect(openPrompt.startsWith(authorPrompt)).toBe(true);
+    expect(openPrompt).toContain(changeApproach);
+    expect(openPrompt).not.toContain(missingFileStop);
+    expect(openPrompt).not.toContain(marker);
+    expect(bashTool().description).toContain(changeApproach);
+    expect(bashTool().description).not.toContain(bashStop);
+    expect(bashTool().promptGuidelines?.join("\n")).toContain(changeApproach);
+    expect(bashTool().promptGuidelines?.join("\n")).not.toContain(bashGuidelineStop);
+    expect(loader().getAgentsFiles().agentsFiles).toEqual([]);
+    expect(loader().getSkills().skills).toEqual([]);
+    expect(loader().getAppendSystemPrompt()).toEqual([]);
+    expect(loader().getAppendSystemPrompt().join("\n")).not.toContain(marker);
+    expect(loader().getExtensions().extensions.map((ext) => ext.path).join("\n")).not.toContain(
+      "project-canary",
+    );
+  });
+});
+
+describe("checkout context AGENTS.md", () => {
+  const authorPrompt = "Fail closed if the source file is missing.";
+  const wins = "The stage assignment wins where it conflicts with the file.";
+  const checkoutMarker = "CHECKOUT-AGENTS-RULE";
+  const parentMarker = "PARENT-AGENTS-RULE";
+  const claudeMarker = "CLAUDE-MD-MUST-STAY-OUT";
+  const piMarker = "PI-APPEND-MUST-STAY-OUT";
+  const runMarker = "RUN-WS-AGENTS-MUST-STAY-OUT";
+
+  beforeEach(() => {
+    piSdkMocks.resetLoaderOptions();
+    piSdkMocks.createAgentSession.mockReset();
+    piSdkMocks.createAgentSession.mockImplementation(async () => ({
+      session: {
+        bindExtensions: async () => {
+          emitPendingMcpStatus();
+        },
+        setModel: async () => {},
+        setThinkingLevel: () => {},
+        prompt: async () => {},
+        abort: async () => {},
+        dispose: () => {},
+        subscribe: () => () => {},
+        agent: { state: { messages: [] }, continue: async () => {} },
+      },
+    }));
+    wrapAttachAndEmitStatus("connected");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function systemPrompt(): string {
+    const options = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
+      | { resourceLoader?: { getSystemPrompt(): string | undefined; getAgentsFiles(): { agentsFiles: unknown[] }; getSkills(): { skills: unknown[] }; getAppendSystemPrompt(): string[] } }
+      | undefined;
+    return options?.resourceLoader?.getSystemPrompt() ?? "";
+  }
+
+  function loaderFlags(): Record<string, unknown> {
+    const options = piSdkMocks.capturedLoaderOptions.at(-1);
+    if (options === undefined) throw new Error("DefaultResourceLoader was not constructed");
+    return options;
+  }
+
+  async function plant(checkoutAgents: string | undefined) {
+    const parent = await mkdtemp(path.join(tmpdir(), "sf-pi-checkout-ctx-"));
+    const checkout = path.join(parent, "checkout");
+    const runWs = path.join(parent, "run");
+    await mkdir(checkout, { recursive: true });
+    await mkdir(runWs, { recursive: true });
+    await writeFile(path.join(parent, "AGENTS.md"), parentMarker);
+    await writeFile(path.join(runWs, "AGENTS.md"), runMarker);
+    await writeFile(path.join(checkout, "CLAUDE.md"), claudeMarker);
+    await mkdir(path.join(checkout, ".pi"), { recursive: true });
+    await writeFile(path.join(checkout, ".pi", "APPEND_SYSTEM.md"), piMarker);
+    await writeExtension(path.join(checkout, ".pi", "extensions"), "project-canary.ts");
+    await writeSkill(path.join(checkout, ".pi", "skills"), "project-skill");
+    if (checkoutAgents !== undefined) {
+      await writeFile(path.join(checkout, "AGENTS.md"), checkoutAgents);
+    }
+    return { parent, checkout, runWs };
+  }
+
+  function inputFor(
+    runWs: string,
+    checkout: string | undefined,
+    independence: "strict" | "persistent" | "open" | undefined,
+    checkoutContext: boolean,
+  ) {
+    const stage = {
+      id: "clarify",
+      system_prompt: authorPrompt,
+      model: "anthropic/claude-sonnet-4-5",
+      ...(independence !== undefined ? { independence } : {}),
+      ...(checkoutContext ? { checkout_context: true as const } : {}),
+    };
+    return wiringInput(runWs, {
+      roots: checkout !== undefined ? buildStageRoots(runWs, "clarify", checkout) : buildStageRoots(runWs, "clarify"),
+      sessionMode: "new_session",
+      stage,
+    });
+  }
+
+  it("includes the checkout file for every independence level and leaves the author prompt intact", async () => {
+    const { checkout, runWs } = await plant(`${checkoutMarker}\nUse the repo style.`);
+    for (const independence of ["strict", "persistent", "open", undefined] as const) {
+      const stageInput = inputFor(runWs, checkout, independence, true);
+      await new PiAgentAdapter().runStage(stageInput);
+      const prompt = systemPrompt();
+      expect(prompt.startsWith(authorPrompt)).toBe(true);
+      expect(stageInput.stage.system_prompt).toBe(authorPrompt);
+      expect(prompt).toContain(checkoutMarker);
+      expect(prompt).toContain(wins);
+      expect(prompt).not.toContain(parentMarker);
+      expect(prompt).not.toContain(claudeMarker);
+      expect(prompt).not.toContain(piMarker);
+      expect(prompt).not.toContain(runMarker);
+      expect(loaderFlags()).toMatchObject({
+        noContextFiles: true,
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+      });
+      const session = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as {
+        resourceLoader: {
+          getAgentsFiles(): { agentsFiles: unknown[] };
+          getSkills(): { skills: unknown[] };
+          getAppendSystemPrompt(): string[];
+          getExtensions(): { extensions: Array<{ path: string }> };
+        };
+      };
+      expect(session.resourceLoader.getAgentsFiles().agentsFiles).toEqual([]);
+      expect(session.resourceLoader.getSkills().skills).toEqual([]);
+      expect(session.resourceLoader.getAppendSystemPrompt().join("\n")).not.toContain(piMarker);
+      expect(session.resourceLoader.getExtensions().extensions.map((ext) => ext.path).join("\n")).not.toContain(
+        "project-canary",
+      );
+    }
+  });
+
+  it("loads nothing when the flag is off, at every independence level", async () => {
+    const { checkout, runWs } = await plant(checkoutMarker);
+    for (const independence of ["strict", "persistent", "open", undefined] as const) {
+      await new PiAgentAdapter().runStage(inputFor(runWs, checkout, independence, false));
+      const prompt = systemPrompt();
+      expect(prompt.startsWith(authorPrompt)).toBe(true);
+      expect(prompt).not.toContain(checkoutMarker);
+      expect(prompt).not.toContain(wins);
+      expect(prompt).not.toContain(parentMarker);
+    }
+  });
+
+  it("starts with no extra context when the checkout has no AGENTS.md", async () => {
+    const { checkout, runWs } = await plant(undefined);
+    const result = await new PiAgentAdapter().runStage(inputFor(runWs, checkout, "persistent", true));
+    const prompt = systemPrompt();
+    expect(prompt.startsWith(authorPrompt)).toBe(true);
+    expect(prompt).not.toContain(wins);
+    expect(prompt).not.toContain(parentMarker);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("missing emit_stage_envelope");
+  });
+
+  it("does not read AGENTS.md from the run workspace when the stage has no checkout", async () => {
+    const { runWs } = await plant(checkoutMarker);
+    await new PiAgentAdapter().runStage(inputFor(runWs, undefined, "open", true));
+    const prompt = systemPrompt();
+    expect(prompt).not.toContain(checkoutMarker);
+    expect(prompt).not.toContain(runMarker);
+    expect(prompt).not.toContain(parentMarker);
+    expect(prompt).not.toContain(wins);
   });
 });

@@ -141,7 +141,7 @@ A stream that ends with neither `done` nor `error` was cut off (the CLI reports 
 
 ## Public web chat API
 
-The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes. The link slug is the credential; there is no control token. They are only live while the agent is enabled and `web_chat.enabled` is true. Each visitor sends a stable id the page keeps in the browser as the `X-Visitor-Id` header (16–64 characters of `A–Z a–z 0–9 _ -`); conversations are scoped to it.
+The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes for tool-less public agents without shared private context. The link slug is the public-access credential; there is no control token. They are only live while the agent is enabled and `web_chat.enabled` is true. Each visitor sends a stable id the page keeps in the browser as the `X-Visitor-Id` header (16–64 characters of `A–Z a–z 0–9 _ -`); conversations are scoped to it. Authenticated agents instead require verified admission and a bearer on every thread request. Their experimental embedded API, unsupported paths and migration limits are documented in [Consumer identity](consumer-identity.md); the existing page has no sign-in flow.
 
 | Method and path | Response |
 |-----------------|----------|
@@ -165,7 +165,19 @@ Errors are `{ code, message, retryAfterSec? }` with a friendly `message`:
 | `web_chat.limit_reached` | 409 | The conversation hit its session limits, or too many threads |
 | `web_chat.failed` | 500 | Anything else; also a guardrail block, with a neutral message |
 
-**CORS.** Same-origin pages always work. A page hosted elsewhere must have its origin listed in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma separated); other origins, and `Origin: null`, get no CORS headers. Allowed headers are `content-type` and `x-visitor-id`.
+**CORS.** Same-origin pages always work. A page hosted elsewhere must have its origin listed in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma separated); other origins, and `Origin: null`, get no CORS headers. Allowed headers are `content-type`, `x-visitor-id` and `authorization`.
+
+### Protected (authenticated) chat
+
+For an agent with `web_chat.access: authenticated` the same thread and message routes apply, but the caller is a verified person, not an anonymous visitor. `Authorization: Bearer <token>` replaces `X-Visitor-Id`, and every thread belongs to that person for good. The token comes from one of:
+
+| Method and path | Purpose |
+|-----------------|---------|
+| `POST /api/public/chat/:slug/admission` | Body `{ connectionId, assertion }`, the signed one-time handoff token. `201 { token, tokenType: "Bearer", expiresIn }` |
+| `POST /api/public/chat/:slug/oidc/start` | Body `{ connectionId }`. `200 { authorizationUrl }` and an `sf_oidc` cookie. Send the browser to the URL |
+| `GET /api/public/chat/:slug/oidc/callback` | The provider's redirect. Returns the same `201 { token, … }` shape |
+
+Extra codes: `identity.verification_required` (401, the proof or bearer is missing, expired or revoked), `identity.not_available` (404, not yours or no longer available), `identity.setup_required` (503, identity is off or the agent is not consumer-safe). Replies are held until the person's permission is checked, then sent, so a denial after the stream starts arrives as an `error` frame. The handoff token, the OIDC flow, access levels and the order tool are in [Consumer identity](consumer-identity.md); a complete client is in [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md#7-embed-the-chat). Operators manage connections and people through the [Operator API](consumer-identity.md#operator-api), not these routes.
 
 ## CLI, MCP and REST side by side
 
