@@ -33,6 +33,8 @@ export const BODY_KEYS = new Set([
   "channels",
   "system_prompt",
   "model",
+  "independence",
+  "checkout_context",
   "payload_schema",
   "gate_kinds",
   "pre_emit_checks",

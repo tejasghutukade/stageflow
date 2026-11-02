@@ -58,6 +58,18 @@ import {
   sliceSandboxLines,
   writeSandboxFile,
 } from "../runtime/sandboxFiles.js";
+import {
+  resolveHostSearchPath,
+  resolveSandboxSearchPath,
+  runFind,
+  runGrep,
+  runHostShell,
+  runLs,
+  sandboxCommandRunner,
+  type FindQuery,
+  type GrepQuery,
+  type LsQuery,
+} from "../runtime/workspaceSearch.js";
 
 export const STAGEFLOW_MCP_SERVER_NAME = "stageflow";
 export const EMIT_STAGE_ENVELOPE_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__emit_stage_envelope`;
@@ -174,7 +186,12 @@ type SandboxExecFn = typeof defaultExecInSandboxContainer;
 export type SandboxBashOptions = {
   containerName: string;
   dockerBin?: string;
+  readonlyDir?: string;
   execute?: SandboxExecFn;
+};
+
+export type WorkspaceSearchOptions = {
+  cwd: string;
 };
 
 /** Adapts a `{content, details?, isError?, terminate?}` tool result to plain MCP CallToolResult. */
@@ -322,6 +339,141 @@ function buildSandboxWriteTool(options: SandboxBashOptions) {
   );
 }
 
+function sandboxSearchDescription(action: string, readonlyDir?: string): string {
+  const mount =
+    readonlyDir !== undefined
+      ? ` One folder is mounted read-only at ${readonlyDir} and can be searched.`
+      : "";
+  return `${action} Paths are relative to /workspace or absolute under /workspace.${mount} A host path, a ~ path, and a path that escapes the workspace are rejected.`;
+}
+
+const grepShape = {
+  pattern: z.string().min(1),
+  path: z.string().optional(),
+  glob: z.string().optional(),
+  ignoreCase: z.boolean().optional(),
+  literal: z.boolean().optional(),
+  context: z.number().optional(),
+  limit: z.number().optional(),
+};
+
+const findShape = {
+  pattern: z.string().min(1),
+  path: z.string().optional(),
+  limit: z.number().optional(),
+};
+
+const lsShape = {
+  path: z.string().optional(),
+  limit: z.number().optional(),
+};
+
+function buildSandboxGrepTool(options: SandboxBashOptions) {
+  const run = sandboxCommandRunner(options);
+  return tool(
+    "grep",
+    sandboxSearchDescription("Search file contents inside this stage's sandbox.", options.readonlyDir),
+    grepShape,
+    async (args: GrepQuery) => {
+      try {
+        const text = await runGrep(resolveSandboxSearchPath(args.path, options.readonlyDir), args, run);
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        return sandboxFileError(err, "grep");
+      }
+    },
+  );
+}
+
+function buildSandboxFindTool(options: SandboxBashOptions) {
+  const run = sandboxCommandRunner(options);
+  return tool(
+    "find",
+    sandboxSearchDescription("Find files by glob pattern inside this stage's sandbox.", options.readonlyDir),
+    findShape,
+    async (args: FindQuery) => {
+      try {
+        const text = await runFind(resolveSandboxSearchPath(args.path, options.readonlyDir), args, run);
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        return sandboxFileError(err, "find");
+      }
+    },
+  );
+}
+
+function buildSandboxLsTool(options: SandboxBashOptions) {
+  const run = sandboxCommandRunner(options);
+  return tool(
+    "ls",
+    sandboxSearchDescription("List a directory inside this stage's sandbox.", options.readonlyDir),
+    lsShape,
+    async (args: LsQuery) => {
+      try {
+        const text = await runLs(resolveSandboxSearchPath(args.path, options.readonlyDir), args, run);
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        return sandboxFileError(err, "ls");
+      }
+    },
+  );
+}
+
+function hostRunner(cwd: string) {
+  return (command: string) => runHostShell(cwd, command);
+}
+
+function buildHostGrepTool(cwd: string) {
+  const run = hostRunner(cwd);
+  return tool(
+    "grep",
+    "Search file contents in this stage's working tree. Paths stay inside that tree.",
+    grepShape,
+    async (args: GrepQuery) => {
+      try {
+        const text = await runGrep(await resolveHostSearchPath(cwd, args.path), args, run);
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        return sandboxFileError(err, "grep");
+      }
+    },
+  );
+}
+
+function buildHostFindTool(cwd: string) {
+  const run = hostRunner(cwd);
+  return tool(
+    "find",
+    "Find files by glob pattern in this stage's working tree. Paths stay inside that tree.",
+    findShape,
+    async (args: FindQuery) => {
+      try {
+        const text = await runFind(await resolveHostSearchPath(cwd, args.path), args, run);
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        return sandboxFileError(err, "find");
+      }
+    },
+  );
+}
+
+function buildHostLsTool(cwd: string) {
+  const run = hostRunner(cwd);
+  return tool(
+    "ls",
+    "List a directory in this stage's working tree. Paths stay inside that tree.",
+    lsShape,
+    async (args: LsQuery) => {
+      try {
+        const text = await runLs(await resolveHostSearchPath(cwd, args.path), args, run);
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        return sandboxFileError(err, "ls");
+      }
+    },
+  );
+}
+
 function buildSandboxEditTool(options: SandboxBashOptions) {
   return tool(
     "sandbox_edit",
@@ -353,6 +505,7 @@ export function buildStageflowMcpServer(options: {
     allowedKinds?: readonly AskOperatorKind[];
   };
   sandboxBash?: SandboxBashOptions;
+  workspaceSearch?: WorkspaceSearchOptions;
 }): McpServerConfig {
   const emitDef = createEmitStageEnvelopeTool(
     options.capture,
@@ -398,6 +551,15 @@ export function buildStageflowMcpServer(options: {
       buildSandboxWriteTool(options.sandboxBash),
       buildSandboxEditTool(options.sandboxBash),
       buildSandboxBashTool(options.sandboxBash),
+      buildSandboxGrepTool(options.sandboxBash),
+      buildSandboxFindTool(options.sandboxBash),
+      buildSandboxLsTool(options.sandboxBash),
+    );
+  } else if (options.workspaceSearch) {
+    tools.push(
+      buildHostGrepTool(options.workspaceSearch.cwd),
+      buildHostFindTool(options.workspaceSearch.cwd),
+      buildHostLsTool(options.workspaceSearch.cwd),
     );
   }
 

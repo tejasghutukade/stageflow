@@ -1,3 +1,5 @@
+import type { IndependenceLevel } from "./stage.js";
+
 export type StageflowManifestVersion = 1;
 
 export type StageflowManifestCatalog = {
@@ -23,6 +25,8 @@ export type StageflowManifest = {
   agent?: string;
   /** Default LLM model id for every stage that doesn't override it at pipeline or stage level. */
   model?: string;
+  /** Default independence for stages that omit it on the stage and the root pipeline. */
+  independence?: IndependenceLevel;
 };
 
 export type LoadedManifest = {

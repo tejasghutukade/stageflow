@@ -1,4 +1,5 @@
 import type {
+  IndependenceLevel,
   LoadedStageConfig,
   StageChannel,
   StageBrowserConfig,
@@ -16,6 +17,8 @@ export type PipelineConfig = {
   agent?: string;
   /** Default LLM model id for every stage in this pipeline; overrides the global default. */
   model?: string;
+  /** Default independence for stages that omit their own. Ignored on include fragments. */
+  independence?: IndependenceLevel;
   /** Pipeline-file `$ref` root (`#/schemas/<name>`). */
   schemas?: Record<string, unknown>;
   /** Declared toolchain binaries this pipeline needs (Slot 9). */
@@ -32,6 +35,7 @@ export type InlinePipelineDefinition = {
   stages: Array<Record<string, unknown>>;
   agent?: unknown;
   model?: unknown;
+  independence?: unknown;
   schemas?: unknown;
   requires?: unknown;
   channels?: unknown;

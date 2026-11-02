@@ -47,4 +47,4 @@ export type CompactionSections = {
 };
 
 /** Bumped whenever the focus prompt or section layout changes (like RUBRIC_PROMPT_VERSION). */
-export const COMPACTION_PROMPT_VERSION = 1;
+export const COMPACTION_PROMPT_VERSION = 2;

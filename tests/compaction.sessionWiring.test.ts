@@ -1,10 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
+import * as compactionExtension from "../src/compaction/extension.js";
 import { createSessionContextWiring } from "../src/compaction/sessionWiring.js";
 import { WORKING_STATE_TOOL_NAME } from "../src/compaction/types.js";
 import { WORKING_STATE_GUIDANCE } from "../src/compaction/workingState.js";
 import { createAgentGateExtension } from "../src/agents/runtime/piRuntime.js";
 
 describe("session context wiring", () => {
+  it("passes a stage independence level into compaction and leaves agents without one", () => {
+    const spy = vi.spyOn(compactionExtension, "createCompactionExtension");
+    try {
+      createSessionContextWiring({ workingState: true, independence: "open" });
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ independence: "open" }));
+      spy.mockClear();
+      createSessionContextWiring({ workingState: false });
+      expect(spy.mock.calls[0]?.[0]).not.toHaveProperty("independence");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("with working state: extension, allowlist entry, guidance, budget exemption and gate pass agree", () => {
     const w = createSessionContextWiring({ workingState: true });
     expect(w.extensions.map((e) => e.name)).toEqual(["stageflow-openrouter-routing", "stageflow-compaction", "stageflow-working-state"]);

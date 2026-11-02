@@ -252,7 +252,9 @@ describe("stage skill invoke prefix", () => {
 
     expect(prompt).not.toContain("/skill:");
     expect(prompt).toContain("Task id: t1");
-    expect(prompt).toContain("Builtin tools (read, bash, write, edit) are for work inside the project checkout.");
+    expect(prompt).toContain(
+      "Builtin tools (read, bash, write, edit, grep, find, and ls) are for work inside the project checkout.",
+    );
     expect(prompt).not.toContain("linked skill");
     expect(prompt).toContain("stages/clarify/attempts/1/artifacts/");
     expect(prompt).not.toContain("path relative to stages/clarify/artifacts/");

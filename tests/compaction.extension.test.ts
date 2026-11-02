@@ -13,6 +13,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPiSettingsManager } from "../src/agent/piSettings.js";
 import { createCompactionExtension } from "../src/compaction/extension.js";
 import { COMPACTION_FOCUS, SECTIONS_MARKER } from "../src/compaction/summarize.js";
+import { COMPACTION_PROMPT_VERSION } from "../src/compaction/types.js";
+import type { IndependenceLevel } from "../src/types/stage.js";
 import { createWorkingStateExtension } from "../src/tools/workingState.js";
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown>;
@@ -96,6 +98,7 @@ describe("compaction extension hook", () => {
     const previousDetails = {
       readFiles: ["a"],
       modifiedFiles: ["m"],
+      stageflowPromptVersion: COMPACTION_PROMPT_VERSION,
       stageflowPinned: [{ kind: "id", value: "EARLY-1", context: "from the first compaction", source: { messageIndex: 0 } }],
     };
     const out = (await pi.fire(
@@ -161,6 +164,121 @@ describe("compaction extension hook", () => {
     const high = { ...ctxFor(), getContextUsage: () => ({ tokens: 800, contextWindow: 1000 }) };
     const cleared = (await pi.fire("context", { messages }, high)) as { messages: unknown[] };
     expect(JSON.stringify(cleared.messages)).toContain("Tool result cleared");
+  });
+
+  async function focusFor(independence?: IndependenceLevel) {
+    const compact = vi.fn(async () => ({
+      summary: "s",
+      firstKeptEntryId: "k",
+      tokensBefore: 1,
+      details: {},
+    }));
+    const pi = fakePi();
+    createCompactionExtension({
+      compact: compact as never,
+      ...(independence !== undefined ? { independence } : {}),
+    })(pi.api);
+    const out = (await pi.fire(
+      "session_before_compact",
+      { preparation: preparation(), branchEntries: [], signal: new AbortController().signal },
+      ctxFor(),
+    )) as { compaction: { details: { stageflowPromptVersion?: number; stageflowIndependence?: string } } };
+    return { focus: compact.mock.calls[0]![4] as string, details: out.compaction.details, settings: compact.mock.calls[0]![0].settings as { enabled?: boolean } };
+  }
+
+  it("keeps compaction enabled and records a dead end for strict", async () => {
+    expect(createPiSettingsManager().getCompactionEnabled()).toBe(true);
+    const strict = await focusFor("strict");
+    const persistent = await focusFor("persistent");
+    const open = await focusFor("open");
+    expect(strict.settings.enabled).toBe(true);
+    expect(persistent.settings.enabled).toBe(true);
+    expect(open.settings.enabled).toBe(true);
+    expect(strict.focus).toBe(COMPACTION_FOCUS);
+    expect(strict.focus).toContain("so it is not retried");
+    expect(persistent.focus).toBe(open.focus);
+    expect(persistent.focus).toContain("failed approach");
+    expect(persistent.focus).toContain("why it failed");
+    expect(persistent.focus).toContain("next approach still available");
+    expect(persistent.focus).not.toContain("so it is not retried");
+    expect(strict.details.stageflowPromptVersion).toBe(COMPACTION_PROMPT_VERSION);
+    expect(strict.details.stageflowIndependence).toBe("strict");
+    expect(persistent.details.stageflowIndependence).toBe("persistent");
+    expect(open.details.stageflowIndependence).toBe("open");
+  });
+
+  async function passedPrevious(input: {
+    independence?: IndependenceLevel;
+    previousSummary: string;
+    previousDetails: { stageflowPromptVersion?: number; stageflowIndependence?: IndependenceLevel };
+  }) {
+    const compact = vi.fn(async (prep: { previousSummary?: string }) => ({
+      summary: "s",
+      firstKeptEntryId: "k",
+      tokensBefore: 1,
+      details: {},
+      seen: prep.previousSummary,
+    }));
+    const pi = fakePi();
+    createCompactionExtension({
+      compact: compact as never,
+      ...(input.independence !== undefined ? { independence: input.independence } : {}),
+    })(pi.api);
+    await pi.fire(
+      "session_before_compact",
+      {
+        preparation: preparation(input.previousSummary),
+        branchEntries: [{ type: "compaction", details: input.previousDetails }],
+        signal: new AbortController().signal,
+      },
+      ctxFor(),
+    );
+    return compact.mock.calls[0]![0].previousSummary as string | undefined;
+  }
+
+  it("does not pass a previous summary recorded at a different level into the next summarize call", async () => {
+    const cases: Array<[IndependenceLevel, IndependenceLevel]> = [
+      ["strict", "persistent"],
+      ["strict", "open"],
+      ["persistent", "open"],
+    ];
+    for (const [recorded, current] of cases) {
+      expect(
+        await passedPrevious({
+          independence: current,
+          previousSummary: `old core\n\n${SECTIONS_MARKER}\n## Pinned facts`,
+          previousDetails: {
+            stageflowPromptVersion: COMPACTION_PROMPT_VERSION,
+            stageflowIndependence: recorded,
+          },
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("passes a previous summary recorded at the same level", async () => {
+    expect(
+      await passedPrevious({
+        independence: "open",
+        previousSummary: `keep going\n\n${SECTIONS_MARKER}\n## Pinned facts`,
+        previousDetails: {
+          stageflowPromptVersion: COMPACTION_PROMPT_VERSION,
+          stageflowIndependence: "open",
+        },
+      }),
+    ).toBe("keep going");
+  });
+
+  it("keeps an agent previous summary when no independence level was recorded", async () => {
+    const agent = await focusFor(undefined);
+    expect(agent.focus).toBe(COMPACTION_FOCUS);
+    expect(agent.details.stageflowIndependence).toBeUndefined();
+    expect(
+      await passedPrevious({
+        previousSummary: "agent core",
+        previousDetails: { stageflowPromptVersion: COMPACTION_PROMPT_VERSION },
+      }),
+    ).toBe("agent core");
   });
 });
 

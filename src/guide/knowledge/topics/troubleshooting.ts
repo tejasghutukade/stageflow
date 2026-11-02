@@ -41,7 +41,7 @@ Run \`validate\` (or \`validate_catalog_draft\` for a draft, \`validate_agent\`,
 |---|---|
 | \`task.invalid_shape\` at run start | The task's \`input\` does not match the entry stage's \`io.input.schema\` (missing \`input\` counts as \`{}\`). |
 | \`channel_check_failed: <connection>: <reason>\` | Live connection check failed. Fix the key or recipient; \`test_connection\`. |
-| \`missing emit_stage_envelope\` | The agent ended without a valid envelope after two reminders. Make the prompt name the payload fields; check \`io.output.schema\` is achievable. |
+| \`missing emit_stage_envelope\` | The agent ended without a valid envelope after its reminder budget. A \`strict\` stage stops after two quiet reminders; any other stage keeps working until twenty. Make the prompt name the payload fields; check \`io.output.schema\` is achievable. |
 | \`provider error: …\` | Usually a missing or invalid provider key or an unavailable model. Check Settings → Providers. |
 | \`stage timed out after …ms\` | Raise \`timeout_ms\` or simplify; the session is kept, so Resume works. |
 | Run waiting | A stage asked a person. Answer in the Inbox. |

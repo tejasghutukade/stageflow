@@ -9,6 +9,7 @@ import type {
 } from "../types/stageflowManifest.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { yamlParsePosition } from "./yamlParsePosition.js";
+import { parseIndependenceField } from "./independenceField.js";
 import { parseModelField } from "./modelField.js";
 
 const DEFAULT_PIPELINE_PATTERN = "*.pipeline.yaml";
@@ -262,6 +263,14 @@ export function parseStageflowManifestOutcome(
     model = modelField.value;
   }
 
+  let independence: StageflowManifest["independence"];
+  const independenceField = parseIndependenceField(record.independence);
+  if (!independenceField.ok) {
+    issues.push(catalogIssue("catalog.manifest_invalid", independenceField.message));
+  } else {
+    independence = independenceField.value;
+  }
+
   if (issues.length > 0) {
     return loadFailure(issues);
   }
@@ -310,6 +319,7 @@ export function parseStageflowManifestOutcome(
     catalog,
     ...(agent !== undefined ? { agent } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(independence !== undefined ? { independence } : {}),
   };
   return loadSuccess({
     path: manifestPath,

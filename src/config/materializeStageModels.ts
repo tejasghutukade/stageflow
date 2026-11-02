@@ -5,17 +5,21 @@ import {
   loadStageflowManifestOutcome,
   manifestPathForProject,
 } from "./loadStageflowManifest.js";
+import type { IndependenceLevel } from "../types/stage.js";
 import { globalModelFromManifest, resolveModelOutcome } from "./resolveModel.js";
+import { globalIndependenceFromManifest, resolveIndependence } from "./resolveIndependence.js";
 
 export async function materializeStageModels(
   stages: StageConfig[],
   options: {
     pipelineModel?: string;
+    pipelineIndependence?: IndependenceLevel;
     pipelineId: string;
     projectRoot: string;
   },
 ): Promise<LoadOutcome<LoadedStageConfig[]>> {
   let globalModel: string | undefined;
+  let globalIndependence: IndependenceLevel | undefined;
   const manifestPath = manifestPathForProject(options.projectRoot);
   let manifestExists = true;
   try {
@@ -29,6 +33,7 @@ export async function materializeStageModels(
       return loadFailure(manifestOutcome.issues);
     }
     globalModel = globalModelFromManifest(manifestOutcome.value);
+    globalIndependence = globalIndependenceFromManifest(manifestOutcome.value);
   }
 
   const materialized: LoadedStageConfig[] = [];
@@ -48,6 +53,11 @@ export async function materializeStageModels(
       ...stage,
       model: modelOutcome.value.model,
       model_tier: modelOutcome.value.tier,
+      independence: resolveIndependence({
+        stage: stage.independence,
+        pipeline: options.pipelineIndependence,
+        global: globalIndependence,
+      }),
     });
   }
   return loadSuccess(materialized);

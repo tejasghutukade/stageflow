@@ -77,7 +77,7 @@ A stage with a non-empty \`gate_kinds\` list (\`free_text\`, \`confirm\`, \`mult
 
 ## Envelopes and artifacts
 
-A stage ends only when the agent calls \`emit_stage_envelope\` with \`status\` (\`success\`/\`failure\`), a non-empty \`summary\`, \`artifacts\` (list, may be empty) and \`payload\` (validated against \`io.output.schema\` on success). If the agent stops without emitting, Stageflow sends up to two reminders, then fails the stage (\`missing emit_stage_envelope\`). A \`failure\` envelope skip-cascades single-parent children.
+A stage ends only when the agent calls \`emit_stage_envelope\` with \`status\` (\`success\`/\`failure\`), a non-empty \`summary\`, \`artifacts\` (list, may be empty) and \`payload\` (validated against \`io.output.schema\` on success). If the agent stops without emitting, Stageflow asks it to keep working. \`independence: strict\` keeps a short reminder budget that may offer a failure envelope (two quiet reminders on Pi, two reminders on Claude). Omitted, \`persistent\`, and \`open\` do not tell the stage to emit failure and keep going until twenty quiet reminders. The stage then fails (\`missing emit_stage_envelope\`). A \`failure\` envelope still ends the attempt and skip-cascades single-parent children.
 
 ### Artifact contract
 

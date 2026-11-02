@@ -1,3 +1,4 @@
+import type { IndependenceLevel } from "../types/stage.js";
 import type { EmitCapture } from "../tools/emitStageEnvelope.js";
 
 /**
@@ -9,6 +10,39 @@ export const DEFAULT_EMIT_REMINDERS = 2;
 
 /** Hard ceiling on reminders in one stage attempt, however much progress each one made. */
 export const MAX_TOTAL_EMIT_REMINDERS = 20;
+
+/** One reminder policy for the attempt. Both agent backends consume this object. */
+export type StageIndependencePolicy = {
+  level: IndependenceLevel;
+};
+
+export const OPEN_CHANGE_APPROACH_INSTRUCTION =
+  "A rejected emit, a failed command, or a missing file ends that approach. Try another approach with the tools and inputs already given. Emit failure only when the stage can name a blocker none of those can get past. Do not create a stand-in for an input that could not be read.";
+
+export function stageIndependencePolicy(level: IndependenceLevel | undefined): StageIndependencePolicy {
+  return { level: level ?? "persistent" };
+}
+
+export type ReminderBackend = "pi" | "claude";
+
+export type ReminderLoopShape = {
+  /** Quiet reminders before the attempt ends. Persistent and open use the hard ceiling. */
+  quietLimit: number;
+  /** Strict Claude does not reset. Strict Pi, persistent, and open do. */
+  resetOnToolUse: boolean;
+};
+
+export function reminderLoopShape(
+  policy: StageIndependencePolicy,
+  backend: ReminderBackend,
+): ReminderLoopShape {
+  if (policy.level === "strict") {
+    return backend === "pi"
+      ? { quietLimit: DEFAULT_EMIT_REMINDERS, resetOnToolUse: true }
+      : { quietLimit: DEFAULT_EMIT_REMINDERS, resetOnToolUse: false };
+  }
+  return { quietLimit: MAX_TOTAL_EMIT_REMINDERS, resetOnToolUse: true };
+}
 
 const PROVIDER_ERROR_MAX_CHARS = 500;
 
@@ -26,6 +60,8 @@ export type RemindOptions = {
   maxReminders?: number;
   /** True once the stage is closing, parked, or timed out: never start another turn then. */
   shouldStop: () => boolean;
+  /** Omitted means persistent: keep working, do not offer a failure envelope. */
+  policy?: StageIndependencePolicy;
 };
 
 export type RemindOutcome = {
@@ -69,14 +105,21 @@ const LEAKED_TOOL_CALL = /<[|｜]?\s*tool[▁_ ]?calls?[▁_ ]?(begin|start)|<to
 type ContentBlock = { type?: unknown; text?: unknown; thinking?: unknown };
 
 /** True when the last assistant turn wrote a tool call out as plain text instead of making a real one. */
+export function contentLeakedToolCall(content: unknown): boolean {
+  if (typeof content === "string") return LEAKED_TOOL_CALL.test(content);
+  if (!Array.isArray(content)) return false;
+  return (content as ContentBlock[]).some((block) => {
+    if (block === null || typeof block !== "object") return false;
+    if (block.type === "toolCall" || block.type === "tool_use") return false;
+    const text = typeof block.text === "string" ? block.text : typeof block.thinking === "string" ? block.thinking : "";
+    return text !== "" && LEAKED_TOOL_CALL.test(text);
+  });
+}
+
 export function lastTurnLeakedToolCall(messages: readonly unknown[]): boolean {
   const m = lastAssistant(messages) as { content?: unknown } | undefined;
-  if (!m || !Array.isArray(m.content)) return false;
-  return (m.content as ContentBlock[]).some((block) => {
-    if (block.type === "toolCall") return false;
-    const text = typeof block.text === "string" ? block.text : typeof block.thinking === "string" ? block.thinking : "";
-    return LEAKED_TOOL_CALL.test(text);
-  });
+  if (!m) return false;
+  return contentLeakedToolCall(m.content);
 }
 
 /** Tool calls the agent made in the messages after `fromIndex`. */
@@ -117,6 +160,43 @@ export function emitReminderPrompt(
   return lines.join("\n");
 }
 
+/** Persistent and open. A quiet turn is a continuation: keep working, and do not offer failure. */
+export function continuationReminderPrompt(
+  emitToolName: string,
+  rejectedEmit?: string,
+  leakedToolCall = false,
+): string {
+  const lines = [
+    `Your turn ended without an accepted ${emitToolName} call. Keep working.`,
+  ];
+  if (leakedToolCall) {
+    lines.push(
+      `Your last tool call was written out as plain text, so it was NOT run. Make it again as a real tool call.`,
+    );
+  }
+  if (rejectedEmit !== undefined) {
+    lines.push(`Your last ${emitToolName} call was rejected: ${rejectedEmit}`);
+    lines.push(`Fix that and call ${emitToolName} again.`);
+  } else {
+    lines.push(`Continue the stage's work. Call ${emitToolName} when it is finished.`);
+  }
+  return lines.join("\n");
+}
+
+export function reminderPromptForPolicy(
+  policy: StageIndependencePolicy,
+  emitToolName: string,
+  attempt: number,
+  max: number,
+  rejectedEmit?: string,
+  leakedToolCall = false,
+): string {
+  if (policy.level === "strict") {
+    return emitReminderPrompt(emitToolName, attempt, max, rejectedEmit, leakedToolCall);
+  }
+  return continuationReminderPrompt(emitToolName, rejectedEmit, leakedToolCall);
+}
+
 /**
  * Called after a turn returns. While no envelope was accepted, nudge the agent with a short
  * follow-up turn, up to `maxReminders` times. Stops at once when an envelope is captured,
@@ -127,7 +207,9 @@ export async function remindUntilEmitted(
   capture: EmitCapture,
   options: RemindOptions,
 ): Promise<RemindOutcome> {
-  const max = options.maxReminders ?? DEFAULT_EMIT_REMINDERS;
+  const policy = options.policy ?? stageIndependencePolicy(undefined);
+  const shape = reminderLoopShape(policy, "pi");
+  const max = options.maxReminders ?? shape.quietLimit;
   let reminders = 0;
   let withoutProgress = 0;
   for (;;) {
@@ -142,7 +224,8 @@ export async function remindUntilEmitted(
     withoutProgress++;
     const before = session.messages.length;
     await session.prompt(
-      emitReminderPrompt(
+      reminderPromptForPolicy(
+        policy,
         options.emitToolName,
         withoutProgress,
         max,
@@ -150,6 +233,6 @@ export async function remindUntilEmitted(
         lastTurnLeakedToolCall(session.messages),
       ),
     );
-    if (toolCallsSince(session.messages, before) > 0) withoutProgress = 0;
+    if (shape.resetOnToolUse && toolCallsSince(session.messages, before) > 0) withoutProgress = 0;
   }
 }

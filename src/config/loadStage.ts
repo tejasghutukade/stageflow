@@ -9,6 +9,7 @@ import {
 } from "../types/stage.js";
 import { compilePayloadSchema, UnresolvedSchemaRefError } from "../envelope/payloadSchema.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
+import { parseIndependenceField } from "./independenceField.js";
 import { parseModelField } from "./modelField.js";
 import {
   allowLegacyYamlAuthoring,
@@ -218,6 +219,35 @@ function parseStageFields(
   }
   if (modelField.value !== undefined) {
     stage.model = modelField.value;
+  }
+
+  const independenceField = parseIndependenceField(raw.independence);
+  if (!independenceField.ok) {
+    return loadFailure([
+      {
+        code: "stage.invalid_independence",
+        message: `Invalid stage ${label}: ${independenceField.message}`,
+        category: "stage",
+        stageId: entryId,
+      },
+    ]);
+  }
+  if (independenceField.value !== undefined) {
+    stage.independence = independenceField.value;
+  }
+
+  if (raw.checkout_context !== undefined && typeof raw.checkout_context !== "boolean") {
+    return loadFailure([
+      {
+        code: "stage.invalid_checkout_context",
+        message: `Invalid stage ${label}: checkout_context must be a boolean`,
+        category: "stage",
+        stageId: entryId,
+      },
+    ]);
+  }
+  if (raw.checkout_context === true) {
+    stage.checkout_context = true;
   }
 
   if (compiled) {

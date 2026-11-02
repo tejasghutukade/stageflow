@@ -19,8 +19,7 @@ export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-/** Resolve a tool path onto the sandbox mount. Host absolutes and `..` escapes are rejected. */
-export function confineSandboxPath(inputPath: string): string {
+function normalizeSandboxCandidate(inputPath: string): string {
   if (typeof inputPath !== "string" || inputPath.trim() === "") {
     throw new SandboxPathError("path must be a non-empty string");
   }
@@ -28,13 +27,34 @@ export function confineSandboxPath(inputPath: string): string {
     throw new SandboxPathError("path escapes the sandbox");
   }
   const slashes = inputPath.replaceAll("\\", "/");
-  const joined = slashes.startsWith("/")
+  return slashes.startsWith("/")
     ? path.posix.normalize(slashes)
     : path.posix.normalize(path.posix.join(SANDBOX_MOUNT_PATH, slashes));
-  if (joined !== SANDBOX_MOUNT_PATH && !joined.startsWith(`${SANDBOX_MOUNT_PATH}/`)) {
+}
+
+function underSandboxRoot(candidate: string, root: string): boolean {
+  const normalized = path.posix.normalize(root.replaceAll("\\", "/"));
+  return candidate === normalized || candidate.startsWith(`${normalized}/`);
+}
+
+/** Resolve a tool path onto the sandbox mount. Host absolutes and `..` escapes are rejected. */
+export function confineSandboxPath(inputPath: string): string {
+  const joined = normalizeSandboxCandidate(inputPath);
+  if (!underSandboxRoot(joined, SANDBOX_MOUNT_PATH)) {
     throw new SandboxPathError("path escapes the sandbox");
   }
   return joined;
+}
+
+/**
+ * Same rejection rules as {@link confineSandboxPath}. Search may also name the
+ * read-only mount when one is present. Read, write, and edit stay on /workspace.
+ */
+export function confineSandboxSearchPath(inputPath: string, readonlyDir?: string): string {
+  const joined = normalizeSandboxCandidate(inputPath);
+  if (underSandboxRoot(joined, SANDBOX_MOUNT_PATH)) return joined;
+  if (readonlyDir !== undefined && underSandboxRoot(joined, readonlyDir)) return joined;
+  throw new SandboxPathError("path escapes the sandbox");
 }
 
 export type SandboxFileTarget = {

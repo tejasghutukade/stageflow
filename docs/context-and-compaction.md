@@ -14,14 +14,14 @@ The Claude backend (`agent: claude`) uses the Claude SDK's own auto-compaction, 
 | Mechanism | What it does |
 |-----------|--------------|
 | Assignment in the system prompt | The task, prior envelopes and the envelope contract are in the system prompt, which compaction never rewrites. |
-| Spilled tool output | A large result from any tool except `read` and `bash` is written to a stage artifact; the model sees a path and a preview. See [Large results](yaml-catalog.md). |
-| Per-turn cap | `read` and `bash` results share a per-turn token cap. The first result of a turn always returns. Later ones in the same turn are replaced by a short notice. A deferred `read` is repeated in a later turn; a deferred `bash` has already run, so the notice tells the model not to rerun it. |
+| Spilled tool output | A large result from any tool except `read`, `bash`, `grep`, `find`, and `ls` is written to a stage artifact; the model sees a path and a preview. See [Large results](yaml-catalog.md). |
+| Per-turn cap | `read`, `bash`, `grep`, `find`, and `ls` results share a per-turn token cap. The first result of a turn always returns. Later ones in the same turn are replaced by a short notice. A deferred `read`, `grep`, `find`, or `ls` is repeated in a later turn; a deferred `bash` has already run, so the notice tells the model not to rerun it. |
 | `working_state` tool | The model keeps keyed entries (facts, decisions, progress, to-dos, blockers). They are saved with the session, survive resume, and are re-injected after every compaction. |
 | Compaction | When the window fills, old messages become a structured summary. |
 
 ## What a compaction produces
 
-The summary is written by the same model the stage or agent uses, with a prompt that asks for exact values, failures and dead ends, in-flight state and the next step. Stageflow then adds four deterministic sections:
+The summary is written by the same model the stage or agent uses. The prompt asks for exact values, in-flight state and the next step. A strict stage, a project agent, and the operator agent also keep every failure and dead end so it is not retried. A persistent or open stage records the failed approach, why it failed, and the next approach still available, and continues from that next approach. A summary written at one independence level is not reused at another. Stageflow then adds four deterministic sections:
 
 - **Operator and user directives**: operator answers, rejected emits and user messages, copied verbatim (long filler prose ranks below instructions and short messages). They accumulate across compactions.
 - **Pinned facts**: identifiers, numbers, timestamps, URLs, paths and error lines copied verbatim from tool results and operator messages. They accumulate across compactions and are bounded.

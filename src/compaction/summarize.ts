@@ -1,3 +1,4 @@
+import type { IndependenceLevel } from "../types/stage.js";
 import { applyClearing, planClearing, renderClearedIndex, type ClearingPolicy } from "./mask.js";
 import { extractDirectives, mergeDirectives, renderDirectives, type Directive } from "./directives.js";
 import { extractPinnedFacts, renderPinned, type LooseMessage } from "./pin.js";
@@ -5,13 +6,28 @@ import { scrubSecrets } from "./scrub.js";
 import { COMPACTION_PROMPT_VERSION, type ClearedResult, type PinnedFact, type WorkingStateEntry } from "./types.js";
 import { WorkingStateStore } from "./workingState.js";
 
-export const COMPACTION_FOCUS =
+const COMPACTION_FOCUS_HEAD =
   "This is an autonomous agent run, not a chat. Make the summary a working record the agent can continue from without the earlier messages. " +
-  "Copy exact identifiers, numbers, counts, timestamps, versions, paths, URLs and quoted error text verbatim; never round, reword or estimate them. " +
-  "Keep every failure, rejection and dead end explicit, with why it failed, so it is not retried. " +
+  "Copy exact identifiers, numbers, counts, timestamps, versions, paths, URLs and quoted error text verbatim; never round, reword or estimate them. ";
+
+const COMPACTION_FOCUS_TAIL =
   "State what is in flight, which sources or items are already handled and which remain, and the exact next step. " +
   "Keep decisions made by the operator or user and the deliverable the run must produce, including its required format. " +
   "Leave out routine output that carries no decision or value.";
+
+export const COMPACTION_FOCUS =
+  COMPACTION_FOCUS_HEAD +
+  "Keep every failure, rejection and dead end explicit, with why it failed, so it is not retried. " +
+  COMPACTION_FOCUS_TAIL;
+
+export const COMPACTION_FOCUS_NEXT_APPROACH =
+  COMPACTION_FOCUS_HEAD +
+  "Record the failed approach, why it failed, and the next approach still available. The stage continues from that next approach. " +
+  COMPACTION_FOCUS_TAIL;
+
+export function compactionFocus(independence?: IndependenceLevel): string {
+  return independence === "persistent" || independence === "open" ? COMPACTION_FOCUS_NEXT_APPROACH : COMPACTION_FOCUS;
+}
 
 export const SECTIONS_MARKER = "<!-- stageflow:compaction-sections -->";
 
@@ -29,6 +45,7 @@ export type StageflowCompactionDetails = {
   stageflowCleared?: ClearedResult[];
   stageflowDirectives?: Directive[];
   stageflowPromptVersion?: number;
+  stageflowIndependence?: IndependenceLevel;
 };
 
 /** The sections are always appended last, so the last marker at the start of a line is the real one. */
@@ -62,6 +79,10 @@ function validDirective(x: unknown): x is Directive {
   return isRecord(x) && typeof x.source === "string" && DIRECTIVE_SOURCES.has(x.source) && typeof x.text === "string";
 }
 
+function validIndependence(value: unknown): value is IndependenceLevel {
+  return value === "strict" || value === "persistent" || value === "open";
+}
+
 /** Details come from the session file, so anything not shaped like ours is dropped rather than trusted. */
 export function readStageflowDetails(value: unknown): StageflowCompactionDetails | undefined {
   if (!isRecord(value)) return undefined;
@@ -74,7 +95,15 @@ export function readStageflowDetails(value: unknown): StageflowCompactionDetails
     ...(Array.isArray(value.stageflowCleared) ? { stageflowCleared: value.stageflowCleared.filter(validCleared) } : {}),
     ...(Array.isArray(value.stageflowDirectives) ? { stageflowDirectives: value.stageflowDirectives.filter(validDirective) } : {}),
     ...(typeof value.stageflowPromptVersion === "number" ? { stageflowPromptVersion: value.stageflowPromptVersion } : {}),
+    ...(validIndependence(value.stageflowIndependence) ? { stageflowIndependence: value.stageflowIndependence } : {}),
   };
+}
+
+function previousCompactionMatches(
+  previous: StageflowCompactionDetails | undefined,
+  independence: IndependenceLevel | undefined,
+): boolean {
+  return previous?.stageflowPromptVersion === COMPACTION_PROMPT_VERSION && previous?.stageflowIndependence === independence;
 }
 
 function factKey(f: PinnedFact): string {
@@ -178,6 +207,7 @@ export function stageflowDetails(
   pinned: readonly PinnedFact[],
   cleared: readonly ClearedResult[],
   directives: readonly Directive[] = [],
+  independence?: IndependenceLevel,
 ): StageflowCompactionDetails {
   const union = (a?: string[], b?: string[]) => [...new Set([...(b ?? []), ...(a ?? [])])];
   return {
@@ -187,6 +217,7 @@ export function stageflowDetails(
     stageflowCleared: [...cleared],
     stageflowDirectives: [...directives],
     stageflowPromptVersion: COMPACTION_PROMPT_VERSION,
+    ...(independence !== undefined ? { stageflowIndependence: independence } : {}),
   };
 }
 
@@ -210,6 +241,7 @@ export async function composeCompactionSummary<R extends { summary: string }>(in
   messages: readonly LooseMessage[];
   previousSummary?: string;
   previousDetails?: StageflowCompactionDetails;
+  independence?: IndependenceLevel;
   state: readonly WorkingStateEntry[];
   clearInSummary?: ClearingPolicy;
   summarize: (call: SummarizeCall) => Promise<R>;
@@ -219,9 +251,13 @@ export async function composeCompactionSummary<R extends { summary: string }>(in
     ...(input.previousDetails ? { previousDetails: input.previousDetails } : {}),
     ...(input.clearInSummary ? { clearInSummary: input.clearInSummary } : {}),
   });
+  const reusable =
+    input.previousSummary !== undefined && previousCompactionMatches(input.previousDetails, input.independence)
+      ? splitSummary(input.previousSummary).core
+      : undefined;
   const result = await input.summarize({
     messages: prepared.messagesForSummarizer,
-    previousSummary: input.previousSummary !== undefined ? splitSummary(input.previousSummary).core : undefined,
+    previousSummary: reusable,
   });
   const core = scrubSecrets(result.summary).split(SECTIONS_MARKER).join("").trimEnd();
   const sections = scrubSecrets(renderSections({ pinned: prepared.pinned, cleared: prepared.cleared, state: input.state, directives: prepared.directives }));

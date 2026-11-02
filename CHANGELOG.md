@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A stage can keep working instead of being steered into failure.** `independence` is `strict`, `persistent`, or `open`. Omitted means `persistent`: after a turn with no envelope the stage is told to keep working, up to twenty quiet reminders, and a tool call resets that count. `strict` keeps the previous short budget, including its offer to emit failure. `open` adds permission to try another approach with the tools and inputs already given, and does not add tools or load `AGENTS.md`. Set it on the stage, the pipeline, or the manifest; the stage wins. A fragment's copy is ignored. See [YAML catalog](docs/yaml-catalog.md).
+- **Checkout `AGENTS.md` is a separate opt-in.** `checkout_context: true` on the stage body loads that checkout's `AGENTS.md` as extra context. The stage assignment wins where they conflict. The author's `system_prompt` is not rewritten. A stage with no checkout fails prepare (`stage.checkout_context_unbound`). A missing file does not fail the stage. A symlink or hard link is not read.
+- **Every stage can `grep`, `find`, and `ls`.** Inside a sandbox those tools see `/workspace` and, when one is mounted, the read-only folder. Outside a sandbox they search the stage working tree. A host path, a `~` path, a `..` escape, and a symlink used as the search path are rejected. Search skips `.git` and `node_modules`.
+
+### Changed
+
+- **A stage that does not set `independence` keeps working.** It used to get the short reminder budget. That behavior is now `independence: strict`.
+- **Compaction for a persistent or open stage records the next approach.** A summary written at one level is not reused at another. Compaction stays on.
+- **Eval snapshots record the effective independence and `checkout_context`.** Agent eval fingerprints omit both, so they stay comparable.
+
 ## [0.48.0] - 2026-11-01
 
 ### Added

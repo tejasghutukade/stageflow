@@ -3,8 +3,8 @@
  *
  * One stage = one `createAgentSession` (single-shot SDK path, not
  * AgentSessionRuntime / interactive / RPC). The session is sealed from host
- * and global Pi resources so the stage YAML system prompt is the only
- * instruction source. Operator credentials come from
+ * and global Pi resources. The stage assignment is the system prompt. Opt-in
+ * checkout AGENTS.md is extra text; the sealed loader stays off. Operator credentials come from
  * `ModelRuntime.create({ authPath })` using the factory-resolved binding
  * (`pi_home` or `.stageflow/agent/auth.json`).
  *
@@ -56,6 +56,7 @@ import {
   STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME,
 } from "./toolOutputBudgetExtension.js";
 import { TOOL_OUTPUT_ARTIFACT_DIR } from "./toolOutputSpill.js";
+import { readCheckoutAgentsContext } from "./checkoutContext.js";
 import {
   createPiAgentSession,
   createSealedResourceLoader,
@@ -72,7 +73,12 @@ import {
   createEmitStageEnvelopeTool,
   type EmitCapture,
 } from "../tools/emitStageEnvelope.js";
-import { remindUntilEmitted, type StageTurnSession } from "./stageTurnDriver.js";
+import {
+  OPEN_CHANGE_APPROACH_INSTRUCTION,
+  remindUntilEmitted,
+  stageIndependencePolicy,
+  type StageTurnSession,
+} from "./stageTurnDriver.js";
 import {
   createAskOperatorTool,
   type AskOperatorPrompt,
@@ -82,6 +88,12 @@ import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
 import {
   createSandboxBashTool,
   createSandboxEditTool,
+  createSandboxFindTool,
+  createSandboxGrepTool,
+  createSandboxLsTool,
+  createWorkingTreeFindTool,
+  createWorkingTreeGrepTool,
+  createWorkingTreeLsTool,
   createSandboxReadTool,
   createSandboxWriteTool,
 } from "./sandboxPiTools.js";
@@ -142,7 +154,7 @@ export { createSealedResourceLoader } from "./piSessionFactory.js";
 
 export const STAGEFLOW_PATH_DENY_EXTENSION_NAME = "stageflow-path-deny";
 
-const PATH_DENY_FILE_TOOLS = new Set(["read", "write", "edit"]);
+const PATH_DENY_FILE_TOOLS = new Set(["read", "write", "edit", "grep", "find", "ls"]);
 
 export function createDurableRootPathDenyExtension(options: {
   runWorkspaceDir: string;
@@ -196,6 +208,9 @@ export function resolveStageToolNames(
     "bash",
     "write",
     "edit",
+    "grep",
+    "find",
+    "ls",
     emitToolName,
   ];
   if (Array.isArray(gateKinds) && gateKinds.length > 0) {
@@ -682,6 +697,7 @@ function buildUserPrompt(
   const attempt = input.roots.attempt ?? 1;
   const attemptArtifactsPath = `stages/${runtimeStageId(input)}/attempts/${attempt}/artifacts/`;
   const sandboxed = input.roots.containerName !== undefined;
+  const changeApproach = input.stage.independence === "open";
   const skillBaseDirs = [
     input.stage.skill !== undefined && input.skillFilePath !== undefined
       ? path.dirname(input.skillFilePath)
@@ -699,9 +715,13 @@ function buildUserPrompt(
       : "";
   const artifactGuidance = sandboxed
     ? [
-        "Sandbox desk: /workspace. read, write, and edit run only inside that desk.",
+        "Sandbox desk: /workspace. read, write, and edit run only inside that desk. grep, find, and ls search that desk.",
         input.roots.readonlyDir
-          ? `One folder is mounted read-only at ${input.roots.readonlyDir}. Read the files there. If a file you were given is not in that folder, stop and say so. Do not create stand-in documents.`
+          ? `One folder is mounted read-only at ${input.roots.readonlyDir}. Read the files there. grep, find, and ls can search that folder. ${
+              changeApproach
+                ? OPEN_CHANGE_APPROACH_INSTRUCTION
+                : "If a file you were given is not in that folder, stop and say so. Do not create stand-in documents."
+            }`
           : "The host filesystem is not mounted.",
         input.roots.checkoutRoot
           ? `Checkout: /workspace/checkout. The host checkout path is not mounted.`
@@ -716,7 +736,7 @@ function buildUserPrompt(
       ? [
           `Project checkout (agent cwd): ${input.roots.checkoutRoot}`,
           `Factory run workspace: ${input.roots.runWorkspaceDir}`,
-          `Builtin tools (read, bash, write, edit) are for work inside the project checkout.`,
+          `Builtin tools (read, bash, write, edit, grep, find, and ls) are for work inside the project checkout.`,
           skillBaseDir !== undefined
             ? `Absolute read and bash against ${skillBaseDir} are in bounds for the linked skill.`
             : undefined,
@@ -762,6 +782,9 @@ function buildUserPrompt(
       : "",
     "",
     artifactGuidance,
+    changeApproach && input.roots.readonlyDir === undefined
+      ? OPEN_CHANGE_APPROACH_INSTRUCTION
+      : "",
     toolOutputGuidance,
     browserGuidance,
     emitHint,
@@ -824,9 +847,11 @@ export function composeStagePiSystemPrompt(
   emitToolName: string,
   emitHintOverride?: string,
   artifactToolName?: string,
+  checkoutContext?: string,
 ): string {
   return [
     input.stage.system_prompt,
+    ...(checkoutContext !== undefined && checkoutContext !== "" ? ["", checkoutContext] : []),
     "",
     "# Working state",
     WORKING_STATE_GUIDANCE,
@@ -1351,7 +1376,10 @@ async function prepareStageSessionWiring(
       restoreProvider?.();
       return { ok: false, reason };
     };
-    const contextWiring = createSessionContextWiring({ workingState: true });
+    const contextWiring = createSessionContextWiring({
+      workingState: true,
+      independence: stageIndependencePolicy(input.stage.independence).level,
+    });
     const extensionFactories: InlineExtension[] = [
       {
         name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
@@ -1375,10 +1403,13 @@ async function prepareStageSessionWiring(
           runWorkspaceDir: roots.runWorkspaceDir,
           stageId: runtimeStageId(input),
           attempt: roots.attempt ?? 1,
-          turnCapped: new Set(["read", "bash"]),
+          turnCapped: new Set(["read", "bash", "grep", "find", "ls"]),
           exempt: new Set([
             "read",
             "bash",
+            "grep",
+            "find",
+            "ls",
             ...contextWiring.budgetExemptNames,
             emitDef.name,
             artifactDef.name,
@@ -1389,6 +1420,7 @@ async function prepareStageSessionWiring(
       ...contextWiring.extensions,
       ...(attached.extensionFactories ?? []),
     ];
+    const checkoutContext = await readCheckoutAgentsContext(input);
     const loader = createSealedResourceLoader({
       cwd: roots.cwd,
       agentDir: roots.agentDir,
@@ -1398,6 +1430,7 @@ async function prepareStageSessionWiring(
         emitDef.name,
         provider?.emitToolHint?.(emitDef.name),
         artifactDef.name,
+        checkoutContext,
       ),
       additionalExtensionPaths,
       ...(additionalSkillPaths.length > 0 ? { additionalSkillPaths } : {}),
@@ -1512,6 +1545,9 @@ async function prepareStageSessionWiring(
           ? { dockerBin: roots.containerDockerBin }
           : {}),
         ...(roots.readonlyDir !== undefined ? { readonlyDir: roots.readonlyDir } : {}),
+        ...(input.stage.independence === "open"
+          ? { missingFileGuidance: OPEN_CHANGE_APPROACH_INSTRUCTION }
+          : {}),
       };
       const sampling = { type: "json_schema", strict: "prefer" } as const;
       customTools.push(
@@ -1519,6 +1555,16 @@ async function prepareStageSessionWiring(
         defineTool({ ...createSandboxWriteTool(sandboxTools), constrainedSampling: sampling }),
         defineTool({ ...createSandboxEditTool(sandboxTools), constrainedSampling: sampling }),
         defineTool({ ...createSandboxBashTool(sandboxTools), constrainedSampling: sampling }),
+        defineTool({ ...createSandboxGrepTool(sandboxTools), constrainedSampling: sampling }),
+        defineTool({ ...createSandboxFindTool(sandboxTools), constrainedSampling: sampling }),
+        defineTool({ ...createSandboxLsTool(sandboxTools), constrainedSampling: sampling }),
+      );
+    } else {
+      const sampling = { type: "json_schema", strict: "prefer" } as const;
+      customTools.push(
+        defineTool({ ...createWorkingTreeGrepTool(roots.cwd), constrainedSampling: sampling }),
+        defineTool({ ...createWorkingTreeFindTool(roots.cwd), constrainedSampling: sampling }),
+        defineTool({ ...createWorkingTreeLsTool(roots.cwd), constrainedSampling: sampling }),
       );
     }
 
@@ -1733,6 +1779,7 @@ function syncAgentMessagesFromSession(
 export class PiAgentAdapter implements StagePort {
   openStage(input: StageRunInput): StageHandle {
     const timeoutMs = input.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS;
+    const independence = stageIndependencePolicy(input.stage.independence);
     const askWaitChannel = new AskOperatorWaitChannel();
     const sessionFile = resolveStageSessionFile(input);
     const sessionMode: StageSessionMode = input.sessionMode ?? "fresh";
@@ -1906,6 +1953,7 @@ export class PiAgentAdapter implements StagePort {
           return remindUntilEmitted(turns, capture, {
             emitToolName,
             shouldStop: () => closing || controller.signal.aborted,
+            policy: independence,
           });
         })();
         const abortPromise = new Promise<never>((_, reject) => {

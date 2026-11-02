@@ -9,7 +9,9 @@ import {
   legacyAuthoringRejected,
   presentLegacyKeys,
 } from "./legacyYaml.js";
+import { parseIndependenceField } from "./independenceField.js";
 import { parseModelField } from "./modelField.js";
+import type { IndependenceLevel } from "../types/stage.js";
 import { readYamlObject } from "./readYamlObject.js";
 import { yamlParsePosition } from "./yamlParsePosition.js";
 import { parseToolRequires, type ToolRequirement } from "./toolRequires.js";
@@ -172,6 +174,7 @@ export async function mergePipelineStages(
     pipelineId: string;
     agent?: string;
     model?: string;
+    independence?: IndependenceLevel;
     schemas?: PayloadSchemaMap;
     requires?: ToolRequirement[];
     channels?: StageChannel[];
@@ -244,6 +247,19 @@ export async function mergePipelineStages(
   }
   const model = modelField.value;
 
+  const independenceField = parseIndependenceField(raw.independence);
+  if (!independenceField.ok) {
+    return loadFailure([
+      {
+        code: "pipeline.invalid_independence",
+        message: `Invalid pipeline ${absRoot}: ${independenceField.message}`,
+        category: "pipeline",
+        pipelineId,
+      },
+    ]);
+  }
+  const independence = independenceField.value;
+
   const schemasOutcome = parsePipelineSchemas(raw.schemas, absRoot, pipelineId);
   if (!schemasOutcome.ok) return schemasOutcome;
   const schemas = schemasOutcome.value;
@@ -286,6 +302,7 @@ export async function mergePipelineStages(
     pipelineId,
     ...(agent !== undefined ? { agent } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(independence !== undefined ? { independence } : {}),
     ...(schemas !== undefined ? { schemas } : {}),
     ...(requires !== undefined ? { requires } : {}),
     ...(channels !== undefined ? { channels } : {}),
@@ -305,6 +322,7 @@ export async function mergeInlinePipelineStages(
     pipelineId: string;
     agent?: string;
     model?: string;
+    independence?: IndependenceLevel;
     schemas?: PayloadSchemaMap;
     requires?: ToolRequirement[];
     channels?: StageChannel[];
@@ -361,6 +379,19 @@ export async function mergeInlinePipelineStages(
   }
   const model = modelField.value;
 
+  const independenceField = parseIndependenceField(raw.independence);
+  if (!independenceField.ok) {
+    return loadFailure([
+      {
+        code: "pipeline.invalid_independence",
+        message: `Invalid inline pipeline ${pipelineId}: ${independenceField.message}`,
+        category: "pipeline",
+        pipelineId,
+      },
+    ]);
+  }
+  const independence = independenceField.value;
+
   const schemasOutcome = parsePipelineSchemas(raw.schemas, "<inline pipeline>", pipelineId);
   if (!schemasOutcome.ok) return schemasOutcome;
   const schemas = schemasOutcome.value;
@@ -406,6 +437,7 @@ export async function mergeInlinePipelineStages(
     pipelineId,
     ...(agent !== undefined ? { agent } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(independence !== undefined ? { independence } : {}),
     ...(schemas !== undefined ? { schemas } : {}),
     ...(requires !== undefined ? { requires } : {}),
     ...(channels !== undefined ? { channels } : {}),

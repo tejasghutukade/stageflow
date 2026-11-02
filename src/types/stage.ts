@@ -43,6 +43,10 @@ export type StageBrowserConfig = {
   };
 };
 
+export const INDEPENDENCE_LEVELS = ["strict", "persistent", "open"] as const;
+
+export type IndependenceLevel = (typeof INDEPENDENCE_LEVELS)[number];
+
 export type StageChannelOperation = "send";
 
 /** A pinned communication target for a stage. Targets are validated per provider. */
@@ -60,6 +64,13 @@ export type StageConfig = {
   id: string;
   system_prompt: string;
   model?: string;
+  /** Effective level after load. Omitted in YAML means persistent. */
+  independence?: IndependenceLevel;
+  /**
+   * When true, the stage receives `<checkoutRoot>/AGENTS.md` as extra context.
+   * Omitted and false are off. Not inherited. Requires a checkout binding.
+   */
+  checkout_context?: boolean;
   /** IR: success envelope.payload schema. YAML: `io.output.schema`. */
   payload_schema?: unknown;
   /** Declared ask_operator kinds this stage is expected to stop on. */

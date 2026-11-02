@@ -1,3 +1,4 @@
+import type { IndependenceLevel } from "../types/stage.js";
 import { canonicalJson, sha256Hex } from "./canonical.js";
 import { CONFIG_SNAPSHOT_VERSION, CONVERSATION_RUBRIC_PROMPT_VERSION, RUBRIC_PROMPT_VERSION } from "./constants.js";
 
@@ -32,6 +33,10 @@ export type StageSnapshotTarget = {
   stage_definition: Record<string, unknown>;
   model: string;
   model_tier: string;
+  /** Effective independence. Omission and explicit persistent are the same value. */
+  independence?: IndependenceLevel;
+  /** Checkout AGENTS.md opt-in. Omission and false are the same value. */
+  checkout_context?: boolean;
   input_schema_hash: string | null;
   output_schema_hash: string | null;
 };
@@ -126,6 +131,10 @@ export type ConfigComponents = {
   pass_threshold: number;
   engine: { name: string; version: string };
   rubric_prompt_version: number;
+  /** Stage runs only. Absent on agent runs so those fingerprints stay comparable. */
+  independence?: IndependenceLevel;
+  /** Stage runs only. Omission and false are both false. Absent on agent runs. */
+  checkout_context?: boolean;
   agent?: AgentComponent;
 };
 
@@ -153,6 +162,8 @@ export type ComponentsInput = {
   passThreshold: number;
   engine: { name: string; version: string };
   rubricPromptVersion?: number;
+  independence?: IndependenceLevel;
+  checkout_context?: boolean;
   agent?: AgentComponent;
 };
 
@@ -174,6 +185,8 @@ export function buildComponents(input: ComponentsInput): ConfigComponents {
     engine: { name: input.engine.name, version: input.engine.version },
     rubric_prompt_version:
       input.rubricPromptVersion ?? (agent ? CONVERSATION_RUBRIC_PROMPT_VERSION : RUBRIC_PROMPT_VERSION),
+    ...(input.independence !== undefined ? { independence: input.independence } : {}),
+    ...(input.checkout_context !== undefined ? { checkout_context: input.checkout_context } : {}),
     ...(agent ? { agent: { ...agent, read_only_tools: [...agent.read_only_tools].sort() } } : {}),
   };
 }
@@ -193,6 +206,8 @@ export function computeFingerprint(components: ConfigComponents): string {
     judge: components.judge,
     engine: components.engine,
     rubric_prompt_version: components.rubric_prompt_version,
+    ...(components.independence !== undefined ? { independence: components.independence } : {}),
+    ...(components.checkout_context !== undefined ? { checkout_context: components.checkout_context } : {}),
     ...(components.agent ? { agent: components.agent } : {}),
   };
   return sha256Hex(canonicalJson(payload)).slice(0, 8);

@@ -351,6 +351,53 @@ describe("fingerprint", () => {
     expect(await fingerprintOf(undefined, { evalRunId: "er_other" })).toBe(await fingerprintOf());
   });
 
+  it("records omitted independence as persistent and keeps strict, persistent, and open apart", async () => {
+    const omitted = await okBuild();
+    expect(omitted.snapshot.target).toMatchObject({ independence: "persistent" });
+    expect(omitted.components.independence).toBe("persistent");
+
+    const fingerprintFor = async (level: string) => {
+      await editFile("stages/review.yaml", (text) => {
+        const stripped = text.replace(/\nindependence:.*\n/, "\n");
+        return stripped.replace("system_prompt:", `independence: ${level}\nsystem_prompt:`);
+      });
+      return fingerprintOf();
+    };
+    const strict = await fingerprintFor("strict");
+    const persistent = await fingerprintFor("persistent");
+    const open = await fingerprintFor("open");
+    expect(persistent).toBe(omitted.fingerprint);
+    expect(strict).not.toBe(persistent);
+    expect(open).not.toBe(persistent);
+    expect(strict).not.toBe(open);
+  });
+
+  it("records checkout context so an omission and false share a fingerprint and true does not", async () => {
+    const omitted = await okBuild();
+    if (omitted.snapshot.target.kind !== "stage") throw new Error("expected a stage target");
+    expect(omitted.snapshot.target.checkout_context).toBe(false);
+    expect(omitted.components.checkout_context).toBe(false);
+
+    const planFor = async (value: string | undefined) => {
+      await editFile("stages/review.yaml", (text) => {
+        const stripped = text.replace(/\ncheckout_context:.*\n/, "\n");
+        if (value === undefined) return stripped;
+        return stripped.replace("system_prompt:", `checkout_context: ${value}\nsystem_prompt:`);
+      });
+      return okBuild();
+    };
+    const off = await planFor("false");
+    const on = await planFor("true");
+    expect(off.fingerprint).toBe(omitted.fingerprint);
+    if (off.snapshot.target.kind !== "stage" || on.snapshot.target.kind !== "stage") {
+      throw new Error("expected a stage target");
+    }
+    expect(off.snapshot.target.checkout_context).toBe(false);
+    expect(on.snapshot.target.checkout_context).toBe(true);
+    expect(on.components.checkout_context).toBe(true);
+    expect(on.fingerprint).not.toBe(off.fingerprint);
+  });
+
   it("changes with the stage prompt", async () => {
     const before = await fingerprintOf();
     await editFile("stages/review.yaml", (t) => t.replace("list defects", "list every defect"));
@@ -406,6 +453,8 @@ describe("fingerprint", () => {
       passThreshold: components.pass_threshold,
       engine: components.engine,
       rubricPromptVersion: RUBRIC_PROMPT_VERSION + 1,
+      ...(components.independence !== undefined ? { independence: components.independence } : {}),
+      ...(components.checkout_context !== undefined ? { checkout_context: components.checkout_context } : {}),
     });
     expect(computeFingerprint(rebuilt)).toBe(computeFingerprint(bumped));
   });
@@ -447,9 +496,11 @@ describe("fingerprint", () => {
     expect(Object.keys(components).sort()).toEqual(
       [
         "case_ids",
+        "checkout_context",
         "dataset",
         "engine",
         "graders",
+        "independence",
         "judge",
         "model",
         "pass_threshold",
@@ -458,6 +509,8 @@ describe("fingerprint", () => {
         "stage",
       ].sort(),
     );
+    expect(components.independence).toBe("persistent");
+    expect(components.checkout_context).toBe(false);
     expect(components.case_ids).toBeNull();
     const subset = await okBuild({ case_ids: ["c002", "c001"] });
     expect(subset.components.case_ids).toEqual(["c001", "c002"]);
