@@ -93,6 +93,7 @@ export function ProviderConnectRow({
           <ProviderOAuthSession
             providerId={provider.id}
             providerName={provider.name}
+            supportsApiKey={provider.supportsApiKey}
             onComplete={onOauthComplete}
             onDismiss={onOauthDismiss}
           />

@@ -10,6 +10,23 @@ export const OAUTH_LOOPBACK_CAVEAT =
 export const OAUTH_PASTE_HINT =
   "If automatic completion does not finish, paste the redirect URL or manual code below.";
 
+export const OAUTH_HOSTED_PASTE_INSTRUCTIONS =
+  "Your browser will say it cannot reach localhost. That is expected. Copy the full address from the address bar and paste it here.";
+
+export const OAUTH_HOSTED_API_KEY_HINT =
+  "An API key can be added instead in Settings, Providers.";
+
+export function manualCodeHint(hosted: boolean | undefined): string {
+  return hosted ? OAUTH_HOSTED_PASTE_INSTRUCTIONS : OAUTH_PASTE_HINT;
+}
+
+export function apiKeyHint(
+  hosted: boolean | undefined,
+  supportsApiKey: boolean | undefined,
+): string | undefined {
+  return hosted && supportsApiKey ? OAUTH_HOSTED_API_KEY_HINT : undefined;
+}
+
 export function latestAuthUrl(
   events: readonly LoginSessionEvent[],
 ): Extract<LoginSessionEvent, { type: "auth_url" }> | undefined {

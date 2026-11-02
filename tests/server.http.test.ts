@@ -3346,6 +3346,10 @@ describe("localhost HTTP API", () => {
         { cwd: root, providerAuthContext },
       );
 
+      const previousAllowedHosts = process.env.STAGEFLOW_ALLOWED_HOSTS;
+      const previousBind = process.env.STAGEFLOW_BIND;
+      delete process.env.STAGEFLOW_ALLOWED_HOSTS;
+      delete process.env.STAGEFLOW_BIND;
       try {
         const origin = base;
         const started = await jsonFetch(
@@ -3362,6 +3366,7 @@ describe("localhost HTTP API", () => {
         expect(started.status).toBe(200);
         expect(started.body.ok).toBe(true);
         expect(started.body.session.status).toBe("running");
+        expect(started.body.session.hosted).toBe(false);
         const sessionId = started.body.session.id as string;
 
         let pending: { body: { session: { pendingPrompt?: { type: string } } } } | undefined;
@@ -3467,6 +3472,175 @@ describe("localhost HTTP API", () => {
         expect(noOriginAnswer.status).toBe(403);
         expect(JSON.stringify(noOriginAnswer.body)).not.toContain(canary);
       } finally {
+        if (previousAllowedHosts === undefined) {
+          delete process.env.STAGEFLOW_ALLOWED_HOSTS;
+        } else {
+          process.env.STAGEFLOW_ALLOWED_HOSTS = previousAllowedHosts;
+        }
+        if (previousBind === undefined) {
+          delete process.env.STAGEFLOW_BIND;
+        } else {
+          process.env.STAGEFLOW_BIND = previousBind;
+        }
+        resetSessionsForTests();
+        await closeServer(server);
+      }
+    });
+
+    it("hosted oauth login reports hosted and auto-selects device code", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-http-oauth-hosted-"));
+      const { writeCredentialSourceToFile } = await import(
+        "../src/runtime/settingsFile.js"
+      );
+      const { makeMutationLock } = await import("../src/agent/providerAuth.js");
+      const { resetSessionsForTests } = await import(
+        "../src/agent/oauthSessionManager.js"
+      );
+      writeCredentialSourceToFile(root, "sf_owned");
+
+      const providers = [
+        {
+          id: "oauth-provider",
+          name: "OAuth Provider",
+          auth: {
+            oauth: {
+              name: "OAuth",
+              async login() {
+                return {
+                  type: "oauth" as const,
+                  refresh: "r",
+                  access: "a",
+                  expires: Date.now() + 60_000,
+                };
+              },
+              async refresh(c: unknown) {
+                return c;
+              },
+              async toAuth() {
+                return { apiKey: "x" };
+              },
+            },
+          },
+          getModels: () => [],
+          stream: () => {
+            throw new Error("n/a");
+          },
+          streamSimple: () => {
+            throw new Error("n/a");
+          },
+        },
+      ];
+      const store = new Map<string, "api_key" | "oauth">();
+      let chosen: string | undefined;
+      const fakeRuntime = {
+        getProviders: () => providers as never,
+        getProvider: (id: string) =>
+          providers.find((p) => p.id === id) as never,
+        getProviderAuthStatus: (id: string) => ({
+          configured: store.has(id),
+          source: store.has(id) ? "stored" : undefined,
+        }),
+        listCredentials: async () =>
+          [...store.entries()].map(([providerId, type]) => ({
+            providerId,
+            type,
+          })),
+        checkAuth: async (id: string) => {
+          const type = store.get(id);
+          return type ? { type, source: "stored" } : undefined;
+        },
+        login: async (
+          providerId: string,
+          type: "api_key" | "oauth",
+          interaction: {
+            notify: (e: unknown) => void;
+            prompt: (p: unknown) => Promise<string>;
+          },
+        ) => {
+          chosen = await interaction.prompt({
+            type: "select",
+            message: "Select OpenAI Codex login method:",
+            options: [
+              { id: "browser", label: "Browser login (default)" },
+              { id: "device_code", label: "Device code login (headless)" },
+            ],
+          });
+          if (chosen === "device_code") {
+            interaction.notify({
+              type: "device_code",
+              userCode: "HOSTED-CODE",
+              verificationUri: "https://example.test/device",
+            });
+          }
+          store.set(providerId, type);
+          return { type };
+        },
+        logout: async (providerId: string) => {
+          store.delete(providerId);
+        },
+      };
+      const providerAuthContext = {
+        createRuntime: async () => fakeRuntime as never,
+        lock: makeMutationLock(),
+      };
+
+      const previousAllowedHosts = process.env.STAGEFLOW_ALLOWED_HOSTS;
+      const previousBind = process.env.STAGEFLOW_BIND;
+      process.env.STAGEFLOW_ALLOWED_HOSTS = "acme.example.com";
+      delete process.env.STAGEFLOW_BIND;
+
+      const { server, base } = await withServer(
+        root,
+        scriptedFakeAgent([]),
+        undefined,
+        { cwd: root, providerAuthContext },
+      );
+
+      try {
+        const started = await jsonFetch(
+          `${base}/api/providers/oauth-provider/login`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Origin: base,
+            },
+            body: JSON.stringify({ authType: "oauth" }),
+          },
+        );
+        expect(started.status).toBe(200);
+        expect(started.body.session.hosted).toBe(true);
+        const sessionId = started.body.session.id as string;
+
+        let sawDevice = false;
+        for (let i = 0; i < 100; i++) {
+          const poll = await jsonFetch(
+            `${base}/api/providers/oauth-provider/login/${sessionId}`,
+          );
+          expect(poll.status).toBe(200);
+          expect(poll.body.session.hosted).toBe(true);
+          expect(poll.body.session.pendingPrompt?.type).not.toBe("select");
+          const events = poll.body.session.events as { type: string }[];
+          if (events.some((event) => event.type === "device_code")) {
+            sawDevice = true;
+            expect(poll.body.session.pendingPrompt).toBeUndefined();
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        expect(sawDevice).toBe(true);
+        expect(chosen).toBe("device_code");
+      } finally {
+        if (previousAllowedHosts === undefined) {
+          delete process.env.STAGEFLOW_ALLOWED_HOSTS;
+        } else {
+          process.env.STAGEFLOW_ALLOWED_HOSTS = previousAllowedHosts;
+        }
+        if (previousBind === undefined) {
+          delete process.env.STAGEFLOW_BIND;
+        } else {
+          process.env.STAGEFLOW_BIND = previousBind;
+        }
         resetSessionsForTests();
         await closeServer(server);
       }

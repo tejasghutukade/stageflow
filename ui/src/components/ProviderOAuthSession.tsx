@@ -10,7 +10,9 @@ import {
 import {
   OAUTH_LOOPBACK_CAVEAT,
   OAUTH_PASTE_HINT,
+  apiKeyHint,
   isTerminalSession,
+  manualCodeHint,
   latestAuthUrl,
   latestDeviceCode,
   latestInfoLinks,
@@ -23,11 +25,13 @@ const POLL_MS = 500;
 export function ProviderOAuthSession({
   providerId,
   providerName,
+  supportsApiKey,
   onComplete,
   onDismiss,
 }: {
   providerId: string;
   providerName: string;
+  supportsApiKey: boolean;
   onComplete: (status: ProviderAuthStatus | undefined, warning?: string) => void;
   onDismiss: () => void;
 }) {
@@ -159,6 +163,8 @@ export function ProviderOAuthSession({
     onDismiss();
   }
 
+  const hosted = session?.hosted === true;
+  const keyHint = apiKeyHint(hosted, supportsApiKey);
   const authUrl = session ? latestAuthUrl(session.events) : undefined;
   const device = session ? latestDeviceCode(session.events) : undefined;
   const statusLine = session ? latestStatusMessage(session.events) : undefined;
@@ -183,6 +189,17 @@ export function ProviderOAuthSession({
       >
         Connecting {providerName} with Pi OAuth / subscription login.
       </p>
+      {keyHint ? (
+        <p
+          style={{
+            margin: 0,
+            color: "var(--color-text-secondary)",
+            fontSize: "var(--font-size-sm)",
+          }}
+        >
+          {keyHint}
+        </p>
+      ) : null}
       {statusLine ? (
         <p className="muted" style={{ margin: 0 }}>
           {statusLine}
@@ -329,7 +346,7 @@ export function ProviderOAuthSession({
                 fontSize: "var(--font-size-sm)",
               }}
             >
-              {OAUTH_PASTE_HINT}
+              {manualCodeHint(hosted)}
             </p>
           ) : null}
           <input

@@ -15,6 +15,7 @@ import {
   getLoginSession,
   startOAuthLoginSession,
 } from "../agent/oauthSessionManager.js";
+import { isHostedConsole } from "./hostedConsole.js";
 
 export type ProviderRoutesCtx = {
   cwd: string;
@@ -87,7 +88,9 @@ export async function handleProviderRoutes(
     const authType = record.authType;
     if (authType === "oauth") {
       try {
-        const session = await startOAuthLoginSession(cwd, providerId, authCtx);
+        const session = await startOAuthLoginSession(cwd, providerId, authCtx, {
+          hosted: isHostedConsole(),
+        });
         json(res, 200, { ok: true, session });
       } catch (err) {
         const mapped = mapProviderAuthError(err);
