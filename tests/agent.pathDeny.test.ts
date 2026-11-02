@@ -106,6 +106,24 @@ describe("Pi durable-root path deny", () => {
     });
   });
 
+  it("grep of $STAGEFLOW_HOME/agent/auth.json returns stageflow_path_denied", async () => {
+    const { durableRoot, runWorkspaceDir, cwd } = await setupHomeWithRun();
+    const onToolCall = await installPathDeny(runWorkspaceDir, durableRoot);
+    const result = await onToolCall(
+      {
+        type: "tool_call",
+        toolCallId: "grep-auth",
+        toolName: "grep",
+        input: { pattern: "secret", path: path.join(durableRoot, "agent", "auth.json") },
+      },
+      { cwd },
+    );
+    expect(result).toEqual({
+      block: true,
+      reason: STAGEFLOW_PATH_DENIED,
+    });
+  });
+
   it("read of $STAGEFLOW_HOME/state.db returns stageflow_path_denied", async () => {
     const { durableRoot, runWorkspaceDir, cwd } = await setupHomeWithRun();
     const onToolCall = await installPathDeny(runWorkspaceDir, durableRoot);

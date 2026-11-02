@@ -492,6 +492,8 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
   const fileRel = relOrUndef(target.file);
   const { stageId } = target;
 
+  const independence = target.stageConfig.independence ?? "persistent";
+  const checkoutContext = target.stageConfig.checkout_context === true;
   const components = buildComponents({
     stageVersionHash: target.stageVersionHash,
     model: stageModel,
@@ -502,6 +504,8 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
     repeats,
     passThreshold,
     engine: input.engine,
+    independence,
+    checkout_context: checkoutContext,
   });
   const fingerprint = computeFingerprint(components);
 
@@ -531,6 +535,8 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
       ) as Record<string, unknown>,
       model: stageModel,
       model_tier: target.modelTier,
+      independence,
+      checkout_context: checkoutContext,
       input_schema_hash: schemaHash(target.inputSchema),
       output_schema_hash: schemaHash(target.outputSchema),
     },

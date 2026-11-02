@@ -262,6 +262,82 @@ describe("composeFeedbackResumePrompt", () => {
   });
 });
 
+const AUTHOR_PROMPT = "Fail closed if the source file is missing.";
+const MISSING_FILE_STOP =
+  "If a file you were given is not in that folder, stop and say so. Do not create stand-in documents.";
+const CHANGE_APPROACH =
+  "A rejected emit, a failed command, or a missing file ends that approach. Try another approach with the tools and inputs already given. Emit failure only when the stage can name a blocker none of those can get past. Do not create a stand-in for an input that could not be read.";
+
+function hostInput(independence?: "strict" | "persistent" | "open", sandboxed = false) {
+  const base = baseInput();
+  return {
+    ...base,
+    stage: {
+      ...base.stage,
+      system_prompt: AUTHOR_PROMPT,
+      ...(independence !== undefined ? { independence } : {}),
+    },
+    roots: sandboxed
+      ? {
+          ...buildStageRoots("/tmp/run-ws", "oss-plan-investigation"),
+          containerName: "stageflow-run-oss-plan-investigation-1-abc",
+          readonlyDir: "/sandbox/inputs",
+        }
+      : base.roots,
+  };
+}
+
+describe("open change of approach", () => {
+  it("puts the change-approach instruction in Claude's user prompt and Pi's stage assignment", () => {
+    const input = hostInput("open", true);
+    const user = composeStageUserPrompt(input, "emit_stage_envelope", undefined, "write_stage_artifact");
+    const system = composeStagePiSystemPrompt(input, "emit_stage_envelope", undefined, "write_stage_artifact");
+
+    expect(user).toContain(CHANGE_APPROACH);
+    expect(user).not.toContain(MISSING_FILE_STOP);
+    expect(user).toContain("One folder is mounted read-only at /sandbox/inputs. Read the files there.");
+    expect(system.startsWith(AUTHOR_PROMPT)).toBe(true);
+    expect(system.slice(0, AUTHOR_PROMPT.length)).toBe(AUTHOR_PROMPT);
+    const assignment = system.indexOf("# Stage assignment");
+    expect(assignment).toBeGreaterThan(AUTHOR_PROMPT.length);
+    expect(system.slice(0, assignment)).not.toContain("ends that approach");
+    expect(system.slice(assignment)).toContain(CHANGE_APPROACH);
+    expect(system.slice(assignment)).not.toContain(MISSING_FILE_STOP);
+  });
+
+  it("keeps the missing-file stop sentence for strict, persistent, and an omitted level", () => {
+    for (const independence of ["strict", "persistent", undefined] as const) {
+      const input = hostInput(independence, true);
+      const user = composeStageUserPrompt(input, "emit_stage_envelope", undefined, "write_stage_artifact");
+      const system = composeStagePiSystemPrompt(input, "emit_stage_envelope", undefined, "write_stage_artifact");
+      expect(user).toContain(MISSING_FILE_STOP);
+      expect(user).not.toContain("ends that approach");
+      expect(system.startsWith(AUTHOR_PROMPT)).toBe(true);
+      expect(system).toContain(MISSING_FILE_STOP);
+      expect(system).not.toContain("ends that approach");
+    }
+  });
+
+  it("tells an open stage to change approach even when no read-only folder is mounted", () => {
+    const input = hostInput("open");
+    const user = composeStageUserPrompt(input, "emit_stage_envelope");
+    const system = composeStagePiSystemPrompt(input, "emit_stage_envelope");
+    expect(user).toContain(CHANGE_APPROACH);
+    expect(user).not.toContain(MISSING_FILE_STOP);
+    expect(system.startsWith(AUTHOR_PROMPT)).toBe(true);
+    expect(system).toContain(CHANGE_APPROACH);
+    expect(system).not.toContain(MISSING_FILE_STOP);
+  });
+
+  it("leaves strict and persistent host text without the change-approach instruction when no folder is mounted", () => {
+    for (const independence of ["strict", "persistent", undefined] as const) {
+      const user = composeStageUserPrompt(hostInput(independence), "emit_stage_envelope");
+      expect(user).not.toContain("ends that approach");
+      expect(user).not.toContain(MISSING_FILE_STOP);
+    }
+  });
+});
+
 describe("Pi stage system prompt", () => {
   it("carries the assignment and envelope contract, not the kickoff message", () => {
     const input = {

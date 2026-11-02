@@ -10,6 +10,8 @@ import {
   SECTIONS_MARKER,
   splitSummary,
 } from "../src/compaction/summarize.js";
+import { COMPACTION_PROMPT_VERSION } from "../src/compaction/types.js";
+import type { IndependenceLevel } from "../src/types/stage.js";
 
 const COOKIE = "sf_c00kie_9f8e7d6c5b4a3210";
 const BEARER = "Bearer eyJhbGciOiJIUzI1NiJ9.FAKE-PAYLOAD-7731.sig_93ab1c";
@@ -106,7 +108,10 @@ describe("details round trip", () => {
     const out = await composeCompactionSummary({
       messages: [browserResult],
       previousSummary: `old core\n\n${SECTIONS_MARKER}\n## Pinned facts\n- OLD`,
-      previousDetails: { stageflowPinned: [{ kind: "id", value: "OLD-1", context: "old", source: { messageIndex: 0 } }] },
+      previousDetails: {
+        stageflowPromptVersion: COMPACTION_PROMPT_VERSION,
+        stageflowPinned: [{ kind: "id", value: "OLD-1", context: "old", source: { messageIndex: 0 } }],
+      },
       state: [{ key: "next", kind: "todo", value: "read shard 4", updatedAt: "2026-03-14T00:00:00Z" }],
       summarize: async ({ messages, previousSummary }) => {
         calls.push({ previousSummary, blob: JSON.stringify(messages) });
@@ -120,5 +125,97 @@ describe("details round trip", () => {
     expect(out.summary).toContain("ORD-88213");
     expect(out.summary).toContain("OLD-1");
     expect(out.summary).toContain("read shard 4");
+  });
+});
+
+describe("compaction summary reuse across independence levels", () => {
+  async function summarized(input: {
+    independence?: IndependenceLevel;
+    previousSummary?: string;
+    previousDetails?: { stageflowPromptVersion?: number; stageflowIndependence?: IndependenceLevel };
+  }) {
+    const calls: Array<string | undefined> = [];
+    await composeCompactionSummary({
+      messages: [],
+      ...(input.independence !== undefined ? { independence: input.independence } : {}),
+      ...(input.previousSummary !== undefined ? { previousSummary: input.previousSummary } : {}),
+      ...(input.previousDetails !== undefined ? { previousDetails: input.previousDetails } : {}),
+      state: [],
+      summarize: async ({ previousSummary }) => {
+        calls.push(previousSummary);
+        return { summary: "next" };
+      },
+    });
+    return calls[0];
+  }
+
+  it("reads a recorded independence level back with the prompt version", () => {
+    expect(
+      readStageflowDetails({
+        stageflowPromptVersion: COMPACTION_PROMPT_VERSION,
+        stageflowIndependence: "open",
+      }),
+    ).toMatchObject({
+      stageflowPromptVersion: COMPACTION_PROMPT_VERSION,
+      stageflowIndependence: "open",
+    });
+    expect(readStageflowDetails({ stageflowIndependence: "loose" })?.stageflowIndependence).toBeUndefined();
+  });
+
+  it("passes a previous summary recorded at the same level and version", async () => {
+    for (const level of ["strict", "persistent", "open"] as const) {
+      expect(
+        await summarized({
+          independence: level,
+          previousSummary: `keep going\n\n${SECTIONS_MARKER}\n## Pinned facts`,
+          previousDetails: {
+            stageflowPromptVersion: COMPACTION_PROMPT_VERSION,
+            stageflowIndependence: level,
+          },
+        }),
+      ).toBe("keep going");
+    }
+  });
+
+  it("does not pass a previous summary recorded at a different level", async () => {
+    const cases: Array<[IndependenceLevel, IndependenceLevel]> = [
+      ["strict", "persistent"],
+      ["strict", "open"],
+      ["persistent", "open"],
+    ];
+    for (const [recorded, current] of cases) {
+      expect(
+        await summarized({
+          independence: current,
+          previousSummary: "dead end",
+          previousDetails: {
+            stageflowPromptVersion: COMPACTION_PROMPT_VERSION,
+            stageflowIndependence: recorded,
+          },
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("does not pass a previous summary recorded at a different prompt version", async () => {
+    expect(
+      await summarized({
+        independence: "strict",
+        previousSummary: "old focus",
+        previousDetails: {
+          stageflowPromptVersion: COMPACTION_PROMPT_VERSION - 1,
+          stageflowIndependence: "strict",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps an agent previous summary when no independence level was recorded", async () => {
+    expect(
+      await summarized({
+        previousSummary: "agent core",
+        previousDetails: { stageflowPromptVersion: COMPACTION_PROMPT_VERSION },
+      }),
+    ).toBe("agent core");
   });
 });

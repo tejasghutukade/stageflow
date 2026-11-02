@@ -6,6 +6,7 @@ import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import { resolveTaskPath } from "./pipelineRunner.js";
+import { resolveWorkspaceBinding } from "./workspaceBinding.js";
 
 export type StartTaskInput = {
   task?: string | TaskFile;
@@ -38,11 +39,16 @@ export function taskFileToYaml(task: TaskFile): string {
   return stringifyYaml(doc);
 }
 
+function taskBindsCheckout(task: TaskFile, checkoutOverride?: string): boolean {
+  const binding = resolveWorkspaceBinding(task, { checkoutOverride });
+  return binding.ok && binding.value.kind !== "unbound";
+}
+
 /** Validate optional `task.input` against entry-stage IR `clone_input_schema` (YAML: `io.input.schema`). */
 export function checkTaskEntryInput(
   task: TaskFile,
   loaded: LoadedPipeline,
-  options: { cwd: string; taskPath?: string },
+  options: { cwd: string; taskPath?: string; checkoutOverride?: string },
 ): ValidationFinding[] {
   const absPath = options.taskPath
     ? path.resolve(options.cwd, options.taskPath)
@@ -50,6 +56,21 @@ export function checkTaskEntryInput(
   const findingPath = relPath(options.cwd, absPath);
   const stageById = new Map(loaded.stages.map((stage) => [stage.id, stage]));
   const findings: ValidationFinding[] = [];
+
+  if (!taskBindsCheckout(task, options.checkoutOverride)) {
+    for (const stage of loaded.stages) {
+      if (stage.checkout_context !== true) continue;
+      findings.push({
+        severity: "error",
+        code: "stage.checkout_context_unbound",
+        path: findingPath,
+        message: `Stage "${stage.id}" sets checkout_context but the task is not bound to a checkout`,
+        category: "stage",
+        pipelineId: loaded.pipeline.id,
+        stageId: stage.id,
+      });
+    }
+  }
 
   for (const rootId of loaded.dag.roots) {
     const stage = stageById.get(rootId);

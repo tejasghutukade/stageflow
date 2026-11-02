@@ -61,8 +61,17 @@ import {
   type AskOperatorCapture,
 } from "./claudeTools.js";
 import { createClaudeActivityMapper } from "./claudeActivity.js";
-import { DEFAULT_EMIT_REMINDERS, emitReminderPrompt, formatProviderError } from "./stageTurnDriver.js";
+import {
+  contentLeakedToolCall,
+  formatProviderError,
+  LEAKED_TOOL_CALL_ERROR,
+  MAX_TOTAL_EMIT_REMINDERS,
+  reminderLoopShape,
+  reminderPromptForPolicy,
+  stageIndependencePolicy,
+} from "./stageTurnDriver.js";
 import { readActivityVerbose } from "./activity.js";
+import { readCheckoutAgentsContext } from "./checkoutContext.js";
 import { composeStageUserPrompt } from "./piAdapter.js";
 import {
   claudeSessionMarkerPath,
@@ -195,6 +204,10 @@ type ClaudeTurnOutcome =
   | {
       kind: "completed";
       result: StageRunResult;
+      /** True when this turn made a real tool call. Persistent reminders reset the quiet count on one. */
+      usedTool?: boolean;
+      /** True when this turn wrote a tool call out as plain text. */
+      leakedToolCall?: boolean;
       /** The turn ended on its own with no envelope: a reminder turn may resume this session. */
       remind?: { sessionId: string; rejectedEmit?: string };
     };
@@ -303,6 +316,8 @@ async function runTurn(
 
   let sessionId = resumeSessionId;
   let providerError: string | undefined;
+  let usedTool = false;
+  let leakedToolCall = false;
 
   const containerName = input.roots.containerName;
 
@@ -336,8 +351,16 @@ async function runTurn(
           }
         : {}),
       ...(containerName !== undefined
-        ? { sandboxBash: { containerName, dockerBin: input.roots.containerDockerBin } }
-        : {}),
+        ? {
+            sandboxBash: {
+              containerName,
+              dockerBin: input.roots.containerDockerBin,
+              ...(input.roots.readonlyDir !== undefined
+                ? { readonlyDir: input.roots.readonlyDir }
+                : {}),
+            },
+          }
+        : { workspaceSearch: { cwd: input.roots.cwd } }),
     });
 
     const passedServers = Object.fromEntries(
@@ -377,6 +400,11 @@ async function runTurn(
     });
 
     for await (const message of stream) {
+      if (assistantMessageUsedTool(message)) usedTool = true;
+      if (message.type === "assistant") {
+        const content = (message.message as { content?: unknown } | undefined)?.content;
+        if (contentLeakedToolCall(content)) leakedToolCall = true;
+      }
       for (const event of activityMapper.map(message)) {
         input.onActivity?.(event);
       }
@@ -449,6 +477,8 @@ async function runTurn(
     return {
       kind: "completed",
       result: { ...resultFromCapture(emitCapture, providerError), usage },
+      usedTool,
+      leakedToolCall,
       ...(remind !== undefined ? { remind } : {}),
     };
   } catch (err) {
@@ -506,9 +536,22 @@ function resumePromptText(answer: AskOperatorAnswer): string {
   ].join("\n");
 }
 
+function assistantMessageUsedTool(message: unknown): boolean {
+  if (message === null || typeof message !== "object") return false;
+  const record = message as { type?: unknown; message?: unknown };
+  if (record.type !== "assistant" || record.message === null || typeof record.message !== "object") return false;
+  const content = (record.message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return false;
+  return content.some(
+    (block) => block !== null && typeof block === "object" && (block as { type?: unknown }).type === "tool_use",
+  );
+}
+
 export class ClaudeAgentAdapter implements StagePort {
   openStage(input: StageRunInput): StageHandle {
     const stageId = runtimeStageId(input);
+    const independence = stageIndependencePolicy(input.stage.independence);
+    const reminders = reminderLoopShape(independence, "claude");
     const markerPath = claudeSessionMarkerPath(input);
 
     let closed = false;
@@ -518,8 +561,8 @@ export class ClaudeAgentAdapter implements StagePort {
     const usage: StageUsage = emptyStageUsage();
 
     /**
-     * While a turn ends on its own without an envelope, resume the same session with a short
-     * reminder turn, up to DEFAULT_EMIT_REMINDERS times. A reminder turn may itself park on
+     * A turn that ends without an envelope resumes the same session. How many times, and what
+     * the reminder says, come from the attempt's independence policy. A reminder may park on
      * ask_operator; a closed handle stops the loop.
      */
     const withEmitReminders = async (
@@ -527,17 +570,39 @@ export class ClaudeAgentAdapter implements StagePort {
       model: string,
     ): Promise<ClaudeTurnOutcome> => {
       let outcome = first;
-      for (let attempt = 1; attempt <= DEFAULT_EMIT_REMINDERS; attempt++) {
+      let sent = 0;
+      let withoutProgress = 0;
+      for (;;) {
         if (closed || outcome.kind !== "completed" || outcome.remind === undefined) break;
-        const reminder = emitReminderPrompt(
+        if (withoutProgress >= reminders.quietLimit || sent >= MAX_TOTAL_EMIT_REMINDERS) {
+          if (outcome.leakedToolCall) {
+            return {
+              kind: "completed",
+              result: {
+                ...outcome.result,
+                ok: false,
+                reason: `provider error: ${LEAKED_TOOL_CALL_ERROR}`,
+              },
+            };
+          }
+          break;
+        }
+        sent++;
+        withoutProgress++;
+        const reminder = reminderPromptForPolicy(
+          independence,
           EMIT_STAGE_ENVELOPE_TOOL_NAME,
-          attempt,
-          DEFAULT_EMIT_REMINDERS,
+          withoutProgress,
+          reminders.quietLimit,
           outcome.remind.rejectedEmit,
+          outcome.leakedToolCall === true,
         );
         // The Claude activity mapper does not echo prompts; show the reminder like Pi does.
         input.onActivity?.({ event: "message", role: "user", text: reminder });
         outcome = await runTurn(input, model, markerPath, reminder, outcome.remind.sessionId, usage);
+        if (reminders.resetOnToolUse && outcome.kind === "completed" && outcome.usedTool) {
+          withoutProgress = 0;
+        }
       }
       return outcome;
     };
@@ -634,16 +699,18 @@ export class ClaudeAgentAdapter implements StagePort {
           );
           return applyOutcome(await withEmitReminders(outcome, pre.model));
         }
+        const checkoutContext = await readCheckoutAgentsContext(input);
+        const assignment = composeStageUserPrompt(
+          input,
+          EMIT_STAGE_ENVELOPE_TOOL_NAME,
+          undefined,
+          WRITE_STAGE_ARTIFACT_TOOL_NAME,
+        );
         const outcome = await runTurn(
           input,
           pre.model,
           markerPath,
-          composeStageUserPrompt(
-            input,
-            EMIT_STAGE_ENVELOPE_TOOL_NAME,
-            undefined,
-            WRITE_STAGE_ARTIFACT_TOOL_NAME,
-          ),
+          checkoutContext === undefined ? assignment : `${checkoutContext}\n\n${assignment}`,
           undefined,
           usage,
         );

@@ -92,6 +92,9 @@ describe("ask_operator wiring (U3)", () => {
       "bash",
       "write",
       "edit",
+      "grep",
+      "find",
+      "ls",
       "emit_stage_envelope",
     ]);
     expect(
@@ -101,6 +104,9 @@ describe("ask_operator wiring (U3)", () => {
       "bash",
       "write",
       "edit",
+      "grep",
+      "find",
+      "ls",
       "emit_stage_envelope",
       "write_stage_artifact",
     ]);
@@ -114,7 +120,7 @@ describe("ask_operator wiring (U3)", () => {
         "ask_operator",
         [],
       ),
-    ).toEqual(["read", "bash", "write", "edit", "emit_stage_envelope"]);
+    ).toEqual(["read", "bash", "write", "edit", "grep", "find", "ls", "emit_stage_envelope"]);
     expect(
       resolveStageToolNames(
         "emit_stage_envelope",
@@ -127,6 +133,9 @@ describe("ask_operator wiring (U3)", () => {
       "bash",
       "write",
       "edit",
+      "grep",
+      "find",
+      "ls",
       "emit_stage_envelope",
       "write_stage_artifact",
     ]);
@@ -150,6 +159,9 @@ describe("ask_operator wiring (U3)", () => {
       "bash",
       "write",
       "edit",
+      "grep",
+      "find",
+      "ls",
       "emit_stage_envelope",
       "ask_operator",
       "write_stage_artifact",

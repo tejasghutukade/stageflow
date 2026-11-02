@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiAgentAdapter } from "../src/agent/piAdapter.js";
 import type { StageRunInput } from "../src/agent/port.js";
+import * as sessionWiring from "../src/compaction/sessionWiring.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 
 const piSdkMocks = vi.hoisted(() => ({ createAgentSession: vi.fn() }));
@@ -54,12 +55,12 @@ const emit = (tools: Tool[], params: unknown) =>
 
 const tempDirs: string[] = [];
 
-async function input(): Promise<StageRunInput> {
+async function input(stage: Partial<StageRunInput["stage"]> = {}): Promise<StageRunInput> {
   const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-reminder-"));
   tempDirs.push(runWs);
   return {
     roots: buildStageRoots(runWs, "clarify"),
-    stage: { id: "clarify", system_prompt: "x", model: "anthropic/claude-sonnet-4-5" },
+    stage: { id: "clarify", system_prompt: "x", model: "anthropic/claude-sonnet-4-5", ...stage },
     task: { id: "t", goal: "g" },
     priorEnvelope: null,
   };
@@ -81,7 +82,7 @@ describe("Pi stage: turn ends without an envelope", () => {
         messages.push({ role: "assistant", stopReason: "stop" });
       },
     ]);
-    const result = await new PiAgentAdapter().runStage(await input());
+    const result = await new PiAgentAdapter().runStage(await input({ independence: "strict" }));
     expect(result.ok).toBe(true);
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain("Reminder 1 of 2");
@@ -89,7 +90,7 @@ describe("Pi stage: turn ends without an envelope", () => {
 
   it("fails as missing emit after two unanswered reminders", async () => {
     const prompts = scriptSession([]);
-    const result = await new PiAgentAdapter().runStage(await input());
+    const result = await new PiAgentAdapter().runStage(await input({ independence: "strict" }));
     expect(result).toMatchObject({ ok: false, reason: "missing emit_stage_envelope" });
     expect(prompts).toHaveLength(3);
   });
@@ -112,6 +113,17 @@ describe("Pi stage: turn ends without an envelope", () => {
     expect(prompts).toHaveLength(1);
   });
 
+  it("keeps going with continuation text when the stage omits independence", async () => {
+    const prompts = scriptSession([]);
+    const result = await new PiAgentAdapter().runStage(await input());
+    expect(result).toMatchObject({ ok: false, reason: "missing emit_stage_envelope" });
+    expect(prompts).toHaveLength(1 + 20);
+    expect(prompts[1]).toContain("Keep working");
+    expect(prompts[1]).not.toMatch(/Reminder \d+ of \d+/);
+    expect(prompts[1]).not.toContain('status "failure"');
+    expect(prompts.every((prompt, index) => index === 0 || prompt.includes("Keep working"))).toBe(true);
+  });
+
   it("does not remind after an agent-declared failure", async () => {
     const prompts = scriptSession([
       async (tools, messages) => {
@@ -122,5 +134,26 @@ describe("Pi stage: turn ends without an envelope", () => {
     const result = await new PiAgentAdapter().runStage(await input());
     expect(result).toMatchObject({ ok: false, reason: "status: failure" });
     expect(prompts).toHaveLength(1);
+  });
+});
+
+describe("Pi stage compaction independence", () => {
+  it("opens the stage session at that stage's independence level", async () => {
+    const spy = vi.spyOn(sessionWiring, "createSessionContextWiring");
+    const succeed = async (tools: Tool[], messages: unknown[]) => {
+      await emit(tools, { status: "success", summary: "done", artifacts: [] });
+      messages.push({ role: "assistant", stopReason: "stop" });
+    };
+    try {
+      scriptSession([succeed]);
+      await new PiAgentAdapter().runStage(await input({ independence: "open" }));
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ workingState: true, independence: "open" }));
+      spy.mockClear();
+      scriptSession([succeed]);
+      await new PiAgentAdapter().runStage(await input());
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ workingState: true, independence: "persistent" }));
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

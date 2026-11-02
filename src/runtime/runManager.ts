@@ -3130,6 +3130,7 @@ export class RunManager {
       const pairing = checkTaskEntryInput(task, loadResult.loaded, {
         cwd,
         taskPath,
+        checkoutOverride,
       });
       if (pairing.some((finding) => finding.severity === "error")) {
         throw new PipelineValidationError(
