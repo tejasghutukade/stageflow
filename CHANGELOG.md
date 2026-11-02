@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-11-02
+
 ### Added
 
 - **A stage can keep working instead of being steered into failure.** `independence` is `strict`, `persistent`, or `open`. Omitted means `persistent`: after a turn with no envelope the stage is told to keep working, up to twenty quiet reminders, and a tool call resets that count. `strict` keeps the previous short budget, including its offer to emit failure. `open` adds permission to try another approach with the tools and inputs already given, and does not add tools or load `AGENTS.md`. Set it on the stage, the pipeline, or the manifest; the stage wins. A fragment's copy is ignored. See [YAML catalog](docs/yaml-catalog.md).
