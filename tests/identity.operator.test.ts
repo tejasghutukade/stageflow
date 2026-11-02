@@ -166,13 +166,19 @@ describe("operator identity routes", () => {
     const { publicKey } = await generateKeyPair("ES256");
     expect((await call("POST", "/api/identity/connections/handoff", handoffBody("app", [await exportJWK(publicKey)]))).status).toBe(201);
     const first = (await call("POST", "/api/identity/assignments", assignmentBody("alice", "own"))).body;
+    const priorToken = store.establishSession("app", "support", "alice", "assert-before-revoke", Date.now() + 60_000);
+    expect(store.authenticate(priorToken, "support").principal.revision).toBe(1);
     expect((await call("POST", `/api/identity/assignments/${first.id}/revoke`)).body).toMatchObject({ active: false });
     expect(assignmentsOf((await call("GET", "/api/identity/assignments")).body)[0]).toMatchObject({ active: false, revision: 1 });
+    expect(() => store.authenticate(priorToken, "support")).toThrow("identity.verification_required");
 
     const again = await call("POST", "/api/identity/assignments", { ...assignmentBody("alice", "assigned"), expectedRevision: 1 });
     expect(again.status).toBe(201);
     expect(again.body).toMatchObject({ id: first.id, active: true, scope: "assigned", revision: 2 });
     expect(store.listAssignments()).toEqual([expect.objectContaining({ id: first.id, active: true, revision: 2 })]);
+    expect(() => store.authenticate(priorToken, "support")).toThrow("identity.verification_required");
+    const nextToken = store.establishSession("app", "support", "alice", "assert-after-regrant", Date.now() + 60_000);
+    expect(store.authenticate(nextToken, "support").principal.revision).toBe(2);
   });
 
   it("assigns each scope, previews without writing, then records the assignment", async () => {

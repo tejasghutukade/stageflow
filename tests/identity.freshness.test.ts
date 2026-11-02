@@ -180,6 +180,43 @@ describe("OIDC evidence freshness and upstream revocation", () => {
   });
 });
 
+describe("consumer identity bindings and expiry", () => {
+  it("rebinds a conversation to a new Access Grant and purges expired sessions", async () => {
+    const file = path.join(await mkdtemp(path.join(tmpdir(), "sf-identity-bind-")), "consumers.sqlite");
+    let now = 1_700_000_000_000;
+    const store = new ConsumerIdentityStore(file, "business-a", () => now);
+    cleanups.push(async () => { store.close(); await rm(path.dirname(file), { recursive: true, force: true }); });
+    const { publicKey } = await generateKeyPair("ES256");
+    store.registerHandoff({ id: "app", issuer: "https://business.example", agentId: "support", audience: "stageflow:business-a:support",
+      publicJwks: { keys: [{ ...await exportJWK(publicKey), kid: "app-key" }] }, algorithms: ["ES256"] });
+    store.assign("app", "alice", "alice", "directory:v1", { scope: "own", agents: ["support"], actions: ["conversation:use", "order:read"] });
+    const firstToken = store.establishSession("app", "support", "alice", "assert-1", now + 1_000);
+    const first = store.authenticate(firstToken, "support");
+    store.bind("conversation", first.sessionId, "support", 1);
+    const secondToken = store.establishSession("app", "support", "alice", "assert-2", now + 60_000);
+    const second = store.authenticate(secondToken, "support");
+    expect(() => store.bind("conversation", second.sessionId, "support", 2)).not.toThrow();
+    expect(store.conversation("conversation", second.sessionId, "support", 2).sessionId).toBe(second.sessionId);
+    expect(() => store.conversation("conversation", first.sessionId, "support", 1)).toThrow("identity.not_available");
+
+    store.registerService("nightly", "alice", { scope: "own", agents: ["support"], actions: ["conversation:use", "order:read"] });
+    const early = store.openServiceAuthority("support");
+    now += 5 * 60 * 1000 + 1;
+    const live = store.openServiceAuthority("support");
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(file);
+    const sessions = db.prepare("SELECT COUNT(*) AS n FROM identity_sessions WHERE workspace = ?").get("business-a") as { n: number };
+    const grants = db.prepare("SELECT COUNT(*) AS n FROM identity_grants WHERE workspace = ?").get("business-a") as { n: number };
+    db.close();
+    expect(sessions.n).toBe(1);
+    expect(grants.n).toBe(1);
+    expect(store.resolve(live.sessionId, "support").sessionId).toBe(live.sessionId);
+    expect(() => store.resolve(early.sessionId, "support")).toThrow("identity.verification_required");
+    expect(() => store.resolve(first.sessionId, "support")).toThrow("identity.verification_required");
+    expect(() => store.resolve(second.sessionId, "support")).toThrow("identity.verification_required");
+  });
+});
+
 describe("consumer identity operator store", () => {
   it("previews scope, conflicts on a stale revision, and keeps secrets out of lists", async () => {
     const store = new ConsumerIdentityStore(":memory:", "business-a");

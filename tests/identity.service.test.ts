@@ -98,6 +98,20 @@ describe("service identity for scheduled consumer turns", () => {
     expect(host.agents.service.listSessionsForRef(host.agents.project, "support", "web_consumer", customer.sessionId, 20).map((session) => session.id)).toEqual([customerSession.id]);
   });
 
+  it("rebinds a reused schedule agent session to a fresh service Access Grant", async () => {
+    const host = await fixture();
+    const first = await host.conversation.send({ projectRoot: host.agents.project, agentId: "support", text: "alice-order", source: "schedule" });
+    expect(first.messages.at(-1)!.text).toContain("private-alice-order");
+    const firstServiceSession = host.seen()[0]!.sessionId;
+    const second = await host.conversation.send({
+      projectRoot: host.agents.project, agentId: "support", sessionId: first.session.id, text: "alice-order", source: "schedule",
+    });
+    expect(second.session.id).toBe(first.session.id);
+    expect(second.messages.at(-1)!.text).toContain("private-alice-order");
+    expect(host.seen()[1]!.sessionId).not.toBe(firstServiceSession);
+    expect(host.released()).toEqual([first.session.id, second.session.id]);
+  });
+
   it("rejects a service source, a service bearer, and a schedule with no active grant before any tool runs", async () => {
     const host = await fixture();
     const calls = host.backend.calls;

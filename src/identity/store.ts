@@ -309,6 +309,7 @@ export class ConsumerIdentityStore {
       if (!principal || expiresAt <= this.now()) throw new ConsumerAccessError("identity.verification_required");
       const permission = permissionSchema.parse(JSON.parse(principal.permission));
       if (!permission.agents.includes(agentId) || !permission.actions.includes("conversation:use")) throw new ConsumerAccessError("identity.not_available");
+      this.purgeExpiredSessions();
       this.db.prepare("DELETE FROM identity_replays WHERE workspace = ? AND expires <= ?").run(this.workspaceId, this.now());
       this.db.prepare("INSERT INTO identity_replays VALUES (?, ?, ?, ?)").run(this.workspaceId, connectionId, assertionId, expiresAt);
       const token = randomBytes(32).toString("base64url");
@@ -353,7 +354,10 @@ export class ConsumerIdentityStore {
 
   bind(conversation: string, sessionId: string, agentId: string, revision: number): void {
     this.resolve(sessionId, agentId);
-    this.db.prepare("INSERT INTO identity_bindings VALUES (?, ?, ?, ?, ?)").run(this.workspaceId, conversation, sessionId, agentId, revision);
+    this.db.prepare(`INSERT INTO identity_bindings(workspace, conversation, session, agent, revision) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(workspace, conversation) DO UPDATE SET
+        session = excluded.session, agent = excluded.agent, revision = excluded.revision`)
+      .run(this.workspaceId, conversation, sessionId, agentId, revision);
   }
 
   conversation(conversation: string, sessionId: string, agentId: string, revision?: number): ConsumerAuthority {
@@ -684,6 +688,23 @@ export class ConsumerIdentityStore {
       this.db.prepare("UPDATE identity_sessions SET active = 0 WHERE workspace = ? AND id = ?").run(this.workspaceId, child.id);
       this.db.prepare("UPDATE identity_grants SET active = 0 WHERE workspace = ? AND session = ?").run(this.workspaceId, child.id);
       this.deactivateDescendants(child.id);
+    }
+  }
+
+  private purgeExpiredSessions(): void {
+    const now = this.now();
+    const expired = this.db.prepare("SELECT id FROM identity_sessions WHERE workspace = ? AND expires <= ?")
+      .all(this.workspaceId, now) as Array<{ id: string }>;
+    if (expired.length === 0) return;
+    const deleteBindings = this.db.prepare("DELETE FROM identity_bindings WHERE workspace = ? AND session = ?");
+    const deleteDisclosures = this.db.prepare("DELETE FROM identity_disclosures WHERE workspace = ? AND session = ?");
+    const deleteGrants = this.db.prepare("DELETE FROM identity_grants WHERE workspace = ? AND session = ?");
+    const deleteSession = this.db.prepare("DELETE FROM identity_sessions WHERE workspace = ? AND id = ?");
+    for (const row of expired) {
+      deleteBindings.run(this.workspaceId, row.id);
+      deleteDisclosures.run(this.workspaceId, row.id);
+      deleteGrants.run(this.workspaceId, row.id);
+      deleteSession.run(this.workspaceId, row.id);
     }
   }
 

@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Granting access again to a person who was revoked now works.** Saving their access reactivates it with a new revision; their old sessions stay invalid.
+- **Rebinding a protected conversation no longer fails when the Access Grant changes.** `bind` updates the existing row; expired consumer sessions are removed when a new session is established.
 
 ## [0.47.0] - 2026-10-29
 
