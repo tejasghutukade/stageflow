@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Hosted provider login no longer stops on a localhost page.** When the console is reached by a public hostname (`STAGEFLOW_ALLOWED_HOSTS`) or listens outside loopback (`STAGEFLOW_BIND`), Codex sign-in uses device code and skips the browser-or-device choice. If device code is not enabled, browser sign-in continues, and the paste field explains that a localhost error page is expected. An API key can be added instead in Settings, Keys.
+- **Hosted provider login no longer stops on a localhost page.** When the console is reached by a public hostname (`STAGEFLOW_ALLOWED_HOSTS`) or listens outside loopback (`STAGEFLOW_BIND`), Codex sign-in uses device code and skips the browser-or-device choice. If device code is not enabled, browser sign-in continues, and the paste field explains that a localhost error page is expected. When the provider also accepts an API key, the panel says it can be added in Settings, Providers.
 
 ## [0.47.0] - 2026-10-29
 

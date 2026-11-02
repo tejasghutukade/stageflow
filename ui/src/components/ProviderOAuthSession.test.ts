@@ -158,11 +158,14 @@ describe("ProviderOAuthSession wiring projections", () => {
     expect(OAUTH_HOSTED_PASTE_INSTRUCTIONS).toBe(
       "Your browser will say it cannot reach localhost. That is expected. Copy the full address from the address bar and paste it here.",
     );
-    expect(apiKeyHint(running.hosted)).toBe(OAUTH_HOSTED_API_KEY_HINT);
-    expect(OAUTH_HOSTED_API_KEY_HINT).toMatch(/Settings, Keys/);
+    expect(apiKeyHint(running.hosted, true)).toBe(OAUTH_HOSTED_API_KEY_HINT);
+    expect(OAUTH_HOSTED_API_KEY_HINT).toBe(
+      "An API key can be added instead in Settings, Providers.",
+    );
+    expect(apiKeyHint(running.hosted, false)).toBeUndefined();
     expect(manualCodeHint(false)).not.toBe(OAUTH_HOSTED_PASTE_INSTRUCTIONS);
-    expect(apiKeyHint(false)).toBeUndefined();
-    expect(apiKeyHint(undefined)).toBeUndefined();
+    expect(apiKeyHint(false, true)).toBeUndefined();
+    expect(apiKeyHint(undefined, true)).toBeUndefined();
   });
 
   it("CredentialSynchronizationError warning is soft success copy", () => {

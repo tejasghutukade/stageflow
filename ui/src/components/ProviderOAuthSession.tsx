@@ -25,11 +25,13 @@ const POLL_MS = 500;
 export function ProviderOAuthSession({
   providerId,
   providerName,
+  supportsApiKey,
   onComplete,
   onDismiss,
 }: {
   providerId: string;
   providerName: string;
+  supportsApiKey: boolean;
   onComplete: (status: ProviderAuthStatus | undefined, warning?: string) => void;
   onDismiss: () => void;
 }) {
@@ -162,7 +164,7 @@ export function ProviderOAuthSession({
   }
 
   const hosted = session?.hosted === true;
-  const keyHint = apiKeyHint(hosted);
+  const keyHint = apiKeyHint(hosted, supportsApiKey);
   const authUrl = session ? latestAuthUrl(session.events) : undefined;
   const device = session ? latestDeviceCode(session.events) : undefined;
   const statusLine = session ? latestStatusMessage(session.events) : undefined;

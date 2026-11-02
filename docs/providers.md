@@ -139,7 +139,7 @@ One catalog supplies every model list and the default model: the stage, pipeline
 - **Replace API key** (providers that take a key) opens the key field.
 - **Sign in again** (providers that use OAuth) restarts sign-in.
 
-On a Host that accepts a public hostname (`STAGEFLOW_ALLOWED_HOSTS`) or listens outside loopback (`STAGEFLOW_BIND`), Codex sign-in uses device code and skips the browser-or-device choice. If device code is not enabled, sign-in continues in the browser, and the paste field explains that a localhost error page is expected.
+On a Host that accepts a public hostname (`STAGEFLOW_ALLOWED_HOSTS`) or listens outside loopback (`STAGEFLOW_BIND`), Codex sign-in uses device code and skips the browser-or-device choice. If device code is not enabled, sign-in continues in the browser, and the paste field explains that a localhost error page is expected. A hosted sign-in for a provider that also accepts an API key says one can be added in Settings, Providers.
 - **Disconnect** asks first ("Disconnect <provider>? Agents and evals that use it will stop working.") and removes the stored credential only after you confirm.
 
 A provider whose key comes from `STAGEFLOW_PROVIDER_<ID>_API_KEY` is configured again at the next Host boot (see above). The TypeSafe row holds the key that [failure sorting](evals.md#sort-failures) uses.
