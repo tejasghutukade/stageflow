@@ -11,6 +11,7 @@ describe("railActiveId", () => {
       [{ name: "workshop" }, "pipelines"],
       [{ name: "task", taskId: "t" }, "tasks"],
       [{ name: "connection", connectionId: "c" }, "connections"],
+      [{ name: "identity" }, "identity"],
       [{ name: "connect" }, "settings"],
       [{ name: "agentSessions" }, "agent-sessions"],
       [{ name: "settings" }, "settings"],

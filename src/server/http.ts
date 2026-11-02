@@ -205,6 +205,8 @@ import { handleAgentAuthorRoutes } from "./agentAuthorRoutes.js";
 import { handleGuideRoutes } from "./guideRoutes.js";
 import { handleInternalAgentRoutes } from "./internalAgentRoutes.js";
 import { handleAgentRoutes } from "./agentRoutes.js";
+import { handleIdentityRoutes } from "./identityRoutes.js";
+import { handleIdentitySetupRoutes } from "./identitySetupRoutes.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
 import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
@@ -289,6 +291,8 @@ export type UiServerOptions = {
   /** Optional AgentPort. Workshop is the caller today; tests inject a fake. */
   workshopOperatorHost?: AgentPort;
   agentConversationBackend?: ConversationBackend;
+  consumerAuthorization?: import("../identity/authorization.js").ConsumerAuthorization;
+  consumerIdentity?: import("../identity/runtime.js").ConsumerIdentityRuntime;
 };
 
 function textPlain(res: ServerResponse, status: number, body: string): void {
@@ -439,6 +443,8 @@ export type OperatorRouteDeps = {
   workshopChatRegistry?: WorkshopChatSessionRegistry;
   /** Injectable agent chat backend (tests). Defaults to Pi conversation host. */
   agentConversationBackend?: ConversationBackend;
+  consumerAuthorization?: import("../identity/authorization.js").ConsumerAuthorization;
+  consumerIdentity?: import("../identity/runtime.js").ConsumerIdentityRuntime;
   /** Shared with MCP when set by bootstrap. */
   agentHost?: AgentHostContext;
   /** Bootstrap fills this once the operator host exists, so evals can run against it. */
@@ -483,6 +489,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
     injectedHost ??
     (agentConnection
       ? createAgentHostContext({
+          ...(deps.consumerAuthorization ? { consumerAuthorization: deps.consumerAuthorization } : {}),
           cwd,
           agentDir,
           connection: agentConnection,
@@ -648,6 +655,15 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             }
           }
           if (await handleAgentRoutes(req, method, pathname, agentHost, agentProjectRoot, res, json)) return true;
+        }
+        if (pathname === "/api/identity" || pathname.startsWith("/api/identity/")) {
+          const identityAuthorization = deps.consumerAuthorization ?? deps.consumerIdentity?.current();
+          if (pathname === "/api/identity/setup" || pathname.startsWith("/api/identity/setup/")) {
+            if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
+            if (await handleIdentitySetupRoutes(req, method, pathname, deps.consumerIdentity, Boolean(identityAuthorization), res, json)) return true;
+          }
+          if (!identityAuthorization) { json(res, 503, { code: "identity.setup_required" }); return true; }
+          if (await handleIdentityRoutes(req, method, pathname, url, identityAuthorization, res, json)) return true;
         }
         if (pathname === "/api/memories" || pathname.startsWith("/api/memories/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
@@ -3793,6 +3809,8 @@ export async function startUiServer(
           ...(options.agentConversationBackend
             ? { agentConversationBackend: options.agentConversationBackend }
             : {}),
+          ...(options.consumerAuthorization ? { consumerAuthorization: options.consumerAuthorization } : {}),
+          ...(boot.consumerIdentity ? { consumerIdentity: boot.consumerIdentity } : {}),
         });
   const envelope = await createHttpHost({
     boot,

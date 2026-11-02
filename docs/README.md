@@ -32,6 +32,9 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Agents](agents.md) | Project-owned agents (`agents/*.agent.yaml`): overview and where the pieces live |
 | [Agent definition](agent-definition.md) | Every field of an agent file, defaults and limits, reserved ids, revisions, validation issues |
 | [Agent runtime](agent-runtime.md) | Turns, tool grants, ask-first approvals, guardrails, sub-agents, limits, restart behaviour |
+| [Consumer identity](consumer-identity.md) | Security model and interfaces for letting a business's customers and employees sign in to protected agents: signed handoff and OIDC admission, access levels, order authorization, turning it on from the console, the operator API, and the package Cloud consumes |
+| [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md) | Start to finish: protected agent, turn identity on, connect a sign-in, map people to accounts, connect your order API, embed the chat, watch activity |
+| [Order API contract](order-api-contract.md) | For the engineer who owns the order system: the two endpoints, the credential, the signed token and how to verify it, rotation, and a checklist |
 | [Agent observability](agent-observability.md) | Spans, capture modes, redaction, OTLP export, groundedness evals |
 | [Agent API](agent-api.md) | REST routes, CLI and MCP tools for agents, webhooks and the public chat API |
 | [Set up your first agent](guides-agents-first-agent.md) | Create, test and enable an agent |
@@ -60,6 +63,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Console: Evals](console-evals.md) | Evals list, New eval wizard (stage or agent), Datasets and scenarios, Run dialog and live progress, run switcher, results, suggested failure sorting, case drawer and conversation transcript, Compare, Edit eval |
 | [Console: Agents](console-agents.md) | Directory, create and edit, sessions, run inspector |
 | [Console: Connections](console-connections.md) | Channels, email accounts, tool servers |
+| [Console: Identity](console-identity.md) | Turn identity on, sign-in connections, people and access levels, check access, activity, setup (policy engine, order API, signing key) |
 | [Console: Settings](console-settings.md) | Providers (connect, replace key, disconnect), Concurrency, MCP server, Project MCP, Notifications |
 | [Environment variables](environment-variables.md) | Every `STAGEFLOW_*` variable the Host reads |
 | [Migrating stage environments](migration-stage-environment.md) | Move stages to declared secrets and the curated stage environment |

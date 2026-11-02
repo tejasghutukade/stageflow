@@ -24,6 +24,7 @@ export type Route =
   | { name: "triggers" }
   | { name: "connections" }
   | { name: "connection"; connectionId: string }
+  | { name: "identity" }
   | { name: "memories" }
   | { name: "memory"; memoryId: string }
   | { name: "agents" }
@@ -459,6 +460,7 @@ export function parseHash(hash = window.location.hash): Route {
     const memoryId = firstSegment(path.slice("memories/".length));
     if (memoryId) return { name: "memory", memoryId };
   }
+  if (path === "identity") return { name: "identity" };
   if (path === "connections") return { name: "connections" };
   if (path.startsWith("connections/")) {
     const connectionId = firstSegment(path.slice("connections/".length));
