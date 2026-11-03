@@ -61,6 +61,43 @@ describe("A2A publication registry", () => {
     await expect(loadPublicationRegistry(configPath, env)).rejects.toThrow();
   });
 
+  describe("STAGEFLOW_PUBLIC_URL default", () => {
+    async function withPublicUrl(publicUrl: string | undefined): Promise<string> {
+      const root = await copyFixture();
+      const configPath = path.join(root, "a2a.yaml");
+      const config = parse(await readFile(configPath, "utf8"));
+      if (publicUrl === undefined) delete config.public_url;
+      else config.public_url = publicUrl;
+      await writeFile(configPath, stringify(config));
+      return configPath;
+    }
+
+    it("is used when the config has no public_url", async () => {
+      const configPath = await withPublicUrl(undefined);
+      const registry = await loadPublicationRegistry(configPath, { ...env, STAGEFLOW_PUBLIC_URL: "https://ws.stage-flow.dev" });
+      expect(registry.publicUrl).toBe("https://ws.stage-flow.dev");
+    });
+
+    it("loses to an explicit public_url", async () => {
+      const configPath = await withPublicUrl("https://explicit.example.com");
+      const registry = await loadPublicationRegistry(configPath, { ...env, STAGEFLOW_PUBLIC_URL: "https://ws.stage-flow.dev" });
+      expect(registry.publicUrl).toBe("https://explicit.example.com");
+    });
+
+    it("is validated like a configured public_url", async () => {
+      const bad = await withPublicUrl("http://public.example");
+      const missing = await withPublicUrl(undefined);
+      const configured = await loadPublicationRegistry(bad, env).catch((error: Error) => error.message);
+      const fromEnv = await loadPublicationRegistry(missing, { ...env, STAGEFLOW_PUBLIC_URL: "http://public.example" }).catch((error: Error) => error.message);
+      expect(configured).toContain("public_url must be an HTTPS origin");
+      expect(fromEnv).toBe(configured);
+    });
+
+    it("still fails with neither set", async () => {
+      await expect(loadPublicationRegistry(await withPublicUrl(undefined), env)).rejects.toThrow();
+    });
+  });
+
   it("rejects missing and shared credentials without printing their values", async () => {
     const config = path.join(fixture, "a2a.yaml");
     await expect(loadPublicationRegistry(config, {})).rejects.toThrow("requires a token");

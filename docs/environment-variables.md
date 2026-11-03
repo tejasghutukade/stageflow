@@ -68,6 +68,7 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_TRIGGER_TICK_INTERVAL_MS` | Schedule-trigger tick (default 30000, `0` disables) |
 | `STAGEFLOW_GITHUB_POLL_INTERVAL_MS` | GitHub-trigger poll (default 60000, `0` disables) |
 | `STAGEFLOW_A2A_CONFIG` | Path to `a2a.yaml`. See [A2A](a2a.md) |
+| `STAGEFLOW_PUBLIC_URL` | Default A2A `public_url` when `a2a.yaml` has none; an explicit `public_url` wins. Same validation (HTTPS origin, HTTP on loopback). See [A2A](a2a.md) |
 | `STAGEFLOW_OPERATOR_CWD`, `STAGEFLOW_OPERATOR_AGENT_DIR` | Operator checkout and Pi agent dir (CI) |
 | `STAGEFLOW_CURSOR_EXTENSION` | Path to the Cursor Pi extension |
 | `STAGEFLOW_AGENT_AUTH_PATH` | Provider auth file stamped into stage workspaces (`PI_HOME_AUTH_PATH` is the deprecated name) |

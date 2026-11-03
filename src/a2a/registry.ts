@@ -164,7 +164,13 @@ export async function loadPublicationRegistry(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<PublicationRegistry> {
   const absolute = await realpath(configPath);
-  const config = configSchema.parse(parse(await readFile(absolute, "utf8")));
+  const raw: unknown = parse(await readFile(absolute, "utf8"));
+  const defaultUrl = env.STAGEFLOW_PUBLIC_URL;
+  const config = configSchema.parse(
+    defaultUrl && raw && typeof raw === "object" && !Array.isArray(raw) && !("public_url" in raw)
+      ? { ...raw, public_url: defaultUrl }
+      : raw,
+  );
   const origin = publicUrl(config.public_url);
   requireUnique(config.callers.map((caller) => caller.id), "caller ID");
   requireUnique(config.publications.map((publication) => publication.id), "publication ID");

@@ -68,6 +68,7 @@ publications:
     caller_answerable_stages: [clarify_requirements]
 ```
 
+- `public_url` must be an HTTPS origin (HTTP is allowed on loopback). When it is omitted, the Host's `STAGEFLOW_PUBLIC_URL` is used as the default and validated the same way; an explicit `public_url` always wins. The agent card interface URL and the contract and artifact links use it.
 - `project_root`, `pipeline`, and `input_schema` resolve relative to the config file, then to each other; they are canonicalized at load time.
 - Only listed publications are served — nothing is auto-published from the catalog.
 - `results.stage` must be a single, non-cloned terminal stage. Its declared artifacts must have a matching `artifact_declared` pre-emit check in the pipeline.
