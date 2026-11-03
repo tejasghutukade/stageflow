@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-11-03
+
 ### Added
 
 - **A2A can be turned off and on again.** `POST /api/a2a/disable` keeps callers, published pipelines and token digests; the A2A endpoints answer as disabled until `POST /api/a2a/enable` restores them. The state survives a restart (`enabled: false` in `a2a.yaml`).
