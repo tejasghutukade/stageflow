@@ -39,7 +39,7 @@ export async function handleA2aRoutes(
   const caller = pathname.match(/^\/api\/a2a\/callers\/([^/]+)$/);
   const publication = pathname.match(/^\/api\/a2a\/publications\/([^/]+)$/);
   const known = new Set([
-    "/api/a2a/enable", "/api/a2a/disable", "/api/a2a/reload", "/api/a2a/callers", "/api/a2a/publications", "/api/a2a/publications/preview",
+    "/api/a2a/enable", "/api/a2a/disable", "/api/a2a/reload", "/api/a2a/callers", "/api/a2a/publications", "/api/a2a/publications/preview", "/api/a2a/pipeline-stages",
   ]);
   if (!known.has(pathname) && !caller && !publication) return false;
 
@@ -52,6 +52,14 @@ export async function handleA2aRoutes(
       return true;
     }
     if (pathname === "/api/a2a/disable" && method === "POST") { json(res, 200, await management.disable()); return true; }
+    if (pathname === "/api/a2a/pipeline-stages" && method === "GET") {
+      const query = new URL(req.url ?? "", "http://localhost").searchParams;
+      const projectRoot = query.get("project_root");
+      const pipeline = query.get("pipeline");
+      if (!projectRoot || !pipeline) throw new A2aManagementError("a2a_invalid_request", "project_root and pipeline are required", 400);
+      json(res, 200, { stages: await management.pipelineStages(projectRoot, pipeline) });
+      return true;
+    }
     if (pathname === "/api/a2a/reload" && method === "POST") { json(res, 200, await management.reload()); return true; }
     if (pathname === "/api/a2a/callers" && method === "GET") { json(res, 200, { callers: management.listCallers() }); return true; }
     if (pathname === "/api/a2a/callers" && method === "POST") {

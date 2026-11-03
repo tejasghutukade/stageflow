@@ -95,10 +95,38 @@ export function normalizePublicUrl(value: string): string {
   return url.origin;
 }
 
+type PipelineStage = LoadedPipeline["stages"][number];
+
+function terminalResultStages(loaded: LoadedPipeline): PipelineStage[] {
+  if (loaded.dag.nodes.some((node) => node.clone_cap !== undefined)) return [];
+  return loaded.stages.filter((stage) => !loaded.dag.childrenOf[stage.id]?.length);
+}
+
+function declaredArtifacts(stage: PipelineStage): string[] {
+  return [...new Set(stage.pre_emit_checks?.flatMap((check) => (check.type === "artifact_declared" ? check.basename : [])) ?? [])];
+}
+
+function allowsOnlyFreeText(stage: PipelineStage): boolean {
+  return stage.gate_kinds?.length === 1 && stage.gate_kinds[0] === "free_text";
+}
+
+export type PipelineStageOption = { id: string; terminal: boolean; artifacts: string[]; freeTextOnly: boolean };
+
+/** What a publication may pick from a pipeline, using the same rules publication validation enforces. */
+export async function describePipelineStages(pipeline: string, projectRoot: string): Promise<PipelineStageOption[]> {
+  const loaded = await loadPipeline(pipeline, { cwd: projectRoot, projectRoot });
+  const terminal = new Set(terminalResultStages(loaded).map((stage) => stage.id));
+  return loaded.stages.map((stage) => ({
+    id: stage.id,
+    terminal: terminal.has(stage.id),
+    artifacts: terminal.has(stage.id) ? declaredArtifacts(stage) : [],
+    freeTextOnly: allowsOnlyFreeText(stage),
+  }));
+}
+
 function validatePublication(config: PublicationConfig, loaded: LoadedPipeline, input: unknown): void {
-  const result = loaded.stages.find((stage) => stage.id === config.results.stage);
-  if (!result || loaded.dag.childrenOf[result.id]?.length ||
-      loaded.dag.nodes.some((node) => node.clone_cap !== undefined)) {
+  const result = terminalResultStages(loaded).find((stage) => stage.id === config.results.stage);
+  if (!result) {
     throw new Error(`Publication ${config.id} requires a fixed terminal result stage without cloning`);
   }
   for (const root of loaded.dag.roots) {
@@ -109,12 +137,11 @@ function validatePublication(config: PublicationConfig, loaded: LoadedPipeline, 
   }
   for (const id of config.caller_answerable_stages) {
     const stage = loaded.stages.find((candidate) => candidate.id === id);
-    if (!stage || stage.gate_kinds?.length !== 1 || stage.gate_kinds[0] !== "free_text") {
+    if (!stage || !allowsOnlyFreeText(stage)) {
       throw new Error(`Publication ${config.id} caller-answerable stage ${id} must allow only free_text`);
     }
   }
-  const declared = new Set(result.pre_emit_checks?.flatMap((check) =>
-    check.type === "artifact_declared" ? check.basename : []) ?? []);
+  const declared = new Set(declaredArtifacts(result));
   for (const name of config.results.artifacts) {
     if (!declared.has(name)) throw new Error(`Publication ${config.id} artifact ${name} needs an emit artifact check`);
   }

@@ -80,6 +80,8 @@ All routes are under `/api/a2a` on the Host. They use the same control tokens as
 | `DELETE /api/a2a/callers/:id` | | `{ revoked: true, removed_from: [publicationId] }`; `404 a2a_caller_not_found` |
 | `GET /api/a2a/publications` | | `{ publications: [Publication] }` |
 | `GET /api/a2a/publications/:id` | | `Publication` plus `contract: { revision, inputSchema, outputSchema, artifacts }`; `404 a2a_publication_not_found` |
+| `GET /api/catalog/files?project_root=<id>&ext=.json` | | `{ project_root, ext, files: [path], truncated }`. Read scope. Relative paths of files with that extension under the catalog project, sorted; `node_modules`, `.git` and symbolic links are skipped, at most 500 are returned (`truncated: true` when there are more). The console lists input schema files with it. `400 invalid_extension`, `unknown_project_root` |
+| `GET /api/a2a/pipeline-stages?project_root=<id>&pipeline=<path>` | | `{ stages: [{ id, terminal, artifacts, freeTextOnly }] }`. `terminal` marks the stages a publication may use as `results.stage`; `artifacts` are the files that terminal stage declares (what `results.artifacts` may name); `freeTextOnly` marks the stages `caller_answerable_stages` may name. Same rules as publication validation. `400 a2a_path_invalid`, `a2a_publication_invalid` |
 | `POST /api/a2a/publications/preview` | Publication body | `contract`, without saving. `400` with the validation message |
 | `POST /api/a2a/publications` | Publication body | `201 Publication`. `409 a2a_publication_exists`; `400 a2a_unknown_caller`, `a2a_path_invalid`, `a2a_publication_invalid` |
 | `PATCH /api/a2a/publications/:id` | any subset of the body (`results` merges by key) | `Publication`. `id` cannot change |

@@ -16,11 +16,13 @@ import type { RunStore } from "../runstore/port.js";
 import {
   A2A_CALLER_STORE_PREFIX,
   a2aIdentifier,
+  describePipelineStages,
   isA2aConfigTurnedOff,
   normalizePublicUrl,
   parsePublicationConfig,
   previewPublication,
   tokenDigestHex,
+  type PipelineStageOption,
   type PublicationConfig,
   type PublicationContract,
   type PublicationRegistry,
@@ -239,6 +241,17 @@ export class A2aManagement {
         artifacts: found.results.artifacts,
       },
     };
+  }
+
+  async pipelineStages(projectRoot: string, pipeline: string): Promise<PipelineStageOption[]> {
+    const roots = await this.catalogRoots();
+    try {
+      const resolved = resolveCatalogRelativePath({ inputPath: pipeline, projectRoot, roots, fieldName: "pipeline" });
+      return await describePipelineStages(resolved.absolutePath, resolved.root.path);
+    } catch (error) {
+      if (error instanceof CatalogPathError) throw invalid(error.message, "a2a_path_invalid");
+      throw invalid(error instanceof Error ? error.message : "The pipeline could not be loaded", "a2a_publication_invalid");
+    }
   }
 
   async previewPublication(body: unknown): Promise<PublicationContract> {

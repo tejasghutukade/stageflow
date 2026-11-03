@@ -340,6 +340,21 @@ describe("A2A management API", () => {
     restarted.close();
   });
 
+  it("describes a pipeline's terminal stages, declared artifacts and free-text-only stages", async () => {
+    const { api, project } = await setup();
+    const query = (pipeline: string, root = project) =>
+      `/api/a2a/pipeline-stages?project_root=${encodeURIComponent(root)}&pipeline=${encodeURIComponent(pipeline)}`;
+    const described = await api("GET", query("supplier.pipeline.yaml"));
+    expect(described.status).toBe(200);
+    expect(described.body.stages).toEqual([
+      { id: "clarify", terminal: false, artifacts: [], freeTextOnly: true },
+      { id: "final_report", terminal: true, artifacts: ["assessment.md"], freeTextOnly: false },
+    ]);
+    expect((await api("GET", "/api/a2a/pipeline-stages")).status).toBe(400);
+    expect((await api("GET", query("../escape.pipeline.yaml"))).body.code).toBe("a2a_path_invalid");
+    expect((await api("GET", query("missing.pipeline.yaml"))).status).toBe(400);
+  });
+
   it("rejects enabling without a public URL, and takes an explicit one", async () => {
     const { api, host } = await setup({ env: { STAGEFLOW_PUBLIC_URL: "" } });
     const missing = await api("POST", "/api/a2a/enable", {});

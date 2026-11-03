@@ -207,6 +207,7 @@ import { handleInternalAgentRoutes } from "./internalAgentRoutes.js";
 import { handleAgentRoutes } from "./agentRoutes.js";
 import { handleIdentityRoutes } from "./identityRoutes.js";
 import { handleIdentitySetupRoutes } from "./identitySetupRoutes.js";
+import { isListableExtension, listCatalogFiles } from "../config/listCatalogFiles.js";
 import { handleA2aRoutes } from "./a2aRoutes.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
@@ -1736,6 +1737,29 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               return true;
             }
             json(res, 200, { path: result.path, content: result.content });
+            return true;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+        }
+
+        if (method === "GET" && pathname === "/api/catalog/files") {
+          const ext = url.searchParams.get("ext") ?? "";
+          if (!isListableExtension(ext)) {
+            json(res, 400, { error: "ext must be a file extension such as .json", code: "invalid_extension" });
+            return true;
+          }
+          try {
+            const { wireRoot } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              url.searchParams.get("project_root") ?? undefined,
+            );
+            const listed = await listCatalogFiles(wireRoot.path, ext);
+            json(res, 200, { project_root: wireRoot.project_root, ext, files: listed.files, truncated: listed.truncated });
             return true;
           } catch (err) {
             if (err instanceof CatalogPathError) {
