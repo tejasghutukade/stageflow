@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { cp, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -372,6 +372,32 @@ describe("A2A management API", () => {
     const results = await Promise.all(["a", "b", "c", "d"].map((id) => api("POST", "/api/a2a/callers", { id })));
     expect(results.map((result) => result.status)).toEqual([201, 201, 201, 201]);
     expect((await api("GET", "/api/a2a/callers")).body.callers.map((c: { id: string }) => c.id)).toEqual(["a", "b", "c", "d"]);
+  });
+});
+
+describe("A2A management of a hand-edited file", () => {
+  it("never shows a filesystem path for a project folder that is not a catalog project", async () => {
+    const { api, base, configFile } = await setup();
+    const outside = path.join(base, "unlisted");
+    await cp(fixture, outside, { recursive: true });
+    const raw = parse(await readFile(path.join(fixture, "a2a.yaml"), "utf8"));
+    raw.callers = [];
+    raw.publications[0].allowed_callers = [];
+    raw.publications[0].project_root = outside;
+    await mkdir(path.dirname(configFile), { recursive: true });
+    await writeFile(configFile, stringify(raw));
+    expect((await api("POST", "/api/a2a/reload")).status).toBe(200);
+
+    const listed = await api("GET", "/api/a2a/publications");
+    expect(listed.status).toBe(200);
+    expect(listed.body.publications[0]).toMatchObject({
+      project_root: "",
+      root_unmanaged: true,
+      pipeline: "supplier.pipeline.yaml",
+      input_schema: "supplier.schema.json",
+    });
+    expect(JSON.stringify(listed.body)).not.toContain(base);
+    expect(JSON.stringify((await api("GET", "/api/a2a/publications/supplier_assessment")).body)).not.toContain(base);
   });
 });
 

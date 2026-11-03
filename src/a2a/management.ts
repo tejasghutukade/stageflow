@@ -54,7 +54,10 @@ export type A2aManagementOptions = {
 export type A2aPublicationView = Omit<PublicationConfig, "allowed_callers"> & {
   allowed_callers: string[];
   revision?: string;
+  root_unmanaged?: true;
 };
+
+const OUTSIDE_PROJECT = "(outside project)";
 
 type RawConfig = {
   version: 1;
@@ -434,10 +437,13 @@ export class A2aManagement {
     const relative = (file: string): string =>
       path.isAbsolute(file) && isInsideProjectRoot(entry.project_root, file)
         ? path.relative(entry.project_root, file).replace(/\\/g, "/")
-        : file;
+        : path.isAbsolute(file)
+          ? OUTSIDE_PROJECT
+          : file;
     return {
       ...config,
-      project_root: root?.project_root ?? entry.project_root,
+      ...(root ? {} : { root_unmanaged: true as const }),
+      project_root: root?.project_root ?? "",
       pipeline: relative(entry.pipeline),
       input_schema: relative(entry.input_schema),
     };
