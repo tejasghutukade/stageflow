@@ -302,6 +302,44 @@ describe("A2A management API", () => {
     expect(host.status.lastReload?.ok).toBe(true);
   });
 
+  it("turns A2A off keeping callers, publications and digests, and back on to restore them", async () => {
+    const { api, url, project, secrets, configFile, host } = await setup();
+    expect((await api("POST", "/api/a2a/disable")).status).toBe(409);
+    await api("POST", "/api/a2a/enable", {});
+    const token = (await api("POST", "/api/a2a/callers", { id: "acme" })).body.token as string;
+    await api("POST", "/api/a2a/publications", publicationBody(project, { allowed_callers: ["acme"] }));
+
+    const off = await api("POST", "/api/a2a/disable");
+    expect(off.status).toBe(200);
+    expect(off.body).toMatchObject({ state: "disabled", configPath: await realpath(configFile) });
+    expect(off.body.agentCardUrl).toBeUndefined();
+    expect(host.registry()).toBeUndefined();
+    expect(await agentCardStatus(url, token)).toBe(404);
+    expect(parse(await readFile(configFile, "utf8"))).toMatchObject({ enabled: false, callers: [{ id: "acme" }], publications: [{ id: "supplier_assessment" }] });
+    expect(secrets.get(A2A_CALLER_STORE_PREFIX + "acme")).toMatch(/^[0-9a-f]{64}$/);
+    expect((await api("POST", "/api/a2a/disable")).status).toBe(200);
+    const blocked = await api("POST", "/api/a2a/callers", { id: "beta" });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe("a2a_not_enabled");
+
+    const on = await api("POST", "/api/a2a/enable", {});
+    expect(on.body).toMatchObject({ state: "enabled", callers: 1, publications: 1 });
+    expect(parse(await readFile(configFile, "utf8")).enabled).toBeUndefined();
+    expect(await agentCardStatus(url, token)).toBe(200);
+  });
+
+  it("stays off after a restart", async () => {
+    const { api, configFile, secrets, env, base } = await setup();
+    await api("POST", "/api/a2a/enable", {});
+    await api("POST", "/api/a2a/disable");
+    const { store, connection } = createRunStoreWithConnection({ rootDir: path.join(base, "again") });
+    const manager = new RunManager({ agent: supplierAgent(), store, cwd: base });
+    const restarted = await createA2aHost({ manager, runStore: store, rootDir: path.join(base, "again"), connection }, configFile, env, secrets);
+    expect(restarted.status.state).toBe("disabled");
+    expect(restarted.status.configPath).toBe(await realpath(configFile));
+    restarted.close();
+  });
+
   it("rejects enabling without a public URL, and takes an explicit one", async () => {
     const { api, host } = await setup({ env: { STAGEFLOW_PUBLIC_URL: "" } });
     const missing = await api("POST", "/api/a2a/enable", {});

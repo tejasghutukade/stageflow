@@ -39,7 +39,7 @@ export async function handleA2aRoutes(
   const caller = pathname.match(/^\/api\/a2a\/callers\/([^/]+)$/);
   const publication = pathname.match(/^\/api\/a2a\/publications\/([^/]+)$/);
   const known = new Set([
-    "/api/a2a/enable", "/api/a2a/reload", "/api/a2a/callers", "/api/a2a/publications", "/api/a2a/publications/preview",
+    "/api/a2a/enable", "/api/a2a/disable", "/api/a2a/reload", "/api/a2a/callers", "/api/a2a/publications", "/api/a2a/publications/preview",
   ]);
   if (!known.has(pathname) && !caller && !publication) return false;
 
@@ -51,6 +51,7 @@ export async function handleA2aRoutes(
       json(res, 200, await management.enable({ public_url: publicUrl }));
       return true;
     }
+    if (pathname === "/api/a2a/disable" && method === "POST") { json(res, 200, await management.disable()); return true; }
     if (pathname === "/api/a2a/reload" && method === "POST") { json(res, 200, await management.reload()); return true; }
     if (pathname === "/api/a2a/callers" && method === "GET") { json(res, 200, { callers: management.listCallers() }); return true; }
     if (pathname === "/api/a2a/callers" && method === "POST") {

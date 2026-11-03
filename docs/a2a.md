@@ -71,6 +71,7 @@ All routes are under `/api/a2a` on the Host. They use the same control tokens as
 |---|---|---|
 | `GET /api/a2a/status` | | `{ state: "disabled" \| "enabled" \| "configuration_error", configPath?, error?, publicUrl?, agentCardUrl?, callers?, publications?, lastReload?: { ok, at, error? } }` |
 | `POST /api/a2a/enable` | `{ public_url? }` | `200` status. Creates the file if there is none; otherwise loads it. `400 a2a_public_url_required` when no public URL is given or set |
+| `POST /api/a2a/disable` | | `200` status (`state: "disabled"`, `configPath` kept). Writes `enabled: false` to the file and keeps callers, publications and stored token digests; the A2A endpoints answer `404` as when disabled. `409 a2a_not_enabled` when there is no file. Calling it when already off is a no-op |
 | `POST /api/a2a/reload` | | `200` status; `409 a2a_reload_failed` (the old configuration stays in use) |
 | `GET /api/a2a/callers` | | `{ callers: [{ id, token_source: "store" \| "env" }] }` |
 | `POST /api/a2a/callers` | `{ id }` | `201 { id, token, token_source: "store" }` (the only time the token appears). `409 a2a_not_enabled`, `a2a_caller_exists`, `a2a_caller_id_retained` |
@@ -83,6 +84,8 @@ All routes are under `/api/a2a` on the Host. They use the same control tokens as
 | `DELETE /api/a2a/publications/:id` | | `{ removed: true }` |
 
 A Publication is `{ id, name, description, project_root, pipeline, goal, repository?, ref?, allowed_callers, input_schema, results: { stage, include_payload, artifacts }, caller_answerable_stages, revision? }`. In the API, `project_root` is a catalog project (the id the console shows) and `pipeline` and `input_schema` are paths inside it; absolute paths and paths that leave the project are refused. `allowed_callers` must name existing callers. Each change is written to the file, loaded, and rolled back if the result does not load.
+
+Turning off is kept across restarts. While off, the routes that change callers or publications answer `409 a2a_not_enabled`; `POST /api/a2a/enable` removes `enabled: false` and loads the file again, which restores the callers, publications and tokens as they were. A file with `enabled: false` otherwise still validates.
 
 `GET /api/a2a/status` returns the same object the Host health report carries under `a2a`.
 

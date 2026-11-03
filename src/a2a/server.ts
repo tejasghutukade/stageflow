@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import type { IncomingMessage as HttpIncomingMessage, ServerResponse } from "node:http";
 import type Database from "better-sqlite3";
 import {
@@ -22,7 +23,7 @@ import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { A2aApplicationError } from "./contracts.js";
-import { loadPublicationRegistry, type PublicationRegistry } from "./registry.js";
+import { isA2aConfigTurnedOff, loadPublicationRegistry, type PublicationRegistry } from "./registry.js";
 import { createA2aInvocations, type A2aInvocations, type PublicTask } from "./service.js";
 import type { A2aStore } from "./store.js";
 
@@ -290,6 +291,13 @@ export async function createA2aHost(
   };
 
   async function load(target: string): Promise<void> {
+    if (await isA2aConfigTurnedOff(target)) {
+      registry = undefined;
+      status.state = "disabled";
+      status.configPath = await realpath(target);
+      for (const key of ["error", "publicUrl", "agentCardUrl", "callers", "publications"] as const) delete status[key];
+      return;
+    }
     const loaded = await loadPublicationRegistry(target, env, secrets);
     if (invocations) {
       invocations.setRegistry(loaded);

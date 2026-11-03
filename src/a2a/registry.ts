@@ -59,6 +59,7 @@ const callerSchema = z.object({
 
 const configSchema = z.object({
   version: z.literal(1),
+  enabled: z.boolean().optional(),
   public_url: z.string().url(),
   callers: z.array(callerSchema),
   publications: z.array(publicationSchema),
@@ -211,6 +212,12 @@ export class PublicationRegistry {
     const current = await readPublication(config);
     if (current.revision !== publication.revision) throw new Error("Publication changed; reload the deployed configuration");
   }
+}
+
+/** True when the file carries `enabled: false`: turned off by the operator, contents kept. */
+export async function isA2aConfigTurnedOff(configPath: string): Promise<boolean> {
+  const raw: unknown = parse(await readFile(configPath, "utf8"));
+  return Boolean(raw && typeof raw === "object" && !Array.isArray(raw) && (raw as Record<string, unknown>).enabled === false);
 }
 
 export async function loadPublicationRegistry(

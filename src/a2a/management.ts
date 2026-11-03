@@ -16,6 +16,7 @@ import type { RunStore } from "../runstore/port.js";
 import {
   A2A_CALLER_STORE_PREFIX,
   a2aIdentifier,
+  isA2aConfigTurnedOff,
   normalizePublicUrl,
   parsePublicationConfig,
   previewPublication,
@@ -120,10 +121,45 @@ export class A2aManagement {
         }
         return this.options.host.status;
       }
+      const turnedOff = await this.turnedOff(target);
+      if (turnedOff) await writeFileAtomic(target, stringify(this.withoutEnabledFlag(existing)));
+      const result = await this.options.host.reload(target);
+      if (!result.ok) {
+        if (turnedOff) {
+          await writeFileAtomic(target, existing);
+          await this.options.host.reload(target);
+        }
+        throw new A2aManagementError(result.error.code, result.error.message, 409);
+      }
+      return this.options.host.status;
+    });
+  }
+
+  disable(): Promise<A2aHost["status"]> {
+    return this.serial(async () => {
+      const target = this.target;
+      const existing = await this.readText(target);
+      if (existing === undefined) throw new A2aManagementError("a2a_not_enabled", "A2A is not turned on", 409);
+      if (!(await this.turnedOff(target))) {
+        await writeFileAtomic(target, stringify({ ...(parse(existing) as object), enabled: false }));
+      }
       const result = await this.options.host.reload(target);
       if (!result.ok) throw new A2aManagementError(result.error.code, result.error.message, 409);
       return this.options.host.status;
     });
+  }
+
+  private async turnedOff(target: string): Promise<boolean> {
+    try {
+      return await isA2aConfigTurnedOff(target);
+    } catch {
+      return false;
+    }
+  }
+
+  private withoutEnabledFlag(text: string): object {
+    const { enabled: _enabled, ...rest } = parse(text) as Record<string, unknown>;
+    return rest;
   }
 
   listCallers(): Array<{ id: string; token_source: "store" | "env" }> {
@@ -297,6 +333,7 @@ export class A2aManagement {
       throw new A2aManagementError("a2a_config_invalid", "The A2A configuration file is not a YAML mapping", 409);
     }
     const config = raw as Record<string, unknown>;
+    if (config.enabled === false) throw new A2aManagementError("a2a_not_enabled", "A2A is turned off", 409);
     const callers = config.callers ?? [];
     const publications = config.publications ?? [];
     if (!Array.isArray(callers) || !Array.isArray(publications)) {
