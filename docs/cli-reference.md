@@ -1095,7 +1095,7 @@ sf a2a add-caller <id> [--config <path>] [--token-env <NAME>]
 | `list` | Same check, plus a reminder to run `sf a2a reload` |
 | `add-caller` | File-based: writes the caller's `id` and `token_env` name into `a2a.yaml` and prints a token to export. A running host reads `token_env` only at startup |
 
-The first group talks to the running Host (started for you if none is running) and takes effect with no restart. `--json` prints the API response. `--config` defaults to the A2A file the Host would find: `STAGEFLOW_A2A_CONFIG`, else `<project-root>/a2a.yaml`, else `$STAGEFLOW_HOME/a2a.yaml`.
+The first group talks to the running Host (started for you if none is running) and takes effect with no restart. `--json` prints the API response. A command gives up with an error after 30 seconds without an answer from the Host (a change may still have been applied; check with `sf a2a status`). `--config` defaults to the A2A file the Host would find: `STAGEFLOW_A2A_CONFIG`, else `<project-root>/a2a.yaml`, else `$STAGEFLOW_HOME/a2a.yaml`.
 
 In a container the Host-API commands work from `docker exec` as well as through the [management API](a2a.md#management-api) with a control token. See [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [A2A](a2a.md).
 

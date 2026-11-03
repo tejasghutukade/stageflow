@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
 import {
   httpDeleteRun,
+  httpRequestJson,
   httpEnsureProject,
   httpReadRun,
   httpStartRun,
@@ -175,5 +177,27 @@ describe("httpEnsureProject", () => {
       expect(result.status).toBe(403);
       expect(result.code).toBe("ensure_project_not_allowed");
     }
+  });
+});
+
+describe("httpRequestJson timeout", () => {
+  it("fails with a clear error when the Host never answers", async () => {
+    const server = createServer(() => undefined);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected TCP address");
+    try {
+      await expect(httpRequestJson(`http://127.0.0.1:${address.port}`, "POST", "/api/a2a/reload", undefined, 100)).rejects.toThrow(
+        /timed out after 100ms; the change may or may not have been applied/,
+      );
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("answers normally within the timeout", async () => {
+    stubFetch(() => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    expect(await httpRequestJson("http://x", "GET", "/api/a2a/status")).toEqual({ status: 200, body: { ok: true } });
   });
 });
