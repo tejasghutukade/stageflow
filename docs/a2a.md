@@ -72,8 +72,8 @@ All routes are under `/api/a2a` on the Host. They use the same control tokens as
 | Method and path | Request | Response |
 |---|---|---|
 | `GET /api/a2a/status` | | `{ state: "disabled" \| "enabled" \| "configuration_error", configPath?, error?, publicUrl?, agentCardUrl?, callers?, publications?, lastReload?: { ok, at, error? } }` |
-| `POST /api/a2a/enable` | `{ public_url? }` | `200` status. Creates the file if there is none; otherwise loads it. `400 a2a_public_url_required` when no public URL is given or set |
-| `POST /api/a2a/disable` | | `200` status (`state: "disabled"`, `configPath` kept). Writes `enabled: false` to the file and keeps callers, publications and stored token digests; the A2A endpoints answer `404` as when disabled. `409 a2a_not_enabled` when there is no file. Calling it when already off is a no-op |
+| `POST /api/a2a/enable` | `{ public_url? }` | `200` status. Creates the file if there is none; otherwise loads it. `400 a2a_public_url_required` when no public URL is given or set; `409 a2a_config_invalid` when the file is not a valid YAML mapping |
+| `POST /api/a2a/disable` | | `200` status (`state: "disabled"`, `configPath` kept). Writes `enabled: false` to the file and keeps callers, publications and stored token digests; the A2A endpoints answer `404` as when disabled. `409 a2a_not_enabled` when there is no file; `409 a2a_config_invalid` when the file is not a valid YAML mapping. Calling it when already off is a no-op |
 | `POST /api/a2a/reload` | | `200` status; `409 a2a_reload_failed` (the old configuration stays in use) |
 | `GET /api/a2a/callers` | | `{ callers: [{ id, token_source: "store" \| "env" }] }` |
 | `POST /api/a2a/callers` | `{ id }` | `201 { id, token, token_source: "store" }` (the only time the token appears). `409 a2a_not_enabled`, `a2a_caller_exists`, `a2a_caller_id_retained` |

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
@@ -22,11 +22,22 @@ import { RunManager } from "../src/runtime/runManager.js";
 import { handleA2aRoutes } from "../src/server/a2aRoutes.js";
 import { supplierAgent } from "./fixtures/a2a/agents.js";
 
+const loadHook = vi.hoisted(() => ({ wrap: undefined as undefined | ((run: () => Promise<unknown>) => Promise<unknown>) }));
+vi.mock("../src/a2a/registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/a2a/registry.js")>();
+  return {
+    ...actual,
+    loadPublicationRegistry: (...args: Parameters<typeof actual.loadPublicationRegistry>) =>
+      loadHook.wrap ? loadHook.wrap(() => actual.loadPublicationRegistry(...args)) : actual.loadPublicationRegistry(...args),
+  };
+});
+
 const fixture = path.resolve("tests/fixtures/a2a");
 const roots: string[] = [];
 const servers: Server[] = [];
 const bodies: string[] = [];
 afterEach(async () => {
+  loadHook.wrap = undefined;
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); })));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   bodies.length = 0;
@@ -328,6 +339,22 @@ describe("A2A management API", () => {
     expect(await agentCardStatus(url, token)).toBe(200);
   });
 
+  it("answers 409 a2a_config_invalid, without file contents, when disabling or enabling a hand-broken file", async () => {
+    const { api, configFile } = await setup();
+    await mkdir(path.dirname(configFile), { recursive: true });
+    for (const text of ["secret_marker: [unclosed\n  - x: : :\n", "- just\n- a list\n", "plain scalar\n"]) {
+      await writeFile(configFile, text);
+      const off = await api("POST", "/api/a2a/disable");
+      expect(off.status).toBe(409);
+      expect(off.body.code).toBe("a2a_config_invalid");
+      expect(JSON.stringify(off.body)).not.toContain("secret_marker");
+      expect(await readFile(configFile, "utf8")).toBe(text);
+      const on = await api("POST", "/api/a2a/enable", {});
+      expect(on.status).toBe(409);
+      expect(JSON.stringify(on.body)).not.toContain("secret_marker");
+    }
+  });
+
   it("stays off after a restart", async () => {
     const { api, configFile, secrets, env, base } = await setup();
     await api("POST", "/api/a2a/enable", {});
@@ -483,6 +510,30 @@ describe("A2A live reload", () => {
     expect(host.status.error?.code).toBe("a2a_configuration_error");
     expect(host.status.error?.message).toBe(host.status.lastReload?.error?.message);
     expect(host.status.error?.message).not.toBe(first);
+  });
+
+  it("makes a second reload wait for a slow first load", async () => {
+    const configPath = await configCopy();
+    const { host } = await plainHost(configPath, env);
+    const events: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let count = 0;
+    loadHook.wrap = async (run) => {
+      const n = (count += 1);
+      events.push(`start ${n}`);
+      if (n === 1) await gate;
+      const loaded = await run();
+      events.push(`end ${n}`);
+      return loaded;
+    };
+    const first = host.reload();
+    const second = host.reload();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(events).toEqual(["start 1"]);
+    release();
+    expect(await Promise.all([first, second])).toEqual([{ ok: true }, { ok: true }]);
+    expect(events).toEqual(["start 1", "end 1", "start 2", "end 2"]);
   });
 
   it("runs concurrent reloads one at a time and keeps the rate limiter across a swap", async () => {

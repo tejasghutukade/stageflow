@@ -126,6 +126,7 @@ export class A2aManagement {
         }
         return this.options.host.status;
       }
+      this.mapping(existing);
       const turnedOff = await this.turnedOff(target);
       if (turnedOff) await writeFileAtomic(target, stringify(this.withoutEnabledFlag(existing)));
       const result = await this.options.host.reload(target);
@@ -146,7 +147,7 @@ export class A2aManagement {
       const existing = await this.readText(target);
       if (existing === undefined) throw new A2aManagementError("a2a_not_enabled", "A2A is not turned on", 409);
       if (!(await this.turnedOff(target))) {
-        await writeFileAtomic(target, stringify({ ...(parse(existing) as object), enabled: false }));
+        await writeFileAtomic(target, stringify({ ...this.mapping(existing), enabled: false }));
       }
       const result = await this.options.host.reload(target);
       if (!result.ok) throw new A2aManagementError(result.error.code, result.error.message, 409);
@@ -162,8 +163,21 @@ export class A2aManagement {
     }
   }
 
+  private mapping(text: string): Record<string, unknown> {
+    let raw: unknown;
+    try {
+      raw = parse(text);
+    } catch {
+      throw new A2aManagementError("a2a_config_invalid", "The A2A configuration file is not valid YAML", 409);
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new A2aManagementError("a2a_config_invalid", "The A2A configuration file is not a YAML mapping", 409);
+    }
+    return raw as Record<string, unknown>;
+  }
+
   private withoutEnabledFlag(text: string): object {
-    const { enabled: _enabled, ...rest } = parse(text) as Record<string, unknown>;
+    const { enabled: _enabled, ...rest } = this.mapping(text);
     return rest;
   }
 
