@@ -61,6 +61,43 @@ describe("A2A publication registry", () => {
     await expect(loadPublicationRegistry(configPath, env)).rejects.toThrow();
   });
 
+  describe("STAGEFLOW_PUBLIC_URL default", () => {
+    async function withPublicUrl(publicUrl: string | undefined): Promise<string> {
+      const root = await copyFixture();
+      const configPath = path.join(root, "a2a.yaml");
+      const config = parse(await readFile(configPath, "utf8"));
+      if (publicUrl === undefined) delete config.public_url;
+      else config.public_url = publicUrl;
+      await writeFile(configPath, stringify(config));
+      return configPath;
+    }
+
+    it("is used when the config has no public_url", async () => {
+      const configPath = await withPublicUrl(undefined);
+      const registry = await loadPublicationRegistry(configPath, { ...env, STAGEFLOW_PUBLIC_URL: "https://ws.stage-flow.dev" });
+      expect(registry.publicUrl).toBe("https://ws.stage-flow.dev");
+    });
+
+    it("loses to an explicit public_url", async () => {
+      const configPath = await withPublicUrl("https://explicit.example.com");
+      const registry = await loadPublicationRegistry(configPath, { ...env, STAGEFLOW_PUBLIC_URL: "https://ws.stage-flow.dev" });
+      expect(registry.publicUrl).toBe("https://explicit.example.com");
+    });
+
+    it("is validated like a configured public_url", async () => {
+      const bad = await withPublicUrl("http://public.example");
+      const missing = await withPublicUrl(undefined);
+      const configured = await loadPublicationRegistry(bad, env).catch((error: Error) => error.message);
+      const fromEnv = await loadPublicationRegistry(missing, { ...env, STAGEFLOW_PUBLIC_URL: "http://public.example" }).catch((error: Error) => error.message);
+      expect(configured).toContain("public_url must be an HTTPS origin");
+      expect(fromEnv).toBe(configured);
+    });
+
+    it("still fails with neither set", async () => {
+      await expect(loadPublicationRegistry(await withPublicUrl(undefined), env)).rejects.toThrow();
+    });
+  });
+
   it("rejects missing and shared credentials without printing their values", async () => {
     const config = path.join(fixture, "a2a.yaml");
     await expect(loadPublicationRegistry(config, {})).rejects.toThrow("requires a token");
@@ -136,5 +173,22 @@ describe("sf a2a add-caller", () => {
     const dup = await runA2aCommand(["add-caller", "acme"], { cwd: root, projectRoot: root, error: (line) => errors.push(line) });
     expect(dup).toBe(1);
     expect(errors.join()).toContain("already exists");
+  });
+
+  it("adds to the host-level file the Host would load instead of shadowing it with a project file", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-a2a-addcaller-project-"));
+    const home = await mkdtemp(path.join(tmpdir(), "sf-a2a-addcaller-home-"));
+    roots.push(root, home);
+    await writeFile(path.join(home, "a2a.yaml"), stringify({ enabled: true, callers: [{ id: "first", token_env: "FIRST_TOKEN" }] }));
+    const code = await runA2aCommand(["add-caller", "x"], {
+      cwd: root,
+      projectRoot: root,
+      env: { STAGEFLOW_HOME: home },
+      log: () => undefined,
+    });
+    expect(code).toBe(0);
+    await expect(readFile(path.join(root, "a2a.yaml"), "utf8")).rejects.toThrow();
+    const written = parse(await readFile(path.join(home, "a2a.yaml"), "utf8"));
+    expect(written.callers.map((c: { id: string }) => c.id)).toEqual(["first", "x"]);
   });
 });

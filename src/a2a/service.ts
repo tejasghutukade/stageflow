@@ -30,7 +30,7 @@ import {
   type RunStageCommand,
 } from "./contracts.js";
 import type Database from "better-sqlite3";
-import { A2aStore, type A2aTaskRow, type TaskState } from "./store.js";
+import { A2aStore, type A2aTaskRow, type PinnedPublication, type TaskState } from "./store.js";
 import { MAX_NONTERMINAL_TASKS_PER_CALLER, RateLimiter } from "./limits.js";
 
 export type Caller = { id: string };
@@ -65,7 +65,7 @@ export type ArtifactRead = { bytes: Buffer; name: string; mediaType?: string };
 
 export class A2aInvocations {
   constructor(
-    private readonly registry: PublicationRegistry,
+    private registry: PublicationRegistry,
     private readonly manager: RunManager,
     private readonly runStore: RunStore,
     /** Base directory a `stage`/`pipeline` filesystem reference in a run_stage call resolves against. */
@@ -76,6 +76,26 @@ export class A2aInvocations {
 
   close(): void {
     this.store.close();
+  }
+
+  setRegistry(registry: PublicationRegistry): void {
+    this.registry = registry;
+  }
+
+  hasTasksForCaller(callerId: string): boolean {
+    return this.store.hasTasksForCaller(callerId);
+  }
+
+  /** What the task started under; rows from before pinning existed fall back to the live publication. */
+  private pinnedFor(row: A2aTaskRow): PinnedPublication | undefined {
+    if (row.pinned_json) return JSON.parse(row.pinned_json) as PinnedPublication;
+    const publication = this.registry.get(row.caller_id, row.publication_id);
+    return publication && {
+      resultStage: publication.results.stage,
+      includePayload: publication.results.include_payload,
+      artifacts: publication.results.artifacts,
+      callerAnswerableStages: publication.caller_answerable_stages,
+    };
   }
 
   /** Deletes terminal tasks and message tombstones past their retention window. Call periodically; the core logic takes an explicit clock so it stays deterministic to test. */
@@ -154,12 +174,13 @@ export class A2aInvocations {
     capability: string,
     input: unknown,
   ): Promise<PublicTask> {
-    const publication = this.registry.get(caller.id, capability);
+    const registry = this.registry;
+    const publication = registry.get(caller.id, capability);
     if (!publication) {
       throw new A2aApplicationError("unknown-capability", "Unknown capability: " + capability);
     }
     try {
-      await this.registry.assertUnchanged(caller.id, capability);
+      await registry.assertUnchanged(caller.id, capability);
     } catch (err) {
       throw new A2aApplicationError(
         "unknown-capability",
@@ -213,6 +234,12 @@ export class A2aInvocations {
         publicationRevision: publication.revision,
         submissionKey,
         runId: result.runId,
+        pinned: {
+          resultStage: publication.results.stage,
+          includePayload: publication.results.include_payload,
+          artifacts: publication.results.artifacts,
+          callerAnswerableStages: publication.caller_answerable_stages,
+        },
       });
       if (result.done) {
         void result.done
@@ -410,8 +437,8 @@ export class A2aInvocations {
       // Published-capability tasks stay gated by the publication's own
       // explicit caller_answerable_stages allowlist (config-time restricted
       // to single-free_text-gate stages in registry.ts's validatePublication).
-      const publication = this.registry.get(caller.id, row.publication_id);
-      if (!publication || !publication.caller_answerable_stages.includes(decoded.stageId)) {
+      const pinned = this.pinnedFor(row);
+      if (!pinned || !pinned.callerAnswerableStages.includes(decoded.stageId)) {
         throw new A2aApplicationError("stale-question", "This prompt cannot be answered by the caller");
       }
     }
@@ -506,15 +533,15 @@ export class A2aInvocations {
       }
       return this.store.getTask(row.task_id)!;
     }
-    const publication = this.registry.get(row.caller_id, row.publication_id);
-    if (detail.status === "failed" || !publication) {
+    const pinned = this.pinnedFor(row);
+    if (detail.status === "failed" || !pinned) {
       await this.store.freezeFailed(row.task_id);
     } else {
       try {
-        const stage = detail.stages.find((candidate) => candidate.stage_id === publication.results.stage);
+        const stage = detail.stages.find((candidate) => candidate.stage_id === pinned.resultStage);
         if (!stage || !stage.envelope) throw new Error("Result stage did not produce an envelope");
         const artifacts = [];
-        for (const name of publication.results.artifacts) {
+        for (const name of pinned.artifacts) {
           const match = stage.artifacts.find((entry) => entry.split("/").pop() === name);
           if (!match) throw new Error("Declared artifact " + name + " was not produced");
           const bytes = await readRunArtifactBytes(this.runStore, row.run_id, match);
@@ -522,7 +549,7 @@ export class A2aInvocations {
         }
         await this.store.freezeCompleted(row.task_id, {
           summary: stage.envelope.summary,
-          payload: publication.results.include_payload ? stage.envelope.payload : undefined,
+          payload: pinned.includePayload ? stage.envelope.payload : undefined,
           artifacts,
         });
       } catch {
@@ -577,8 +604,8 @@ export class A2aInvocations {
         return stage?.pending_prompt?.kind === "free_text";
       });
     } else {
-      const publication = this.registry.get(caller.id, row.publication_id);
-      answerableIds = waitingIds.filter((id) => publication?.caller_answerable_stages.includes(id));
+      const pinned = this.pinnedFor(row);
+      answerableIds = waitingIds.filter((id) => pinned?.callerAnswerableStages.includes(id));
     }
     if (answerableIds.length > 0) {
       const questions: PublicQuestion[] = answerableIds.map((stageId) => {

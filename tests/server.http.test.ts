@@ -618,6 +618,39 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("GET /api/catalog/files lists files of one extension under a catalog root", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-list-catalog-"));
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    const manifestCatalog = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/manifest-catalog",
+    );
+    await cp(manifestCatalog, repoRoot, { recursive: true });
+    await mkdir(path.join(repoRoot, "contracts"), { recursive: true });
+    await mkdir(path.join(repoRoot, "node_modules/pkg"), { recursive: true });
+    await writeFile(path.join(repoRoot, "contracts/b.schema.json"), "{}");
+    await writeFile(path.join(repoRoot, "a.json"), "{}");
+    await writeFile(path.join(repoRoot, "node_modules/pkg/skip.json"), "{}");
+    clearFindProjectRootCacheForTests();
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), undefined, { cwd: repoRoot });
+    try {
+      const listed = await jsonFetch(`${base}/api/catalog/files?project_root=${encodeURIComponent(repoRoot)}&ext=.json`);
+      expect(listed.status).toBe(200);
+      expect(listed.body.files).toEqual(["a.json", "contracts/b.schema.json"]);
+      expect(listed.body.truncated).toBe(false);
+      const bad = await jsonFetch(`${base}/api/catalog/files?project_root=${encodeURIComponent(repoRoot)}&ext=json`);
+      expect(bad.status).toBe(400);
+      expect(bad.body.code).toBe("invalid_extension");
+      const unknown = await jsonFetch(`${base}/api/catalog/files?project_root=${encodeURIComponent("/not/a/root")}&ext=.json`);
+      expect(unknown.status).toBe(400);
+      expect(unknown.body.code).toBe("unknown_project_root");
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await closeServer(server);
+      await cleanup();
+    }
+  });
+
   it("PUT /api/catalog/file writes stage YAML and rolls back invalid content", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-put-catalog-"));
     const { root: repoRoot, cleanup } = await initTempGitRepo();

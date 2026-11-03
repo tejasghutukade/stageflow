@@ -1,12 +1,14 @@
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createA2aHost, type A2aHost } from "../a2a/server.js";
+import { A2aManagement } from "../a2a/management.js";
+import { defaultSecretStore } from "../channels/registry.js";
 import { A2aStore } from "../a2a/store.js";
 import type { StagePort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type Database from "better-sqlite3";
 import { createRunStoreWithConnection, sqliteConnectionFromStore, type RunStoreKind } from "../runstore/createStore.js";
-import { resolveA2aConfigPath } from "../a2a/configDiscovery.js";
+import { a2aWriteTargetPath, resolveA2aConfigPath } from "../a2a/configDiscovery.js";
 import { ensureProjectRootsFromEnv } from "../project/ensureProjectRootsFromEnv.js";
 import { ensureGlobalHome, globalCredentialRoot, globalStageflowHome } from "../project/globalHome.js";
 import { ConsumerIdentityRuntime } from "../identity/runtime.js";
@@ -114,6 +116,7 @@ export type StageflowHostOptions = {
 
 export type StageflowHostBootstrap = {
   a2a?: A2aHost;
+  a2aManagement?: A2aManagement;
   cwd: string;
   agentDir: string;
   rootDir: string;
@@ -631,17 +634,28 @@ export async function bootstrapStageflowHost(
     },
     { mcpStateless },
   );
+  const a2aSecrets = defaultSecretStore();
+  const a2a = await createA2aHost(
+    {
+      manager,
+      runStore: store,
+      rootDir: storeRootDir,
+      connection: sqliteConnection,
+      a2aStore,
+    },
+    resolveA2aConfigPath(rootDir),
+    process.env,
+    a2aSecrets,
+  );
   return {
-    a2a: await createA2aHost(
-      {
-        manager,
-        runStore: store,
-        rootDir: storeRootDir,
-        connection: sqliteConnection,
-        a2aStore,
-      },
-      resolveA2aConfigPath(rootDir),
-    ),
+    a2a,
+    a2aManagement: new A2aManagement({
+      host: a2a,
+      secrets: a2aSecrets,
+      store,
+      env: process.env,
+      configPath: () => a2aWriteTargetPath(rootDir),
+    }),
     cwd,
     agentDir,
     rootDir,

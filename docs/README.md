@@ -64,6 +64,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Console: Agents](console-agents.md) | Directory, create and edit, sessions, run inspector |
 | [Console: Connections](console-connections.md) | Channels, email accounts, tool servers |
 | [Console: Identity](console-identity.md) | Turn identity on, sign-in connections, people and access levels, check access, activity, setup (policy engine, order API, signing key) |
+| [Console: A2A](console-a2a.md) | Turn A2A on and off, callers and their one-time tokens, published pipelines, status and the snippet for the calling agent |
 | [Console: Settings](console-settings.md) | Providers (connect, replace key, disconnect), Concurrency, MCP server, Project MCP, Notifications |
 | [Environment variables](environment-variables.md) | Every `STAGEFLOW_*` variable the Host reads |
 | [Migrating stage environments](migration-stage-environment.md) | Move stages to declared secrets and the curated stage environment |

@@ -25,6 +25,7 @@ export type Route =
   | { name: "connections" }
   | { name: "connection"; connectionId: string }
   | { name: "identity" }
+  | { name: "a2a" }
   | { name: "memories" }
   | { name: "memory"; memoryId: string }
   | { name: "agents" }
@@ -461,6 +462,7 @@ export function parseHash(hash = window.location.hash): Route {
     if (memoryId) return { name: "memory", memoryId };
   }
   if (path === "identity") return { name: "identity" };
+  if (path === "a2a") return { name: "a2a" };
   if (path === "connections") return { name: "connections" };
   if (path.startsWith("connections/")) {
     const connectionId = firstSegment(path.slice("connections/".length));

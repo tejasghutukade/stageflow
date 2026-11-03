@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-11-03
+
+### Added
+
+- **A2A can be turned off and on again.** `POST /api/a2a/disable` keeps callers, published pipelines and token digests; the A2A endpoints answer as disabled until `POST /api/a2a/enable` restores them. The state survives a restart (`enabled: false` in `a2a.yaml`).
+- **An A2A screen in the console.** It sits in the Connect group at `#/a2a`: turn A2A on and off, add and revoke callers (a token is shown once), publish, edit, preview and remove published pipelines, and copy the agent card address and a snippet for the calling agent. See [Console: A2A](docs/console-a2a.md).
+- **Two read routes for the console.** `GET /api/catalog/files?project_root=&ext=` lists files of one extension under a catalog project (capped at 500), and `GET /api/a2a/pipeline-stages?project_root=&pipeline=` lists a pipeline's terminal stages, declared files and free-text-only stages. See [A2A](docs/a2a.md).
+
+### Changed
+
+- **`sf a2a` commands stop waiting after 30 seconds.** A stuck Host now gives a clear timeout error instead of hanging.
+- **The publication list no longer shows server paths.** A hand-edited `a2a.yaml` that names a project folder outside the catalog is shown with `project_root: ""` and `root_unmanaged: true`.
+- **The catalog file listing stops early on huge trees.** It also stops after 20,000 entries, 2,000 directories or 2 seconds (`truncated: true`), and lists in sorted order.
+
+### Fixed
+
+- **`sf a2a add-caller` writes to the file the Host loads.** It no longer creates a project `a2a.yaml` that hides the host-level file.
+- **Failed A2A reloads are visible.** The status keeps the latest error, and the console warns with the Host's message and a Reload button while A2A is on.
+- **A new caller's token stays on screen** even if the refresh after creating it fails.
+- **Turning A2A on or off over a broken `a2a.yaml` answers `409 a2a_config_invalid`** instead of a 500.
+- **A Host started with `STAGEFLOW_PUBLIC_URL` set boots.** The variable was rejected as unknown.
+
 ## [0.49.1] - 2026-11-02
 
 ### Fixed

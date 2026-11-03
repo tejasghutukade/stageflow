@@ -57,6 +57,36 @@ async function parseJsonBody(res: Response): Promise<unknown> {
   }
 }
 
+export const HOST_REQUEST_TIMEOUT_MS = 30_000;
+
+export async function httpRequestJson(
+  base: string,
+  method: string,
+  urlPath: string,
+  body?: unknown,
+  timeoutMs: number = HOST_REQUEST_TIMEOUT_MS,
+): Promise<{ status: number; body: unknown }> {
+  try {
+    const res = await fetch(`${base}${urlPath}`, {
+      method,
+      headers: {
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...clientAuthorizationHeaders(method),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return { status: res.status, body: await parseJsonBody(res) };
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new Error(
+        `request to global Stageflow service timed out after ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`}; the change may or may not have been applied`,
+      );
+    }
+    throw err;
+  }
+}
+
 function extractError(body: unknown, status: number): string {
   if (body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string") {
     return (body as { error: string }).error;

@@ -1075,6 +1075,9 @@ Container Hosts should prefer boot env / `*_FILE` for API keys ([Providers](prov
 Inbound A2A: let other agents invoke your published pipelines over JSON-RPC. See [A2A](a2a.md) for the full reference and walkthrough.
 
 ```bash
+sf a2a status | enable [--public-url <url>] | reload
+sf a2a caller list | create <id> | revoke <id>
+sf a2a publication list | create <file> | edit <id> <file> | remove <id>
 sf a2a validate [--config <path>]
 sf a2a list [--config <path>]
 sf a2a add-caller <id> [--config <path>] [--token-env <NAME>]
@@ -1082,13 +1085,19 @@ sf a2a add-caller <id> [--config <path>] [--token-env <NAME>]
 
 | Subcommand | Description |
 |------------|-------------|
+| `status` | A2A state, config file, agent card URL and the last reload, from the running Host |
+| `enable` | Turn A2A on with no callers or publications (needs `--public-url` or `STAGEFLOW_PUBLIC_URL`) |
+| `reload` | Load the configuration file again; a failure keeps the configuration in use |
+| `caller create` | Create a caller and print its token once; the Host stores only the SHA-256 digest |
+| `caller revoke` | Revoke a caller and remove it from every publication |
+| `publication create` / `edit` / `remove` | Publish a pipeline to chosen callers from a YAML or JSON body, change it, or stop publishing it |
 | `validate` | Load and check a publication config; prints the resolved publications as JSON |
-| `list` | Same check, plus a reminder that a running host needs an explicit restart to pick up changes |
-| `add-caller` | Register a new caller: writes its `id` and `token_env` name into `a2a.yaml` (creating the file if needed) and prints a generated token to export -- never writes a secret value to disk |
+| `list` | Same check, plus a reminder to run `sf a2a reload` |
+| `add-caller` | File-based: writes the caller's `id` and `token_env` name into `a2a.yaml` and prints a token to export. A running host reads `token_env` only at startup |
 
-`--config` defaults to `<project-root>/a2a.yaml` when omitted -- the same file `STAGEFLOW_A2A_CONFIG` overrides if set. `sf ui` uses this same resolution to decide whether A2A is enabled at all.
+The first group talks to the running Host (started for you if none is running) and takes effect with no restart. `--json` prints the API response. A command gives up with an error after 30 seconds without an answer from the Host (a change may still have been applied; check with `sf a2a status`). `--config` defaults to the A2A file the Host would find: `STAGEFLOW_A2A_CONFIG`, else `<project-root>/a2a.yaml`, else `$STAGEFLOW_HOME/a2a.yaml`.
 
-Mutating / validate CLI is [docker exec–only](docker.md#cli-via-docker-exec) in containers; read whether A2A is enabled via `GET /api/a2a/status`. See [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [A2A](a2a.md).
+In a container the Host-API commands work from `docker exec` as well as through the [management API](a2a.md#management-api) with a control token. See [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [A2A](a2a.md).
 
 ## Internal: `sf internal run-stage`
 
@@ -1121,7 +1130,7 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_CURSOR_EXTENSION` | Path to Cursor Pi extension |
 | `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution in CI |
 | `STAGEFLOW_OPERATOR_AGENT_DIR` | Pi agent directory for user/runner skills in CI |
-| `STAGEFLOW_A2A_CONFIG` | Explicit path to `a2a.yaml`, overriding auto-discovery at `<project-root>/a2a.yaml`. See [A2A](a2a.md) |
+| `STAGEFLOW_A2A_CONFIG` | Explicit path to `a2a.yaml`, overriding auto-discovery at `<project-root>/a2a.yaml` and `$STAGEFLOW_HOME/a2a.yaml`. See [A2A](a2a.md) |
 | `STAGEFLOW_SHUTDOWN_GRACE_MS` | Host SIGTERM/SIGINT drain budget (default `8000`); pair with compose `stop_grace_period` — see [CI Host lifecycle](ci.md#host-lifecycle-sf-ui--sf-mcp) |
 | `STAGEFLOW_LOG_FORMAT` | Host log format: `json` or `pretty` (TTY default pretty, else json) |
 | `STAGEFLOW_LOG_LEVEL` | Host log level: `debug` \| `info` \| `warn` \| `error` (default `info`) |

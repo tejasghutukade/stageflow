@@ -7,7 +7,7 @@ describe("sidebar", () => {
       [null, ["guide", "overview", "inbox"]],
       ["Activity", ["runs", "agent-sessions"]],
       ["Build", ["pipelines", "agents", "tasks", "catalog", "evals"]],
-      ["Connect", ["triggers", "connections", "identity", "memories"]],
+      ["Connect", ["triggers", "connections", "identity", "a2a", "memories"]],
     ]);
   });
 

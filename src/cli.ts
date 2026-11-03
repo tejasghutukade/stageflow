@@ -110,6 +110,9 @@ const USAGE = `Usage:
   sf --version
   sf -V
   sf --help
+  sf a2a status|enable|reload [--json]
+  sf a2a caller list|create|revoke [<id>] [--json]
+  sf a2a publication list|create|edit|remove [<id>] [<file>] [--json]
   sf a2a validate|list [--config <path>]
   sf a2a add-caller <id> [--config <path>] [--token-env <NAME>]
 

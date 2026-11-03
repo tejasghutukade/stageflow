@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import type { IncomingMessage as HttpIncomingMessage, ServerResponse } from "node:http";
 import type Database from "better-sqlite3";
 import {
@@ -17,11 +18,12 @@ import {
   TaskNotFoundError,
   UnsupportedOperationError,
 } from "@a2a-js/sdk/errors";
+import type { SecretReader } from "../channels/secretStore.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { A2aApplicationError } from "./contracts.js";
-import { loadPublicationRegistry, type PublicationRegistry } from "./registry.js";
+import { isA2aConfigTurnedOff, loadPublicationRegistry, type PublicationRegistry } from "./registry.js";
 import { createA2aInvocations, type A2aInvocations, type PublicTask } from "./service.js";
 import type { A2aStore } from "./store.js";
 
@@ -237,13 +239,32 @@ export type A2aRuntime = {
 
 const RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
+export type A2aReloadResult =
+  | { ok: true }
+  | { ok: false; error: { code: string; message: string } };
+
 export type A2aHost = {
   status: {
     state: "disabled" | "enabled" | "configuration_error";
     configPath?: string;
     error?: { code: string; message: string };
+    publicUrl?: string;
+    agentCardUrl?: string;
+    callers?: number;
+    publications?: number;
+    lastReload?: { ok: boolean; at: string; error?: { code: string; message: string } };
   };
   handle(req: HttpIncomingMessage, res: ServerResponse, pathname: string): Promise<boolean>;
+  /**
+   * Loads the configuration again and swaps the registry in one synchronous step. Calls run one at a
+   * time. A failed load keeps the registry in use, records the failure in `status.lastReload` and
+   * leaves `status.state` alone. Works from the disabled and configuration-error states too.
+   */
+  reload(configPath?: string): Promise<A2aReloadResult>;
+  /** The registry now in use, or undefined while A2A is not enabled. */
+  registry(): PublicationRegistry | undefined;
+  /** True when the store still holds tasks for this caller id (retained until retention removes them). */
+  callerHasTasks(callerId: string): boolean;
   /** Deletes expired terminal tasks/artifacts and message tombstones. A no-op when A2A is not enabled. */
   pruneExpired(now?: Date): Promise<{ removedTasks: number; removedMessages: number }>;
   close(): void;
@@ -253,18 +274,36 @@ export async function createA2aHost(
   runtime: A2aRuntime,
   configPath?: string,
   env: NodeJS.ProcessEnv = process.env,
+  secrets?: SecretReader,
 ): Promise<A2aHost> {
   let registry: PublicationRegistry | undefined;
   let invocations: A2aInvocations | undefined;
+  let sweep: NodeJS.Timeout | undefined;
+  let queue: Promise<unknown> = Promise.resolve();
   const status: A2aHost["status"] = { state: "disabled" };
-  if (configPath) {
-    status.configPath = configPath;
-    try {
-      registry = await loadPublicationRegistry(configPath, env);
-      status.configPath = registry.configPath;
-      status.state = "enabled";
+
+  const describe = (loaded: PublicationRegistry): void => {
+    status.configPath = loaded.configPath;
+    status.publicUrl = loaded.publicUrl;
+    status.agentCardUrl = loaded.publicUrl + "/.well-known/agent-card.json";
+    status.callers = loaded.callers().length;
+    status.publications = loaded.summaries().length;
+  };
+
+  async function load(target: string): Promise<void> {
+    if (await isA2aConfigTurnedOff(target)) {
+      registry = undefined;
+      status.state = "disabled";
+      status.configPath = await realpath(target);
+      for (const key of ["error", "publicUrl", "agentCardUrl", "callers", "publications"] as const) delete status[key];
+      return;
+    }
+    const loaded = await loadPublicationRegistry(target, env, secrets);
+    if (invocations) {
+      invocations.setRegistry(loaded);
+    } else {
       invocations = createA2aInvocations(
-        registry,
+        loaded,
         runtime.manager,
         runtime.runStore,
         runtime.rootDir,
@@ -272,6 +311,20 @@ export async function createA2aHost(
         undefined,
         runtime.a2aStore,
       );
+      sweep = setInterval(() => {
+        invocations!.pruneExpired().catch(() => undefined);
+      }, RETENTION_SWEEP_INTERVAL_MS).unref();
+    }
+    registry = loaded;
+    status.state = "enabled";
+    delete status.error;
+    describe(loaded);
+  }
+
+  if (configPath) {
+    status.configPath = configPath;
+    try {
+      await load(configPath);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       status.state = "configuration_error";
@@ -279,13 +332,32 @@ export async function createA2aHost(
       console.error(`stageflow: A2A configuration error: ${message}`);
     }
   }
-  const sweep = invocations
-    ? setInterval(() => {
-        invocations!.pruneExpired().catch(() => undefined);
-      }, RETENTION_SWEEP_INTERVAL_MS).unref()
-    : undefined;
+
+  async function runReload(target: string | undefined): Promise<A2aReloadResult> {
+    const at = new Date().toISOString();
+    try {
+      const path = target ?? status.configPath;
+      if (!path) throw new Error("No A2A configuration file to load");
+      await load(path);
+      status.lastReload = { ok: true, at };
+      return { ok: true };
+    } catch (err) {
+      const error = { code: "a2a_reload_failed", message: err instanceof Error ? err.message : String(err) };
+      status.lastReload = { ok: false, at, error };
+      if (status.state === "configuration_error") status.error = { code: "a2a_configuration_error", message: error.message };
+      return { ok: false, error };
+    }
+  }
+
   return {
     status,
+    reload(target) {
+      const run = queue.then(() => runReload(target));
+      queue = run;
+      return run;
+    },
+    registry: () => registry,
+    callerHasTasks: (callerId) => invocations?.hasTasksForCaller(callerId) ?? false,
     async pruneExpired(now) {
       return (await invocations?.pruneExpired(now)) ?? { removedTasks: 0, removedMessages: 0 };
     },
@@ -300,11 +372,13 @@ export async function createA2aHost(
         pathname.startsWith(CONTRACT_ROUTE_PREFIX) ||
         pathname.startsWith(ARTIFACT_ROUTE_PREFIX);
       if (!isRoute) return false;
-      if (!registry || !invocations) {
+      const current = registry;
+      const service = invocations;
+      if (!current || !service) {
         respond(res, status.state === "disabled" ? 404 : 503, { error: "A2A unavailable" });
         return true;
       }
-      const caller = registry.authenticate(req.headers.authorization);
+      const caller = current.authenticate(req.headers.authorization);
       if (!caller) {
         res.setHeader("WWW-Authenticate", 'Bearer realm="stageflow-a2a"');
         respond(res, 401, { error: "Authentication required" });
@@ -322,7 +396,7 @@ export async function createA2aHost(
           return true;
         }
         try {
-          const artifact = await invocations.readArtifact({ id: caller }, segments[0], segments[1]);
+          const artifact = await service.readArtifact({ id: caller }, segments[0], segments[1]);
           res.writeHead(200, {
             "Content-Type": artifact.mediaType ?? "application/octet-stream",
             "Content-Length": artifact.bytes.length,
@@ -335,7 +409,7 @@ export async function createA2aHost(
         }
         return true;
       }
-      const card = publicationCard(registry, caller);
+      const card = publicationCard(current, caller);
       if (pathname !== "/a2a") {
         if (req.method !== "GET") {
           res.setHeader("Allow", "GET");
@@ -343,7 +417,7 @@ export async function createA2aHost(
         } else if (pathname === "/.well-known/agent-card.json") {
           respond(res, 200, AgentCard.toJSON(card));
         } else {
-          const publication = registry.get(caller, pathname.slice(CONTRACT_ROUTE_PREFIX.length));
+          const publication = current.get(caller, pathname.slice(CONTRACT_ROUTE_PREFIX.length));
           if (!publication) respond(res, 404, { error: "Contract not found" });
           else
             respond(res, 200, {
@@ -382,7 +456,7 @@ export async function createA2aHost(
       try {
         const body = await readBody(req);
         const context = new ServerCallContext({ user: { isAuthenticated: true, userName: caller }, requestedVersion: "1.0" });
-        const result = await new JsonRpcTransportHandler(realHandler(card, invocations, registry.publicUrl)).handle(body, context);
+        const result = await new JsonRpcTransportHandler(realHandler(card, service, current.publicUrl)).handle(body, context);
         respond(res, 200, result);
       } catch (error) {
         if (!res.destroyed) respond(res, error instanceof Error && error.message === "body_too_large" ? 413 : 400, { error: "Invalid request body" });
