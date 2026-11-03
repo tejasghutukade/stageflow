@@ -236,7 +236,8 @@ export async function runA2aCommand(
       error(A2A_USAGE);
       return 1;
     }
-    const configPath = config ? path.resolve(options.cwd, config) : a2aConfigPathFor(projectRoot);
+    const configPath = config ? path.resolve(options.cwd, config)
+      : (resolveA2aConfigPath(projectRoot, env) ?? a2aConfigPathFor(projectRoot));
     try {
       const result = await addCaller(configPath, positionals[0], tokenEnv);
       log(JSON.stringify({ ok: true, configPath, callerId: positionals[0], tokenEnv: result.tokenEnv, created: result.created }));

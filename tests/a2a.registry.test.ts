@@ -174,4 +174,21 @@ describe("sf a2a add-caller", () => {
     expect(dup).toBe(1);
     expect(errors.join()).toContain("already exists");
   });
+
+  it("adds to the host-level file the Host would load instead of shadowing it with a project file", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-a2a-addcaller-project-"));
+    const home = await mkdtemp(path.join(tmpdir(), "sf-a2a-addcaller-home-"));
+    roots.push(root, home);
+    await writeFile(path.join(home, "a2a.yaml"), stringify({ enabled: true, callers: [{ id: "first", token_env: "FIRST_TOKEN" }] }));
+    const code = await runA2aCommand(["add-caller", "x"], {
+      cwd: root,
+      projectRoot: root,
+      env: { STAGEFLOW_HOME: home },
+      log: () => undefined,
+    });
+    expect(code).toBe(0);
+    await expect(readFile(path.join(root, "a2a.yaml"), "utf8")).rejects.toThrow();
+    const written = parse(await readFile(path.join(home, "a2a.yaml"), "utf8"));
+    expect(written.callers.map((c: { id: string }) => c.id)).toEqual(["first", "x"]);
+  });
 });
