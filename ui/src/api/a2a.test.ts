@@ -18,6 +18,7 @@ import { A2aTurnOn } from "../redesign/a2a/A2aTurnOn";
 import {
   a2aErrorCopy,
   a2aScreen,
+  failedReload,
   answerableStages,
   callerNameProblem,
   defaultResultStage,
@@ -195,6 +196,25 @@ describe("A2A screen state", () => {
     expect(html).toContain("Reload configuration");
   });
 
+  it("enabled with a failed last reload: warns with the Host's message and offers a reload on every tab", () => {
+    const failed: A2aStatus = {
+      ...enabledStatus,
+      lastReload: { ok: false, at: "2026-11-03T10:04:00.000Z", error: { code: "a2a_reload_failed", message: "Caller acme has no token digest" } },
+    };
+    expect(failedReload(failed)).toEqual({ message: "Caller acme has no token digest" });
+    expect(failedReload(enabledStatus)).toBeNull();
+    expect(failedReload({ ...failed, state: "configuration_error" })).toBeNull();
+    for (const tab of ["callers", "publications", "status"] as const) {
+      const html = render({ status: failed, tab });
+      expect(html).toContain("a2a-reload-failed");
+      expect(html).toContain("Caller acme has no token digest");
+      expect(html).toContain("Reload configuration");
+    }
+    const panel = render({ status: failed, tab: "status" });
+    expect(panel).toContain("A2A is on, but the last reload failed");
+    expect(render({ tab: "status" })).not.toContain("a2a-reload-failed");
+  });
+
   it("error: shows the code and a retry", () => {
     const html = render({ screen: "error", status: null, loadError: "request_failed" });
     expect(html).toContain("Could not reach the Host.");
@@ -218,6 +238,15 @@ describe("caller tokens", () => {
     expect(gone).not.toContain(TOKEN);
     expect(renderToStaticMarkup(createElement(NewTokenNotice, { caller: "acme", token: TOKEN, onDismiss: noop }))).toContain(TOKEN);
     expect(TOKEN_ONCE_COPY).toContain("cannot be shown again");
+  });
+
+  it("keeps a freshly issued token visible when the refresh failed and the screen is not the ready one", () => {
+    for (const screen of ["error", "off", "configuration_error", "loading"] as const) {
+      const html = render({ screen, status: screen === "error" ? null : enabledStatus, loadError: "request_failed", issued: { caller: "acme", token: TOKEN } });
+      expect(html).toContain(TOKEN);
+      expect(html).toContain("a2a-new-token");
+    }
+    expect(render({ issued: { caller: "acme", token: TOKEN } }).match(/a2a-new-token/g)).toHaveLength(1);
   });
 
   it("returns the token only from createCaller and never from a listing", async () => {

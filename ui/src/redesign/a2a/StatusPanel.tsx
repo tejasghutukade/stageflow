@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { A2aStatus } from "../../api/a2a";
 import { CARD, CopyButton, DANGER, GHOST, MONO, SECONDARY, StatusLabel } from "../identity/identityParts";
-import { agentCardCommand, callingAgentSnippet, relativeAt } from "./a2aView";
+import { agentCardCommand, callingAgentSnippet, failedReload, relativeAt } from "./a2aView";
 
 export function StatusPanel({
   status,
@@ -23,8 +23,8 @@ export function StatusPanel({
     <div className="flex flex-col gap-6">
       <div className={`${CARD} flex flex-col gap-3 px-4 py-4`}>
         <StatusLabel
-          tone={status.state === "enabled" ? "ok" : "fail"}
-          label={status.state === "enabled" ? "A2A is on" : "A2A has a configuration error"}
+          tone={failedReload(status) ? "fail" : "ok"}
+          label={failedReload(status) ? "A2A is on, but the last reload failed" : "A2A is on"}
           detail={`${status.callers} ${status.callers === 1 ? "caller" : "callers"}, ${status.publications} published ${status.publications === 1 ? "pipeline" : "pipelines"}`}
         />
         <dl className="flex flex-col gap-2.5">

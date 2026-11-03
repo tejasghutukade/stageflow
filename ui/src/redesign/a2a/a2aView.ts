@@ -16,6 +16,12 @@ export function a2aScreen(input: {
   return input.callers.length === 0 ? "no_callers" : "ready";
 }
 
+export function failedReload(status: A2aStatus): { message: string } | null {
+  const last = status.lastReload;
+  if (status.state !== "enabled" || !last || last.ok) return null;
+  return { message: last.error?.message ?? "The configuration could not be loaded." };
+}
+
 export const CALLER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
 
 export function callerNameProblem(name: string, existing: readonly string[]): string | null {

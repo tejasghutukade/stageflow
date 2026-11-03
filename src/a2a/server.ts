@@ -344,6 +344,7 @@ export async function createA2aHost(
     } catch (err) {
       const error = { code: "a2a_reload_failed", message: err instanceof Error ? err.message : String(err) };
       status.lastReload = { ok: false, at, error };
+      if (status.state === "configuration_error") status.error = { code: "a2a_configuration_error", message: error.message };
       return { ok: false, error };
     }
   }

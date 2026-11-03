@@ -7,7 +7,7 @@ import { A2aTurnOn } from "./A2aTurnOn";
 import { CallersPanel } from "./CallersPanel";
 import { PublicationsPanel } from "./PublicationsPanel";
 import { StatusPanel } from "./StatusPanel";
-import type { A2aScreen as ScreenState } from "./a2aView";
+import { failedReload, type A2aScreen as ScreenState } from "./a2aView";
 
 export type A2aTabId = "callers" | "publications" | "status";
 
@@ -47,6 +47,12 @@ export function A2aScreen(props: A2aScreenProps) {
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[#0c0d0f]">
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <PageHeader title="A2A" subtitle="Let other agents call the pipelines you publish" />
+
+        {props.issued && !on ? (
+          <div className="px-5 pt-6">
+            <NewTokenNotice caller={props.issued.caller} token={props.issued.token} onDismiss={props.onDismissToken} />
+          </div>
+        ) : null}
 
         {screen === "loading" ? (
           <p className="px-5 py-7 text-[13px] text-[#8b8f98]" role="status">Loading…</p>
@@ -100,6 +106,13 @@ export function A2aScreen(props: A2aScreenProps) {
             />
             <div className="flex flex-col gap-6 px-5 py-6">
               {props.issued ? <NewTokenNotice caller={props.issued.caller} token={props.issued.token} onDismiss={props.onDismissToken} /> : null}
+              {failedReload(status) ? (
+                <div className="flex flex-col items-start gap-2 rounded-lg border border-[#f5b54447] bg-[#f5b5441a] px-4 py-3" role="alert" data-testid="a2a-reload-failed">
+                  <span className="text-[13px] font-medium text-[#ecedee]">The last reload failed. The previous configuration is still in use.</span>
+                  <span className={`break-words text-xs text-[#f5b544] ${MONO}`}>{failedReload(status)!.message}</span>
+                  <button type="button" className={SECONDARY} disabled={props.busy} onClick={props.onReload}>Reload configuration</button>
+                </div>
+              ) : null}
               <div className={`${CARD} divide-y divide-[#ffffff12]`}>
                 <AddressRow label="Public address" value={status.publicUrl} />
                 <AddressRow label="Agent card address" value={status.agentCardUrl} />

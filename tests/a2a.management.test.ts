@@ -470,6 +470,21 @@ describe("A2A live reload", () => {
     expect(await agentCardStatus(second.url, env.PROCUREMENT_TOKEN)).toBe(200);
   });
 
+  it("keeps the configuration error in step with the latest failed reload", async () => {
+    const broken = await configCopy();
+    await writeFile(broken, "version: 2\n");
+    const { host } = await plainHost(broken, env);
+    expect(host.status.state).toBe("configuration_error");
+    const first = host.status.error?.message;
+    await writeFile(broken, "version: 1\ncallers: nope\n");
+    const result = await host.reload();
+    expect(result.ok).toBe(false);
+    expect(host.status.state).toBe("configuration_error");
+    expect(host.status.error?.code).toBe("a2a_configuration_error");
+    expect(host.status.error?.message).toBe(host.status.lastReload?.error?.message);
+    expect(host.status.error?.message).not.toBe(first);
+  });
+
   it("runs concurrent reloads one at a time and keeps the rate limiter across a swap", async () => {
     const configPath = await configCopy();
     const { host, url } = await plainHost(configPath, env);
