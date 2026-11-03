@@ -3,11 +3,14 @@ import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
+import { defaultSecretStore } from "../channels/registry.js";
+import { STORE_NAME_PATTERN, type SecretReader } from "../channels/secretStore.js";
 import { loadPipeline } from "../config/loadPipeline.js";
 import { compilePayloadSchema, isPayloadSchemaSubset } from "../envelope/payloadSchema.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
 
 const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/);
+export const a2aIdentifier = identifier;
 const publicationSchema = z.object({
   id: identifier,
   name: z.string().trim().min(1),
@@ -17,7 +20,7 @@ const publicationSchema = z.object({
   goal: z.string().trim().min(1),
   repository: z.string().trim().min(1).optional(),
   ref: z.string().trim().min(1).optional(),
-  allowed_callers: z.array(identifier).min(1),
+  allowed_callers: z.array(identifier),
   input_schema: z.string().min(1),
   results: z.object({
     stage: identifier,
@@ -44,16 +47,24 @@ const publicationSchema = z.object({
   }
 });
 
+export const A2A_CALLER_STORE_PREFIX = "a2a-caller.";
+
+const callerSchema = z.object({
+  id: identifier,
+  token_env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional(),
+  token_store: z.string().regex(STORE_NAME_PATTERN).optional(),
+}).strict().refine((caller) => (caller.token_env === undefined) !== (caller.token_store === undefined), {
+  message: "Exactly one of token_env or token_store is required",
+});
+
 const configSchema = z.object({
   version: z.literal(1),
   public_url: z.string().url(),
-  callers: z.array(z.object({
-    id: identifier,
-    token_env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
-  }).strict()).min(1),
-  publications: z.array(publicationSchema).min(1),
+  callers: z.array(callerSchema),
+  publications: z.array(publicationSchema),
 }).strict();
 
+export type CallerConfig = z.infer<typeof callerSchema>;
 export type PublicationConfig = z.infer<typeof publicationSchema>;
 export type Publication = PublicationConfig & {
   revision: string;
@@ -65,11 +76,15 @@ function digest(value: string): Buffer {
   return createHash("sha256").update(value).digest();
 }
 
+export function tokenDigestHex(token: string): string {
+  return digest(token).toString("hex");
+}
+
 function requireUnique(values: string[], label: string): void {
   if (new Set(values).size !== values.length) throw new Error(`Duplicate ${label}`);
 }
 
-function publicUrl(value: string): string {
+export function normalizePublicUrl(value: string): string {
   const url = new URL(value);
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
   if ((url.protocol !== "https:" && !(local && url.protocol === "http:")) ||
@@ -122,12 +137,43 @@ async function readPublication(config: PublicationConfig): Promise<Publication> 
   };
 }
 
+export type PublicationContract = {
+  revision: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema: unknown;
+  artifacts: string[];
+};
+
+async function resolvePublicationPaths(entry: PublicationConfig, baseDir: string): Promise<PublicationConfig> {
+  const root = await realpath(path.resolve(baseDir, entry.project_root));
+  return {
+    ...entry, project_root: root,
+    pipeline: await realpath(path.resolve(root, entry.pipeline)),
+    input_schema: await realpath(path.resolve(root, entry.input_schema)),
+  };
+}
+
+/** Loads one publication the way the registry would, without registering it. Throws the same validation errors. */
+export async function previewPublication(entry: PublicationConfig, baseDir: string): Promise<PublicationContract> {
+  const publication = await readPublication(await resolvePublicationPaths(publicationSchema.parse(entry), baseDir));
+  return {
+    revision: publication.revision,
+    inputSchema: publication.inputSchema,
+    outputSchema: publication.outputSchema,
+    artifacts: publication.results.artifacts,
+  };
+}
+
+export function parsePublicationConfig(value: unknown): PublicationConfig {
+  return publicationSchema.parse(value);
+}
+
 export class PublicationRegistry {
   constructor(
     readonly publicUrl: string,
     readonly configPath: string,
     private readonly publications: readonly Publication[],
-    private readonly credentials: readonly { id: string; hash: Buffer }[],
+    private readonly credentials: readonly { id: string; hash: Buffer; source: "store" | "env" }[],
   ) {}
 
   authenticate(authorization: string | undefined): string | undefined {
@@ -146,6 +192,14 @@ export class PublicationRegistry {
     return this.list(caller).find((publication) => publication.id === id);
   }
 
+  callers(): Array<{ id: string; source: "store" | "env" }> {
+    return this.credentials.map(({ id, source }) => ({ id, source }));
+  }
+
+  publicationConfigs(): Publication[] {
+    return this.publications.map((publication) => structuredClone(publication));
+  }
+
   summaries(): Array<{ id: string; name: string; revision: string }> {
     return this.publications.map(({ id, name, revision }) => ({ id, name, revision }));
   }
@@ -162,6 +216,7 @@ export class PublicationRegistry {
 export async function loadPublicationRegistry(
   configPath: string,
   env: NodeJS.ProcessEnv = process.env,
+  secrets: SecretReader = { get: (name) => defaultSecretStore().get(name) },
 ): Promise<PublicationRegistry> {
   const absolute = await realpath(configPath);
   const raw: unknown = parse(await readFile(absolute, "utf8"));
@@ -171,13 +226,18 @@ export async function loadPublicationRegistry(
       ? { ...raw, public_url: defaultUrl }
       : raw,
   );
-  const origin = publicUrl(config.public_url);
+  const origin = normalizePublicUrl(config.public_url);
   requireUnique(config.callers.map((caller) => caller.id), "caller ID");
   requireUnique(config.publications.map((publication) => publication.id), "publication ID");
   const credentials = config.callers.map((caller) => {
-    const token = env[caller.token_env];
+    if (caller.token_store !== undefined) {
+      const stored = secrets.get(caller.token_store);
+      if (!stored || !/^[0-9a-f]{64}$/.test(stored)) throw new Error(`Caller ${caller.id} has no token digest in the credential store entry ${caller.token_store}`);
+      return { id: caller.id, hash: Buffer.from(stored, "hex"), source: "store" as const };
+    }
+    const token = env[caller.token_env!];
     if (!token || /\s/.test(token) || token.length < 32) throw new Error(`Caller ${caller.id} requires a token of at least 32 characters in ${caller.token_env}`);
-    return { id: caller.id, hash: digest(token) };
+    return { id: caller.id, hash: digest(token), source: "env" as const };
   });
   requireUnique(credentials.map((credential) => credential.hash.toString("hex")), "caller credential");
   const publications: Publication[] = [];
@@ -188,12 +248,7 @@ export async function loadPublicationRegistry(
     if (entry.allowed_callers.some((id) => !credentials.some((caller) => caller.id === id))) {
       throw new Error(`Publication ${entry.id} refers to an unknown caller`);
     }
-    const root = await realpath(path.resolve(path.dirname(absolute), entry.project_root));
-    publications.push(await readPublication({
-      ...entry, project_root: root,
-      pipeline: await realpath(path.resolve(root, entry.pipeline)),
-      input_schema: await realpath(path.resolve(root, entry.input_schema)),
-    }));
+    publications.push(await readPublication(await resolvePublicationPaths(entry, path.dirname(absolute))));
   }
   return new PublicationRegistry(origin, absolute, publications, credentials);
 }

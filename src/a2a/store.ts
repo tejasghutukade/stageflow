@@ -28,8 +28,18 @@ export type A2aTaskRow = {
    * `pipeline` (no single designated result stage) and always null for "invoke".
    */
   result_stage_id: string | null;
+  /** JSON of {@link PinnedPublication}, set at creation so a later registry change cannot alter an in-flight "invoke" task. Null for rows from before this column existed. */
+  pinned_json: string | null;
   created_at: string;
   updated_at: string;
+};
+
+/** What finalising, projecting and answering need from the publication a task started under. */
+export type PinnedPublication = {
+  resultStage: string;
+  includePayload: boolean;
+  artifacts: string[];
+  callerAnswerableStages: string[];
 };
 
 export type A2aArtifactRow = {
@@ -90,6 +100,9 @@ export class A2aStore {
     }
     if (!cols.some((c) => c.name === "result_stage_id")) {
       this.db.exec(`ALTER TABLE a2a_tasks ADD COLUMN result_stage_id TEXT`);
+    }
+    if (!cols.some((c) => c.name === "pinned_json")) {
+      this.db.exec(`ALTER TABLE a2a_tasks ADD COLUMN pinned_json TEXT`);
     }
   }
 
@@ -165,13 +178,14 @@ export class A2aStore {
     runId: string;
     kind?: TaskKind;
     resultStageId?: string | null;
+    pinned?: PinnedPublication;
   }): A2aTaskRow {
     const at = nowIso();
     this.db
       .prepare(
         `INSERT INTO a2a_tasks
-          (task_id, context_id, caller_id, publication_id, publication_revision, submission_key, run_id, state, result_json, kind, result_stage_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', NULL, ?, ?, ?, ?)`,
+          (task_id, context_id, caller_id, publication_id, publication_revision, submission_key, run_id, state, result_json, kind, result_stage_id, pinned_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', NULL, ?, ?, ?, ?, ?)`,
       )
       .run(
         params.taskId,
@@ -183,6 +197,7 @@ export class A2aStore {
         params.runId,
         params.kind ?? "invoke",
         params.resultStageId ?? null,
+        params.pinned ? JSON.stringify(params.pinned) : null,
         at,
         at,
       );
@@ -263,6 +278,10 @@ export class A2aStore {
       }
     });
     transact();
+  }
+
+  hasTasksForCaller(callerId: string): boolean {
+    return this.db.prepare("SELECT 1 FROM a2a_tasks WHERE caller_id = ? LIMIT 1").get(callerId) !== undefined;
   }
 
   countNonterminal(callerId: string): number {
