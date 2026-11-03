@@ -10,37 +10,81 @@ Not implemented: streaming (`SendStreamingMessage`/`SubscribeToTask`), active pi
 
 ## Enabling the host
 
-Drop an `a2a.yaml` file at the project root, next to `stageflow.yaml` — the daemon auto-discovers it, the same way it already auto-discovers the pipeline catalog. No environment variable, no flag; if the file isn't there, A2A is simply disabled.
+A2A is turned on by an `a2a.yaml` the Host finds, in this order:
 
-`STAGEFLOW_A2A_CONFIG` still works as an explicit override, for a config file that lives outside the project (or during migration from an earlier setup):
+1. `STAGEFLOW_A2A_CONFIG`, an explicit path (a file outside the project, or a migration from an earlier setup).
+2. `a2a.yaml` at the project root, next to `stageflow.yaml`, when it exists.
+3. `$STAGEFLOW_HOME/a2a.yaml`, the host-level file, when it exists. Like `connections.yaml`, it is not tied to a project folder.
+
+If none exists, A2A is disabled. The management API and `sf a2a enable` create the host-level file when no file is found, and otherwise write to the file that was found. They always write absolute `project_root` values, so the file works from any location. A file written by the API is plain YAML in the format below; comments in a file the API edits are not kept.
 
 ```bash
 export STAGEFLOW_A2A_CONFIG=/etc/stageflow/a2a.yaml
 ```
 
-Either way, the host reads the file once at startup — there is no hot reload. Editing `a2a.yaml` (or a publication's pipeline) requires an explicit restart to take effect; the drift check described below exists precisely to stop a live edit from silently taking effect without one.
+Changes made through the management API or the `sf a2a` commands below take effect at once, with no restart. A file you edit by hand is loaded at startup, and again when you run `sf a2a reload` (or `POST /api/a2a/reload`). A reload that fails (a typo, a missing token) keeps the configuration already in use and records the failure in `GET /api/a2a/status`; it never takes A2A down. Publication drift (below) is still checked on every new invocation.
 
-Register a caller without hand-editing YAML or hand-generating a token:
+### Manage A2A from the CLI or the API
+
+These commands talk to the running Host (and start one when none is running). `--json` prints the API response.
 
 ```bash
-sf a2a add-caller procurement-assistant
-# Generated a token for caller "procurement-assistant". Export it before starting the host
-# (or store it in your secrets manager):
-#   export PROCUREMENT_ASSISTANT_TOKEN=<48 hex chars>
+sf a2a enable [--public-url https://agents.example.com]   # create the config; no callers or publications yet
+sf a2a caller create procurement-assistant                # prints the token once
+sf a2a publication create supplier.publication.yaml       # body below; --json for the API response
+sf a2a publication edit supplier_assessment edit.yaml     # only the fields you give change
+sf a2a publication remove supplier_assessment
+sf a2a caller revoke procurement-assistant
+sf a2a caller list | publication list | status | reload
 ```
 
-The `token_env` name defaults to the caller id uppercased with non-alphanumerics collapsed to `_` (`procurement-assistant` → `PROCUREMENT_ASSISTANT_TOKEN`) plus a `_TOKEN` suffix; pass `--token-env <NAME>` to override it. `--config <path>` overrides the auto-discovered `a2a.yaml` location for both `add-caller` and `validate`/`list`. The generated token is 24 random bytes hex-encoded (48 characters) — comfortably over the registry's 32-character minimum for a caller's bearer token.
+`enable` needs a public URL: pass `--public-url`, or set `STAGEFLOW_PUBLIC_URL` (the file then carries no `public_url` and follows the variable). Turning A2A on adds no callers and publishes nothing. Nothing is exposed until an operator creates a caller and a publication that names it.
 
-This only writes the caller's `id` and `token_env` name to `a2a.yaml` — never a secret value. Granting that caller access to a specific publication is still a separate, explicit edit to that publication's `allowed_callers`, on purpose: creating a caller identity and authorizing it to invoke something are different facts, and auto-granting access as a side effect would undercut "nothing is exposed unless a human wrote it down."
+A caller created this way has a token the Host generates: 24 random bytes, hex-encoded (48 characters). It is printed once, in the response that creates it, and is never returned again by any route, log or error. The Host stores only the SHA-256 digest of the token, in the `a2a-caller.<id>` entry of `channel-secrets.json` (owner-only file, credential root), and the caller's `a2a.yaml` entry is `token_store: a2a-caller.<id>`. A lost token cannot be shown again: revoke the caller and create a new one.
 
-Validate a configuration locally without touching a running daemon — `--config` is optional on both and follows the same auto-discovery rule as the host:
+Revoking a caller removes it from `callers` and from every publication's `allowed_callers`, deletes its stored digest, and its token stops working on the next request. A task the caller started before it was revoked is unaffected by the change. Creating a caller whose id still has retained tasks (they are deleted 30 days after they finish) is refused, so a new caller cannot read an old caller's results; use another id.
+
+Tasks that started before a change keep the settings they started with: the result stage, whether the payload is included, the exposed artifacts and the caller-answerable stages are recorded on the task when it is created. Editing or removing a publication, or revoking its caller, never turns a running task into a failure.
+
+The older file-based commands still work:
+
+```bash
+sf a2a add-caller procurement-assistant [--config ./a2a.yaml] [--token-env NAME]
+```
+
+This writes the caller's `id` and a `token_env` name to the file and prints a token to export. A running Host reads `token_env` variables only at startup, so use `sf a2a caller create` for a caller that must work without a restart. Exactly one of `token_env` or `token_store` is set per caller.
+
+Validate a configuration file locally without touching a running daemon. `--config` is optional on both and follows the same discovery rule as the host:
 
 ```bash
 sf a2a validate [--config ./a2a.yaml]
 sf a2a list [--config ./a2a.yaml]
 ```
 
-`GET /api/a2a/status` on the local host reports `{ state: "disabled" | "enabled" | "configuration_error", configPath? }` so operators can tell whether a running daemon actually picked up a config change (it needs a restart).
+`callers` and `publications` may be empty, and a publication may have no `allowed_callers`; such a publication is served to nobody.
+
+### Management API
+
+All routes are under `/api/a2a` on the Host. They use the same control tokens as the other Host API routes: `GET` needs the `read` scope, every other method needs `drive`. Errors are `{ "error": "<message>", "code": "<code>" }`. Bodies are JSON, up to 64 KiB.
+
+| Method and path | Request | Response |
+|---|---|---|
+| `GET /api/a2a/status` | | `{ state: "disabled" \| "enabled" \| "configuration_error", configPath?, error?, publicUrl?, agentCardUrl?, callers?, publications?, lastReload?: { ok, at, error? } }` |
+| `POST /api/a2a/enable` | `{ public_url? }` | `200` status. Creates the file if there is none; otherwise loads it. `400 a2a_public_url_required` when no public URL is given or set |
+| `POST /api/a2a/reload` | | `200` status; `409 a2a_reload_failed` (the old configuration stays in use) |
+| `GET /api/a2a/callers` | | `{ callers: [{ id, token_source: "store" \| "env" }] }` |
+| `POST /api/a2a/callers` | `{ id }` | `201 { id, token, token_source: "store" }` (the only time the token appears). `409 a2a_not_enabled`, `a2a_caller_exists`, `a2a_caller_id_retained` |
+| `DELETE /api/a2a/callers/:id` | | `{ revoked: true, removed_from: [publicationId] }`; `404 a2a_caller_not_found` |
+| `GET /api/a2a/publications` | | `{ publications: [Publication] }` |
+| `GET /api/a2a/publications/:id` | | `Publication` plus `contract: { revision, inputSchema, outputSchema, artifacts }`; `404 a2a_publication_not_found` |
+| `POST /api/a2a/publications/preview` | Publication body | `contract`, without saving. `400` with the validation message |
+| `POST /api/a2a/publications` | Publication body | `201 Publication`. `409 a2a_publication_exists`; `400 a2a_unknown_caller`, `a2a_path_invalid`, `a2a_publication_invalid` |
+| `PATCH /api/a2a/publications/:id` | any subset of the body (`results` merges by key) | `Publication`. `id` cannot change |
+| `DELETE /api/a2a/publications/:id` | | `{ removed: true }` |
+
+A Publication is `{ id, name, description, project_root, pipeline, goal, repository?, ref?, allowed_callers, input_schema, results: { stage, include_payload, artifacts }, caller_answerable_stages, revision? }`. In the API, `project_root` is a catalog project (the id the console shows) and `pipeline` and `input_schema` are paths inside it; absolute paths and paths that leave the project are refused. `allowed_callers` must name existing callers. Each change is written to the file, loaded, and rolled back if the result does not load.
+
+`GET /api/a2a/status` returns the same object the Host health report carries under `a2a`.
 
 ## Publication configuration
 
@@ -51,7 +95,7 @@ version: 1
 public_url: https://agents.example.com
 callers:
   - id: procurement-assistant
-    token_env: PROCUREMENT_TOKEN
+    token_env: PROCUREMENT_TOKEN   # or: token_store: a2a-caller.procurement-assistant
 publications:
   - id: supplier_assessment
     name: Assess a supplier
@@ -73,8 +117,8 @@ publications:
 - Only listed publications are served — nothing is auto-published from the catalog.
 - `results.stage` must be a single, non-cloned terminal stage. Its declared artifacts must have a matching `artifact_declared` pre-emit check in the pipeline.
 - `caller_answerable_stages` may only name stages whose only gate kind is `free_text`. Mixed or `confirm`/`multi_question`/`artifact_backed` gates stay operator-only — split a stage before exposing it if it mixes clarification with approval.
-- Bearer tokens are read from the named environment variable at load time (never written into YAML), must be at least 32 characters, and must be unique per caller.
-- Every publication is pinned to a digest of its resolved pipeline body, referenced stage files, and input schema. A later edit that changes that digest fails new invocations with a drift error instead of silently running a changed recipe — republish (restart the daemon with the updated files) to pick it up.
+- A caller has exactly one of `token_env` (the named environment variable, read when the configuration is loaded, at least 32 characters) or `token_store` (a credential store entry holding the SHA-256 digest of a Host-generated token). A token never appears in YAML, and tokens must be unique per caller.
+- Every publication is pinned to a digest of its resolved pipeline body, referenced stage files, and input schema. A later edit that changes that digest fails new invocations with a drift error instead of silently running a changed recipe — republish (run `sf a2a reload`, or save the publication through the API) to pick it up.
 
 ## Request contract
 
@@ -174,7 +218,7 @@ location /a2a { proxy_pass http://127.0.0.1:PORT; }
 ## Walkthrough
 
 1. An operator authors `clarify_requirements -> research -> review -> final_report`, validates it, and deploys it.
-2. The operator publishes `supplier_assessment` in `a2a.yaml`, granting `procurement-assistant` permission to invoke it and to answer only `clarify_requirements`.
+2. The operator publishes `supplier_assessment` (in the console API, the CLI or `a2a.yaml`), granting `procurement-assistant` permission to invoke it and to answer only `clarify_requirements`.
 3. The caller reads the Agent Card and the publication's contract, then sends message `m-1` with Northstar's details. Stageflow creates task `t-1` and run `r-1`.
 4. The HTTP response is lost; the caller resends `m-1`. Stageflow returns the same `t-1` — the durable submission key guarantees at most one run per accepted message content.
 5. `clarify_requirements` asks whether certification is mandatory. `GetTask` reports `input-required` with an opaque handle.

@@ -57,6 +57,23 @@ async function parseJsonBody(res: Response): Promise<unknown> {
   }
 }
 
+export async function httpRequestJson(
+  base: string,
+  method: string,
+  urlPath: string,
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(`${base}${urlPath}`, {
+    method,
+    headers: {
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...clientAuthorizationHeaders(method),
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  return { status: res.status, body: await parseJsonBody(res) };
+}
+
 function extractError(body: unknown, status: number): string {
   if (body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string") {
     return (body as { error: string }).error;

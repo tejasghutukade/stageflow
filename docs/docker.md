@@ -438,8 +438,10 @@ docker exec -it stageflow sf skills install --from-path /workspace/skills/my-ski
 docker exec -it stageflow sf skills install --from-zip "https://example.com/skill.zip" \
   --skill-name my-skill
 
-# A2A deployment config (boot-read; restart Host after changes).
+# A2A: manage callers and publications live (no restart) with the management API or:
+docker exec -it stageflow sf a2a caller create procurement
 # Read whether A2A is enabled without exec: GET /api/a2a/status (read token).
+# File-based checks of a deployment config:
 docker exec -it stageflow sf a2a validate --config /data/a2a.yaml
 docker exec -it stageflow sf a2a list --config /data/a2a.yaml
 docker exec -it stageflow sf a2a add-caller procurement --config /data/a2a.yaml

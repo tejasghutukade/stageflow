@@ -137,6 +137,19 @@ describe("requiredScopeFor", () => {
     expect(requiredScopeFor("POST", "/mcp")).toBe("drive");
   });
 
+  it("reads A2A management with read and changes it with drive", () => {
+    expect(requiredScopeFor("GET", "/api/a2a/status")).toBe("read");
+    expect(requiredScopeFor("GET", "/api/a2a/callers")).toBe("read");
+    expect(requiredScopeFor("GET", "/api/a2a/publications/x")).toBe("read");
+    for (const [method, route] of [
+      ["POST", "/api/a2a/enable"], ["POST", "/api/a2a/reload"], ["POST", "/api/a2a/callers"],
+      ["DELETE", "/api/a2a/callers/x"], ["POST", "/api/a2a/publications"], ["PATCH", "/api/a2a/publications/x"],
+      ["DELETE", "/api/a2a/publications/x"], ["POST", "/api/a2a/publications/preview"],
+    ] as const) {
+      expect(requiredScopeFor(method, route)).toBe("drive");
+    }
+  });
+
   it("requires drive for backup GET and POST (credential-bearing archives)", () => {
     expect(requiredScopeFor("GET", "/api/backup")).toBe("drive");
     expect(requiredScopeFor("GET", "/api/backup/stageflow.tar.gz")).toBe(
