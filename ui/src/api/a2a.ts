@@ -39,6 +39,8 @@ export type A2aContract = {
   artifacts: string[];
 };
 
+export type A2aStageOption = { id: string; terminal: boolean; artifacts: string[]; freeTextOnly: boolean };
+
 export class A2aApiError extends Error {
   constructor(
     readonly code: string,
@@ -183,6 +185,23 @@ export const a2aApi = {
   },
   previewPublication: async (publication: A2aPublication): Promise<A2aContract> =>
     projectA2aContract(await request("/api/a2a/publications/preview", "POST", publicationBody(publication))),
+  createPublication: async (publication: A2aPublication): Promise<A2aPublication> =>
+    projectA2aPublication(await request("/api/a2a/publications", "POST", publicationBody(publication))),
+  pipelineStages: async (projectRoot: string, pipeline: string): Promise<A2aStageOption[]> => {
+    const list = asRecord(
+      await request(`/api/a2a/pipeline-stages?project_root=${enc(projectRoot)}&pipeline=${enc(pipeline)}`),
+    ).stages;
+    return Array.isArray(list)
+      ? list.map((value) => {
+          const raw = asRecord(value);
+          return { id: text(raw.id), terminal: raw.terminal === true, artifacts: stringList(raw.artifacts), freeTextOnly: raw.freeTextOnly === true };
+        })
+      : [];
+  },
+  schemaFiles: async (projectRoot: string): Promise<{ files: string[]; truncated: boolean }> => {
+    const raw = asRecord(await request(`/api/catalog/files?project_root=${enc(projectRoot)}&ext=.json`));
+    return { files: stringList(raw.files), truncated: raw.truncated === true };
+  },
   updatePublication: async (id: string, patch: { description?: string; allowedCallers?: string[] }): Promise<A2aPublication> =>
     projectA2aPublication(
       await request(`/api/a2a/publications/${enc(id)}`, "PATCH", {

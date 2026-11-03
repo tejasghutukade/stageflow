@@ -18,7 +18,16 @@ import { A2aTurnOn } from "../redesign/a2a/A2aTurnOn";
 import {
   a2aErrorCopy,
   a2aScreen,
+  answerableStages,
   callerNameProblem,
+  defaultResultStage,
+  newPublication,
+  newPublicationReady,
+  publicationIdProblem,
+  slugifyId,
+  terminalStages,
+  artifactsOf,
+  type NewPublicationForm,
   callingAgentSnippet,
   publicationDirty,
   toggleCaller,
@@ -308,5 +317,92 @@ describe("A2A API client", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(jsonResponse({ code: "a2a_public_url_required", error: "x" }, 400)).mockResolvedValueOnce(jsonResponse({}, 502)));
     await expect(a2aApi.enable()).rejects.toMatchObject({ code: "a2a_public_url_required", status: 400 });
     await expect(a2aApi.status()).rejects.toBeInstanceOf(A2aApiError);
+  });
+});
+
+const stageOptions = [
+  { id: "clarify", terminal: false, artifacts: [], freeTextOnly: true },
+  { id: "review", terminal: false, artifacts: [], freeTextOnly: false },
+  { id: "final_report", terminal: true, artifacts: ["assessment.md"], freeTextOnly: false },
+];
+
+const filledForm: NewPublicationForm = {
+  projectRoot: "proj",
+  pipeline: "supplier.pipeline.yaml",
+  name: "Assess a Supplier!",
+  goal: "Produce an assessment.",
+  description: "Research a supplier.",
+  inputSchema: "supplier.schema.json",
+  resultStage: "final_report",
+  includePayload: true,
+  artifacts: ["assessment.md"],
+  answerable: [],
+  allowedCallers: ["acme"],
+};
+
+describe("publishing a pipeline", () => {
+  it("makes the id from the name and refuses a taken or empty one", () => {
+    expect(slugifyId("Assess a Supplier!")).toBe("assess-a-supplier");
+    expect(slugifyId("  --A__b--  ")).toBe("a-b");
+    expect(slugifyId("***")).toBe("");
+    expect(publicationIdProblem("", [])).toBeNull();
+    expect(publicationIdProblem("***", [])).not.toBeNull();
+    expect(publicationIdProblem("Assess a supplier", ["assess-a-supplier"])).toContain("already exists");
+  });
+
+  it("selects the result stage on its own only when exactly one stage is terminal", () => {
+    expect(terminalStages(stageOptions).map((stage) => stage.id)).toEqual(["final_report"]);
+    expect(defaultResultStage(stageOptions)).toBe("final_report");
+    expect(defaultResultStage([...stageOptions, { id: "alt", terminal: true, artifacts: [], freeTextOnly: false }])).toBe("");
+    expect(defaultResultStage([stageOptions[0]!])).toBe("");
+  });
+
+  it("offers declared files of the result stage and only free-text-only stages as answerable", () => {
+    expect(artifactsOf(stageOptions, "final_report")).toEqual(["assessment.md"]);
+    expect(artifactsOf(stageOptions, "clarify")).toEqual([]);
+    expect(answerableStages(stageOptions).map((stage) => stage.id)).toEqual(["clarify"]);
+  });
+
+  it("is ready only when everything needed is chosen, and builds the API shape", () => {
+    expect(newPublicationReady(filledForm, [])).toBe(true);
+    expect(newPublicationReady({ ...filledForm, inputSchema: "" }, [])).toBe(false);
+    expect(newPublicationReady({ ...filledForm, resultStage: "" }, [])).toBe(false);
+    expect(newPublicationReady({ ...filledForm, goal: " " }, [])).toBe(false);
+    expect(newPublicationReady(filledForm, ["assess-a-supplier"])).toBe(false);
+    expect(publicationBody(newPublication(filledForm))).toEqual({
+      id: "assess-a-supplier",
+      name: "Assess a Supplier!",
+      description: "Research a supplier.",
+      project_root: "proj",
+      pipeline: "supplier.pipeline.yaml",
+      goal: "Produce an assessment.",
+      allowed_callers: ["acme"],
+      input_schema: "supplier.schema.json",
+      results: { stage: "final_report", include_payload: true, artifacts: ["assessment.md"] },
+      caller_answerable_stages: [],
+    });
+  });
+
+  it("offers Publish a pipeline in the empty and the filled list", () => {
+    expect(render({ tab: "publications", publications: [] })).toContain("Publish a pipeline");
+    expect(render({ tab: "publications" })).toContain("Publish a pipeline");
+  });
+
+  it("calls the schema, stage and create routes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ files: ["a.json"], truncated: true }))
+      .mockResolvedValueOnce(jsonResponse({ stages: stageOptions }))
+      .mockResolvedValueOnce(jsonResponse({ id: "assess-a-supplier" }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await a2aApi.schemaFiles("my root")).toEqual({ files: ["a.json"], truncated: true });
+    expect(await a2aApi.pipelineStages("my root", "p/x.pipeline.yaml")).toEqual(stageOptions);
+    await a2aApi.createPublication(newPublication(filledForm));
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/catalog/files?project_root=my%20root&ext=.json",
+      "/api/a2a/pipeline-stages?project_root=my%20root&pipeline=p%2Fx.pipeline.yaml",
+      "/api/a2a/publications",
+    ]);
+    expect(fetchMock.mock.calls[2]![1]).toMatchObject({ method: "POST" });
   });
 });

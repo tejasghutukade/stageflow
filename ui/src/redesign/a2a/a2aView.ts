@@ -1,4 +1,4 @@
-import type { A2aCaller, A2aPublication, A2aStatus } from "../../api/a2a";
+import type { A2aCaller, A2aPublication, A2aStageOption, A2aStatus } from "../../api/a2a";
 
 export type A2aScreen = "loading" | "error" | "off" | "configuration_error" | "no_callers" | "ready";
 
@@ -102,4 +102,74 @@ export function relativeAt(at: string, now: number): string {
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours} h ago`;
   return `${Math.round(hours / 24)} d ago`;
+}
+
+export function slugifyId(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80).replace(/-+$/g, "");
+}
+
+export function publicationIdProblem(name: string, existing: readonly string[]): string | null {
+  if (name.trim().length === 0) return null;
+  const id = slugifyId(name);
+  if (id.length === 0) return "Use at least one letter or digit in the name.";
+  if (existing.includes(id)) return "A published pipeline with this id already exists. Change the name.";
+  return null;
+}
+
+export function terminalStages(stages: readonly A2aStageOption[]): A2aStageOption[] {
+  return stages.filter((stage) => stage.terminal);
+}
+
+/** The result stage to select on its own: exactly one terminal stage. */
+export function defaultResultStage(stages: readonly A2aStageOption[]): string {
+  const terminal = terminalStages(stages);
+  return terminal.length === 1 ? terminal[0]!.id : "";
+}
+
+export function answerableStages(stages: readonly A2aStageOption[]): A2aStageOption[] {
+  return stages.filter((stage) => stage.freeTextOnly);
+}
+
+export function artifactsOf(stages: readonly A2aStageOption[], resultStage: string): string[] {
+  return stages.find((stage) => stage.id === resultStage && stage.terminal)?.artifacts ?? [];
+}
+
+export type NewPublicationForm = {
+  projectRoot: string;
+  pipeline: string;
+  name: string;
+  goal: string;
+  description: string;
+  inputSchema: string;
+  resultStage: string;
+  includePayload: boolean;
+  artifacts: readonly string[];
+  answerable: readonly string[];
+  allowedCallers: readonly string[];
+};
+
+export function newPublicationReady(form: NewPublicationForm, existingIds: readonly string[]): boolean {
+  return Boolean(
+    form.projectRoot && form.pipeline && form.name.trim() && form.goal.trim() && form.description.trim() &&
+      form.inputSchema && form.resultStage && publicationIdProblem(form.name, existingIds) === null && slugifyId(form.name),
+  );
+}
+
+export function newPublication(form: NewPublicationForm): A2aPublication {
+  return {
+    id: slugifyId(form.name),
+    name: form.name.trim(),
+    description: form.description.trim(),
+    projectRoot: form.projectRoot,
+    pipeline: form.pipeline,
+    goal: form.goal.trim(),
+    inputSchema: form.inputSchema,
+    allowedCallers: [...form.allowedCallers],
+    resultStage: form.resultStage,
+    includePayload: form.includePayload,
+    artifacts: [...form.artifacts],
+    callerAnswerableStages: [...form.answerable],
+    repository: null,
+    ref: null,
+  };
 }

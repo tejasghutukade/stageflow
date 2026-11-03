@@ -37,6 +37,21 @@ The list shows each caller and the published pipelines it may call. **Revoke…*
 
 ### Published pipelines
 
+**Publish a pipeline** opens a dialog:
+
+- **Pipeline**: choose from your catalog.
+- **Name** and **Goal**: you type both. The id is made from the name (lowercase, hyphens), shown under the field, and cannot be changed afterwards. A name whose id is already taken is refused.
+- **Description**: what other agents read to decide whether to call it.
+- **Input schema**: pick an existing `.json` file from the pipeline's project. The console lists the project's `.json` files (at most 500, not looking inside `node_modules` or `.git`); it does not write schemas.
+- **Result stage**: the pipeline's final stages. It is chosen for you when there is exactly one. A pipeline with no usable final stage (it needs one final stage and no cloning) says so.
+- **Files the other agent can download**: pick from the files that stage declares.
+- **Stages the caller may answer**: stages whose only question is free text. None are selected unless you tick them.
+- **Include the result stage's output in the reply**: on by default.
+- **Callers that may use it**: tick callers. Nothing is exposed until you tick one.
+- **Preview contract** shows what the other agent will see before you press **Publish**.
+
+The same rules the Host applies when it loads a publication decide which stages and files are offered, so a choice the dialog offers is one the Host accepts.
+
 Each row shows the name and id a pipeline is published as, its pipeline file and the callers that may use it (**Nobody** when none is ticked). **Edit** opens a dialog:
 
 - **Description**: what other agents read to decide whether to call it.
@@ -63,7 +78,3 @@ Each row shows the name and id a pipeline is published as, its pipeline file and
 | On, with callers | The addresses and the three tabs |
 
 Errors show a short explanation and the code, for example `a2a_caller_exists`.
-
-## Current limits
-
-Publishing a new pipeline and choosing its input schema file are not in the console yet; use `sf a2a publication create` or `POST /api/a2a/publications`. See [A2A](a2a.md#manage-a2a-from-the-cli-or-the-api).
