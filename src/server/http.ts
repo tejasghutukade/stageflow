@@ -207,6 +207,7 @@ import { handleInternalAgentRoutes } from "./internalAgentRoutes.js";
 import { handleAgentRoutes } from "./agentRoutes.js";
 import { handleIdentityRoutes } from "./identityRoutes.js";
 import { handleIdentitySetupRoutes } from "./identitySetupRoutes.js";
+import { handleA2aRoutes } from "./a2aRoutes.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
 import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
@@ -669,6 +670,10 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
           if (!boot.memories) { json(res, 503, { code: "memory.unavailable" }); return true; }
           if (await handleMemoryRoutes(req, method, pathname, boot.memories, res, json)) return true;
+        }
+        if (pathname.startsWith("/api/a2a/")) {
+          if (!boot.a2aManagement) { json(res, 503, { code: "a2a_unavailable", error: "A2A management is unavailable" }); return true; }
+          if (await handleA2aRoutes(req, method, pathname, boot.a2aManagement, res, json)) return true;
         }
         if (pathname === "/api/connections" || pathname.startsWith("/api/connections/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
