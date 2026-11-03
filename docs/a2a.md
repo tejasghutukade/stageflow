@@ -63,6 +63,8 @@ sf a2a list [--config ./a2a.yaml]
 
 `callers` and `publications` may be empty, and a publication may have no `allowed_callers`; such a publication is served to nobody.
 
+The console does the same from the **A2A** screen; see [Console: A2A](console-a2a.md).
+
 ### Management API
 
 All routes are under `/api/a2a` on the Host. They use the same control tokens as the other Host API routes: `GET` needs the `read` scope, every other method needs `drive`. Errors are `{ "error": "<message>", "code": "<code>" }`. Bodies are JSON, up to 64 KiB.

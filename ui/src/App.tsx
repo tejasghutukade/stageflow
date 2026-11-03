@@ -29,6 +29,7 @@ import { ConnectionsPage } from "./pages/ConnectionsPage";
 import { MemoriesPage } from "./redesign/memories/MemoriesPage";
 import { ConnectionDetailPage } from "./redesign/connections/ConnectionDetailPage";
 import { IdentityPage } from "./redesign/identity/IdentityPage";
+import { A2aPage } from "./redesign/a2a/A2aPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { CatalogPage } from "./pages/CatalogPage";
@@ -239,6 +240,8 @@ function ConsoleRoot() {
     content = <DatasetsPage datasetId={route.datasetId} evalId={route.evalId} />;
   } else if (route.name === "identity") {
     content = <IdentityPage />;
+  } else if (route.name === "a2a") {
+    content = <A2aPage />;
   } else if (route.name === "connections") {
     content = <ConnectionsPage />;
   } else if (route.name === "memories") {

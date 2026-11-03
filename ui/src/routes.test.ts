@@ -99,6 +99,10 @@ describe("parseHash", () => {
     expect(parseHash("#/overview")).toEqual({ name: "overview" });
   });
 
+  it("parses the A2A page", () => {
+    expect(parseHash("#/a2a")).toEqual({ name: "a2a" });
+  });
+
   it("parses the identity page", () => {
     expect(parseHash("#/identity")).toEqual({ name: "identity" });
   });

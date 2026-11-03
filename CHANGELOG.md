@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A2A can be turned off and on again.** `POST /api/a2a/disable` keeps callers, published pipelines and token digests; the A2A endpoints answer as disabled until `POST /api/a2a/enable` restores them. The state survives a restart (`enabled: false` in `a2a.yaml`).
+- **An A2A screen in the console.** It sits in the Connect group at `#/a2a`: turn A2A on and off, add and revoke callers (a token is shown once), edit and preview published pipelines, and copy the agent card address and a snippet for the calling agent. See [Console: A2A](docs/console-a2a.md).
+
 ## [0.49.1] - 2026-11-02
 
 ### Fixed
