@@ -3,7 +3,7 @@ import { A2aApiError, a2aApi, type A2aCaller, type A2aContract, type A2aPublicat
 import { IdentityDialog } from "../identity/identityOverlay";
 import { Field, GHOST, INPUT, MONO, PRIMARY, SECONDARY } from "../identity/identityParts";
 import { A2aError } from "./A2aParts";
-import { publicationDirty, toggleCaller } from "./a2aView";
+import { INPUT_FROM_ENTRY_STAGE, publicationDirty, toggleCaller } from "./a2aView";
 
 export function ContractPreview({ contract }: { contract: A2aContract }) {
   return (
@@ -82,7 +82,7 @@ export function PublicationDialog({
         </div>
         <div className="flex items-baseline justify-between gap-3">
           <dt className="shrink-0 text-xs text-[#8b8f98]">Input schema</dt>
-          <dd className={`min-w-0 break-words text-right text-[13px] text-[#ecedee] ${MONO}`}>{publication.inputSchema}</dd>
+          <dd className={`min-w-0 break-words text-right text-[13px] text-[#ecedee] ${MONO}`}>{publication.inputSchema || INPUT_FROM_ENTRY_STAGE}</dd>
         </div>
       </dl>
       <Field label="Description" hint="What other agents read to decide whether to call this pipeline.">

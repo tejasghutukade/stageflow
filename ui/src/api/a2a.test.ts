@@ -394,7 +394,7 @@ describe("publishing a pipeline", () => {
 
   it("is ready only when everything needed is chosen, and builds the API shape", () => {
     expect(newPublicationReady(filledForm, [])).toBe(true);
-    expect(newPublicationReady({ ...filledForm, inputSchema: "" }, [])).toBe(false);
+    expect(newPublicationReady({ ...filledForm, inputSchema: "" }, [])).toBe(true);
     expect(newPublicationReady({ ...filledForm, resultStage: "" }, [])).toBe(false);
     expect(newPublicationReady({ ...filledForm, goal: " " }, [])).toBe(false);
     expect(newPublicationReady(filledForm, ["assess-a-supplier"])).toBe(false);
@@ -410,6 +410,11 @@ describe("publishing a pipeline", () => {
       results: { stage: "final_report", include_payload: true, artifacts: ["assessment.md"] },
       caller_answerable_stages: [],
     });
+  });
+
+  it("leaves input_schema out when the entry stage's io.input.schema is used", () => {
+    expect(publicationBody(newPublication({ ...filledForm, inputSchema: "" }))).not.toHaveProperty("input_schema");
+    expect(projectA2aPublication({ id: "p", results: {} }).inputSchema).toBe("");
   });
 
   it("offers Publish a pipeline in the empty and the filled list", () => {

@@ -84,6 +84,10 @@ const ERROR_COPY: Record<string, { title: string; hint?: string }> = {
   a2a_unknown_caller: { title: "A selected caller no longer exists.", hint: "Reload to see the latest list." },
   a2a_publication_not_found: { title: "That published pipeline no longer exists.", hint: "Reload to see the latest list." },
   a2a_publication_invalid: { title: "This publication is not valid." },
+  a2a_input_schema_multiple_entries: {
+    title: "This pipeline has more than one entry stage.",
+    hint: "Pick an input schema file, or give the pipeline a single entry stage.",
+  },
   a2a_path_invalid: { title: "A file in this publication is outside its project or missing." },
   a2a_invalid_request: { title: "That request was not accepted." },
   a2a_unavailable: { title: "A2A management is not available on this Host." },
@@ -109,6 +113,8 @@ export function relativeAt(at: string, now: number): string {
   if (hours < 24) return `${hours} h ago`;
   return `${Math.round(hours / 24)} d ago`;
 }
+
+export const INPUT_FROM_ENTRY_STAGE = "From the entry stage (io.input.schema)";
 
 export function slugifyId(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80).replace(/-+$/g, "");
@@ -157,7 +163,7 @@ export type NewPublicationForm = {
 export function newPublicationReady(form: NewPublicationForm, existingIds: readonly string[]): boolean {
   return Boolean(
     form.projectRoot && form.pipeline && form.name.trim() && form.goal.trim() && form.description.trim() &&
-      form.inputSchema && form.resultStage && publicationIdProblem(form.name, existingIds) === null && slugifyId(form.name),
+      form.resultStage && publicationIdProblem(form.name, existingIds) === null && slugifyId(form.name),
   );
 }
 

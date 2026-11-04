@@ -42,7 +42,7 @@ The list shows each caller and the published pipelines it may call. **Revoke…*
 - **Pipeline**: choose from your catalog.
 - **Name** and **Goal**: you type both. The id is made from the name (lowercase, hyphens), shown under the field, and cannot be changed afterwards. A name whose id is already taken is refused.
 - **Description**: what other agents read to decide whether to call it.
-- **Input schema**: pick an existing `.json` file from the pipeline's project. The console lists the project's `.json` files (at most 500, not looking inside `node_modules` or `.git`); it does not write schemas.
+- **Input schema**: by default, what the pipeline's entry stage declares in `io.input.schema`; nothing else to set up. Or pick an existing `.json` file from the pipeline's project. The console lists the project's `.json` files (at most 500, not looking inside `node_modules` or `.git`); it does not write schemas. A pipeline with more than one entry stage needs a file.
 - **Result stage**: the pipeline's final stages. It is chosen for you when there is exactly one. A pipeline with no usable final stage (it needs one final stage and no cloning) says so.
 - **Files the other agent can download**: pick from the files that stage declares.
 - **Stages the caller may answer**: stages whose only question is free text. None are selected unless you tick them.

@@ -21,7 +21,7 @@ const publicationSchema = z.object({
   repository: z.string().trim().min(1).optional(),
   ref: z.string().trim().min(1).optional(),
   allowed_callers: z.array(identifier),
-  input_schema: z.string().min(1),
+  input_schema: z.string().min(1).optional(),
   results: z.object({
     stage: identifier,
     include_payload: z.boolean().default(true),
@@ -147,9 +147,35 @@ function validatePublication(config: PublicationConfig, loaded: LoadedPipeline, 
   }
 }
 
+/** A publication whose input contract cannot be taken from its pipeline. `code` is part of the management API. */
+export class PublicationInputSchemaError extends Error {
+  constructor(readonly code: "a2a_input_schema_multiple_entries", message: string) {
+    super(message);
+    this.name = "PublicationInputSchemaError";
+  }
+}
+
+/** Without an `input_schema` file, the contract is the single entry stage's `io.input.schema`. */
+function entryStageInputSchema(config: PublicationConfig, loaded: LoadedPipeline): unknown {
+  if (loaded.dag.roots.length !== 1) {
+    throw new PublicationInputSchemaError(
+      "a2a_input_schema_multiple_entries",
+      `Publication ${config.id}: the pipeline has ${loaded.dag.roots.length} entry stages; pick an input schema file`,
+    );
+  }
+  const root = loaded.dag.roots[0]!;
+  const schema = loaded.stages.find((stage) => stage.id === root)?.clone_input_schema;
+  if (schema === undefined) {
+    throw new Error(`Publication ${config.id}: entry stage ${root} declares no io.input.schema; add one or pick an input schema file`);
+  }
+  return structuredClone(schema);
+}
+
 async function readPublication(config: PublicationConfig): Promise<Publication> {
   const loaded = await loadPipeline(config.pipeline, { cwd: config.project_root, projectRoot: config.project_root });
-  const input: unknown = JSON.parse(await readFile(config.input_schema, "utf8"));
+  const input: unknown = config.input_schema === undefined
+    ? entryStageInputSchema(config, loaded)
+    : JSON.parse(await readFile(config.input_schema, "utf8"));
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error(`Publication ${config.id} needs an object schema`);
   compilePayloadSchema(input);
   validatePublication(config, loaded, input);
@@ -177,7 +203,7 @@ async function resolvePublicationPaths(entry: PublicationConfig, baseDir: string
   return {
     ...entry, project_root: root,
     pipeline: await realpath(path.resolve(root, entry.pipeline)),
-    input_schema: await realpath(path.resolve(root, entry.input_schema)),
+    ...(entry.input_schema === undefined ? {} : { input_schema: await realpath(path.resolve(root, entry.input_schema)) }),
   };
 }
 

@@ -241,6 +241,57 @@ describe("A2A management API", () => {
     expect((await api("DELETE", "/api/a2a/publications/supplier_assessment")).status).toBe(404);
   });
 
+  it("publishes without a schema file using the entry stage's io.input.schema, and switches between file and pipeline", async () => {
+    const { api, project, url, configFile } = await setup();
+    await api("POST", "/api/a2a/enable", {});
+    const token = (await api("POST", "/api/a2a/callers", { id: "acme" })).body.token as string;
+    const { input_schema: _schema, ...fromPipeline } = publicationBody(project, { allowed_callers: ["acme"] });
+
+    const preview = await api("POST", "/api/a2a/publications/preview", fromPipeline);
+    expect(preview.status).toBe(200);
+    expect(preview.body.inputSchema).toEqual({ type: "object", properties: { supplier: { type: "string" } }, required: ["supplier"] });
+
+    const created = await api("POST", "/api/a2a/publications", fromPipeline);
+    expect(created.status).toBe(201);
+    expect(created.body).not.toHaveProperty("input_schema");
+    expect(parse(await readFile(configFile, "utf8")).publications[0]).not.toHaveProperty("input_schema");
+    const contract = (await (await fetch(`${url}/a2a/contracts/supplier_assessment`, { headers: { authorization: `Bearer ${token}` } })).json()) as { inputSchema: { required: string[] } };
+    expect(contract.inputSchema.required).toEqual(["supplier"]);
+
+    const client = await clientFor(url, token);
+    const task = await startTask(client);
+    expect((await waitForState(client, task.id, [3, 6])).status.state).toBe(6);
+
+    const toFile = await api("PATCH", "/api/a2a/publications/supplier_assessment", { input_schema: "supplier.schema.json" });
+    expect(toFile.status).toBe(200);
+    expect(toFile.body.input_schema).toBe("supplier.schema.json");
+    expect((await api("GET", "/api/a2a/publications/supplier_assessment")).body.contract.inputSchema.additionalProperties).toBe(false);
+
+    const back = await api("PATCH", "/api/a2a/publications/supplier_assessment", { input_schema: null });
+    expect(back.status).toBe(200);
+    expect(back.body).not.toHaveProperty("input_schema");
+    expect((await api("GET", "/api/a2a/publications/supplier_assessment")).body.contract.inputSchema).not.toHaveProperty("additionalProperties");
+  });
+
+  it("refuses a pipeline-derived schema when the pipeline has more than one entry stage", async () => {
+    const { api, project } = await setup();
+    await api("POST", "/api/a2a/enable", {});
+    const { input_schema: _schema, ...body } = publicationBody(project, { pipeline: "two-entry.pipeline.yaml", caller_answerable_stages: [], results: { stage: "final_report", include_payload: true, artifacts: [] } });
+    const refused = await api("POST", "/api/a2a/publications", body);
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe("a2a_input_schema_multiple_entries");
+    expect((await api("POST", "/api/a2a/publications", { ...body, input_schema: "supplier.schema.json" })).status).toBe(201);
+  });
+
+  it("answers reload with no configuration file as not enabled, without a path", async () => {
+    const { api, base } = await setup();
+    const reloaded = await api("POST", "/api/a2a/reload");
+    expect(reloaded.status).toBe(409);
+    expect(reloaded.body.code).toBe("a2a_not_enabled");
+    expect(JSON.stringify(reloaded.body)).not.toContain(base);
+    expect(JSON.stringify(reloaded.body)).not.toContain("ENOENT");
+  });
+
   it("never returns a token after creation and never stores one", async () => {
     const { api, project, base, secrets, host, storeRoot, store, configFile } = await setup();
     await api("POST", "/api/a2a/enable", {});

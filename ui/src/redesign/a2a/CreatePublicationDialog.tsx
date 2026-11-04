@@ -10,6 +10,7 @@ import {
   answerableStages,
   artifactsOf,
   defaultResultStage,
+  INPUT_FROM_ENTRY_STAGE,
   newPublication,
   newPublicationReady,
   publicationIdProblem,
@@ -169,10 +170,10 @@ export function CreatePublicationDialog({
         <>
           <Field
             label="Input schema"
-            hint={schemas.files.length === 0 ? "This project has no .json files. Add the schema file to the project first." : schemas.truncated ? "Only the first files are listed." : "A JSON schema file in the pipeline's project describing what the other agent sends."}
+            hint={schemas.truncated ? "Only the first files are listed." : "What the other agent sends. By default, what the pipeline's entry stage declares; or a JSON schema file in the project."}
           >
             <select className={`${INPUT} ${MONO}`} value={form.inputSchema} onChange={(event) => patch({ inputSchema: event.target.value })}>
-              <option value="">Choose a file</option>
+              <option value="">{INPUT_FROM_ENTRY_STAGE}</option>
               {schemas.files.map((file) => <option key={file} value={file}>{file}</option>)}
             </select>
           </Field>

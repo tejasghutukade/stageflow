@@ -1,0 +1,52 @@
+id: two-entry
+model: anthropic/claude-sonnet-4-20250514
+stages:
+  - id: research
+    entry: true
+    system_prompt: Research the supplier.
+    io:
+      input:
+        schema:
+          type: object
+          properties:
+            supplier: { type: string }
+          required: [supplier]
+      output:
+        schema:
+          type: object
+          properties:
+            supplier: { type: string }
+          required: [supplier]
+    route: [{ to: final_report }]
+  - id: pricing
+    entry: true
+    system_prompt: Check the supplier's pricing.
+    io:
+      input:
+        schema:
+          type: object
+          properties:
+            supplier: { type: string }
+          required: [supplier]
+      output:
+        schema:
+          type: object
+          properties:
+            supplier: { type: string }
+          required: [supplier]
+    route: [{ to: final_report }]
+  - id: final_report
+    system_prompt: Write the supplier assessment.
+    io:
+      input:
+        schema:
+          type: object
+          properties:
+            supplier: { type: string }
+          required: [supplier]
+      output:
+        schema:
+          type: object
+          properties:
+            recommendation: { type: string }
+          required: [recommendation]

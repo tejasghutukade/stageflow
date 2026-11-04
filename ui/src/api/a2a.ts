@@ -134,7 +134,7 @@ export function publicationBody(publication: A2aPublication): Record<string, unk
     ...(publication.repository !== null ? { repository: publication.repository } : {}),
     ...(publication.ref !== null ? { ref: publication.ref } : {}),
     allowed_callers: publication.allowedCallers,
-    input_schema: publication.inputSchema,
+    ...(publication.inputSchema ? { input_schema: publication.inputSchema } : {}),
     results: {
       stage: publication.resultStage,
       include_payload: publication.includePayload,
