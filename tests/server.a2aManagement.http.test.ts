@@ -182,6 +182,8 @@ describe("A2A management over the real HTTP chain", () => {
       const off = await call(base, "GET", "/api/a2a/status", READ);
       expect(off.body.state).toBe("disabled");
       expect(off.body.configPath).toBe(on.body.configPath);
+      expect(on.body.configPath).toBe("a2a.yaml");
+      expect((await call(base, "GET", "/api/a2a/status", READ)).body.configPath).toBe("a2a.yaml");
     });
   });
 

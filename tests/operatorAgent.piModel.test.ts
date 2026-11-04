@@ -753,7 +753,7 @@ describe("createPiOperatorAgentModel", () => {
       try {
         const message = await authorError(cwd, path.join(data, "workshop-agent"));
         expect(message).toMatch(/provider auth is not configured/i);
-        expect(message).toContain(operatorAuth);
+        expect(message).not.toContain(operatorAuth);
         expect(message).toMatch(/sf providers/i);
         expect(existsSync(operatorAuth)).toBe(false);
         expect(create).not.toHaveBeenCalled();
@@ -775,7 +775,7 @@ describe("createPiOperatorAgentModel", () => {
             path.join(data, "workshop-agent"),
           );
           expect(message).toMatch(/provider auth is not configured/i);
-          expect(message).toContain(operatorAuth);
+          expect(message).not.toContain(operatorAuth);
           expect(message).not.toMatch(/is not used/);
           expect(create).not.toHaveBeenCalled();
         } finally {
@@ -799,9 +799,10 @@ describe("createPiOperatorAgentModel", () => {
             cwd,
             path.join(data, "workshop-agent"),
           );
-          expect(message).toContain(operatorAuth);
-          expect(message).toContain(dataAuth);
-          expect(message).toMatch(/process data directory/i);
+          expect(message).not.toContain(operatorAuth);
+          expect(message).not.toContain(dataAuth);
+          expect(message).toMatch(/STAGEFLOW_CREDENTIAL_HOME/);
+          expect(message).toMatch(/process data directory \(STAGEFLOW_HOME\)/i);
           expect(message).toMatch(/is not used/i);
           expect(create).not.toHaveBeenCalled();
           if (state === "missing") {

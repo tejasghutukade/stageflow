@@ -157,7 +157,7 @@ describe("A2A management API", () => {
     expect(enabled.status).toBe(200);
     expect(enabled.body).toMatchObject({
       state: "enabled",
-      configPath: await realpath(configFile),
+      configPath: path.basename(configFile),
       publicUrl: "https://ws.stage-flow.dev",
       agentCardUrl: "https://ws.stage-flow.dev/.well-known/agent-card.json",
       callers: 0,
@@ -415,7 +415,7 @@ describe("A2A management API", () => {
 
     const off = await api("POST", "/api/a2a/disable");
     expect(off.status).toBe(200);
-    expect(off.body).toMatchObject({ state: "disabled", configPath: await realpath(configFile) });
+    expect(off.body).toMatchObject({ state: "disabled", configPath: path.basename(configFile) });
     expect(off.body.agentCardUrl).toBeUndefined();
     expect(host.registry()).toBeUndefined();
     expect(await agentCardStatus(url, token)).toBe(404);

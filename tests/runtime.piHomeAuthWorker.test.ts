@@ -260,7 +260,10 @@ describe("stage worker opens the host-stamped auth file", () => {
         const result = await new PiAgentAdapter().runStage(stageInput(roots));
         expect(spy).not.toHaveBeenCalled();
         expect(result.ok).toBe(false);
-        if (!result.ok) expect(result.reason).toContain(hostAuth);
+        if (!result.ok) {
+          expect(result.reason).not.toContain(hostAuth);
+          expect(result.reason).toMatch(/auth.json in the credential home/);
+        }
       } finally {
         spy.mockRestore();
       }

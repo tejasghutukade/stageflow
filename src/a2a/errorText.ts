@@ -21,3 +21,9 @@ export function scrubA2aPaths(message: string, prefixes: readonly (string | unde
   for (const prefix of known) out = out.split(prefix + "/").join("").split(prefix + "\\").join("").split(prefix).join(".");
   return out.replace(/(?<![\w:/.\\-])(?:[A-Za-z]:)?(?:[\\/][^\s'"`\\/]+)+[\\/]([^\s'"`\\/]+)/g, "$1");
 }
+
+/** A2A status as the API returns it: `configPath` relative to the Host home (or cut to its file name), never absolute. */
+export function a2aStatusView<T extends { configPath?: string }>(status: T, home: string | undefined): T {
+  if (!status.configPath) return status;
+  return { ...status, configPath: scrubA2aPaths(status.configPath, [home]) };
+}
