@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.53.0] - 2026-11-04
+
+### Added
+
+- **`GET /api/health` reports work other than pipeline runs.** A new `activity` object gives `evals` (1 while an eval run is planned or running, a case is tried, or a judge is calibrated), `agent_turns` (project agent turns running, eval sessions included), `author_turns` (Workshop Author, Agent Author and Guide turns running) and `next_agent_schedule_at` (the next agent schedule, computed before its first tick; an unreadable schedule reads as due now; `null` when none or when schedules do not tick). A platform that stops idle Hosts, such as Stageflow Cloud, reads it so it does not stop a Host under an eval or a chat turn, and wakes it for agent schedules.
 ## [0.52.1] - 2026-11-04
 
 ### Fixed

@@ -237,7 +237,7 @@ import {
   type HttpHostEnvelope,
   type HttpHostRouteContext,
 } from "./createHttpHost.js";
-import { handleApiHealth, listCatalogRootsForApi } from "./healthSurfaces.js";
+import { handleApiHealth, listCatalogRootsForApi, type HostActivity } from "./healthSurfaces.js";
 import {
   mapRetryStageFailure,
   mapStartFailure,
@@ -257,6 +257,8 @@ import {
   runWithRequestAuth,
 } from "./requestAuthContext.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
+import { agentAuthorTurnsInFlight } from "../agents/authorChat.js";
+import { guideTurnsInFlight } from "../guide/chat.js";
 
 const auditLog = rootLogger.child({ component: "audit" });
 
@@ -540,6 +542,13 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
   if (deps.operatorHostSlot) deps.operatorHostSlot.current = operatorHost;
   const workshopChatRegistry =
     deps.workshopChatRegistry ?? new WorkshopChatSessionRegistry(operatorHost);
+  const hostActivity = async (): Promise<HostActivity> => ({
+    evals: deps.evalRunManager?.isBusy() ? 1 : 0,
+    agent_turns: agentHost?.chat.activeTurnCount() ?? 0,
+    author_turns: workshopChatRegistry.turnsInFlightCount() + agentAuthorTurnsInFlight() + guideTurnsInFlight(),
+    // An unreadable schedule reads as due now, so a platform keeps the Host awake rather than miss it.
+    next_agent_schedule_at: (await agentScheduleSource?.nextFireAt().catch(() => new Date().toISOString())) ?? null,
+  });
   const workshopSessionStoreRoot = (): string =>
     resolveWorkshopSessionStoreRoot();
   const workshopBuildStoreRoot = (): string => resolveWorkshopBuildStoreRoot();
@@ -3659,7 +3668,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         }
 
         if (method === "GET" && pathname === "/api/health") {
-          await handleApiHealth(req, res, boot);
+          await handleApiHealth(req, res, boot, hostActivity);
           return true;
         }
 

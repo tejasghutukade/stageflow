@@ -17,6 +17,13 @@ import {
   type OperatorAgentSession,
 } from "../operatorAgent/index.js";
 
+let authorTurnsInFlight = 0;
+
+/** Agent Author turns running now; the Host reports it so a hosted VM is not put to sleep mid-turn. */
+export function agentAuthorTurnsInFlight(): number {
+  return authorTurnsInFlight;
+}
+
 export type AgentAuthorTurnResult = {
   sessionId: string;
   text: string;
@@ -134,7 +141,13 @@ export async function runAgentAuthorTurn(input: {
   session.setContext(posted);
   const before = readAgentAuthorDraft(session.getContext());
   const modelId = resolveWorkshopModel({ sessionOverride: input.model ?? record.model });
-  const events = await session.send(message, { modelId });
+  let events: Awaited<ReturnType<typeof session.send>>;
+  authorTurnsInFlight++;
+  try {
+    events = await session.send(message, { modelId });
+  } finally {
+    authorTurnsInFlight--;
+  }
   const text = events
     .filter((event) => event.type === "message" && event.role === "assistant")
     .map((event) => (event.type === "message" ? event.text : ""))

@@ -73,6 +73,29 @@ export class AgentScheduleSource {
     }, this.intervalMs).unref();
   }
 
+  /**
+   * When the next enabled agent schedule fires: the stored next run, or the computed one before the first tick
+   * stored it. Null when no agent has a schedule, or when this source does not tick (nothing would fire).
+   */
+  async nextFireAt(): Promise<string | null> {
+    if (this.intervalMs <= 0) return null;
+    const now = this.now();
+    let earliest: number | undefined;
+    for (const candidate of await this.service.scheduledAgents(this.projectRoot)) {
+      const stored = this.service.schedules.nextRun(this.projectRoot, candidate.agentId);
+      let at = stored === undefined ? NaN : Date.parse(stored);
+      if (Number.isNaN(at)) {
+        try {
+          at = computeNextRunAt(candidate.schedule, now)?.getTime() ?? NaN;
+        } catch {
+          continue;
+        }
+      }
+      if (!Number.isNaN(at) && (earliest === undefined || at < earliest)) earliest = at;
+    }
+    return earliest === undefined ? null : new Date(earliest).toISOString();
+  }
+
   async stop(): Promise<void> {
     if (this.interval !== undefined) clearInterval(this.interval);
     this.interval = undefined;

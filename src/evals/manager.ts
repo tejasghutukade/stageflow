@@ -294,6 +294,11 @@ export class EvalRunManager {
     this.now = deps.now ?? (() => new Date());
   }
 
+  /** Planning, running, trying a case or calibrating: work a hosting platform must not stop under. */
+  isBusy(): boolean {
+    return this.live !== undefined || this.reserved || this.trying;
+  }
+
   activeRunId(): string | null {
     return this.live?.evalRunId ?? null;
   }
