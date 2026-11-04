@@ -28,6 +28,7 @@ import {
   type PublicationContract,
   type PublicationRegistry,
 } from "./registry.js";
+import { scrubA2aPaths } from "./errorText.js";
 import type { A2aHost } from "./server.js";
 
 export type A2aSecretStore = SecretReader & {
@@ -270,8 +271,8 @@ export class A2aManagement {
       const resolved = resolveCatalogRelativePath({ inputPath: pipeline, projectRoot, roots, fieldName: "pipeline" });
       return await describePipelineStages(resolved.absolutePath, resolved.root.path);
     } catch (error) {
-      if (error instanceof CatalogPathError) throw invalid(error.message, "a2a_path_invalid");
-      throw invalid(error instanceof Error ? error.message : "The pipeline could not be loaded", "a2a_publication_invalid");
+      if (error instanceof CatalogPathError) throw invalid(this.scrub(error.message, roots), "a2a_path_invalid");
+      throw invalid(error instanceof Error ? this.scrub(error.message, roots) : "The pipeline could not be loaded", "a2a_publication_invalid");
     }
   }
 
@@ -410,7 +411,7 @@ export class A2aManagement {
   private normalize(draft: Record<string, unknown>, roots: CatalogRoot[]): PublicationConfig {
     const { input_schema, ...rest } = draft;
     const { project_root, pipeline } = rest;
-    const fromPipeline = input_schema === undefined || input_schema === null;
+    const fromPipeline = input_schema === undefined || input_schema === null || input_schema === "";
     if (typeof project_root !== "string" || typeof pipeline !== "string" || (!fromPipeline && typeof input_schema !== "string")) {
       return this.parse(fromPipeline ? rest : draft);
     }
@@ -426,7 +427,7 @@ export class A2aManagement {
         ...(resolvedSchema ? { input_schema: resolvedSchema.relativePath } : {}),
       });
     } catch (error) {
-      if (error instanceof CatalogPathError) throw invalid(error.message, "a2a_path_invalid");
+      if (error instanceof CatalogPathError) throw invalid(this.scrub(error.message, roots), "a2a_path_invalid");
       throw error;
     }
   }
@@ -446,8 +447,13 @@ export class A2aManagement {
     } catch (error) {
       if (error instanceof ZodError) throw invalid(issueText(error));
       if (error instanceof PublicationInputSchemaError) throw invalid(error.message, error.code);
-      throw invalid(error instanceof Error ? error.message : "Invalid publication", "a2a_publication_invalid");
+      const message = error instanceof Error ? error.message : "Invalid publication";
+      throw invalid(this.scrub(message, [{ path: entry.project_root }]), "a2a_publication_invalid");
     }
+  }
+
+  private scrub(message: string, roots: readonly { path: string }[]): string {
+    return scrubA2aPaths(message, [...roots.map((root) => root.path), path.dirname(this.target), this.options.env.STAGEFLOW_HOME]);
   }
 
   private live(id: string): ReturnType<PublicationRegistry["publicationConfigs"]>[number] | undefined {

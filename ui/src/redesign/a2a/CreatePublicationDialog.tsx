@@ -10,10 +10,12 @@ import {
   answerableStages,
   artifactsOf,
   defaultResultStage,
+  entryStageCount,
   INPUT_FROM_ENTRY_STAGE,
   newPublication,
   newPublicationReady,
   publicationIdProblem,
+  schemaFilesOrNone,
   slugifyId,
   terminalStages,
   toggleCaller,
@@ -51,7 +53,7 @@ export function CreatePublicationDialog({
   const [pipelines, setPipelines] = useState<PipelineListing[] | null>(null);
   const [pipelinesFailed, setPipelinesFailed] = useState(false);
   const [selected, setSelected] = useState("");
-  const [schemas, setSchemas] = useState<{ files: string[]; truncated: boolean } | null>(null);
+  const [schemas, setSchemas] = useState<{ files: string[]; truncated: boolean; failed: boolean } | null>(null);
   const [stages, setStages] = useState<A2aStageOption[] | null>(null);
   const [form, setForm] = useState<NewPublicationForm>({
     projectRoot: "", pipeline: "", name: "", goal: "", description: "", inputSchema: "",
@@ -85,7 +87,7 @@ export function CreatePublicationDialog({
     }
     const projectRoot = row.project_root ?? "";
     patch({ projectRoot, pipeline: row.path, inputSchema: "", resultStage: "", artifacts: [], answerable: [] });
-    Promise.all([a2aApi.schemaFiles(projectRoot), a2aApi.pipelineStages(projectRoot, row.path)]).then(
+    Promise.all([schemaFilesOrNone(() => a2aApi.schemaFiles(projectRoot)), a2aApi.pipelineStages(projectRoot, row.path)]).then(
       ([files, found]) => {
         if (!mounted.current || picked.current !== key) return;
         setSchemas(files);
@@ -112,7 +114,8 @@ export function CreatePublicationDialog({
   }
 
   const idProblem = publicationIdProblem(form.name, existingIds);
-  const ready = newPublicationReady(form, existingIds);
+  const entries = stages ? entryStageCount(stages) : 1;
+  const ready = newPublicationReady(form, existingIds, entries);
   const terminal = stages ? terminalStages(stages) : [];
   const artifactChoices = stages ? artifactsOf(stages, form.resultStage) : [];
   const answerChoices = stages ? answerableStages(stages) : [];
@@ -170,10 +173,16 @@ export function CreatePublicationDialog({
         <>
           <Field
             label="Input schema"
-            hint={schemas.truncated ? "Only the first files are listed." : "What the other agent sends. By default, what the pipeline's entry stage declares; or a JSON schema file in the project."}
+            hint={entries !== 1
+              ? `This pipeline has ${entries} entry stages, so pick a JSON schema file in the project.`
+              : schemas.failed
+                ? "Could not list the project's schema files. The entry stage's schema is used."
+                : schemas.truncated
+                  ? "Only the first files are listed."
+                  : "What the other agent sends. By default, what the pipeline's entry stage declares; or a JSON schema file in the project."}
           >
             <select className={`${INPUT} ${MONO}`} value={form.inputSchema} onChange={(event) => patch({ inputSchema: event.target.value })}>
-              <option value="">{INPUT_FROM_ENTRY_STAGE}</option>
+              <option value="">{entries === 1 ? INPUT_FROM_ENTRY_STAGE : "Choose a file"}</option>
               {schemas.files.map((file) => <option key={file} value={file}>{file}</option>)}
             </select>
           </Field>

@@ -110,14 +110,16 @@ function allowsOnlyFreeText(stage: PipelineStage): boolean {
   return stage.gate_kinds?.length === 1 && stage.gate_kinds[0] === "free_text";
 }
 
-export type PipelineStageOption = { id: string; terminal: boolean; artifacts: string[]; freeTextOnly: boolean };
+export type PipelineStageOption = { id: string; entry: boolean; terminal: boolean; artifacts: string[]; freeTextOnly: boolean };
 
 /** What a publication may pick from a pipeline, using the same rules publication validation enforces. */
 export async function describePipelineStages(pipeline: string, projectRoot: string): Promise<PipelineStageOption[]> {
   const loaded = await loadPipeline(pipeline, { cwd: projectRoot, projectRoot });
   const terminal = new Set(terminalResultStages(loaded).map((stage) => stage.id));
+  const entries = new Set(loaded.dag.roots);
   return loaded.stages.map((stage) => ({
     id: stage.id,
+    entry: entries.has(stage.id),
     terminal: terminal.has(stage.id),
     artifacts: terminal.has(stage.id) ? declaredArtifacts(stage) : [],
     freeTextOnly: allowsOnlyFreeText(stage),
@@ -164,11 +166,7 @@ function entryStageInputSchema(config: PublicationConfig, loaded: LoadedPipeline
     );
   }
   const root = loaded.dag.roots[0]!;
-  const schema = loaded.stages.find((stage) => stage.id === root)?.clone_input_schema;
-  if (schema === undefined) {
-    throw new Error(`Publication ${config.id}: entry stage ${root} declares no io.input.schema; add one or pick an input schema file`);
-  }
-  return structuredClone(schema);
+  return structuredClone(loaded.stages.find((stage) => stage.id === root)?.clone_input_schema);
 }
 
 async function readPublication(config: PublicationConfig): Promise<Publication> {

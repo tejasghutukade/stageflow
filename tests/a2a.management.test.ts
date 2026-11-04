@@ -267,10 +267,52 @@ describe("A2A management API", () => {
     expect(toFile.body.input_schema).toBe("supplier.schema.json");
     expect((await api("GET", "/api/a2a/publications/supplier_assessment")).body.contract.inputSchema.additionalProperties).toBe(false);
 
+    expect((await api("PATCH", "/api/a2a/publications/supplier_assessment", { input_schema: "" })).body).not.toHaveProperty("input_schema");
+    expect((await api("PATCH", "/api/a2a/publications/supplier_assessment", { input_schema: "supplier.schema.json" })).status).toBe(200);
     const back = await api("PATCH", "/api/a2a/publications/supplier_assessment", { input_schema: null });
     expect(back.status).toBe(200);
     expect(back.body).not.toHaveProperty("input_schema");
     expect((await api("GET", "/api/a2a/publications/supplier_assessment")).body.contract.inputSchema).not.toHaveProperty("additionalProperties");
+  });
+
+  it("treats an edit of the entry stage's io.input.schema as a changed publication until it is reloaded", async () => {
+    const { api, project, url } = await setup();
+    await api("POST", "/api/a2a/enable", {});
+    const token = (await api("POST", "/api/a2a/callers", { id: "acme" })).body.token as string;
+    const { input_schema: _schema, ...fromPipeline } = publicationBody(project, { allowed_callers: ["acme"] });
+    expect((await api("POST", "/api/a2a/publications", fromPipeline)).status).toBe(201);
+    const before = (await api("GET", "/api/a2a/publications/supplier_assessment")).body.contract;
+
+    const pipelineFile = path.join(project, "supplier.pipeline.yaml");
+    const pipeline = parse(await readFile(pipelineFile, "utf8"));
+    pipeline.stages[0].io.input.schema.properties.country = { type: "string" };
+    await writeFile(pipelineFile, stringify(pipeline));
+
+    const client = await clientFor(url, token);
+    await expect(startTask(client)).rejects.toThrow(/changed/i);
+    expect((await api("POST", "/api/a2a/reload")).status).toBe(200);
+    const after = (await api("GET", "/api/a2a/publications/supplier_assessment")).body.contract;
+    expect(after.revision).not.toBe(before.revision);
+    expect(after.inputSchema.properties.country).toEqual({ type: "string" });
+  });
+
+  it("keeps server paths out of reload and publication errors", async () => {
+    const { api, project, base } = await setup();
+    await api("POST", "/api/a2a/enable", {});
+    expect((await api("POST", "/api/a2a/publications", publicationBody(project))).status).toBe(201);
+    await rm(path.join(project, "supplier.schema.json"));
+    const reloaded = await api("POST", "/api/a2a/reload");
+    expect(reloaded.status).toBe(409);
+    expect(reloaded.body.code).toBe("a2a_reload_failed");
+    expect(reloaded.body.error).toContain("supplier.schema.json");
+    const status = await api("GET", "/api/a2a/status");
+    for (const text of [JSON.stringify(reloaded.body), JSON.stringify(status.body.lastReload)]) {
+      expect(text).not.toContain(base);
+      expect(text).not.toContain(project);
+    }
+    const preview = await api("POST", "/api/a2a/publications/preview", publicationBody(project, { id: "other" }));
+    expect(preview.status).toBe(400);
+    expect(JSON.stringify(preview.body)).not.toContain(project);
   });
 
   it("refuses a pipeline-derived schema when the pipeline has more than one entry stage", async () => {
@@ -425,12 +467,16 @@ describe("A2A management API", () => {
     const described = await api("GET", query("supplier.pipeline.yaml"));
     expect(described.status).toBe(200);
     expect(described.body.stages).toEqual([
-      { id: "clarify", terminal: false, artifacts: [], freeTextOnly: true },
-      { id: "final_report", terminal: true, artifacts: ["assessment.md"], freeTextOnly: false },
+      { id: "clarify", entry: true, terminal: false, artifacts: [], freeTextOnly: true },
+      { id: "final_report", entry: false, terminal: true, artifacts: ["assessment.md"], freeTextOnly: false },
     ]);
+    expect((await api("GET", query("two-entry.pipeline.yaml"))).body.stages.filter((stage: { entry: boolean }) => stage.entry).map((stage: { id: string }) => stage.id))
+      .toEqual(["research", "pricing"]);
     expect((await api("GET", "/api/a2a/pipeline-stages")).status).toBe(400);
     expect((await api("GET", query("../escape.pipeline.yaml"))).body.code).toBe("a2a_path_invalid");
-    expect((await api("GET", query("missing.pipeline.yaml"))).status).toBe(400);
+    const missing = await api("GET", query("missing.pipeline.yaml"));
+    expect(missing.status).toBe(400);
+    expect(JSON.stringify(missing.body)).not.toContain(project);
   });
 
   it("rejects enabling without a public URL, and takes an explicit one", async () => {

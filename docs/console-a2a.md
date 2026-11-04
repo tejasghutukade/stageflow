@@ -42,7 +42,7 @@ The list shows each caller and the published pipelines it may call. **Revoke…*
 - **Pipeline**: choose from your catalog.
 - **Name** and **Goal**: you type both. The id is made from the name (lowercase, hyphens), shown under the field, and cannot be changed afterwards. A name whose id is already taken is refused.
 - **Description**: what other agents read to decide whether to call it.
-- **Input schema**: by default, what the pipeline's entry stage declares in `io.input.schema`; nothing else to set up. Or pick an existing `.json` file from the pipeline's project. The console lists the project's `.json` files (at most 500, not looking inside `node_modules` or `.git`); it does not write schemas. A pipeline with more than one entry stage needs a file.
+- **Input schema**: by default, what the pipeline's entry stage declares in `io.input.schema`; nothing else to set up. Or pick an existing `.json` file from the pipeline's project. The console lists the project's `.json` files (at most 500, not looking inside `node_modules` or `.git`); it does not write schemas. A pipeline with more than one entry stage needs a file; the form says so as soon as you pick the pipeline. If the file list cannot be read, the entry stage's schema is still available.
 - **Result stage**: the pipeline's final stages. It is chosen for you when there is exactly one. A pipeline with no usable final stage (it needs one final stage and no cloning) says so.
 - **Files the other agent can download**: pick from the files that stage declares.
 - **Stages the caller may answer**: stages whose only question is free text. None are selected unless you tick them.
@@ -56,6 +56,7 @@ Each row shows the name and id a pipeline is published as, its pipeline file and
 
 - **Description**: what other agents read to decide whether to call it.
 - **Callers that may use it**: tick the callers.
+- **Input schema**: switch between the entry stage's `io.input.schema` and a JSON schema file in the project. Shown when the project's files can be listed.
 - **Preview contract**: the input schema the other agent sends, the output it gets back and the files it can download, as the Host will serve them. Preview before you save.
 
 **Save** applies to new calls. Tasks already running keep the settings they started with. **Remove…** unpublishes a pipeline after a confirmation.

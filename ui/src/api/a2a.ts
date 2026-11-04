@@ -39,7 +39,7 @@ export type A2aContract = {
   artifacts: string[];
 };
 
-export type A2aStageOption = { id: string; terminal: boolean; artifacts: string[]; freeTextOnly: boolean };
+export type A2aStageOption = { id: string; entry: boolean; terminal: boolean; artifacts: string[]; freeTextOnly: boolean };
 
 export class A2aApiError extends Error {
   constructor(
@@ -194,7 +194,7 @@ export const a2aApi = {
     return Array.isArray(list)
       ? list.map((value) => {
           const raw = asRecord(value);
-          return { id: text(raw.id), terminal: raw.terminal === true, artifacts: stringList(raw.artifacts), freeTextOnly: raw.freeTextOnly === true };
+          return { id: text(raw.id), entry: raw.entry === true, terminal: raw.terminal === true, artifacts: stringList(raw.artifacts), freeTextOnly: raw.freeTextOnly === true };
         })
       : [];
   },
@@ -202,11 +202,15 @@ export const a2aApi = {
     const raw = asRecord(await request(`/api/catalog/files?project_root=${enc(projectRoot)}&ext=.json`));
     return { files: stringList(raw.files), truncated: raw.truncated === true };
   },
-  updatePublication: async (id: string, patch: { description?: string; allowedCallers?: string[] }): Promise<A2aPublication> =>
+  updatePublication: async (
+    id: string,
+    patch: { description?: string; allowedCallers?: string[]; inputSchema?: string },
+  ): Promise<A2aPublication> =>
     projectA2aPublication(
       await request(`/api/a2a/publications/${enc(id)}`, "PATCH", {
         ...(patch.description !== undefined ? { description: patch.description } : {}),
         ...(patch.allowedCallers !== undefined ? { allowed_callers: patch.allowedCallers } : {}),
+        ...(patch.inputSchema !== undefined ? { input_schema: patch.inputSchema || null } : {}),
       }),
     ),
   removePublication: async (id: string): Promise<void> => {

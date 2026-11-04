@@ -62,8 +62,22 @@ export function sameSet(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((entry) => b.includes(entry));
 }
 
-export function publicationDirty(original: A2aPublication, description: string, allowed: readonly string[]): boolean {
-  return description !== original.description || !sameSet(original.allowedCallers, allowed);
+export function publicationDirty(original: A2aPublication, description: string, allowed: readonly string[], inputSchema = original.inputSchema): boolean {
+  return description !== original.description || !sameSet(original.allowedCallers, allowed) || inputSchema !== original.inputSchema;
+}
+
+/** How many stages a run starts from; the entry stage's io.input.schema can be the contract only when it is exactly one. */
+export function entryStageCount(stages: readonly A2aStageOption[]): number {
+  return stages.filter((stage) => stage.entry).length;
+}
+
+/** The project's schema files to offer, or none when the list could not be read (picking a file is optional). */
+export async function schemaFilesOrNone(load: () => Promise<{ files: string[]; truncated: boolean }>): Promise<{ files: string[]; truncated: boolean; failed: boolean }> {
+  try {
+    return { ...(await load()), failed: false };
+  } catch {
+    return { files: [], truncated: false, failed: true };
+  }
 }
 
 export function callerUsage(callerId: string, publications: readonly A2aPublication[]): string[] {
@@ -160,10 +174,10 @@ export type NewPublicationForm = {
   allowedCallers: readonly string[];
 };
 
-export function newPublicationReady(form: NewPublicationForm, existingIds: readonly string[]): boolean {
+export function newPublicationReady(form: NewPublicationForm, existingIds: readonly string[], entryStages = 1): boolean {
   return Boolean(
     form.projectRoot && form.pipeline && form.name.trim() && form.goal.trim() && form.description.trim() &&
-      form.resultStage && publicationIdProblem(form.name, existingIds) === null && slugifyId(form.name),
+      (form.inputSchema || entryStages === 1) && form.resultStage && publicationIdProblem(form.name, existingIds) === null && slugifyId(form.name),
   );
 }
 
