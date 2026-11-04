@@ -535,10 +535,12 @@ export async function bootstrapStageflowHost(
     void scheduleSource.stop();
   };
 
+  const triggerSecrets = defaultSecretStore();
   const githubPollSource = new GithubPollSource({
     store,
     cwd,
     intervalMs: githubPollIntervalMsFromEnv(env),
+    secrets: triggerSecrets,
     logError: (message) => bootLog.error("trigger.github_poll_source_failed", message),
   });
   await githubPollSource.start(onTriggerFire);
@@ -549,6 +551,7 @@ export async function bootstrapStageflowHost(
   const emailSource = new EmailSource({
     store,
     cwd,
+    secrets: triggerSecrets,
     logError: (message) => bootLog.error("trigger.email_source_failed", message),
   });
   await emailSource.start(onTriggerFire);

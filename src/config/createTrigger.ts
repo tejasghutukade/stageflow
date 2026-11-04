@@ -7,6 +7,7 @@ import { STAGE_ID_PATTERN } from "./createStage.js";
 import { getCatalogScanPaths } from "./browseCatalog.js";
 import { catalogContextFromStageflow } from "./resolveCatalogContext.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
+import { secretRefError, triggerSourceTakesSecret } from "./triggerSecret.js";
 import { githubMatchActionError } from "./githubTriggerAction.js";
 import { loadTriggerOutcome } from "./loadTrigger.js";
 import { collectPipelineIdsFromPaths, collectTaskIdsFromPaths } from "./validateCatalog.js";
@@ -85,6 +86,10 @@ export function parseEventField(raw: unknown): ParsedField<TriggerEvent> {
     return { ok: false, message: "event.config must be an object" };
   }
   const match = isPlainObject(raw.match) ? raw.match : undefined;
+  if (triggerSourceTakesSecret(raw.source)) {
+    const refError = secretRefError(isPlainObject(raw.config) ? raw.config.secretRef : undefined);
+    if (refError !== null) return { ok: false, message: refError };
+  }
   const actionError = githubMatchActionError(raw.source, match);
   if (actionError !== undefined) {
     return { ok: false, message: actionError };

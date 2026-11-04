@@ -1,0 +1,11 @@
+id: github-store
+pipeline: hello
+kind: event
+enabled: true
+event:
+  source: github.pull_request
+  match:
+    action: opened
+  config:
+    repo: acme/widgets
+    secretRef: store:trigger.github-store.secret

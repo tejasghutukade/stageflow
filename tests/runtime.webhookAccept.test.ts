@@ -156,3 +156,28 @@ describe("acceptWebhook", () => {
     });
   });
 });
+
+describe("acceptWebhook with store: secretRef", () => {
+  const storeTrigger = () =>
+    trigger({ event: { source: "webhook", config: { secretRef: "store:trigger.webhook-dynamic.secret", header: "X-Signature" } } });
+  const reader = (values: Record<string, string>) => ({ get: (name: string) => values[name] });
+  const run = (body: string, headers: Record<string, string>, secrets?: { get(name: string): string | undefined }) =>
+    acceptWebhook({ trigger: storeTrigger(), rawBody: Buffer.from(body), headers, env: { WEBHOOK_SECRET: "env-value" }, secrets });
+
+  it("verifies against the store entry, not the environment", () => {
+    const secrets = reader({ "trigger.webhook-dynamic.secret": SECRET });
+    const body = JSON.stringify({ action: "opened" });
+    expect(run(body, { "x-signature": sign(body, SECRET) }, secrets).kind).toBe("fire");
+    expect(run(body, { "x-signature": sign(body, "other") }, secrets).kind).toBe("bad_signature");
+    expect(run(body, { "x-signature": sign(body, "env-value") }, secrets).kind).toBe("bad_signature");
+  });
+
+  it("is not_configured when the entry is missing, there is no store, or the name is malformed", () => {
+    expect(run("{}", {}, reader({})).kind).toBe("not_configured");
+    expect(run("{}", {}).kind).toBe("not_configured");
+    const bad = trigger({ event: { source: "webhook", config: { secretRef: "store:bad name", header: "X-Signature" } } });
+    expect(
+      acceptWebhook({ trigger: bad, rawBody: Buffer.from("{}"), headers: {}, env: {}, secrets: reader({ "bad name": "x" }) }).kind,
+    ).toBe("not_configured");
+  });
+});

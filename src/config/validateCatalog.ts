@@ -14,6 +14,7 @@ import type { LoadIssue } from "./loadOutcome.js";
 import { loadStageOutcome } from "./loadStage.js";
 import { loadTaskOutcome } from "./loadTask.js";
 import { loadTriggerOutcome } from "./loadTrigger.js";
+import { secretRefError, triggerSourceTakesSecret } from "./triggerSecret.js";
 import { githubMatchActionError, isGithubTriggerAction } from "./githubTriggerAction.js";
 import { loadEvalCatalog } from "./evalCatalog.js";
 import { evalFindingsFromIssues } from "./validateEval.js";
@@ -109,6 +110,7 @@ export type ValidationFindingCode =
   | "trigger.unknown_task"
   | "trigger.github_action_required"
   | "trigger.invalid_github_action"
+  | "trigger.invalid_secret_ref"
   | "catalog.duplicate_pipeline_id"
   | "catalog.manifest_missing"
   | "catalog.manifest_invalid"
@@ -1192,6 +1194,14 @@ export function findingsForTriggerRefs(
             `Trigger "${trigger.id}" has an invalid event.match.action`,
           "trigger.invalid_github_action",
         ),
+      );
+    }
+  }
+  if (typeof source === "string" && triggerSourceTakesSecret(source)) {
+    const refError = secretRefError(trigger.event?.config?.secretRef);
+    if (refError !== null) {
+      findings.push(
+        findingTriggerError(cwd, absPath, `Trigger "${trigger.id}": ${refError}`, "trigger.invalid_secret_ref"),
       );
     }
   }

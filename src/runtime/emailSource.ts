@@ -4,7 +4,8 @@ import {
   triggerStoreId,
   type CatalogTriggerMatch,
 } from "../config/triggerCatalog.js";
-import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
+import type { SecretReader } from "../channels/secretStore.js";
+import { resolveTriggerSecret } from "../config/triggerSecret.js";
 import type { RunStore } from "../runstore/port.js";
 import type { TaskFile } from "../types/task.js";
 import type { TriggerFile } from "../types/trigger.js";
@@ -153,6 +154,7 @@ export type EmailSourceOptions = {
   cwd?: string;
   logError?: (message: string) => void;
   env?: NodeJS.ProcessEnv;
+  secrets?: SecretReader;
   /** Injectable client factory so tests never hit a real mailbox. */
   createEmailClient?: (config: EmailClientConfig) => EmailImapClient;
   reconnectBaseDelayMs?: number;
@@ -173,6 +175,7 @@ export class EmailSource implements TriggerSourcePort {
   private readonly cwd: string;
   private readonly logError: (message: string) => void;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly secrets: SecretReader | undefined;
   private readonly createEmailClient: (config: EmailClientConfig) => EmailImapClient;
   private readonly reconnectBaseDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
@@ -188,6 +191,7 @@ export class EmailSource implements TriggerSourcePort {
         console.error(message);
       });
     this.env = options.env ?? process.env;
+    this.secrets = options.secrets;
     this.createEmailClient = options.createEmailClient ?? defaultCreateEmailClient;
     this.reconnectBaseDelayMs = options.reconnectBaseDelayMs ?? DEFAULT_EMAIL_RECONNECT_BASE_DELAY_MS;
     this.reconnectMaxDelayMs = options.reconnectMaxDelayMs ?? DEFAULT_EMAIL_RECONNECT_MAX_DELAY_MS;
@@ -272,7 +276,7 @@ export class EmailSource implements TriggerSourcePort {
 
     let password: string | undefined;
     try {
-      password = readSecretFromEnvOrFile(this.env, group.config.secretRef);
+      password = resolveTriggerSecret(group.config.secretRef, { env: this.env, secrets: this.secrets });
     } catch (err) {
       this.logError(
         `email: failed to read secret "${group.config.secretRef}" for mailbox "${mailboxKey}": ${errMsg(err)}`,
