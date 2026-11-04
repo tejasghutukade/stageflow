@@ -9,6 +9,8 @@ import {
 } from "./browserHost.js";
 import type { BrowserHostCapabilityRecord } from "./hostCapabilities.js";
 import { createLocalBrowserHost, type LocalBrowserHostOptions } from "./localBrowserHost.js";
+import { type ProfileStore, validateProfileKey, validateProfileScope } from "./profileStore.js";
+import { createVolumeProfileStore } from "./volumeProfileStore.js";
 
 export const PLATFORM_URL_ENV = "STAGEFLOW_PLATFORM_URL";
 export const PLATFORM_TOKEN_ENV = "STAGEFLOW_PLATFORM_TOKEN";
@@ -32,7 +34,11 @@ export type PlatformBrowserClientOptions = {
 export type PlatformBrowserClient = {
   createSession(input: { runId: string; stageId?: string; profile?: string; allowDomains?: string[] }): Promise<{ connectUrl: string }>;
   release(input: { runId: string; stageId?: string; profile?: string }): Promise<void>;
+  /** Whether the browser with these tags is still running on the platform (it ends at the platform's time limit). */
+  alive(input: { runId: string; stageId?: string; profile?: string }): Promise<boolean>;
   runs(): Promise<string[]>;
+  profiles(): Promise<string[]>;
+  deleteProfile(name: string): Promise<void>;
 };
 
 const MESSAGES: Record<string, string> = {
@@ -79,9 +85,20 @@ export function createPlatformBrowserClient(options: PlatformBrowserClientOption
     async release(input) {
       await call("POST", "release", input);
     },
+    async alive(input) {
+      const answer = (await call("POST", "alive", input)) as { alive?: unknown } | undefined;
+      return answer?.alive === true;
+    },
     async runs() {
       const answer = (await call("GET", "runs")) as { runIds?: unknown } | undefined;
       return Array.isArray(answer?.runIds) ? answer.runIds.filter((id): id is string => typeof id === "string") : [];
+    },
+    async profiles() {
+      const answer = (await call("GET", "profiles")) as { profiles?: unknown } | undefined;
+      return Array.isArray(answer?.profiles) ? answer.profiles.filter((name): name is string => typeof name === "string") : [];
+    },
+    async deleteProfile(name) {
+      await call("DELETE", `profiles/${encodeURIComponent(name)}`);
     },
   };
 }
@@ -121,9 +138,14 @@ export function createPlatformBrowserHost(options: PlatformBrowserHostOptions): 
       if (request.humanLogin === true) {
         throw new PlatformBrowserError("platform_no_human_login", "Logging in by hand is not available on this host yet. Log in from a local Stageflow and use the profile there.");
       }
-      // The platform keeps the session alive between stages, so a persisted anchor is still the run's browser.
-      if (request.previous !== undefined) return { ...request.previous, restarted: false };
-      const { connectUrl } = await client.createSession({ runId: request.runId, profile: request.profile.key.name });
+      // TODO(multi-tenant): the platform keys profiles by name within the Host's workspace; pass the owner scope when one Host serves several.
+      const profile = request.profile.key.name;
+      if (request.previous !== undefined) {
+        if (await client.alive({ runId: request.runId, profile })) return { ...request.previous, restarted: false };
+        // Ended at the platform's time limit or by a sweep: make sure nothing is left, then start a new one.
+        await client.release({ runId: request.runId, profile }).catch(() => undefined);
+      }
+      const { connectUrl } = await client.createSession({ runId: request.runId, profile });
       const env = await base.stageEnv({
         runId: request.runId,
         stageId: `anchor:${request.profile.key.name}`,
@@ -132,7 +154,7 @@ export function createPlatformBrowserHost(options: PlatformBrowserHostOptions): 
         cdpAddress: connectUrl,
       });
       delete env.AGENT_BROWSER_PIN_TAB;
-      return { cdpAddress: connectUrl, anchorEnv: env, restarted: false };
+      return { cdpAddress: connectUrl, anchorEnv: env, restarted: request.previous !== undefined };
     },
 
     async releaseProfileBrowser(request: ProfileBrowserRelease): Promise<void> {
@@ -145,6 +167,11 @@ export function createPlatformBrowserHost(options: PlatformBrowserHostOptions): 
       stageBrowsers.delete(stageKey(request.runId, request.stageId));
     },
 
+    stageBrowserAlive(request: { runId: string; stageId: string }): Promise<boolean> {
+      return client.alive(request);
+    },
+
+    // One Host per platform workspace: a run this Host does not know is not live anywhere.
     async sweepOrphans(input): Promise<{ released: string[] }> {
       const released: string[] = [];
       for (const runId of await client.runs()) {
@@ -183,10 +210,37 @@ export function createPlatformBrowserHost(options: PlatformBrowserHostOptions): 
   };
 }
 
-/** The platform host from the Host env, or undefined when the platform settings are absent. */
-export function platformBrowserHostFromEnv(env: NodeJS.ProcessEnv, options: { local?: LocalBrowserHostOptions } = {}): BrowserHost | undefined {
-  const url = env[PLATFORM_URL_ENV]?.trim();
-  const token = env[PLATFORM_TOKEN_ENV]?.trim();
-  if (!url || !token) return undefined;
-  return createPlatformBrowserHost({ client: createPlatformBrowserClient({ url, token }), ...(options.local ? { local: options.local } : {}) });
+/**
+ * Saved logins kept by the platform: listing and deleting go to the platform, so clearing a profile removes its cookies there.
+ * TODO(multi-tenant): the platform has one profile list per Host; the scope is not sent.
+ */
+export function createPlatformProfileStore(client: Pick<PlatformBrowserClient, "profiles" | "deleteProfile">): ProfileStore {
+  const handles = createVolumeProfileStore();
+  return {
+    open: (key) => handles.open(key),
+    async list(scope) {
+      validateProfileScope(scope);
+      return (await client.profiles()).sort();
+    },
+    async delete(rawKey) {
+      const key = validateProfileKey(rawKey);
+      await client.deleteProfile(key.name);
+      await handles.delete(key);
+    },
+    async deleteScope(scope) {
+      for (const name of await this.list(scope)) await this.delete({ scope, name });
+    },
+  };
+}
+
+/** True when the Host env carries both platform settings. */
+export function hasPlatformBrowserEnv(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env[PLATFORM_URL_ENV]?.trim() && env[PLATFORM_TOKEN_ENV]?.trim());
+}
+
+/** The platform host and its profile store from the Host env, or undefined when the platform settings are absent. */
+export function platformBrowserSupportFromEnv(env: NodeJS.ProcessEnv, options: { local?: LocalBrowserHostOptions } = {}): { host: BrowserHost; profiles: ProfileStore } | undefined {
+  if (!hasPlatformBrowserEnv(env)) return undefined;
+  const client = createPlatformBrowserClient({ url: env[PLATFORM_URL_ENV]!.trim(), token: env[PLATFORM_TOKEN_ENV]!.trim() });
+  return { host: createPlatformBrowserHost({ client, ...(options.local ? { local: options.local } : {}) }), profiles: createPlatformProfileStore(client) };
 }

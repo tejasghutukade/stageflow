@@ -74,6 +74,11 @@ export interface BrowserHost {
   /** A stage's own browser session was closed. Only hosts whose stage browsers live elsewhere implement it. */
   releaseStageBrowser?(request: StageBrowserRelease): Promise<void>;
   /**
+   * Whether a profile-less stage's own browser, created earlier, still runs. A host that implements it keeps a stage's
+   * persisted browser for every attempt and resume while it lives, and gives the stage a new one (same env, new address) after.
+   */
+  stageBrowserAlive?(request: { runId: string; stageId: string }): Promise<boolean>;
+  /**
    * A stage reported that a site blocked this host's browser. A routing host remembers the profile so its stages use
    * another browser, and says whether that is a change (`switched`), so the scheduler can retry the stage there.
    */

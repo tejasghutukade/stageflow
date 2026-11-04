@@ -14,9 +14,11 @@ import {
   createPlatformBrowserClient,
   createPlatformBrowserHost,
   type PlatformBrowserClient,
+  createPlatformProfileStore,
   PlatformBrowserError,
-  platformBrowserHostFromEnv,
+  platformBrowserSupportFromEnv,
 } from "../src/browser/platformBrowserHost.js";
+import { BROWSER_STAGE_PATTERNS, redactString } from "../src/logging/redact.js";
 import { createVolumeProfileStore } from "../src/browser/volumeProfileStore.js";
 import { loadHostConfig } from "../src/config/hostConfig.js";
 import { execInSandboxContainer, sandboxBrowserEnv } from "../src/runtime/sandboxContainer.js";
@@ -36,6 +38,7 @@ afterEach(async () => {
 
 function fakeClient() {
   const calls: Array<[string, unknown]> = [];
+  const state = { alive: true, profiles: ["acct"] as string[] };
   let next = 0;
   const client: PlatformBrowserClient = {
     async createSession(input) {
@@ -45,15 +48,26 @@ function fakeClient() {
     async release(input) {
       calls.push(["release", input]);
     },
+    async alive(input) {
+      calls.push(["alive", input]);
+      return state.alive;
+    },
     async runs() {
       return ["live-run", "dead-run"];
     },
+    async profiles() {
+      return state.profiles;
+    },
+    async deleteProfile(name) {
+      calls.push(["deleteProfile", name]);
+      state.profiles = state.profiles.filter((p) => p !== name);
+    },
   };
-  return { client, calls };
+  return { client, calls, state };
 }
 
 function setup() {
-  const { client, calls } = fakeClient();
+  const { client, calls, state } = fakeClient();
   const host = createPlatformBrowserHost({ client, local: { platform: "linux", hostEnv: {}, socketRoot: path.join(root, "sock"), emptyConfigPath: path.join(root, "empty.json") } });
   const profiles = createVolumeProfileStore();
   const request = async (extra: Record<string, unknown> = {}) => ({
@@ -65,7 +79,7 @@ function setup() {
     }) as BrowserRunner,
     ...extra,
   });
-  return { host, calls, request, profiles };
+  return { host, calls, request, profiles, state };
 }
 
 describe("platform browser host", () => {
@@ -84,7 +98,22 @@ describe("platform browser host", () => {
     expect(shared.anchorEnv.AGENT_BROWSER_PROFILE).toBeUndefined();
     const again = await host.ensureProfileBrowser(await request({ previous: shared }));
     expect(again).toEqual({ ...shared, restarted: false });
-    expect(calls).toHaveLength(1);
+    expect(calls.filter(([kind]) => kind === "create")).toHaveLength(1);
+    expect(calls.at(-1)).toEqual(["alive", { runId: "run-1", profile: "acct" }]);
+  });
+
+  it("replaces a persisted profile browser that the platform ended, and releases what is left of it", async () => {
+    const { host, calls, request, state } = setup();
+    const shared = await host.ensureProfileBrowser(await request());
+    state.alive = false;
+    const replaced = await host.ensureProfileBrowser(await request({ previous: shared }));
+    expect(replaced.restarted).toBe(true);
+    expect(replaced.cdpAddress).toBe("wss://connect.example/?signingKey=k2");
+    expect(calls.slice(-3)).toEqual([
+      ["alive", { runId: "run-1", profile: "acct" }],
+      ["release", { runId: "run-1", profile: "acct" }],
+      ["create", { runId: "run-1", profile: "acct" }],
+    ]);
   });
 
   it("refuses a human login, which needs a live view this host does not offer yet", async () => {
@@ -137,11 +166,24 @@ describe("platform browser host in the Host's browser lifecycle", () => {
     expect(env?.AGENT_BROWSER_CDP).toBe("wss://connect.example/?signingKey=k1");
     expect(calls).toEqual([["create", { runId: "run-1", stageId: "scrape", allowDomains: ["example.com"] }]]);
 
+    const resume = await resolveStageBrowserEnv(support, { runId: "run-1", stageId: "scrape", scope: "local", runDir, browser: { allow_domains: ["example.com"] } });
+    expect(resume, "a live browser is kept for a resume or retry").toEqual(env);
+    expect(calls.filter(([kind]) => kind === "create")).toHaveLength(1);
+
+    const restartedHost = createPlatformBrowserHost({ client, local: { platform: "linux", hostEnv: {}, socketRoot: path.join(root, "sock") } });
+    const afterRestart = await resolveStageBrowserEnv({ ...support, host: restartedHost }, { runId: "run-1", stageId: "scrape", scope: "local", runDir, browser: { allow_domains: ["example.com"] } });
+    expect(afterRestart, "a Host restart keeps the live browser too").toEqual(env);
+    expect(calls.filter(([kind]) => kind === "create")).toHaveLength(1);
+
     await teardownStageBrowser(support, { runId: "run-1", runDir, stageId: "scrape" });
     expect(calls.at(-1)).toEqual(["release", { runId: "run-1", stageId: "scrape" }]);
     expect(runnerCalls.some((args) => args[0] === "close")).toBe(true);
     await teardownStageBrowser(support, { runId: "run-1", runDir, stageId: "scrape" });
     expect(calls.filter(([kind]) => kind === "release")).toHaveLength(1);
+
+    const retried = await resolveStageBrowserEnv(support, { runId: "run-1", stageId: "scrape", scope: "local", runDir, browser: { allow_domains: ["example.com"] } });
+    expect(retried?.AGENT_BROWSER_CDP, "a retry after release gets a new browser").toBe("wss://connect.example/?signingKey=k2");
+    expect({ ...retried, AGENT_BROWSER_CDP: env?.AGENT_BROWSER_CDP }, "and only the address changes").toEqual(env);
 
     const profile = await support.profiles.open({ scope: "local", name: "acct" });
     await ensureRunProfileBrowser(support, { runId: "run-1", runDir, browser: { profile: "acct" }, profile });
@@ -187,17 +229,34 @@ describe("platform browser client", () => {
   });
 
   it("is built from the Host env only when both settings are present", () => {
-    expect(platformBrowserHostFromEnv({})).toBeUndefined();
-    expect(platformBrowserHostFromEnv({ STAGEFLOW_PLATFORM_URL: "https://gw" })).toBeUndefined();
-    expect(platformBrowserHostFromEnv({ STAGEFLOW_PLATFORM_URL: "https://gw", STAGEFLOW_PLATFORM_TOKEN: "t".repeat(40) })).toBeDefined();
+    expect(platformBrowserSupportFromEnv({})).toBeUndefined();
+    expect(platformBrowserSupportFromEnv({ STAGEFLOW_PLATFORM_URL: "https://gw" })).toBeUndefined();
+    expect(platformBrowserSupportFromEnv({ STAGEFLOW_PLATFORM_URL: "https://gw", STAGEFLOW_PLATFORM_TOKEN: "t".repeat(40) })).toBeDefined();
   });
 
-  it("makes platform the default browser host when the platform address is set, unless config says otherwise", async () => {
-    expect(loadHostConfig({ env: { STAGEFLOW_PLATFORM_URL: "https://gw" }, configFilePath: null }).browserHost).toBe("platform");
+  it("redacts a connect address's signing key from browser stage output", () => {
+    const out = redactString("connect wss://connect.usw2.browserbase.com/?signingKey=abc.def-123", { patterns: BROWSER_STAGE_PATTERNS });
+    expect(out).toContain("connect.usw2.browserbase.com");
+    expect(out).not.toContain("abc.def-123");
+  });
+
+  it("lists and deletes saved logins on the platform", async () => {
+    const { client, calls } = fakeClient();
+    const store = createPlatformProfileStore(client);
+    expect(await store.list("local")).toEqual(["acct"]);
+    await store.delete({ scope: "local", name: "acct" });
+    expect(calls).toEqual([["deleteProfile", "acct"]]);
+    expect(await store.list("local")).toEqual([]);
+  });
+
+  it("makes platform the default browser host when both platform settings are set, unless config says otherwise", async () => {
+    const both = { STAGEFLOW_PLATFORM_URL: "https://gw", STAGEFLOW_PLATFORM_TOKEN: "t".repeat(40) };
+    expect(loadHostConfig({ env: both, configFilePath: null }).browserHost).toBe("platform");
+    expect(loadHostConfig({ env: { STAGEFLOW_PLATFORM_URL: "https://gw" }, configFilePath: null }).browserHost, "one setting alone does not switch hosts").toBe("local");
     expect(loadHostConfig({ env: {}, configFilePath: null }).browserHost).toBe("local");
     const file = path.join(root, "config.yaml");
     await writeFile(file, "browser:\n  host: local\n");
-    expect(loadHostConfig({ env: { STAGEFLOW_PLATFORM_URL: "https://gw" }, configFilePath: file }).browserHost).toBe("local");
+    expect(loadHostConfig({ env: both, configFilePath: file }).browserHost).toBe("local");
     await writeFile(file, "browser:\n  host: platform\n");
     expect(loadHostConfig({ env: {}, configFilePath: file }).browserHost).toBe("platform");
   });

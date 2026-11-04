@@ -558,8 +558,8 @@ export function loadHostConfig(options?: {
   let browserLaunchArgs: string[] = [];
   let browserExecutablePath: string | undefined;
   let browserDialogTimeoutSeconds = DEFAULT_BROWSER_DIALOG_TIMEOUT_SECONDS;
-  // A hosting platform that offers browsers sets STAGEFLOW_PLATFORM_URL; then the Host uses them unless config says otherwise.
-  let browserHost: BrowserHostKind = env.STAGEFLOW_PLATFORM_URL?.trim() ? "platform" : "local";
+  // A hosting platform that offers browsers sets both platform settings; then the Host uses them unless config says otherwise.
+  let browserHost: BrowserHostKind = env.STAGEFLOW_PLATFORM_URL?.trim() && env.STAGEFLOW_PLATFORM_TOKEN?.trim() ? "platform" : "local";
   const browserOwnerHosts: Record<string, BrowserHostKind> = {};
   let browserAttach: BrowserAttachConfig | undefined;
   let browserLoginHost: "attach" | undefined;

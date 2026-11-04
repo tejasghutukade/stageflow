@@ -73,7 +73,10 @@ const implementations: Array<{
         client: {
           createSession: async () => ({ connectUrl: "wss://platform.example/session-1" }),
           release: async () => undefined,
+          alive: async () => true,
           runs: async () => [],
+          profiles: async () => [],
+          deleteProfile: async () => undefined,
         },
         local: { platform: "darwin", hostEnv: {}, socketRoot: sockRoot },
       }),

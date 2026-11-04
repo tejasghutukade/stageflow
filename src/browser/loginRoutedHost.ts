@@ -118,6 +118,9 @@ export function createLoginRoutedHost(options: LoginRoutedHostOptions): BrowserH
     ...(work.releaseProfileBrowser !== undefined
       ? { releaseProfileBrowser: (request: ProfileBrowserRelease) => work.releaseProfileBrowser!(request) }
       : {}),
+    ...(work.stageBrowserAlive !== undefined
+      ? { stageBrowserAlive: (request: { runId: string; stageId: string }) => work.stageBrowserAlive!(request) }
+      : {}),
     ...(work.releaseStageBrowser !== undefined
       ? { releaseStageBrowser: (request: StageBrowserRelease) => work.releaseStageBrowser!(request) }
       : {}),

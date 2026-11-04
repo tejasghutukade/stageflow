@@ -188,6 +188,8 @@ export type SandboxBashOptions = {
   dockerBin?: string;
   readonlyDir?: string;
   execute?: SandboxExecFn;
+  /** Env the shell gets inside the sandbox (a remote browser's settings); see `sandboxBrowserEnv`. */
+  shellEnv?: Record<string, string>;
 };
 
 export type WorkspaceSearchOptions = {
@@ -265,6 +267,7 @@ function buildSandboxBashTool(options: SandboxBashOptions) {
           containerName: options.containerName,
           command: args.command,
           dockerBin: options.dockerBin,
+          ...(options.shellEnv !== undefined ? { env: options.shellEnv } : {}),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
