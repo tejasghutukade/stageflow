@@ -14,6 +14,8 @@ export const BROWSER_SECRET_PATTERNS: RegExp[] = [
   /\b(?:Proxy-)?Authorization["']?\s*[:=]\s*["']?[^\r\n"']+/gi,
   /\b(?:X-Api-Key|X-Auth-Token|X-CSRF-Token|X-Xsrf-Token)["']?\s*[:=]\s*["']?[^\s"']+/gi,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+  // A remote browser's connect address carries a per-session credential in its query.
+  /\b(?:signingKey|signing_key)=[^\s&"'`]+/gi,
   /"name"\s*:\s*"[^"]*"\s*,\s*"value"\s*:\s*"[^"]*"/g,
   /"value"\s*:\s*"[^"]*"(?=\s*,\s*"domain")/g,
   /\b(?:li_at|li_rm|JSESSIONID|sessionid|session_id|sessid|csrftoken|auth_token|access_token|refresh_token|id_token)\b["']?\s*[:=]\s*["']?[A-Za-z0-9%+/_.=-]{8,}/gi,

@@ -60,6 +60,8 @@ export function confineSandboxSearchPath(inputPath: string, readonlyDir?: string
 export type SandboxFileTarget = {
   containerName: string;
   dockerBin?: string;
+  /** Env the stage's shell commands get inside the sandbox (a remote browser's settings); see `sandboxBrowserEnv`. */
+  shellEnv?: Record<string, string>;
 };
 
 function assertFilePath(containerPath: string): void {
@@ -185,6 +187,7 @@ export async function runSandboxBash(
     dockerBin: target.dockerBin,
     command,
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(target.shellEnv !== undefined ? { env: target.shellEnv } : {}),
   });
   return formatSandboxBashResult(result);
 }

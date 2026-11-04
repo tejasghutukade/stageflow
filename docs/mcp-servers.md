@@ -41,7 +41,7 @@ Paste JSON accepts a full `.mcp.json` (`{ "mcpServers": { … } }`), a bare map 
 **Never allowed:**
 
 - A `url` pointing at a link-local or cloud-metadata address (for example `169.254.169.254`).
-- A `${NAME}` placeholder that names a Stageflow control token (`STAGEFLOW_CONTROL_TOKEN*`, `STAGEFLOW_READ_TOKEN*` and `PI_MCP_ADAPTER_OAUTH_FILE_KEY`).
+- A `${NAME}` placeholder that names a Stageflow control token (`STAGEFLOW_CONTROL_TOKEN*`, `STAGEFLOW_READ_TOKEN*`, `STAGEFLOW_PLATFORM_TOKEN` and `PI_MCP_ADAPTER_OAUTH_FILE_KEY`).
 - A `${NAME}` placeholder that names a provider or cloud credential (a fixed list such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` and cloud keys; the full list is `PROVIDER_AND_CLOUD_NAMES` in `src/runtime/stageEnvironment.ts`). Use a different variable name, or list the exact name in `STAGEFLOW_MCP_ENV_ALLOW` (below).
 
 To remove a server use **Remove**. A server defined in the project's `.mcp.json` cannot be removed from the console (409 `project_defined`); edit that file.
