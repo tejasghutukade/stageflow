@@ -42,6 +42,14 @@ export type ProfileBrowserResult = ProfileBrowser & {
   restarted: boolean;
 };
 
+/** A stage's browser session ended; `shared` is true when it was a tab in the run's profile browser. */
+export type StageBrowserRelease = {
+  scope: string;
+  runId: string;
+  stageId: string;
+  shared: boolean;
+};
+
 export type ProfileBrowserRelease = {
   scope: string;
   runId: string;
@@ -63,6 +71,8 @@ export interface BrowserHost {
    * what hosts it. Only hosts whose browser lives outside the Host's own sockets implement it.
    */
   releaseProfileBrowser?(request: ProfileBrowserRelease): Promise<void>;
+  /** A stage's own browser session was closed. Only hosts whose stage browsers live elsewhere implement it. */
+  releaseStageBrowser?(request: StageBrowserRelease): Promise<void>;
   /**
    * A stage reported that a site blocked this host's browser. A routing host remembers the profile so its stages use
    * another browser, and says whether that is a change (`switched`), so the scheduler can retry the stage there.

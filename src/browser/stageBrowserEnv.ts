@@ -30,6 +30,7 @@ import { createContainerBrowserHost } from "./containerBrowserHost.js";
 import { createDockerSandboxOrchestrator } from "./dockerSandboxOrchestrator.js";
 import { createVolumeProfileStore } from "./volumeProfileStore.js";
 import { createLocalBrowserHost } from "./localBrowserHost.js";
+import { PLATFORM_TOKEN_ENV, PLATFORM_URL_ENV, platformBrowserHostFromEnv } from "./platformBrowserHost.js";
 import { createLocalProfileStore } from "./localProfileStore.js";
 import { localOwnerScope } from "./ownerScope.js";
 
@@ -63,6 +64,13 @@ function configuredBrowserSupport(liveView: "relay" | "none"): StageBrowserSuppo
       : undefined;
   if (kind === "attach" && attached !== undefined) {
     return { host: attached, profiles: createVolumeProfileStore() };
+  }
+  if (kind === "platform") {
+    const platform = platformBrowserHostFromEnv(process.env, { local: hostLaunchOptions() });
+    if (platform === undefined) {
+      throw new Error(`browser.host is "platform" but ${PLATFORM_URL_ENV} and ${PLATFORM_TOKEN_ENV} are not both set`);
+    }
+    return { host: platform, profiles: createVolumeProfileStore() };
   }
   const support: StageBrowserSupport =
     kind === "container"

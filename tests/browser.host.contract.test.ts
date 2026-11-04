@@ -11,6 +11,7 @@ import { resolveBrowserHostCapabilities } from "../src/browser/hostCapabilities.
 import { createFakeRemoteBrowserHost } from "../src/browser/fakeRemoteBrowserHost.js";
 import { createContainerBrowserHost } from "../src/browser/containerBrowserHost.js";
 import { createVolumeProfileStore } from "../src/browser/volumeProfileStore.js";
+import { createPlatformBrowserHost } from "../src/browser/platformBrowserHost.js";
 import { createFakeContainerBrowsers } from "./helpers/fakeContainerBrowsers.js";
 import { createFakeProviderSession } from "./helpers/fakeProviderSession.js";
 import { createSessionApiSandboxOrchestrator } from "../src/browser/sessionApiSandboxOrchestrator.js";
@@ -64,6 +65,22 @@ const implementations: Array<{
     }),
     remote: true,
     remoteAddress: "wss://browsers.example/session-1",
+  },
+  {
+    name: "platform (fake platform)",
+    make: () => ({
+      host: createPlatformBrowserHost({
+        client: {
+          createSession: async () => ({ connectUrl: "wss://platform.example/session-1" }),
+          release: async () => undefined,
+          runs: async () => [],
+        },
+        local: { platform: "darwin", hostEnv: {}, socketRoot: sockRoot },
+      }),
+      profiles: createVolumeProfileStore(),
+    }),
+    remote: true,
+    remoteAddress: "wss://platform.example/session-1",
   },
   {
     name: "container (fake orchestrator)",

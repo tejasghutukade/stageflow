@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.54.0] - 2026-11-04
+
+### Added
+
+- **Platform browser host.** With `browser.host: platform` (the default when `STAGEFLOW_PLATFORM_URL` and `STAGEFLOW_PLATFORM_TOKEN` are set), the Host runs no browser: a hosting platform such as Stageflow Cloud gives it remote browsers and stages attach over CDP. A profile-less stage gets its own browser, released at stage end, with `allow_domains` enforced by the platform; a profile stage gets a tab in the run's browser, and the platform keeps the saved login between runs. Human login and the live view are not available on this host yet. See [Platform host](docs/browser.md#platform-host).
+- **Browser stages in a stage sandbox.** A remote browser's `agent-browser` settings now reach the stage's shell inside the sandbox container (by name, never on the docker command line); a browser on the Host itself is never exposed to the sandbox.
+- **`BrowserHost.releaseStageBrowser`**, an optional hook called when a stage's browser session closes, for hosts whose stage browsers live elsewhere.
+
+### Security
+
+- `STAGEFLOW_PLATFORM_TOKEN` is never passed to a stage or usable as an MCP `${NAME}`.
+
 ## [0.52.0] - 2026-11-04
 
 ### Added

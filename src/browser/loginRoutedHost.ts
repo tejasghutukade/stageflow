@@ -7,6 +7,7 @@ import type {
   BrowserStageRequest,
   ProfileBrowser,
   ProfileBrowserRelease,
+  StageBrowserRelease,
   ProfileBrowserRequest,
   ProfileBrowserResult,
 } from "./browserHost.js";
@@ -116,6 +117,9 @@ export function createLoginRoutedHost(options: LoginRoutedHostOptions): BrowserH
 
     ...(work.releaseProfileBrowser !== undefined
       ? { releaseProfileBrowser: (request: ProfileBrowserRelease) => work.releaseProfileBrowser!(request) }
+      : {}),
+    ...(work.releaseStageBrowser !== undefined
+      ? { releaseStageBrowser: (request: StageBrowserRelease) => work.releaseStageBrowser!(request) }
       : {}),
     ...(work.sweepOrphans !== undefined ? { sweepOrphans: (input: Parameters<NonNullable<BrowserHost["sweepOrphans"]>>[0]) => work.sweepOrphans!(input) } : {}),
 
