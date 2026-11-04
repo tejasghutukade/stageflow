@@ -22,6 +22,7 @@ import {
   answerableStages,
   callerNameProblem,
   defaultResultStage,
+  entryStageCount,
   newPublication,
   newPublicationReady,
   publicationIdProblem,
@@ -31,6 +32,7 @@ import {
   type NewPublicationForm,
   callingAgentSnippet,
   publicationDirty,
+  schemaFilesOrNone,
   toggleCaller,
   PUBLIC_URL_MISSING_COPY,
   TOKEN_ONCE_COPY,
@@ -350,9 +352,9 @@ describe("A2A API client", () => {
 });
 
 const stageOptions = [
-  { id: "clarify", terminal: false, artifacts: [], freeTextOnly: true },
-  { id: "review", terminal: false, artifacts: [], freeTextOnly: false },
-  { id: "final_report", terminal: true, artifacts: ["assessment.md"], freeTextOnly: false },
+  { id: "clarify", entry: true, terminal: false, artifacts: [], freeTextOnly: true },
+  { id: "review", entry: false, terminal: false, artifacts: [], freeTextOnly: false },
+  { id: "final_report", entry: false, terminal: true, artifacts: ["assessment.md"], freeTextOnly: false },
 ];
 
 const filledForm: NewPublicationForm = {
@@ -382,7 +384,7 @@ describe("publishing a pipeline", () => {
   it("selects the result stage on its own only when exactly one stage is terminal", () => {
     expect(terminalStages(stageOptions).map((stage) => stage.id)).toEqual(["final_report"]);
     expect(defaultResultStage(stageOptions)).toBe("final_report");
-    expect(defaultResultStage([...stageOptions, { id: "alt", terminal: true, artifacts: [], freeTextOnly: false }])).toBe("");
+    expect(defaultResultStage([...stageOptions, { id: "alt", entry: false, terminal: true, artifacts: [], freeTextOnly: false }])).toBe("");
     expect(defaultResultStage([stageOptions[0]!])).toBe("");
   });
 
@@ -394,7 +396,7 @@ describe("publishing a pipeline", () => {
 
   it("is ready only when everything needed is chosen, and builds the API shape", () => {
     expect(newPublicationReady(filledForm, [])).toBe(true);
-    expect(newPublicationReady({ ...filledForm, inputSchema: "" }, [])).toBe(false);
+    expect(newPublicationReady({ ...filledForm, inputSchema: "" }, [])).toBe(true);
     expect(newPublicationReady({ ...filledForm, resultStage: "" }, [])).toBe(false);
     expect(newPublicationReady({ ...filledForm, goal: " " }, [])).toBe(false);
     expect(newPublicationReady(filledForm, ["assess-a-supplier"])).toBe(false);
@@ -410,6 +412,34 @@ describe("publishing a pipeline", () => {
       results: { stage: "final_report", include_payload: true, artifacts: ["assessment.md"] },
       caller_answerable_stages: [],
     });
+  });
+
+  it("needs a schema file when the pipeline has more than one entry stage", () => {
+    const twoEntries = [...stageOptions, { id: "pricing", entry: true, terminal: false, artifacts: [], freeTextOnly: false }];
+    expect(entryStageCount(stageOptions)).toBe(1);
+    expect(entryStageCount(twoEntries)).toBe(2);
+    expect(newPublicationReady({ ...filledForm, inputSchema: "" }, [], entryStageCount(twoEntries))).toBe(false);
+    expect(newPublicationReady(filledForm, [], entryStageCount(twoEntries))).toBe(true);
+  });
+
+  it("keeps publishing possible when the schema file list cannot be read", async () => {
+    expect(await schemaFilesOrNone(async () => { throw new Error("down"); })).toEqual({ files: [], truncated: false, failed: true });
+    expect(await schemaFilesOrNone(async () => ({ files: ["a.json"], truncated: false }))).toEqual({ files: ["a.json"], truncated: false, failed: false });
+  });
+
+  it("marks a changed input schema as dirty and sends null to switch back to the entry stage", async () => {
+    const original = projectA2aPublication({ id: "p", description: "d", input_schema: "s.json", results: {} });
+    expect(publicationDirty(original, "d", [], "s.json")).toBe(false);
+    expect(publicationDirty(original, "d", [], "")).toBe(true);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "p", results: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+    await a2aApi.updatePublication("p", { inputSchema: "" });
+    expect(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)).toEqual({ input_schema: null });
+  });
+
+  it("leaves input_schema out when the entry stage's io.input.schema is used", () => {
+    expect(publicationBody(newPublication({ ...filledForm, inputSchema: "" }))).not.toHaveProperty("input_schema");
+    expect(projectA2aPublication({ id: "p", results: {} }).inputSchema).toBe("");
   });
 
   it("offers Publish a pipeline in the empty and the filled list", () => {

@@ -1,4 +1,5 @@
 import { realpath } from "node:fs/promises";
+import path from "node:path";
 import type { IncomingMessage as HttpIncomingMessage, ServerResponse } from "node:http";
 import type Database from "better-sqlite3";
 import {
@@ -23,6 +24,7 @@ import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { A2aApplicationError } from "./contracts.js";
+import { scrubA2aPaths } from "./errorText.js";
 import { isA2aConfigTurnedOff, loadPublicationRegistry, type PublicationRegistry } from "./registry.js";
 import { createA2aInvocations, type A2aInvocations, type PublicTask } from "./service.js";
 import type { A2aStore } from "./store.js";
@@ -282,6 +284,11 @@ export async function createA2aHost(
   let queue: Promise<unknown> = Promise.resolve();
   const status: A2aHost["status"] = { state: "disabled" };
 
+  const scrub = (err: unknown, target: string | undefined): string =>
+    scrubA2aPaths(err instanceof Error ? err.message : String(err), [
+      target ? path.dirname(target) : undefined, env.STAGEFLOW_HOME, runtime.rootDir,
+    ]);
+
   const describe = (loaded: PublicationRegistry): void => {
     status.configPath = loaded.configPath;
     status.publicUrl = loaded.publicUrl;
@@ -326,7 +333,7 @@ export async function createA2aHost(
     try {
       await load(configPath);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = scrub(err, configPath);
       status.state = "configuration_error";
       status.error = { code: "a2a_configuration_error", message };
       console.error(`stageflow: A2A configuration error: ${message}`);
@@ -335,14 +342,14 @@ export async function createA2aHost(
 
   async function runReload(target: string | undefined): Promise<A2aReloadResult> {
     const at = new Date().toISOString();
+    const file = target ?? status.configPath;
     try {
-      const path = target ?? status.configPath;
-      if (!path) throw new Error("No A2A configuration file to load");
-      await load(path);
+      if (!file) throw new Error("No A2A configuration file to load");
+      await load(file);
       status.lastReload = { ok: true, at };
       return { ok: true };
     } catch (err) {
-      const error = { code: "a2a_reload_failed", message: err instanceof Error ? err.message : String(err) };
+      const error = { code: "a2a_reload_failed", message: scrub(err, file) };
       status.lastReload = { ok: false, at, error };
       if (status.state === "configuration_error") status.error = { code: "a2a_configuration_error", message: error.message };
       return { ok: false, error };

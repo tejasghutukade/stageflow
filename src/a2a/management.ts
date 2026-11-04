@@ -21,12 +21,14 @@ import {
   normalizePublicUrl,
   parsePublicationConfig,
   previewPublication,
+  PublicationInputSchemaError,
   tokenDigestHex,
   type PipelineStageOption,
   type PublicationConfig,
   type PublicationContract,
   type PublicationRegistry,
 } from "./registry.js";
+import { scrubA2aPaths } from "./errorText.js";
 import type { A2aHost } from "./server.js";
 
 export type A2aSecretStore = SecretReader & {
@@ -97,6 +99,9 @@ export class A2aManagement {
 
   reload(): Promise<A2aHost["status"]> {
     return this.serial(async () => {
+      if (await this.readText(this.target) === undefined) {
+        throw new A2aManagementError("a2a_not_enabled", "A2A is not turned on", 409);
+      }
       const result = await this.options.host.reload(this.target);
       if (!result.ok) throw new A2aManagementError(result.error.code, result.error.message, 409);
       return this.options.host.status;
@@ -266,8 +271,8 @@ export class A2aManagement {
       const resolved = resolveCatalogRelativePath({ inputPath: pipeline, projectRoot, roots, fieldName: "pipeline" });
       return await describePipelineStages(resolved.absolutePath, resolved.root.path);
     } catch (error) {
-      if (error instanceof CatalogPathError) throw invalid(error.message, "a2a_path_invalid");
-      throw invalid(error instanceof Error ? error.message : "The pipeline could not be loaded", "a2a_publication_invalid");
+      if (error instanceof CatalogPathError) throw invalid(this.scrub(error.message, roots), "a2a_path_invalid");
+      throw invalid(error instanceof Error ? this.scrub(error.message, roots) : "The pipeline could not be loaded", "a2a_publication_invalid");
     }
   }
 
@@ -404,21 +409,25 @@ export class A2aManagement {
 
   /** Turns the API's catalog-relative paths into the absolute project root and root-relative paths stored in the file. */
   private normalize(draft: Record<string, unknown>, roots: CatalogRoot[]): PublicationConfig {
-    const { project_root, pipeline, input_schema } = draft;
-    if (typeof project_root !== "string" || typeof pipeline !== "string" || typeof input_schema !== "string") {
-      return this.parse(draft);
+    const { input_schema, ...rest } = draft;
+    const { project_root, pipeline } = rest;
+    const fromPipeline = input_schema === undefined || input_schema === null || input_schema === "";
+    if (typeof project_root !== "string" || typeof pipeline !== "string" || (!fromPipeline && typeof input_schema !== "string")) {
+      return this.parse(fromPipeline ? rest : draft);
     }
     try {
       const resolvedPipeline = resolveCatalogRelativePath({ inputPath: pipeline, projectRoot: project_root, roots, fieldName: "pipeline" });
-      const resolvedSchema = resolveCatalogRelativePath({ inputPath: input_schema, projectRoot: project_root, roots, fieldName: "input_schema" });
+      const resolvedSchema = fromPipeline
+        ? undefined
+        : resolveCatalogRelativePath({ inputPath: input_schema as string, projectRoot: project_root, roots, fieldName: "input_schema" });
       return this.parse({
-        ...draft,
+        ...rest,
         project_root: resolvedPipeline.root.path,
         pipeline: resolvedPipeline.relativePath,
-        input_schema: resolvedSchema.relativePath,
+        ...(resolvedSchema ? { input_schema: resolvedSchema.relativePath } : {}),
       });
     } catch (error) {
-      if (error instanceof CatalogPathError) throw invalid(error.message, "a2a_path_invalid");
+      if (error instanceof CatalogPathError) throw invalid(this.scrub(error.message, roots), "a2a_path_invalid");
       throw error;
     }
   }
@@ -437,8 +446,14 @@ export class A2aManagement {
       return await previewPublication(entry, path.dirname(this.target));
     } catch (error) {
       if (error instanceof ZodError) throw invalid(issueText(error));
-      throw invalid(error instanceof Error ? error.message : "Invalid publication", "a2a_publication_invalid");
+      if (error instanceof PublicationInputSchemaError) throw invalid(error.message, error.code);
+      const message = error instanceof Error ? error.message : "Invalid publication";
+      throw invalid(this.scrub(message, [{ path: entry.project_root }]), "a2a_publication_invalid");
     }
+  }
+
+  private scrub(message: string, roots: readonly { path: string }[]): string {
+    return scrubA2aPaths(message, [...roots.map((root) => root.path), path.dirname(this.target), this.options.env.STAGEFLOW_HOME]);
   }
 
   private live(id: string): ReturnType<PublicationRegistry["publicationConfigs"]>[number] | undefined {
@@ -459,7 +474,7 @@ export class A2aManagement {
       ...(root ? {} : { root_unmanaged: true as const }),
       project_root: root?.project_root ?? "",
       pipeline: relative(entry.pipeline),
-      input_schema: relative(entry.input_schema),
+      ...(entry.input_schema === undefined ? {} : { input_schema: relative(entry.input_schema) }),
     };
   }
 }

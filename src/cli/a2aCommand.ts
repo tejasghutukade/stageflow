@@ -25,7 +25,8 @@ status, enable, reload, caller and publication talk to the running Host (started
 for you when none is running) and take effect without a restart. The token of a
 new caller is printed once and never stored; the Host keeps only its SHA-256
 digest. <file> is a YAML or JSON publication body (project_root is a catalog
-project, pipeline and input_schema are paths inside it).
+project, pipeline and input_schema are paths inside it; without input_schema the
+entry stage's io.input.schema is used).
 
 validate and list check a configuration file locally. add-caller edits a file
 and uses a token read from an environment variable (token_env); the Host reads
