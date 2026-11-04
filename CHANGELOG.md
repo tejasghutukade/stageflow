@@ -5,7 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.51.0] - 2026-11-04
+
+### Added
+
+- **Trigger secrets can be typed in the console.** A webhook, GitHub or email trigger's `secretRef` now also accepts `store:NAME`, read from the console secret store; a plain name still reads the environment or `NAME_FILE`. The trigger editor has a masked field and shows `set` with Replace and Clear, never the value. `POST /api/triggers` and `PUT /api/triggers/:id` take `secret` (and `clear_secret: true` on edit), file and store change together, and responses carry `secret_set`. A malformed name is the new `trigger.invalid_secret_ref` finding. See [Trigger secrets](docs/yaml-catalog.md#trigger-secrets-store).
 
 ## [0.50.0] - 2026-11-03
 

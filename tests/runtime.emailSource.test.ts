@@ -396,4 +396,42 @@ describe("EmailSource", () => {
       await cleanup();
     }
   });
+
+  it("reads the password from a store: secretRef, and skips the mailbox without leaking when it is unset", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root, ["email-store.trigger.yaml"]);
+      clearFindProjectRootCacheForTests();
+      const store = await storeForCatalog(root);
+      const logError = vi.fn();
+      const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
+
+      const missingFake = makeFakeClient({ uidNext: 5, fetchImpl: () => [] });
+      const missing = new EmailSource({
+        store, cwd: root, env: { EMAIL_PASSWORD: "env-secret" }, logError,
+        secrets: { get: () => undefined },
+        createEmailClient: () => missingFake.client,
+      });
+      await missing.start(onFire);
+      expect(missingFake.connect).not.toHaveBeenCalled();
+      expect(logError).toHaveBeenCalledWith(expect.stringContaining("is not set"));
+      await missing.stop();
+
+      const presentFake = makeFakeClient({ uidNext: 5, fetchImpl: () => [] });
+      const passwords: string[] = [];
+      const present = new EmailSource({
+        store, cwd: root, env: {}, logError,
+        secrets: { get: (name) => (name === "trigger.email-store.secret" ? "store-password" : undefined) },
+        createEmailClient: (config) => { passwords.push(config.password); return presentFake.client; },
+      });
+      await present.start(onFire);
+      expect(presentFake.connect).toHaveBeenCalledTimes(1);
+      expect(passwords).toEqual(["store-password"]);
+      for (const call of logError.mock.calls) expect(String(call[0])).not.toContain("store-password");
+      await present.stop();
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
 });

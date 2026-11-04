@@ -39,6 +39,7 @@ import {
   type NewTriggerForm,
   type NewTriggerInitial,
   type TriggerKind,
+  type TriggerSecretState,
 } from "./newTriggerModel";
 import { buildTriggerYamlPreview } from "./triggerYamlPreview";
 import {
@@ -167,6 +168,76 @@ function SecretRefLabel({ hint }: { hint?: string }) {
         </span>
       ) : null}
     </>
+  );
+}
+
+export function ConsoleSecretField({
+  secret,
+  isEdit,
+  onChange,
+}: {
+  secret: TriggerSecretState;
+  isEdit: boolean;
+  onChange: (patch: Partial<TriggerSecretState>) => void;
+}) {
+  const showBadge = isEdit && secret.set && !secret.replacing && !secret.clear;
+  const buttonClass = `rounded-md border border-[#ffffff1a] px-2 py-0.5 text-[#a7aab2] font-sans text-[11px] leading-normal`;
+  return (
+    <div className="flex w-full flex-col gap-[5px]" data-testid="console-secret">
+      <span className="flex items-center gap-1.5">
+        <span className={FIELD_LABEL}>Console secret</span>
+        <span className="flex-1 text-right text-[#8b8f98] font-sans text-[11px] leading-normal">
+          kept by the console, never in the YAML
+        </span>
+      </span>
+      {showBadge ? (
+        <span className="flex items-center gap-2">
+          <span className="rounded-full bg-[#1f3a2a] px-2 py-0.5 text-[#8fd4a8] font-sans text-[11px] leading-normal">
+            set
+          </span>
+          <button type="button" className={buttonClass} onClick={() => onChange({ replacing: true })}>
+            Replace
+          </button>
+          <button type="button" className={buttonClass} onClick={() => onChange({ clear: true })}>
+            Clear
+          </button>
+        </span>
+      ) : null}
+      {isEdit && secret.set && secret.clear ? (
+        <span className="flex items-center gap-2">
+          <span className="text-[#a7aab2] font-sans text-[11px] leading-normal">
+            Will be cleared on save. The trigger then reports not configured.
+          </span>
+          <button type="button" className={buttonClass} onClick={() => onChange({ clear: false })}>
+            Undo
+          </button>
+        </span>
+      ) : null}
+      {!showBadge && !(secret.set && secret.clear) ? (
+        <span className={INPUT_SHELL}>
+          <LuKeyRound className="size-3.5 shrink-0 text-[#8b8f98]" aria-hidden />
+          <input
+            className={INPUT_TEXT}
+            type="password"
+            value={secret.value}
+            onChange={(e) => onChange({ value: e.target.value })}
+            placeholder={secret.set ? "new value" : "optional, instead of an env var"}
+            aria-label="Console secret value"
+            autoComplete="new-password"
+            spellCheck={false}
+          />
+          {secret.replacing ? (
+            <button
+              type="button"
+              className={buttonClass}
+              onClick={() => onChange({ replacing: false, value: "" })}
+            >
+              Cancel
+            </button>
+          ) : null}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -398,6 +469,8 @@ export function NewTriggerModal({
     setForm((prev) => ({ ...prev, github: { ...prev.github, ...patch } }));
   const updateWebhook = (patch: Partial<NewTriggerForm["webhook"]>) =>
     setForm((prev) => ({ ...prev, webhook: { ...prev.webhook, ...patch } }));
+  const updateSecret = (patch: Partial<TriggerSecretState>) =>
+    setForm((prev) => ({ ...prev, secret: { ...prev.secret, ...patch } }));
   const updateEmail = (patch: Partial<NewTriggerForm["email"]>) =>
     setForm((prev) => ({ ...prev, email: { ...prev.email, ...patch } }));
 
@@ -787,6 +860,7 @@ export function NewTriggerModal({
                   />
                 </>
               ) : null}
+              <ConsoleSecretField secret={form.secret} isEdit={isEdit} onChange={updateSecret} />
             </div>
           </div>
         ) : null}

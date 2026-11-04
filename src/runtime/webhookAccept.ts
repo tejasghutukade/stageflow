@@ -1,4 +1,5 @@
-import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
+import type { SecretReader } from "../channels/secretStore.js";
+import { resolveTriggerSecret } from "../config/triggerSecret.js";
 import type { TaskFile } from "../types/task.js";
 import type { TriggerFile } from "../types/trigger.js";
 import { matchesEventFilter } from "./triggerEventMatch.js";
@@ -23,6 +24,7 @@ export function acceptWebhook(input: {
   rawBody: Buffer;
   headers: WebhookHeaderMap;
   env: NodeJS.ProcessEnv;
+  secrets?: SecretReader;
   now?: () => number;
 }): WebhookAcceptResult {
   const { trigger, rawBody, headers, env } = input;
@@ -37,7 +39,7 @@ export function acceptWebhook(input: {
 
   let secret: string | undefined;
   try {
-    secret = readSecretFromEnvOrFile(env, secretRef);
+    secret = resolveTriggerSecret(secretRef, { env, secrets: input.secrets });
   } catch {
     secret = undefined;
   }

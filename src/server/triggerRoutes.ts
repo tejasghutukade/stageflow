@@ -3,6 +3,15 @@ import { fireTrigger } from "../runtime/triggerRunner.js";
 import { acceptWebhook } from "../runtime/webhookAccept.js";
 import { mapStartFailure } from "./operatorResults.js";
 import { writeAudit } from "../logging/audit.js";
+import { defaultSecretStore } from "../channels/registry.js";
+import type { SecretReader } from "../channels/secretStore.js";
+import type { SecretWriter } from "../channels/connectionEdits.js";
+import {
+  applyTriggerSecret,
+  eventWithStoreSecretRef,
+  parseTriggerSecretBody,
+  triggerSecretIsSet,
+} from "../config/triggerSecretEdit.js";
 import type { Logger } from "../logging/logger.js";
 import {
   callerIdFromRequestAuth,
@@ -44,9 +53,10 @@ export type { TriggerAdapterStatus } from "../config/triggerAdapterStatus.js";
 async function enrichTriggerListItem(
   item: TriggerListItem,
   store: RunStore,
-): Promise<TriggerListItem & { adapter_status: TriggerAdapterStatus }> {
+  secrets: SecretReader,
+): Promise<TriggerListItem & { adapter_status: TriggerAdapterStatus; secret_set: boolean }> {
   const adapter_status = await readTriggerAdapterStatus(item, store);
-  return { ...item, adapter_status };
+  return { ...item, adapter_status, secret_set: triggerSecretIsSet(item, secrets) };
 }
 
 function resolveListedTrigger(
@@ -89,6 +99,7 @@ export type TriggerRoutesCtx = {
   readJsonBody: (req: IncomingMessage) => Promise<unknown>;
   readRawBody: (req: IncomingMessage) => Promise<Buffer>;
   auditLog: Logger;
+  secrets?: SecretReader & SecretWriter;
 };
 
 export async function handleTriggerRoutes(
@@ -97,6 +108,7 @@ export async function handleTriggerRoutes(
   ctx: TriggerRoutesCtx,
 ): Promise<boolean> {
   const { cwd, manager, store, json, readJsonBody, readRawBody, auditLog } = ctx;
+  const secrets = ctx.secrets ?? defaultSecretStore();
   const method = req.method ?? "GET";
   const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
 
@@ -129,11 +141,25 @@ export async function handleTriggerRoutes(
       }
       throw err;
     }
-    const parsed = parseCreateTriggerBody(body);
+    let parsed = parseCreateTriggerBody(body);
     if ("ok" in parsed) {
       json(res, parsed.status, { error: parsed.error });
       return true;
     }
+    const secretReq = parseTriggerSecretBody(body, false);
+    if ("ok" in secretReq) {
+      json(res, secretReq.status, { error: secretReq.error });
+      return true;
+    }
+    if (secretReq.secret !== undefined) {
+      const withRef = eventWithStoreSecretRef(parsed.kind, parsed.event, parsed.id);
+      if (!withRef.ok) {
+        json(res, withRef.status, { error: withRef.error });
+        return true;
+      }
+      parsed = { ...parsed, event: withRef.event };
+    }
+    const createInput = parsed;
     const stageflowCtx = await resolveStageflowContext(triggerWriteRoot);
     if (stageflowCtx.manifestStatus !== "ok") {
       json(res, 400, {
@@ -142,7 +168,9 @@ export async function handleTriggerRoutes(
       return true;
     }
     const callerId = callerIdFromRequestAuth();
-    const result = await createTrigger(stageflowCtx.projectRoot, parsed);
+    const result = await applyTriggerSecret(secrets, createInput.id, secretReq, () =>
+      createTrigger(stageflowCtx.projectRoot, createInput),
+    );
     if (!result.ok) {
       writeAudit(auditLog, {
         caller_id: callerId,
@@ -159,13 +187,13 @@ export async function handleTriggerRoutes(
       action: "trigger_create",
       outcome: "ok",
     });
-    json(res, 201, result.trigger);
+    json(res, 201, { ...result.trigger, secret_set: triggerSecretIsSet(result.trigger, secrets) });
     return true;
   }
 
   if (method === "GET" && pathname === "/api/triggers") {
     const items = await loadCatalogTriggers({ store, bootCwd: cwd });
-    const triggers = await Promise.all(items.map((item) => enrichTriggerListItem(item, store)));
+    const triggers = await Promise.all(items.map((item) => enrichTriggerListItem(item, store, secrets)));
     json(res, 200, { triggers });
     return true;
   }
@@ -268,6 +296,7 @@ export async function handleTriggerRoutes(
       rawBody,
       headers: req.headers,
       env: process.env,
+      secrets,
     });
     if (accepted.kind === "not_configured") {
       json(res, 400, { error: "this trigger has no webhook signing configured" });
@@ -377,16 +406,30 @@ export async function handleTriggerRoutes(
       return true;
     }
     const id = decodeURIComponent(putMatch[1] ?? "");
-    const parsed = parsePutTriggerBody(body, id);
+    let parsed = parsePutTriggerBody(body, id);
     if ("ok" in parsed) {
       json(res, parsed.status, { error: parsed.error });
       return true;
     }
+    const secretReq = parseTriggerSecretBody(body, true);
+    if ("ok" in secretReq) {
+      json(res, secretReq.status, { error: secretReq.error });
+      return true;
+    }
+    if (secretReq.secret !== undefined) {
+      const withRef = eventWithStoreSecretRef(parsed.kind, parsed.event, id);
+      if (!withRef.ok) {
+        json(res, withRef.status, { error: withRef.error });
+        return true;
+      }
+      parsed = { ...parsed, event: withRef.event };
+    }
+    const putInput = parsed;
     const projectRootFilter = projectRootFilterFromBody(body);
     const callerId = callerIdFromRequestAuth();
-    const result = await updateTriggerDefinition(cwd, store, id, parsed, {
-      projectRootFilter,
-    });
+    const result = await applyTriggerSecret(secrets, id, secretReq, () =>
+      updateTriggerDefinition(cwd, store, id, putInput, { projectRootFilter }),
+    );
     if (!result.ok) {
       writeAudit(auditLog, {
         caller_id: callerId,
@@ -403,7 +446,7 @@ export async function handleTriggerRoutes(
       action: "trigger_update",
       outcome: "ok",
     });
-    const enriched = await enrichTriggerListItem(result.trigger, store);
+    const enriched = await enrichTriggerListItem(result.trigger, store, secrets);
     json(res, 200, enriched);
     return true;
   }
@@ -444,7 +487,7 @@ export async function handleTriggerRoutes(
       action: "trigger_patch",
       outcome: "ok",
     });
-    const enriched = await enrichTriggerListItem(result.trigger, store);
+    const enriched = await enrichTriggerListItem(result.trigger, store, secrets);
     json(res, 200, enriched);
     return true;
   }
@@ -460,7 +503,7 @@ export async function handleTriggerRoutes(
       json(res, found.status, { error: found.error, ...(found.project_roots ? { project_roots: found.project_roots } : {}) });
       return true;
     }
-    json(res, 200, await enrichTriggerListItem(found, store));
+    json(res, 200, await enrichTriggerListItem(found, store, secrets));
     return true;
   }
 

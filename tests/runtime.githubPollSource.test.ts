@@ -723,4 +723,39 @@ describe("defaultCreateGithubClient", () => {
       "Bad credentials",
     );
   });
+
+  it("reads the token from a store: secretRef, and skips the tick without leaking when it is unset", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root, ["github-store.trigger.yaml"]);
+      clearFindProjectRootCacheForTests();
+      const store = await storeForCatalog(root);
+      const tokens: string[] = [];
+      const { client, listPulls } = scriptedClient([{ status: 200, items: [makePr({ number: 1 })] }]);
+      const logError = vi.fn();
+      const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
+
+      const missing = new GithubPollSource({
+        store, cwd: root, env: { GH_TOKEN: "env-token" }, logError,
+        secrets: { get: () => undefined },
+        createGithubClient: (token) => { tokens.push(token); return client; },
+      });
+      await missing.tick(onFire);
+      expect(listPulls).not.toHaveBeenCalled();
+      expect(logError).toHaveBeenCalledWith(expect.stringContaining("store:trigger.github-store.secret"));
+
+      const present = new GithubPollSource({
+        store, cwd: root, env: {}, logError,
+        secrets: { get: (name) => (name === "trigger.github-store.secret" ? "store-token" : undefined) },
+        createGithubClient: (token) => { tokens.push(token); return client; },
+      });
+      await present.tick(onFire);
+      expect(tokens).toEqual(["store-token"]);
+      expect(listPulls).toHaveBeenCalledTimes(1);
+      for (const call of logError.mock.calls) expect(String(call[0])).not.toContain("store-token");
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
 });

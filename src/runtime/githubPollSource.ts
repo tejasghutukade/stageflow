@@ -4,7 +4,8 @@ import {
   triggerStoreId,
   type CatalogTriggerMatch,
 } from "../config/triggerCatalog.js";
-import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
+import type { SecretReader } from "../channels/secretStore.js";
+import { resolveTriggerSecret } from "../config/triggerSecret.js";
 import type { RunStore } from "../runstore/port.js";
 import type { TaskFile } from "../types/task.js";
 import type { TriggerFile } from "../types/trigger.js";
@@ -242,6 +243,7 @@ export type GithubPollSourceOptions = {
   intervalMs?: number;
   logError?: (message: string) => void;
   env?: NodeJS.ProcessEnv;
+  secrets?: SecretReader;
   /** Injectable client factory so tests never hit real GitHub. */
   createGithubClient?: (token: string) => GithubPollClient;
 };
@@ -265,6 +267,7 @@ export class GithubPollSource implements TriggerSourcePort {
   private readonly intervalMs: number;
   private readonly logError: (message: string) => void;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly secrets: SecretReader | undefined;
   private readonly createGithubClient: (token: string) => GithubPollClient;
   private interval: NodeJS.Timeout | undefined;
   private inFlight = false;
@@ -279,6 +282,7 @@ export class GithubPollSource implements TriggerSourcePort {
         console.error(message);
       });
     this.env = options.env ?? process.env;
+    this.secrets = options.secrets;
     this.createGithubClient = options.createGithubClient ?? defaultCreateGithubClient;
   }
 
@@ -362,7 +366,7 @@ export class GithubPollSource implements TriggerSourcePort {
     const secretRef = firstSecretRef(matches) ?? DEFAULT_GITHUB_TOKEN_SECRET;
     let token: string | undefined;
     try {
-      token = readSecretFromEnvOrFile(this.env, secretRef);
+      token = resolveTriggerSecret(secretRef, { env: this.env, secrets: this.secrets });
     } catch (err) {
       this.logError(
         `github poll: failed to read secret "${secretRef}" for repo "${repo}": ${

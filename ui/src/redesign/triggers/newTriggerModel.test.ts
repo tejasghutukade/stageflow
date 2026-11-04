@@ -328,3 +328,36 @@ describe("buildTriggerYamlPreview", () => {
     expect(yaml).toContain("enabled: false\n");
   });
 });
+
+describe("console-entered trigger secret", () => {
+  const typed = { value: "super-secret-typed", set: false, replacing: false, clear: false };
+
+  it("sends the secret only in the request body and points the YAML at store:NAME", () => {
+    const f = form({ kind: "event", source: "webhook", secret: typed, webhook: { secretRef: "WEBHOOK_SECRET", header: "H", scheme: "hex" } });
+    const create = buildCreateTriggerBody(f, "triggers");
+    expect(create.secret).toBe("super-secret-typed");
+    expect(create.event?.config?.secretRef).toBe("store:trigger.pr-review.secret");
+    expect(JSON.stringify(create.event)).not.toContain("super-secret-typed");
+    expect(buildTriggerYamlPreview({ id: f.id, pipeline: f.pipeline, kind: "event", enabled: true, event: buildTriggerEvent(f) })).not.toContain("super-secret-typed");
+    expect(buildUpdateTriggerBody(f).secret).toBe("super-secret-typed");
+  });
+
+  it("sends nothing when no secret is typed, and clear_secret only when clearing", () => {
+    const f = form({ kind: "event", source: "webhook", webhook: { secretRef: "store:trigger.pr-review.secret", header: "H", scheme: "hex" } });
+    expect(buildCreateTriggerBody(f, "triggers")).not.toHaveProperty("secret");
+    expect(buildUpdateTriggerBody(f)).not.toHaveProperty("clear_secret");
+    const cleared = form({ ...f, secret: { value: "", set: true, replacing: false, clear: true } });
+    expect(buildUpdateTriggerBody(cleared).clear_secret).toBe(true);
+    expect(buildUpdateTriggerBody(cleared)).not.toHaveProperty("secret");
+    expect(buildCreateTriggerBody(cleared, "triggers")).not.toHaveProperty("clear_secret");
+  });
+
+  it("reads secret_set from the trigger and lets a typed or set secret replace the secretRef requirement", () => {
+    const initial = { id: "t", pipeline: "p", kind: "event" as const, enabled: true, secret_set: true, event: { source: "email.message", config: { host: "h", port: 993, user: "u", secretRef: "store:trigger.t.secret" } } };
+    expect(formFromInitial(initial).secret).toEqual({ value: "", set: true, replacing: false, clear: false });
+    const email = form({ kind: "event", source: "email", email: { host: "h", port: "993", user: "u", secretRef: "", subject: "" } });
+    expect(validateNewTriggerForm(email, "create").secretRef).toBeDefined();
+    expect(validateNewTriggerForm({ ...email, secret: typed }, "create").secretRef).toBeUndefined();
+  });
+});
+

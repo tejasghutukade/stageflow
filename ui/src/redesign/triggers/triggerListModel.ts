@@ -282,5 +282,11 @@ export function triggerMatchSummary(trigger: TriggerListItem): string | undefine
 }
 
 export function duplicateTrigger(trigger: TriggerListItem): TriggerListItem {
-  return { ...trigger, id: `${trigger.id}-copy` };
+  const config = trigger.event?.config;
+  const ref = config?.secretRef;
+  if (trigger.event === undefined || config === undefined || typeof ref !== "string" || !ref.startsWith("store:")) {
+    return { ...trigger, id: `${trigger.id}-copy`, secret_set: false };
+  }
+  const { secretRef: _dropped, ...rest } = config;
+  return { ...trigger, id: `${trigger.id}-copy`, secret_set: false, event: { ...trigger.event, config: rest } };
 }

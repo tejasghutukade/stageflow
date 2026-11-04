@@ -1273,6 +1273,7 @@ export type TriggerListItem = {
   last_run_id?: string;
   next_run_at?: string;
   adapter_status?: TriggerAdapterStatus;
+  secret_set?: boolean;
 };
 
 export type TriggerFireRecord = { fired_at: string; run_id: string };
@@ -1296,6 +1297,7 @@ export type CreateTriggerInput = {
   event?: TriggerEvent;
   enabled?: boolean;
   project_root?: string;
+  secret?: string;
 };
 
 export type CreateTriggerResult =

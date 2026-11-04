@@ -82,7 +82,7 @@ UI tile **GitHub pull request** → `event.source: github.pull_request` (any `gi
 
 - [ ] `kind: event`, `event.source` starts with `github.`
 - [ ] `event.config.repo` = `owner/repo`
-- [ ] `event.config.secretRef` or host env **`GITHUB_TOKEN`** / **`GH_TOKEN`** with repo read access (Docker: set in compose `.env`)
+- [ ] `event.config.secretRef` (a plain env name, or `store:NAME` typed in the console editor) or host env **`GITHUB_TOKEN`** / **`GH_TOKEN`** with repo read access (Docker: set in compose `.env`)
 - [ ] Required `match.action`: `opened` \| `synchronize` \| `updated` \| `merged` \| `closed` (`synchronize` = head SHA changed / push; `updated` = other activity with the same head)
 - [ ] Optional `match.author` (exact login match)
 - [ ] Expect **first poll to seed only** — no runs for PRs that already existed before the cursor
@@ -105,7 +105,7 @@ UI tile **Signed webhook** → `event.source: webhook`.
 - [ ] `kind: event`, `event.source: webhook`
 - [ ] `event.config.secretRef` and `event.config.header` set (UI defaults: `WEBHOOK_SECRET`, `X-Hub-Signature-256`)
 - [ ] Optional `event.config.scheme`: `hex` (default) \| `base64`
-- [ ] Secret available to the Host via `readSecretFromEnvOrFile`
+- [ ] Secret available to the Host: an env var or `NAME_FILE` for a plain `secretRef`, or a console-entered `store:NAME` entry (an unset secret answers `400`)
 - [ ] Sender computes HMAC-SHA256 over the **raw body** on the configured header
 - [ ] Optional `event.match` — subset match on JSON object; no match → `200 { fired: false }`
 - [ ] **Reachability:** default Host bind is loopback — external senders need a tunnel (ngrok, cloudflared) or a deployment that exposes the Host
@@ -128,7 +128,7 @@ UI tile **Email** → `event.source: email.message` (any `email.*` prefix uses `
 
 - [ ] `kind: event`, `event.source` starts with `email.`
 - [ ] `event.config.host`, `port`, `user`, `secretRef` (UI default password ref: `EMAIL_PASSWORD`)
-- [ ] Dedicated mailbox recommended; credentials in Host env, not in YAML
+- [ ] Dedicated mailbox recommended; the password comes from Host env or a console-entered `store:NAME` secret, never from the YAML
 - [ ] Optional `match.subject` — must equal the full subject line
 - [ ] **v1:** no attachment handling (subject, from, date, body text only)
 - [ ] After **creating or changing** email triggers, **restart the Host** if the mailbox does not connect — catalog email triggers are discovered at `EmailSource.start()` (unlike schedule/GitHub, which rescan each tick)

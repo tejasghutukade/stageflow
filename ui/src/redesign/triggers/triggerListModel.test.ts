@@ -298,4 +298,12 @@ describe("inspector helpers", () => {
   it("duplicates with a -copy id", () => {
     expect(duplicateTrigger(trigger()).id).toBe("t1-copy");
   });
+
+  it("does not let a copy share the original's console secret", () => {
+    const copy = duplicateTrigger(
+      trigger({ secret_set: true, event: { source: "webhook", config: { secretRef: "store:trigger.t1.secret", header: "H" } } }),
+    );
+    expect(copy.secret_set).toBe(false);
+    expect(copy.event?.config).toEqual({ header: "H" });
+  });
 });
