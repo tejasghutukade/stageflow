@@ -58,10 +58,24 @@ export type NewTriggerInitial = {
     match?: Record<string, unknown>;
     config?: Record<string, unknown>;
   };
+  secret_set?: boolean;
   directory?: string;
   path?: string;
   project_root?: string;
 };
+
+export type TriggerSecretState = {
+  /** Typed in the masked field; sent once and never read back. */
+  value: string;
+  /** The Host reports a console-entered secret for this trigger. */
+  set: boolean;
+  replacing: boolean;
+  clear: boolean;
+};
+
+export function triggerSecretStoreRef(id: string): string {
+  return `store:trigger.${id.trim()}.secret`;
+}
 
 export type NewTriggerForm = {
   id: string;
@@ -76,6 +90,7 @@ export type NewTriggerForm = {
   github: { repo: string; secretRef: string; action: GithubAction; author: string };
   webhook: { secretRef: string; header: string; scheme: WebhookScheme };
   email: { host: string; port: string; user: string; secretRef: string; subject: string };
+  secret: TriggerSecretState;
   preserved: {
     source: EventSourceKind;
     match: Record<string, unknown>;
@@ -111,6 +126,8 @@ export type UpdateTriggerBody = {
     config?: Record<string, unknown>;
   } | null;
   enabled: boolean;
+  secret?: string;
+  clear_secret?: true;
 };
 
 export function emptyNewTriggerForm(): NewTriggerForm {
@@ -127,6 +144,7 @@ export function emptyNewTriggerForm(): NewTriggerForm {
     github: { repo: "", secretRef: "GITHUB_TOKEN", action: "opened", author: "" },
     webhook: { secretRef: "WEBHOOK_SECRET", header: "X-Hub-Signature-256", scheme: "hex" },
     email: { host: "", port: "993", user: "", secretRef: "EMAIL_PASSWORD", subject: "" },
+    secret: { value: "", set: false, replacing: false, clear: false },
     preserved: null,
   };
 }
@@ -175,6 +193,7 @@ export function formFromInitial(initial: NewTriggerInitial | null | undefined): 
   form.pipeline = initial.pipeline;
   form.taskMode = initial.task ? "catalog" : "dynamic";
   form.task = initial.task ?? "";
+  form.secret.set = initial.secret_set === true;
   if (initial.schedule) {
     form.cron = initial.schedule.cron ?? DEFAULT_CRON;
     form.timezone = initial.schedule.timezone ?? "";
@@ -224,6 +243,10 @@ export function parsePort(value: string): number | null {
   return port >= 1 && port <= 65535 ? port : null;
 }
 
+function hasConsoleSecret(form: NewTriggerForm): boolean {
+  return form.secret.value !== "" || (form.secret.set && !form.secret.clear);
+}
+
 export function validateNewTriggerForm(
   form: NewTriggerForm,
   mode: "create" | "edit",
@@ -257,13 +280,13 @@ export function validateNewTriggerForm(
         errors.repo = "Repo must be owner/name.";
       }
     } else if (form.source === "webhook") {
-      if (!form.webhook.secretRef.trim()) errors.secretRef = "secretRef is required.";
+      if (!form.webhook.secretRef.trim() && !hasConsoleSecret(form)) errors.secretRef = "secretRef is required.";
       if (!form.webhook.header.trim()) errors.header = "Header is required.";
     } else {
       if (!form.email.host.trim()) errors.host = "Host is required.";
       if (parsePort(form.email.port) === null) errors.port = "Port must be 1–65535.";
       if (!form.email.user.trim()) errors.user = "User is required.";
-      if (!form.email.secretRef.trim()) errors.secretRef = "secretRef is required.";
+      if (!form.email.secretRef.trim() && !hasConsoleSecret(form)) errors.secretRef = "secretRef is required.";
     }
   }
   return errors;
@@ -291,6 +314,7 @@ export function buildTriggerEvent(form: NewTriggerForm): TriggerEvent {
     config.secretRef = form.email.secretRef.trim();
     if (form.email.subject.trim()) match.subject = form.email.subject.trim();
   }
+  if (form.secret.value !== "") config.secretRef = triggerSecretStoreRef(form.id);
   return {
     source: EVENT_SOURCE_IDS[source],
     ...(Object.keys(match).length > 0 ? { match } : {}),
@@ -332,6 +356,7 @@ export function buildCreateTriggerBody(
     ...(form.kind === "schedule" ? { schedule: buildSchedule(form) } : {}),
     ...(form.kind === "event" ? { event: buildTriggerEvent(form) } : {}),
     enabled: form.enabled,
+    ...(form.kind === "event" && form.secret.value !== "" ? { secret: form.secret.value } : {}),
   };
 }
 
@@ -343,6 +368,10 @@ export function buildUpdateTriggerBody(form: NewTriggerForm): UpdateTriggerBody 
     schedule: form.kind === "schedule" ? buildSchedule(form) : null,
     event: form.kind === "event" ? buildTriggerEvent(form) : null,
     enabled: form.enabled,
+    ...(form.kind === "event" && form.secret.value !== "" ? { secret: form.secret.value } : {}),
+    ...(form.kind === "event" && form.secret.value === "" && form.secret.clear
+      ? { clear_secret: true as const }
+      : {}),
   };
 }
 

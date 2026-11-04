@@ -353,6 +353,8 @@ export function updateTrigger(
       config?: Record<string, unknown>;
     } | null;
     enabled: boolean;
+    secret?: string;
+    clear_secret?: true;
   },
   projectRoot?: string,
 ): Promise<TriggerListItem> {
