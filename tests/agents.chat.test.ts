@@ -104,9 +104,12 @@ describe("agent chat turns", () => {
   it("counts a turn as active while it runs and not after", async () => {
     const { service, project } = await enabledAgent();
     let release: () => void = () => undefined;
+    let started: () => void = () => undefined;
+    const running = new Promise<void>((resolve) => (started = resolve));
     const backend: ConversationBackend = {
       id: "pi",
       async complete() {
+        started();
         await new Promise<void>((resolve) => (release = resolve));
         return { text: "done" };
       },
@@ -114,7 +117,7 @@ describe("agent chat turns", () => {
     const chat = new AgentChatController({ service, backend });
     expect(chat.activeTurnCount()).toBe(0);
     const pending = chat.send({ projectRoot: project, agentId: "helper", text: "go" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await running;
     expect(chat.activeTurnCount()).toBe(1);
     release();
     await pending;

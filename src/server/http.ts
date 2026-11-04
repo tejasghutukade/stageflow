@@ -257,6 +257,8 @@ import {
   runWithRequestAuth,
 } from "./requestAuthContext.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
+import { agentAuthorTurnsInFlight } from "../agents/authorChat.js";
+import { guideTurnsInFlight } from "../guide/chat.js";
 
 const auditLog = rootLogger.child({ component: "audit" });
 
@@ -541,10 +543,11 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
   const workshopChatRegistry =
     deps.workshopChatRegistry ?? new WorkshopChatSessionRegistry(operatorHost);
   const hostActivity = async (): Promise<HostActivity> => ({
-    evals: deps.evalRunManager?.activeRunId() ? 1 : 0,
+    evals: deps.evalRunManager?.isBusy() ? 1 : 0,
     agent_turns: agentHost?.chat.activeTurnCount() ?? 0,
-    author_turns: workshopChatRegistry.turnsInFlightCount(),
-    next_agent_schedule_at: (await agentScheduleSource?.nextFireAt().catch(() => null)) ?? null,
+    author_turns: workshopChatRegistry.turnsInFlightCount() + agentAuthorTurnsInFlight() + guideTurnsInFlight(),
+    // An unreadable schedule reads as due now, so a platform keeps the Host awake rather than miss it.
+    next_agent_schedule_at: (await agentScheduleSource?.nextFireAt().catch(() => new Date().toISOString())) ?? null,
   });
   const workshopSessionStoreRoot = (): string =>
     resolveWorkshopSessionStoreRoot();

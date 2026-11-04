@@ -59,6 +59,11 @@ export type GuideFrame =
 
 const sessions = new Map<string, OperatorAgentSession>();
 const running = new Set<string>();
+
+/** Guide chat turns running now; the Host reports it so a hosted VM is not put to sleep mid-turn. */
+export function guideTurnsInFlight(): number {
+  return running.size;
+}
 const turnAborts = new Map<string, AbortController>();
 
 export function resetGuideSessionsForTests(): void {
