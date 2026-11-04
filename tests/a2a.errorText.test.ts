@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scrubA2aPaths } from "../src/a2a/errorText.js";
+import { a2aStatusView, pathForDisplay, scrubA2aPaths } from "../src/a2a/errorText.js";
 
 describe("scrubA2aPaths", () => {
   it("makes paths under a known folder relative, including folders with spaces", () => {
@@ -13,5 +13,32 @@ describe("scrubA2aPaths", () => {
     expect(scrubA2aPaths("open 'C:\\Users\\me\\s.json'", [])).toBe("open 's.json'");
     expect(scrubA2aPaths("public_url https://ws.stage-flow.dev/a/b is invalid; see ./contracts/s.json", []))
       .toBe("public_url https://ws.stage-flow.dev/a/b is invalid; see ./contracts/s.json");
+  });
+});
+
+describe("known folders match only at a path boundary", () => {
+  it("does not cut a folder name that appears inside another path or as a prefix of a longer name", () => {
+    expect(scrubA2aPaths("open '/srv/data/a2a.yaml'", ["/data"])).toBe("open 'a2a.yaml'");
+    expect(scrubA2aPaths("open '/data2/a2a.yaml'", ["/data"])).toBe("open 'a2a.yaml'");
+    expect(scrubA2aPaths("open '/data/sub/a2a.yaml'", ["/data"])).toBe("open 'sub/a2a.yaml'");
+    expect(scrubA2aPaths("home is /data", ["/data"])).toBe("home is .");
+  });
+});
+
+describe("pathForDisplay and a2aStatusView", () => {
+  it("is relative inside the home and the file name outside it, never absolute", () => {
+    expect(pathForDisplay("/data/a2a.yaml", "/data")).toBe("a2a.yaml");
+    expect(pathForDisplay("/data/sub/a2a.yaml", "/data/")).toBe("sub/a2a.yaml");
+    expect(pathForDisplay("/srv/data/a2a.yaml", "/data")).toBe("a2a.yaml");
+    expect(pathForDisplay("/data2/a2a.yaml", "/data")).toBe("a2a.yaml");
+    expect(pathForDisplay("/my proj/a2a.yaml", "/data")).toBe("a2a.yaml");
+    expect(pathForDisplay("/Volumes/Sandisk SSD/proj/a2a.yaml", "/data")).toBe("a2a.yaml");
+    expect(pathForDisplay("C:\\Users\\me\\proj\\a2a.yaml", "C:\\Users\\me\\.stageflow")).toBe("a2a.yaml");
+    expect(pathForDisplay("C:\\Users\\me\\.stageflow\\a2a.yaml", "C:\\Users\\me\\.stageflow")).toBe("a2a.yaml");
+  });
+
+  it("leaves a status without a config path alone", () => {
+    expect(a2aStatusView({ state: "disabled" as const }, "/data")).toEqual({ state: "disabled" });
+    expect(a2aStatusView({ state: "enabled" as const, configPath: "/data/a2a.yaml" }, "/data")).toEqual({ state: "enabled", configPath: "a2a.yaml" });
   });
 });

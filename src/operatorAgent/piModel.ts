@@ -335,10 +335,10 @@ function authNotConfiguredError(authPath: string): Error {
   const unusedDataFile =
     path.resolve(dataAuth) !== path.resolve(authPath) &&
     isUsableAuthFile(dataAuth)
-      ? ` A usable auth file at ${dataAuth} in the process data directory is not used.`
+      ? " A usable agent/auth.json in the process data directory (STAGEFLOW_HOME) is not used."
       : "";
   return new Error(
-    `Workshop Author provider auth is not configured (auth file missing or empty: ${authPath}).${unusedDataFile} Configure credentials via \`sf providers\` / the operator console Providers page, then retry.`,
+    `Workshop Author provider auth is not configured (agent/auth.json in the credential home, STAGEFLOW_CREDENTIAL_HOME, is missing or empty).${unusedDataFile} Configure credentials via \`sf providers\` / the operator console Providers page, then retry.`,
   );
 }
 
