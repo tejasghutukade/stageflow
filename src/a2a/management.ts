@@ -28,7 +28,7 @@ import {
   type PublicationContract,
   type PublicationRegistry,
 } from "./registry.js";
-import { scrubA2aPaths } from "./errorText.js";
+import { a2aStatusView, scrubA2aPaths } from "./errorText.js";
 import type { A2aHost } from "./server.js";
 
 export type A2aSecretStore = SecretReader & {
@@ -94,7 +94,7 @@ export class A2aManagement {
   }
 
   status(): A2aHost["status"] {
-    return this.options.host.status;
+    return this.publicStatus();
   }
 
   reload(): Promise<A2aHost["status"]> {
@@ -104,7 +104,7 @@ export class A2aManagement {
       }
       const result = await this.options.host.reload(this.target);
       if (!result.ok) throw new A2aManagementError(result.error.code, result.error.message, 409);
-      return this.options.host.status;
+      return this.publicStatus();
     });
   }
 
@@ -129,7 +129,7 @@ export class A2aManagement {
           await rm(target, { force: true });
           throw invalid(result.error.message, "a2a_config_invalid");
         }
-        return this.options.host.status;
+        return this.publicStatus();
       }
       this.mapping(existing);
       const turnedOff = await this.turnedOff(target);
@@ -142,7 +142,7 @@ export class A2aManagement {
         }
         throw new A2aManagementError(result.error.code, result.error.message, 409);
       }
-      return this.options.host.status;
+      return this.publicStatus();
     });
   }
 
@@ -156,7 +156,7 @@ export class A2aManagement {
       }
       const result = await this.options.host.reload(target);
       if (!result.ok) throw new A2aManagementError(result.error.code, result.error.message, 409);
-      return this.options.host.status;
+      return this.publicStatus();
     });
   }
 
@@ -450,6 +450,10 @@ export class A2aManagement {
       const message = error instanceof Error ? error.message : "Invalid publication";
       throw invalid(this.scrub(message, [{ path: entry.project_root }]), "a2a_publication_invalid");
     }
+  }
+
+  private publicStatus(): A2aHost["status"] {
+    return a2aStatusView(this.options.host.status);
   }
 
   private scrub(message: string, roots: readonly { path: string }[]): string {

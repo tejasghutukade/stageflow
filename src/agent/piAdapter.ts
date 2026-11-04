@@ -150,6 +150,7 @@ import { createPiSettingsManager } from "./piSettings.js";
 import { createSessionContextWiring } from "../compaction/sessionWiring.js";
 import { ASK_OPERATOR_TOOL_NAME } from "../tools/stageToolNames.js";
 import { WORKING_STATE_GUIDANCE } from "../compaction/workingState.js";
+import { sandboxBrowserEnv } from "../runtime/sandboxContainer.js";
 export { createSealedResourceLoader } from "./piSessionFactory.js";
 
 export const STAGEFLOW_PATH_DENY_EXTENSION_NAME = "stageflow-path-deny";
@@ -1262,7 +1263,7 @@ async function prepareStageSessionWiring(
       return {
         ok: false,
         reason: authPath
-          ? `Stage provider auth is not configured (auth file missing or empty: ${authPath}).`
+          ? "Stage provider auth is not configured (agent/auth.json in the credential home, STAGEFLOW_CREDENTIAL_HOME, is missing or empty). Configure credentials via `sf providers` or the operator console Providers page."
           : `Stage provider auth is not configured (${STAGEFLOW_AGENT_AUTH_PATH_ENV} is unset).`,
       };
     }
@@ -1539,8 +1540,10 @@ async function prepareStageSessionWiring(
       }
     }
     if (roots.containerName !== undefined) {
+      const browserEnv = sandboxBrowserEnv(process.env);
       const sandboxTools = {
         containerName: roots.containerName,
+        ...(browserEnv !== undefined ? { shellEnv: browserEnv } : {}),
         ...(roots.containerDockerBin !== undefined
           ? { dockerBin: roots.containerDockerBin }
           : {}),

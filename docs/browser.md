@@ -246,6 +246,19 @@ open -na "Google Chrome" --args --remote-debugging-port=9222 --remote-debugging-
 
 Verified against Chrome 156 on macOS from a Docker Desktop container (opening pages, own tab per stage, tab-only close, Google sign-in). Native Linux, Windows and a Chrome on another machine are not verified.
 
+### Platform host: browsers from your hosting platform {#platform-host}
+
+With `browser.host: platform` the Host runs no browser at all. A hosting platform, such as Stageflow Cloud, gives it remote browsers, and stages attach to them over CDP. The Host picks this host on its own when `STAGEFLOW_PLATFORM_URL` and `STAGEFLOW_PLATFORM_TOKEN` are both set in its environment, unless `browser.host` in Host config says otherwise. Both values come from the platform, never from YAML.
+
+- **A stage without a profile** gets its own remote browser for the stage. It is released when the stage ends. `allow_domains` is enforced by the platform, so it is a hard block here, not the soft check of a local profile stage.
+- **A stage with a profile** gets a tab in the run's remote browser for that profile, the same shared browser model as on a local Host. The platform keeps the saved login (cookies and site storage) between runs; the Host keeps no profile folder. The profile list and delete (`sf browser profiles|clear`, the console) act on the platform's saved logins.
+- **Time limit.** A remote browser ends at the platform's time limit. The next stage that needs it gets a new one: the login is kept, open pages are not.
+- **Stage sandbox.** When stage commands run in a sandbox container, the stage's `agent-browser` settings are handed to its shell inside the sandbox. Only a remote browser address passes, never one on this machine, and the socket and config paths are moved to sandbox paths.
+- **Not available yet on this host:** logging in by hand (a `verify: browser_login` stage or `sf browser login`) and the live view. Log in on a Host that has them, or wait for the platform's live view.
+- **Errors** name what to do: no free remote browser (`browser_capacity`), this workspace already uses as many as it may (`browser_workspace_limit`), or another run is using the profile (`browser_profile_busy`).
+
+The platform API this host calls is in [Browser internals](browser-internals.md#platform-host).
+
 ### Log in with your own Chrome, run headless {#login-handoff}
 
 Some sites refuse sign-in from the browser Stageflow starts (Google rejects an automated or containerized Chromium). Other sites are fine once you are logged in, and you would rather not keep a visible browser open for every run. This mode splits the two: **login happens in your own Chrome, every other stage runs in the Host's own (headless) browser.**

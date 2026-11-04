@@ -42,6 +42,8 @@ export const KNOWN_STAGEFLOW_ENV_KEYS = new Set<string>([
   "STAGEFLOW_REQUIRE_PROVIDERS",
   "STAGEFLOW_A2A_CONFIG",
   "STAGEFLOW_PUBLIC_URL",
+  "STAGEFLOW_PLATFORM_URL",
+  "STAGEFLOW_PLATFORM_TOKEN",
   "STAGEFLOW_ACTIVITY_TEXT_LIMIT",
   "STAGEFLOW_ACTIVITY_VERBOSE",
   "STAGEFLOW_CURSOR_EXTENSION",
@@ -119,7 +121,8 @@ export type CallerQuotaConfig = {
 
 export const DEFAULT_BROWSER_DIALOG_TIMEOUT_SECONDS = 60;
 
-export type BrowserHostKind = "local" | "container" | "attach";
+/** `platform`: browsers from the hosting platform (`STAGEFLOW_PLATFORM_URL`), for a Host that runs no browser itself. */
+export type BrowserHostKind = "local" | "container" | "attach" | "platform";
 
 /** An existing Chrome the Host attaches to (`browser.attach`); the Host never starts or closes it. */
 export type BrowserAttachConfig = {
@@ -555,7 +558,8 @@ export function loadHostConfig(options?: {
   let browserLaunchArgs: string[] = [];
   let browserExecutablePath: string | undefined;
   let browserDialogTimeoutSeconds = DEFAULT_BROWSER_DIALOG_TIMEOUT_SECONDS;
-  let browserHost: BrowserHostKind = "local";
+  // A hosting platform that offers browsers sets both platform settings; then the Host uses them unless config says otherwise.
+  let browserHost: BrowserHostKind = env.STAGEFLOW_PLATFORM_URL?.trim() && env.STAGEFLOW_PLATFORM_TOKEN?.trim() ? "platform" : "local";
   const browserOwnerHosts: Record<string, BrowserHostKind> = {};
   let browserAttach: BrowserAttachConfig | undefined;
   let browserLoginHost: "attach" | undefined;
@@ -632,9 +636,9 @@ export function loadHostConfig(options?: {
     }
     const host = (raw as Record<string, unknown>).host;
     if (host !== undefined && host !== null) {
-      if (host !== "local" && host !== "container" && host !== "attach") {
+      if (host !== "local" && host !== "container" && host !== "attach" && host !== "platform") {
         throw new HostConfigError(
-          'Invalid value for browser.host; expected "local", "container" or "attach"',
+          'Invalid value for browser.host; expected "local", "container", "attach" or "platform"',
           "config_invalid",
           "browser.host",
         );
@@ -656,9 +660,9 @@ export function loadHostConfig(options?: {
             "browser.owner_hosts",
           );
         }
-        if (value !== "local" && value !== "container" && value !== "attach") {
+        if (value !== "local" && value !== "container" && value !== "attach" && value !== "platform") {
           throw new HostConfigError(
-            `Invalid value for browser.owner_hosts.${scope}; expected "local", "container" or "attach"`,
+            `Invalid value for browser.owner_hosts.${scope}; expected "local", "container", "attach" or "platform"`,
             "config_invalid",
             `browser.owner_hosts.${scope}`,
           );

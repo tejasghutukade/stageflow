@@ -36,6 +36,33 @@ describe("agent schedule source", () => {
     expect(onFire).toHaveBeenCalledOnce();
   });
 
+  it("reports the earliest next run of enabled agents, and null when none is stored", async () => {
+    const fixture = await agentsFixture();
+    fixtures.push(fixture);
+    const { service, project, clock } = fixture;
+    const source = new AgentScheduleSource({ service, projectRoot: project, intervalMs: 60_000, now: () => clock.now });
+    expect(await source.nextFireAt()).toBeNull();
+    for (const [id, cron] of [["digest", "0 9 * * *"], ["early", "0 7 * * *"], ["off", "0 1 * * *"]] as const) {
+      await service.create(project, agentInput(id, { schedule: { cron, timezone: "UTC" } }), { source: "console" });
+      if (id !== "off") await service.setEnabled(project, id, true, { source: "console" });
+    }
+    expect(await source.nextFireAt(), "computed before the first tick stores it").toBe("2026-10-16T07:00:00.000Z");
+    await source.tick(vi.fn());
+    expect(await source.nextFireAt()).toBe("2026-10-16T07:00:00.000Z");
+    await service.setEnabled(project, "early", false, { source: "console" });
+    expect(await source.nextFireAt(), "an agent disabled after its next run was stored no longer counts").toBe("2026-10-16T09:00:00.000Z");
+  });
+
+  it("reports no schedule when the source does not tick, since nothing would fire", async () => {
+    const fixture = await agentsFixture();
+    fixtures.push(fixture);
+    const { service, project, clock } = fixture;
+    await service.create(project, agentInput("digest", { schedule: { cron: "0 9 * * *", timezone: "UTC" } }), { source: "console" });
+    await service.setEnabled(project, "digest", true, { source: "console" });
+    const off = new AgentScheduleSource({ service, projectRoot: project, intervalMs: 0, now: () => clock.now });
+    expect(await off.nextFireAt()).toBeNull();
+  });
+
   it("ignores disabled agents", async () => {
     const fixture = await agentsFixture();
     fixtures.push(fixture);

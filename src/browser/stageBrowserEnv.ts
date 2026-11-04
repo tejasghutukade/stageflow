@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { browserHostForOwner, loadHostConfig } from "../config/hostConfig.js";
@@ -30,6 +31,7 @@ import { createContainerBrowserHost } from "./containerBrowserHost.js";
 import { createDockerSandboxOrchestrator } from "./dockerSandboxOrchestrator.js";
 import { createVolumeProfileStore } from "./volumeProfileStore.js";
 import { createLocalBrowserHost } from "./localBrowserHost.js";
+import { PLATFORM_TOKEN_ENV, PLATFORM_URL_ENV, platformBrowserSupportFromEnv } from "./platformBrowserHost.js";
 import { createLocalProfileStore } from "./localProfileStore.js";
 import { localOwnerScope } from "./ownerScope.js";
 
@@ -63,6 +65,13 @@ function configuredBrowserSupport(liveView: "relay" | "none"): StageBrowserSuppo
       : undefined;
   if (kind === "attach" && attached !== undefined) {
     return { host: attached, profiles: createVolumeProfileStore() };
+  }
+  if (kind === "platform") {
+    const platform = platformBrowserSupportFromEnv(process.env, { local: hostLaunchOptions() });
+    if (platform === undefined) {
+      throw new Error(`browser.host is "platform" but ${PLATFORM_URL_ENV} and ${PLATFORM_TOKEN_ENV} are not both set`);
+    }
+    return platform;
   }
   const support: StageBrowserSupport =
     kind === "container"
@@ -180,17 +189,26 @@ export async function resolveStageBrowserEnv(
       { display: "local_window", liveView: capabilities.liveView, ownBrowser: true },
     );
   }
-  const fresh = await support.host.stageEnv({
-    runId: input.runId,
-    stageId: input.stageId,
-    browser,
-    ...(profile !== undefined ? { profile } : {}),
-    ...(anchor !== undefined ? { cdpAddress: anchor.cdpAddress } : {}),
-    ...(input.humanLogin === true ? { humanLogin: true } : {}),
-  });
+  const persisted = await readPersistedBrowserEnv(file);
+  // A host whose stage browsers live elsewhere (the platform host) keeps a live persisted browser instead of asking for another.
+  const ownBrowserHost = profile === undefined && support.host.stageBrowserAlive !== undefined;
+  const keepPersisted =
+    ownBrowserHost &&
+    persisted !== undefined &&
+    !existsSync(path.join(dir, BROWSER_CLOSED_FILENAME)) &&
+    (await support.host.stageBrowserAlive!({ runId: input.runId, stageId: input.stageId }).catch(() => false));
+  const fresh = keepPersisted
+    ? persisted!
+    : await support.host.stageEnv({
+        runId: input.runId,
+        stageId: input.stageId,
+        browser,
+        ...(profile !== undefined ? { profile } : {}),
+        ...(anchor !== undefined ? { cdpAddress: anchor.cdpAddress } : {}),
+        ...(input.humanLogin === true ? { humanLogin: true } : {}),
+      });
 
   await rm(path.join(dir, BROWSER_CLOSED_FILENAME), { force: true });
-  const persisted = await readPersistedBrowserEnv(file);
   let env = persisted ?? fresh;
   const writeEnv = async (value: BrowserEnv) => {
     await mkdir(dir, { recursive: true });
@@ -213,6 +231,18 @@ export async function resolveStageBrowserEnv(
       await mkdir(persisted.AGENT_BROWSER_SOCKET_DIR, { recursive: true, mode: 0o700 });
     }
     env = { ...persisted, AGENT_BROWSER_CDP: anchor.cdpAddress };
+    await writeEnv(env);
+  }
+  if (ownBrowserHost && persisted !== undefined && !keepPersisted && fresh.AGENT_BROWSER_CDP !== persisted.AGENT_BROWSER_CDP) {
+    // The stage's own browser ended (released or timed out): same env, new address, the old daemon closed first.
+    await closeBrowserSession(persisted, {
+      ...(support.runner !== undefined ? { runner: support.runner } : {}),
+      ...(support.closeWaitMs !== undefined ? { closeWaitMs: support.closeWaitMs } : {}),
+    }).catch(() => undefined);
+    if (persisted.AGENT_BROWSER_SOCKET_DIR !== undefined) {
+      await mkdir(persisted.AGENT_BROWSER_SOCKET_DIR, { recursive: true, mode: 0o700 });
+    }
+    env = { ...persisted, AGENT_BROWSER_CDP: fresh.AGENT_BROWSER_CDP! };
     await writeEnv(env);
   }
   if (persisted === undefined) {

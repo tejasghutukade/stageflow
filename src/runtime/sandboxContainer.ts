@@ -197,16 +197,55 @@ export type SandboxExecResult = {
   exitCode: number;
 };
 
+/** Where a remote browser's agent-browser session keeps its socket and empty config inside the sandbox. */
+export const SANDBOX_BROWSER_DIR = "/tmp/sf-agent-browser";
+const SANDBOX_BROWSER_KEYS = ["AGENT_BROWSER_CDP", "AGENT_BROWSER_SESSION", "AGENT_BROWSER_PIN_TAB", "AGENT_BROWSER_IDLE_TIMEOUT_MS"] as const;
+
+function isLoopbackAddress(address: string): boolean {
+  try {
+    const host = new URL(address).hostname.replace(/^\[|\]$/g, "");
+    return host === "localhost" || host === "::1" || host.startsWith("127.");
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * The stage's browser env as the sandbox needs it, or undefined. Only a remote browser (a CDP address
+ * that is not this machine) is reachable from the sandbox; its socket and config move to sandbox paths.
+ */
+export function sandboxBrowserEnv(env: Record<string, string | undefined>): Record<string, string> | undefined {
+  const cdp = env.AGENT_BROWSER_CDP;
+  if (cdp === undefined || cdp === "" || isLoopbackAddress(cdp)) return undefined;
+  const out: Record<string, string> = {};
+  for (const key of SANDBOX_BROWSER_KEYS) {
+    const value = env[key];
+    if (value !== undefined && value !== "") out[key] = value;
+  }
+  const socket = env.AGENT_BROWSER_SOCKET_DIR !== undefined ? path.basename(env.AGENT_BROWSER_SOCKET_DIR) : "default";
+  out.AGENT_BROWSER_SOCKET_DIR = `${SANDBOX_BROWSER_DIR}/${socket.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+  out.AGENT_BROWSER_CONFIG = `${SANDBOX_BROWSER_DIR}/empty.json`;
+  return out;
+}
+
+/** Runs before a command that carries a browser env: the empty config agent-browser reads instead of ./agent-browser.json. */
+const BROWSER_PREAMBLE = `mkdir -p -m 700 ${SANDBOX_BROWSER_DIR} && { [ -e ${SANDBOX_BROWSER_DIR}/empty.json ] || printf '{}\\n' > ${SANDBOX_BROWSER_DIR}/empty.json; }\n`;
+
 export async function execInSandboxContainer(params: {
   containerName: string;
   command: string;
   dockerBin?: string;
   timeoutMs?: number;
+  /** Passed by name (`-e NAME`), so values never appear in the docker command line. */
+  env?: Record<string, string>;
 }): Promise<SandboxExecResult> {
-  const args = ["exec", "-w", SANDBOX_MOUNT_PATH, params.containerName, "bash", "-c", params.command];
+  const names = Object.keys(params.env ?? {}).filter((name) => /^[A-Z][A-Z0-9_]*$/.test(name));
+  const command = names.includes("AGENT_BROWSER_CONFIG") ? BROWSER_PREAMBLE + params.command : params.command;
+  const args = ["exec", ...names.flatMap((name) => ["-e", name]), "-w", SANDBOX_MOUNT_PATH, params.containerName, "bash", "-c", command];
   try {
     const { stdout, stderr } = await execFileAsync(params.dockerBin ?? "docker", args, {
       maxBuffer: 8 * 1024 * 1024,
+      ...(names.length > 0 ? { env: { ...process.env, ...params.env } } : {}),
       ...(params.timeoutMs !== undefined ? { timeout: params.timeoutMs } : {}),
     });
     return { stdout, stderr, exitCode: 0 };

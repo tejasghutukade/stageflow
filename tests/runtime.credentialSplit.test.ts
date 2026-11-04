@@ -150,8 +150,8 @@ describe("credential root split from the data directory", () => {
       await writeFile(dataAuth, USABLE_AUTH);
 
       const unused = await authorMessage(cwd, path.join(data, "workshop-agent"));
-      expect(unused).toContain(operatorAuth);
-      expect(unused).toContain(dataAuth);
+      expect(unused).not.toContain(operatorAuth);
+      expect(unused).not.toContain(dataAuth);
       expect(unused).toMatch(/process data directory/i);
       expect(unused).toMatch(/is not used/i);
       expect(await readFile(dataAuth, "utf8")).toBe(USABLE_AUTH);

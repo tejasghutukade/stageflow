@@ -1,4 +1,6 @@
 import { realpathSync } from "node:fs";
+import path from "node:path";
+import { globalStageflowHome } from "../project/globalHome.js";
 
 function variants(prefix: string): string[] {
   const trimmed = prefix.replace(/[\\/]+$/, "");
@@ -9,15 +11,38 @@ function variants(prefix: string): string[] {
   }
 }
 
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * Error text the A2A API or status may show: paths under a known folder become relative to it, and any
  * other absolute path is cut to its last segment, so no server filesystem layout leaves the Host.
+ * A known folder only matches where a path starts and at a folder boundary (`/data` never matches `/srv/data` or `/data2`).
  */
 export function scrubA2aPaths(message: string, prefixes: readonly (string | undefined)[]): string {
   const known = [...new Set(prefixes.flatMap((prefix) => (prefix ? variants(prefix) : [])))]
     .filter((prefix) => prefix.length > 1)
     .sort((a, b) => b.length - a.length);
   let out = message;
-  for (const prefix of known) out = out.split(prefix + "/").join("").split(prefix + "\\").join("").split(prefix).join(".");
+  for (const prefix of known) {
+    const at = new RegExp(`(?<![^\\s'"\`(=])${escapeRegExp(prefix)}(?:([\\\\/])|(?=[\\s'"\`),;]|$))`, "g");
+    out = out.replace(at, (_match, separator: string | undefined) => (separator ? "" : "."));
+  }
   return out.replace(/(?<![\w:/.\\-])(?:[A-Za-z]:)?(?:[\\/][^\s'"`\\/]+)+[\\/]([^\s'"`\\/]+)/g, "$1");
+}
+
+/** `file` relative to `home` when it is inside it, else its file name. Never absolute. */
+export function pathForDisplay(file: string, home: string): string {
+  const windows = /^[A-Za-z]:\\/.test(file);
+  const p = windows ? path.win32 : path.posix;
+  for (const base of windows ? [home] : variants(home)) {
+    const relative = p.relative(base, file);
+    if (relative !== "" && !relative.startsWith("..") && !p.isAbsolute(relative)) return relative;
+  }
+  return p.basename(file);
+}
+
+/** A2A status as the API returns it: `configPath` relative to the Stageflow home (or its file name), never absolute. */
+export function a2aStatusView<T extends { configPath?: string }>(status: T, home: string = globalStageflowHome()): T {
+  if (!status.configPath) return status;
+  return { ...status, configPath: pathForDisplay(status.configPath, home) };
 }

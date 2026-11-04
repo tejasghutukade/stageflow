@@ -159,6 +159,12 @@ describe("durableRootDiskBreakdown + GET /api/health", () => {
       expect(body.disk.a2a_artifacts_bytes).toBeGreaterThanOrEqual(0);
       expect(body.disk.cache_bytes).toBeGreaterThanOrEqual(0);
       expect(body.disk.free_bytes).toBeGreaterThanOrEqual(0);
+      expect((body as unknown as { activity: unknown }).activity).toEqual({
+        evals: 0,
+        agent_turns: 0,
+        author_turns: 0,
+        next_agent_schedule_at: null,
+      });
     } finally {
       await new Promise<void>((resolve, reject) => {
         started.server.close((err) => (err ? reject(err) : resolve()));

@@ -52,7 +52,7 @@ function jsonResponse(body: unknown, status = 200) {
 
 const enabledStatus: A2aStatus = {
   state: "enabled",
-  configPath: "/home/a2a.yaml",
+  configPath: "a2a.yaml",
   error: null,
   publicUrl: "https://ws.stage-flow.dev",
   agentCardUrl: "https://ws.stage-flow.dev/.well-known/agent-card.json",
@@ -181,7 +181,7 @@ describe("A2A screen state", () => {
   it("status tab: counts, last load, snippet with a placeholder token and the turn-off button", () => {
     const html = render({ tab: "status" });
     expect(html).toContain("A2A is on");
-    expect(html).toContain("/home/a2a.yaml");
+    expect(html).toContain("a2a.yaml");
     expect(html).toContain("Authorization: Bearer &lt;caller token&gt;");
     expect(html).toContain("Copy snippet");
     expect(html).toContain("Turn off A2A");

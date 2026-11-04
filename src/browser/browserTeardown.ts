@@ -252,7 +252,18 @@ async function teardownStageBrowserOnce(
     );
   }
   const { gone } = await closeBrowserSession(env, closeOptions(support));
-  if (gone) await writeFile(closedMarker, "{}\n").catch(() => undefined);
+  const released =
+    support.host.releaseStageBrowser === undefined ||
+    (await support.host
+      .releaseStageBrowser({
+        scope: runOwnerScope(support, { runId: input.runId }),
+        runId: input.runId,
+        stageId: input.stageId,
+        shared: env.AGENT_BROWSER_PIN_TAB === "1",
+      })
+      .then(() => true)
+      .catch(() => false));
+  if (gone && released) await writeFile(closedMarker, "{}\n").catch(() => undefined);
 }
 
 /** Gracefully closes every anchor browser the run started. */

@@ -79,6 +79,8 @@ export const FOREVER_DENIED_SECRET_NAMES: ReadonlySet<string> = new Set([
   "STAGEFLOW_READ_TOKEN_FILE",
   // Host-generated key for the MCP OAuth token store; never hand it to a stage or an MCP server.
   "PI_MCP_ADAPTER_OAUTH_FILE_KEY",
+  // The hosting platform's token for this Host (remote browsers); stages get a browser address, never this.
+  "STAGEFLOW_PLATFORM_TOKEN",
 ]);
 
 /** Blocked from ambient / ALLOW / PASSTHROUGH; `as: env` grants may still inject. */
