@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.0] - 2026-11-04
+
+### Added
+
+- **A2A pipelines can be published without a schema file.** `input_schema` is now optional: without it, the input contract is the pipeline entry stage's `io.input.schema`, so a Host where you cannot add files (a hosted workspace) can publish. A pipeline with more than one entry stage still needs a file (`400 a2a_input_schema_multiple_entries`). `input_schema: null` or `""` switches back to the entry stage. Editing the entry stage's schema is drift like any other stage edit. See [A2A](docs/a2a.md).
+- **The console's publish and edit dialogs offer the entry stage's schema.** It is the default in the publish form; the edit dialog can switch between it and a file. `GET /api/a2a/pipeline-stages` now reports `entry`, so the form asks for a file as soon as a multi-entry pipeline is picked. See [Console: A2A](docs/console-a2a.md).
+
+### Fixed
+
+- **A2A errors no longer show server paths.** Reload, status and publication errors give paths relative to the project or data directory, or the file name only. `POST /api/a2a/reload` with no configuration file answers `409 a2a_not_enabled` instead of a raw `ENOENT` message.
+- **A failed schema file listing no longer blocks publishing** from the entry stage's schema.
+
 ## [0.51.0] - 2026-11-04
 
 ### Added
