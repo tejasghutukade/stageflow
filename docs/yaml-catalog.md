@@ -1177,7 +1177,7 @@ For `github.*` sources, `event.match.action` is **required**. Omitting `match` (
 | Field | Required | Description |
 |-------|----------|-------------|
 | `repo` | yes | `"owner/repo"` string identifying the watched GitHub repository |
-| `secretRef` | no | Name of the secret (resolved via `readSecretFromEnvOrFile`) holding a GitHub PAT with repo read scope; defaults to `GITHUB_TOKEN` |
+| `secretRef` | no | Where the GitHub PAT (repo read scope) comes from: a plain name read from the Host environment or `NAME_FILE` (`readSecretFromEnvOrFile`), or `store:NAME` read from the console secret store ([Trigger secrets](#trigger-secrets-store)). Defaults to the plain name `GITHUB_TOKEN` |
 
 Normalized `action` values (priority: merged → closed → opened → synchronize → updated):
 
@@ -1215,14 +1215,14 @@ An `event`-kind trigger with `event.source: webhook` gets its own inbound HTTP e
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `secretRef` | yes | Name of the secret (resolved via `readSecretFromEnvOrFile`) holding the HMAC signing secret |
+| `secretRef` | yes | Where the HMAC signing secret comes from: a plain name (environment or `NAME_FILE`) or `store:NAME` (console secret store, see [Trigger secrets](#trigger-secrets-store)) |
 | `header` | yes | Request header carrying the signature, e.g. `"x-hub-signature-256"` |
 | `scheme` | no | `"hex"` \| `"base64"` — encoding of the signature value; defaults to `"hex"` |
 
 Request handling, in order:
 
 1. Unknown trigger id → `404`.
-2. `event.config.secretRef`/`header` missing, or the referenced secret isn't set → `400 { error: "this trigger has no webhook signing configured" }` — checked before touching the body.
+2. `event.config.secretRef`/`header` missing, or the referenced secret isn't set (environment variable, or missing `store:` entry) → `400 { error: "this trigger has no webhook signing configured" }` — checked before touching the body.
 3. HMAC verified over the raw request body (`crypto.createHmac("sha256", secret)`, compared with `crypto.timingSafeEqual`) against the value of the configured header → wrong/missing signature is `401 { error: "Invalid webhook signature" }`, and `fireTrigger` is never called.
 4. Body parsed as JSON (only after the signature check, so a tampered-but-still-valid-JSON body fails on signature rather than slipping through because it happened to parse) → malformed JSON, or a non-object body, is `400`.
 5. `event.match` evaluated against the parsed payload, using the same subset-match `matchesEventFilter` the GitHub poller uses (`src/runtime/triggerEventMatch.ts`) → no match is `200 { fired: false }` — accepted but deliberately not fired, since a webhook provider often disables or retry-storms a subscription that doesn't return 2xx.
@@ -1261,7 +1261,7 @@ An `event`-kind trigger whose `event.source` starts with `email.` is picked up b
 | `host` | yes | IMAP server hostname |
 | `port` | yes | IMAP server port (`993`/`465` are treated as implicit TLS) |
 | `user` | yes | Mailbox username |
-| `secretRef` | yes | Name of the secret (resolved via `readSecretFromEnvOrFile`) holding the password or app-password |
+| `secretRef` | yes | Where the password or app-password comes from: a plain name (environment or `NAME_FILE`) or `store:NAME` (console secret store, see [Trigger secrets](#trigger-secrets-store)) |
 
 The normalized message handed to `match`/`input` has these fields: `from`, `subject`, `date`, `text` (body excerpt, truncated). `match` is a small subset-match filter, the same `matchesEventFilter` every adapter uses (`src/runtime/triggerEventMatch.ts`): every key/value in `match` must equal-match the corresponding field on the normalized message — there is no substring/contains operator, so a `subject` filter matches only a message whose subject is exactly that string, not a partial match.
 
@@ -1312,6 +1312,17 @@ enabled: true
 
 See [`tests/fixtures/triggers/dynamic-hello.trigger.yaml`](../tests/fixtures/triggers/dynamic-hello.trigger.yaml).
 
+### Trigger secrets {#trigger-secrets-store}
+
+A trigger's `secretRef` is never a value. It takes one of two forms on webhook, `github.*` and `email.message` triggers:
+
+- A plain name (`WEBHOOK_SECRET`): read from the Host environment, or from the file named by `NAME_FILE`. This is unchanged.
+- `store:NAME`: read from the console secret store (`channel-secrets.json`, the same store connections use, see [Channels](channels.md)). `NAME` follows the store's rule: letters, digits, `.`, `_`, `-`, starting with a letter or digit, at most 200 characters. A malformed name is the `trigger.invalid_secret_ref` finding.
+
+If the value is unset (no variable, or no store entry) a webhook answers `400` and GitHub and email skip the tick, exactly as for an unset variable.
+
+In the console editor the secret is typed in a masked field. `POST /api/triggers` and `PUT /api/triggers/:id` accept a body field `secret` (never echoed): the Host writes it to the store entry `trigger.<id>.secret` and saves `store:trigger.<id>.secret` as `secretRef`. File and store change together; a failed save restores the previous entry. `PUT` also accepts `clear_secret: true`, which removes the entry (the trigger then reports not configured). Trigger responses and lists carry `secret_set: boolean`, never the value. There is no CLI option, and deleting a trigger file by hand leaves its store entry in place.
+
 ### Validation
 
 `sf validate` loads every `*.trigger.yaml` under the catalog's trigger roots (`catalog.triggers` in the `stageflow.yaml` manifest, below) and confirms its `pipeline` ref, and its `task` ref when `task` is present, resolve against known catalog ids, the same way stage `uses:` refs are checked. A dangling ref is caught at validate time, not fire time. A dynamic-mode trigger (`task` omitted) produces no `task`-related finding — absence is valid, not an error:
@@ -1323,6 +1334,7 @@ See [`tests/fixtures/triggers/dynamic-hello.trigger.yaml`](../tests/fixtures/tri
 | `trigger.unknown_task` | `task` does not match any catalog task `id` |
 | `trigger.github_action_required` | `event.source` starts with `github.` but `event.match.action` is missing |
 | `trigger.invalid_github_action` | `event.match.action` is present but not one of `opened` \| `synchronize` \| `updated` \| `merged` \| `closed` |
+| `trigger.invalid_secret_ref` | `event.config.secretRef` starts with `store:` on a webhook, `github.*` or `email.message` trigger but the name after it is not a valid store name (letters, digits, `.`, `_`, `-`; starts with a letter or digit; at most 200 characters) |
 
 See [`tests/fixtures/triggers/manual-dangling-refs.trigger.yaml`](../tests/fixtures/triggers/manual-dangling-refs.trigger.yaml) — a trigger whose `pipeline`/`task` reference ids that don't exist in the catalog.
 

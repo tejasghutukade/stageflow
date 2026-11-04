@@ -32,7 +32,7 @@ Two tabs: **Stages** (stage files; **E** opens one in the editor, **N** creates 
 
 ## Triggers (`#/triggers`)
 
-Catalog triggers: **N** creates one, **F** fires it once, **E** enables or disables it. Email triggers need a connected [email account](email-accounts.md).
+Catalog triggers: **N** creates one, **F** fires it once, **E** enables or disables it. Email triggers need a connected [email account](email-accounts.md). For webhook, GitHub and email triggers the editor has a masked **Console secret** field: the value is stored on the Host, the trigger file keeps only `store:trigger.<id>.secret`, and after saving the editor shows a `set` badge with **Replace** and **Clear**, never the value. See [Trigger secrets](yaml-catalog.md#trigger-secrets-store).
 
 ## Workshop (`#/workshop`)
 

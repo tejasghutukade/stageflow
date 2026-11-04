@@ -36,7 +36,7 @@ The pipeline and task ids must exist in the catalog; \`create_trigger\` refuses 
 
 **event, \`source\` starting with \`github.\`** (console tile uses \`github.pull_request\`). Polls the GitHub pull request list of \`event.config.repo\` (\`owner/repo\`) about every 60 seconds, with a token from \`event.config.secretRef\` (default \`GITHUB_TOKEN\`). Only pull requests, not issues or repo pushes outside a PR. The first poll of a repo only records a cursor (and per-PR head SHAs) and fires nothing for old PRs; the same quiet baseline runs when a cursor already exists but heads were never written (upgrade). \`match.action\` is **required** for github sources — \`create_trigger\` / validate reject omit-match. Actions: \`opened\` (brand-new PR: equal created/updated timestamps, or created after the cursor), \`synchronize\` (head SHA changed — use this for every push), \`updated\` (other activity, same head; also aged PRs with no prior SHA), \`merged\`, \`closed\`. \`match\` can also filter \`author\` and the other normalized fields; exact equality only.
 
-**event, \`source: webhook\`.** Gets its own endpoint \`POST /api/triggers/<id>/webhook\`, verified by HMAC-SHA256 over the raw body. \`event.config\`: \`secretRef\` (required, name of the Host secret), \`header\` (required, for example \`x-hub-signature-256\`), \`scheme\` (\`hex\` default or \`base64\`). Wrong signature is 401. A body that does not match \`match\` returns 200 with \`fired: false\`. The Host listens on loopback by default, so an outside sender needs a tunnel or an exposed deployment.
+**event, \`source: webhook\`.** Gets its own endpoint \`POST /api/triggers/<id>/webhook\`, verified by HMAC-SHA256 over the raw body. \`event.config\`: \`secretRef\` (required, a Host env name or \`store:NAME\`), \`header\` (required, for example \`x-hub-signature-256\`), \`scheme\` (\`hex\` default or \`base64\`). Wrong signature is 401. A body that does not match \`match\` returns 200 with \`fired: false\`. The Host listens on loopback by default, so an outside sender needs a tunnel or an exposed deployment.
 
 **event, \`source\` starting with \`email.\`** (console uses \`email.message\`). Holds an IMAP IDLE connection to a mailbox the user supplies. \`event.config\`: \`host\`, \`port\`, \`user\`, \`secretRef\` (password or app password). \`match\` compares \`from\`, \`subject\`, \`date\`, \`text\` by exact equality (a subject filter must equal the whole subject). No attachments. After creating or changing an email trigger, restart the Host if the mailbox does not connect.
 
@@ -58,7 +58,7 @@ All automatic triggers need a running Host (\`sf ui\`, \`sf mcp\` or Docker). Th
 
 ## Secrets
 
-Trigger secrets are referenced by name (\`secretRef\`) and read from the Host environment or a \`_FILE\` variant. Never put a token or password in trigger YAML.
+Trigger secrets (webhook, GitHub, email) are referenced by \`secretRef\`, never written as a value. A plain name is read from the Host environment or a \`_FILE\` variant. \`store:NAME\` is read from the console secret store: the console trigger editor has a masked field that saves the value there (entry \`trigger.<id>.secret\`) and keeps only \`store:trigger.<id>.secret\` in the YAML; the editor shows a \`set\` badge with Replace and Clear, never the value. No tool or CLI command sets the value. Never put a token or password in trigger YAML.
 
 ## Tools
 
