@@ -242,6 +242,11 @@ export class WorkshopChatSessionRegistry {
     return this.sessions.get(sessionId)?.agentSession;
   }
 
+  /** Workshop Author turns running now; the Host reports it so a hosted VM is not put to sleep mid-turn. */
+  turnsInFlightCount(): number {
+    return this.turnsInFlight.size;
+  }
+
   isTurnInFlight(sessionId: string): boolean {
     return this.turnsInFlight.has(sessionId);
   }

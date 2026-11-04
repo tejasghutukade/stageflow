@@ -138,8 +138,17 @@ export async function handleReadyz(
   json(res, result.ready ? 200 : 503, result);
 }
 
+/** Work other than pipeline runs that is in progress or due, so a hosted platform does not stop the Host under it. */
+export type HostActivity = {
+  evals: number;
+  agent_turns: number;
+  author_turns: number;
+  next_agent_schedule_at: string | null;
+};
+
 export async function buildRichHealthPayload(
   boot: StageflowHostBootstrap,
+  activity?: () => Promise<HostActivity>,
 ): Promise<Record<string, unknown>> {
   if (boot.manager === undefined || boot.store === undefined) {
     throw new Error("buildRichHealthPayload requires store and manager");
@@ -186,6 +195,7 @@ export async function buildRichHealthPayload(
   if (boot.a2a?.status) {
     payload.a2a = boot.a2a.status;
   }
+  if (activity) payload.activity = await activity();
   return payload;
 }
 
@@ -193,6 +203,7 @@ export async function handleApiHealth(
   _req: IncomingMessage,
   res: ServerResponse,
   boot: StageflowHostBootstrap,
+  activity?: () => Promise<HostActivity>,
 ): Promise<void> {
-  json(res, 200, await buildRichHealthPayload(boot));
+  json(res, 200, await buildRichHealthPayload(boot, activity));
 }

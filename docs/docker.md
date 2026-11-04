@@ -359,7 +359,9 @@ Stdout is lifecycle-oriented. Per-line bytes are capped (`STAGEFLOW_LOG_MAX_LINE
 | `org.opencontainers.image.title` | `Stageflow` |
 | `org.opencontainers.image.base.name` / `.base.digest` | pinned base |
 
-`BUILD_SHA` is `process.env.STAGEFLOW_BUILD_SHA ?? "unknown"` and appears on `/api/health`, MCP `get_health`, and `sf --version --json`. Publish sets build-arg `STAGEFLOW_BUILD_SHA=${{ github.sha }}` so `revision`, the baked SHA, and health `build_sha` agree.
+`BUILD_SHA` is `process.env.STAGEFLOW_BUILD_SHA ?? "unknown"` and appears on `/api/health`, MCP `get_health`, and `sf --version --json`.
+
+`/api/health` also carries `activity`: `evals`, `agent_turns`, `author_turns` (work in progress besides pipeline runs, whose count is `activeCount`) and `next_agent_schedule_at`. A platform that stops idle containers or VMs should treat any non-zero count as busy and wake the Host before `next_agent_schedule_at`. Publish sets build-arg `STAGEFLOW_BUILD_SHA=${{ github.sha }}` so `revision`, the baked SHA, and health `build_sha` agree.
 
 Buildx also emits provenance and SBOM (`--provenance=true --sbom=true`). Cosign keyless-signs the **manifest-list digest** after push (not tag-only).
 

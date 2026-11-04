@@ -73,6 +73,17 @@ export class AgentScheduleSource {
     }, this.intervalMs).unref();
   }
 
+  /** The earliest stored next run of an enabled agent schedule, or null when none is set. */
+  async nextFireAt(): Promise<string | null> {
+    let earliest: number | undefined;
+    for (const candidate of await this.service.scheduledAgents(this.projectRoot)) {
+      const stored = this.service.schedules.nextRun(this.projectRoot, candidate.agentId);
+      const at = stored === undefined ? NaN : Date.parse(stored);
+      if (!Number.isNaN(at) && (earliest === undefined || at < earliest)) earliest = at;
+    }
+    return earliest === undefined ? null : new Date(earliest).toISOString();
+  }
+
   async stop(): Promise<void> {
     if (this.interval !== undefined) clearInterval(this.interval);
     this.interval = undefined;

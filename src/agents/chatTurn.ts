@@ -29,6 +29,11 @@ export class AgentChatController {
     return run;
   }
 
+  /** Agent turns running now (eval sessions included); the Host reports it so a hosted VM is not put to sleep mid-turn. */
+  activeTurnCount(): number {
+    return new Set([...this.activeBySession.values(), ...this.activeByAgent.values()]).size;
+  }
+
   async send(input: SendTurnInput): Promise<AgentSessionDetail> {
     if (input.sessionId && input.source !== EVAL_SESSION_SOURCE) {
       const { session } = await this.options.service.getSession(input.projectRoot, input.sessionId);

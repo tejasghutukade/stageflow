@@ -101,6 +101,26 @@ describe("agent chat turns", () => {
     ]);
   });
 
+  it("counts a turn as active while it runs and not after", async () => {
+    const { service, project } = await enabledAgent();
+    let release: () => void = () => undefined;
+    const backend: ConversationBackend = {
+      id: "pi",
+      async complete() {
+        await new Promise<void>((resolve) => (release = resolve));
+        return { text: "done" };
+      },
+    };
+    const chat = new AgentChatController({ service, backend });
+    expect(chat.activeTurnCount()).toBe(0);
+    const pending = chat.send({ projectRoot: project, agentId: "helper", text: "go" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(chat.activeTurnCount()).toBe(1);
+    release();
+    await pending;
+    expect(chat.activeTurnCount()).toBe(0);
+  });
+
   it("stops a running turn and records it as cancelled with the partial reply", async () => {
     const { service, project } = await enabledAgent();
     let release: () => void = () => undefined;

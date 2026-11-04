@@ -237,7 +237,7 @@ import {
   type HttpHostEnvelope,
   type HttpHostRouteContext,
 } from "./createHttpHost.js";
-import { handleApiHealth, listCatalogRootsForApi } from "./healthSurfaces.js";
+import { handleApiHealth, listCatalogRootsForApi, type HostActivity } from "./healthSurfaces.js";
 import {
   mapRetryStageFailure,
   mapStartFailure,
@@ -540,6 +540,12 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
   if (deps.operatorHostSlot) deps.operatorHostSlot.current = operatorHost;
   const workshopChatRegistry =
     deps.workshopChatRegistry ?? new WorkshopChatSessionRegistry(operatorHost);
+  const hostActivity = async (): Promise<HostActivity> => ({
+    evals: deps.evalRunManager?.activeRunId() ? 1 : 0,
+    agent_turns: agentHost?.chat.activeTurnCount() ?? 0,
+    author_turns: workshopChatRegistry.turnsInFlightCount(),
+    next_agent_schedule_at: (await agentScheduleSource?.nextFireAt().catch(() => null)) ?? null,
+  });
   const workshopSessionStoreRoot = (): string =>
     resolveWorkshopSessionStoreRoot();
   const workshopBuildStoreRoot = (): string => resolveWorkshopBuildStoreRoot();
@@ -3659,7 +3665,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         }
 
         if (method === "GET" && pathname === "/api/health") {
-          await handleApiHealth(req, res, boot);
+          await handleApiHealth(req, res, boot, hostActivity);
           return true;
         }
 
