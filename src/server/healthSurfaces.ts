@@ -7,6 +7,7 @@ import {
 } from "../agent/providerAuth.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "../package-meta.js";
 import { globalStageflowHome } from "../project/globalHome.js";
+import { a2aStatusView } from "../a2a/errorText.js";
 import { redactHostConfig } from "../config/hostConfig.js";
 import {
   resolveCatalogRoots,
@@ -184,7 +185,7 @@ export async function buildRichHealthPayload(
     payload.config = redactHostConfig(boot.hostConfig);
   }
   if (boot.a2a?.status) {
-    payload.a2a = boot.a2a.status;
+    payload.a2a = a2aStatusView(boot.a2a.status, globalStageflowHome());
   }
   return payload;
 }

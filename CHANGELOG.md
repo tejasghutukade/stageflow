@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A2A status no longer shows the server path of its configuration file.** `GET /api/a2a/status` and the enable, disable and reload responses give `configPath` relative to the Stageflow home (`a2a.yaml`), or the file name only.
+- **A2A status no longer shows the server path of its configuration file.** `GET /api/a2a/status`, the `a2a` block of `GET /api/health`, and the enable, disable and reload responses give `configPath` relative to the Stageflow home (`a2a.yaml`), or the file name only.
 - **Provider auth errors no longer show server paths.** A stage or the Workshop Author with no usable `auth.json` now names the folder by its role (the credential home, `STAGEFLOW_CREDENTIAL_HOME`, or the data directory, `STAGEFLOW_HOME`) instead of its absolute path.
 
 ## [0.52.0] - 2026-11-04
