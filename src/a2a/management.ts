@@ -29,7 +29,6 @@ import {
   type PublicationRegistry,
 } from "./registry.js";
 import { a2aStatusView, scrubA2aPaths } from "./errorText.js";
-import { globalStageflowHome } from "../project/globalHome.js";
 import type { A2aHost } from "./server.js";
 
 export type A2aSecretStore = SecretReader & {
@@ -454,7 +453,7 @@ export class A2aManagement {
   }
 
   private publicStatus(): A2aHost["status"] {
-    return a2aStatusView(this.options.host.status, this.options.env.STAGEFLOW_HOME ?? globalStageflowHome());
+    return a2aStatusView(this.options.host.status);
   }
 
   private scrub(message: string, roots: readonly { path: string }[]): string {

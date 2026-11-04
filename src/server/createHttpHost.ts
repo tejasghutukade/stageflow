@@ -27,7 +27,6 @@ import {
 import { advertisedHost } from "./listenHost.js";
 import { handleLivez, handleReadyz } from "./healthSurfaces.js";
 import { a2aStatusView } from "../a2a/errorText.js";
-import { globalStageflowHome } from "../project/globalHome.js";
 
 export const DEFAULT_PORT = 3847;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
@@ -136,7 +135,7 @@ export async function createHttpHost(
       }
       const a2aAuth = enforceBearerAuth(controlTokens, req, res, "read");
       if (!a2aAuth.ok) return;
-      json(res, 200, boot.a2a ? a2aStatusView(boot.a2a.status, globalStageflowHome()) : { state: "disabled" });
+      json(res, 200, boot.a2a ? a2aStatusView(boot.a2a.status) : { state: "disabled" });
       return;
     }
     if (boot.serveBlocked !== undefined) {

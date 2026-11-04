@@ -1262,7 +1262,7 @@ async function prepareStageSessionWiring(
       return {
         ok: false,
         reason: authPath
-          ? "Stage provider auth is not configured (auth.json in the credential home is missing or empty). Configure credentials via `sf providers` or the operator console Providers page."
+          ? "Stage provider auth is not configured (agent/auth.json in the credential home, STAGEFLOW_CREDENTIAL_HOME, is missing or empty). Configure credentials via `sf providers` or the operator console Providers page."
           : `Stage provider auth is not configured (${STAGEFLOW_AGENT_AUTH_PATH_ENV} is unset).`,
       };
     }

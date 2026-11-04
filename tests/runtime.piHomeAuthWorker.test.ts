@@ -262,7 +262,7 @@ describe("stage worker opens the host-stamped auth file", () => {
         expect(result.ok).toBe(false);
         if (!result.ok) {
           expect(result.reason).not.toContain(hostAuth);
-          expect(result.reason).toMatch(/auth.json in the credential home/);
+          expect(result.reason).toMatch(/agent\/auth\.json in the credential home, STAGEFLOW_CREDENTIAL_HOME/);
         }
       } finally {
         spy.mockRestore();

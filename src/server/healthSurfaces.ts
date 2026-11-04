@@ -185,7 +185,7 @@ export async function buildRichHealthPayload(
     payload.config = redactHostConfig(boot.hostConfig);
   }
   if (boot.a2a?.status) {
-    payload.a2a = a2aStatusView(boot.a2a.status, globalStageflowHome());
+    payload.a2a = a2aStatusView(boot.a2a.status);
   }
   return payload;
 }
