@@ -51,7 +51,8 @@ From repo root after `npm i`:
 
 ```bash
 npm run build          # compile CLI to dist/
-npm test               # vitest (src + integration)
+npm test               # vitest (src + integration); does not pack
+npm run test:pack      # pack the package and import it (CI job, not part of npm test)
 npm run typecheck      # tsc --noEmit
 npm run ui:build       # build console + copy assets into dist/ui
 npm run ui:test        # vitest in ui workspace

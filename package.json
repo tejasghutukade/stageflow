@@ -1,6 +1,6 @@
 {
   "name": "stageflow",
-  "version": "0.55.1",
+  "version": "0.55.2",
   "description": "Stageflow — CLI pipeline runtime for configurable stages on Pi",
   "type": "module",
   "main": "./dist/index.js",
@@ -48,6 +48,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:pack": "vitest run --config vitest.pack.config.ts",
     "test:watch": "vitest",
     "dev": "tsx src/cli.ts",
     "dev:watch": "PI_CURSOR_SETTING_SOURCES=all STAGEFLOW_ACTIVITY_VERBOSE=1 tsx watch src/cli.ts ui",

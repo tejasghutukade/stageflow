@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { StagePort, StageHandle } from "../src/agent/port.js";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
@@ -15,8 +13,6 @@ import {
 import { PACKAGE_VERSION } from "../src/package-meta.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
-
-const execFileAsync = promisify(execFile);
 
 const PIPELINE = `id: hosted-smoke
 stages:
@@ -861,44 +857,4 @@ stages:
     }).catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "package_invalid" });
   });
-});
-
-describe("packed stageflow package", () => {
-  it(
-    "imports the hosted runtime from the package root",
-    async () => {
-      const repoRoot = path.resolve(import.meta.dirname, "..");
-      await execFileAsync("npm", ["run", "build"], { cwd: repoRoot });
-      const packDir = await mkdtemp(path.join(tmpdir(), "sf-pack-"));
-      try {
-        const { stdout } = await execFileAsync(
-          "npm",
-          ["pack", "--json", "--pack-destination", packDir],
-          { cwd: repoRoot },
-        );
-        const packed = JSON.parse(stdout) as Array<{ filename: string }>;
-        const tarball = path.join(packDir, packed[0]?.filename ?? "");
-        const consumer = path.join(packDir, "consumer");
-        await mkdir(consumer);
-        await writeFile(
-          path.join(consumer, "package.json"),
-          JSON.stringify({ name: "hosted-consumer", private: true, type: "module" }),
-        );
-        await execFileAsync("npm", ["install", tarball], { cwd: consumer });
-        const script = `
-          import { configurePiProviderApiKey, createHostedRuntime, createPiStagePort, HostedRuntimeError } from "stageflow";
-          if (typeof createHostedRuntime !== "function") process.exit(1);
-          if (typeof HostedRuntimeError !== "function") process.exit(2);
-          if (typeof createPiStagePort !== "function") process.exit(3);
-          if (typeof configurePiProviderApiKey !== "function") process.exit(4);
-        `;
-        await execFileAsync("node", ["--input-type=module", "-e", script], {
-          cwd: consumer,
-        });
-      } finally {
-        await rm(packDir, { recursive: true, force: true });
-      }
-    },
-    180_000,
-  );
 });
