@@ -4,6 +4,8 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     exclude: [...configDefaults.exclude, "**/hosted.pack.test.ts"],
+    // A tsx CLI spawn exceeds the 5s default while a shard's workers are busy.
+    testTimeout: 30_000,
     globalSetup: ["tests/globalSetup.socketLeakGuard.ts"],
     setupFiles: ["tests/setup/credentialHomePin.ts"],
     env: {
