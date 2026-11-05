@@ -7,7 +7,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  test-shard:
     name: test (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     strategy:
@@ -28,6 +28,15 @@ jobs:
       - run: npm ci
 
       - run: npm test -- --shard=${{ matrix.shard }}/4
+
+  # Ruleset requires a check named "test". The shards report as test (1/4)…
+  test:
+    needs: test-shard
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every shard
+        run: test "${{ needs.test-shard.result }}" = "success"
 
   ui:
     runs-on: ubuntu-latest
