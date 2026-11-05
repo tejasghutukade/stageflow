@@ -7,17 +7,24 @@ DEST_ROOT="$(pwd)"
 
 SKILLS=(
   stageflow
-  stageflow-setup
-  stageflow-session-capture
-  stageflow-author
-  stageflow-run
-  stageflow-delegate
+  stageflow-pipelines
+  stageflow-agents
+  stageflow-operate
+  stageflow-evals
 )
 
 TARGETS=(
   .cursor/skills
   .claude/skills
   .agents/skills
+)
+
+LEGACY_SKILLS=(
+  stageflow-setup
+  stageflow-author
+  stageflow-session-capture
+  stageflow-delegate
+  stageflow-run
 )
 
 usage() {
@@ -81,10 +88,39 @@ resolve_paths() {
   fi
 }
 
+frontmatter_name() {
+  local file="$1"
+  local line=""
+  line="$(awk 'NR==1 && $0=="---"{fm=1; next} fm && $0=="---"{exit} fm && /^name:/{print; exit}' "$file" || true)"
+  line="${line#name:}"
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  line="${line#\"}"
+  line="${line%\"}"
+  line="${line#\'}"
+  line="${line%\'}"
+  printf '%s' "$line"
+}
+
+remove_legacy_skills() {
+  local target="$1"
+  local skill dir name
+  for skill in "${LEGACY_SKILLS[@]}"; do
+    dir="${DEST_ROOT}/${target}/${skill}"
+    if [ -f "${dir}/SKILL.md" ]; then
+      name="$(frontmatter_name "${dir}/SKILL.md")"
+      if [ "$name" = "$skill" ]; then
+        rm -rf "$dir"
+      fi
+    fi
+  done
+}
+
 copy_suite() {
   local target skill
   for target in "${TARGETS[@]}"; do
     mkdir -p "${DEST_ROOT}/${target}"
+    remove_legacy_skills "$target"
     for skill in "${SKILLS[@]}"; do
       rm -rf "${DEST_ROOT}/${target}/${skill}"
       cp -R "${SOURCE_DIR}/${skill}" "${DEST_ROOT}/${target}/${skill}"

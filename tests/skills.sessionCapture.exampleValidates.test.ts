@@ -6,14 +6,15 @@ import { describe, expect, it } from "vitest";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
-const exampleDir = path.join(
+const pipeline = path.join(
   root,
   "skills",
-  "stageflow-session-capture",
+  "stageflow-pipelines",
   "assets",
-  "example-pipeline",
+  "examples",
+  "session-capture",
+  "example.pipeline.yaml",
 );
-const pipeline = path.join(exampleDir, "example.pipeline.yaml");
 
 function runCli(args: string[]) {
   return spawnSync(process.execPath, [tsxCli, cli, ...args], {

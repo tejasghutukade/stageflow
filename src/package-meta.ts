@@ -1,3 +1,3 @@
 export const PACKAGE_NAME = "stageflow";
-export const PACKAGE_VERSION = "0.54.1";
+export const PACKAGE_VERSION = "0.55.1";
 export const BUILD_SHA = process.env.STAGEFLOW_BUILD_SHA ?? "unknown";

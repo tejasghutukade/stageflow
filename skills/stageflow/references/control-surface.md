@@ -1,38 +1,97 @@
-# Control surface
+# Control surface: MCP or CLI
 
-Prefer MCP when a Stageflow host is up. Otherwise use the CLI. This file is the only copy of that rule; job skills cite it instead of restating it.
+Every Stageflow skill follows this rule. Two ways drive the same Host: the MCP tools and the `sf` CLI. Pick one per task, say which you chose when it matters, and do not mix them mid-operation.
 
-## Probe
+## Contents
 
-Run [../scripts/detect-host.mjs](../scripts/detect-host.mjs). Do not write a second probe.
+- The rule
+- What the CLI needs from a Host
+- Probe the Host
+- JSON and exit codes
+- Things only one surface can do
+- Safety on both surfaces
 
-```bash
-node ../scripts/detect-host.mjs
-node ../scripts/detect-host.mjs --base-url http://127.0.0.1:3847
-```
+## The rule
 
-The script `GET`s `{baseUrl}/api/health` (default `http://127.0.0.1:3847`, 1500 ms timeout). **up** means HTTP 200 and parseable JSON. Non-200, non-JSON, or timeout is **down**. Health stays Host/Origin-only (no bearer), so loopback probes keep working when a control token is configured. This probe is Stageflow host up/down only — it does not detect a coding-agent question UI. Gate presentation lives in [`../../stageflow-run/references/native-question-ui.md`](../../stageflow-run/references/native-question-ui.md).
+1. If the Stageflow MCP tools are in your tool list and a call such as `get_started` answers, use MCP. Tools return structured data and need no output parsing.
+2. Otherwise use the CLI. Add `--json` wherever the command accepts it and read the exit code.
+3. If neither works, run the probe below and follow `references/setup.md`. Do not guess a Host URL or invent a tool name.
 
-Stdout is one line: `up <baseUrl>` or `down <baseUrl>`, with an optional trailing `bearer` when `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_TOKEN_FILE` is set in this environment (MCP/Compose need `Authorization: Bearer` — see [`../../stageflow-run/references/mcp-call.md`](../../stageflow-run/references/mcp-call.md)). Exit `0` when up, `1` when down, `2` on usage error.
+MCP tools exist only while a Host is running. The MCP server lives inside the Host, so every tool call needs one. The CLI is more forgiving: it starts a Host itself when it needs one, and a few read commands work with no Host at all.
 
-**Health is not auth.** `GET /api/health` is ungated (Host/Origin only — no bearer). Do **not** treat a health 200 as authenticated MCP. Non-loopback Hosts require a drive bearer (`STAGEFLOW_CONTROL_TOKEN`) unless `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` (the shipped local Compose file sets that and publishes `127.0.0.1` only). MCP and protected API calls need `Authorization: Bearer <drive-token>` when a control token is set. See Stageflow docs: MCP (Access control); Docker and self-hosting — Local try.
+## What the CLI needs from a Host
 
-Start a host with `sf ui` or `sf mcp` when the user wants MCP. Do not auto-start one. Compose local try is the standing-Host path — see `stageflow-setup` and Stageflow docs: Docker and self-hosting.
+The CLI talks to `http://127.0.0.1:<port>` only. The port is `STAGEFLOW_SERVICE_PORT` if set, else 3847. A Host on another port, another machine or in a container is invisible to it unless that same port is exported and reachable on loopback. Use MCP for those Hosts.
 
-## When the host is up
+| Group | Commands | Host behavior |
+|---|---|---|
+| Autostart a Host | `sf run`, `sf run-stage`, `sf trigger`, every `sf agents` verb, `sf eval` verbs other than `validate` and `engine`, `sf a2a` verbs that call the Host, and these `sf runs` verbs: `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `rerun` | Probes `/livez`. If nothing is listening, spawns a detached `sf mcp --port <port>` (log: `$STAGEFLOW_HOME/service.log`) and waits up to `STAGEFLOW_AUTOSTART_TIMEOUT_MS` (default 10000) |
+| Host-down reads | `sf runs list`, `show`, `verify`, `waiting`, `wait`; `sf artifact`; `sf envelope`; `sf export-run`; `sf debug-run`; `sf export --all`; `sf backup` | Read the SQLite store directly. They start a Host only when a store migration is pending |
+| Never use a Host | `sf validate`, `sf graph`, `sf migrate-yaml`, `sf doctor`, `sf init`, `sf skills`, `sf providers`, `sf browser`, `sf eval validate`, `sf eval engine`, `sf a2a validate`, `list` and `add-caller`, `sf restore`, `--version`, `--help` | Run in-process |
 
-Use MCP tools over the Streamable HTTP endpoint at `{baseUrl}/mcp`. Send `Authorization: Bearer <drive-token>` when `STAGEFLOW_CONTROL_TOKEN` (or a named drive token) is configured. Tool names and payloads live in Stageflow docs: MCP (checkout: [docs/mcp.md](../../../docs/mcp.md)). Typical talking-job tools: `list_pipelines`, `list_tasks`, `start_run`, `run_stage`, `get_run`, `wait_run`, `list_waiting`, `answer_gate`, `decide_feedback_loop`, `get_envelope`, `read_artifact`, `list_checkout_changes`, `get_run_diff`, `read_checkout_file`, `validate`, `describe_pipeline`, `get_health`, `list_providers`, `list_models`, `list_project_mcp`, `probe_project_mcp`, `export_run`, `list_skills`, `list_stage_events`, `get_stage_verification`.
+Autostart failures are final, not retried. The reason id is one of:
 
-Eval tools (`list_evals`, `get_eval`, `validate_eval`, `run_eval`, `get_eval_run`, `list_eval_runs`, `get_eval_results`, `get_eval_result`, `cancel_eval_run`, `compare_eval_runs`, `get_eval_failure_suggestions`, `get_eval_failure_sort_status`, `sort_eval_failures`, `list_grader_calibrations`, `calibrate_eval_grader`) follow the same rule; `run_eval` costs money, and `sort_eval_failures` sends failed results to an external classifier (manual only), and `calibrate_eval_grader` re-judges the author's labeled outputs with the judge model (costs money). See [evals.md](evals.md).
+| `reason` | Meaning | Fix |
+|---|---|---|
+| `autostart_disabled` | `STAGEFLOW_NO_AUTOSTART` is set (anything but empty, `0` or `false`) and nothing answers | Start the Host with `sf mcp` or `sf ui`, or unset the variable. An already-running Host still works |
+| `port_occupied` | Something answers on the port but not with Stageflow's `/livez` JSON | Free the port or export a different `STAGEFLOW_SERVICE_PORT` for both the Host and the CLI |
+| `bind_refused` | `STAGEFLOW_BIND` is not loopback and no control token is set | Set a token (see `references/host-and-mcp.md`) or bind loopback |
+| `spawn_failed` | The detached process did not start | Read `$STAGEFLOW_HOME/service.log` |
+| `timed_out` | The Host did not answer within the timeout | Read `service.log`; raise `STAGEFLOW_AUTOSTART_TIMEOUT_MS` on a slow disk |
 
-`get_health` returns capacity fields plus `stageflow_home`, `boot_providers` / `providers_live` (prefer `list_providers` for live auth), and an on-demand `disk` breakdown (`runs_bytes`, `worktrees_bytes`, `repos_bytes`, `state_db_bytes`, `a2a_artifacts_bytes`, `free_bytes`) for the durable root. When `slotsAvailable` is `0`, starts may still succeed as queued until `STAGEFLOW_MAX_QUEUED` is full — see `start_run` in the MCP docs.
+Under `--json`, a failure to start the Host exits 1. The document depends on the command:
 
-**Skills cwd ≠ catalog root:** `STAGEFLOW_OPERATOR_CWD` resolves operator skills; MCP/HTTP catalog browse uses seeded ∪ registered `project_root` values. See Stageflow docs: MCP — Skills cwd vs catalog project_root.
+| Command | Autostart-failure document |
+|---|---|
+| `sf run` | `{ "ok": false, "outcome": "failed", "reason": "<message>", "code"?: "<id>" }`. `reason` is the human message, not the reason id. `code` is present only for `autostart_disabled`. `port_occupied`, `bind_refused`, `spawn_failed`, and `timed_out` have no `code`. Branch on the message, or re-read the failure. Do not branch on `code` for those four. |
+| `sf trigger list`, `show`, `fire` | `{ "error": "<message>", "reason": "<reason id>" }` on stdout. Same shape as a mutating `sf runs` verb. |
+| `sf trigger fire` after the Host is up and then refuses | Not an autostart failure. Same start-failure JSON as `sf run`. Non-busy refusals use the start-failed document (`ok: false`, `outcome: "failed"`, `reason` is the message, `code` only when set). `busy_capacity` and `busy_checkout` use `outcome: "busy"`. |
+| `sf run-stage` | `{ "error": "<message>" }` on stdout. No reason id. |
+| `sf agents` | `{ "code": "host.unavailable", "message": "<message>", "issues": [] }` on stdout. |
+| `sf a2a` status, enable, reload, caller, publication | The message on stderr. `--json` does not wrap it. |
+| Mutating `sf runs` (`answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `rerun`) | `{ "error": "<message>", "reason": "<reason id>" }` on stdout. |
 
-Some capabilities stay **CLI-only** (or `docker exec` on a container Host): `sf graph`, `sf migrate-yaml`, `sf eval engine install`, `sf skills install` (durable host install; prefer `start_run.skills` for harnesses), A2A config mutate/validate, and provider OAuth login. Provider API keys for Host boot use `STAGEFLOW_PROVIDER_<ID>_API_KEY(_FILE)`, not an MCP login tool. Use the MCP **CLI-only capabilities** decision table (Stageflow docs: MCP) instead of inventing MCP substitutes.
+`sf eval` verbs that autostart print `{ "error": "<message>", "reason": "<reason id>" }` on stdout, the same shape as mutating `sf runs`.
 
-## When the host is down
+## Probe the Host
 
-Use the `sf` CLI. Command names and flags live in Stageflow docs: CLI reference (checkout: [docs/cli-reference.md](../../../docs/cli-reference.md)). Typical talking-job commands: `sf run`, `sf runs waiting`, `sf runs answer`, `sf runs feedback-decide`, `sf runs wait`, `sf validate`, `sf envelope get`, `sf artifact read`, `sf providers`; for evals, `sf eval validate`, `sf eval run --json`, `sf eval runs`, `sf eval compare`.
+Run `node <this skill's folder>/scripts/detect-host.mjs`. It requests `GET /livez` with a 1.5 second timeout and prints one line:
 
-Probe before each mutating `sf runs` verb. If the probe is **up** or the command refuses because a host is up, continue that gate via MCP — do not start a second mutating writer, and do not start `sf mcp` as a disposable bridge.
+- `up http://127.0.0.1:3847` exit 0: a Stageflow Host answered with 200 and JSON.
+- `down http://127.0.0.1:3847` exit 1: nothing, a non-200, non-JSON, or a hang.
+- exit 2: bad arguments.
+
+`bearer` is appended when `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_TOKEN_FILE` is set in your environment, as a reminder that `/mcp` and `/api/*` need `Authorization: Bearer <token>`. The probe never sends the token. `--base-url <url>` checks a Host elsewhere.
+
+`/livez` and `/readyz` never need a bearer. `/api/health` does when a token is set, which is why the probe does not use it. The result is advisory: the probe says whether a Host is there, not whether your MCP client is connected to it.
+
+## JSON and exit codes
+
+Use `--json` on `sf run`, `sf run-stage`, `sf runs ...`, `sf validate`, `sf doctor`, `sf graph`, `sf trigger`, `sf eval run` and `sf --version`. `sf providers` has no `--json`: its output is tab-separated lines. Check `sf <command> --help` for any other command. Do not parse human prose when a JSON form exists.
+
+| Command | 0 | 1 | 2 |
+|---|---|---|---|
+| `sf validate` | passed | any error finding, or a warning promoted by `--strict` | not used |
+| `sf doctor` | no check failed (warnings allowed) | at least one `fail` | not used |
+| `sf run` | run succeeded | run failed, or the Host could not be reached | run is waiting for an operator (`--json` outcome says so) |
+| `sf run-stage` | async: call accepted. Blocking (`--blocking`): stage succeeded | bad input, or blocking stage failed | blocking only: parked on a gate (`needs_input`), or `--timeout-ms` elapsed |
+| `sf runs wait` | woke on `waiting`, `terminal`, `already` or `timeout`; read `reason` and `run.status` | error, such as run not found | not used; 130 means the wait was aborted |
+| `sf runs retry`, `rerun`, `recover` | succeeded (`recover --stop`: done) | failed, busy or cancelled | waiting after the retry |
+| `sf eval run` | `--no-wait`: the Host accepted the run, before any score. Waited: the outcome is `passed` | anything else: below threshold, failed, cancelled, cost limit, invalid eval, missing engine, Host error | never |
+| `sf browser check` | logged in | error | 2 profile in use, 3 logged out, 4 unknown |
+
+A waiting run is not a failure. Exit 2 means a human must answer: hand off to `stageflow-operate`. A `sf runs wait` that exits 0 does not mean the run finished; check `reason`.
+
+## Things only one surface can do
+
+- CLI only: `sf init`, `sf graph`, `sf migrate-yaml`, `sf backup`, `sf restore`, `sf doctor`, `sf providers login`, `sf browser login`, `sf eval engine install`.
+- MCP or REST (or the console) only: creating and editing connections, memories, and project registration. There is no `sf connections` command.
+- Both: starting and answering runs, validating, listing the catalog, agents, evals. MCP is richer for live inspection; the CLI is simpler in CI.
+
+When MCP is the only way (connections, memories), and no Host is up, tell the user to run `sf ui` or `sf mcp`, then connect the harness (`references/host-and-mcp.md`).
+
+## Safety on both surfaces
+
+- MCP tool calls carry no confirmation prompt of their own. You are the gate. Ask the user before calling anything that starts a real run, an eval, a trigger, an agent turn that uses real tools, a send, or a delete.
+- Arguments appear in tool logs and chat. Never pass a secret as an argument. For connections, keys are entered in the console or exported by the user; see the skill that owns the task.
+- The CLI inherits your shell environment, including provider keys. Do not echo it, and do not run `env` or `printenv` to debug.

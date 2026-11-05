@@ -1,0 +1,18 @@
+id: research-digest
+# Replace with a model id from MCP list_models or `sf providers status` before running.
+model: CHANGE_ME/<provider-model>
+stages:
+  - id: gather
+    uses: ./gather.yaml
+    entry: true
+    route:
+      - to: summarize
+  - id: summarize
+    uses: ./summarize.yaml
+    route:
+      - to: send
+  - id: send
+    uses: ./send.yaml
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting

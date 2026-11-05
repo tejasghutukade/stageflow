@@ -6,12 +6,11 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const AUTHORING_MARKDOWN = [
-  "skills/stageflow-author/SKILL.md",
-  "skills/stageflow-author/references/catalog-mapping.md",
-  "skills/stageflow-author/references/catalog-write-conventions.md",
-  "skills/stageflow-author/references/stage-prompt-template.md",
-  "skills/stageflow-session-capture/SKILL.md",
-  "skills/stageflow-session-capture/references/catalog-authoring.md",
+  "skills/stageflow-pipelines/SKILL.md",
+  "skills/stageflow-pipelines/references/catalog-mapping.md",
+  "skills/stageflow-pipelines/references/stage-prompt-template.md",
+  "skills/stageflow-pipelines/references/yaml-reference.md",
+  "skills/stageflow-pipelines/references/design-playbook.md",
 ] as const;
 
 const STALE_CATALOG_KEY = /^\s*needs:|^\s*fork:|fork:\s*\{|needs:\s*\[/m;

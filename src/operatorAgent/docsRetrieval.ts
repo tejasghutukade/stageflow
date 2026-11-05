@@ -146,21 +146,21 @@ const CORPUS: CorpusEntry[] = [
     topics: ["retry", "repair", "manual", "recover", "recovery"],
   },
   {
-    path: "skills/stageflow-author/assets/examples/linear-review/review-loop.pipeline.yaml",
+    path: "skills/stageflow-pipelines/assets/examples/linear-review/review-loop.pipeline.yaml",
     kind: "example",
-    title: "linear-review (author skill)",
+    title: "linear-review (pipelines skill)",
     topics: ["linear", "review", "author", "skill"],
   },
   {
-    path: "skills/stageflow-author/assets/examples/branch-decision/release-gate.pipeline.yaml",
+    path: "skills/stageflow-pipelines/assets/examples/branch-decision/release-gate.pipeline.yaml",
     kind: "example",
-    title: "branch-decision (author skill)",
+    title: "branch-decision (pipelines skill)",
     topics: ["branch", "decision", "route", "if", "author"],
   },
   {
-    path: "skills/stageflow-author/assets/examples/non-sdlc-digest/research-digest.pipeline.yaml",
+    path: "skills/stageflow-pipelines/assets/examples/non-sdlc-digest/research-digest.pipeline.yaml",
     kind: "example",
-    title: "non-sdlc-digest (author skill)",
+    title: "non-sdlc-digest (pipelines skill)",
     topics: ["digest", "non-sdlc", "research", "author"],
   },
 ];

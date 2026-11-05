@@ -1,0 +1,25 @@
+id: release-gate
+# Replace with a model id from MCP list_models or `sf providers status` before running.
+model: CHANGE_ME/<provider-model>
+stages:
+  - id: run-tests
+    uses: ./run-tests.yaml
+    entry: true
+    route:
+      - to: ship
+        if:
+          field: ready
+          op: eq
+          value: true
+      - to: hotfix
+        if:
+          field: ready
+          op: eq
+          value: false
+  - id: hotfix
+    uses: ./hotfix.yaml
+  - id: ship
+    uses: ./ship.yaml
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting

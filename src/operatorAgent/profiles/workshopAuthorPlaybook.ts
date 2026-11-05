@@ -1,5 +1,5 @@
 /**
- * Baked Workshop Author playbook — distilled from harness stageflow-author
+ * Baked Workshop Author playbook — distilled from harness stageflow-pipelines
  * guidance and public YAML catalog concepts. First-class Workshop editors
  * cover the core path; advanced topics are explain-only.
  */

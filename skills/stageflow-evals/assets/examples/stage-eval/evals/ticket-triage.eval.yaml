@@ -1,0 +1,46 @@
+version: 1
+id: ticket-triage
+name: Ticket triage
+description: Does the classify stage pick the right category, flag urgent messages and summarize faithfully?
+type: capability
+target:
+  kind: stage
+  pipeline: ../pipelines/ticket-triage.pipeline.yaml
+  stage: classify
+dataset: ../datasets/ticket-triage.dataset.jsonl
+defaults:
+  repeats: 3
+  # Replace with an id from `sf providers status`. Keep it different from the stage model.
+  judge: anthropic/claude-sonnet-4-5
+  judge_settings:
+    temperature: 0
+  pass_threshold: 0.8
+  max_cost_usd: 2
+  concurrency: 4
+graders:
+  - id: output-schema
+    type: schema
+    must_pass: true
+  - id: category-matches
+    type: reference
+    weight: 3
+    mode: equals
+    path: payload.category
+    expected: expected.category
+  - id: urgent-flagged
+    type: code
+    weight: 2
+    code: |
+      return !testCase.tags.includes("urgent") || output.payload.urgency === "high";
+  - id: summary-is-faithful
+    type: rubric
+    rubric: |
+      Pass if the summary is one sentence and every fact in it appears in the message.
+      Fail if the summary adds a detail, a cause or a promise that the message does not contain.
+    scale: pass_fail
+    examples:
+      - { verdict: pass, output: "Customer was charged 29 dollars twice on the 3rd and asks for one refund.", reason: "Every fact is in the message." }
+      - { verdict: fail, output: "Customer was double charged because of a payment gateway bug.", reason: "The cause is invented." }
+budget:
+  latency_ms: 120000
+  cost_usd: 0.1

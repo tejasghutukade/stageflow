@@ -1,0 +1,47 @@
+id: implement
+system_prompt: |
+  Take the known and unknown lists from the prior stage envelope and make the
+  change they describe in the checkout. Prefer the approach that already worked
+  in the source session.
+
+  Success requires real checkout edits. Put every checkout-relative path you
+  changed in payload.changed_files. Do not put stages/.../artifacts paths there.
+  A report or plan alone is a failure emit, not success.
+
+  summary and payload are handed to the next stage verbatim. State outcomes
+  only.
+
+  When finished, call emit_stage_envelope once with status, summary, artifacts,
+  and a payload with changed_files. Your last tool call in this attempt must be
+  emit_stage_envelope.
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - known
+        - unknown
+      properties:
+        known:
+          type: array
+          items:
+            type: string
+        unknown:
+          type: array
+          items:
+            type: string
+  output:
+    schema:
+      type: object
+      required:
+        - changed_files
+      properties:
+        changed_files:
+          type: array
+          items:
+            type: string
+verify:
+  - id: checkout-changed
+    type: checkout_changes
+    path_fields:
+      - changed_files

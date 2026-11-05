@@ -6,7 +6,7 @@ export const WORKSHOP_CHAT_ATTACHMENT_MAX_FILES = 5;
 export const WORKSHOP_CHAT_ATTACHMENT_MAX_BYTES = 256 * 1024;
 export const WORKSHOP_DOCS_REFERENCE_PATHS = [
   "docs/yaml-catalog.md",
-  "skills/stageflow-author/references/catalog-mapping.md",
+  "skills/stageflow-pipelines/references/catalog-mapping.md",
 ] as const;
 
 export type WorkshopDocsReference = { path: string; text: string };

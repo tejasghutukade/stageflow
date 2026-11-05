@@ -15,7 +15,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const script = path.join(
   root,
   "skills",
-  "stageflow-session-capture",
+  "stageflow-pipelines",
   "scripts",
   "locate-session-transcript.mjs",
 );
@@ -35,7 +35,7 @@ function tempDir(prefix: string): string {
 }
 
 function encodeClaudeProject(cwd: string): string {
-  return cwd.replace(/[/\\:]/g, "-");
+  return cwd.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
 function writeJsonl(filePath: string, mtimeSec: number): string {

@@ -11,12 +11,13 @@ function cleanEnv(extra = {}) {
   const env = { ...process.env };
   delete env.STAGEFLOW_CONTROL_TOKEN;
   delete env.STAGEFLOW_CONTROL_TOKEN_FILE;
+  delete env.STAGEFLOW_SERVICE_PORT;
   return { ...env, ...extra };
 }
 
-function run(baseUrl, opts = {}) {
+function run(args, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [script, "--base-url", baseUrl], {
+    const child = spawn(process.execPath, [script, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       env: opts.env ?? cleanEnv(),
     });
@@ -36,28 +37,32 @@ function run(baseUrl, opts = {}) {
   });
 }
 
+function runBase(baseUrl, opts = {}) {
+  return run(["--base-url", baseUrl], opts);
+}
+
 function listen(handler) {
   return new Promise((resolve) => {
     const server = createServer(handler);
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
-      resolve({ server, baseUrl: `http://127.0.0.1:${addr.port}` });
+      resolve({ server, baseUrl: `http://127.0.0.1:${addr.port}`, port: addr.port });
     });
   });
 }
 
-test("classifies reachable 200 JSON /api/health as up", async () => {
+test("classifies reachable 200 JSON /livez as up", async () => {
   const { server, baseUrl } = await listen((req, res) => {
-    if (req.url === "/api/health") {
+    if (req.url === "/livez") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true }));
+      res.end(JSON.stringify({ ok: true, status: "live" }));
       return;
     }
     res.writeHead(404);
     res.end();
   });
   try {
-    const result = await run(baseUrl);
+    const result = await runBase(baseUrl);
     assert.equal(result.status, 0);
     assert.equal(result.stdout.trim(), `up ${baseUrl}`);
   } finally {
@@ -65,13 +70,32 @@ test("classifies reachable 200 JSON /api/health as up", async () => {
   }
 });
 
-test("classifies non-200 /api/health as down", async () => {
+test("a host that gates /api/health behind a bearer is still up", async () => {
+  const { server, baseUrl } = await listen((req, res) => {
+    if (req.url === "/livez") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, status: "live" }));
+      return;
+    }
+    res.writeHead(401, { "www-authenticate": "Bearer" });
+    res.end();
+  });
+  try {
+    const result = await runBase(baseUrl);
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.trim(), `up ${baseUrl}`);
+  } finally {
+    server.close();
+  }
+});
+
+test("classifies non-200 /livez as down", async () => {
   const { server, baseUrl } = await listen((_req, res) => {
     res.writeHead(503, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: false }));
   });
   try {
-    const result = await run(baseUrl);
+    const result = await runBase(baseUrl);
     assert.equal(result.status, 1);
     assert.equal(result.stdout.trim(), `down ${baseUrl}`);
   } finally {
@@ -79,13 +103,13 @@ test("classifies non-200 /api/health as down", async () => {
   }
 });
 
-test("classifies 200 non-JSON /api/health as down", async () => {
+test("classifies 200 non-JSON /livez as down", async () => {
   const { server, baseUrl } = await listen((_req, res) => {
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("ok");
   });
   try {
-    const result = await run(baseUrl);
+    const result = await runBase(baseUrl);
     assert.equal(result.status, 1);
     assert.equal(result.stdout.trim(), `down ${baseUrl}`);
   } finally {
@@ -93,10 +117,10 @@ test("classifies 200 non-JSON /api/health as down", async () => {
   }
 });
 
-test("classifies a hung /api/health as down", async () => {
+test("classifies a hung /livez as down", async () => {
   const { server, baseUrl } = await listen(() => {});
   try {
-    const result = await run(baseUrl);
+    const result = await runBase(baseUrl);
     assert.equal(result.status, 1);
     assert.equal(result.stdout.trim(), `down ${baseUrl}`);
   } finally {
@@ -104,15 +128,15 @@ test("classifies a hung /api/health as down", async () => {
   }
 });
 
-test("notes bearer when STAGEFLOW_CONTROL_TOKEN is set without changing health probe", async () => {
+test("notes bearer when STAGEFLOW_CONTROL_TOKEN is set without sending it", async () => {
   const { server, baseUrl } = await listen((req, res) => {
-    assert.equal(req.url, "/api/health");
+    assert.equal(req.url, "/livez");
     assert.equal(req.headers.authorization, undefined);
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true }));
+    res.end(JSON.stringify({ ok: true, status: "live" }));
   });
   try {
-    const result = await run(baseUrl, {
+    const result = await runBase(baseUrl, {
       env: cleanEnv({
         STAGEFLOW_CONTROL_TOKEN: "b".repeat(32),
       }),
@@ -122,4 +146,32 @@ test("notes bearer when STAGEFLOW_CONTROL_TOKEN is set without changing health p
   } finally {
     server.close();
   }
+});
+
+test("default base URL follows STAGEFLOW_SERVICE_PORT", async () => {
+  const { server, baseUrl, port } = await listen((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, status: "live" }));
+  });
+  try {
+    const result = await run([], {
+      env: cleanEnv({ STAGEFLOW_SERVICE_PORT: String(port) }),
+    });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.trim(), `up ${baseUrl}`);
+  } finally {
+    server.close();
+  }
+});
+
+test("an unusable STAGEFLOW_SERVICE_PORT falls back to 3847", async () => {
+  const result = await run([], {
+    env: cleanEnv({ STAGEFLOW_SERVICE_PORT: "not-a-port" }),
+  });
+  assert.match(result.stdout.trim(), /^(up|down) http:\/\/127\.0\.0\.1:3847/);
+});
+
+test("an unknown argument is a usage error", async () => {
+  const result = await run(["--nope"]);
+  assert.equal(result.status, 2);
 });
