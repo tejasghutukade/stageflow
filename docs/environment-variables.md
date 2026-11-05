@@ -15,7 +15,7 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_CONNECTIONS_FILE` | Overrides the `connections.yaml` location. See [Channels](channels.md#connectionsyaml) |
 | `STAGEFLOW_BIND` | Listen address for `sf ui` / `sf mcp` |
 | `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` | `1` allows a non-loopback bind with no control token (local Compose only) |
-| `STAGEFLOW_ALLOWED_HOSTS` | Extra Host/Origin names accepted (loopback always allowed; `*` rejected). Needed for any public hostname, including webhook and web chat URLs |
+| `STAGEFLOW_ALLOWED_HOSTS` | Extra Host/Origin names accepted (loopback always allowed; `*` rejected). Needed for any public hostname, including webhook and web chat URLs. A Host bound (`STAGEFLOW_BIND`) to one non-loopback IP also accepts that IP on its own port, so its own calls, such as the eval engine's callback, are not refused |
 | `STAGEFLOW_CONTROL_TOKEN`, `_FILE` | Drive-scoped bearer token (32+ chars) |
 | `STAGEFLOW_CONTROL_TOKEN_<NAME>`, `_FILE` | Named drive token |
 | `STAGEFLOW_READ_TOKEN`, `_FILE` | Read-scoped bearer token |

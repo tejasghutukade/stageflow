@@ -10,6 +10,7 @@ import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import { logger as rootLogger } from "../logging/logger.js";
 import type { StageflowHostBootstrap } from "./bootstrap.js";
 import {
+  allowListenAddress,
   assertAllowedHttpAccess,
   resolveAllowedHosts,
   type AllowedHosts,
@@ -221,6 +222,7 @@ export async function createHttpHost(
   const address = server.address();
   const boundPort =
     address && typeof address !== "string" ? address.port : port;
+  allowListenAddress(allowedHosts, host, boundPort);
   const publicHost = advertisedHost(host);
   const url = `http://${publicHost}:${boundPort}`;
   const mcpUrl = `${url}/mcp`;

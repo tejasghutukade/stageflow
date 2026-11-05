@@ -150,6 +150,21 @@ function parseAllowedHostEntry(token: string): AllowedHostEntry {
   return { hostname: token.toLowerCase() };
 }
 
+/**
+ * Adds the Host's own listen address (that exact IP and port) to the allowed hosts. A Host bound to one
+ * non-loopback address (a private address behind a platform's gateway) calls itself there, for example the
+ * eval engine's callback, and would otherwise refuse its own requests as a forbidden host. A literal IP
+ * cannot be reached through DNS rebinding, which the host check guards against. A wildcard or loopback
+ * bind adds nothing (loopback is always allowed).
+ */
+export function allowListenAddress(allowed: AllowedHosts, bind: string, port: number): void {
+  const hostname = bind.replace(/^\[|\]$/g, "").toLowerCase();
+  if (isIP(hostname) === 0 || hostname === "0.0.0.0" || hostname === "::" || isLoopbackHostname(hostname)) return;
+  const entry = { hostname, port: String(port) };
+  if (allowed.entries.some((e) => e.hostname === entry.hostname && e.port === entry.port)) return;
+  allowed.entries.push(entry);
+}
+
 export function isHostAllowed(
   allowed: AllowedHosts,
   hostname: string,

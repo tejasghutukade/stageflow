@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.3] - 2026-11-05
+
+### Fixed
+
+- **Evals run on a Host bound to a private address.** A Host listening on one non-loopback IP (`STAGEFLOW_BIND`, as Stageflow Cloud does behind its gateway) refused the eval engine's callback to its own address as a forbidden host, so every case failed with `EVAL_ENGINE_ERROR: host callback answered 403`. The Host now also accepts its own listen IP on its own port. A wildcard or loopback bind is unchanged.
+- **`cache.root` in `GET /api/health` and MCP `get_health` no longer shows a server path.** It reads `~/…` inside the user's home folder, `<home>/cache` under the Stageflow home (for example `sfhome/cache`), else the folder name.
+
 ## [0.55.2] - 2026-11-05
 
 ### Changed

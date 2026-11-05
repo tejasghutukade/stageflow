@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
 import {
+  allowListenAddress,
   isHostAllowed,
   isLoopbackHostname,
   isLoopbackRemoteAddress,
@@ -30,6 +31,34 @@ describe("resolveAllowedHosts", () => {
     expect(() =>
       resolveAllowedHosts({ STAGEFLOW_ALLOWED_HOSTS: "*" }),
     ).toThrow(/\*/);
+  });
+});
+
+describe("allowListenAddress", () => {
+  it("allows the Host's own non-loopback listen IP on its port only", () => {
+    const allowed = resolveAllowedHosts({ STAGEFLOW_ALLOWED_HOSTS: "ws.example.dev" });
+    allowListenAddress(allowed, "10.20.0.21", 3847);
+    expect(isHostAllowed(allowed, "10.20.0.21", "3847")).toBe(true);
+    expect(isHostAllowed(allowed, "10.20.0.21", "3848")).toBe(false);
+    expect(isHostAllowed(allowed, "10.20.0.21")).toBe(false);
+    expect(isHostAllowed(allowed, "10.20.0.22", "3847")).toBe(false);
+    allowListenAddress(allowed, "10.20.0.21", 3847);
+    expect(allowed.entries.filter((e) => e.hostname === "10.20.0.21")).toHaveLength(1);
+  });
+
+  it("adds nothing for a wildcard, loopback or name bind", () => {
+    for (const bind of ["0.0.0.0", "::", "127.0.0.1", "::1", "localhost", "box.example"]) {
+      const allowed = resolveAllowedHosts({});
+      const before = allowed.entries.length;
+      allowListenAddress(allowed, bind, 3847);
+      expect(allowed.entries.length, bind).toBe(before);
+    }
+  });
+
+  it("matches an IPv6 listen address given with or without brackets", () => {
+    const allowed = resolveAllowedHosts({});
+    allowListenAddress(allowed, "[fd00::5]", 3847);
+    expect(isHostAllowed(allowed, "fd00::5", "3847")).toBe(true);
   });
 });
 

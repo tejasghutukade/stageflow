@@ -35,10 +35,27 @@ function resolveStageflowHomeFromEnv(): string {
 
 /** The Stageflow home as health answers show it: `~/…` inside the user's home folder, else the folder name. Never absolute. */
 export function stageflowHomeForDisplay(home: string = globalStageflowHome(), userHome: string = os.homedir()): string {
-  const relative = path.relative(userHome, home);
-  if (relative === "") return "~";
-  if (!relative.startsWith("..") && !path.isAbsolute(relative)) return `~/${relative.split(path.sep).join("/")}`;
+  const underUser = relativeInside(userHome, home);
+  if (underUser !== undefined) return underUser === "" ? "~" : `~/${underUser}`;
   return path.basename(home);
+}
+
+/** A Host folder as health answers show it: `~/…`, or under the Stageflow home as `<home as shown>/…`, else the folder name. Never absolute. */
+export function hostPathForDisplay(dir: string, home: string = globalStageflowHome(), userHome: string = os.homedir()): string {
+  const underUser = relativeInside(userHome, dir);
+  if (underUser !== undefined) return underUser === "" ? "~" : `~/${underUser}`;
+  const underHome = relativeInside(home, dir);
+  if (underHome !== undefined) {
+    const shown = stageflowHomeForDisplay(home, userHome);
+    return underHome === "" ? shown : `${shown}/${underHome}`;
+  }
+  return path.basename(dir);
+}
+
+function relativeInside(base: string, target: string): string | undefined {
+  const relative = path.relative(base, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return undefined;
+  return relative.split(path.sep).join("/");
 }
 
 export function globalStageflowHome(): string {
