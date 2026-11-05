@@ -744,6 +744,71 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("PUT /api/catalog/file creates files on request, checks a pipeline as a pipeline, and names no host path", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-put-create-"));
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    await cp(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/manifest-catalog"), repoRoot, { recursive: true });
+    const outside = await mkdtemp(path.join(tmpdir(), "sf-http-put-outside-"));
+    await symlink(outside, path.join(repoRoot, "linked"));
+    clearFindProjectRootCacheForTests();
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), undefined, { cwd: repoRoot });
+    const put = (body: Record<string, unknown>) =>
+      jsonFetch(`${base}/api/catalog/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_root: repoRoot, ...body }),
+      });
+    const stage = ["id: probe", "system_prompt: Probe.", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n");
+    const pipeline = ["id: probe-run", "model: cursor/auto", "stages:", "  - id: probe", "    uses: ./probe.stage.yaml", ""].join("\n");
+    try {
+      const missing = await put({ path: "flows/probe.stage.yaml", content: stage });
+      expect(missing.status).toBe(404);
+      expect(missing.body.code).toBe("catalog_file_not_found");
+
+      const created = await put({ path: "flows/probe.stage.yaml", content: stage, create: true });
+      expect(created.status).toBe(200);
+      expect(await readFile(path.join(repoRoot, "flows/probe.stage.yaml"), "utf8")).toBe(stage);
+
+      const again = await put({ path: "flows/probe.stage.yaml", content: stage, create: true });
+      expect(again.status).toBe(409);
+      expect(again.body.code).toBe("catalog_file_exists");
+
+      const brokenPipeline = await put({ path: "flows/probe-run.pipeline.yaml", content: pipeline.replace("probe.stage", "nope.stage"), create: true });
+      expect(brokenPipeline.status).toBe(400);
+      expect(brokenPipeline.body.code).toBe("pipeline_invalid");
+      expect(JSON.stringify(brokenPipeline.body)).not.toContain(repoRoot);
+      expect(JSON.stringify(brokenPipeline.body)).not.toContain(await realpath(repoRoot));
+      expect(existsSync(path.join(repoRoot, "flows/probe-run.pipeline.yaml"))).toBe(false);
+
+      const savedPipeline = await put({ path: "flows/probe-run.pipeline.yaml", content: pipeline, create: true });
+      expect(savedPipeline.status).toBe(200);
+
+      const invalidStage = await put({ path: "flows/probe.stage.yaml", content: "id: probe\n" });
+      expect(invalidStage.status).toBe(400);
+      expect(invalidStage.body.code).toBe("stage_invalid");
+      expect(invalidStage.body.error).toContain("flows/probe.stage.yaml");
+      expect(JSON.stringify(invalidStage.body)).not.toContain(await realpath(repoRoot));
+
+      const newDir = await put({ path: "deep/er/x.stage.yaml", content: "id: x\n", create: true });
+      expect(newDir.status).toBe(400);
+      expect(existsSync(path.join(repoRoot, "deep"))).toBe(false);
+
+      const viaLink = await put({ path: "linked/leak.stage.yaml", content: stage, create: true });
+      expect(viaLink.status).toBe(400);
+      expect(viaLink.body.code).toBe("path_outside_project_root");
+      expect(existsSync(path.join(outside, "leak.stage.yaml"))).toBe(false);
+
+      const evalFile = await put({ path: "flows/x.eval.yaml", content: "id: x\n", create: true });
+      expect(evalFile.status).toBe(400);
+      expect(evalFile.body.code).toBe("use_eval_api");
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await closeServer(server);
+      await cleanup();
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("POST /api/pipelines creates pipeline-owned YAML", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-post-pipeline-"));
     const { root: repoRoot, cleanup } = await initTempGitRepo();

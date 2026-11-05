@@ -642,7 +642,7 @@ Server health, soft-max run capacity, toolchain map (from the image manifest wit
 
 **Input:** `{}`
 
-**Output:** includes capacity fields, `version`, `build_sha`, `stageflow_home`, `toolchain` (map of tool → version string), `disk` breakdown, plus:
+**Output:** includes capacity fields, `version`, `build_sha`, `stageflow_home` (`~/…` when inside the user's home folder, else the folder name; never an absolute path), `toolchain` (map of tool → version string), `disk` breakdown, plus:
 
 | Field | Meaning |
 |-------|---------|

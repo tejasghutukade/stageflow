@@ -97,7 +97,7 @@ import {
 } from "./stageTimeout.js";
 import { StageMcpError } from "../config/resolveStageMcpServers.js";
 import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
-import { sandboxBrowserEnv } from "../runtime/sandboxContainer.js";
+import { inProcessBrowserEnv, sandboxBrowserEnv } from "../runtime/sandboxContainer.js";
 
 /** Built-in tool allowlist, mirroring Pi's sealed-session base set (read/bash/write/edit). */
 const CLAUDE_BUILTIN_TOOLS = ["Read", "Write", "Edit", "Bash"];
@@ -356,7 +356,7 @@ async function runTurn(
             sandboxBash: {
               containerName,
               dockerBin: input.roots.containerDockerBin,
-              ...(sandboxBrowserEnv(process.env) !== undefined ? { shellEnv: sandboxBrowserEnv(process.env)! } : {}),
+              ...(sandboxBrowserEnv({ ...process.env, ...input.browserEnv }) !== undefined ? { shellEnv: sandboxBrowserEnv({ ...process.env, ...input.browserEnv })! } : {}),
               ...(input.roots.readonlyDir !== undefined
                 ? { readonlyDir: input.roots.readonlyDir }
                 : {}),
@@ -388,6 +388,9 @@ async function runTurn(
         persistSession: true,
         strictMcpConfig: true,
         ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
+        ...(containerName === undefined && inProcessBrowserEnv(input.browserEnv) !== undefined
+          ? { env: { ...process.env, ...input.browserEnv } }
+          : {}),
         ...(containerName !== undefined
           ? {
               toolAliases: {

@@ -84,6 +84,8 @@ export type StageRunInput = {
   memoryPrompt?: string;
   /** Bundled browser skill; set by the runtime when the stage has `browser`. */
   browserSkillFilePath?: string;
+  /** The stage's `AGENT_BROWSER_*` env. A stage worker also has it in `process.env`; an in-process stage only here. */
+  browserEnv?: Record<string, string>;
   forkEmitContext?: ForkEmitContext;
   cloneEmitContext?: CloneEmitContext;
   /** Declared source policy; successful emits must continue or send work back. */

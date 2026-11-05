@@ -41,8 +41,38 @@ export function pathForDisplay(file: string, home: string): string {
   return p.basename(file);
 }
 
-/** A2A status as the API returns it: `configPath` relative to the Stageflow home (or its file name), never absolute. */
-export function a2aStatusView<T extends { configPath?: string }>(status: T, home: string = globalStageflowHome()): T {
+export type A2aConfigSource = "home" | "project" | "override";
+
+function sameFile(a: string, b: string): boolean {
+  const resolve = (file: string) => {
+    try {
+      return realpathSync(file);
+    } catch {
+      return path.resolve(file);
+    }
+  };
+  return resolve(a) === resolve(b);
+}
+
+/** Which discovery rule found the file: `STAGEFLOW_A2A_CONFIG`, the Stageflow home, or the project root. */
+export function a2aConfigSource(file: string, home: string, env: NodeJS.ProcessEnv = process.env): A2aConfigSource {
+  if (env.STAGEFLOW_A2A_CONFIG && sameFile(env.STAGEFLOW_A2A_CONFIG, file)) return "override";
+  const insideHome = variants(home).some((base) => {
+    const relative = path.relative(base, file);
+    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  });
+  return insideHome ? "home" : "project";
+}
+
+/**
+ * A2A status as the API returns it: `configPath` relative to the Stageflow home (or its file name), never absolute,
+ * and `configSource`, so a project `a2a.yaml` and the home one are told apart.
+ */
+export function a2aStatusView<T extends { configPath?: string }>(
+  status: T,
+  home: string = globalStageflowHome(),
+  env: NodeJS.ProcessEnv = process.env,
+): T & { configSource?: A2aConfigSource } {
   if (!status.configPath) return status;
-  return { ...status, configPath: pathForDisplay(status.configPath, home) };
+  return { ...status, configPath: pathForDisplay(status.configPath, home), configSource: a2aConfigSource(status.configPath, home, env) };
 }

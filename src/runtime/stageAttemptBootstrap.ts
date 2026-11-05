@@ -510,6 +510,9 @@ async function openStageWithOperatorCatalog(
       ...(browserSkillFilePath !== undefined
         ? { browserSkillFilePath }
         : {}),
+      ...(stageBrowserEnvOf(resolveOptions.stageEnv) !== undefined
+        ? { browserEnv: stageBrowserEnvOf(resolveOptions.stageEnv)! }
+        : {}),
       ...(resolvedMcpServers !== undefined ? { resolvedMcpServers } : {}),
       onResolvedModel: async (info) => {
         await patchRunManifest(
@@ -829,4 +832,9 @@ export async function openStageAttempt(
     prior: priorResult.prior,
     ...(input.stageEnv !== undefined ? { stageEnv: input.stageEnv } : {}),
   };
+}
+
+function stageBrowserEnvOf(env: Record<string, string> | undefined): Record<string, string> | undefined {
+  const entries = Object.entries(env ?? {}).filter(([name]) => name.startsWith("AGENT_BROWSER_"));
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }

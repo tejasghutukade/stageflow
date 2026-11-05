@@ -1,4 +1,4 @@
-import type { A2aCaller, A2aPublication, A2aStatus } from "../../api/a2a";
+import { a2aConfigFileLabel, type A2aCaller, type A2aPublication, type A2aStatus } from "../../api/a2a";
 import { PageHeader } from "../shell/PageHeader";
 import { FilterTabs } from "../shell/FilterTabs";
 import { CARD, MONO, SECONDARY, SectionHead } from "../identity/identityParts";
@@ -83,7 +83,7 @@ export function A2aScreen(props: A2aScreenProps) {
               <SectionHead title="A2A has a configuration error" subtitle="Other agents get an unavailable answer until the configuration loads again." />
               <div className="flex flex-col gap-1 rounded-lg border border-[#f2645a47] bg-[#f2645a14] px-4 py-3" role="alert">
                 <span className={`break-words text-[13px] text-[#f2645a] ${MONO}`}>{status.error?.message ?? "The configuration could not be loaded."}</span>
-                {status.configPath ? <span className={`break-all text-xs text-[#a7aab2] ${MONO}`}>{status.configPath}</span> : null}
+                {status.configPath ? <span className={`break-all text-xs text-[#a7aab2] ${MONO}`}>{a2aConfigFileLabel(status)}</span> : null}
               </div>
               {props.actionError ? <A2aError code={props.actionError.code} detail={props.actionError.detail} /> : null}
               <div>

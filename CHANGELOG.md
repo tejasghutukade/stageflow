@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`PUT /api/catalog/file` creates files and checks each kind as itself.** With `create: true` it makes a new file (its folders too, inside the project only); a pipeline, task, trigger or `stageflow.yaml` is now checked as one instead of as a stage, and a failed check puts everything back. Eval and dataset files are refused (`use_eval_api`). See [Writing a catalog file over HTTP](docs/yaml-catalog.md#writing-a-catalog-file-over-http).
+- **A2A status says where its configuration file was found.** `configSource` is `home`, `project` or `override` (`STAGEFLOW_A2A_CONFIG`), and the console shows it beside the file, so a project `a2a.yaml` and the home one are told apart.
+
+### Fixed
+
+- **Two browser commands that start a sandboxed stage's remote browser session at once no longer fail.** The first command starts the session once, under a lock; the other waits for it.
+- **A sandboxed stage's tab in a shared run browser is closed when the stage's container stops**, instead of staying open until the run ends.
+- **In-process stages (`STAGEFLOW_STAGE_EXECUTION=inprocess`) get their browser settings.** The agent's shell, local or sandboxed, now gets the stage's `AGENT_BROWSER_*` env instead of the Host's own.
+- **No server paths in catalog write errors or health.** `PUT /api/catalog/file` findings name the project-relative file, and `stageflow_home` in `GET /api/health` and MCP `get_health` is `~/…` inside the user's home folder, else the folder name.
+
 ## [0.53.0] - 2026-11-04
 
 ### Added

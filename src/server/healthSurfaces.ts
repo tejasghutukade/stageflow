@@ -6,7 +6,7 @@ import {
   type ProviderAuthContext,
 } from "../agent/providerAuth.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "../package-meta.js";
-import { globalStageflowHome } from "../project/globalHome.js";
+import { globalStageflowHome, stageflowHomeForDisplay } from "../project/globalHome.js";
 import { a2aStatusView } from "../a2a/errorText.js";
 import { redactHostConfig } from "../config/hostConfig.js";
 import {
@@ -179,7 +179,7 @@ export async function buildRichHealthPayload(
     },
     version: PACKAGE_VERSION,
     build_sha: BUILD_SHA,
-    stageflow_home: globalStageflowHome(),
+    stageflow_home: stageflowHomeForDisplay(),
     schema,
     git_version: gitVersion ?? null,
     toolchain: toolchainHealthMap(),

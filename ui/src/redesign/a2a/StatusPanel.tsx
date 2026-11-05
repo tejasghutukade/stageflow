@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { A2aStatus } from "../../api/a2a";
+import { a2aConfigFileLabel, type A2aStatus } from "../../api/a2a";
 import { CARD, CopyButton, DANGER, GHOST, MONO, SECONDARY, StatusLabel } from "../identity/identityParts";
 import { agentCardCommand, callingAgentSnippet, failedReload, relativeAt } from "./a2aView";
 
@@ -30,7 +30,7 @@ export function StatusPanel({
         <dl className="flex flex-col gap-2.5">
           <div className="flex items-baseline justify-between gap-3">
             <dt className="shrink-0 text-xs text-[#8b8f98]">Configuration file</dt>
-            <dd className={`min-w-0 break-all text-right text-[13px] text-[#ecedee] ${MONO}`}>{status.configPath || "—"}</dd>
+            <dd className={`min-w-0 break-all text-right text-[13px] text-[#ecedee] ${MONO}`}>{a2aConfigFileLabel(status) || "—"}</dd>
           </div>
           <div className="flex items-baseline justify-between gap-3">
             <dt className="shrink-0 text-xs text-[#8b8f98]">Last load</dt>

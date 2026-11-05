@@ -1,6 +1,8 @@
 import {
   assertStageReadOnlyDirExists,
+  execInSandboxContainer,
   resolveSandboxContainerOptions,
+  sandboxBrowserEnv,
   stageReadOnlyDir,
   startSandboxContainer,
   stopSandboxContainer,
@@ -19,6 +21,9 @@ export type StageSandbox = {
   close: () => Promise<void>;
   failure?: string;
 };
+
+/** Closes the pinned tab only when this container's daemon is running, so a stage that never used the browser starts none. */
+const CLOSE_STAGE_TAB = `[ -S "$AGENT_BROWSER_SOCKET_DIR/\${AGENT_BROWSER_SESSION:-default}.sock" ] && agent-browser tab close >/dev/null 2>&1; true`;
 
 export async function openStageSandbox(input: {
   env: NodeJS.ProcessEnv;
@@ -68,10 +73,21 @@ export async function openStageSandbox(input: {
     ...(grants.length > 0 ? { grants } : {}),
   });
 
+  const browserEnv = sandboxBrowserEnv(input.env);
   const session: StageSandbox = {
     roots,
-    close: () =>
-      stopSandboxContainer({
+    close: async () => {
+      // The stage's tab in a shared run browser belongs to the daemon in this container: close it before the container goes.
+      if (browserEnv?.AGENT_BROWSER_PIN_TAB === "1") {
+        await execInSandboxContainer({
+          containerName: started.containerName,
+          dockerBin: options.dockerBin,
+          command: CLOSE_STAGE_TAB,
+          env: browserEnv,
+          timeoutMs: 15_000,
+        }).catch(() => undefined);
+      }
+      await stopSandboxContainer({
         containerName: started.containerName,
         dockerBin: options.dockerBin,
       }).catch((err: unknown) => {
@@ -79,7 +95,8 @@ export async function openStageSandbox(input: {
         process.stderr.write(
           `[stageWorker] failed to stop sandbox container ${started.containerName}: ${message}\n`,
         );
-      }),
+      });
+    },
   };
 
   try {
