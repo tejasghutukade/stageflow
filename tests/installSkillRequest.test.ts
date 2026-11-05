@@ -29,11 +29,11 @@ describe("parseSkillsAddCommand", () => {
 
   it("parses owner/repo slug and bare skills add", () => {
     const parsed = parseSkillsAddCommand(
-      "skills add tejasghutukade/stageflow --skill stageflow-run",
+      "skills add tejasghutukade/stageflow --skill stageflow-operate",
     );
     expect(parsed).toEqual({
       source: "tejasghutukade/stageflow",
-      skillName: "stageflow-run",
+      skillName: "stageflow-operate",
     });
   });
 

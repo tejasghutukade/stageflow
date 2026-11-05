@@ -1,0 +1,23 @@
+id: review-loop
+# Replace with a model id from MCP list_models or `sf providers status` before running.
+model: CHANGE_ME/<provider-model>
+stages:
+  - id: draft
+    uses: ./draft.yaml
+    entry: true
+    route:
+      - to: review
+  - id: review
+    uses: ./review.yaml
+    route:
+      - to: publish
+    on_verify_fail:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: publish
+    uses: ./publish.yaml
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting

@@ -1,0 +1,30 @@
+id: research
+system_prompt: |
+  Review the incoming goal and prior notes. Identify what is known, what is
+  unknown, and the next useful work. Do not change the checkout in this stage.
+
+  summary and payload are handed to the next stage verbatim. State outcomes
+  only.
+
+  When finished, call emit_stage_envelope once with status, summary, artifacts,
+  and a payload with the required known and unknown lists. Your last tool call
+  in this attempt must be emit_stage_envelope.
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
+      required:
+        - known
+        - unknown
+      properties:
+        known:
+          type: array
+          items:
+            type: string
+        unknown:
+          type: array
+          items:
+            type: string

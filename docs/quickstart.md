@@ -173,7 +173,7 @@ If a stage calls `ask_operator`, the run pauses until you reply in the console. 
 3. MCP: `list_pipelines` (catalog-relative paths; absolute paths → `absolute_path_not_allowed`) → `start_run` → `wait_run`
 4. Compare homes/providers with `get_health` (`stageflow_home`, `boot_providers`) and live auth via `list_providers`
 
-Details: [MCP](mcp.md). Setup skill checklist: `skills/stageflow-setup/SKILL.md`.
+Details: [MCP](mcp.md). Setup skill checklist: `skills/stageflow/SKILL.md`.
 
 For MCP without the console, use `sf mcp` — see [MCP](mcp.md).
 

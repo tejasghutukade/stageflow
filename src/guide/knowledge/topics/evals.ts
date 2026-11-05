@@ -62,7 +62,7 @@ Every run has a cost cap (\`max_cost_usd\`) covering model calls and judge calls
 
 ## What evals cannot do
 
-No checkout or repository for cases. A stage that asks a person (HITL gate) records \`EVAL_STAGE_NEEDS_INPUT\`. Pipeline-entry overlays (entry-level \`mcp\`, \`secrets\`, \`requires\`, pipeline \`channels\`, \`schemas\`, \`include\`) are not applied when a pipeline stage is evaluated, so it can behave differently than inside its pipeline. No whole-pipeline evals, no scheduled evals, no judge calibration, no deleting an eval from the console.
+No checkout or repository for cases. A stage that asks a person (HITL gate) records \`EVAL_STAGE_NEEDS_INPUT\`. Pipeline-entry overlays (entry-level \`mcp\`, \`secrets\`, \`requires\`, pipeline \`channels\`, \`schemas\`, \`include\`) are not applied when a pipeline stage is evaluated, so it can behave differently than inside its pipeline. No whole-pipeline evals, no scheduled evals, no automatic rubric rewriting, no deleting an eval from the console.
 
 ## Sort failures
 

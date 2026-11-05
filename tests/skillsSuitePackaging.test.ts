@@ -8,16 +8,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skillsRoot = path.join(root, "skills");
 
 const JOB_SKILLS = [
-  "stageflow-setup",
-  "stageflow-session-capture",
-  "stageflow-author",
-  "stageflow-run",
-  "stageflow-delegate",
+  "stageflow-pipelines",
+  "stageflow-agents",
+  "stageflow-operate",
+  "stageflow-evals",
 ] as const;
 
 const ALL_SKILLS = ["stageflow", ...JOB_SKILLS] as const;
 const NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const CONTROL_SURFACE_CITE = "../stageflow/references/control-surface.md";
 
 function parseFrontmatter(raw: string): Record<string, unknown> {
   const match = raw.match(/^---\n([\s\S]*?)\n---/);
@@ -46,7 +44,7 @@ function skillDirsWithSkillMd(): string[] {
 }
 
 describe("harness skills suite packaging", () => {
-  it("ships exactly six skill directories with SKILL.md plus the shared reference and probe", () => {
+  it("ships exactly five skill directories with SKILL.md plus the shared reference and probe", () => {
     expect(skillDirsWithSkillMd()).toEqual([...ALL_SKILLS].sort());
     expect(existsSync(path.join(skillsRoot, "stageflow", "references", "control-surface.md"))).toBe(
       true,
@@ -62,11 +60,14 @@ describe("harness skills suite packaging", () => {
     expect(frontmatter["disable-model-invocation"]).toBeFalsy();
   });
 
-  it("parses each job stub as user-invoked with a matching name", () => {
+  it("parses each job skill with a matching name and a description that can trigger", () => {
     for (const name of JOB_SKILLS) {
       const { frontmatter } = readSkill(name);
       expect(frontmatter.name, name).toBe(name);
-      expect(frontmatter["disable-model-invocation"], name).toBe(true);
+      expect(frontmatter["disable-model-invocation"], name).toBeFalsy();
+      const description = String(frontmatter.description);
+      expect(description.length, name).toBeGreaterThan(0);
+      expect(description.length, name).toBeLessThanOrEqual(1024);
     }
   });
 
@@ -78,9 +79,10 @@ describe("harness skills suite packaging", () => {
     }
   });
 
-  it("cites the shared control-surface reference from every job stub", () => {
-    for (const name of JOB_SKILLS) {
-      expect(readSkill(name).raw).toContain(CONTROL_SURFACE_CITE);
+  it("keeps every skill description inside the Agent Skills limit", () => {
+    for (const name of ALL_SKILLS) {
+      const description = String(readSkill(name).frontmatter.description);
+      expect(description.length, name).toBeLessThanOrEqual(1024);
     }
   });
 });

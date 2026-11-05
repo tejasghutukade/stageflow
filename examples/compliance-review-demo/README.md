@@ -75,7 +75,7 @@ From the **repository git root**:
 sf validate --pipeline examples/compliance-review-demo/compliance-review-demo.pipeline.yaml --strict
 ```
 
-Use the `stageflow-run` job to build a task with a payload like
+Use the `stageflow-operate` skill to build a task with a payload like
 `{ "bucket": "customer-uploads", "scenario": "fail" }`, or point `sf run`
 at it directly:
 

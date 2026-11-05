@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const skillDir = path.join(root, "skills", "stageflow-session-capture");
+const skillDir = path.join(root, "skills", "stageflow-pipelines");
 const skillMd = path.join(skillDir, "SKILL.md");
 const CITED_PATH_RE =
   /(?:\.\.\/stageflow\/references\/[\w.-]+|references\/[\w./-]+|scripts\/[\w./-]+|assets\/[\w./-]+)/g;
@@ -22,7 +22,7 @@ function parseFrontmatter(raw: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-describe("stageflow-session-capture SKILL.md", () => {
+describe("stageflow-pipelines SKILL.md", () => {
   const raw = readFileSync(skillMd, "utf8");
   const frontmatter = parseFrontmatter(raw);
   const body = raw.slice(raw.indexOf("\n---", 3) + 4);

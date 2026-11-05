@@ -9,7 +9,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const script = path.join(
   root,
   "skills",
-  "stageflow-session-capture",
+  "stageflow-pipelines",
   "scripts",
   "check-provider-gate.mjs",
 );

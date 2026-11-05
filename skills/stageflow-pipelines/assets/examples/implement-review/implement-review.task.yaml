@@ -1,0 +1,5 @@
+id: implement-review
+goal: Make a small, reviewed change and open a pull request for it
+context: Example task for the implement-review pipeline. Bind a checkout at run time.
+input:
+  request: Add a --verbose flag to the CLI that prints each step as it runs
