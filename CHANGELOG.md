@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.54.1] - 2026-11-05
+
+### Fixed
+
+- **Connecting OpenRouter asks for an API key again.** Since Pi 0.99, OpenRouter also offers a browser sign-in, and the console's **Connect** went straight to it. Connect now opens the API key field for any provider that takes a key, with **Sign in with <provider> instead** next to it; a provider with only a browser sign-in starts it as before. A Host's browser sign-in waits for a callback on the Host's own machine, so on a hosted workspace the key is the dependable choice.
+
 ## [0.54.0] - 2026-11-05
 
 ### Added

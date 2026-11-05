@@ -24,7 +24,7 @@ The **Workshop model** (see [Workshop Author, Model](workshop.md#model)) and how
 
 ## Providers
 
-Connect and inspect Pi model providers. A connected provider's **Provider actions** menu has Replace API key, Sign in again and Disconnect (which asks for confirmation). See [Providers](providers.md#console).
+Connect and inspect Pi model providers. **Connect** opens the API key field when the provider takes a key; a provider that also has a browser sign-in (OpenRouter, for example) shows **Sign in with <provider> instead** next to it, and a provider with only a browser sign-in starts it directly. A connected provider's **Provider actions** menu has Replace API key, Sign in again and Disconnect (which asks for confirmation). See [Providers](providers.md#console).
 
 ## Concurrency
 

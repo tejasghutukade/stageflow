@@ -21,6 +21,8 @@ import { useHotkeys } from "../keys";
 import {
   disconnectConfirmText,
   initialProviderActionsState,
+  browserSignInLabel,
+  connectStart,
   providerActions,
   reduceProviderActions,
   type ProviderActionsEvent,
@@ -705,8 +707,9 @@ function ProviderRow({
             className="flex h-8 shrink-0 items-center rounded-lg border border-[#ffffff1a] bg-[var(--sf-raised)] px-3 py-0"
             disabled={rowBusy}
             onClick={() => {
-              if (canOauth) onSetOauthing(provider.id);
-              else if (canKey) onSetConnecting(provider.id);
+              const start = connectStart({ canKey, canOauth });
+              if (start === "key") onSetConnecting(provider.id);
+              else if (start === "oauth") onSetOauthing(provider.id);
             }}
           >
             <span className="font-sans text-[13px] font-medium text-[var(--sf-text-1)]">
@@ -769,6 +772,19 @@ function ProviderRow({
           >
             Save key
           </button>
+          {canOauth && !configured ? (
+            <button
+              type="button"
+              className="font-sans text-[13px] text-[var(--sf-text-2)] underline-offset-2 hover:underline"
+              disabled={rowBusy}
+              onClick={() => {
+                onSetConnecting(null);
+                onSetOauthing(provider.id);
+              }}
+            >
+              {browserSignInLabel(provider.name)}
+            </button>
+          ) : null}
           <button
             type="button"
             className="font-sans text-[13px] text-[var(--sf-text-2)]"
