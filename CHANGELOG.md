@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.55.2] - 2026-11-05
+
+### Changed
+
+- **CI runs the test suite in four shards.** The UI tests, typecheck, and the package install check run at the same time as the shards. `npm test` no longer packs the package; that check is `npm run test:pack`.
+
 ## [0.55.1] - 2026-11-05
 
 ### Fixed
