@@ -1814,6 +1814,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             const result = await writeCatalogFileForHttp({
               inputPath: relPath,
               content: record.content,
+              ...(record.create === true ? { create: true } : {}),
               projectRoot: wireRoot.project_root,
               roots,
               fieldName: "path",

@@ -35,6 +35,7 @@ import path from "node:path";
 import { BROWSER_SKILL_NAME } from "../config/builtinSkills.js";
 import {
   type AgentSession,
+  createBashToolDefinition,
   type ExtensionFactory,
   type InlineExtension,
   DefaultResourceLoader,
@@ -150,7 +151,7 @@ import { createPiSettingsManager } from "./piSettings.js";
 import { createSessionContextWiring } from "../compaction/sessionWiring.js";
 import { ASK_OPERATOR_TOOL_NAME } from "../tools/stageToolNames.js";
 import { WORKING_STATE_GUIDANCE } from "../compaction/workingState.js";
-import { sandboxBrowserEnv } from "../runtime/sandboxContainer.js";
+import { inProcessBrowserEnv, sandboxBrowserEnv } from "../runtime/sandboxContainer.js";
 export { createSealedResourceLoader } from "./piSessionFactory.js";
 
 export const STAGEFLOW_PATH_DENY_EXTENSION_NAME = "stageflow-path-deny";
@@ -1540,7 +1541,7 @@ async function prepareStageSessionWiring(
       }
     }
     if (roots.containerName !== undefined) {
-      const browserEnv = sandboxBrowserEnv(process.env);
+      const browserEnv = sandboxBrowserEnv({ ...process.env, ...input.browserEnv });
       const sandboxTools = {
         containerName: roots.containerName,
         ...(browserEnv !== undefined ? { shellEnv: browserEnv } : {}),
@@ -1569,6 +1570,12 @@ async function prepareStageSessionWiring(
         defineTool({ ...createWorkingTreeFindTool(roots.cwd), constrainedSampling: sampling }),
         defineTool({ ...createWorkingTreeLsTool(roots.cwd), constrainedSampling: sampling }),
       );
+      const missingBrowserEnv = inProcessBrowserEnv(input.browserEnv);
+      if (missingBrowserEnv !== undefined) {
+        customTools.push(defineTool(createBashToolDefinition(roots.cwd, {
+          spawnHook: (context) => ({ ...context, env: { ...context.env, ...missingBrowserEnv } }),
+        })));
+      }
     }
 
     return {
@@ -2067,3 +2074,4 @@ export class PiAgentAdapter implements StagePort {
     return runStageViaOpen(this, input);
   }
 }
+

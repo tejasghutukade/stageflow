@@ -2,7 +2,7 @@
 
 Use this instead of checklist steps 2 and 6 in `SKILL.md` when the user wants a container or wants Stageflow embedded in another application. Confirm before `docker pull`, `docker run`, or `docker compose up`. Those publish a process and can spend model money once a provider key is present. Do not put a key in a compose file that will be committed. Use an untracked env file or a secret the user exports.
 
-This skill was checked against Stageflow 0.54.0. The image is published when that npm release is published.
+This skill was checked against Stageflow 0.55.0. The image is published when that npm release is published.
 
 ## Contents
 
@@ -15,7 +15,7 @@ This skill was checked against Stageflow 0.54.0. The image is published when tha
 
 ## Published image
 
-The image is `ghcr.io/tejasghutukade/stageflow`. Each release is tagged `x.y.z` and `x.y` (same digest, linux/amd64 and linux/arm64). For this skill that is `0.54.0` and `0.54`. Prefer a digest pin (`ghcr.io/tejasghutukade/stageflow@sha256:…`) for anything you will run again. The image is signed with keyless cosign on that digest.
+The image is `ghcr.io/tejasghutukade/stageflow`. Each release is tagged `x.y.z` and `x.y` (same digest, linux/amd64 and linux/arm64). For this skill that is `0.55.0` and `0.55`. Prefer a digest pin (`ghcr.io/tejasghutukade/stageflow@sha256:…`) for anything you will run again. The image is signed with keyless cosign on that digest.
 
 The image already contains the CLI at `/usr/local/bin/sf`, the console assets, and the eval engine (promptfoo, about 1.2 GB under `/data/eval-engine/`). It does not contain a browser, `gh`, or your project's pipelines. It does not mount a Docker socket, so stage shell tools run inside this container.
 
@@ -39,13 +39,13 @@ A new volume is seeded from the image, including the baked eval engine. A bind m
 Local console, port published only on this machine, no token. Safe only because `127.0.0.1` is the published address. The allow flag is required: inside the container the bind is `0.0.0.0`.
 
 ```bash
-docker pull ghcr.io/tejasghutukade/stageflow:0.54.0
+docker pull ghcr.io/tejasghutukade/stageflow:0.55.0
 docker run --rm --name stageflow \
   -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -e STAGEFLOW_PROVIDER_OPENROUTER_API_KEY \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.54.0 \
+  ghcr.io/tejasghutukade/stageflow:0.55.0 \
   sf ui
 ```
 
@@ -63,8 +63,8 @@ When the port is not limited to this machine, drop the allow flag, set a token, 
 
 ```bash
 export STAGEFLOW_CONTROL_TOKEN="$(openssl rand -hex 32)"
-docker pull ghcr.io/tejasghutukade/stageflow:0.54.0
-DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/tejasghutukade/stageflow:0.54.0)"
+docker pull ghcr.io/tejasghutukade/stageflow:0.55.0
+DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/tejasghutukade/stageflow:0.55.0)"
 docker run --rm --name stageflow \
   -e STAGEFLOW_CONTROL_TOKEN \
   -p 3847:3847 \
@@ -85,7 +85,7 @@ This is the standing Host without a Stageflow checkout. Save it where the user w
 ```yaml
 services:
   stageflow:
-    image: ghcr.io/tejasghutukade/stageflow:0.54.0
+    image: ghcr.io/tejasghutukade/stageflow:0.55.0
     command: ["sf", "ui"]
     ports:
       - "127.0.0.1:3847:3847"
@@ -117,7 +117,7 @@ After `curl -fsS http://127.0.0.1:3847/livez` returns 200, connect the harness a
 
 The Stageflow repository ships a `docker-compose.yml` that builds the image from the checkout and also builds a `stageflow-bash` sandbox. That file sets `image: ghcr.io/tejasghutukade/stageflow:local`, `command: ["sf", "ui"]`, the same localhost publish, `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`, and a Docker socket mount so stage shell tools can start sandbox containers. Use it only when the user has a checkout and asked for that sandbox. It is not the path for a customer who installed this skill into their own project.
 
-To point that file at a published image instead of a local build, set the service `image` to `ghcr.io/tejasghutukade/stageflow:0.54.0` (or a digest) and remove the `build` key. Keep the socket mount only if you still want the sandbox.
+To point that file at a published image instead of a local build, set the service `image` to `ghcr.io/tejasghutukade/stageflow:0.55.0` (or a digest) and remove the `build` key. Keep the socket mount only if you still want the sandbox.
 
 A browser stage needs a second image. The published image has no Chromium. Build the recipe `docker/Dockerfile.browser` from a checkout with `BASE_IMAGE` set to the published digest, and mount a Host config file at `/data/config.yaml` that sets `browser.executable_path`. Do not put browser paths in pipeline YAML.
 

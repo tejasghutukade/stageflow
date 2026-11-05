@@ -39,6 +39,13 @@ describe("pathForDisplay and a2aStatusView", () => {
 
   it("leaves a status without a config path alone", () => {
     expect(a2aStatusView({ state: "disabled" as const }, "/data")).toEqual({ state: "disabled" });
-    expect(a2aStatusView({ state: "enabled" as const, configPath: "/data/a2a.yaml" }, "/data")).toEqual({ state: "enabled", configPath: "a2a.yaml" });
+    expect(a2aStatusView({ state: "enabled" as const, configPath: "/data/a2a.yaml" }, "/data", {})).toEqual({ state: "enabled", configPath: "a2a.yaml", configSource: "home" });
+  });
+
+  it("tells a project a2a.yaml from the home one and from STAGEFLOW_A2A_CONFIG", () => {
+    expect(a2aStatusView({ configPath: "/data/a2a.yaml" }, "/data", {})).toEqual({ configPath: "a2a.yaml", configSource: "home" });
+    expect(a2aStatusView({ configPath: "/srv/proj/a2a.yaml" }, "/data", {})).toEqual({ configPath: "a2a.yaml", configSource: "project" });
+    expect(a2aStatusView({ configPath: "/etc/sf/a2a.yaml" }, "/data", { STAGEFLOW_A2A_CONFIG: "/etc/sf/a2a.yaml" })).toEqual({ configPath: "a2a.yaml", configSource: "override" });
+    expect(a2aStatusView({ configPath: "/data2/a2a.yaml" }, "/data", {})).toEqual({ configPath: "a2a.yaml", configSource: "project" });
   });
 });

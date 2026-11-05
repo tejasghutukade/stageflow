@@ -21,7 +21,7 @@ import { validateCatalog, type ValidationResult } from "../config/validateCatalo
 import { writeAudit } from "../logging/audit.js";
 import { logger as rootLogger } from "../logging/logger.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "../package-meta.js";
-import { globalStageflowHome } from "../project/globalHome.js";
+import { stageflowHomeForDisplay } from "../project/globalHome.js";
 import {
   getAuthStatus,
 } from "../agent/providerAuth.js";
@@ -436,7 +436,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         version: PACKAGE_VERSION,
         build_sha: BUILD_SHA,
         toolchain: toolchainHealthMap(),
-        stageflow_home: globalStageflowHome(),
+        stageflow_home: stageflowHomeForDisplay(),
         boot_providers,
         providers_live,
         providers: boot_providers,

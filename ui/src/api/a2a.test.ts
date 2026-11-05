@@ -6,6 +6,7 @@ import {
   a2aApi,
   projectA2aCaller,
   projectA2aPublication,
+  a2aConfigFileLabel,
   projectA2aStatus,
   publicationBody,
   type A2aPublication,
@@ -53,6 +54,7 @@ function jsonResponse(body: unknown, status = 200) {
 const enabledStatus: A2aStatus = {
   state: "enabled",
   configPath: "a2a.yaml",
+  configSource: "home",
   error: null,
   publicUrl: "https://ws.stage-flow.dev",
   agentCardUrl: "https://ws.stage-flow.dev/.well-known/agent-card.json",
@@ -112,6 +114,16 @@ describe("A2A routing", () => {
   it("is reachable at #/a2a and lights its rail item", () => {
     expect(parseHash("#/a2a")).toEqual({ name: "a2a" });
     expect(railActiveId({ name: "a2a" }, true)).toBe("a2a");
+  });
+});
+
+describe("A2A configuration file label", () => {
+  it("names where the file was found, and reads only known sources", () => {
+    expect(a2aConfigFileLabel(enabledStatus)).toBe("a2a.yaml (Stageflow home)");
+    expect(a2aConfigFileLabel(projectA2aStatus({ configPath: "a2a.yaml", configSource: "project" }))).toBe("a2a.yaml (project)");
+    expect(a2aConfigFileLabel(projectA2aStatus({ configPath: "a2a.yaml", configSource: "override" }))).toBe("a2a.yaml (STAGEFLOW_A2A_CONFIG)");
+    expect(a2aConfigFileLabel(projectA2aStatus({ configPath: "a2a.yaml", configSource: "/abs" }))).toBe("a2a.yaml");
+    expect(a2aConfigFileLabel(projectA2aStatus({}))).toBe("");
   });
 });
 
