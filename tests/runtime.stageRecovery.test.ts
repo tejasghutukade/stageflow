@@ -951,6 +951,8 @@ describe("runtime stage recovery abandon", () => {
     expect(
       detail.stages.find((s) => s.stage_id === "design-doc")?.status,
     ).toBe("succeeded");
+    // The run is marked succeeded before the manager lets it go; wait so it does not log after the file ends.
+    await waitFor(() => manager.getActiveCount() === 0);
   },
     15000,
   );
