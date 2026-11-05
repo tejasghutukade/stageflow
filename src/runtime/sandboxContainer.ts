@@ -228,8 +228,35 @@ export function sandboxBrowserEnv(env: Record<string, string | undefined>): Reco
   return out;
 }
 
-/** Runs before a command that carries a browser env: the empty config agent-browser reads instead of ./agent-browser.json. */
-const BROWSER_PREAMBLE = `mkdir -p -m 700 ${SANDBOX_BROWSER_DIR} && { [ -e ${SANDBOX_BROWSER_DIR}/empty.json ] || printf '{}\\n' > ${SANDBOX_BROWSER_DIR}/empty.json; }\n`;
+/** The browser env an in-process stage's local shell lacks (a stage worker already has it in `process.env`), or undefined. */
+export function inProcessBrowserEnv(
+  browserEnv: Record<string, string> | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> | undefined {
+  if (browserEnv === undefined) return undefined;
+  return Object.entries(browserEnv).some(([name, value]) => env[name] !== value) ? browserEnv : undefined;
+}
+
+/**
+ * Runs before a command that carries a browser env: the empty config agent-browser reads instead of
+ * ./agent-browser.json, and an `agent-browser` wrapper that starts the session's daemon once, under a
+ * lock, before the first command. Two commands that start it at the same time fail on its socket.
+ */
+const BROWSER_PREAMBLE = [
+  `mkdir -p -m 700 ${SANDBOX_BROWSER_DIR} && { [ -e ${SANDBOX_BROWSER_DIR}/empty.json ] || printf '{}\\n' > ${SANDBOX_BROWSER_DIR}/empty.json; }`,
+  `agent-browser() {`,
+  `  local dir="\${AGENT_BROWSER_SOCKET_DIR:-}" sock="\${AGENT_BROWSER_SOCKET_DIR:-}/\${AGENT_BROWSER_SESSION:-default}.sock"`,
+  `  if [ -n "$dir" ] && [ ! -S "$sock" ] && mkdir -p -m 700 "$dir"; then`,
+  `    local i=0 held=0`,
+  `    while [ $i -lt 300 ]; do mkdir "$dir/.start.lock" 2>/dev/null && { held=1; break; }; [ -S "$sock" ] && break; sleep 0.1; i=$((i + 1)); done`,
+  `    [ -S "$sock" ] || command agent-browser get url >/dev/null 2>&1 || true`,
+  `    [ $held -eq 1 ] && rmdir "$dir/.start.lock"`,
+  `  fi`,
+  `  command agent-browser "$@"`,
+  `}`,
+  `export -f agent-browser`,
+  ``,
+].join("\n");
 
 export async function execInSandboxContainer(params: {
   containerName: string;

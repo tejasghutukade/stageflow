@@ -1,4 +1,5 @@
-import { readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { parse as parseYaml } from "yaml";
 import path from "node:path";
 import {
   CatalogPathError,
@@ -6,7 +7,12 @@ import {
   resolveCatalogRelativePath,
   type ResolveCatalogRelativePathInput,
 } from "../config/catalogRelativePath.js";
+import type { LoadOutcome } from "../config/loadOutcome.js";
+import { loadPipelineOutcome } from "../config/loadPipeline.js";
 import { loadStageOutcome } from "../config/loadStage.js";
+import { loadStageflowManifestOutcome } from "../config/loadStageflowManifest.js";
+import { loadTaskOutcome } from "../config/loadTask.js";
+import { loadTriggerOutcome } from "../config/loadTrigger.js";
 import {
   findingsFromLoadIssues,
   type ValidationFinding,
@@ -29,13 +35,26 @@ export type ReadCatalogFileResult =
       code: CatalogFileReadErrorCode;
     };
 
+export type CatalogFileWriteInvalidCode =
+  | "stage_invalid"
+  | "pipeline_invalid"
+  | "task_invalid"
+  | "trigger_invalid"
+  | "manifest_invalid";
+
+export type WriteCatalogFileErrorCode =
+  | CatalogFileReadErrorCode
+  | CatalogFileWriteInvalidCode
+  | "catalog_file_exists"
+  | "use_eval_api";
+
 export type WriteCatalogFileResult =
   | { ok: true; path: string; content: string }
   | {
       ok: false;
-      status: 400 | 404 | 413;
+      status: 400 | 404 | 409 | 413;
       error: string;
-      code: CatalogFileReadErrorCode | "stage_invalid";
+      code: WriteCatalogFileErrorCode;
       findings?: ValidationFinding[];
     };
 
@@ -148,125 +167,181 @@ export async function readCatalogFileForHttp(
   return { ok: true, path: resolved.relativePath, content };
 }
 
+export type CatalogFileKind = "stage" | "pipeline" | "task" | "trigger" | "manifest";
+
+const INVALID_CODE: Record<CatalogFileKind, CatalogFileWriteInvalidCode> = {
+  stage: "stage_invalid",
+  pipeline: "pipeline_invalid",
+  task: "task_invalid",
+  trigger: "trigger_invalid",
+  manifest: "manifest_invalid",
+};
+
+/** Eval and dataset files have their own write path (base hash, atomic write); this route refuses them. */
+function isEvalCatalogFile(relativePath: string): boolean {
+  const base = path.basename(relativePath).toLowerCase();
+  return /\.eval\.ya?ml$/.test(base) || /\.dataset\.(jsonl|json|csv)$/.test(base);
+}
+
+/** What the file is, from its name first and then its content; an unrecognized file is checked as a stage, as before. */
+export function catalogFileKind(relativePath: string, content: string): CatalogFileKind {
+  const normalized = relativePath.replace(/\\/g, "/").replace(/^\.\/+/, "");
+  if (normalized === "stageflow.yaml") return "manifest";
+  const base = path.basename(normalized).toLowerCase();
+  if (base.endsWith(".pipeline.yaml") || base.endsWith(".pipeline.yml")) return "pipeline";
+  if (base.endsWith(".task.yaml") || base.endsWith(".task.yml")) return "task";
+  if (base.endsWith(".trigger.yaml") || base.endsWith(".trigger.yml")) return "trigger";
+  if (base.endsWith(".stage.yaml") || base.endsWith(".stage.yml")) return "stage";
+  let raw: unknown;
+  try {
+    raw = parseYaml(content);
+  } catch {
+    return "stage";
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return "stage";
+  const record = raw as Record<string, unknown>;
+  if (Array.isArray(record.stages) || record.include !== undefined) return "pipeline";
+  if (typeof record.goal === "string" && record.system_prompt === undefined) return "task";
+  return "stage";
+}
+
+async function loadCatalogFileOutcome(kind: CatalogFileKind, file: string, root: string): Promise<LoadOutcome<unknown>> {
+  switch (kind) {
+    case "pipeline":
+      return loadPipelineOutcome(file, { cwd: root, projectRoot: root });
+    case "task":
+      return loadTaskOutcome(file);
+    case "trigger":
+      return loadTriggerOutcome(file);
+    case "manifest":
+      return loadStageflowManifestOutcome(root);
+    case "stage":
+      return loadStageOutcome(file);
+  }
+}
+
+/** The nearest folder of `target` that exists, so a new file's real location can be checked before anything is created. */
+async function nearestExistingDir(target: string): Promise<string> {
+  let dir = path.dirname(target);
+  for (;;) {
+    try {
+      if ((await stat(dir)).isDirectory()) return dir;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return dir;
+    dir = parent;
+  }
+}
+
+function writeFailure(status: 400 | 404 | 409 | 413, error: string, code: WriteCatalogFileErrorCode): WriteCatalogFileResult {
+  return { ok: false, status, error, code };
+}
+
 export async function writeCatalogFileForHttp(
-  input: ResolveCatalogRelativePathInput & { content: string },
+  input: ResolveCatalogRelativePathInput & { content: string; create?: boolean },
 ): Promise<WriteCatalogFileResult> {
   if (!isCatalogYamlExtension(input.inputPath)) {
-    return {
-      ok: false,
-      status: 400,
-      error: "Only .yaml and .yml catalog files can be written",
-      code: "unsupported_file_type",
-    };
+    return writeFailure(400, "Only .yaml and .yml catalog files can be written", "unsupported_file_type");
   }
-
+  if (isEvalCatalogFile(input.inputPath)) {
+    return writeFailure(400, "Eval files are written through the evals API", "use_eval_api");
+  }
   if (Buffer.byteLength(input.content, "utf8") > CATALOG_FILE_MAX_BYTES) {
-    return {
-      ok: false,
-      status: 413,
-      error: `Catalog file exceeds ${CATALOG_FILE_MAX_BYTES} byte limit`,
-      code: "catalog_file_too_large",
-    };
+    return writeFailure(413, `Catalog file exceeds ${CATALOG_FILE_MAX_BYTES} byte limit`, "catalog_file_too_large");
   }
 
   let resolved;
   try {
     resolved = resolveCatalogRelativePath(input);
   } catch (err) {
-    if (err instanceof CatalogPathError) {
-      if (err.code === "path_outside_project_root") {
-        return {
-          ok: false,
-          status: 400,
-          error: err.message,
-          code: "path_outside_project_root",
-        };
-      }
-      throw err;
+    if (err instanceof CatalogPathError && err.code === "path_outside_project_root") {
+      return writeFailure(400, err.message, "path_outside_project_root");
     }
     throw err;
   }
 
-  let rootReal: string;
+  const rootReal = await realpath(resolved.root.path);
+  const outside = writeFailure(400, `path escapes project_root ${resolved.root.project_root}`, "path_outside_project_root");
   let fileReal: string;
+  let createdDir: string | undefined;
   try {
-    rootReal = await realpath(resolved.root.path);
     fileReal = await realpath(resolved.absolutePath);
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      return {
-        ok: false,
-        status: 404,
-        error: "Catalog file not found",
-        code: "catalog_file_not_found",
-      };
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    if (input.create !== true) return writeFailure(404, "Catalog file not found", "catalog_file_not_found");
+    const existing = await nearestExistingDir(resolved.absolutePath);
+    const existingReal = await realpath(existing);
+    fileReal = path.join(existingReal, path.relative(existing, resolved.absolutePath));
+    if (!isInsideProjectRoot(rootReal, existingReal) || !isInsideProjectRoot(rootReal, fileReal)) return outside;
+    const firstNew = path.relative(existingReal, path.dirname(fileReal)).split(path.sep)[0];
+    if (firstNew) {
+      createdDir = path.join(existingReal, firstNew);
+      await mkdir(path.dirname(fileReal), { recursive: true });
     }
-    throw err;
+    try {
+      await writeFile(fileReal, input.content, { encoding: "utf8", flag: "wx" });
+    } catch (writeErr) {
+      if (createdDir !== undefined) await rm(createdDir, { recursive: true, force: true });
+      if ((writeErr as NodeJS.ErrnoException).code === "EEXIST") {
+        return writeFailure(409, "Catalog file already exists", "catalog_file_exists");
+      }
+      throw writeErr;
+    }
+    return validateWritten(input, resolved.relativePath, rootReal, fileReal, async () => {
+      await rm(createdDir ?? fileReal, { recursive: true, force: true });
+    });
   }
 
-  if (!isInsideProjectRoot(rootReal, fileReal)) {
-    return {
-      ok: false,
-      status: 400,
-      error: `path escapes project_root ${resolved.root.project_root}`,
-      code: "path_outside_project_root",
-    };
-  }
-
+  if (!isInsideProjectRoot(rootReal, fileReal)) return outside;
   if (!isCatalogYamlExtension(fileReal)) {
-    return {
-      ok: false,
-      status: 400,
-      error: "Only .yaml and .yml catalog files can be written",
-      code: "unsupported_file_type",
-    };
+    return writeFailure(400, "Only .yaml and .yml catalog files can be written", "unsupported_file_type");
   }
-
-  let fileStat;
-  try {
-    fileStat = await stat(fileReal);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      return {
-        ok: false,
-        status: 404,
-        error: "Catalog file not found",
-        code: "catalog_file_not_found",
-      };
-    }
-    throw err;
+  if (!(await stat(fileReal)).isFile()) {
+    return writeFailure(400, "Only .yaml and .yml catalog files can be written", "unsupported_file_type");
   }
-
-  if (!fileStat.isFile()) {
-    return {
-      ok: false,
-      status: 400,
-      error: "Only .yaml and .yml catalog files can be written",
-      code: "unsupported_file_type",
-    };
-  }
-
-  const original = await readFile(fileReal, "utf8");
+  if (input.create === true) return writeFailure(409, "Catalog file already exists", "catalog_file_exists");
+  const previous = await readFile(fileReal, "utf8");
   await writeFile(fileReal, input.content, "utf8");
+  return validateWritten(input, resolved.relativePath, rootReal, fileReal, async () => {
+    await writeFile(fileReal, previous, "utf8");
+  });
+}
 
-  const outcome = await loadStageOutcome(fileReal);
-  if (!outcome.ok) {
-    await writeFile(fileReal, original, "utf8");
-    const findings = findingsFromLoadIssues(
-      resolved.root.path,
-      fileReal,
-      outcome.issues,
-    );
-    return {
-      ok: false,
-      status: 400,
-      error: findings[0]?.message ?? "Invalid stage YAML",
-      code: "stage_invalid",
-      findings,
-    };
+/** Loads the written file as what it is; on failure undoes the write and answers with catalog-relative findings. */
+async function validateWritten(
+  input: { content: string },
+  relativePath: string,
+  rootReal: string,
+  fileReal: string,
+  undo: () => Promise<void>,
+): Promise<WriteCatalogFileResult> {
+  const kind = catalogFileKind(relativePath, input.content);
+  const outcome = await loadCatalogFileOutcome(kind, fileReal, rootReal);
+  if (outcome.ok) return { ok: true, path: relativePath, content: input.content };
+  await undo();
+  const findings = findingsFromLoadIssues(rootReal, fileReal, outcome.issues).map((finding) => ({
+    ...finding,
+    message: withoutHostPaths(finding.message, [
+      [fileReal, relativePath],
+      [rootReal, "."],
+    ]),
+  }));
+  return {
+    ok: false,
+    status: 400,
+    error: findings[0]?.message ?? `Invalid ${kind} YAML`,
+    code: INVALID_CODE[kind],
+    findings,
+  };
+}
+
+/** Load messages name the absolute file; the console and API answer with the catalog-relative path instead. */
+function withoutHostPaths(message: string, replacements: Array<[string, string]>): string {
+  let out = message;
+  for (const [from, to] of [...replacements].sort((a, b) => b[0].length - a[0].length)) {
+    if (from.length > 1) out = out.split(from).join(to);
   }
-
-  return { ok: true, path: resolved.relativePath, content: input.content };
+  return out;
 }

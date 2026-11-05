@@ -6,7 +6,7 @@
 //     -> creates a per-container temp directory that stands in for /workspace,
 //        prints a fake container id, exits 0. If FAKE_DOCKER_LOG_FILE is set,
 //        appends a "start <name>" line.
-//   exec [-w /workspace] <name> bash -c <command>
+//   exec [-e NAME]... [-w /workspace] <name> bash -c <command>
 //     -> runs <command> with cwd set to that container's fake /workspace.
 //        Absolute /workspace paths in the command are rewritten to the temp
 //        directory. Not a chroot: the command can still name other host paths.
@@ -128,7 +128,7 @@ if (subcommand === "run") {
 } else if (subcommand === "exec") {
   let i = 1;
   while (i < args.length && args[i].startsWith("-")) {
-    if (args[i] === "-w" || args[i] === "--workdir") {
+    if (args[i] === "-w" || args[i] === "--workdir" || args[i] === "-e" || args[i] === "--env") {
       i += 2;
       continue;
     }

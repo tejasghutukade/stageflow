@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureRunProfileBrowser } from "../src/browser/anchor.js";
@@ -21,7 +21,7 @@ import {
 import { BROWSER_STAGE_PATTERNS, redactString } from "../src/logging/redact.js";
 import { createVolumeProfileStore } from "../src/browser/volumeProfileStore.js";
 import { loadHostConfig } from "../src/config/hostConfig.js";
-import { execInSandboxContainer, sandboxBrowserEnv } from "../src/runtime/sandboxContainer.js";
+import { execInSandboxContainer, inProcessBrowserEnv, sandboxBrowserEnv } from "../src/runtime/sandboxContainer.js";
 import { FOREVER_DENIED_SECRET_NAMES } from "../src/runtime/stageEnvironment.js";
 
 let root: string;
@@ -299,5 +299,42 @@ describe("browser env inside the stage sandbox", () => {
     expect(args.join("\n")).toContain("printf '{}\\n' > /tmp/sf-agent-browser/empty.json");
     expect(args.join("\n")).toContain("agent-browser get url");
     expect(lines).toContain("CDP=wss://secret-signing");
+  });
+
+  it("starts the session daemon once when two commands start it at the same time", async () => {
+    const bin = path.join(root, "bin");
+    const log = path.join(root, "calls.log");
+    const sockets = path.join(root, "s");
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(bin, "agent-browser"), [
+      "#!/bin/sh",
+      `printf '%s\\n' "$*" >> ${log}`,
+      `if [ "$*" = "get url" ]; then sleep 0.3; python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$AGENT_BROWSER_SOCKET_DIR/$AGENT_BROWSER_SESSION.sock"; fi`,
+      "",
+    ].join("\n"));
+    const docker = path.join(root, "docker");
+    await writeFile(docker, `#!/bin/sh\nwhile [ "$1" != bash ]; do shift; done\nPATH=${bin}:$PATH exec "$@"\n`);
+    await chmod(path.join(bin, "agent-browser"), 0o755);
+    await chmod(docker, 0o755);
+    const env = { AGENT_BROWSER_CDP: "wss://remote", AGENT_BROWSER_SESSION: "sf-t-1", AGENT_BROWSER_SOCKET_DIR: sockets, AGENT_BROWSER_CONFIG: path.join(root, "empty.json") };
+    const results = await Promise.all(["snapshot", "open https://a.test"].map((cmd) =>
+      execInSandboxContainer({ containerName: "c1", command: `agent-browser ${cmd}`, dockerBin: docker, env })));
+    expect(results.map((r) => r.exitCode)).toEqual([0, 0]);
+    const calls = (await readFile(log, "utf8")).trim().split("\n");
+    expect(calls.filter((c) => c === "get url")).toHaveLength(1);
+    expect(calls.indexOf("get url")).toBe(0);
+    expect(calls.slice(1).sort()).toEqual(["open https://a.test", "snapshot"]);
+    await execInSandboxContainer({ containerName: "c1", command: "agent-browser snapshot", dockerBin: docker, env });
+    expect((await readFile(log, "utf8")).trim().split("\n").filter((c) => c === "get url")).toHaveLength(1);
+  });
+});
+
+describe("inProcessBrowserEnv", () => {
+  it("is the stage's browser env only when the process does not already carry it", () => {
+    const env = { AGENT_BROWSER_SESSION: "sf-t-1", AGENT_BROWSER_CDP: "wss://r" };
+    expect(inProcessBrowserEnv(undefined, {})).toBeUndefined();
+    expect(inProcessBrowserEnv(env, { ...env })).toBeUndefined();
+    expect(inProcessBrowserEnv(env, {})).toEqual(env);
+    expect(inProcessBrowserEnv(env, { ...env, AGENT_BROWSER_CDP: "wss://old" })).toEqual(env);
   });
 });

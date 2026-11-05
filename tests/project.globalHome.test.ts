@@ -9,6 +9,7 @@ import {
   globalStageflowHome,
   resetGlobalStageflowHomeForTests,
   StageflowHomeError,
+  stageflowHomeForDisplay,
 } from "../src/project/globalHome.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { withIsolatedHome } from "./helpers/projectContext.js";
@@ -123,5 +124,14 @@ describe("assertStageflowHomeWritable", () => {
       await chmod(home, 0o700).catch(() => {});
       await rm(parent, { recursive: true, force: true });
     }
+  });
+});
+
+describe("stageflowHomeForDisplay", () => {
+  it("is ~/… inside the user's home folder and the folder name elsewhere, never absolute", () => {
+    expect(stageflowHomeForDisplay("/Users/me/.stageflow", "/Users/me")).toBe("~/.stageflow");
+    expect(stageflowHomeForDisplay("/Users/me", "/Users/me")).toBe("~");
+    expect(stageflowHomeForDisplay("/data/sfhome", "/home/sfuser")).toBe("sfhome");
+    expect(stageflowHomeForDisplay("/Users/me2/.stageflow", "/Users/me")).toBe(".stageflow");
   });
 });

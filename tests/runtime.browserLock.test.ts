@@ -352,3 +352,27 @@ describe("stale locks at Host start", () => {
     expect(await fresh.holder({ scope: "local", name: "gone" })).toBeUndefined();
   });
 });
+
+describe("in-process browser stages", () => {
+  it("hand the stage's browser env to the agent, which a stage worker would have in process.env", async () => {
+    const { store, browser } = setup(createInMemoryProfileLock());
+    const seen = new Map<string, Record<string, string> | undefined>();
+    const fake = scriptedFakeAgent([{ type: "emit", envelope: { status: "success", summary: "ok", artifacts: [], payload: {} } }]);
+    const agent = { ...fake, openStage: (input: Parameters<typeof fake.openStage>[0]) => { seen.set(input.stage.id, input.browserEnv); return fake.openStage(input); } };
+    const started = await startPipeline({
+      agent,
+      store,
+      taskYaml: "id: t\ngoal: g\n",
+      pipeline: pipeline([stage("plain"), stage("web", { browser: {} })]),
+      cwd: root,
+      executionMode: "inprocess",
+      browser,
+    });
+    await started.done;
+    const web = seen.get("web");
+    expect(seen.has("plain")).toBe(true);
+    expect(seen.get("plain")).toBeUndefined();
+    expect(web?.AGENT_BROWSER_SESSION).toMatch(/^sf-t-/);
+    expect(Object.keys(web ?? {}).every((name) => name.startsWith("AGENT_BROWSER_"))).toBe(true);
+  });
+});

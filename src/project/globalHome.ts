@@ -33,6 +33,14 @@ function resolveStageflowHomeFromEnv(): string {
   return path.resolve(process.cwd(), raw);
 }
 
+/** The Stageflow home as health answers show it: `~/…` inside the user's home folder, else the folder name. Never absolute. */
+export function stageflowHomeForDisplay(home: string = globalStageflowHome(), userHome: string = os.homedir()): string {
+  const relative = path.relative(userHome, home);
+  if (relative === "") return "~";
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) return `~/${relative.split(path.sep).join("/")}`;
+  return path.basename(home);
+}
+
 export function globalStageflowHome(): string {
   if (memoizedHome === undefined) {
     memoizedHome = resolveStageflowHomeFromEnv();

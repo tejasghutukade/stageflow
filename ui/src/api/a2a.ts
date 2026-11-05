@@ -5,6 +5,8 @@ export type A2aState = "disabled" | "enabled" | "configuration_error";
 export type A2aStatus = {
   state: A2aState;
   configPath: string;
+  /** Which rule found the file; empty when the Host did not say. */
+  configSource: "home" | "project" | "override" | "";
   error: { code: string; message: string } | null;
   publicUrl: string;
   agentCardUrl: string;
@@ -69,12 +71,21 @@ function problem(value: unknown): { code: string; message: string } | null {
   return typeof raw.code === "string" ? { code: raw.code, message: text(raw.message) } : null;
 }
 
+const CONFIG_SOURCE_LABEL = { home: "Stageflow home", project: "project", override: "STAGEFLOW_A2A_CONFIG" } as const;
+
+/** The configuration file with where it was found, e.g. `a2a.yaml (project)`. */
+export function a2aConfigFileLabel(status: Pick<A2aStatus, "configPath" | "configSource">): string {
+  if (!status.configPath) return "";
+  return status.configSource ? `${status.configPath} (${CONFIG_SOURCE_LABEL[status.configSource]})` : status.configPath;
+}
+
 export function projectA2aStatus(value: unknown): A2aStatus {
   const raw = asRecord(value);
   const reload = asRecord(raw.lastReload);
   return {
     state: raw.state === "enabled" || raw.state === "configuration_error" ? raw.state : "disabled",
     configPath: text(raw.configPath),
+    configSource: raw.configSource === "home" || raw.configSource === "project" || raw.configSource === "override" ? raw.configSource : "",
     error: problem(raw.error),
     publicUrl: text(raw.publicUrl),
     agentCardUrl: text(raw.agentCardUrl),
