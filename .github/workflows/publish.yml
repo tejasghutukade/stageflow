@@ -187,6 +187,31 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  # Tells a hosting platform (Stageflow Cloud) that a version is on npm so it can bake its VM image.
+  # Off unless CLOUD_DISPATCH_REPO and CLOUD_DISPATCH_TOKEN are set; a failed dispatch fails only this job.
+  notify-cloud:
+    needs: publish
+    if: needs.publish.outputs.published == 'true' && vars.CLOUD_DISPATCH_REPO != ''
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Send core-published
+        env:
+          GH_TOKEN: ${{ secrets.CLOUD_DISPATCH_TOKEN }}
+          REPO: ${{ vars.CLOUD_DISPATCH_REPO }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "CLOUD_DISPATCH_TOKEN is empty; add it next to CLOUD_DISPATCH_REPO." >&2
+            exit 1
+          fi
+          if [[ ! "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid CLOUD_DISPATCH_REPO or version" >&2
+            exit 1
+          fi
+          gh api "repos/${REPO}/dispatches" -f event_type=core-published -f "client_payload[version]=${VERSION}"
+          echo "Sent core-published ${VERSION} to ${REPO}"
+
   # Multi-arch GHCR image + cosign keyless sign-by-digest (Slot 10 / U3+U4).
   # Same version gate as npm; failure fails the release pipeline (no continue-on-error).
   publish-image:
