@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  browserSignInLabel,
+  connectStart,
   disconnectConfirmText,
   initialProviderActionsState as init,
   providerActions,
@@ -80,5 +82,20 @@ describe("provider actions model", () => {
     expect(disconnectConfirmText("openrouter")).toBe(
       "Disconnect openrouter? Agents and evals that use it will stop working.",
     );
+  });
+});
+
+describe("connectStart", () => {
+  it("opens the key field when a key is possible, even when a browser sign-in exists", () => {
+    expect(connectStart({ canKey: true, canOauth: true })).toBe("key");
+    expect(connectStart({ canKey: true, canOauth: false })).toBe("key");
+    expect(connectStart({ canKey: false, canOauth: true })).toBe("oauth");
+    expect(connectStart({ canKey: false, canOauth: false })).toBeNull();
+  });
+
+  it("names the browser sign-in after the provider's login when it has one", () => {
+    expect(browserSignInLabel("OpenRouter")).toBe("Sign in with OpenRouter instead");
+    expect(browserSignInLabel(undefined)).toBe("Sign in with browser instead");
+    expect(browserSignInLabel("  ")).toBe("Sign in with browser instead");
   });
 });

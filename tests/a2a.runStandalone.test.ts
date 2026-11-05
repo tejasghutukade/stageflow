@@ -24,8 +24,22 @@ async function setup(configPath: string, agent = supplierAgent()) {
   const { store, connection } = createRunStoreWithConnection({ rootDir: root });
   const manager = new RunManager({ agent, store, cwd: root });
   const registry = await loadPublicationRegistry(configPath, env);
-  const invocations = createA2aInvocations(registry, manager, store, root, connection, new RateLimiter());
+  // A roomy limiter: these tests poll task state and are not about rate limits (the default burst is 20).
+  const invocations = createA2aInvocations(registry, manager, store, root, connection, new RateLimiter(10_000, 600_000));
   return { invocations, manager, store, root };
+}
+
+/** Polls a task until it reaches `state`, pausing between reads so a slow runner does not spin. */
+async function pollTask(
+  invocations: Awaited<ReturnType<typeof setup>>["invocations"],
+  task: Awaited<ReturnType<Awaited<ReturnType<typeof setup>>["invocations"]["get"]>>,
+  state: string,
+) {
+  for (let i = 0; i < 400 && task.state !== state; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    task = await invocations.get(caller, task.id);
+  }
+  return task;
 }
 
 function runStage(
@@ -100,10 +114,7 @@ describe("run_stage (A2A standalone stage/pipeline operation, ADR-0001)", () => 
     expect(["submitted", "working"]).toContain(submitted.state);
     expect(submitted.runId).toBeTruthy();
 
-    let task = submitted;
-    for (let i = 0; i < 25 && task.state !== "completed"; i += 1) {
-      task = await invocations.get(caller, submitted.id);
-    }
+    const task = await pollTask(invocations, submitted, "completed");
     expect(task.state).toBe("completed");
     expect(task.result?.payload?.recommendation).toBe("approve");
     expect(task.result?.artifacts.map((a) => a.name)).toContain("assessment.md");
@@ -141,16 +152,12 @@ describe("run_stage (A2A standalone stage/pipeline operation, ADR-0001)", () => 
       caller,
       runStage({ stage: clarifyStage, task: { id: "t3", goal: "assess", input: { supplier: "Northstar" } } }, "m-3"),
     );
-    for (let i = 0; i < 25 && task.state !== "input-required"; i += 1) {
-      task = await invocations.get(caller, task.id);
-    }
+    task = await pollTask(invocations, task, "input-required");
     expect(task.state).toBe("input-required");
     const handle = task.questions![0].handle;
     expect(task.questions![0].message).toContain("certification");
     task = await invocations.send(caller, answer(task.id, "m-4", handle, "Yes, mandatory."));
-    for (let i = 0; i < 25 && task.state !== "completed"; i += 1) {
-      task = await invocations.get(caller, task.id);
-    }
+    task = await pollTask(invocations, task, "completed");
     expect(task.state).toBe("completed");
   });
 
