@@ -1,14 +1,21 @@
 #!/usr/bin/env node
 
-const DEFAULT_BASE_URL = "http://127.0.0.1:3847";
+const FALLBACK_PORT = 3847;
 const TIMEOUT_MS = 1500;
 
 function usage() {
   return "Usage: detect-host.mjs [--base-url URL]";
 }
 
+function defaultBaseUrl(env = process.env) {
+  const raw = env.STAGEFLOW_SERVICE_PORT;
+  const parsed = raw === undefined ? NaN : Number(raw);
+  const port = Number.isFinite(parsed) && parsed > 0 ? parsed : FALLBACK_PORT;
+  return `http://127.0.0.1:${port}`;
+}
+
 function parseArgs(argv) {
-  let baseUrl = DEFAULT_BASE_URL;
+  let baseUrl = defaultBaseUrl();
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "-h" || arg === "--help") {
@@ -46,7 +53,7 @@ async function probe(baseUrl) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(`${baseUrl}/api/health`, { signal: ac.signal });
+    const res = await fetch(`${baseUrl}/livez`, { signal: ac.signal });
     if (res.status !== 200) return "down";
     JSON.parse(await res.text());
     return "up";

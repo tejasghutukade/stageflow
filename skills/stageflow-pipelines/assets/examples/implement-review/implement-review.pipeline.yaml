@@ -1,0 +1,48 @@
+id: implement-review
+# Replace with a model id from MCP list_models or `sf providers status` before running.
+model: CHANGE_ME/<provider-model>
+schemas:
+  change-plan:
+    type: object
+    required: [summary, steps]
+    properties:
+      summary:
+        type: string
+      steps:
+        type: array
+        items:
+          type: string
+stages:
+  - id: plan
+    uses: ./plan.yaml
+    entry: true
+    route:
+      - to: implement
+  - id: implement
+    uses: ./implement.yaml
+    route:
+      - to: review
+    on_verify_fail:
+      mode: repair
+      max_attempts: 2
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: review
+    uses: ./review.yaml
+    route:
+      - to: ship
+      - type: loop
+        to: implement
+        max_replays: 2
+        on_max_replays: wait_for_human
+        replay_session: resume
+  - id: ship
+    uses: ./ship.yaml
+    replay_safe: false
+    secrets:
+      - { name: GITHUB_TOKEN, as: env }
+    requires:
+      - tool: gh
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting

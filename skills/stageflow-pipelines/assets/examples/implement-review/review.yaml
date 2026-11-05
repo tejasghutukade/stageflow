@@ -1,0 +1,35 @@
+id: review
+system_prompt: |
+  Review the change described by payload.changed_files against the accepted
+  plan. Read the changed files in the checkout. Do not edit them.
+
+  Emit status success with a payload that has verdict (pass or fail) and
+  blocking_findings (an empty list when verdict is pass).
+  - verdict pass: include feedback_loop: { action: continue }.
+  - verdict fail: include feedback_loop: { action: send_back, target: implement }
+    and list each blocking finding as one actionable sentence.
+
+  summary and payload are handed to the next stage verbatim. Your last tool call
+  in this attempt must be emit_stage_envelope.
+io:
+  input:
+    schema:
+      type: object
+      required: [changed_files]
+      properties:
+        changed_files:
+          type: array
+          items:
+            type: string
+  output:
+    schema:
+      type: object
+      required: [verdict, blocking_findings]
+      properties:
+        verdict:
+          type: string
+          enum: [pass, fail]
+        blocking_findings:
+          type: array
+          items:
+            type: string

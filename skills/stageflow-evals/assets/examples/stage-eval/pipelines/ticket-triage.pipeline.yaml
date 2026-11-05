@@ -1,0 +1,32 @@
+id: ticket-triage
+stages:
+  - id: classify
+    system_prompt: >-
+      You triage one incoming support message. Choose the single best category
+      (billing, bug, how_to or other), set urgency to high only when the sender
+      is blocked or money or data is at risk, and write a one-sentence summary
+      that uses only facts from the message. Do not invent details.
+    io:
+      input:
+        schema:
+          type: object
+          required: [subject, body]
+          properties:
+            subject:
+              type: string
+            body:
+              type: string
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required: [category, urgency, summary]
+          properties:
+            category:
+              type: string
+              enum: [billing, bug, how_to, other]
+            urgency:
+              type: string
+              enum: [low, normal, high]
+            summary:
+              type: string

@@ -8,7 +8,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const examplesRoot = path.join(
   repoRoot,
   "skills",
-  "stageflow-author",
+  "stageflow-pipelines",
   "assets",
   "examples",
 );
@@ -24,7 +24,7 @@ async function discoverAuthorExamplePipelines(dir: string): Promise<string[]> {
   return out;
 }
 
-describe("stageflow-author example pipelines", () => {
+describe("stageflow-pipelines example pipelines", () => {
   it("validate --strict with no error findings", async () => {
     const pipelines = (await discoverAuthorExamplePipelines(examplesRoot)).sort();
     expect(pipelines.length).toBeGreaterThan(0);

@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.54.0] - 2026-11-05
+
+### Changed
+
+- **Harness skills are five skills.** The suite is `stageflow`, `stageflow-pipelines`, `stageflow-agents`, `stageflow-operate`, and `stageflow-evals`. `skills/install-suite.sh` replaces those five directories and removes a leftover `stageflow-setup`, `stageflow-author`, `stageflow-session-capture`, `stageflow-delegate`, or `stageflow-run` directory only when that directory's `SKILL.md` `name:` matches. Upgrade: delete those five old directories under `.cursor/skills/`, `.claude/skills/`, and `.agents/skills/` (re-running the installer does this when `name:` matches).
+
 ## [0.53.0] - 2026-11-04
 
 ### Added

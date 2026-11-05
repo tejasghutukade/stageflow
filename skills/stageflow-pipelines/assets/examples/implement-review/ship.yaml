@@ -1,0 +1,27 @@
+id: ship
+system_prompt: |
+  The review passed. Commit the changes on a new branch, push it, and open a
+  pull request with gh. Use the change plan and the review summary for the pull
+  request title and body.
+
+  Write the pull request URL to shipped.md with write_stage_artifact. Then call
+  emit_stage_envelope once with status success, artifacts listing shipped.md,
+  and a payload with pr_url. If a push or gh call fails, emit status failure
+  with the error in summary; do not retry side effects yourself.
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
+      required: [pr_url]
+      properties:
+        pr_url:
+          type: string
+verify:
+  - id: shipped-record
+    type: artifact
+    path: shipped.md
+    nonempty: true
+    when: [after]

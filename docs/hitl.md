@@ -168,7 +168,7 @@ Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while
 
 When no host is up, the same loop is `sf runs waiting` / `answer` / `wait` (or `sf runs feedback-decide` for an exhausted feedback loop). Mutating `sf runs` verbs (`answer`, `retry`, `resume`, `abandon`, `rerun`, `recover`) are HTTP clients of the shared global Stageflow service: they auto-start it if nothing is listening yet and use it as-is if `sf ui`/`sf mcp` is already running — there is no host-up/host-down conflict to avoid. After `sf run` exit `2`, list waiting gates, answer, then wait — do not treat `answer` `{ "ok": true }` as terminal. See [CLI reference — `sf runs`](cli-reference.md#sf-runs).
 
-When a coding-agent host is driving the run (the `stageflow-run` skill), a mappable gate is presented on that host's native question UI when one exists, then submitted with `answer_gate` (host up) or `sf runs answer --json` (host down). Open-ended `free_text` and hosts without a picker stay in chat. A representable `multi_question` is one picker call, not sequential cards. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).
+When a coding-agent host is driving the run (the `stageflow-operate` skill), a mappable gate is presented on that host's native question UI when one exists, then submitted with `answer_gate` (host up) or `sf runs answer --json` (host down). Open-ended `free_text` and hosts without a picker stay in chat. A representable `multi_question` is one picker call, not sequential cards. See [`skills/stageflow-operate/references/native-question-ui.md`](../skills/stageflow-operate/references/native-question-ui.md).
 
 ## See also
 

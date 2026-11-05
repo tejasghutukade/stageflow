@@ -19,11 +19,11 @@ describe("readWorkshopDocsReference", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-docs-ref-"));
     try {
       expect(await readWorkshopDocsReference(root)).toBeNull();
-      const refDir = path.join(root, "skills", "stageflow-author", "references");
+      const refDir = path.join(root, "skills", "stageflow-pipelines", "references");
       await mkdir(refDir, { recursive: true });
       await writeFile(path.join(refDir, "catalog-mapping.md"), "# Catalog mapping\n", "utf8");
       expect(await readWorkshopDocsReference(root)).toEqual({
-        path: "skills/stageflow-author/references/catalog-mapping.md",
+        path: "skills/stageflow-pipelines/references/catalog-mapping.md",
         text: "# Catalog mapping\n",
       });
     } finally {

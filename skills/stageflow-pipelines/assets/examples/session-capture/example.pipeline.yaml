@@ -1,0 +1,16 @@
+id: example
+# Replace with a model id from MCP list_models or `sf providers status` before running.
+model: CHANGE_ME/<provider-model>
+stages:
+  - id: research
+    uses: ./research.yaml
+    entry: true
+    route:
+      - to: implement
+  - id: implement
+    uses: ./implement.yaml
+    on_verify_fail:
+      mode: repair
+      max_attempts: 2
+      retry_safety: idempotent
+      include_failed_checks: true
