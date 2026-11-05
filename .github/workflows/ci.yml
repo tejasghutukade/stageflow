@@ -8,6 +8,60 @@ on:
 
 jobs:
   test:
+    name: test (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      TMPDIR: /tmp
+      SQLITE_TMPDIR: /tmp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test -- --shard=${{ matrix.shard }}/4
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run ui:build
+
+      - run: npm run ui:test
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+  # npm pack + install of the tarball. Off the sharded suite so it does not
+  # occupy a test worker. The test builds before it packs.
+  pack:
     runs-on: ubuntu-latest
     env:
       TMPDIR: /tmp
@@ -22,15 +76,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run build
-
-      - run: npm run ui:build
-
-      - run: npm test
-
-      - run: npm run ui:test
-
-      - run: npm run typecheck
+      - run: npm run test:pack
 
   # Image smoke (Slot 10 / U5): build → run → /livez. Path-filtered on PRs;
   # always on main so packaging regressions still fail the default branch.

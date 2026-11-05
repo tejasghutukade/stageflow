@@ -49,13 +49,16 @@ in between. `dev:watch` also sets `PI_CURSOR_SETTING_SOURCES=all` and
 
 ## Running Tests
 
-CI runs the same checks on every push and pull request:
+CI runs these in parallel on every push and pull request. `npm test` is split into four shards:
 
 ```bash
-npm test              # unit/integration tests (vitest)
-npm run ui:test       # operator UI tests
-npm run typecheck     # TypeScript
+npm test -- --shard=1/4   # unit/integration tests (vitest)
+npm run ui:build && npm run ui:test
+npm run typecheck         # TypeScript
+npm run test:pack         # pack the package and import it
 ```
+
+`npm test` does not pack the package. That check is `npm run test:pack`, and CI runs it on its own so it does not sit inside a shard.
 
 Optional: `npm run test:watch` for iterative test runs.
 

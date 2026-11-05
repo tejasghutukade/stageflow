@@ -1,8 +1,9 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
+    exclude: [...configDefaults.exclude, "**/hosted.pack.test.ts"],
     globalSetup: ["tests/globalSetup.socketLeakGuard.ts"],
     setupFiles: ["tests/setup/credentialHomePin.ts"],
     env: {

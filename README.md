@@ -326,7 +326,7 @@ npm run build && npm run ui:build   # ui:build builds the UI and copies assets i
 sf ui
 ```
 
-Run tests: `npm test` and `npm run ui:test`. Typecheck: `npm run typecheck`.
+Run tests: `npm test` and `npm run ui:test`. Typecheck: `npm run typecheck`. The package install check is `npm run test:pack` (CI runs it on its own).
 
 ## License
 
