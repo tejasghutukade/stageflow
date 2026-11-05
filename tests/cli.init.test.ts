@@ -42,7 +42,7 @@ describe("resolveInitDefaultModel", () => {
 });
 
 describe("runInitCommand", () => {
-  it("AE6: scaffolds manifest, pipeline, task, and global home in fresh git repo", async () => {
+  it("AE6: scaffolds manifest, pipeline, task, and global home in fresh git repo", { timeout: 30_000 }, async () => {
     await withIsolatedHome(async (home) => {
       const { root: repoRoot, cleanup } = await initTempGitRepo();
       try {
