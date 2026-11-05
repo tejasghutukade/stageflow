@@ -5,7 +5,7 @@ import { access, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { StagePort, OpaqueAnswer } from "../agent/port.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
-import { globalStageflowHome } from "../project/globalHome.js";
+import { globalStageflowHome, hostPathForDisplay } from "../project/globalHome.js";
 import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
 import { normalizeCatalogPath, normalizeProjectRoot } from "../runstore/normalizeCatalogPath.js";
 import {
@@ -780,7 +780,7 @@ export class RunManager {
         memory_limit_bytes: limits.memoryLimitBytes ?? null,
         source: limits.source,
       },
-      cache: { root: stageflowCacheRoot() },
+      cache: { root: hostPathForDisplay(stageflowCacheRoot()) },
     };
   }
 

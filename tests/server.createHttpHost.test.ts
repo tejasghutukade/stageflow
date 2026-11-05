@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createRunStore } from "../src/runstore/createStore.js";
@@ -230,6 +230,46 @@ describe("createHttpHost shared listen", () => {
         headers: { Authorization: `Bearer ${DRIVE}` },
       });
       expect(driveGet.status).toBe(200);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  const lanAddress = Object.values(networkInterfaces()).flat().find((a) => a?.family === "IPv4" && !a.internal)?.address;
+
+  it.skipIf(lanAddress === undefined)("a Host bound to a non-loopback address accepts requests addressed to that address (its own eval callback)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-host-selfaddr-"));
+    const store = createRunStore({ rootDir: root });
+    const tokens = loadControlTokens({ STAGEFLOW_CONTROL_TOKEN: DRIVE });
+    const allowedHosts = resolveAllowedHosts({ STAGEFLOW_ALLOWED_HOSTS: "ws.example.dev" });
+    const { server, port } = await startMcpServer({
+      agent: scriptedFakeAgent([]),
+      cwd: root,
+      rootDir: root,
+      store,
+      host: lanAddress!,
+      port: 0,
+      mcpStateless: true,
+      controlTokens: tokens,
+      allowedHosts,
+    });
+    const { request } = await import("node:http");
+    const get = (hostHeader: string) =>
+      new Promise<number>((resolve, reject) => {
+        const req = request(
+          { hostname: lanAddress, port, path: "/api/runs", method: "GET", headers: { Host: hostHeader, Authorization: `Bearer ${DRIVE}` } },
+          (res) => {
+            res.resume();
+            res.on("end", () => resolve(res.statusCode ?? 0));
+          },
+        );
+        req.on("error", reject);
+        req.end();
+      });
+    try {
+      expect(await get(`${lanAddress}:${port}`)).toBe(200);
+      expect(await get(`${lanAddress}:${port + 1}`)).toBe(403);
+      expect(await get("evil.example")).toBe(403);
     } finally {
       await closeServer(server);
     }

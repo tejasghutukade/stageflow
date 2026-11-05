@@ -9,6 +9,7 @@ import {
   globalStageflowHome,
   resetGlobalStageflowHomeForTests,
   StageflowHomeError,
+  hostPathForDisplay,
   stageflowHomeForDisplay,
 } from "../src/project/globalHome.js";
 import { createRunStore } from "../src/runstore/createStore.js";
@@ -133,5 +134,15 @@ describe("stageflowHomeForDisplay", () => {
     expect(stageflowHomeForDisplay("/Users/me", "/Users/me")).toBe("~");
     expect(stageflowHomeForDisplay("/data/sfhome", "/home/sfuser")).toBe("sfhome");
     expect(stageflowHomeForDisplay("/Users/me2/.stageflow", "/Users/me")).toBe(".stageflow");
+  });
+});
+
+describe("hostPathForDisplay", () => {
+  it("shows a Host folder under the user's home, under the Stageflow home, or by name, never absolute", () => {
+    expect(hostPathForDisplay("/Users/me/.stageflow/cache", "/Users/me/.stageflow", "/Users/me")).toBe("~/.stageflow/cache");
+    expect(hostPathForDisplay("/data/sfhome/cache", "/data/sfhome", "/home/sfuser")).toBe("sfhome/cache");
+    expect(hostPathForDisplay("/data/sfhome", "/data/sfhome", "/home/sfuser")).toBe("sfhome");
+    expect(hostPathForDisplay("/var/cache/sf", "/data/sfhome", "/home/sfuser")).toBe("sf");
+    expect(hostPathForDisplay("/data/sfhome2/cache", "/data/sfhome", "/home/sfuser")).toBe("cache");
   });
 });
