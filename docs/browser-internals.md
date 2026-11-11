@@ -193,14 +193,14 @@ Who closes what, and when
 | `src/server/http.ts`, `src/server/mcpHost.ts` | Create the routes, register `onGateClosed`, `beforeBrowserTeardown` and `onShutdown`, dispose on server close. |
 | `src/runtime/stageAttemptBootstrap.ts` | Browser skill resolution, login-check and human-login prompt blocks, `browser_login_check` pre-emit check, redaction hooks for stream log and activity. |
 | `src/runtime/stageRunner.ts` | Stamps Host gate fields, redacts the final envelope, passes `browserLogin` to verification. |
-| `src/runtime/stageProcessLauncher.ts` | Merges `browserEnv` into the worker env, strips ambient `AGENT_BROWSER_*`, sets `STAGEFLOW_PI_HOME_AUTH_PATH`. |
+| `src/runtime/stageProcessLauncher.ts` | Merges `browserEnv` into the worker env, strips ambient `AGENT_BROWSER_*`, sets `STAGEFLOW_AGENT_AUTH_PATH`. |
 | `src/runtime/stageEnvironment.ts` | `buildStageEnvironment` takes `runVars`. |
 | `src/runtime/stageHitl.ts`, `src/tools/askOperator.ts` | Read and carry the Host gate fields on pending prompts. |
 | `src/runtime/verifiedStageExecution.ts`, `completionCheckRunner.ts` | `browser_login` check: re-run the login check with the stage's persisted env. |
 | `src/envelope/preEmitChecks.ts`, `src/types/preEmitCheck.ts` | `browser_login_check` pre-emit check (emit payload must match the Host result). |
 | `src/agent/piAdapter.ts`, `src/agent/port.ts`, `src/agent/fakeAgent.ts` | Browser skill path, prompt guidance (`formatBrowserGuidance`), `/skill:browser` invocation; fake agent answers the login check. |
 | `src/logging/redact.ts`, `src/agent/streamLogRedact.ts` | `BROWSER_SECRET_PATTERNS`, `BROWSER_STAGE_PATTERNS`, `redactBrowserSecrets`, `redactBrowserActivityEvent`. |
-| `src/runtime/credentialBinding.ts` | `PI_HOME_AUTH_PATH_ENV`, `piHomeAuthPath`. |
+| `src/runtime/credentialBinding.ts` | `STAGEFLOW_AGENT_AUTH_PATH`, `stageflowAgentAuthPath`. |
 | `src/server/bootstrap.ts` | Calls `manager.sweepBrowserSessions()` at Host start. |
 | `src/cli/browserCommand.ts`, `src/cli.ts` | `sf browser`. Exit codes in `BROWSER_EXIT`. |
 | `examples/browser-session/` | Fixture site (`fixture-server.mjs`) and the check, login, parallel work, merge pipeline. |
@@ -221,7 +221,7 @@ Hook points, in order. Process mode is the default. Names are in `src/runtime/pi
    8. Other stage with `check`: `ensureStageLoginCheck` opens the check URL, waits for network idle, reads the URL until it settles, matches the globs, and writes `browser-login-check.json` for this attempt.
    A throw here fails the stage through `onStageFailure`.
 3. **Anchor** (`anchor.ts`, `localBrowserHost.ensureProfileBrowser`). An in-process promise map dedupes callers. A `anchor.lock` dir (pid inside, stale when the pid is dead, 120 s wait) serializes processes. No stored anchor: `open about:blank` with the anchor env, then `get cdp-url`. Stored anchor: `get cdp-url` is the liveness probe (any command relaunches a dead daemon). A headless stored anchor is closed and replaced when a human login stage needs it headed. Result goes to `anchor.json` (mode 0600, atomic rename) and the anchor's `owner.json`.
-4. **Launch** (process mode). `launcher.launch({ ..., browserEnv })`. The launcher builds the worker env, removes every ambient `AGENT_BROWSER_*`, adds `browserEnv`, and sets `STAGEFLOW_PI_HOME_AUTH_PATH`. In the worker, `stageAttemptBootstrap` resolves the `browser` skill (run, checkout, Host, then built-in), reads the login check result (error `browser login check result is missing` if absent), appends the login-check or human-login prompt block, adds the `browser_login_check` pre-emit check, and turns on browser redaction. `stageRunner` stamps Host gate fields on every gate and, after verification, redacts the envelope before writing it.
+4. **Launch** (process mode). `launcher.launch({ ..., browserEnv })`. The launcher builds the worker env, removes every ambient `AGENT_BROWSER_*`, adds `browserEnv`, and sets `STAGEFLOW_AGENT_AUTH_PATH`. In the worker, `stageAttemptBootstrap` resolves the `browser` skill (run, checkout, Host, then built-in), reads the login check result (error `browser login check result is missing` if absent), appends the login-check or human-login prompt block, adds the `browser_login_check` pre-emit check, and turns on browser redaction. `stageRunner` stamps Host gate fields on every gate and, after verification, redacts the envelope before writing it.
 5. **Verify.** A `browser_login` item calls `runLoginCheck` with the persisted env and `stage.browser.check` (`verifiedStageExecution.ts`). It passes only when the state is `logged_in`.
 6. **Stage end.** `startStage` waits for `launchStage`. If the stage state is `succeeded` or `failed` it calls `teardownStageBrowser`: first the live view hook (see "Live view relay" below), then skip when `browser-closed.json` exists, `tab close` (only when the env has `AGENT_BROWSER_CDP`), `close`, poll until the socket and pid are gone, remove the session's socket files, write `browser-closed.json`. A `waiting` stage is not torn down.
 7. **Run end** (end of the scheduler loop). If no stage is waiting (or scheduling was halted) and it is not a Host shutdown: `teardownRunBrowsers` first runs the live view hook for the whole run, then closes every stage dir's session, then `closeRunAnchors` (graceful `close` with the stored anchor env, then deletes `anchor.json`), then `releaseOwner({ runId })`.
@@ -309,7 +309,7 @@ Display capability (`createLocalBrowserHost`, `xvfbProbe` and `platform`/`hostEn
 
 Other variables:
 
-- `STAGEFLOW_PI_HOME_AUTH_PATH` (`PI_HOME_AUTH_PATH_ENV`). Set by `StageProcessLauncher` for every stage worker. A worker's `HOME` is an empty attempt dir, so Pi would not find `~/.pi/agent/auth.json` and the stage failed with "No API key". `piHomeAuthPath()` reads this variable first and falls back to `~/.pi/agent/auth.json`. Not browser specific, but real browser runs found it. Guard: `tests/runtime.piHomeAuthWorker.test.ts`.
+- `STAGEFLOW_AGENT_AUTH_PATH`. Set by `StageProcessLauncher` for every stage worker to the `sf_owned` auth file. A worker's `HOME` is an empty attempt dir, so the stage would otherwise fail with "No API key". Not browser specific, but real browser runs found it. Guard: `tests/runtime.piHomeAuthWorker.test.ts`.
 - The default runner (`defaultBrowserRunner`) spawns `agent-browser` with only `PATH`, the Host's `HOME`, and the given env. `HOME` does not matter to the daemon match (spikes).
 
 **Byte-identical rule.** Every agent-browser command of one session must carry the same launch-affecting env. If a client's env differs from the running daemon's, agent-browser silently kills and relaunches the browser. The page and session-only cookies are lost. So the env is computed once, written to `browser-env.json`, and read back by every attempt and resume worker. The only allowed change is `AGENT_BROWSER_CDP` after an anchor restart, and then the old stage daemon is closed first.
@@ -530,7 +530,7 @@ Goal: run `examples/browser-session` without touching your own Host (default por
    export STAGEFLOW_MIN_FREE_DISK_BYTES=1073741824 # optional: enable free-disk admission (bytes or N%)
    ```
    `sf run` and `sf runs` auto-start a Host on that port when none answers, so the Host and the run state live in the temp home.
-2. Credentials. A new home has no provider auth. Either point the credential source at the Pi home (`sf providers source set pi_home`, uses `~/.pi/agent/auth.json`, and workers get it through `STAGEFLOW_PI_HOME_AUTH_PATH`), or give Host-boot provider env such as `STAGEFLOW_PROVIDER_<ID>_API_KEY` (see [Providers](providers.md)). Never paste keys into pipeline files or logs.
+2. Credentials. A new home has no provider auth. Give Host-boot provider env such as `STAGEFLOW_PROVIDER_<ID>_API_KEY`, or log in with `sf providers login` so credentials land in the `sf_owned` store (see [Providers](providers.md)). Never paste keys into pipeline files or logs.
 3. Start the fixture site: `node examples/browser-session/fixture-server.mjs` (port 4173, or `PORT=...` and edit the pipeline URLs).
 4. Build and run: `npm run build`, then `node dist/cli.js run --pipeline examples/browser-session/browser-session.pipeline.yaml --task examples/browser-session/browser-session.task.yaml --json`. Needs a screen for the login window. A machine with no screen fails the login stage on purpose.
 5. Answer gates with `sf runs waiting` then `sf runs answer --run <runId> --stage <stageId> --answer '<json>'`. The JSON is an `AskOperatorAnswer`: for the login confirm gate it is `{ "kind": "confirm", "promptId": "<id from the pending prompt>", "decision": "accept" }`. Take `promptId` and `kind` from the prompt shown by `sf runs waiting` or `sf runs show`. Log in in the visible window first. A too-early accept returns `verification: "failed_retrying"` and a new gate.
@@ -540,7 +540,7 @@ Goal: run `examples/browser-session` without touching your own Host (default por
 
 | Symptom | Likely cause | Where to look |
 |---------|--------------|---------------|
-| Stage fails with "No API key" in a worker | Worker `HOME` is an empty attempt dir and the Pi auth path was not passed | `STAGEFLOW_PI_HOME_AUTH_PATH` in the launcher (`stageProcessLauncher.ts`), `credentialBinding.ts`, `runtime.piHomeAuthWorker.test.ts`, `sf providers source get` |
+| Stage fails with "No API key" in a worker | Worker `HOME` is an empty attempt dir and the auth path was not passed | `STAGEFLOW_AGENT_AUTH_PATH` in the launcher (`stageProcessLauncher.ts`), `credentialBinding.ts`, `runtime.piHomeAuthWorker.test.ts`, `sf providers source get` |
 | "browser socket path is N bytes (limit 103)" | `socketRoot` override is too deep, or a very long session name | `localBrowserHost.build`; use a short root |
 | "waiting for browser profile X held by run Y" | Another run holds the lease | `sf browser status X` (holder and `live`), `sf runs show --run Y`. Locks of dead runs are reclaimed at Host start and while waiting. Lock file: `$HOME/browser/locks/local/X.lock` |
 | Stage stuck in waiting for the profile | The holder run is alive and at a gate, or never reached a terminal state | Answer or cancel the holder run. Check `createRunLiveness` status rules (`created`, `queued`, `running` are live). There is no wait limit. |

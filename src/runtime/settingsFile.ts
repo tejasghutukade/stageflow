@@ -56,9 +56,6 @@ export function parseCredentialSource(
   if (value === "sf_owned") {
     return value;
   }
-  if (value === "pi_home") {
-    return "sf_owned";
-  }
   return undefined;
 }
 

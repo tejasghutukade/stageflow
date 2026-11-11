@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.2.x   | Yes       |
-| < 0.2   | No        |
+| 0.55.x  | Yes       |
+| < 0.55  | No        |
 
 ## Reporting a Vulnerability
 
@@ -26,7 +26,7 @@ You should receive an acknowledgment within a reasonable timeframe. Fixes are re
 
 Stageflow is a local CLI and operator console:
 
-- **In scope:** the `sf` / `stageflow` CLI, bundled operator UI, MCP endpoint served by `sf ui`, and SQLite state under `.stageflow/`
+- **In scope:** the `sf` / `stageflow` CLI, bundled operator UI, MCP endpoint served by `sf ui`, and SQLite state under `~/.stageflow/`
 - **Out of scope:** third-party model providers (Anthropic, OpenAI, etc.), Pi runtime behavior, and project YAML you author locally
 
-Stageflow does not collect telemetry or phone home. Credentials are stored locally (Pi home or SF-owned credential files) as configured by the operator.
+Stageflow does not collect telemetry or phone home. Credentials are stored locally at `~/.stageflow/agent/auth.json`.

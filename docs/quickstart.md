@@ -9,14 +9,14 @@ Docker is the recommended way to run Stageflow: pull the published image and ope
 
 ## Docker (recommended)
 
-The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.39` is the current minor tag (`0.39.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
+The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.55` is the current minor tag (`0.55.3` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
 
 ```bash
 docker run --rm --name stageflow \
   -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.39 \
+  ghcr.io/tejasghutukade/stageflow:0.55 \
   sf ui
 ```
 
@@ -33,7 +33,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.39 \
+  ghcr.io/tejasghutukade/stageflow:0.55 \
   sf ui
 ```
 
@@ -92,8 +92,15 @@ catalog:
 id: hello
 stages:
   - id: hello
+    model: "CHANGE_ME/<provider-model>"
     system_prompt: Say hello and emit a success envelope.
-    model: CHANGE_ME/<provider-model>
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 ```
 
 `sf init` fills `model` from the single configured provider when one is logged in (for example `openrouter/auto` or `anthropic/claude-sonnet-4-5`). With none or more than one configured provider, it writes the loud placeholder `CHANGE_ME/<provider-model>` — replace it before running.
@@ -132,7 +139,7 @@ sf providers list
 sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
 ```
 
-See [Providers](providers.md) for `pi_home` vs `sf_owned` credential storage.
+See [Providers](providers.md) for `sf_owned` credential storage.
 
 ## 4. Run the pipeline
 

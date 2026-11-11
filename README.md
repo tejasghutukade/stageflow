@@ -19,7 +19,7 @@ Open-source runtime for **configurable multi-stage agent workflows** with typed 
   <a href="https://github.com/tejasghutukade/stageflow/releases/download/media/stageflow-demo-long.mp4">Full walkthrough (3 min)</a>
 </p>
 
-Author pipeline-owned YAML in your project. Stageflow schedules each stage in a fresh agent session, moves context through explicit envelopes and artifacts, and persists run state under `.stageflow/`. [Pi](https://github.com/badlogic/pi-mono) is the current agent execution backend. Bins: **`sf`** and **`stageflow`**.
+Author pipeline-owned YAML in your project. Stageflow schedules each stage in a fresh agent session, moves context through explicit envelopes and artifacts, and persists run state under `~/.stageflow/`. [Pi](https://github.com/badlogic/pi-mono) is the current agent execution backend. Bins: **`sf`** and **`stageflow`**.
 
 ## Why Stageflow?
 
@@ -39,7 +39,7 @@ The same pipeline runs three ways without rewriting anything:
 
 - **Pipeline-owned YAML** — `*.pipeline.yaml` with inline stages or `uses:` refs; separate `*.task.yaml` files; optional repo-root `stageflow.yaml` manifest
 - **Path-based CLI** — `--pipeline` and `--task` take filesystem paths (no bare-id lookup)
-- **Pi-native** — runs on `@earendil-works/pi-coding-agent`; reuse an existing Pi login (`pi_home`) or store credentials in `~/.stageflow/agent/auth.json` (`sf_owned`)
+- **Pi-native** — runs on `@earendil-works/pi-coding-agent`; store credentials in `~/.stageflow/agent/auth.json` (`sf_owned`)
 - **Envelope handoffs** — typed stage payloads and artifacts via `write_stage_artifact` / `emit_stage_envelope`
 - **Verified stage execution** — after-phase `verify` checks with durable evidence, plus `on_verify_fail` repair or manual operator recovery ([guide](docs/verified-stage-execution.md))
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
@@ -53,7 +53,7 @@ The same pipeline runs three ways without rewriting anything:
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
 - **Parallel stages** — pipeline DAG with fan-out, join, and Clone Chains (one Clone Instance per Clone Array element; see [YAML catalog](docs/yaml-catalog.md#clone-chain))
 - **Definition-time graph view** — `sf graph --pipeline <path>` prints how a pipeline is wired before any run (terminal diagram or `--json`)
-- **SQLite run store** — global `~/.stageflow/.stageflow/` state plus per-run workspaces, shared across every project since Stageflow became a single auto-starting service
+- **SQLite run store** — global `~/.stageflow/` state (`state.db` plus per-run workspaces), shared across every project since Stageflow became a single auto-starting service
 
 ## Architecture at a glance
 
@@ -67,14 +67,14 @@ See [Architecture](docs/architecture.md) for component boundaries, execution flo
 
 ### Docker (recommended)
 
-Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.42` is the current minor tag (`0.42.0` is that exact release).
+Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.55` is the current minor tag (`0.55.3` is that exact release).
 
 ```bash
 docker run --rm --name stageflow \
   -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.42 \
+  ghcr.io/tejasghutukade/stageflow:0.55 \
   sf ui
 ```
 
@@ -91,7 +91,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.42 \
+  ghcr.io/tejasghutukade/stageflow:0.55 \
   sf ui
 ```
 
@@ -163,11 +163,11 @@ sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
 
 Use `sf providers list` to see provider ids and supported auth types (`api_key`, `oauth`).
 
-**Credential storage:** reuse Pi's shared auth file (`pi_home`) or keep credentials in Stageflow's global store (`sf_owned`):
+**Credential storage:** credentials live in Stageflow's global store (`sf_owned`), at `~/.stageflow/agent/auth.json`:
 
 ```bash
 sf providers detect
-sf providers source set pi_home    # or sf_owned
+sf providers source set sf_owned
 ```
 
 Pi is Stageflow's current agent execution backend. Stageflow owns the workflow layer around it, and you do not need Pi CLI `/login` as a prerequisite when providers are configured through the console or `sf providers`.
@@ -184,7 +184,7 @@ Start the console with `sf ui` (default `http://127.0.0.1:3847`).
 - **Pipelines, Tasks, Catalog, Triggers** — browse and edit the YAML, start runs; **New pipeline** drafts one in the Workshop
 - **Agents** and **Agent sessions** — a directory with each agent's reach (web chat link, channel, schedule), cost and status; create and edit with version history; sessions, approvals and a run inspector
 - **Connections** — channels, email accounts and tool servers
-- **Settings** — Providers (`pi_home` or `sf_owned` credential storage), Concurrency, MCP server, Project MCP (servers, secrets, sign-in) and Notifications
+- **Settings** — Providers (`sf_owned` credential storage), Concurrency, MCP server, Project MCP (servers, secrets, sign-in) and Notifications
 - **Command palette** — `⌘K` from any page. Page-by-page guide: [docs/operator-console.md](docs/operator-console.md)
 
 Brand assets live under `docs/img/` (`stageflow-og.svg`, `stageflow-icon.svg`).
@@ -232,7 +232,7 @@ See [docs/ci.md](docs/ci.md) for the full CI recipe and [`.github/actions/sf-run
 
 ## State
 
-Runtime state (SQLite run store + per-run workspaces) is **global** — `~/.stageflow/.stageflow/` — shared across every project on the machine, since Stageflow became a single auto-starting service. Global config and `sf_owned` auth live directly under **`~/.stageflow/`**; per-project settings (`maxConcurrent`, `credentialSource`) still live at `<git-root>/.stageflow/settings.json`. If `.stageflow` is missing and `.software-factory` exists from an older install, the next store open renames it to `.stageflow` once.
+Runtime state (SQLite `state.db` and per-run workspaces) is **global** — `~/.stageflow/` (`$STAGEFLOW_HOME`) — shared across every project on the machine. `sf_owned` auth lives at `~/.stageflow/agent/auth.json`. Per-project settings (`maxConcurrent`, `credentialSource`) still live at `<git-root>/.stageflow/settings.json`. If `.stageflow` is missing and `.software-factory` exists from an older install, the next store open renames it to `.stageflow` once.
 
 ## MCP
 

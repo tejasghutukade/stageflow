@@ -45,7 +45,10 @@ verify_install() {
   need_cmd sf
   echo ""
   echo "Installed: $(sf --version 2>/dev/null || echo stageflow)"
-  if node -e "require('better-sqlite3')" >/dev/null 2>&1; then
+  local global_root
+  global_root="$(npm root -g)"
+  if NODE_PATH="${global_root}/${STAGEFLOW_PACKAGE}/node_modules:${global_root}" \
+    node -e "require('better-sqlite3')" >/dev/null 2>&1; then
     echo "better-sqlite3: ok"
   else
     err "better-sqlite3 did not load. If install used --ignore-scripts, retry without it."

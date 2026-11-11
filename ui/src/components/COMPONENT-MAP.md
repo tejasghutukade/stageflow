@@ -10,7 +10,7 @@ Inventory mapping prototype concepts to React modules.
 | Placeholder library pages | `pages/PlaceholderPages.tsx` | removed | Settings stub replaced in Phase 5. |
 | Settings page | `pages/SettingsPage.tsx` | wired | `redesign/settings/*` — single stacked scroll (General, Providers, Concurrency \| MCP, Project MCP, Notifications, Appearance) with sidebar jump-nav and scroll spy. Project MCP panel (`SettingsProjectMcpPanel.tsx`) runs on `mcpSession.ts` (probe model) behind the `mcpApi.ts` adapter. |
 | SettingsAppearance | — | removed | The console is dark only. Settings no longer has an Appearance section. |
-| SettingsProviders | `components/SettingsProviders.tsx` | wired | Live Pi provider list, API-key + OAuth connect/disconnect, credential source (`pi_home` \| `sf_owned`). OAuth uses `ProviderOAuthSession` AuthInteraction bridge. |
+| SettingsProviders | `components/SettingsProviders.tsx` | wired | Live Pi provider list, API-key + OAuth connect/disconnect, credential source (`sf_owned`). OAuth uses `ProviderOAuthSession` AuthInteraction bridge. |
 | ProviderOAuthSession | `components/ProviderOAuthSession.tsx` | wired | Interactive OAuth login session: auth_url / device_code / prompts, paste fallback, cancel. Used by Settings + first-run. |
 | SettingsMcp | `components/SettingsMcp.tsx` | wired | Operator-host Streamable HTTP MCP how-to: endpoint URL, Cursor `.cursor/mcp.json` snippet, tools, HITL submit via `answer_gate` and `decide_feedback_loop`. Distinct from the project MCP panel. |
 | New Run capacity `.gate` | `pages/NewRunPage.tsx` | wired | Inline `.gate` warning when `slotsAvailable === 0`; Start run disabled. Pipeline preview (`.track--inline`) when selected. Not a separate component. |

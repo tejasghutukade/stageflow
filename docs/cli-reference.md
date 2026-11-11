@@ -1051,7 +1051,7 @@ Manage Pi model provider authentication.
 sf providers list
 sf providers status [--provider <id>]
 sf providers detect
-sf providers source [get | set <pi_home|sf_owned>]
+sf providers source [get | set sf_owned]
 sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
 sf providers logout <providerId>
 ```
@@ -1060,9 +1060,9 @@ sf providers logout <providerId>
 |------------|-------------|
 | `list` | Available providers and auth capabilities |
 | `status` | Configured/disconnected state per provider |
-| `detect` | Pi home detection and credential binding |
+| `detect` | Credential binding |
 | `source get` | Show credential storage mode |
-| `source set pi_home\|sf_owned` | Pin storage mode |
+| `source set sf_owned` | Pin storage mode |
 | `login` | API key (prompt or env var) or OAuth flow |
 | `logout` | Remove stored credentials for a provider |
 
@@ -1151,7 +1151,7 @@ Full CI-related flags and env vars: [CI / headless](ci.md).
 - [Quick start](quickstart.md) — first run walkthrough
 - [Docker and self-hosting](docker.md) — backup/restore, volumes, provenance
 - [CI / headless](ci.md) — GitHub Actions and `--json`
-- [Providers](providers.md) — `pi_home` vs `sf_owned`
+- [Providers](providers.md) — `sf_owned` credential storage
 - [HITL](hitl.md) — `--skip-gates`, exit `2`, and `sf runs` answer/wait
 - [MCP](mcp.md#run_stage) — `run_stage`, the tool `sf run-stage` talks to
 - [A2A](a2a.md) — publish pipelines for other agents to call over JSON-RPC, plus the wildcard-access `run_stage` operation

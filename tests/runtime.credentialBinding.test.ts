@@ -108,7 +108,7 @@ describe("resolveCredentialBinding", () => {
     });
   });
 
-  it("legacy pi_home on disk normalizes to sf_owned binding", async () => {
+  it("pi_home on disk does not pin a credential source", async () => {
     await withIsolatedHome(async (home) => {
       await mkdir(storeRootFor(home), { recursive: true });
       await writeFile(
@@ -120,9 +120,9 @@ describe("resolveCredentialBinding", () => {
       expect(binding).toEqual({
         source: "sf_owned",
         authPath: sfOwnedAuthPath(),
-        provisional: false,
+        provisional: true,
       });
-      expect(readCredentialSourceFromFile(home)).toBe("sf_owned");
+      expect(readCredentialSourceFromFile(home)).toBeUndefined();
     });
   });
 

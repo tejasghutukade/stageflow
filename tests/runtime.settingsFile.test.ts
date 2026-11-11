@@ -34,16 +34,16 @@ describe("settingsFile credentialSource", () => {
     expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
   });
 
-  it("maps legacy pi_home on disk to sf_owned when read", async () => {
+  it("ignores pi_home on disk", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-settings-legacy-pi-"));
     await mkdir(storeRootFor(root), { recursive: true });
     await writeFile(
       path.join(storeRootFor(root), "settings.json"),
       `${JSON.stringify({ credentialSource: "pi_home", maxConcurrent: 2 }, null, 2)}\n`,
     );
-    expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
+    expect(readCredentialSourceFromFile(root)).toBeUndefined();
     expect(readMaxConcurrentFromFile(root)).toBe(2);
-    expect(parseCredentialSource("pi_home")).toBe("sf_owned");
+    expect(parseCredentialSource("pi_home")).toBeUndefined();
   });
 
   it("preserves credentialSource when writing maxConcurrent", async () => {

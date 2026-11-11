@@ -80,7 +80,7 @@ describe("runtime store resolution", () => {
         await mkdir(storeRootFor(root), { recursive: true });
         await writeFile(
           path.join(storeRootFor(root), "settings.json"),
-          `${JSON.stringify({ credentialSource: "pi_home" }, null, 2)}\n`,
+          `${JSON.stringify({ credentialSource: "sf_owned" }, null, 2)}\n`,
         );
         expect(readCredentialSourceFromContext(projectCtx)).toBe("sf_owned");
         expect(globalSettingsFilePath()).toBe(
