@@ -1,0 +1,4 @@
+id: total-counts
+goal: Total a short list of non-negative counts with the total_counts tool
+context: The tool adds the counts the stage passes. It does not read the envelope.
+constraints: Pass the counts as the tool argument. Do not invent a second tool.

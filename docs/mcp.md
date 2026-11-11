@@ -218,6 +218,28 @@ A session id only opens under the agent it belongs to: `get_agent_session`, `sto
 
 See [Agents](agents.md). The REST, CLI and MCP surfaces side by side are in [Agent API](agent-api.md#cli-mcp-and-rest-side-by-side).
 
+### Function tools {#function-tools}
+
+Project functions (`functions/<id>.function.yaml`) use the same service as `GET` and `POST /api/functions`. The id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`. Attaching a function to a stage, pipeline, or agent still goes through `edit_stage`, `edit_pipeline`, and `save_agent`. `write_catalog_file` rejects a `*.function.yaml` file.
+
+**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "code", "message", "issues"?, "current_revision"?, "usages"? }`. Branch on `code`: `function.invalid`, `function.conflict` (the current revision is in `current_revision`; the file is not overwritten), `function.in_use` (`usages` lists the pipeline, stage, or agent paths), `function.not_found`, `function.exists`, `function.kind_immutable`, `function.id_immutable`, `function.catalog_unreadable`.
+
+| Tool | Grant | Input | Output |
+|------|-------|-------|--------|
+| `list_functions` | `functions.read` | `{}` | `{ functions }` |
+| `get_function` | `functions.read` | `{ id }` | The current definition, revision, issues, and source hash |
+| `list_function_revisions` | `functions.read` | `{ id }` | `{ revisions }` |
+| `get_function_revision` | `functions.read` | `{ id, revision }` | That stored revision |
+| `create_function` | `functions.write` | `{ definition }` | The created definition |
+| `save_function` | `functions.write` | `{ id, baseRevision, definition, summary? }` | The saved definition. `baseRevision` must be the current revision |
+| `duplicate_function` | `functions.write` | `{ id, newId }` | The copy, with its own revision history. Grants on existing attachments are not copied onto new attachments |
+| `test_function` | `functions.test` | `{ id, source?, input?, mocks?, real?, timeoutMs?, memoryLimitBytes? }` | The validated result, duration, sanitized logs, and source hash. `real: true` is the only way the test reads real files, environment, or APIs, and it cannot widen grants. Omit `real` to stay on mocks |
+| `delete_function` | `functions.cleanup` | `{ id }` | `{ deleted: true }`. Refuses while a pipeline, reusable stage, or agent references the id |
+
+`functions.read` lists and fetches metadata. `functions.write` creates, edits, and duplicates. `functions.test` runs the production executor. `functions.cleanup` deletes. A test without `real: true` uses the mocks in the request and fails when a mock the source needs is missing. There is no `sf functions` create, edit, or delete command; the file and these tools are the authoring pair.
+
+`sf validate` fails closed when an attachment names a missing function, attaches a function of the wrong kind, or leaves a declared capability without a matching grant (`function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`, `function.invalid`). See [YAML catalog: Functions](yaml-catalog.md#functions).
+
 ### Eval tools {#eval-tools}
 
 Ten tools cover [evals](evals.md). They use the same service as the REST routes in [Evals: HTTP API](evals.md#http-api). Every tool takes an optional `project_root` where it names an eval (omit it to use the Host default; see [Catalog roots](#catalog-roots-and-project_root)).

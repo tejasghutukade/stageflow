@@ -29,7 +29,7 @@ An eval is a file in your project, `evals/<id>.eval.yaml`. It names a **target**
 | **Stage run** | The normal Stageflow run started for each result. Marked `origin = eval` and hidden from the Runs list, Inbox and Overview |
 | **Eval session** | For an agent target, the agent session opened for each conversation. Marked as an eval session and hidden the same way |
 | **Config snapshot** | Everything that determined an eval run, stored with it and never edited |
-| **Fingerprint** | The first 8 hex characters of a hash of the config snapshot. Equal fingerprints mean the same setup |
+| **Fingerprint** | The first 8 hex characters of a hash of the config snapshot. Equal fingerprints mean the same setup. When the target attaches a function, the fingerprint includes that function's revision content hash and the effective capability policy, so a source or grant change is a different setup |
 | **Engine** | The component that executes results and grades them. Today [promptfoo](https://github.com/promptfoo/promptfoo), installed on demand |
 
 See also the [Glossary](glossary.md). Agent terms (scenario, driver, simulator, conversation subject, tool policy) are in [Agent concepts](#agent-concepts).
@@ -128,7 +128,7 @@ target: { kind: stage, pipeline: ../pipelines/ship.pipeline.yaml, stage: review 
 target: { kind: stage, file: ../stages/review.yaml }                                 # a standalone stage file
 ```
 
-The stage version hash (first 6 hex characters, shown in the console) changes whenever anything that can change the stage's behavior changes: prompt, model, `io`, `verify`, `mcp`, `gate_kinds`, `timeout_ms`.
+The stage version hash (first 6 hex characters, shown in the console) changes whenever anything that can change the stage's behavior changes: prompt, model, `io`, `verify`, `mcp`, `gate_kinds`, `timeout_ms`. A function attachment stores the function id on the stage or agent file, so that file hash does not change when only the function source changes. The run fingerprint also includes each attached function's revision content hash (`source_hash`) and the effective capability policy (`policy`: the files, env aliases, and API operations the attachment's grants actually allow). Two runs match only when both are unchanged. The cost cap and concurrency stay out of the fingerprint.
 
 ### Defaults
 

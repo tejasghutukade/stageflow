@@ -29,6 +29,7 @@ export type Route =
   | { name: "memories" }
   | { name: "memory"; memoryId: string }
   | { name: "agents" }
+  | { name: "functions"; functionId?: string; creating?: boolean }
   | { name: "agentSessions" }
   | { name: "agentCreate"; authorSessionId?: string }
   | { name: "agent"; agentId: string; screen: "detail" | "edit" }
@@ -197,6 +198,18 @@ export function memoryPath(memoryId: string): string {
 
 export function agentsPath(): string {
   return "/agents";
+}
+
+export function functionsPath(): string {
+  return "/functions";
+}
+
+export function functionNewPath(): string {
+  return "/functions/new";
+}
+
+export function functionPath(functionId: string): string {
+  return `/functions/${encodeURIComponent(functionId)}`;
 }
 
 export function agentSessionsPath(): string {
@@ -467,6 +480,12 @@ export function parseHash(hash = window.location.hash): Route {
   if (path.startsWith("connections/")) {
     const connectionId = firstSegment(path.slice("connections/".length));
     if (connectionId) return { name: "connection", connectionId };
+  }
+  if (path === "functions") return { name: "functions" };
+  if (path === "functions/new") return { name: "functions", creating: true };
+  if (path.startsWith("functions/")) {
+    const functionId = firstSegment(path.slice("functions/".length));
+    if (functionId && functionId !== "new") return { name: "functions", functionId };
   }
   if (path === "agent-sessions" || path === "agents/sessions") return { name: "agentSessions" };
   if (path === "agents") return { name: "agents" };
