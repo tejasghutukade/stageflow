@@ -80,13 +80,12 @@ export class FunctionBroker {
   private readonly usesHostExecutor: boolean;
   private readonly env: NodeJS.ProcessEnv;
   private readonly stageflowHome: string;
-  private readonly registry: SecretRegistry;
+  private secretRegistry: SecretRegistry | undefined;
   private readonly active = new Map<string, ActiveCall>();
 
   constructor(private readonly options: FunctionBrokerOptions = {}) {
     this.env = options.env ?? process.env;
     this.stageflowHome = options.stageflowHome ?? globalStageflowHome();
-    this.registry = loadSecretRegistry(this.env, this.stageflowHome);
     this.usesHostExecutor = options.executor !== undefined && isHostFunctionExecutor(options.executor);
     this.executor =
       options.executor ??
@@ -108,7 +107,7 @@ export class FunctionBroker {
     const context = input.context === undefined ? { ok: true as const, value: {} } : assertJsonObject(input.context);
     if (!context.ok) return failure("invalid_input", context.message);
     const envSource = input.env ?? this.env;
-    const env = resolveEnv(grants.env ?? [], envSource, this.registry);
+    const env = resolveEnv(grants.env ?? [], envSource, this.secrets());
     if (!env.ok) return failure(env.code, env.message);
     const call: ActiveCall = {
       grants,
@@ -146,6 +145,11 @@ export class FunctionBroker {
     return this.executor.cancel(invocationId);
   }
 
+  private secrets(): SecretRegistry {
+    this.secretRegistry ??= loadSecretRegistry(this.env, this.stageflowHome);
+    return this.secretRegistry;
+  }
+
   private actionDispatched(invocationId: string, request: FunctionCapabilityRequest): boolean {
     if (request.op !== "http") return false;
     const call = this.active.get(invocationId);
@@ -169,7 +173,7 @@ export class FunctionBroker {
               requestPath: request.path,
               body: request.body,
               grants: call.grants.apis ?? [],
-              resolveCredential: (name) => credentialValue(this.registry, call.env, name),
+              resolveCredential: (name) => credentialValue(this.secrets(), call.env, name),
               lookup: call.lookup ?? this.options.lookup,
               dial: call.dial ?? this.options.dial,
               signal,

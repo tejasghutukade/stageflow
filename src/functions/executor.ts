@@ -265,7 +265,7 @@ export class FunctionExecutor {
     try {
       child.send?.(value);
     } catch {
-      // The child has already exited.
+      return;
     }
   }
 

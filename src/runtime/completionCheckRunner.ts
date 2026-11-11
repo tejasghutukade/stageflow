@@ -101,7 +101,6 @@ export type CompletionCheckRunnerInput = {
     logged_in: boolean | null;
     url: string;
   }>;
-  /** Pinned revision for a function check. Absent means the run has no pin. */
   functionRevision?: FunctionRevisionLookup;
   functions?: FunctionCheckInvoker;
   runId?: string;
@@ -670,11 +669,6 @@ async function runFunctionCheck(
   );
 }
 
-/**
- * Run every after-phase IR check in declaration order. YAML: `verify` when after.
- * A failed check never throws. Later checks still produce repair evidence,
- * except a cancelled function check, which stops the rest.
- */
 export async function runCompletionContract(
   input: CompletionCheckRunnerInput,
 ): Promise<CompletionVerificationResult> {

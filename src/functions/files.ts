@@ -85,7 +85,7 @@ export async function performFileCapability(input: FileCapabilityInput): Promise
   return hostCapability(input, rootPath, relative);
 }
 
-export function dockerContainerFiles(target: SandboxFileTarget): ContainerFiles {
+function dockerContainerFiles(target: SandboxFileTarget): ContainerFiles {
   return {
     async realPath(containerPath: string) {
       const confined = confineSandboxPath(containerPath);

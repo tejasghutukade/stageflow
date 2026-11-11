@@ -7,7 +7,7 @@ import { A2aStore } from "../a2a/store.js";
 import type { StagePort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type Database from "better-sqlite3";
-import { createFunctionInvoker } from "../functions/invoke.js";
+import { createFunctionInvoker, registerHostFunctionInvoker } from "../functions/invoke.js";
 import { FunctionService } from "../functions/service.js";
 import { FunctionStore } from "../functions/store.js";
 import { createRunStoreWithConnection, sqliteConnectionFromStore, type RunStoreKind } from "../runstore/createStore.js";
@@ -629,6 +629,7 @@ export async function bootstrapStageflowHost(
   const functionStore = sqliteConnection !== undefined ? new FunctionStore(sqliteConnection) : undefined;
   const functionService = functionStore ? new FunctionService({ store: functionStore }) : undefined;
   const functionInvoker = sqliteConnection !== undefined ? createFunctionInvoker({ db: sqliteConnection }) : undefined;
+  if (functionInvoker) registerHostFunctionInvoker(functionInvoker);
   const agentHost =
     sqliteConnection !== undefined
       ? createAgentHostContext({

@@ -107,7 +107,7 @@ export async function performFunctionHttp(input: {
   return API_DENIED;
 }
 
-export function isPublicAddress(address: string): boolean {
+function isPublicAddress(address: string): boolean {
   const parsed = canonicalAddress(address);
   if (!parsed) return false;
   return !BLOCKED.check(parsed.address, parsed.family);

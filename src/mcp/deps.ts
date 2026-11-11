@@ -25,7 +25,6 @@ export type McpToolDeps = {
   providerBoot?: BootProviderResult;
   agentService?: AgentService;
   functionService?: FunctionService;
-  /** Shared with HTTP so function tests and production calls use one execution queue. */
   functionInvoker?: FunctionInvoker;
   agentChat?: AgentChatController;
   agentConversationBackend?: ConversationBackend;

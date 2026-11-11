@@ -9,9 +9,9 @@ import {
 import { effectiveFunctionPolicy } from "./toolPolicy.js";
 import { canonicalJson } from "../evals/canonical.js";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { createRunStoreWithConnection } from "../runstore/createStore.js";
 import {
   createFunctionInvoker,
+  hostFunctionInvoker,
   type FunctionCallInput,
   type FunctionInvoker,
   type FunctionRunView,
@@ -49,8 +49,6 @@ export type ResolvedFunctionTool = {
   grants: FunctionGrant[];
   run: (args: unknown, callId: string) => Promise<FunctionToolResult>;
 };
-
-const invokers = new Map<string, FunctionInvoker>();
 
 export function claudeFunctionToolReason(toolName: string): string {
   return `stage attaches function tool "${toolName}"; the model would see it as mcp__stageflow__${toolName} instead of ${toolName}`;
@@ -197,11 +195,5 @@ async function loadDefinition(projectRoot: string, functionId: string): Promise<
 
 function invokerFor(db: Database.Database | undefined): FunctionInvoker {
   if (db) return createFunctionInvoker({ db, stageflowHome: globalStageflowHome() });
-  const home = globalStageflowHome();
-  const cached = invokers.get(home);
-  if (cached) return cached;
-  const { connection } = createRunStoreWithConnection({ rootDir: home });
-  const created = createFunctionInvoker({ db: connection, stageflowHome: home });
-  invokers.set(home, created);
-  return created;
+  return hostFunctionInvoker();
 }

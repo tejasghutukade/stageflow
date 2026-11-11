@@ -99,7 +99,7 @@ function callFunctionOnTransport(input: FunctionCallInput, transport: FunctionHo
       try {
         transport.send({ type: "function.cancel", requestId });
       } catch {
-        // The host sees the disconnect and cancels the same id.
+        return;
       }
     };
     const disconnected = (): void => {
@@ -117,9 +117,13 @@ function callFunctionOnTransport(input: FunctionCallInput, transport: FunctionHo
     }, HOST_TIMEOUT_MS);
     transport.on("message", receive);
     transport.once("disconnect", disconnected);
-    transport.send({ type: "function.invoke", requestId, input }, (error) => {
-      if (error) disconnected();
-    });
+    try {
+      transport.send({ type: "function.invoke", requestId, input }, (error) => {
+        if (error) disconnected();
+      });
+    } catch {
+      disconnected();
+    }
   });
 }
 

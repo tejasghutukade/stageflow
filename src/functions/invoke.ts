@@ -95,6 +95,10 @@ export function createFunctionInvoker(options: FunctionInvokerOptions): Function
 
 const hostInvokers = new Map<string, FunctionInvoker>();
 
+export function registerHostFunctionInvoker(invoker: FunctionInvoker, home = globalStageflowHome()): void {
+  hostInvokers.set(home, invoker);
+}
+
 export function hostFunctionInvoker(): FunctionInvoker {
   const home = globalStageflowHome();
   const existing = hostInvokers.get(home);
@@ -167,9 +171,8 @@ export class FunctionInvoker {
     let definition = detail.definition;
     let revision = detail.revision;
     let sourceHash = detail.sourceHash ?? functionSourceHash(definition.source);
-    if (input.revision !== undefined) {
-      const pinned = new FunctionStore(this.db).getRevision(agentProjectKey(projectRoot), input.functionId, input.revision);
-      if (!pinned) throw new FunctionError("function.revision_not_found");
+    if (input.revision !== undefined && input.revision !== detail.revision) {
+      const pinned = await this.service.getRevision(projectRoot, input.functionId, input.revision);
       definition = pinned.definition;
       revision = pinned.revision;
       sourceHash = pinned.sourceHash;
