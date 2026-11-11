@@ -1591,7 +1591,11 @@ async function prepareStageSessionWiring(
       const resolved = await resolveFunctionTools({
         projectRoot,
         attachments: functionAttachments,
-        execution: () => ({ stage: runtimeStageId(input), attempt: roots.attempt ?? 1 }),
+        execution: () => ({
+          stage: runtimeStageId(input),
+          attempt: roots.attempt ?? 1,
+          ...(input.runId !== undefined ? { run: input.runId } : {}),
+        }),
       });
       if (!resolved.ok) return failAfterAttach(resolved.reason);
       const reserved = new Set([

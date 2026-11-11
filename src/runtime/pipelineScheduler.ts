@@ -1604,6 +1604,10 @@ export async function runPipelineDag(
           model: stage.model,
           grants,
           attemptHome,
+          ...((): { routeFunction?: NonNullable<(typeof dag.nodes)[number]["routeFunction"]> } => {
+            const routeFunction = dag.nodes.find((node) => node.id === definitionId)?.routeFunction;
+            return routeFunction !== undefined ? { routeFunction } : {};
+          })(),
           ...(browserEnv !== undefined ? { browserEnv } : {}),
           ...(sessionMode !== undefined
             ? {

@@ -378,6 +378,11 @@ describe("StageProcessLauncher", () => {
       stageId: "check",
       rootDir,
       factoryCwd: "/projects/app",
+      stage: {
+        id: "check",
+        system_prompt: "x",
+        pre_emit_checks: [{ id: "score", type: "function", function: "score_check", grants: [] }],
+      },
     });
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(calls).toEqual([{ projectRoot: "/projects/app", invocationId: "req-1" }]);
@@ -448,7 +453,16 @@ describe("StageProcessLauncher", () => {
       }) as typeof childProcess.fork,
     });
 
-    const pending = launcher.launch({ runId: "r-fn", stageId: "check", rootDir });
+    const pending = launcher.launch({
+      runId: "r-fn",
+      stageId: "check",
+      rootDir,
+      stage: {
+        id: "check",
+        system_prompt: "x",
+        pre_emit_checks: [{ id: "score", type: "function", function: "score_check", grants: [] }],
+      },
+    });
     await vi.waitFor(() => expect(started).toBe(true));
     child.emit("exit", null, "SIGTERM");
     await expect(pending).resolves.toEqual({

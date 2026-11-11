@@ -161,6 +161,14 @@ export class FunctionInvoker {
 
   async call(projectRoot: string, input: FunctionCallInput): Promise<FunctionRunView> {
     if (stageFunctionCallsUseHost()) return callFunctionOnHost(input);
+    let revisionHint = input.revision;
+    if (revisionHint === undefined) {
+      if (input.runId) {
+        revisionHint = (await this.service.getPin(projectRoot, "run", input.runId, input.functionId))?.revision;
+      } else if (input.sessionId) {
+        revisionHint = (await this.service.getPin(projectRoot, "session", input.sessionId, input.functionId))?.revision;
+      }
+    }
     const detail = await this.service.get(projectRoot, input.functionId);
     if (!detail.definition) {
       throw new FunctionError("function.invalid", "Fix the function file before running it", { issues: detail.issues });
@@ -171,8 +179,8 @@ export class FunctionInvoker {
     let definition = detail.definition;
     let revision = detail.revision;
     let sourceHash = detail.sourceHash ?? functionSourceHash(definition.source);
-    if (input.revision !== undefined && input.revision !== detail.revision) {
-      const pinned = await this.service.getRevision(projectRoot, input.functionId, input.revision);
+    if (revisionHint !== undefined && revisionHint !== detail.revision) {
+      const pinned = await this.service.getRevision(projectRoot, input.functionId, revisionHint);
       definition = pinned.definition;
       revision = pinned.revision;
       sourceHash = pinned.sourceHash;

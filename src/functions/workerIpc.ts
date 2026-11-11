@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { SF_STAGE_WORKER } from "../runtime/stageWorkerProtocol.js";
-import type { FunctionKind } from "../config/loadFunction.js";
+import type { FunctionGrant, FunctionKind } from "../config/loadFunction.js";
 import { FUNCTION_KILL_GRACE_MS, FUNCTION_TIMEOUT_MS_MAX } from "./protocol.js";
 import type { FunctionCallInput, FunctionRunView } from "./invoke.js";
 
@@ -9,6 +9,10 @@ const HOST_TIMEOUT_MS = FUNCTION_TIMEOUT_MS_MAX + FUNCTION_KILL_GRACE_MS + 1_000
 export type StageFunctionHost = {
   call(projectRoot: string, input: FunctionCallInput): Promise<FunctionRunView>;
   cancel(invocationId: string): Promise<void>;
+};
+
+export type StageFunctionGrantSource = {
+  grantsFor(functionId: string, kind: FunctionKind): readonly FunctionGrant[] | undefined;
 };
 
 type FunctionHostTransport = {
@@ -54,6 +58,7 @@ export async function handleStageFunctionMessage(
   projectRoot: string,
   send: (message: object) => void,
   alive: () => boolean,
+  grantSource?: StageFunctionGrantSource,
 ): Promise<void> {
   if (typeof message.requestId !== "string" || message.requestId.length === 0 || message.requestId.length > 100) return;
   if (message.type === "function.cancel") {
@@ -65,8 +70,23 @@ export async function handleStageFunctionMessage(
     if (alive()) send(functionResponse(message.requestId, failedView(undefined, "invalid_input", "function call was rejected")));
     return;
   }
+  const { grants: _ignored, ...withoutGrants } = kind.input;
+  const grants = grantSource?.grantsFor(kind.input.functionId, kind.input.kind);
+  if (grants === undefined) {
+    if (alive()) {
+      send(functionResponse(
+        message.requestId,
+        failedView(kind.input.kind, "permission_denied", "function grants are not attached to this stage"),
+      ));
+    }
+    return;
+  }
   try {
-    const view = await host.call(projectRoot, { ...kind.input, invocationId: message.requestId });
+    const view = await host.call(projectRoot, {
+      ...withoutGrants,
+      grants: [...grants],
+      invocationId: message.requestId,
+    });
     if (alive()) send(functionResponse(message.requestId, view));
   } catch (error) {
     if (alive()) {

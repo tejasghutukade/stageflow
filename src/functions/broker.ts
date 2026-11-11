@@ -194,11 +194,19 @@ export class FunctionBroker {
               signal,
               beforeCommit: this.options.beforeFileCommit,
             });
-      if (signal.aborted && request.op !== "write") return capabilityResult(request.requestId, cancelled());
+      if (signal.aborted) {
+        const action =
+          request.op === "write" ||
+          (request.op === "http" && functionApiIsAction(call.grants.apis ?? [], request.method, request.origin, request.path));
+        return capabilityResult(request.requestId, action ? uncertain() : cancelled());
+      }
       return capabilityResult(request.requestId, result);
     } catch {
       if (signal.aborted) {
-        return capabilityResult(request.requestId, request.op === "write" ? uncertain() : cancelled());
+        const action =
+          request.op === "write" ||
+          (request.op === "http" && functionApiIsAction(call.grants.apis ?? [], request.method, request.origin, request.path));
+        return capabilityResult(request.requestId, action ? uncertain() : cancelled());
       }
       return capabilityResult(request.requestId, {
         ok: false,

@@ -112,6 +112,7 @@ export function createAgentHostContext(options: {
 }): AgentHostContext {
   const service = new AgentService({
     store: new AgentStore(options.connection),
+    connection: options.connection,
     environment:
       options.environment ??
       createAgentEnvironment({

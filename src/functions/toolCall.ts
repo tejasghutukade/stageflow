@@ -16,6 +16,8 @@ import {
   type FunctionInvoker,
   type FunctionRunView,
 } from "./invoke.js";
+import { FunctionService } from "./service.js";
+import { FunctionStore } from "./store.js";
 
 export type FunctionToolInvoker = {
   call(projectRoot: string, input: FunctionCallInput): Promise<FunctionRunView>;
@@ -139,12 +141,17 @@ export async function runAttachedFunctionTool(input: {
   const invalid = argumentError(definition, input.args);
   if (invalid) return invalid;
   const invoker = input.invoker ?? invokerFor(input.db);
+  const revision = input.revision ?? (await pinnedToolRevision(input));
   const view = await invoker.call(input.projectRoot, {
     functionId: input.functionId,
     kind: "tool",
-    ...(input.revision !== undefined ? { revision: input.revision } : {}),
+    ...(revision !== undefined ? { revision } : {}),
     grants: input.grants,
     input: toolContext(input.functionId, input.args, input.execution),
+    ...(input.execution?.run !== undefined ? { runId: input.execution.run } : {}),
+    ...(input.execution?.session !== undefined ? { sessionId: input.execution.session } : {}),
+    ...(input.execution?.stage !== undefined ? { stageId: input.execution.stage } : {}),
+    ...(input.execution?.attempt !== undefined ? { attempt: input.execution.attempt } : {}),
   });
   if (!view.ok || view.code === "uncertain_outcome" || view.status === "uncertain") {
     const code = view.code ?? "exception";
@@ -196,4 +203,23 @@ async function loadDefinition(projectRoot: string, functionId: string): Promise<
 function invokerFor(db: Database.Database | undefined): FunctionInvoker {
   if (db) return createFunctionInvoker({ db, stageflowHome: globalStageflowHome() });
   return hostFunctionInvoker();
+}
+
+async function pinnedToolRevision(input: {
+  projectRoot: string;
+  functionId: string;
+  db?: Database.Database;
+  execution?: FunctionToolExecution;
+}): Promise<number | undefined> {
+  if (!input.db) return undefined;
+  const service = new FunctionService({ store: new FunctionStore(input.db) });
+  if (input.execution?.run) {
+    const pin = await service.getPin(input.projectRoot, "run", input.execution.run, input.functionId);
+    return pin?.revision;
+  }
+  if (input.execution?.session) {
+    const pin = await service.getPin(input.projectRoot, "session", input.execution.session, input.functionId);
+    return pin?.revision;
+  }
+  return undefined;
 }

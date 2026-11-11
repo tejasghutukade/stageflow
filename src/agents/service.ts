@@ -14,6 +14,8 @@ import {
   type AgentIssue,
 } from "../config/loadAgent.js";
 import { attachmentIssuesFromFiles, readFunctionFile } from "../config/loadFunction.js";
+import { FunctionService } from "../functions/service.js";
+import { FunctionStore } from "../functions/store.js";
 import { agentThreadKey, inboundDedupeKey, type AgentInboundMessage } from "./communications/port.js";
 import { generateAgentId } from "./agentId.js";
 import { newWebChatSlug } from "./webChat/slug.js";
@@ -151,6 +153,7 @@ const THREAD_COST_WINDOW_MS = 24 * 60 * 60_000;
 
 export class AgentService {
   private readonly store: AgentStore;
+  private readonly connection: import("better-sqlite3").Database | undefined;
   private readonly environment: AgentEnvironment;
   private readonly now: () => Date;
   private readonly tails = new Map<string, Promise<unknown>>();
@@ -165,8 +168,16 @@ export class AgentService {
   /** Next-run bookkeeping, for the scheduler. */
   readonly schedules: ScheduleLedger;
 
-  constructor(options: { store: AgentStore; environment?: AgentEnvironment; now?: () => Date; /** How long a file must be unchanged before its stamp is trusted (default 2 s). */ treeTrustMs?: number }) {
+  constructor(options: {
+    store: AgentStore;
+    connection?: import("better-sqlite3").Database;
+    environment?: AgentEnvironment;
+    now?: () => Date;
+    /** How long a file must be unchanged before its stamp is trusted (default 2 s). */
+    treeTrustMs?: number;
+  }) {
     this.store = options.store;
+    this.connection = options.connection;
     this.treeTrustMs = options.treeTrustMs ?? 2_000;
     this.environment = options.environment ?? NO_ENVIRONMENT;
     this.now = options.now ?? (() => new Date());
@@ -967,6 +978,11 @@ export class AgentService {
       };
       this.store.insertSession(agentProjectKey(projectRoot), session);
       if (isEval) this.evalOverrides.set(session.id, input.eval ?? {});
+      const functionIds = (revision.definition.tools.functions ?? []).map((item) => item.id);
+      if (functionIds.length > 0 && this.connection) {
+        const functions = new FunctionService({ store: new FunctionStore(this.connection) });
+        await functions.pinSession(projectRoot, session.id, functionIds);
+      }
       return session;
     });
   }

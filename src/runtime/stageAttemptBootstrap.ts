@@ -769,6 +769,7 @@ export async function openStageAttempt(
       roots,
       stage: input.stage,
       stageId,
+      runId: input.runId,
       task: input.task,
       priorEnvelope: priorResult.prior,
       ...(priorResult.joinPriors !== undefined

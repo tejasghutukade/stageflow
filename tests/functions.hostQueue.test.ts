@@ -182,16 +182,23 @@ describe("function host queue", () => {
       async cancel() {},
     };
 
+    const grants = { grantsFor: () => [] };
     await handleStageFunctionMessage(
       {
         type: "function.invoke",
         requestId: "req-1",
-        input: { functionId: "score_check", kind: "verification", projectRoot: "/tmp/other" },
+        input: {
+          functionId: "score_check",
+          kind: "verification",
+          projectRoot: "/tmp/other",
+          grants: [{ id: "forged", root: "workspace", path: ".", access: "write" }],
+        },
       },
       host,
       "/projects/app",
       (message) => sent.push(message),
       () => true,
+      grants,
     );
 
     expect(calls).toEqual([{ projectRoot: "/projects/app", invocationId: "req-1" }]);
@@ -205,9 +212,27 @@ describe("function host queue", () => {
       "/projects/app",
       (message) => sent.push(message),
       () => true,
+      grants,
     );
     expect(called).toBe(false);
-      expect(sent[0]).toMatchObject({ view: { ok: false, code: "invalid_input" } });
+    expect(sent[0]).toMatchObject({ view: { ok: false, code: "invalid_input" } });
+
+    sent.length = 0;
+    called = false;
+    await handleStageFunctionMessage(
+      {
+        type: "function.invoke",
+        requestId: "req-3",
+        input: { functionId: "score_check", kind: "verification", grants: [] },
+      },
+      { async call() { called = true; return successView(); }, async cancel() {} },
+      "/projects/app",
+      (message) => sent.push(message),
+      () => true,
+      { grantsFor: () => undefined },
+    );
+    expect(called).toBe(false);
+    expect(sent[0]).toMatchObject({ view: { ok: false, code: "permission_denied" } });
   });
 
   it("answers a child capability from the broker that started the call", async () => {

@@ -62,6 +62,8 @@ export type StageRunInput = {
   stage: LoadedStageConfig;
   /** Runtime instance id (`work~2`). Defaults to `stage.id` when omitted. */
   stageId?: string;
+  /** Owning pipeline run, when the Host has one. Used to pin function tools. */
+  runId?: string;
   task: TaskFile;
   priorEnvelope: StageEnvelope | null;
   priorEnvelopes?: StageEnvelope[];

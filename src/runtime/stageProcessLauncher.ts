@@ -73,6 +73,7 @@ export type StageLaunchInput = {
   attemptHome?: string;
   browserEnv?: Record<string, string>;
   model?: string;
+  routeFunction?: { id: string; grants: import("../config/loadFunction.js").FunctionGrant[] };
 };
 
 export type StageLaunchResult =
@@ -622,6 +623,22 @@ export class StageProcessLauncher {
               if (child.connected && !settled) child.send(payload);
             },
             () => child.connected === true && !settled,
+            {
+              grantsFor(functionId, kind) {
+                if (kind === "routing") {
+                  if (input.routeFunction?.id === functionId) return input.routeFunction.grants;
+                  return undefined;
+                }
+                if (kind === "tool") {
+                  return input.stage?.tools?.functions?.find((item) => item.id === functionId)?.grants;
+                }
+                const emit = input.stage?.pre_emit_checks?.find(
+                  (check) => check.type === "function" && check.function === functionId,
+                );
+                if (emit?.type === "function") return emit.grants;
+                return undefined;
+              },
+            },
           ).finally(() => {
             if (request.type === "function.invoke" && typeof request.requestId === "string") {
               this.functionCalls.get(child)?.delete(request.requestId);

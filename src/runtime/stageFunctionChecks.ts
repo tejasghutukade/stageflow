@@ -24,6 +24,9 @@ export function functionIdsForStage(
   for (const check of stage.pre_emit_checks ?? []) {
     if (check.type === "function") ids.add(check.function);
   }
+  for (const attachment of stage.tools?.functions ?? []) {
+    ids.add(attachment.id);
+  }
   const node = dag?.nodes.find((item) => item.id === stageId);
   const definition =
     node?.definition_id !== undefined && node.definition_id !== node.id
