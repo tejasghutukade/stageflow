@@ -81,7 +81,7 @@ Without `--json`, a blocking `sf run` prints `Run <runId>` as soon as the run is
 
 On a terminal, `sf run` asks at the gate and then continues the same command. A confirm gate, and an artifact gate, offer `1  accept` and `2  reject` (`accept` and `reject` also work). An artifact gate prints each file path above that choice. A free-text gate reads one line. A multi-question gate asks each part in order. After the choice, that stage's line changes to `accepted` or `rejected` and the timeline keeps updating while the rest of the run finishes. Cancel leaves the run parked. `--json`, and a run that is not on a terminal, do not ask.
 
-When the run finishes, the same id is printed again with `sf runs show --run <runId>`, the console URL for that run, and the run folder. A run still waiting on a person also prints the question and `sf runs answer --run <runId> --stage <stage>`. A run that failed on a stage also prints `sf runs retry --run <runId> --stage <stage>`. Cost is printed when the run reported one. `--json` does not print this view. The completion document already includes `runId` and `runDir`.
+When the run finishes, the same id is printed again with `sf runs show --run <runId>`, the console URL for that run, and the run folder. A run still waiting on a person also prints the question and `sf runs answer --run <runId> --stage <stage>`. A feedback-loop decision prints `sf runs feedback-decide` instead, including `--loop` when the loop has an id. A run that failed on a stage also prints `sf runs retry --run <runId> --stage <stage>`. Cost is printed when the run reported one. `--json` does not print this view. The completion document already includes `runId` and `runDir`.
 
 **Exit codes:**
 
