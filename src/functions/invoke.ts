@@ -55,6 +55,8 @@ export type FunctionCallInput = {
   attempt?: number | null;
   sessionId?: string | null;
   roots?: { artifacts?: string; workspace?: string };
+  containerName?: string;
+  containerDockerBin?: string;
 };
 
 export type FunctionRunView = {
@@ -175,6 +177,8 @@ export class FunctionInvoker {
       lookup: this.lookup,
       dial: this.dial,
       roots,
+      ...(input.containerName !== undefined ? { containerName: input.containerName } : {}),
+      ...(input.containerDockerBin !== undefined ? { containerDockerBin: input.containerDockerBin } : {}),
       attachmentId: input.attachmentId,
       runId: input.runId,
       stageId: input.stageId,
@@ -222,6 +226,8 @@ export class FunctionInvoker {
     lookup?: FunctionLookup;
     dial?: FunctionDial;
     roots: { artifacts: string; workspace: string };
+    containerName?: string;
+    containerDockerBin?: string;
     attachmentId?: string | null;
     runId?: string | null;
     stageId?: string | null;
@@ -237,6 +243,8 @@ export class FunctionInvoker {
       timeoutMs: input.timeoutMs,
       memoryLimitBytes: input.memoryLimitBytes,
       roots: input.roots,
+      ...(input.containerName !== undefined ? { containerName: input.containerName } : {}),
+      ...(input.containerDockerBin !== undefined ? { containerDockerBin: input.containerDockerBin } : {}),
       projectRoot: input.projectRoot,
       grants: input.grants,
       env: input.env,

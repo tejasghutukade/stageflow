@@ -219,7 +219,7 @@ function parseIo(
 
 type VerifyPhase = "emit" | "after";
 
-const EMIT_LEGAL_TYPES = new Set(["gate", "artifact"]);
+const EMIT_LEGAL_TYPES = new Set(["gate", "artifact", "function"]);
 
 function parseVerifyWhen(
   item: Record<string, unknown>,

@@ -35,6 +35,7 @@ import {
   type LoginCheckOptions,
 } from "../browser/loginCheck.js";
 import type { StageRoots } from "./stageRoots.js";
+import type { FunctionCheckScope } from "../envelope/functionVerification.js";
 
 /** Sidecar written before completion command checks so they can inspect fork_choice. */
 export const COMPLETION_CANDIDATE_ENVELOPE_FILENAME =
@@ -100,6 +101,7 @@ export function createVerifiedStageExecution(options: {
     runner?: BrowserRunner;
     options?: LoginCheckOptions;
   };
+  functions?: FunctionCheckScope;
 }): VerifiedStageExecution {
   const { store, runId, stageId, attempt, stage, dag, roots, commandEnv } =
     options;
@@ -169,6 +171,15 @@ export function createVerifiedStageExecution(options: {
           checkoutBefore,
           checkoutError,
           checklistAttestations: candidate.envelope.checklist_attestations,
+          ...(options.functions !== undefined
+            ? {
+                functions: { invoke: options.functions.invoke },
+                functionRevision: options.functions.revision,
+                runId,
+                stageId,
+                attempt,
+              }
+            : {}),
           ...(options.browserLogin !== undefined
             ? {
                 browserLogin: async () => {

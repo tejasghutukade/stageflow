@@ -664,6 +664,162 @@ describe("emit_stage_envelope artifact disk-truth", () => {
     expect(String(out.result.details.error)).toMatch(/write_stage_artifact/);
   });
 
+  it("compiles a function check onto emit only when when includes it", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-fn-verify-yaml-"));
+    await mkdir(path.join(root, "functions"), { recursive: true });
+    await writeFile(
+      path.join(root, "functions", "score.function.yaml"),
+      [
+        "id: score",
+        "name: Score",
+        "kind: verification",
+        "source: |",
+        "  export default function execute() {",
+        "    return { passed: true };",
+        "  }",
+        "capabilities: []",
+        "bindings: []",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      path.join(root, "demo.pipeline.yaml"),
+      [
+        "id: demo",
+        "model: anthropic/claude-sonnet-4-5",
+        "stages:",
+        "  - id: check",
+        "    system_prompt: Check.",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
+        "    verify:",
+        "      - id: at-emit",
+        "        type: function",
+        "        function: score",
+        "        when: [emit]",
+        "      - id: at-after",
+        "        type: function",
+        "        function: score",
+        "      - id: both",
+        "        type: function",
+        "        function: score",
+        "        when: [emit, after]",
+        "",
+      ].join("\n"),
+    );
+    const loaded = await loadPipelineOutcome(path.join(root, "demo.pipeline.yaml"), {
+      cwd: root,
+      projectRoot: root,
+    });
+    expect(loaded.ok ? [] : loaded.issues).toEqual([]);
+    if (!loaded.ok) return;
+    const stage = loaded.value.stages.find((item) => item.id === "check");
+    const node = loaded.value.dag.nodes.find((item) => item.id === "check");
+    expect(stage?.pre_emit_checks).toEqual([
+      { id: "at-emit", type: "function", function: "score", grants: [] },
+      { id: "both", type: "function", function: "score", grants: [] },
+    ]);
+    expect(node?.completion).toEqual({
+      mode: "all",
+      checks: [
+        { id: "at-after", type: "function", function: "score", grants: [] },
+        { id: "both", type: "function", function: "score", grants: [] },
+      ],
+    });
+  });
+
+  it("keeps a failed function check, a thrown function, and an extra field distinct", async () => {
+    const calls: string[] = [];
+    const responses = [
+      { ok: true, value: { passed: false, message: "low" }, revision: 1 },
+      { ok: false, code: "exception", message: "Error: boom", revision: 1 },
+      { ok: true, value: { passed: true, extra: true }, revision: 1 },
+    ];
+    const functions = {
+      async invoke(request: { checkId: string }) {
+        calls.push(request.checkId);
+        const next = responses[calls.length - 1];
+        if (!next) throw new Error("unexpected function check");
+        return next;
+      },
+    };
+    const revision = () => 1;
+    const check = (id: string) =>
+      ({ id, type: "function", function: "score", grants: [] }) as PreEmitCheck;
+    const failed = await emit(
+      { checks: [check("low")], functions, functionRevision: revision } as EmitOptions,
+      plainSuccess,
+    );
+    const thrown = await emit(
+      { checks: [check("boom")], functions, functionRevision: revision } as EmitOptions,
+      plainSuccess,
+    );
+    const extra = await emit(
+      { checks: [check("extra")], functions, functionRevision: revision } as EmitOptions,
+      plainSuccess,
+    );
+    expectRejected(failed);
+    expectRejected(thrown);
+    expectRejected(extra);
+    expect(String(failed.result.details.error)).toBe("low");
+    expect(String(thrown.result.details.error)).toMatch(/exception/);
+    expect(String(thrown.result.details.error)).not.toMatch(/invalid_output/);
+    expect(String(extra.result.details.error)).toMatch(/invalid_output/);
+    expect(String(extra.result.details.error)).toMatch(/extra/);
+    expect(calls).toEqual(["low", "boom", "extra"]);
+  });
+
+  it("stops at the first failing emit function check", async () => {
+    const calls: string[] = [];
+    const functions = {
+      async invoke(request: { checkId: string; revision: number }) {
+        calls.push(`${request.checkId}:${request.revision}`);
+        return { ok: true, value: { passed: false, message: request.checkId }, revision: request.revision };
+      },
+    };
+    const out = await emit(
+      {
+        checks: [
+          { id: "first", type: "function", function: "score", grants: [] },
+          { id: "second", type: "function", function: "score", grants: [] },
+        ] as PreEmitCheck[],
+        functions,
+        functionRevision: () => 4,
+      } as EmitOptions,
+      plainSuccess,
+    );
+    expectRejected(out);
+    expect(calls).toEqual(["first:4"]);
+    expect(String(out.result.details.error)).toBe("first");
+  });
+
+  it("a failure envelope does not run function checks", async () => {
+    const calls: string[] = [];
+    const functions = {
+      async invoke(request: { checkId: string }) {
+        calls.push(request.checkId);
+        return { ok: true, value: { passed: false, message: "low" }, revision: 1 };
+      },
+    };
+    const out = await emit(
+      {
+        checks: [{ id: "score", type: "function", function: "score", grants: [] }] as PreEmitCheck[],
+        functions,
+        functionRevision: () => 1,
+      } as EmitOptions,
+      { status: "failure", summary: "blocked", artifacts: [] },
+    );
+    expectAccepted(out);
+    expect(out.capture).toMatchObject({ envelope: { status: "failure" } });
+    expect(calls).toEqual([]);
+  });
+
   it("skips disk-truth on status: failure even with listed phantoms", async () => {
     const ctx = await withPresence();
     const out = await emit(

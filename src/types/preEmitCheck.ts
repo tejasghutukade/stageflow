@@ -1,3 +1,4 @@
+import type { FunctionGrant } from "../config/loadFunction.js";
 import type { StageGateKind } from "./stage.js";
 
 /**
@@ -16,4 +17,5 @@ export type PreEmitCheck =
       state: "logged_in" | "logged_out" | "unknown";
       logged_in: boolean | null;
       url: string;
-    };
+    }
+  | { id: string; type: "function"; function: string; grants: FunctionGrant[] };

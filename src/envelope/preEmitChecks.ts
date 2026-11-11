@@ -14,12 +14,24 @@ import { loginCheckIssue } from "../browser/loginCheck.js";
 import { EnvelopeError, type StageEnvelope } from "../types/envelope.js";
 import type { PreEmitCheck } from "../types/preEmitCheck.js";
 import type { ArtifactPresenceContext } from "./assertEmittedArtifacts.js";
+import {
+  activeFunctionChecks,
+  functionCheckErrorText,
+  judgeFunctionVerification,
+  type FunctionCheckInvoker,
+  type FunctionRevisionLookup,
+} from "./functionVerification.js";
 
 export type PreEmitCheckOptions = {
   checks?: PreEmitCheck[];
   readQaTrail?: () => QaExchange[] | Promise<QaExchange[]>;
   /** Host attempt context for emit disk-truth of non-empty `envelope.artifacts`. */
   artifactPresence?: ArtifactPresenceContext;
+  functions?: FunctionCheckInvoker;
+  functionRevision?: FunctionRevisionLookup;
+  runId?: string;
+  stageId?: string;
+  attempt?: number;
 };
 
 function artifactListsBasename(artifact: string, basename: string): boolean {
@@ -46,10 +58,27 @@ export function declaredArtifactIssue(
  * `gate` check with no `readQaTrail` fails closed (cannot be verified). No
  * `checks` (or an empty list) is a no-op.
  */
+function candidateEnvelope(
+  envelope: Pick<StageEnvelope, "artifacts" | "payload"> & Partial<StageEnvelope>,
+): StageEnvelope {
+  return {
+    status: envelope.status === "failure" ? "failure" : "success",
+    summary: envelope.summary ?? "",
+    artifacts: [...envelope.artifacts],
+    ...(envelope.payload !== undefined ? { payload: envelope.payload } : {}),
+    ...(envelope.notes !== undefined ? { notes: envelope.notes } : {}),
+    ...(envelope.stage_id !== undefined ? { stage_id: envelope.stage_id } : {}),
+    ...(envelope.checklist_attestations !== undefined
+      ? { checklist_attestations: envelope.checklist_attestations }
+      : {}),
+  };
+}
+
 export async function assertPreEmitChecks(
-  envelope: Pick<StageEnvelope, "artifacts" | "payload">,
+  envelope: Pick<StageEnvelope, "artifacts" | "payload"> & Partial<StageEnvelope>,
   options: PreEmitCheckOptions | undefined,
 ): Promise<void> {
+  if (envelope.status === "failure") return;
   const checks = options?.checks;
   if (checks === undefined || checks.length === 0) {
     return;
@@ -73,7 +102,49 @@ export async function assertPreEmitChecks(
       continue;
     }
 
-    // check.type === "gate"
+    if (check.type === "function") {
+      const scope = activeFunctionChecks();
+      const invoke = options?.functions?.invoke ?? scope?.invoke;
+      const revisionOf = options?.functionRevision ?? scope?.revision;
+      if (invoke === undefined || revisionOf === undefined) {
+        throw new EnvelopeError("function invoker is not available");
+      }
+      const revision = await revisionOf(check.function);
+      if (typeof revision !== "number") {
+        throw new EnvelopeError("function revision is not pinned for this run");
+      }
+      let response;
+      try {
+        response = await invoke({
+          functionId: check.function,
+          revision,
+          grants: check.grants,
+          phase: "emit",
+          checkId: check.id,
+          envelope: candidateEnvelope(envelope),
+          runId: options?.runId ?? scope?.runId,
+          stageId: options?.stageId ?? scope?.stageId,
+          attempt: options?.attempt ?? scope?.attempt,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new EnvelopeError(functionCheckErrorText("exception", message));
+      }
+      const verdict = judgeFunctionVerification(response, revision);
+      switch (verdict.outcome) {
+        case "passed":
+          continue;
+        case "failed":
+          throw new EnvelopeError(verdict.message ?? "function check failed");
+        case "error":
+          throw new EnvelopeError(functionCheckErrorText(verdict.code, verdict.message));
+      }
+    }
+
+    if (check.type !== "gate") {
+      const unsupported: never = check;
+      throw new EnvelopeError(`unsupported pre-emit check "${(unsupported as { type: string }).type}"`);
+    }
     if (options?.readQaTrail === undefined) {
       throw new EnvelopeError(
         "declared gate kinds cannot be verified without a QA trail reader",

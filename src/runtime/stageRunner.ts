@@ -31,7 +31,14 @@ import {
   openStageAttempt,
   type OperatorCatalog,
 } from "./stageAttemptBootstrap.js";
+import { runWithFunctionChecks, type FunctionCheckScope } from "../envelope/functionVerification.js";
+import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { createVerifiedStageExecution } from "./verifiedStageExecution.js";
+import {
+  createFunctionCheckScope,
+  functionIdsForStage,
+  pinMissingRunFunctions,
+} from "./stageFunctionChecks.js";
 import { BROWSER_STAGE_PATTERNS, redact } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
 import { isStageTimeoutReason } from "../agent/stageTimeout.js";
@@ -309,6 +316,43 @@ export async function runStage(
       attemptCtx,
     });
   }
+  let functionScope: FunctionCheckScope | undefined;
+  const functionIds = functionIdsForStage(stage, dag, stageId);
+  if (functionIds.length > 0) {
+    const db = sqliteConnectionFromStore(store);
+    if (factoryCwd === undefined || db === undefined) {
+      const reason = "function checks require a project store";
+      await appendLifecycleEventAndPatchExecution({
+        store,
+        runId,
+        stageId,
+        event: { event: "failed", reason },
+        attemptCtx,
+      });
+      return { ok: false, reason };
+    }
+    try {
+      await pinMissingRunFunctions(db, factoryCwd, runId, functionIds);
+      functionScope = createFunctionCheckScope({
+        db,
+        projectRoot: factoryCwd,
+        runId,
+        stageId,
+        attempt,
+        roots,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await appendLifecycleEventAndPatchExecution({
+        store,
+        runId,
+        stageId,
+        event: { event: "failed", reason },
+        attemptCtx,
+      });
+      return { ok: false, reason };
+    }
+  }
   const verifiedExecution = createVerifiedStageExecution({
     store,
     runId,
@@ -331,6 +375,7 @@ export async function runStage(
           },
         }
       : {}),
+    ...(functionScope !== undefined ? { functions: functionScope } : {}),
   });
   await verifiedExecution.prepare();
   console.error(`Running stage ${stageId} (${stage.model})...`);
@@ -391,22 +436,26 @@ export async function runStage(
 
   let outcome: RunStageYieldLoopResult;
   try {
-    outcome = await runStageYieldLoop({
-      handle,
-      runId,
-      stageId,
-      hitl,
-      workerMode,
-      store: workerMode ? store : undefined,
-      attemptCtx,
-      skipGates,
-      gateContext: await stageGateContext({
-        runDir: workspaceDir ?? store.getWorkspaceDir(runId),
+    const yieldLoop = async () =>
+      runStageYieldLoop({
+        handle,
         runId,
         stageId,
-        browser: stage.browser,
-      }),
-    });
+        hitl,
+        workerMode,
+        store: workerMode ? store : undefined,
+        attemptCtx,
+        skipGates,
+        gateContext: await stageGateContext({
+          runDir: workspaceDir ?? store.getWorkspaceDir(runId),
+          runId,
+          stageId,
+          browser: stage.browser,
+        }),
+      });
+    outcome = await (functionScope !== undefined
+      ? runWithFunctionChecks(functionScope, yieldLoop)
+      : yieldLoop());
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     const synced = await runBeforeVerify(beforeVerify);

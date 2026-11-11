@@ -508,6 +508,11 @@ async function buildLoadedPipelineFromMerge(
       if (check.type === "function") uses.push({ kind: "verification", id: check.function, grants: check.grants });
     }
   }
+  for (const stage of loadedStages) {
+    for (const check of stage.pre_emit_checks ?? []) {
+      if (check.type === "function") uses.push({ kind: "verification", id: check.function, grants: check.grants });
+    }
+  }
   if (uses.length > 0) {
     const attachmentIssues = await attachmentIssuesFromFiles(projectRoot, uses);
     if (attachmentIssues.length > 0) {
