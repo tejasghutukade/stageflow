@@ -4,13 +4,11 @@ Project-specific guidance for AI coding agents.
 
 ## Operator console UX
 
-When changing operator-console layout, navigation, HITL reply surfaces, run/stage chrome, triage home, theme, or status presentation — read `docs/ideation/2026-08-16-ui-app/UX-DECISIONS.md` first (shell law, IA, HITL kinds, copy).
+When changing operator-console layout, navigation, HITL reply surfaces, run/stage chrome, triage home, theme, or status presentation — follow the shell, information architecture, HITL kinds, and copy already in this console.
 
 When adding or wiring UI modules for that console — use `ui/src/components/COMPONENT-MAP.md` and prefer skeletons under `ui/src/components/` over inventing parallel patterns.
 
-When scoping backend/API or screen work to match the prototype — read `docs/ideation/2026-08-16-ui-app/BUILD-GAP.md` (gap + phased order).
-
-Static HTML under `docs/ideation/2026-08-16-ui-app/` is a design snapshot, not production.
+When scoping backend/API or screen work — match the screens and components already in `ui/src/`. Production UI is that tree.
 
 <!-- ASTRYX:START -->
 Astryx v0.4.0 · 90+ components
@@ -44,6 +42,6 @@ MORE CLI:
 
 ## Chrome exception (Phase 6)
 
-The operator-console chrome primitives — rail, page-head, zone, block, run-row, fail-row, rrow, pick, theme-pick, gate, track-mini, mini, filters/tab, topbar, capacity, setting, table, drawer, kv, graph-view, gnode, canvas-tools, canvas-hint, work-split, run-page workspace — are ported from the finalized HTML prototype (`docs/ideation/2026-08-16-ui-app/`) and the locked spatial run map (`docs/prototype/minimal/index.html`) as CSS classes in `ui/src/console.css`, using Astryx design tokens (`var(--color-*)`, `var(--spacing-*)`, `var(--radius-*)`, `var(--font-size-*)`, `var(--shadow-*)`). Native HTML elements (`<div>`, `<span>`, `<nav>`, `<section>`, `<table>`, `<a>`, `<button>`, `<aside>`, `<dl>`) are allowed for those primitives. This overrides the "No `<div>`" and "don't hand-roll CSS" Astryx rules for chrome surfaces.
+The operator-console chrome primitives — rail, page-head, zone, block, run-row, fail-row, rrow, pick, theme-pick, gate, track-mini, mini, filters/tab, topbar, capacity, setting, table, drawer, kv, graph-view, gnode, canvas-tools, canvas-hint, work-split, run-page workspace — are ported from the finalized HTML prototype as CSS classes in `ui/src/console.css`, using Astryx design tokens (`var(--color-*)`, `var(--spacing-*)`, `var(--radius-*)`, `var(--font-size-*)`, `var(--shadow-*)`). Native HTML elements (`<div>`, `<span>`, `<nav>`, `<section>`, `<table>`, `<a>`, `<button>`, `<aside>`, `<dl>`) are allowed for those primitives. This overrides the "No `<div>`" and "don't hand-roll CSS" Astryx rules for chrome surfaces.
 
 Astryx atoms remain where they already work: `Markdown`, `CodeBlock`, `Token`, `Collapsible`, `Theme`, and `Banner` (as last resort). Do not replace working Astryx content components with hand-rolled equivalents.

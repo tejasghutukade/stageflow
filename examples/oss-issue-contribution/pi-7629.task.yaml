@@ -76,4 +76,4 @@ constraints: |
   replaced by a Stageflow artifact or report describing the change.
   In the explainer stages only (oss-explain-issue, oss-explain-fix), the
   explainer HTML belongs in Stageflow artifacts, never in the checkout.
-checkout: /Users/tejasghutukade/Projects/pi
+checkout: /path/to/pi

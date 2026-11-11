@@ -5,7 +5,7 @@ title: Browser sessions internals
 
 # Browser sessions internals
 
-For contributors and coding agents. This page says what the browser-sessions feature does, how the code fits together, and how to change or debug it safely. The user-facing page is [Browser sessions](browser.md). The design record is [docs/specs/browser-sessions.md](specs/browser-sessions.md) (Revision 2 wins over the earlier text). If this page and the code disagree, the code wins. Fix this page.
+For contributors and coding agents. This page says what the browser-sessions feature does, how the code fits together, and how to change or debug it safely. The user-facing page is [Browser sessions](browser.md). If this page and the code disagree, the code wins. Fix this page.
 
 All paths are relative to the repo root. Names were checked against the code at the time of writing.
 
@@ -582,5 +582,3 @@ Goal: run `examples/browser-session` without touching your own Host (default por
 | Stay on the agent-browser stream; no third-party live view product | Steel and Browserless were run as self-hosted candidates (spikes, not shipped) and rejected. Steel: one session per container, no auth on CDP, API or viewer, read-only mode only client-side, Enter did not submit forms in its viewer, release does not flush cookies. Browserless: SSPL or commercial licence blocks hosted use, the open-source viewer is the DevTools frontend (did not follow popups, Tab left the canvas), real live view is Enterprise only, session multiplexer with one shared token. Both would still need Stageflow's own authenticating relay and container labels. Cloud providers (Kernel, Browserbase, Anchor, Hyperbrowser, Cloudflare Browser Run) were read from documentation only. | Spec F4, F9 |
 | Relay in the Host, container holds only the browser | Keeps tokens, auth, tickets and audit in one place and the container tiny. | Spec D1, D11 |
 | Neutral local fixture site | Sites such as LinkedIn forbid automation in their terms. | Further Notes |
-
-Spec: [docs/specs/browser-sessions.md](specs/browser-sessions.md). Tickets: `docs/tickets/browser-sessions/`.

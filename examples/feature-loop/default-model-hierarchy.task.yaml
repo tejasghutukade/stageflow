@@ -55,4 +55,4 @@ constraints: |
   Do not change agent-backend resolution semantics except where
   documentation must clarify that model and agent are separate.
   publish_repo and base_branch must be the values named here, never guessed.
-checkout: /Users/tejasghutukade/Projects/software-factory/.worktrees/scratch/extra-workspace
+checkout: /path/to/checkout

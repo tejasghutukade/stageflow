@@ -1,5 +1,5 @@
 /**
- * Shared contracts for Stageflow's built-in compaction (docs/plans/compaction-strategy.md).
+ * Shared contracts for Stageflow's built-in compaction.
  * Pure data types only: the layers (mask, pin, state, summary, guards) import from here.
  */
 

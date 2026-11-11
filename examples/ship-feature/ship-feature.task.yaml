@@ -43,8 +43,8 @@ context: |
   tracker" section at the bottom — follow those instructions exactly (flip
   [ ] to [x], add links to the fixture/test/doc/example) rather than only
   deleting the checkbox text. Do not touch any other backlog item in that
-  file. This tracker file is gitignored (a local-only planning artifact, like
-  docs/plans/ and docs/ideation/) — editing it on disk is still worthwhile
+  file. This tracker file is gitignored (a local-only planning artifact) —
+  editing it on disk is still worthwhile
   for the operator's own tracking, but it will never appear in `git diff` or
   `git status`, so never list it in changed_files/fixed_files (those must
   match tracked, committable changes) and never expect it to show up in the
@@ -75,4 +75,4 @@ constraints: |
   this file already rejects invalid minItems/minimum/maximum.
   Source and test edits belong in the checkout working tree and must never
   be replaced by a Stageflow artifact or report describing the change.
-checkout: /Users/tejasghutukade/Projects/stageflow-demo-worktree
+checkout: /path/to/checkout

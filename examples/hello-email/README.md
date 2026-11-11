@@ -16,7 +16,7 @@ The local `email.yaml` is ignored by Git. `email.example.yaml` remains the publi
 
 ## Incoming-email reply test
 
-The `hello-email-reply` pipeline has one stage, `reply-hello-email`. An account email rule with `includeBody: true` supplies the incoming message reference and up to 8192 characters of body in task context. The stage checks the sender and Reply-To, interprets the latest authored text (ignoring quoted history and signatures), then sends one threaded conversational answer. It does not reuse the manual send task or require its recipient input. Its test sender is `simrankore15@gmail.com`.
+The `hello-email-reply` pipeline has one stage, `reply-hello-email`. An account email rule with `includeBody: true` supplies the incoming message reference and up to 8192 characters of body in task context. The stage checks the sender and Reply-To, interprets the latest authored text (ignoring quoted history and signatures), then sends one threaded conversational answer. It does not reuse the manual send task or require its recipient input. Its test sender is `you@example.com`.
 
 Send `Tell me a joke` in the email body to receive a joke. Send `What day is today?` to receive the weekday and date checked against the host clock, with its timezone. Each new incoming message starts a separate run; no conversation memory beyond that message is loaded. Empty or truncated requests are skipped. The stage prompt limits email requests to conversational answers: it does not authorize browsing, file changes, commands from the email, or access to secrets. These are prompt-level boundaries, not a hardened sandbox for arbitrary untrusted senders.
 
