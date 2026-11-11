@@ -97,14 +97,14 @@ export function createEvalGate(options: {
     if (options.projectRoot && forbiddenWriteTarget(options.projectRoot, options.stageflowHome ?? globalStageflowHome(), call.tool, call.input) !== undefined) {
       return refuse("denied", "Agent definitions and Stageflow state cannot be written by an agent.");
     }
-    const kind = classifyTool(definition, call.tool, policy.readOnlyTools);
+    const kind = classifyTool(definition, call.tool, policy.readOnlyTools, options.projectRoot);
     const blocked =
       kind.class === "operator_only" ||
       ALWAYS_BLOCKED.has(call.tool) ||
       (policy.tools !== "real" && (BLOCKED_UNLESS_REAL.has(call.tool) || kind.class === "sub_agent"));
     if (blocked) return refuse("denied", `${call.tool} cannot run in an evaluation.`);
 
-    if (requiresAskFirst(definition, call.tool)) {
+    if (requiresAskFirst(definition, call.tool, options.projectRoot)) {
       if (policy.approvals === "deny") return refuse("denied", APPROVAL_NOT_GRANTED(call.tool));
       if (policy.approvals === "record_only" || !kind.readOnly) return refuse("would_ask_first", APPROVAL_NOT_GRANTED(call.tool));
     }

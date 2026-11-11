@@ -90,6 +90,12 @@ export type InternalAgentSnapshotTarget = {
   model: string;
 };
 
+export type FunctionSnapshotPin = {
+  id: string;
+  source_hash: string;
+  policy: string;
+};
+
 export type ConfigSnapshot = {
   snapshot_version: number;
   eval: { id: string; path: string; hash: string; definition: Record<string, unknown> };
@@ -117,6 +123,7 @@ export type ConfigSnapshot = {
   };
   engine: { name: string; version: string; rubric_prompt_version: number; node_version: string };
   stageflow_version: string;
+  functions?: FunctionSnapshotPin[];
 };
 
 /** Every fingerprint input, as the exact value fingerprinted, so two runs can be diffed by key. */
@@ -136,6 +143,7 @@ export type ConfigComponents = {
   /** Stage runs only. Omission and false are both false. Absent on agent runs. */
   checkout_context?: boolean;
   agent?: AgentComponent;
+  functions?: FunctionSnapshotPin[];
 };
 
 /** Agent-only fingerprint inputs; absent for stage runs so stage payloads hash identically. */
@@ -165,7 +173,13 @@ export type ComponentsInput = {
   independence?: IndependenceLevel;
   checkout_context?: boolean;
   agent?: AgentComponent;
+  functions?: readonly FunctionSnapshotPin[];
 };
+
+function sortedFunctionPins(pins: readonly FunctionSnapshotPin[] | undefined): FunctionSnapshotPin[] | undefined {
+  if (!pins || pins.length === 0) return undefined;
+  return [...pins].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
 
 export function buildComponents(input: ComponentsInput): ConfigComponents {
   const graders: Record<string, string> = {};
@@ -173,6 +187,7 @@ export function buildComponents(input: ComponentsInput): ConfigComponents {
     graders[grader.id] = grader.hash;
   }
   const agent = input.agent;
+  const functions = sortedFunctionPins(input.functions);
   return {
     stage: input.stageVersionHash,
     model: input.model,
@@ -188,6 +203,7 @@ export function buildComponents(input: ComponentsInput): ConfigComponents {
     ...(input.independence !== undefined ? { independence: input.independence } : {}),
     ...(input.checkout_context !== undefined ? { checkout_context: input.checkout_context } : {}),
     ...(agent ? { agent: { ...agent, read_only_tools: [...agent.read_only_tools].sort() } } : {}),
+    ...(functions ? { functions } : {}),
   };
 }
 
@@ -209,6 +225,7 @@ export function computeFingerprint(components: ConfigComponents): string {
     ...(components.independence !== undefined ? { independence: components.independence } : {}),
     ...(components.checkout_context !== undefined ? { checkout_context: components.checkout_context } : {}),
     ...(components.agent ? { agent: components.agent } : {}),
+    ...(components.functions ? { functions: components.functions } : {}),
   };
   return sha256Hex(canonicalJson(payload)).slice(0, 8);
 }
@@ -225,6 +242,7 @@ export type SnapshotInput = {
   settings: ConfigSnapshot["settings"];
   engine: { name: string; version: string; nodeVersion: string };
   stageflowVersion: string;
+  functions?: readonly FunctionSnapshotPin[];
 };
 
 export function buildSnapshot(input: SnapshotInput): ConfigSnapshot {
@@ -254,5 +272,6 @@ export function buildSnapshot(input: SnapshotInput): ConfigSnapshot {
       node_version: input.engine.nodeVersion,
     },
     stageflow_version: input.stageflowVersion,
+    ...(sortedFunctionPins(input.functions) ? { functions: sortedFunctionPins(input.functions) } : {}),
   };
 }

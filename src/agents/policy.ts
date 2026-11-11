@@ -1,6 +1,7 @@
 import path from "node:path";
 import { grantedToolIds, type AgentDefinition } from "../config/loadAgent.js";
 import type { ApprovalActor } from "./store.js";
+import { functionToolAsksFirst } from "../functions/toolPolicy.js";
 
 export type { ApprovalActor };
 
@@ -23,8 +24,13 @@ export function effectiveAskFirst(definition: Grants & Pick<AgentDefinition, "ap
   return [...new Set([...definition.approvals.ask_first, ...forced])];
 }
 
-export function requiresAskFirst(definition: Pick<AgentDefinition, "approvals">, tool: string): boolean {
-  return (ALWAYS_ASK_FIRST as readonly string[]).includes(tool) || definition.approvals.ask_first.includes(tool);
+export function requiresAskFirst(
+  definition: Pick<AgentDefinition, "approvals" | "tools">,
+  tool: string,
+  projectRoot?: string,
+): boolean {
+  if ((ALWAYS_ASK_FIRST as readonly string[]).includes(tool) || definition.approvals.ask_first.includes(tool)) return true;
+  return functionToolAsksFirst(definition, tool, projectRoot);
 }
 
 export function canApprove(definition: Pick<AgentDefinition, "approvals">, actor: ApprovalActor): boolean {

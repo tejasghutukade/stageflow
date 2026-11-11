@@ -43,6 +43,7 @@ import {
   type ConfigSnapshot,
   type SnapshotOverrides,
 } from "./snapshot.js";
+import { functionSnapshotPins } from "../functions/toolCall.js";
 import { planInternalAgent } from "./planInternalAgent.js";
 import { isConversationTarget, type EvalFile, type EvalPlan, type PlanCase, type ResolvedGrader } from "./types.js";
 import { isJudged, isJudgedType } from "./judged.js";
@@ -494,6 +495,7 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
 
   const independence = target.stageConfig.independence ?? "persistent";
   const checkoutContext = target.stageConfig.checkout_context === true;
+  const functionPins = await functionSnapshotPins(projectRoot, target.stageConfig.tools?.functions ?? []);
   const components = buildComponents({
     stageVersionHash: target.stageVersionHash,
     model: stageModel,
@@ -506,6 +508,7 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
     engine: input.engine,
     independence,
     checkout_context: checkoutContext,
+    ...(functionPins.length > 0 ? { functions: functionPins } : {}),
   });
   const fingerprint = computeFingerprint(components);
 
@@ -568,6 +571,7 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
     },
     engine: input.engine,
     stageflowVersion: PACKAGE_VERSION,
+    ...(functionPins.length > 0 ? { functions: functionPins } : {}),
   });
 
   const plan: EvalPlan = {
@@ -668,6 +672,7 @@ async function buildAgentResult(a: AgentResultInput): Promise<BuildEvalPlanResul
     always_on: false,
   };
 
+  const functionPins = await functionSnapshotPins(projectRoot, definition.tools.functions ?? []);
   const components = buildComponents({
     stageVersionHash: agentTarget.definitionHash,
     model: agentModel,
@@ -678,6 +683,7 @@ async function buildAgentResult(a: AgentResultInput): Promise<BuildEvalPlanResul
     repeats: a.repeats,
     passThreshold: a.passThreshold,
     engine: input.engine,
+    ...(functionPins.length > 0 ? { functions: functionPins } : {}),
     agent: {
       revision,
       mode: conversation.mode,
@@ -722,7 +728,7 @@ async function buildAgentResult(a: AgentResultInput): Promise<BuildEvalPlanResul
       tools: agentTarget.tools.map((tool) => ({
         id: tool.id,
         risk: tool.risk,
-        class: classifyTool(definition, tool.id, conversation.readOnlyTools).class,
+        class: classifyTool(definition, tool.id, conversation.readOnlyTools, projectRoot).class,
       })),
       ask_first: agentTarget.askFirst,
       sub_agents: subAgents,
@@ -774,6 +780,7 @@ async function buildAgentResult(a: AgentResultInput): Promise<BuildEvalPlanResul
     },
     engine: input.engine,
     stageflowVersion: PACKAGE_VERSION,
+    ...(functionPins.length > 0 ? { functions: functionPins } : {}),
   });
 
   const plan: EvalPlan = {

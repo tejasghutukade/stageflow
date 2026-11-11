@@ -235,7 +235,7 @@ export class AgentConversation {
       };
       const allowed = await checkConsumer();
       if (!allowed.allow) return allowed;
-      if (!requiresAskFirst(definition, call.tool)) return allowed;
+      if (!requiresAskFirst(definition, call.tool, input.projectRoot)) return allowed;
       const gateStart = new Date();
       const approval = await service.requestApproval(input.projectRoot, sessionId, {
         tool: call.tool,

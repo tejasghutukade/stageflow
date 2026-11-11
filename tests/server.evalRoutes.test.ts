@@ -962,7 +962,7 @@ describe("eval routes: eval runs", () => {
     expect(results.body.results[0].grades).toBeDefined();
     const config = await h.get(`/api/eval-runs/${b}/export?what=config`);
     expect(config.headers.get("content-disposition")).toBe("attachment; filename=review-run-2-config.json");
-    expect(config.body.snapshot_version).toBe(1);
+    expect(config.body.snapshot_version).toBe(2);
     expect(config.body.eval.id).toBe("review");
     expect((await h.get(`/api/eval-runs/${b}/export?what=other`)).status).toBe(400);
   });

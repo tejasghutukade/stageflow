@@ -3,7 +3,9 @@ import { senderAllowed } from "./communications/allowlist.js";
 import { createHash, randomBytes } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { parse as parseYaml } from "yaml";
 import {
+  BUILTIN_TOOL_IDS,
   grantedBuiltinTools,
   parseAgentDefinition,
   parseAgentYaml,
@@ -11,7 +13,7 @@ import {
   type AgentDefinition,
   type AgentIssue,
 } from "../config/loadAgent.js";
-import { attachmentIssuesFromFiles } from "../config/loadFunction.js";
+import { attachmentIssuesFromFiles, readFunctionFile } from "../config/loadFunction.js";
 import { agentThreadKey, inboundDedupeKey, type AgentInboundMessage } from "./communications/port.js";
 import { generateAgentId } from "./agentId.js";
 import { newWebChatSlug } from "./webChat/slug.js";
@@ -687,8 +689,9 @@ export class AgentService {
 
   async validate(projectRoot: string, rawInput: unknown): Promise<ValidationResult> {
     const raw = this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "preview");
-    const parsed = parseAgentDefinition(raw);
-    if (!parsed.ok) return { definition: null, issues: parsed.issues, warnings: [], yaml: null };
+    const accepted = await this.acceptAgent(projectRoot, raw);
+    if ("issues" in accepted) return { definition: null, issues: accepted.issues, warnings: [], yaml: null };
+    const parsed = { ok: true as const, value: accepted.definition };
     const conflicts = await this.channelConflicts(projectRoot, parsed.value);
     const missing = agentMemoryIssues(parsed.value.memories);
     const functions = await this.functionAttachmentIssues(projectRoot, parsed.value);
@@ -703,16 +706,78 @@ export class AgentService {
     };
   }
 
-  private parseOrThrow(raw: unknown): AgentDefinition {
+  private async acceptOrThrow(projectRoot: string, raw: unknown): Promise<AgentDefinition> {
+    const accepted = await this.acceptAgent(projectRoot, raw);
+    if ("issues" in accepted) throw new AgentError("agent.invalid", "Agent definition is invalid", accepted.issues);
+    return accepted.definition;
+  }
+
+  private async acceptAgent(
+    projectRoot: string,
+    raw: unknown,
+  ): Promise<{ definition: AgentDefinition } | { issues: AgentIssue[] }> {
     const parsed = parseAgentDefinition(raw);
-    if (!parsed.ok) throw new AgentError("agent.invalid", "Agent definition is invalid", parsed.issues);
-    return parsed.value;
+    if (parsed.ok) {
+      const stale = await this.staleFunctionToolNames(projectRoot, parsed.value, raw);
+      if (stale.length > 0) return { issues: stale };
+      return { definition: parsed.value };
+    }
+    if (!isPlainRecord(raw) || !parsed.issues.every((issue) => issue.code === "agent.ask_first_not_granted")) {
+      return { issues: parsed.issues };
+    }
+    const approvals = isPlainRecord(raw.approvals) ? raw.approvals : {};
+    const names = Array.isArray(approvals.ask_first)
+      ? approvals.ask_first.filter((name): name is string => typeof name === "string")
+      : [];
+    const retry = parseAgentDefinition({ ...raw, approvals: { ...approvals, ask_first: [] } });
+    if (!retry.ok || (retry.value.tools.functions?.length ?? 0) === 0) return { issues: parsed.issues };
+    const current = await currentFunctionToolNames(projectRoot, retry.value);
+    const issues: AgentIssue[] = [];
+    names.forEach((name, index) => {
+      if (isToolGranted(retry.value, name) || current.has(name)) return;
+      if (isBareToolName(name) && !BUILTIN_TOOL_IDS.includes(name)) {
+        issues.push({
+          path: `approvals.ask_first.${index}`,
+          code: "agent.function_tool_renamed",
+          message: `${name} is not the current name of an attached function tool`,
+        });
+        return;
+      }
+      issues.push({
+        path: `approvals.ask_first.${index}`,
+        code: "agent.ask_first_not_granted",
+        message: `${name} is not a tool this agent is granted`,
+      });
+    });
+    issues.push(...(await this.staleFunctionToolNames(projectRoot, retry.value, raw, current)));
+    if (issues.length > 0) return { issues };
+    return { definition: { ...retry.value, approvals: { ...retry.value.approvals, ask_first: names } } };
+  }
+
+  private async staleFunctionToolNames(
+    projectRoot: string,
+    definition: AgentDefinition,
+    raw: unknown,
+    known?: Set<string>,
+  ): Promise<AgentIssue[]> {
+    if ((definition.tools.functions?.length ?? 0) === 0) return [];
+    const current = known ?? (await currentFunctionToolNames(projectRoot, definition));
+    const names = await citedReadOnlyToolNames(projectRoot, raw);
+    return names.flatMap((name) =>
+      isBareToolName(name) && !BUILTIN_TOOL_IDS.includes(name) && !current.has(name)
+        ? [{
+            path: "read_only_tools",
+            code: "agent.function_tool_renamed",
+            message: `${name} is not the current name of an attached function tool`,
+          }]
+        : [],
+    );
   }
 
   /* ---------- writes ---------- */
 
   async create(projectRoot: string, rawInput: unknown, actor: ChangeActor): Promise<AgentDetail> {
-    const definition = this.parseOrThrow(this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "create"));
+    const definition = await this.acceptOrThrow(projectRoot, this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "create"));
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const conflicts = await this.channelConflicts(projectRoot, definition);
@@ -752,7 +817,7 @@ export class AgentService {
       const current = row && row.currentRevision > 0 ? this.store.getRevision(projectKey, agentId, row.currentRevision)?.definition : undefined;
       if (current) incoming = { ...(incoming as Record<string, unknown>), web_chat: current.web_chat };
     }
-    const definition = this.parseOrThrow(this.prepareWebChat(incoming, "save"));
+    const definition = await this.acceptOrThrow(projectRoot, this.prepareWebChat(incoming, "save"));
     if (definition.id !== agentId) {
       throw new AgentError("agent.invalid", "The id cannot change", [
         { path: "id", code: "agent.id_immutable", message: "The id is fixed after creation" },
@@ -1291,7 +1356,7 @@ export class AgentService {
       if (!live.definition.enabled && !isEvalSession(session)) throw new AgentError("agent.disabled");
       const definition = await this.effectiveDefinition(projectRoot, session);
       if (!isToolGranted(definition, input.tool)) throw new AgentError("agent.tool_not_granted");
-      if (!requiresAskFirst(definition, input.tool)) throw new AgentError("agent.approval_not_required");
+      if (!requiresAskFirst(definition, input.tool, projectRoot)) throw new AgentError("agent.approval_not_required");
       const payloadHash = hashApprovalPayload(input.payload);
       if (this.store.hasExecutedPayload(sessionId, payloadHash)) {
         const prior = this.store.findApprovalByPayload(sessionId, payloadHash);
@@ -1461,6 +1526,59 @@ export class AgentService {
       return rows;
     });
   }
+}
+
+const BARE_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBareToolName(name: string): boolean {
+  return BARE_TOOL_NAME.test(name);
+}
+
+async function currentFunctionToolNames(projectRoot: string, definition: AgentDefinition): Promise<Set<string>> {
+  const names = new Set<string>();
+  for (const attachment of definition.tools.functions ?? []) {
+    const file = await readFunctionFile(projectRoot, attachment.id);
+    if (!file.missing && file.parsed.ok && file.parsed.value.tool_name) names.add(file.parsed.value.tool_name);
+  }
+  return names;
+}
+
+async function citedReadOnlyToolNames(projectRoot: string, raw: unknown): Promise<string[]> {
+  const names: string[] = [];
+  collectReadOnlyTools(raw, names);
+  for (const file of await evalDefinitionFiles(projectRoot)) {
+    try {
+      collectReadOnlyTools(parseYaml(await readFile(file, "utf8")), names);
+    } catch {
+      continue;
+    }
+  }
+  return names;
+}
+
+function collectReadOnlyTools(value: unknown, names: string[]): void {
+  if (!isPlainRecord(value) || !isPlainRecord(value.conversation) || !Array.isArray(value.conversation.read_only_tools)) return;
+  for (const name of value.conversation.read_only_tools) if (typeof name === "string") names.push(name);
+}
+
+async function evalDefinitionFiles(projectRoot: string): Promise<string[]> {
+  const found: string[] = [];
+  for (const dir of [projectRoot, path.join(projectRoot, "evals")]) {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (name.endsWith(".eval.yaml") || name.endsWith(".eval.yml")) found.push(path.join(dir, name));
+    }
+  }
+  return found;
 }
 
 export function hashApprovalPayload(payload: Record<string, unknown>): string {

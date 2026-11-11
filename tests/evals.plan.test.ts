@@ -105,7 +105,7 @@ describe("buildEvalPlan: plan from files", () => {
 
   it("fills the snapshot", async () => {
     const { snapshot, fingerprint, components } = await okBuild({}, { graderOrdinals: { "no-invented-files": 3 } });
-    expect(snapshot.snapshot_version).toBe(1);
+    expect(snapshot.snapshot_version).toBe(2);
     expect(snapshot.eval).toMatchObject({ id: "valid", path: "evals/valid.eval.yaml" });
     expect(snapshot.eval.definition).toMatchObject({ defaults: { repeats: 3, concurrency: 4 }, dataset: "datasets/review-diffs.dataset.jsonl" });
     expect(snapshot.target).toMatchObject({

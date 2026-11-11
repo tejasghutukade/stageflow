@@ -23,6 +23,9 @@ import { STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME } from "../src/agent/toolOutputBud
 import { WORKING_STATE_TOOL_NAME } from "../src/compaction/types.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { StageMcpError } from "../src/config/resolveStageMcpServers.js";
+import { FunctionService } from "../src/functions/service.js";
+import { FunctionStore } from "../src/functions/store.js";
+import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 
 const piSdkMocks = vi.hoisted(() => {
@@ -953,6 +956,108 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     expect(loader().getExtensions().extensions.map((ext) => ext.path).join("\n")).not.toContain(
       "project-canary",
     );
+  });
+
+  it("registers a function tool by its schema and keeps it outside the output budget exemption", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-fn-tool-"));
+    const home = await mkdtemp(path.join(tmpdir(), "sf-pi-fn-home-"));
+    const { connection } = createRunStoreWithConnection({ rootDir: home, openerMode: "migrate" });
+    try {
+      const functions = new FunctionService({ store: new FunctionStore(connection) });
+      await functions.create(
+        runWs,
+        {
+          id: "invoice_tool",
+          name: "Invoice",
+          kind: "tool",
+          source: "export default function execute(context) { return { id: context.input.invoice.id, amount: context.input.invoice.amount, envelope: context.envelope }; }\n",
+          tool_name: "total_invoice",
+          tool_description: "Total an invoice object the agent supplies.",
+          input_schema: {
+            type: "object",
+            properties: {
+              invoice: {
+                type: "object",
+                properties: { id: { type: "string" }, amount: { type: "integer" } },
+                required: ["id", "amount"],
+              },
+            },
+            required: ["invoice"],
+          },
+          capabilities: [],
+          bindings: [],
+        },
+        { source: "api", author: "test" },
+      );
+      await new PiAgentAdapter().runStage(
+        wiringInput(runWs, { stage: { id: "clarify", system_prompt: "x", model: "anthropic/claude-sonnet-4-5", tools: { functions: [{ id: "invoice_tool", grants: [] }] } } }),
+      );
+      const custom = (
+        piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
+          | { customTools?: Array<{ name: string; execute: (id: string, args: unknown) => Promise<{ content: Array<{ text: string }> }> }> }
+          | undefined
+      )?.customTools?.find((tool) => tool.name === "total_invoice");
+      expect(custom).toBeDefined();
+      expect(lastSessionTools()).toContain("total_invoice");
+      const result = await custom!.execute("call-1", { invoice: { id: "inv-9", amount: 42 } });
+      expect(result.content[0]?.text).toBe(JSON.stringify({ id: "inv-9", amount: 42, envelope: null }));
+
+      const factories = lastLoaderOptions().extensionFactories as Array<{ name: string; factory: (pi: { on: (event: string, handler: Function) => void }) => void }>;
+      const budget = factories.find((entry) => entry.name === STAGEFLOW_TOOL_OUTPUT_EXTENSION_NAME);
+      const handlers = new Map<string, Function>();
+      budget?.factory({ on: (event, handler) => void handlers.set(event, handler) });
+      const huge = "x".repeat(200_000);
+      const ctx = { getContextUsage: () => ({ tokens: 1_000, contextWindow: 8_000 }) };
+      const spilled = await handlers.get("tool_result")?.({
+        toolName: "total_invoice",
+        toolCallId: "c1",
+        content: [{ type: "text", text: huge }],
+        details: {},
+      }, ctx);
+      const kept = await handlers.get("tool_result")?.({
+        toolName: WORKING_STATE_TOOL_NAME,
+        toolCallId: "c2",
+        content: [{ type: "text", text: huge }],
+        details: {},
+      }, ctx);
+      expect(spilled).toBeDefined();
+      expect(kept).toBeUndefined();
+    } finally {
+      connection.close();
+    }
+  });
+
+  it("fails a cursor stage before the model session opens", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-fn-cursor-"));
+    const home = await mkdtemp(path.join(tmpdir(), "sf-pi-fn-cursor-home-"));
+    const { connection } = createRunStoreWithConnection({ rootDir: home, openerMode: "migrate" });
+    try {
+      const functions = new FunctionService({ store: new FunctionStore(connection) });
+      await functions.create(
+        runWs,
+        {
+          id: "invoice_tool",
+          name: "Invoice",
+          kind: "tool",
+          source: "export default function execute() { return { ok: true }; }\n",
+          tool_name: "total_invoice",
+          tool_description: "Total an invoice.",
+          input_schema: { type: "object", properties: {} },
+          capabilities: [],
+          bindings: [],
+        },
+        { source: "api", author: "test" },
+      );
+      piSdkMocks.createAgentSession.mockClear();
+      const result = await new PiAgentAdapter().runStage(
+        wiringInput(runWs, { stage: { id: "clarify", system_prompt: "x", model: "cursor/auto", tools: { functions: [{ id: "invoice_tool", grants: [] }] } } }),
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("pi__total_invoice");
+      expect(piSdkMocks.createAgentSession).not.toHaveBeenCalled();
+    } finally {
+      connection.close();
+    }
   });
 });
 

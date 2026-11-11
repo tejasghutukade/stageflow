@@ -60,6 +60,7 @@ import {
   SANDBOX_WRITE_TOOL_NAME,
   type AskOperatorCapture,
 } from "./claudeTools.js";
+import { claudeFunctionToolReason, resolveFunctionTools } from "../functions/toolCall.js";
 import { createClaudeActivityMapper } from "./claudeActivity.js";
 import {
   contentLeakedToolCall,
@@ -123,7 +124,14 @@ function resolveClaudeModel(stageModel: string): Preflight {
   return { ok: true, model };
 }
 
-function preflight(input: StageRunInput): Preflight {
+async function preflight(input: StageRunInput): Promise<Preflight> {
+  const attachments = input.stage.tools?.functions ?? [];
+  if (attachments.length > 0) {
+    const projectRoot = input.roots.checkoutRoot ?? input.roots.cwd;
+    const resolved = await resolveFunctionTools({ projectRoot, attachments });
+    const name = resolved.ok ? (resolved.tools[0]?.name ?? attachments[0]!.id) : attachments[0]!.id;
+    return { ok: false, reason: claudeFunctionToolReason(name) };
+  }
   if (input.stage.skill !== undefined) {
     return {
       ok: false,
@@ -662,7 +670,7 @@ export class ClaudeAgentAdapter implements StagePort {
             return { status: "completed", result: { ok: false, reason: `invalid operator answer: ${message}` } };
           }
 
-          const pre = preflight(input);
+          const pre = await preflight(input);
           if (!pre.ok) {
             waiting = undefined;
             await clearClaudeSessionMarker(markerPath);
@@ -679,7 +687,7 @@ export class ClaudeAgentAdapter implements StagePort {
           return applyOutcome(await withEmitReminders(outcome, pre.model));
         }
 
-        const pre = preflight(input);
+        const pre = await preflight(input);
         if (!pre.ok) {
           return { status: "completed", result: { ok: false, reason: pre.reason } };
         }
