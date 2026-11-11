@@ -15,9 +15,12 @@ import {
   FUNCTION_TIMEOUT_MS_MAX,
   assertJsonObject,
   assertJsonValue,
+  isCapabilityRequest,
   isChildResponse,
   jsonByteLength,
   truncateUtf8,
+  type FunctionCapabilityRequest,
+  type FunctionCapabilityResult,
   type FunctionChildRequest,
   type FunctionChildResponse,
   type FunctionInvokeRequest,
@@ -43,21 +46,32 @@ type RunningCall = {
   child: ChildProcess;
   cancelled: boolean;
   hostKilled: boolean;
+  externalWrite: boolean;
+  abort: AbortController;
   exited: Promise<void>;
 };
 
+export type FunctionCapabilityHandler = (
+  invocationId: string,
+  request: FunctionCapabilityRequest,
+  signal: AbortSignal,
+) => Promise<FunctionCapabilityResult>;
+
 export type FunctionExecutorOptions = {
   forkFn?: typeof childProcess.fork;
+  onCapability?: FunctionCapabilityHandler;
 };
 
 export class FunctionExecutor {
   private readonly forkFn: typeof childProcess.fork;
+  private readonly onCapability: FunctionCapabilityHandler | undefined;
   private active = 0;
   private readonly running = new Map<string, RunningCall>();
   private readonly waiting: Waiter[] = [];
 
   constructor(options: FunctionExecutorOptions = {}) {
     this.forkFn = options.forkFn ?? childProcess.fork;
+    this.onCapability = options.onCapability;
   }
 
   invoke(input: FunctionInvokeRequest): Promise<FunctionInvokeResult> {
@@ -96,6 +110,7 @@ export class FunctionExecutor {
     const running = this.running.get(invocationId);
     if (!running) return Promise.resolve();
     running.cancelled = true;
+    running.abort.abort();
     signalProcessGroup(running.child.pid, "SIGKILL");
     return running.exited;
   }
@@ -136,6 +151,8 @@ export class FunctionExecutor {
       child,
       cancelled: false,
       hostKilled: false,
+      externalWrite: false,
+      abort: new AbortController(),
       exited,
     };
     this.running.set(prepared.invocationId, running);
@@ -151,6 +168,7 @@ export class FunctionExecutor {
       let settled = false;
       const timer = setTimeout(() => {
         running.hostKilled = true;
+        running.abort.abort();
         signalProcessGroup(child.pid, "SIGKILL");
       }, timeoutMs + FUNCTION_KILL_GRACE_MS);
 
@@ -168,6 +186,10 @@ export class FunctionExecutor {
         finish(result("exception", error.message, pid));
       });
       child.on("message", (message: unknown) => {
+        if (isCapabilityRequest(message)) {
+          this.answerCapability(prepared.invocationId, running, child, message);
+          return;
+        }
         if (running.cancelled || running.hostKilled || !isChildResponse(message)) return;
         finish(fromChild(message, pid));
       });
@@ -176,6 +198,10 @@ export class FunctionExecutor {
           signalProcessGroup(child.pid, "SIGKILL");
         }
         if (settled) return;
+        if (running.externalWrite && (running.cancelled || running.hostKilled)) {
+          finish(result("uncertain_outcome", "function write outcome is uncertain", pid));
+          return;
+        }
         if (running.cancelled) {
           finish(result("cancelled", "function execution cancelled", pid));
           return;
@@ -200,6 +226,38 @@ export class FunctionExecutor {
         finish(result("exception", error instanceof Error ? error.message : String(error), pid));
       }
     });
+  }
+
+  private answerCapability(
+    invocationId: string,
+    running: RunningCall,
+    child: ChildProcess,
+    request: FunctionCapabilityRequest,
+  ): void {
+    if (running.cancelled || running.hostKilled || running.abort.signal.aborted) return;
+    if (request.op === "write") running.externalWrite = true;
+    const pending = this.onCapability
+      ? this.onCapability(invocationId, request, running.abort.signal)
+      : Promise.resolve(deniedCapability(request.requestId));
+    void pending.then(
+      (value) => {
+        if (request.op === "write") running.externalWrite = false;
+        this.sendCapability(running, child, value);
+      },
+      () => {
+        if (request.op === "write") running.externalWrite = false;
+        this.sendCapability(running, child, deniedCapability(request.requestId));
+      },
+    );
+  }
+
+  private sendCapability(running: RunningCall, child: ChildProcess, value: FunctionCapabilityResult): void {
+    if (running.cancelled || running.hostKilled || running.abort.signal.aborted) return;
+    try {
+      child.send?.(value);
+    } catch {
+      // The child has already exited.
+    }
   }
 
   private release(): void {
@@ -303,6 +361,16 @@ function fromChild(message: FunctionChildResponse, pid: number | undefined): Fun
     };
   }
   return { ...base, ok: true, value: value.value };
+}
+
+function deniedCapability(requestId: string): FunctionCapabilityResult {
+  return {
+    type: "capability_result",
+    requestId,
+    ok: false,
+    code: "permission_denied",
+    message: "capability denied",
+  };
 }
 
 function result(code: string, message: string, pid?: number): FunctionInvokeResult {

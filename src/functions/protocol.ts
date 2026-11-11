@@ -10,6 +10,8 @@ export const FUNCTION_LOG_BYTES_MAX = 16 * 1024;
 export const FUNCTION_MAX_RUNNING = 4;
 export const FUNCTION_MAX_WAITING = 16;
 export const FUNCTION_MAX_PROMISE_JOBS = 1_000;
+export const FUNCTION_IO_BYTES_MAX = 1024 * 1024;
+export const FUNCTION_HTTP_REDIRECTS_MAX = 3;
 
 export type JsonValue =
   | null
@@ -96,6 +98,54 @@ export function truncateUtf8(text: string, maxBytes: number): { text: string; tr
   const bytes = Buffer.from(text, "utf8");
   if (bytes.byteLength <= maxBytes) return { text, truncated: false };
   return { text: bytes.subarray(0, maxBytes).toString("utf8"), truncated: true };
+}
+
+export type FunctionKind = "verification" | "routing" | "tool";
+
+export type FunctionFileRoot = "artifacts" | "workspace";
+
+export type FunctionCapabilityOp = "exists" | "stat" | "readText" | "readJson" | "write" | "http";
+
+export type FunctionCapabilityRequest = {
+  type: "capability";
+  requestId: string;
+  op: FunctionCapabilityOp;
+  root?: string;
+  path?: string;
+  content?: string;
+  method?: string;
+  origin?: string;
+  body?: string;
+};
+
+export type FunctionCapabilityResult = {
+  type: "capability_result";
+  requestId: string;
+  ok: boolean;
+  value?: JsonValue;
+  code?: string;
+  message?: string;
+};
+
+const CAPABILITY_OPS = new Set<FunctionCapabilityOp>(["exists", "stat", "readText", "readJson", "write", "http"]);
+
+export function isCapabilityRequest(value: unknown): value is FunctionCapabilityRequest {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<FunctionCapabilityRequest>;
+  return (
+    record.type === "capability" &&
+    typeof record.requestId === "string" &&
+    record.requestId.length > 0 &&
+    record.requestId.length <= 80 &&
+    typeof record.op === "string" &&
+    CAPABILITY_OPS.has(record.op)
+  );
+}
+
+export function isCapabilityResult(value: unknown): value is FunctionCapabilityResult {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<FunctionCapabilityResult>;
+  return record.type === "capability_result" && typeof record.requestId === "string" && typeof record.ok === "boolean";
 }
 
 export function isChildResponse(value: unknown): value is FunctionChildResponse {

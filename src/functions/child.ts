@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
@@ -12,6 +13,9 @@ import {
   FUNCTION_JSON_BYTES_MAX,
   FUNCTION_LOG_BYTES_MAX,
   FUNCTION_MAX_PROMISE_JOBS,
+  isCapabilityResult,
+  type FunctionCapabilityRequest,
+  type FunctionCapabilityResult,
   type FunctionChildRequest,
   type FunctionChildResponse,
   type FunctionWasmVariant,
@@ -64,13 +68,43 @@ function __stageflowEncode(value) {
 }
 `;
 
+const EXPLICIT_CODES = new Set([
+  "permission_denied",
+  "missing_binding",
+  "uncertain_outcome",
+  "cancelled",
+  "file_limit",
+  "not_found",
+  "invalid_output",
+]);
+
+type CapabilityCall = {
+  op: FunctionCapabilityRequest["op"];
+  root?: string;
+  path?: string;
+  content?: string;
+  method?: string;
+  origin?: string;
+  body?: string;
+};
+
+type HostBridge = {
+  waiters: Promise<void>[];
+  closed: boolean;
+  call(input: CapabilityCall): Promise<FunctionCapabilityResult>;
+  receive(message: FunctionCapabilityResult): void;
+};
+
 type LoadedQuickJs = {
   module: QuickJSWASMModule;
   wasmFile: string;
   wasm: FunctionWasmVariant;
 };
 
-export async function runFunctionChild(message: unknown): Promise<FunctionChildResponse> {
+export async function runFunctionChild(
+  message: unknown,
+  bridge: HostBridge = denyBridge(),
+): Promise<FunctionChildResponse> {
   const request = readRequest(message);
   if (!request) {
     return {
@@ -127,14 +161,14 @@ export async function runFunctionChild(message: unknown): Promise<FunctionChildR
             logs,
           );
         } else {
-          const guestContext = buildContext(context, scope, request, logs);
+          const guestContext = buildContext(context, scope, request, logs, bridge);
           interruptArmed = true;
           const called = scope.manage(
             context.callFunction(execute, context.undefined, guestContext),
           );
           response = called.error
             ? withLogs(failureFromHandle(context, called.error), loaded, logs)
-            : settleCall(runtime, context, scope, called.value, encode, request, loaded, logs);
+            : await settleCall(runtime, context, scope, called.value, encode, request, loaded, logs, bridge);
         }
       }
     }
@@ -157,6 +191,7 @@ export async function runFunctionChild(message: unknown): Promise<FunctionChildR
       );
     }
   } finally {
+    bridge.closed = true;
     if (hostStackOverflow) {
       process.kill(process.pid, "SIGKILL");
       await new Promise(() => {});
@@ -210,6 +245,7 @@ function buildContext(
   scope: Scope,
   request: FunctionChildRequest,
   logs: LogBuffer,
+  bridge: HostBridge,
 ): QuickJSHandle {
   const jsonText = scope.manage(context.newString(JSON.stringify(request.context)));
   const json = scope.manage(context.getProp(context.global, "JSON"));
@@ -232,10 +268,11 @@ function buildContext(
   );
   context.setProp(guestContext, "log", logFn);
   context.setProp(guestContext, "signal", signal);
+  installCapabilities(context, scope, guestContext, bridge);
   return guestContext;
 }
 
-function settleCall(
+async function settleCall(
   runtime: QuickJSRuntime,
   context: QuickJSContext,
   scope: Scope,
@@ -244,7 +281,8 @@ function settleCall(
   request: FunctionChildRequest,
   loaded: LoadedQuickJs,
   logs: LogBuffer,
-): FunctionChildResponse {
+  bridge: HostBridge,
+): Promise<FunctionChildResponse> {
   let executed = 0;
   let current = handle;
   while (executed <= FUNCTION_MAX_PROMISE_JOBS) {
@@ -261,32 +299,219 @@ function settleCall(
     if (Date.now() >= request.deadlineAt || (request.forceInterrupt && executed > 0)) {
       return withLogs(limitResult("timeout", "function execution timed out"), loaded, logs);
     }
-    if (!runtime.hasPendingJob() || executed >= FUNCTION_MAX_PROMISE_JOBS) {
-      return withLogs(
-        limitResult("job_limit", "guest promise jobs exceeded the cap"),
-        loaded,
-        logs,
-      );
-    }
-    const batch = Math.min(32, FUNCTION_MAX_PROMISE_JOBS - executed);
-    const pending = runtime.executePendingJobs(batch);
-    if (pending.error) {
-      const failure = failureFromHandle(context, pending.error);
+    if (runtime.hasPendingJob() && executed < FUNCTION_MAX_PROMISE_JOBS) {
+      const batch = Math.min(32, FUNCTION_MAX_PROMISE_JOBS - executed);
+      const pending = runtime.executePendingJobs(batch);
+      if (pending.error) {
+        const failure = failureFromHandle(context, pending.error);
+        pending.dispose();
+        return withLogs(failure, loaded, logs);
+      }
+      const count = pending.value;
       pending.dispose();
-      return withLogs(failure, loaded, logs);
+      if (count > 0) {
+        executed += count;
+        continue;
+      }
     }
-    const count = pending.value;
-    pending.dispose();
-    if (count <= 0) {
-      return withLogs(
-        limitResult("job_limit", "guest promise jobs exceeded the cap"),
-        loaded,
-        logs,
-      );
+    if (bridge.waiters.length > 0) {
+      const waiting = bridge.waiters.splice(0, bridge.waiters.length);
+      const remaining = Math.max(0, request.deadlineAt - Date.now());
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timed = new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), remaining);
+      });
+      const outcome = await Promise.race([Promise.all(waiting).then(() => "done" as const), timed]);
+      if (timer) clearTimeout(timer);
+      if (outcome === "timeout" || Date.now() >= request.deadlineAt || bridge.closed) {
+        return withLogs(limitResult("timeout", "function execution timed out"), loaded, logs);
+      }
+      continue;
     }
-    executed += count;
+    return withLogs(limitResult("job_limit", "guest promise jobs exceeded the cap"), loaded, logs);
   }
   return withLogs(limitResult("job_limit", "guest promise jobs exceeded the cap"), loaded, logs);
+}
+
+function installCapabilities(
+  context: QuickJSContext,
+  scope: Scope,
+  guestContext: QuickJSHandle,
+  bridge: HostBridge,
+): void {
+  const files = scope.manage(context.newObject());
+  for (const op of ["exists", "stat", "readText", "readJson"] as const) {
+    const fn = scope.manage(
+      context.newFunction(op, (rootHandle, pathHandle) =>
+        hostPromise(context, bridge, {
+          op,
+          root: readGuestString(context, rootHandle),
+          path: readGuestString(context, pathHandle),
+        }),
+      ),
+    );
+    context.setProp(files, op, fn);
+  }
+  const write = scope.manage(
+    context.newFunction("write", (rootHandle, pathHandle, contentHandle) =>
+      hostPromise(context, bridge, {
+        op: "write",
+        root: readGuestString(context, rootHandle),
+        path: readGuestString(context, pathHandle),
+        content: readGuestString(context, contentHandle),
+      }),
+    ),
+  );
+  context.setProp(files, "write", write);
+  const http = scope.manage(context.newObject());
+  const request = scope.manage(
+    context.newFunction("request", (spec) =>
+      hostPromise(context, bridge, {
+        op: "http",
+        method: readGuestProp(context, spec, "method"),
+        path: readGuestProp(context, spec, "path"),
+        origin: readGuestProp(context, spec, "origin"),
+        body: readGuestProp(context, spec, "body"),
+      }),
+    ),
+  );
+  context.setProp(http, "request", request);
+  context.setProp(guestContext, "files", files);
+  context.setProp(guestContext, "http", http);
+}
+
+function hostPromise(context: QuickJSContext, bridge: HostBridge, request: CapabilityCall): QuickJSHandle {
+  const deferred = context.newPromise();
+  let release = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  bridge.waiters.push(gate);
+  void bridge.call(request).then(
+    (result) => {
+      try {
+        if (bridge.closed || !deferred.alive) return;
+        if (!result.ok) {
+          const error = context.newError({ name: "Error", message: result.message ?? "capability denied" });
+          const code = context.newString(result.code ?? "permission_denied");
+          context.setProp(error, "code", code);
+          code.dispose();
+          deferred.reject(error);
+          error.dispose();
+          return;
+        }
+        const handle = jsonToHandle(context, result.value ?? null);
+        deferred.resolve(handle);
+        handle.dispose();
+      } catch {
+        if (!bridge.closed && deferred.alive) {
+          const error = context.newError({ name: "Error", message: "capability failed" });
+          deferred.reject(error);
+          error.dispose();
+        }
+      } finally {
+        release();
+      }
+    },
+    () => {
+      release();
+    },
+  );
+  return deferred.handle;
+}
+
+function jsonToHandle(context: QuickJSContext, value: JsonValue): QuickJSHandle {
+  const text = context.newString(JSON.stringify(value));
+  const json = context.getProp(context.global, "JSON");
+  const parse = context.getProp(json, "parse");
+  const parsed = context.callFunction(parse, json, text);
+  text.dispose();
+  parse.dispose();
+  json.dispose();
+  if (parsed.error) {
+    parsed.error.dispose();
+    return context.newString("");
+  }
+  return parsed.value;
+}
+
+function readGuestString(context: QuickJSContext, handle: QuickJSHandle | undefined): string | undefined {
+  if (!handle || context.typeof(handle) !== "string") return undefined;
+  return context.getString(handle);
+}
+
+function readGuestProp(context: QuickJSContext, handle: QuickJSHandle | undefined, key: string): string | undefined {
+  if (!handle || context.typeof(handle) !== "object") return undefined;
+  const prop = context.getProp(handle, key);
+  const value = context.typeof(prop) === "string" ? context.getString(prop) : undefined;
+  prop.dispose();
+  return value;
+}
+
+function denyBridge(): HostBridge {
+  return {
+    waiters: [],
+    closed: false,
+    receive() {},
+    call(input) {
+      return Promise.resolve({
+        type: "capability_result",
+        requestId: input.op,
+        ok: false,
+        code: "permission_denied",
+        message: "capability unavailable",
+      });
+    },
+  };
+}
+
+function createIpcBridge(): HostBridge {
+  const pending = new Map<string, (result: FunctionCapabilityResult) => void>();
+  return {
+    waiters: [],
+    closed: false,
+    receive(message) {
+      const resolve = pending.get(message.requestId);
+      if (!resolve) return;
+      pending.delete(message.requestId);
+      resolve(message);
+    },
+    call(input) {
+      const requestId = randomUUID();
+      const payload: FunctionCapabilityRequest = { type: "capability", requestId, op: input.op };
+      if (input.root !== undefined) payload.root = input.root;
+      if (input.path !== undefined) payload.path = input.path;
+      if (input.content !== undefined) payload.content = input.content;
+      if (input.method !== undefined) payload.method = input.method;
+      if (input.origin !== undefined) payload.origin = input.origin;
+      if (input.body !== undefined) payload.body = input.body;
+      return new Promise((resolve) => {
+        pending.set(requestId, resolve);
+        try {
+          const sent = process.send?.(payload) ?? false;
+          if (!sent) {
+            pending.delete(requestId);
+            resolve({
+              type: "capability_result",
+              requestId,
+              ok: false,
+              code: "permission_denied",
+              message: "capability unavailable",
+            });
+          }
+        } catch {
+          pending.delete(requestId);
+          resolve({
+            type: "capability_result",
+            requestId,
+            ok: false,
+            code: "permission_denied",
+            message: "capability unavailable",
+          });
+        }
+      });
+    },
+  };
 }
 
 function exportValue(
@@ -331,9 +556,13 @@ function exportValue(
 
 function failureFromHandle(context: QuickJSContext, handle: QuickJSHandle): FunctionChildResponse {
   const error = readError(context, handle);
+  const codeHandle = context.getProp(handle, "code");
+  const explicit = context.typeof(codeHandle) === "string" ? context.getString(codeHandle) : undefined;
+  codeHandle.dispose();
   const text = `${error.name}: ${error.message}`;
   let code = "exception";
-  if (error.message.includes("strict-json:")) code = "invalid_output";
+  if (explicit && EXPLICIT_CODES.has(explicit)) code = explicit;
+  else if (error.message.includes("strict-json:")) code = "invalid_output";
   else if (/interrupted/i.test(text)) code = "timeout";
   else if (/out of memory/i.test(text)) code = "memory";
   else if (/stack overflow/i.test(text)) code = "stack";
@@ -484,8 +713,16 @@ function isDirectRun(): boolean {
 }
 
 if (isDirectRun()) {
-  process.once("message", (message: unknown) => {
-    void runFunctionChild(message)
+  const bridge = createIpcBridge();
+  let started = false;
+  process.on("message", (message: unknown) => {
+    if (isCapabilityResult(message)) {
+      bridge.receive(message);
+      return;
+    }
+    if (started) return;
+    started = true;
+    void runFunctionChild(message, bridge)
       .then((response) => {
         process.send?.(response);
         process.exit(0);
