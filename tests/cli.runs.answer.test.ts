@@ -263,6 +263,63 @@ describe("runRunsCommand answer", () => {
     }
   });
 
+  it("prompts on a terminal when --answer is omitted", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-runs-ans-prompt-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = scriptedFakeAgent([
+      {
+        type: "wait_then_emit",
+        waitRequests: [confirmPrompt],
+        envelope: successEnvelope,
+      },
+    ]);
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: SINGLE_PIPELINE,
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const detail = await store.readRun(started.runId);
+      return detail.stages.some((s) => s.status === "waiting_for_input");
+    });
+
+    const service = await startTestService(
+      store,
+      scriptedFakeAgent([
+        {
+          type: "wait_then_emit",
+          waitRequests: [confirmPrompt],
+          envelope: successEnvelope,
+        },
+      ]),
+      fixtures,
+    );
+    try {
+      const cap = captureIo();
+      const code = await runRunsCommand(
+        ["answer", "--run", started.runId, "--stage", "clarify"],
+        {
+          cwd: fixtures,
+          hostBaseUrl: service.baseUrl,
+          ensureService: alreadyUp,
+          stdinIsTTY: true,
+          readLine: async () => "1",
+          io: cap.io,
+        },
+      );
+      expect(code).toBe(0);
+      const text = cap.stdout.join("\n");
+      expect(text).toContain("Proceed?");
+      expect(text).toContain("1  accept");
+      expect(text).toContain("Accepted.");
+    } finally {
+      await service.stop();
+    }
+  });
+
   it("--answer omitted + stdinIsTTY true exits 1 missing-answer", async () => {
     const cap = captureIo();
     const code = await runRunsCommand(

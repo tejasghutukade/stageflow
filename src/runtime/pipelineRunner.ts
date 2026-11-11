@@ -119,6 +119,14 @@ export type PipelineRunResult = {
   runId: string;
   reason?: string;
   findings?: ValidationFinding[];
+  /** Stage parked on operator input, when the run is waiting. */
+  waitingStageId?: string;
+  /** The parked question, when the prompt has one. Human output only. */
+  waitingSummary?: string;
+  /** Stage that failed, when the run failed on a stage. */
+  failedStageId?: string;
+  /** Sum of stage cost, when any stage reported usage. */
+  totalCostUsd?: number;
 };
 
 export type StartedPipeline = {

@@ -110,6 +110,23 @@ describe("runRunsCommand inspect/wait", () => {
     expect(listed.map((r) => r.run_id)).toContain(runId);
   });
 
+  it("list without --json names the pipeline and the run", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-list-human-"));
+    const { runId, store } = await seedRun(projectRoot);
+    const cap = captureIo();
+    const code = await runRunsCommand(["list"], {
+      projectRoot,
+      store,
+      io: cap.io,
+    });
+    expect(code).toBe(0);
+    const text = cap.stdout.join("\n");
+    expect(text).toContain("● succeeded");
+    expect(text).toContain("test-pipeline");
+    expect(text).toContain(runId);
+    expect(text).not.toBe(`${runId}\tsucceeded`);
+  });
+
   it("show --json on a running run returns projectRun", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-show-"));
     const { runId, store } = await seedRun(projectRoot, {
@@ -127,6 +144,27 @@ describe("runRunsCommand inspect/wait", () => {
     expect(detail.status).toBe("running");
     const parsed = JSON.parse(cap.stdout.join("\n"));
     expect(parsed).toEqual(projectRun(detail));
+  });
+
+  it("show without --json prints the run timeline", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-show-human-"));
+    const { runId, store } = await seedRun(projectRoot);
+    const cap = captureIo();
+    const code = await runRunsCommand(["show", "--run", runId], {
+      projectRoot,
+      store,
+      io: cap.io,
+    });
+    expect(code).toBe(0);
+    const text = cap.stdout.join("\n");
+    expect(text).toContain(runId);
+    expect(text).toContain("● succeeded");
+    expect(text).toContain("pipeline  test-pipeline");
+    expect(text).toContain("stage-a");
+    expect(text).toContain("stage-b");
+    expect(text).toContain(`/#/runs/${encodeURIComponent(runId)}`);
+    expect(text).not.toBe(`${runId}\tsucceeded`);
+    expect(cap.stderr.join("\n")).toBe("");
   });
 
   it("show --json diamond pipeline_track has both inbound synthesize edges", async () => {

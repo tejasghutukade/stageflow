@@ -104,7 +104,7 @@ Prompts from stages without `browser`, and gates stored before this field existe
 sf run --task tests/fixtures/tasks/sample.task.yaml --pipeline tests/fixtures/pipelines/plan-review-proving.pipeline.yaml
 ```
 
-When a stage waits, the CLI exits **`2`** and prints the run folder path. Continue with `sf runs waiting` / `answer` / `wait` (host down), or from the console / MCP while a host is up. See [CLI reference — `sf runs`](cli-reference.md#sf-runs).
+When a stage waits on a terminal, `sf run` asks in place. The answered stage shows `accepted` or `rejected` and the timeline keeps moving while the rest of the run finishes. A confirm gate offers `1  accept` and `2  reject`. An artifact gate prints the file path, then the same choice. A free-text gate reads a line. A multi-question gate asks each part in order. Cancel, `--json`, or a non-terminal still exits **`2`**: the timeline shows the question under that stage, and the receipt prints the question, the run id, `sf runs show`, `sf runs answer`, the console URL, and the run folder. Continue with `sf runs waiting` / `answer` / `wait` (host down), or from the console / MCP while a host is up. On a terminal, `sf runs answer` without `--answer` asks the same way. See [CLI reference — `sf runs`](cli-reference.md#sf-runs).
 
 JSON with `--json`:
 

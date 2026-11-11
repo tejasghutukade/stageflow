@@ -131,11 +131,19 @@ function sleep(ms: number): Promise<void> {
 export async function pollRunUntilTerminal(
   base: string,
   runId: string,
-  options?: { pollIntervalMs?: number },
+  options?: {
+    pollIntervalMs?: number;
+    onUpdate?: (detail: RunDetail) => void;
+  },
 ): Promise<RunDetail> {
   const pollIntervalMs = options?.pollIntervalMs ?? 500;
   for (;;) {
     const detail = await httpReadRun(base, runId);
+    try {
+      options?.onUpdate?.(detail);
+    } catch {
+      // A progress-line failure must not fail the run.
+    }
     if (isRunTerminal(detail)) return detail;
     await sleep(pollIntervalMs);
   }
@@ -162,6 +170,18 @@ export function runDetailToPipelineRunResult(detail: RunDetail): PipelineRunResu
     runId: detail.run_id,
     runDir: computeRunDir(detail.run_id),
     ...(reason !== undefined ? { reason } : {}),
+    ...(detail.waiting_stage_id !== undefined
+      ? { waitingStageId: detail.waiting_stage_id }
+      : {}),
+    ...(detail.waiting_summary !== undefined && detail.waiting_summary.trim().length > 0
+      ? { waitingSummary: detail.waiting_summary }
+      : {}),
+    ...(detail.failed_stage_id !== undefined
+      ? { failedStageId: detail.failed_stage_id }
+      : {}),
+    ...(detail.total_cost_usd !== undefined
+      ? { totalCostUsd: detail.total_cost_usd }
+      : {}),
   };
 }
 
@@ -202,6 +222,7 @@ function validationResultFrom(body: unknown): ValidationResult | undefined {
 export async function httpStartRun(
   base: string,
   input: HttpStartRunInput,
+  options?: { onUpdate?: (detail: RunDetail) => void },
 ): Promise<StartRunResult> {
   const { status, body } = await postJson(base, "/api/runs", input);
   if (status === 400) {
@@ -221,7 +242,9 @@ export async function httpStartRun(
     ...(parsed.queued === true
       ? { queued: true, queuePosition: parsed.queuePosition }
       : {}),
-    done: pollRunUntilTerminal(base, runId).then(runDetailToPipelineRunResult),
+    done: pollRunUntilTerminal(base, runId, {
+      onUpdate: options?.onUpdate,
+    }).then(runDetailToPipelineRunResult),
   };
 }
 
