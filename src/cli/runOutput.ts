@@ -233,9 +233,16 @@ function writeCompletionHuman(
   write(`Run ${result.runId}`);
   write(`sf runs show --run ${result.runId}`);
   if (result.outcome === "waiting" && result.waitingStageId) {
-    write(
-      `sf runs answer --run ${result.runId} --stage ${result.waitingStageId}`,
-    );
+    if (result.waitingKind === "feedback_loop_decision") {
+      const loop = result.feedbackLoopId ? ` --loop ${result.feedbackLoopId}` : "";
+      write(
+        `sf runs feedback-decide --run ${result.runId} --stage ${result.waitingStageId}${loop} --decision extend|continue|abandon`,
+      );
+    } else {
+      write(
+        `sf runs answer --run ${result.runId} --stage ${result.waitingStageId}`,
+      );
+    }
   }
   if (result.outcome === "failed" && result.failedStageId) {
     write(

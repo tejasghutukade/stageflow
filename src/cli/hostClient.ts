@@ -176,6 +176,10 @@ export function runDetailToPipelineRunResult(detail: RunDetail): PipelineRunResu
     ...(detail.waiting_summary !== undefined && detail.waiting_summary.trim().length > 0
       ? { waitingSummary: detail.waiting_summary }
       : {}),
+    ...(detail.waiting_kind ? { waitingKind: detail.waiting_kind } : {}),
+    ...(detail.active_feedback_loop?.loop_id
+      ? { feedbackLoopId: detail.active_feedback_loop.loop_id }
+      : {}),
     ...(detail.failed_stage_id !== undefined
       ? { failedStageId: detail.failed_stage_id }
       : {}),
@@ -298,10 +302,11 @@ export async function httpDeliverAnswer(
   stageId: string,
   answer: unknown,
 ): Promise<DeliverAnswerResult> {
-  const { status, body } = await postJson(
+  const { status, body } = await httpRequestJson(
     base,
+    "POST",
     `/api/runs/${enc(runId)}/stages/${enc(stageId)}/answer`,
-    answer,
+    answer ?? {},
   );
   if (status === 202) {
     const verification = (body as { verification?: unknown } | null)?.verification;

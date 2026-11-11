@@ -376,7 +376,6 @@ async function pollAfterAnswer(
   shouldStop: () => boolean,
 ): Promise<{ stopped: true } | { stopped: false; detail: RunDetail }> {
   for (;;) {
-    if (shouldStop()) return { stopped: true };
     const detail = await readRun(runId);
     const stillOpen = sameOpenGate(detail, answered);
     if (!stillOpen) {
@@ -396,6 +395,7 @@ async function pollAfterAnswer(
     if (!stillOpen && detail.waiting_stage_id !== undefined) {
       return { stopped: false, detail };
     }
+    if (stillOpen && shouldStop()) return { stopped: true };
     await sleep(pollIntervalMs);
   }
 }
@@ -451,6 +451,11 @@ export async function continueThroughGates(
       .then((delivered) => {
         if (!delivered.ok) answerFailure = delivered.reason;
         return delivered;
+      })
+      .catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        answerFailure = reason;
+        return { ok: false as const, reason };
       });
     try {
       const polled = await pollAfterAnswer(
@@ -464,7 +469,18 @@ export async function continueThroughGates(
       const delivered = await delivery;
       if (!delivered.ok) {
         deps.io.error(delivered.reason);
-        return { result: current, failed: true };
+        if (polled.stopped) {
+          try {
+            deps.onUpdate?.(detail);
+          } catch {
+            // A progress-line failure must not fail the run.
+          }
+          return { result: current, failed: false };
+        }
+        return {
+          result: runDetailToPipelineRunResult(polled.detail),
+          failed: false,
+        };
       }
       if (polled.stopped) {
         deps.io.error(answerFailure ?? "The run did not resume.");
@@ -575,6 +591,9 @@ export async function runRunCommand(
           process.stdout.isTTY === true,
           options.env ?? process.env,
         ),
+        ...(typeof process.stdout.columns === "number" && process.stdout.columns > 0
+          ? { columns: process.stdout.columns }
+          : {}),
       });
 
   const startRun =

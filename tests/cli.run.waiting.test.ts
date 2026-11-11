@@ -161,6 +161,56 @@ describe("cli run waiting outcome", () => {
     expect(text).toContain("sf runs answer --run run-wait --stage review");
   });
 
+  it("points a feedback-loop park at feedback-decide", async () => {
+    const cap = captureIo();
+    const code = await completeCliRun(
+      startedWith({
+        ok: false,
+        outcome: "waiting",
+        runDir: "/tmp/runs/wait",
+        runId: "run-wait",
+        waitingStageId: "review",
+        waitingKind: "feedback_loop_decision",
+        feedbackLoopId: "loop-9",
+      }),
+      cap.io,
+    );
+    expect(code).toBe(2);
+    const text = cap.stderr.join("\n");
+    expect(text).toContain(
+      "sf runs feedback-decide --run run-wait --stage review --loop loop-9 --decision extend|continue|abandon",
+    );
+    expect(text).not.toContain("sf runs answer");
+
+    const json = captureIo();
+    const jsonCode = await completeCliRun(
+      startedWith({
+        ok: false,
+        outcome: "waiting",
+        runDir: "/tmp/runs/wait",
+        runId: "run-wait",
+        waitingStageId: "review",
+        waitingKind: "feedback_loop_decision",
+        feedbackLoopId: "loop-9",
+        waitingSummary: "Feedback loop limit reached",
+      }),
+      json.io,
+      { json: true },
+    );
+    expect(jsonCode).toBe(2);
+    const body = json.stdout.join("\n");
+    expect(body).not.toContain("waitingKind");
+    expect(body).not.toContain("feedbackLoopId");
+    expect(body).not.toContain("waitingStageId");
+    expect(body).not.toContain("sf runs answer");
+    expect(JSON.parse(body)).toEqual({
+      ok: false,
+      outcome: "waiting",
+      runId: "run-wait",
+      runDir: "/tmp/runs/wait",
+    });
+  });
+
   it("prints the parked question and skips the generic wait phrase", async () => {
     const asked = captureIo();
     await completeCliRun(

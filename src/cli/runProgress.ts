@@ -306,6 +306,17 @@ export function progressLines(
   return lines;
 }
 
+function fitProgressLine(line: ProgressLine, columns: number): ProgressLine {
+  if (line.text.length <= columns) return line;
+  const text = line.text.slice(0, columns);
+  return { ...line, aside: "", lead: text, text, stable: text };
+}
+
+function positiveColumns(columns: number | undefined): number | undefined {
+  if (columns === undefined || !Number.isFinite(columns) || columns <= 0) return undefined;
+  return columns;
+}
+
 export function paintProgressLine(line: ProgressLine, color: boolean): string {
   if (!color) return line.text;
   if (line.role === "detail") {
@@ -339,6 +350,7 @@ export function createRunProgressWriter(options: {
   tty: boolean;
   color: boolean;
   now?: () => number;
+  columns?: number;
 }): RunProgressWriter {
   let drawn = 0;
   let prevStable: string[] = [];
@@ -355,7 +367,10 @@ export function createRunProgressWriter(options: {
       const plainKey = plain.join("\n");
       const stableKey = stable.join("\n");
       if (options.tty ? plainKey === lastPlain : stableKey === lastStable) return;
-      const painted = lines.map((line) => paintProgressLine(line, options.color));
+      const columns = options.tty ? positiveColumns(options.columns) : undefined;
+      const visible =
+        columns === undefined ? lines : lines.map((line) => fitProgressLine(line, columns));
+      const painted = visible.map((line) => paintProgressLine(line, options.color));
       if (options.tty) {
         let chunk = "";
         if (drawn > 0) chunk += `\x1b[${drawn}A`;

@@ -8,7 +8,7 @@ import {
   type ValidationFinding,
 } from "../config/validateCatalog.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
-import type { RunOrigin, RunStore } from "../runstore/port.js";
+import type { RunDetail, RunOrigin, RunStore } from "../runstore/port.js";
 import {
   resolveAndValidateCheckout,
   resolveEffectiveGitIdentity,
@@ -123,6 +123,8 @@ export type PipelineRunResult = {
   waitingStageId?: string;
   /** The parked question, when the prompt has one. Human output only. */
   waitingSummary?: string;
+  waitingKind?: RunDetail["waiting_kind"];
+  feedbackLoopId?: string;
   /** Stage that failed, when the run failed on a stage. */
   failedStageId?: string;
   /** Sum of stage cost, when any stage reported usage. */

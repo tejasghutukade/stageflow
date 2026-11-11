@@ -248,4 +248,81 @@ describe("continueThroughGates", () => {
     expect(driven.result.outcome).toBe("waiting");
     expect(cap.log.join("\n")).toContain("Cancelled.");
   });
+
+  it("stops polling when the answer post rejects and keeps the waiting receipt", async () => {
+    const errors: string[] = [];
+    const cap = scripted(["accept"]);
+    const driven = await continueThroughGates(waitingResult(), {
+      io: {
+        log: cap.io.log,
+        error: (line) => {
+          errors.push(line);
+        },
+      },
+      readLine: cap.io.readLine,
+      readRun: async () => runDetail("running", confirm),
+      deliverAnswer: () => Promise.reject(new Error("socket hang up")),
+      pollIntervalMs: 10,
+    });
+    expect(errors.join("\n")).toContain("socket hang up");
+    expect(driven.failed).toBe(false);
+    expect(driven.result.outcome).toBe("waiting");
+  });
+
+  it("stops polling when the answer is refused and repaints the parked gate", async () => {
+    const errors: string[] = [];
+    const updates: RunDetail[] = [];
+    const cap = scripted(["accept"]);
+    const driven = await continueThroughGates(waitingResult(), {
+      io: {
+        log: cap.io.log,
+        error: (line) => {
+          errors.push(line);
+        },
+      },
+      readLine: cap.io.readLine,
+      readRun: async () => runDetail("running", confirm),
+      deliverAnswer: async () => ({ ok: false, reason: "rejected" }),
+      onUpdate: (detail) => {
+        updates.push(detail);
+      },
+      pollIntervalMs: 10,
+    });
+    expect(errors.join("\n")).toContain("rejected");
+    expect(driven.failed).toBe(false);
+    expect(driven.result.outcome).toBe("waiting");
+    const parked = updates.at(-1)?.stages.find((stage) => stage.stage_id === "review");
+    expect(parked?.status).toBe("waiting_for_input");
+    expect(parked?.pending_prompt?.id).toBe("q1");
+  });
+
+  it("keeps the failed snapshot when a refused answer lands on a terminal run", async () => {
+    const errors: string[] = [];
+    const cap = scripted(["accept"]);
+    let reads = 0;
+    const driven = await continueThroughGates(waitingResult(), {
+      io: {
+        log: cap.io.log,
+        error: (line) => {
+          errors.push(line);
+        },
+      },
+      readLine: cap.io.readLine,
+      readRun: async () => {
+        reads += 1;
+        if (reads === 1) return runDetail("running", confirm);
+        return {
+          ...runDetail("failed"),
+          failed_stage_id: "review",
+          failed_reason: "stage boom",
+        };
+      },
+      deliverAnswer: async () => ({ ok: false, reason: "rejected" }),
+      pollIntervalMs: 10,
+    });
+    expect(errors.join("\n")).toContain("rejected");
+    expect(driven.failed).toBe(false);
+    expect(driven.result.outcome).toBe("failed");
+    expect(driven.result.failedStageId).toBe("review");
+  });
 });

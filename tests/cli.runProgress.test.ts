@@ -166,6 +166,30 @@ describe("progressLines", () => {
   });
 });
 
+function visualLines(chunk: string): string[] {
+  const lines: string[] = [];
+  for (const raw of chunk.replace(/^\x1b\[\d+A/, "").split("\n")) {
+    if (!raw.startsWith("\x1b[2K")) continue;
+    lines.push(raw.replace(/^\x1b\[2K/, "").replace(/\x1b\[[0-9;]*m/g, ""));
+  }
+  return lines;
+}
+
+const longRunning = {
+  stages: [
+    stage("draft", "running", [
+      { event: "started", at: new Date(t0).toISOString() },
+      {
+        event: "tool_start",
+        toolName: "bash",
+        argsPreview: JSON.stringify({
+          command: "printf hello from a very long command",
+        }),
+      },
+    ]),
+  ],
+};
+
 describe("createRunProgressWriter", () => {
   it("rewrites the block on a tty and colors the finished stage", () => {
     const chunks: string[] = [];
@@ -212,6 +236,67 @@ describe("createRunProgressWriter", () => {
       "● outline\n│  calling read\n",
       "│  wrote outline.txt\n● draft\n│  starting\n",
     ]);
+  });
+
+  it("truncates tty lines to the given width and cursor-ups one row per line", () => {
+    const chunks: string[] = [];
+    const now = t0 + 12_000;
+    const writer = createRunProgressWriter({
+      write: (chunk) => chunks.push(chunk),
+      tty: true,
+      color: true,
+      columns: 20,
+      now: () => now,
+    });
+    writer.update(longRunning);
+    writer.update({
+      stages: [stage("draft", "succeeded", [], { artifacts: ["draft.txt"] })],
+    });
+    const source = progressLines(longRunning, now, { questions: true }).map((line) => line.text);
+    const shown = visualLines(chunks[0] ?? "");
+    const wrapped = source.reduce(
+      (rows, line) => rows + Math.max(1, Math.ceil(line.length / 20)),
+      0,
+    );
+    expect(source.some((line) => line.length > 20)).toBe(true);
+    expect(shown).toEqual(source.map((line) => line.slice(0, 20)));
+    expect(wrapped).toBeGreaterThan(shown.length);
+    expect(chunks[1]?.startsWith(`\x1b[${shown.length}A`)).toBe(true);
+    expect(chunks[1]?.startsWith(`\x1b[${wrapped}A`)).toBe(false);
+  });
+
+  it("cursor-ups on a tty when no column width is given", () => {
+    const chunks: string[] = [];
+    const writer = createRunProgressWriter({
+      write: (chunk) => chunks.push(chunk),
+      tty: true,
+      color: false,
+    });
+    writer.update(longRunning);
+    writer.update({ stages: [stage("draft", "succeeded")] });
+    const shown = visualLines(chunks[0] ?? "");
+    expect(shown.some((line) => line.length > 20)).toBe(true);
+    expect(chunks[0]).toContain("printf hello from a very long command");
+    expect(chunks[1]?.startsWith(`\x1b[${shown.length}A`)).toBe(true);
+  });
+
+  it("keeps appending full lines when stdout is not a tty", () => {
+    const chunks: string[] = [];
+    const now = t0 + 12_000;
+    const writer = createRunProgressWriter({
+      write: (chunk) => chunks.push(chunk),
+      tty: false,
+      color: false,
+      columns: 20,
+      now: () => now,
+    });
+    writer.update(longRunning);
+    writer.update(longRunning);
+    const text = progressLines(longRunning, now, { questions: true })
+      .map((line) => line.text)
+      .join("\n");
+    expect(text).toContain("printf hello from a very long command");
+    expect(chunks).toEqual([`${text}\n`]);
   });
 
   it("prints a fresh block after reset so a prompt stays above the timeline", () => {
