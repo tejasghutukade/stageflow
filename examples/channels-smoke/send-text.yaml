@@ -1,5 +1,5 @@
 id: send-text
-model: cursor/auto
+model: anthropic/claude-haiku-5-5
 # One channel per stage. The recipient is a phone number in E.164 form. On a Free or Pro Photon
 # project they must be a project user who has texted their assigned line once.
 channels:

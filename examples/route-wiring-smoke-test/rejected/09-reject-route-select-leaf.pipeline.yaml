@@ -6,7 +6,7 @@ stages:
     route:
       - to: only-branch
     system_prompt: Decide.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:
@@ -16,7 +16,7 @@ stages:
           type: object
   - id: only-branch
     system_prompt: Only branch.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:

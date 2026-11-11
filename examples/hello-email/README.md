@@ -6,7 +6,7 @@ One stage sends one email from the `personal-inbox` account. No trigger is creat
 2. Supply `PERSONAL_EMAIL_PASSWORD` in the host environment. For Gmail, use an app password, not your normal Google password. Do not store it in YAML.
 3. Set `enabled: true` and restart the host so it reads the file and credentials.
 4. Edit `hello-email.task.yaml`: set `input.recipient` to the destination email address. The empty default prevents a run from starting before you choose it.
-5. Open the `hello-email` pipeline in the console and start it with `hello-email-task`. The stage uses `cursor/auto`; change its model if you use another configured provider.
+5. Open the `hello-email` pipeline in the console and start it with `hello-email-task`. The stage uses `anthropic/claude-haiku-5-5`; change its model if you use another configured provider.
 
 The subject is `Hello from Stageflow`. The body is `Hello! This email was sent by my Stageflow test pipeline.` The stage reports the SMTP receipt and does not read the inbox.
 

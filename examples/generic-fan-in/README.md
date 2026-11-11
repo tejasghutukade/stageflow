@@ -24,7 +24,7 @@ that includes generic fan-in. A globally installed `sf` from npm may lag.
 
 - Node.js ≥ 20
 - From repo root: `npm run build` and `npm run ui:build`
-- Provider auth connected (`sf ui` → Settings → Providers). Stages use `cursor/auto`.
+- Provider auth connected (`sf ui` → Settings → Providers). Stages use `anthropic/claude-haiku-5-5`.
 
 Run state lives in `<repo>/.stageflow` even if you start the console from a subdirectory.
 

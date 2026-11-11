@@ -5,7 +5,7 @@ stages:
     fork:
       select: one
     system_prompt: Decide.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:
@@ -15,7 +15,7 @@ stages:
           type: object
   - id: branch-a
     system_prompt: Branch A.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:

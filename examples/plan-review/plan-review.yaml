@@ -15,7 +15,7 @@ system_prompt: |
      operator accepts/confirms the plan. Never emit before plan accept.
   5. Optionally, before the plan gate, you may ask one clarifying free_text or
      multi_question via ask_operator if needed. Never emit before plan accept.
-model: anthropic/claude-sonnet-4-5
+model: anthropic/claude-sonnet-5-5
 io:
   input:
     schema:

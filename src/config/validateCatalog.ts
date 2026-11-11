@@ -498,11 +498,19 @@ export async function findingPathCaseMismatch(
   );
 }
 
+function stageIdFilenameStem(stagePath: string): string {
+  const base = path.basename(stagePath);
+  if (base.endsWith(".stage.yaml")) {
+    return base.slice(0, -".stage.yaml".length);
+  }
+  return path.basename(base, ".yaml");
+}
+
 async function checkStageIdFilename(
   cwd: string,
   stagePath: string,
 ): Promise<ValidationFinding | null> {
-  const fileStem = path.basename(stagePath, ".yaml");
+  const fileStem = stageIdFilenameStem(stagePath);
   try {
     const raw = await readYamlObject(stagePath);
     if (typeof raw?.id === "string" && raw.id !== fileStem) {
@@ -528,14 +536,10 @@ async function validateStageFile(
     return findings;
   }
 
-  if (!mismatch && path.basename(stagePath, ".yaml") !== outcome.value.id) {
+  const fileStem = stageIdFilenameStem(stagePath);
+  if (!mismatch && fileStem !== outcome.value.id) {
     findings.push(
-      findingStageIdFilenameMismatch(
-        cwd,
-        stagePath,
-        path.basename(stagePath, ".yaml"),
-        outcome.value.id,
-      ),
+      findingStageIdFilenameMismatch(cwd, stagePath, fileStem, outcome.value.id),
     );
   }
 

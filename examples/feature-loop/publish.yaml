@@ -68,7 +68,7 @@ system_prompt: |
   When finished, call emit_stage_envelope exactly once. Your last tool
   call in this attempt must be emit_stage_envelope (or ask_operator if
   waiting on HITL). An empty final message is a stage failure.
-model: cursor/auto
+model: anthropic/claude-sonnet-5-5
 timeout_ms: 3600000
 io:
   input:

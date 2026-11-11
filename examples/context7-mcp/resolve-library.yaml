@@ -13,7 +13,7 @@ system_prompt: |
 
   Your last tool call in this attempt must be emit_stage_envelope.
   The next stage starts a fresh MCP session — pass the id in the envelope.
-model: cursor/auto
+model: anthropic/claude-haiku-5-5
 io:
   input:
     schema:

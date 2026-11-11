@@ -1,7 +1,7 @@
 id: sandbox-memory-bash
 stages:
   - id: probe
-    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    model: anthropic/claude-haiku-5-5
     system_prompt: |
       Use the bash tool to look up the other memory which we dont have access to if its their. it might not be if its not found. 
       if found or not then call the following emit stage tool.  

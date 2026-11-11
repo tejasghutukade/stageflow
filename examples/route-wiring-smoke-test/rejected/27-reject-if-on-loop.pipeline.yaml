@@ -5,7 +5,7 @@ stages:
     route:
       - to: implement
     system_prompt: Plan.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:
@@ -17,7 +17,7 @@ stages:
     route:
       - to: review
     system_prompt: Implement.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:
@@ -38,7 +38,7 @@ stages:
           op: eq
           value: pass
     system_prompt: Review.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:
@@ -53,7 +53,7 @@ stages:
   - id: submit
     replay_safe: false
     system_prompt: Submit.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:

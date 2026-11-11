@@ -361,7 +361,7 @@ describe("sf browser usage", () => {
     expect(await runBrowserCommand(["wat"], deps())).toBe(1);
   });
 
-  it("is routed from the top-level CLI and listed in --help", { timeout: 20_000 }, () => {
+  it("is routed from the top-level CLI and listed in --help", { timeout: 30_000 }, () => {
     const run = (a: string[]) =>
       spawnSync(process.execPath, [tsxCli, path.join(root, "src", "cli.ts"), ...a], {
         cwd: root,
@@ -371,7 +371,12 @@ describe("sf browser usage", () => {
     const help = run(["--help"]);
     expect(help.status).toBe(0);
     expect(help.stdout).toMatch(/sf browser profiles/);
-    expect(help.stdout).toContain(BROWSER_USAGE.slice(0, 20));
+    expect(help.stdout).toMatch(/sf <command> --help/);
+    expect(help.stdout).not.toContain("Manage saved browser logins");
+    const commandHelp = run(["browser", "--help"]);
+    expect(commandHelp.status).toBe(0);
+    expect(commandHelp.stdout + commandHelp.stderr).toContain(BROWSER_USAGE.slice(0, 20));
+    expect(commandHelp.stdout + commandHelp.stderr).not.toMatch(/Data under \.stageflow\/\./);
     const profiles = run(["browser", "profiles", "--json"]);
     expect(profiles.status).toBe(0);
     expect(JSON.parse(profiles.stdout)).toEqual({ profiles: [] });

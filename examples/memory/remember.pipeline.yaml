@@ -4,7 +4,7 @@ stages:
     entry: true
     route:
       - to: confirm
-    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    model: anthropic/claude-haiku-5-5
     system_prompt: |
       The task input has one field, "note".
       Do these steps in order, then stop:
@@ -35,7 +35,7 @@ stages:
               type: string
           additionalProperties: false
   - id: confirm
-    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    model: anthropic/claude-haiku-5-5
     system_prompt: |
       Call read_memory with memory "notebook". Do not call replace_memory.
       Then call emit_stage_envelope once with status success, a one-line summary, artifacts [], and payload {"page":"<the exact text read_memory returned>"}.

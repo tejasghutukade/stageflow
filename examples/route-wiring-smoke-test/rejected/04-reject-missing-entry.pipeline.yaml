@@ -4,7 +4,7 @@ stages:
     route:
       - to: review
     system_prompt: Draft.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:
@@ -14,7 +14,7 @@ stages:
           type: object
   - id: review
     system_prompt: Review.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:

@@ -49,7 +49,7 @@ system_prompt: |
   When finished, call emit_stage_envelope exactly once with status,
   this attempt must be emit_stage_envelope. An empty final message is a
   stage failure.
-model: cursor/auto
+model: anthropic/claude-sonnet-5-5
 timeout_ms: 3600000
 io:
   input:

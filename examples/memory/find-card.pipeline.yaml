@@ -2,7 +2,7 @@ id: find-card
 stages:
   - id: find
     entry: true
-    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    model: anthropic/claude-haiku-5-5
     system_prompt: |
       The task input has "key" and "query".
       Do these steps in order, then stop:

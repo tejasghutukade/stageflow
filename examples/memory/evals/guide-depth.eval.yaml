@@ -12,7 +12,7 @@ defaults:
   pass_threshold: 0.8
   max_cost_usd: 8
   concurrency: 2
-  model: cursor/auto
+  model: anthropic/claude-sonnet-5-5
   judge: openrouter/tencent/hy3
 conversation:
   mode: script

@@ -1,5 +1,5 @@
 id: compaction-stress
-model: openrouter/deepseek/deepseek-chat-v3.1
+model: anthropic/claude-sonnet-5-5
 schemas:
   evidence-report:
     type: object

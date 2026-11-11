@@ -1,5 +1,5 @@
 id: verify-tour
-model: cursor/auto
+model: anthropic/claude-haiku-5-5
 schemas:
   empty:
     type: object

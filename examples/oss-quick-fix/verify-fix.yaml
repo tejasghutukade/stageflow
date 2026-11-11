@@ -27,7 +27,7 @@ system_prompt: |
      fixed in this stage.
   5. Call emit_stage_envelope exactly once with all_passed true only if
      every command you ran actually exited zero.
-model: openrouter/minimax/minimax-m3:free
+model: anthropic/claude-sonnet-5-5
 timeout_ms: 7200000
 io:
   input:

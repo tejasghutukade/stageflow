@@ -11,7 +11,7 @@ stages:
     system_prompt: |
       Triage in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"severity": "low"}.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:
@@ -27,7 +27,7 @@ stages:
     system_prompt: |
       Page on-call in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: cursor/auto
+    model: anthropic/claude-haiku-5-5
     io:
       input:
         schema:

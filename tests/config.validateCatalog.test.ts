@@ -402,6 +402,44 @@ describe("validateCatalog stage scope", () => {
     expect(result.findings).toHaveLength(0);
   });
 
+  it("stage id matches name for name.stage.yaml and name.yaml", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-stem-"));
+    const check = async (filename: string, id: string) => {
+      const stagePath = path.join(root, filename);
+      await writeFile(stagePath, validStageYaml(id));
+      return validateCatalog({ scope: "stage", stage: stagePath, cwd: root });
+    };
+    const dottedMatch = await check("x.stage.yaml", "x");
+    expect(dottedMatch.ok).toBe(true);
+    expect(dottedMatch.findings.some((f) => f.code === "stage.id_filename_mismatch")).toBe(false);
+
+    const plainMatch = await check("x.yaml", "x");
+    expect(plainMatch.ok).toBe(true);
+    expect(plainMatch.findings.some((f) => f.code === "stage.id_filename_mismatch")).toBe(false);
+
+    const dottedStem = await check("x.stage.yaml", "x.stage");
+    expect(dottedStem.ok).toBe(false);
+    expect(dottedStem.findings.filter((f) => f.code === "stage.id_filename_mismatch")).toEqual([
+      expect.objectContaining({
+        message: 'Stage id "x.stage" does not match filename stem "x"',
+      }),
+    ]);
+
+    const otherId = await check("x.stage.yaml", "y");
+    expect(otherId.ok).toBe(false);
+    expect(otherId.findings.filter((f) => f.code === "stage.id_filename_mismatch")).toEqual([
+      expect.objectContaining({
+        message: 'Stage id "y" does not match filename stem "x"',
+      }),
+    ]);
+
+    const missingPath = path.join(root, "x.stage.yaml");
+    await writeFile(missingPath, validStageYaml("x").replace("id: x\n", ""));
+    const missing = await validateCatalog({ scope: "stage", stage: missingPath, cwd: root });
+    expect(missing.findings.some((f) => f.code === "stage.id_filename_mismatch")).toBe(false);
+    expect(missing.findings.some((f) => f.code === "stage.invalid_shape")).toBe(true);
+  });
+
   it("invalid shape produces stage finding", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-"));
     const stagePath = path.join(root, "bad.yaml");

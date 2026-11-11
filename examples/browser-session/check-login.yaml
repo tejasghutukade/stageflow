@@ -6,7 +6,7 @@ system_prompt: |
   Call emit_stage_envelope exactly once with status success, a one-line
   summary, artifacts: [], and payload { "logged_in": <boolean>, "url": "<url>" }
   copied exactly from the Host result. Do not call ask_operator.
-model: cursor/auto
+model: anthropic/claude-haiku-5-5
 io:
   input:
     schema:

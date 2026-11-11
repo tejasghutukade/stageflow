@@ -49,10 +49,10 @@ route:
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow built (`npm run build`)
-- **OpenRouter** provider
-  (`openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`) — set
-  `OPENROUTER_API_KEY`, then:
-  `sf providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY`
+- **Anthropic** provider — `detect-changes` uses `anthropic/claude-haiku-5-5`
+  and `author-diagrams` uses `anthropic/claude-sonnet-5-5`. Set
+  `ANTHROPIC_API_KEY`, then:
+  `sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY`
 - **Archify skill** at `.pi/skills/archify/` (see below)
 - Git checkout at the target head; run `prepare-ci-context.sh` before `sf run`
   (GHA does this automatically)
@@ -120,8 +120,8 @@ Local dry-run from repo root:
 
 ```bash
 sf validate --strict
-export OPENROUTER_API_KEY=…
-sf providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY
+export ANTHROPIC_API_KEY=…
+sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
 ./scripts/prepare-ci-context.sh ci-context.json
 sf run \
   --pipeline examples/archify-on-pr/archify-on-pr.pipeline.yaml \
@@ -172,7 +172,7 @@ done < <(jq -c '.diagrams[]' envelope.json)
 
 | Variable | Used by | Description |
 |----------|---------|-------------|
-| `OPENROUTER_API_KEY` | `sf run` | OpenRouter provider auth (required) |
+| `ANTHROPIC_API_KEY` | `sf run` | Anthropic provider auth (required) |
 | `PR_NUMBER` | prepare-ci-context | PR number override (enables sticky comment in GHA when set) |
 | `PR_HEAD_SHA` | prepare-ci-context | PR head commit SHA |
 | `GITHUB_REPOSITORY` | prepare-ci-context | `owner/repo` |

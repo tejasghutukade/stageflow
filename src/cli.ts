@@ -65,6 +65,42 @@ import { installProxyDispatcher } from "./net/proxy.js";
 import { warnMissingCaPaths } from "./preflight/tls.js";
 import { logger as cliLogger } from "./logging/logger.js";
 
+const UI_USAGE_LINE = `sf ui [--host <addr>] [--port ${DEFAULT_PORT}] [--no-open] [--mcp-stateless]`;
+const MCP_USAGE_LINE = `sf mcp [--host <addr>] [--port ${DEFAULT_PORT}] [--mcp-stateless]`;
+
+const UI_USAGE = `Usage:
+  ${UI_USAGE_LINE}`;
+
+const MCP_USAGE = `Usage:
+  ${MCP_USAGE_LINE}`;
+
+const COMMAND_USAGE: Record<string, string> = {
+  init: INIT_USAGE,
+  run: RUN_USAGE,
+  "run-stage": RUN_STAGE_USAGE,
+  validate: VALIDATE_USAGE,
+  doctor: DOCTOR_USAGE,
+  graph: GRAPH_USAGE,
+  a2a: A2A_USAGE,
+  "migrate-yaml": MIGRATE_YAML_USAGE,
+  artifact: ARTIFACT_USAGE,
+  envelope: ENVELOPE_USAGE,
+  "export-run": EXPORT_RUN_USAGE,
+  "debug-run": DEBUG_RUN_USAGE,
+  backup: BACKUP_USAGE,
+  restore: RESTORE_USAGE,
+  export: EXPORT_ALL_USAGE,
+  runs: RUNS_USAGE,
+  trigger: TRIGGER_USAGE,
+  eval: EVAL_USAGE,
+  agents: AGENTS_USAGE,
+  providers: PROVIDERS_USAGE,
+  skills: SKILLS_USAGE,
+  browser: BROWSER_USAGE,
+  ui: UI_USAGE,
+  mcp: MCP_USAGE,
+};
+
 const USAGE = `Usage:
   sf init
   sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/repo>] [--ref <ref>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
@@ -91,8 +127,11 @@ const USAGE = `Usage:
   sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
   sf runs rerun --run <runId> [--pinned] [--json]
-  sf ui [--host <addr>] [--port ${DEFAULT_PORT}] [--no-open] [--mcp-stateless]
-  sf mcp [--host <addr>] [--port ${DEFAULT_PORT}] [--mcp-stateless]
+  sf trigger
+  sf eval
+  sf agents
+  ${UI_USAGE_LINE}
+  ${MCP_USAGE_LINE}
   sf providers list
   sf providers status [--provider <id>]
   sf providers detect
@@ -110,6 +149,7 @@ const USAGE = `Usage:
   sf --version
   sf -V
   sf --help
+  sf <command> --help
   sf a2a status|enable|reload [--json]
   sf a2a caller list|create|revoke [<id>] [--json]
   sf a2a publication list|create|edit|remove [<id>] [<file>] [--json]
@@ -119,53 +159,30 @@ const USAGE = `Usage:
 Stageflow (sf) runs YAML-defined automatic stage pipelines.
 
 Store backend: SF_STORE=sqlite only. SF_STORE=disk is rejected; disk-era .stageflow/runs trees import when the SQLite store is empty. Data under .stageflow/.
+`;
 
-${INIT_USAGE}
+function isHelpFlag(arg: string): boolean {
+  return arg === "--help" || arg === "-h";
+}
 
-${RUN_USAGE}
-
-${RUN_STAGE_USAGE}
-
-${VALIDATE_USAGE}
-
-${DOCTOR_USAGE}
-
-${GRAPH_USAGE}
-
-${A2A_USAGE}
-
-${MIGRATE_YAML_USAGE}
-
-${ARTIFACT_USAGE}
-
-${ENVELOPE_USAGE}
-
-${EXPORT_RUN_USAGE}
-
-${DEBUG_RUN_USAGE}
-
-${BACKUP_USAGE}
-
-${RESTORE_USAGE}
-
-${EXPORT_ALL_USAGE}
-
-${RUNS_USAGE}
-
-${TRIGGER_USAGE}
-
-${EVAL_USAGE}
-
-${AGENTS_USAGE}
-
-${PROVIDERS_USAGE}
-
-${SKILLS_USAGE}
-
-${BROWSER_USAGE}`;
+export function resolveCliHelp(
+  argv: string[],
+): { text: string; exitCode: number } | undefined {
+  const parsed = parseArgs(argv);
+  if (parsed.help) {
+    return { text: USAGE, exitCode: argv.slice(2).length === 0 ? 1 : 0 };
+  }
+  if (parsed.commandHelp !== undefined) {
+    const text = COMMAND_USAGE[parsed.commandHelp];
+    if (text === undefined) return undefined;
+    return { text, exitCode: 0 };
+  }
+  return undefined;
+}
 
 function parseArgs(argv: string[]): {
   help: boolean;
+  commandHelp?: string;
   version?: boolean;
   versionJson?: boolean;
   command?: string;
@@ -183,10 +200,7 @@ function parseArgs(argv: string[]): {
   if (args.length === 0) {
     return { help: true };
   }
-  if (
-    (args[0] === "--help" || args[0] === "-h") &&
-    args.length === 1
-  ) {
+  if (args[0] !== undefined && isHelpFlag(args[0]) && args.length === 1) {
     return { help: true };
   }
   if (args[0] === "--version" || args[0] === "-V") {
@@ -199,6 +213,13 @@ function parseArgs(argv: string[]): {
   }
 
   const command = args[0];
+  if (
+    command !== undefined &&
+    Object.hasOwn(COMMAND_USAGE, command) &&
+    args.slice(1).some(isHelpFlag)
+  ) {
+    return { help: false, commandHelp: command };
+  }
   if (
     command === "providers" ||
     command === "validate" ||
@@ -226,7 +247,7 @@ function parseArgs(argv: string[]): {
     return { help: false, command };
   }
 
-  if (args.includes("--help") || args.includes("-h")) {
+  if (args.some(isHelpFlag)) {
     return { help: true };
   }
 
@@ -451,11 +472,12 @@ async function main(argv: string[]): Promise<number> {
         `${warning.name} points to missing path: ${warning.path}`,
       );
     }
-    const parsed = parseArgs(argv);
-    if (parsed.help) {
-      console.log(USAGE);
-      return argv.slice(2).length === 0 ? 1 : 0;
+    const help = resolveCliHelp(argv);
+    if (help) {
+      console.log(help.text);
+      return help.exitCode;
     }
+    const parsed = parseArgs(argv);
     if (parsed.version) {
       if (parsed.versionJson) {
         console.log(

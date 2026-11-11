@@ -23,7 +23,7 @@ system_prompt: |
   Rules:
   - Never emit before the operator answers.
   - Do not call ask_operator more than once.
-model: cursor/auto
+model: anthropic/claude-haiku-5-5
 io:
   input:
     schema:

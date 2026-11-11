@@ -1,5 +1,5 @@
 id: reply-hello-email
-model: cursor/auto
+model: anthropic/claude-haiku-5-5
 email:
   - accountId: personal-inbox
     operations: [getMessage, reply]

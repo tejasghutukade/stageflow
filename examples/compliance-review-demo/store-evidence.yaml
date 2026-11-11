@@ -25,7 +25,7 @@ system_prompt: |
   forward from the prior stage, plus changed_files naming the evidence log
   path. Your last tool call in this attempt must be emit_stage_envelope. An
   empty final message is a stage failure.
-model: anthropic/claude-sonnet-4-5
+model: anthropic/claude-sonnet-5-5
 io:
   input:
     schema:

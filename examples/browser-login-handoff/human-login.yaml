@@ -12,7 +12,7 @@ system_prompt: |
      summary, artifacts: [], and payload { "logged_in": true, "url": "<the page url the Host reports>" }.
 
   The Host checks the login again after you emit. If it fails you will be asked again.
-model: openrouter/nvidia/nemotron-3.5-lightning:free
+model: anthropic/claude-haiku-5-5
 io:
   input:
     schema:
