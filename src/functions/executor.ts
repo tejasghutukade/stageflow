@@ -60,11 +60,13 @@ export type FunctionCapabilityHandler = (
 export type FunctionExecutorOptions = {
   forkFn?: typeof childProcess.fork;
   onCapability?: FunctionCapabilityHandler;
+  sideEffect?: (invocationId: string, request: FunctionCapabilityRequest) => boolean;
 };
 
 export class FunctionExecutor {
   private readonly forkFn: typeof childProcess.fork;
   private readonly onCapability: FunctionCapabilityHandler | undefined;
+  private readonly sideEffect: FunctionExecutorOptions["sideEffect"];
   private active = 0;
   private readonly running = new Map<string, RunningCall>();
   private readonly waiting: Waiter[] = [];
@@ -72,6 +74,7 @@ export class FunctionExecutor {
   constructor(options: FunctionExecutorOptions = {}) {
     this.forkFn = options.forkFn ?? childProcess.fork;
     this.onCapability = options.onCapability;
+    this.sideEffect = options.sideEffect;
   }
 
   invoke(input: FunctionInvokeRequest): Promise<FunctionInvokeResult> {
@@ -190,7 +193,12 @@ export class FunctionExecutor {
           this.answerCapability(prepared.invocationId, running, child, message);
           return;
         }
-        if (running.cancelled || running.hostKilled || !isChildResponse(message)) return;
+        if (!isChildResponse(message) || running.cancelled || running.hostKilled) return;
+        if (running.externalWrite && !message.ok) {
+          running.abort.abort();
+          finish(result("uncertain_outcome", "function external outcome is uncertain", pid));
+          return;
+        }
         finish(fromChild(message, pid));
       });
       child.once("exit", (code, signal) => {
@@ -198,8 +206,8 @@ export class FunctionExecutor {
           signalProcessGroup(child.pid, "SIGKILL");
         }
         if (settled) return;
-        if (running.externalWrite && (running.cancelled || running.hostKilled)) {
-          finish(result("uncertain_outcome", "function write outcome is uncertain", pid));
+        if (running.externalWrite) {
+          finish(result("uncertain_outcome", "function external outcome is uncertain", pid));
           return;
         }
         if (running.cancelled) {
@@ -235,17 +243,18 @@ export class FunctionExecutor {
     request: FunctionCapabilityRequest,
   ): void {
     if (running.cancelled || running.hostKilled || running.abort.signal.aborted) return;
-    if (request.op === "write") running.externalWrite = true;
+    const effect = request.op === "write" || this.sideEffect?.(invocationId, request) === true;
+    if (effect) running.externalWrite = true;
     const pending = this.onCapability
       ? this.onCapability(invocationId, request, running.abort.signal)
       : Promise.resolve(deniedCapability(request.requestId));
     void pending.then(
       (value) => {
-        if (request.op === "write") running.externalWrite = false;
+        if (effect) running.externalWrite = false;
         this.sendCapability(running, child, value);
       },
       () => {
-        if (request.op === "write") running.externalWrite = false;
+        if (effect) running.externalWrite = false;
         this.sendCapability(running, child, deniedCapability(request.requestId));
       },
     );

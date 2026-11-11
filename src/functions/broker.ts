@@ -4,7 +4,13 @@ import { isForeverDeniedSecret, isProviderOrCloudName } from "../runtime/stageEn
 import { loadSecretRegistry, type SecretRegistry } from "../runtime/stageSecrets.js";
 import { FunctionExecutor, type FunctionExecutorOptions } from "./executor.js";
 import { performFileCapability, type ContainerFiles, type FunctionFileGrant } from "./files.js";
-import { performFunctionHttp, type FunctionApiGrant, type FunctionDial, type FunctionLookup } from "./http.js";
+import {
+  functionApiIsAction,
+  performFunctionHttp,
+  type FunctionApiGrant,
+  type FunctionDial,
+  type FunctionLookup,
+} from "./http.js";
 import {
   type FunctionCapabilityRequest,
   type FunctionCapabilityResult,
@@ -38,6 +44,9 @@ export type FunctionBrokerInvoke = {
   containerName?: string;
   containerDockerBin?: string;
   grants?: FunctionGrants;
+  env?: NodeJS.ProcessEnv;
+  lookup?: FunctionLookup;
+  dial?: FunctionDial;
 };
 
 export type FunctionBrokerOptions = {
@@ -58,6 +67,9 @@ type ActiveCall = {
   projectRoot?: string;
   containerName?: string;
   containerDockerBin?: string;
+  env: NodeJS.ProcessEnv;
+  lookup?: FunctionLookup;
+  dial?: FunctionDial;
 };
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -78,6 +90,7 @@ export class FunctionBroker {
       new FunctionExecutor({
         forkFn: options.forkFn,
         onCapability: (invocationId, request, signal) => this.answer(invocationId, request, signal),
+        sideEffect: (invocationId, request) => this.actionDispatched(invocationId, request),
       });
   }
 
@@ -91,7 +104,8 @@ export class FunctionBroker {
     }
     const context = input.context === undefined ? { ok: true as const, value: {} } : assertJsonObject(input.context);
     if (!context.ok) return failure("invalid_input", context.message);
-    const env = resolveEnv(grants.env ?? [], this.env, this.registry);
+    const envSource = input.env ?? this.env;
+    const env = resolveEnv(grants.env ?? [], envSource, this.registry);
     if (!env.ok) return failure(env.code, env.message);
     const call: ActiveCall = {
       grants,
@@ -100,6 +114,9 @@ export class FunctionBroker {
       projectRoot: input.projectRoot,
       containerName: input.containerName,
       containerDockerBin: input.containerDockerBin,
+      env: envSource,
+      lookup: input.lookup,
+      dial: input.dial,
     };
     this.active.set(input.invocationId, call);
     try {
@@ -119,6 +136,13 @@ export class FunctionBroker {
     return this.executor.cancel(invocationId);
   }
 
+  private actionDispatched(invocationId: string, request: FunctionCapabilityRequest): boolean {
+    if (request.op !== "http") return false;
+    const call = this.active.get(invocationId);
+    if (!call) return false;
+    return functionApiIsAction(call.grants.apis ?? [], request.method, request.origin, request.path);
+  }
+
   private async answer(
     invocationId: string,
     request: FunctionCapabilityRequest,
@@ -135,9 +159,9 @@ export class FunctionBroker {
               requestPath: request.path,
               body: request.body,
               grants: call.grants.apis ?? [],
-              resolveCredential: (name) => credentialValue(this.registry, this.env, name),
-              lookup: this.options.lookup,
-              dial: this.options.dial,
+              resolveCredential: (name) => credentialValue(this.registry, call.env, name),
+              lookup: call.lookup ?? this.options.lookup,
+              dial: call.dial ?? this.options.dial,
               signal,
             })
           : await performFileCapability({

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BodyError, readJsonBody } from "../agents/ndjson.js";
+import type { FunctionInvoker, FunctionTestInput, FunctionTestMocks } from "../functions/invoke.js";
 import { FunctionError, isFunctionError, type FunctionService } from "../functions/service.js";
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
@@ -11,6 +12,7 @@ type Ctx = {
   service: FunctionService;
   projectRoot: string;
   params: string[];
+  invoker?: FunctionInvoker;
 };
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -106,6 +108,31 @@ const routes: Array<{ method: string; pattern: RegExp; handle: (ctx: Ctx) => Pro
     pattern: /^\/api\/functions\/([^/]+)$/,
     handle: async (ctx) => ctx.json(ctx.res, 200, await ctx.service.delete(ctx.projectRoot, ctx.params[0]!)),
   },
+  {
+    method: "POST",
+    pattern: /^\/api\/functions\/([^/]+)\/test$/,
+    handle: async (ctx) => {
+      const invoker = ctx.invoker;
+      if (!invoker) {
+        ctx.json(ctx.res, 503, { code: "function.store_unavailable" });
+        return;
+      }
+      const body = await readBody(ctx.req);
+      ctx.json(ctx.res, 200, await invoker.test(ctx.projectRoot, ctx.params[0]!, testInput(body)));
+    },
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/functions\/([^/]+)\/invocations$/,
+    handle: async (ctx) => {
+      const invoker = ctx.invoker;
+      if (!invoker) {
+        ctx.json(ctx.res, 503, { code: "function.store_unavailable" });
+        return;
+      }
+      ctx.json(ctx.res, 200, { invocations: invoker.list(ctx.projectRoot, ctx.params[0]!) });
+    },
+  },
 ];
 
 export async function handleFunctionRoutes(
@@ -116,13 +143,14 @@ export async function handleFunctionRoutes(
   projectRoot: string,
   res: ServerResponse,
   json: Json,
+  invoker?: FunctionInvoker,
 ): Promise<boolean> {
   for (const route of routes) {
     const match = route.pattern.exec(pathname);
     if (!match || route.method !== method) continue;
     try {
       const params = match.slice(1).map((segment) => decodeURIComponent(segment));
-      await route.handle({ req, res, json, service, projectRoot, params });
+      await route.handle({ req, res, json, service, projectRoot, params, invoker });
     } catch (error) {
       if (res.headersSent) {
         if (!res.writableEnded) res.end();
@@ -150,4 +178,38 @@ export async function handleFunctionRoutes(
     return true;
   }
   return false;
+}
+
+function testInput(body: Record<string, unknown>): FunctionTestInput {
+  const input: FunctionTestInput = { real: body.real === true };
+  if (typeof body.source === "string") input.source = body.source;
+  if (body.input !== undefined) input.input = body.input;
+  if (typeof body.timeoutMs === "number") input.timeoutMs = body.timeoutMs;
+  if (typeof body.memoryLimitBytes === "number") input.memoryLimitBytes = body.memoryLimitBytes;
+  const mocks = mocksOf(body.mocks);
+  if (mocks) input.mocks = mocks;
+  return input;
+}
+
+function mocksOf(value: unknown): FunctionTestMocks | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const mocks: FunctionTestMocks = {};
+  if (Array.isArray(record.files)) {
+    mocks.files = [];
+    for (const entry of record.files) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const file = entry as Record<string, unknown>;
+      if ((file.root !== "artifacts" && file.root !== "workspace") || typeof file.path !== "string" || typeof file.text !== "string") continue;
+      mocks.files.push({ root: file.root, path: file.path, text: file.text });
+    }
+  }
+  if (record.env && typeof record.env === "object" && !Array.isArray(record.env)) {
+    const env: Record<string, string> = {};
+    for (const [key, item] of Object.entries(record.env)) {
+      if (typeof item === "string") env[key] = item;
+    }
+    mocks.env = env;
+  }
+  return mocks;
 }

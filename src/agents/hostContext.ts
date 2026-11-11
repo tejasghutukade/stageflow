@@ -107,6 +107,7 @@ export function createAgentHostContext(options: {
     | "memories"
     | "evalRunManager"
     | "functionService"
+    | "functionInvoker"
   >;
 }): AgentHostContext {
   const service = new AgentService({

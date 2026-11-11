@@ -7,6 +7,7 @@ import type { ZodType } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { registerFunctionTools } from "../src/mcp/functionTools.js";
 import type { McpToolDeps } from "../src/mcp/deps.js";
+import { createFunctionInvoker } from "../src/functions/invoke.js";
 import { FunctionService } from "../src/functions/service.js";
 import { FunctionStore } from "../src/functions/store.js";
 import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
@@ -71,11 +72,12 @@ describe("function MCP tools", () => {
     const { connection } = createRunStoreWithConnection({ rootDir: home, openerMode: "migrate" });
     closers.push(() => connection.close());
     const service = new FunctionService({ store: new FunctionStore(connection) });
-    const tools = record({ cwd: project, functionService: service } as McpToolDeps);
+    const functionInvoker = createFunctionInvoker({ db: connection, env: {}, stageflowHome: home });
+    const tools = record({ cwd: project, functionService: service, functionInvoker } as McpToolDeps);
     return { project, tools };
   }
 
-  it("creates, conflicts, duplicates, and refuses a referenced delete without running guest code", async () => {
+  it("creates, conflicts, duplicates, refuses a referenced delete, and tests the saved revision", async () => {
     const { project, tools } = await open();
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_functions",
@@ -119,8 +121,7 @@ describe("function MCP tools", () => {
     expect(removed.payload).toMatchObject({ code: "function.in_use" });
 
     const tested = await call(tools, "test_function", { id: "score" });
-    expect(tested.isError).toBe(true);
-    expect(tested.payload).toMatchObject({ code: "function.test_unavailable" });
-    expect(JSON.stringify(tested.payload)).not.toContain("passed");
+    expect(tested.isError).toBe(false);
+    expect(tested.payload).toMatchObject({ ok: true, kind: "test", revision: 2, value: { passed: true } });
   });
 });

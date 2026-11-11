@@ -20,6 +20,7 @@ import { MIGRATION_017 } from "./017-eval-result-suggestions.js";
 import { MIGRATION_018 } from "./018-eval-grader-labels.js";
 import { MIGRATION_019 } from "./019-agent-session-rollover.js";
 import { MIGRATION_020 } from "./020-functions.js";
+import { MIGRATION_021 } from "./021-function-invocations.js";
 
 export type SqliteMigration = {
   version: number;
@@ -49,6 +50,7 @@ const DEFAULT_MIGRATIONS: SqliteMigration[] = [
   MIGRATION_018,
   MIGRATION_019,
   MIGRATION_020,
+  MIGRATION_021,
 ];
 
 export const CURRENT_SCHEMA_VERSION =

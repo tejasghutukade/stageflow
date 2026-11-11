@@ -3,6 +3,7 @@ import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type { AgentChatController } from "../agents/chatTurn.js";
 import type { ConversationBackend } from "../agents/sessions.js";
 import type { AgentService } from "../agents/service.js";
+import type { FunctionInvoker } from "../functions/invoke.js";
 import type { FunctionService } from "../functions/service.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
@@ -24,6 +25,8 @@ export type McpToolDeps = {
   providerBoot?: BootProviderResult;
   agentService?: AgentService;
   functionService?: FunctionService;
+  /** Shared with HTTP so function tests and production calls use one execution queue. */
+  functionInvoker?: FunctionInvoker;
   agentChat?: AgentChatController;
   agentConversationBackend?: ConversationBackend;
   evalRunManager?: EvalRunManager;

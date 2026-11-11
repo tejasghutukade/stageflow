@@ -249,6 +249,23 @@ function matchGrant(grants: readonly FunctionApiGrant[], method: string, url: UR
   return grants.find((grant) => grantMatches(grant, url, method, false));
 }
 
+export function functionApiIsAction(
+  grants: readonly FunctionApiGrant[],
+  method: string | undefined,
+  origin: string | undefined,
+  requestPath: string | undefined,
+): boolean {
+  const verb = method?.toUpperCase();
+  if (!verb || !METHODS.has(verb) || !origin || !requestPath) return false;
+  let current: URL;
+  try {
+    current = new URL(requestPath, origin);
+  } catch {
+    return false;
+  }
+  return matchGrant(grants, verb, current)?.access === "action";
+}
+
 function grantMatches(grant: FunctionApiGrant, url: URL, method: string, allowOtherHost: boolean): boolean {
   let origin: URL;
   try {

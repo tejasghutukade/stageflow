@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { defaultAgentProjectRoot } from "../agents/projectRoot.js";
+import type { FunctionInvoker } from "../functions/invoke.js";
 import { isFunctionError } from "../functions/service.js";
 import type { FunctionService } from "../functions/service.js";
 import type { McpToolDeps } from "./deps.js";
@@ -12,6 +13,11 @@ const MCP_ACTOR = { source: "api" as const, author: "mcp" };
 function required(deps: McpToolDeps): FunctionService {
   if (!deps.functionService) throw new Error("MCP function tools require functionService from host bootstrap");
   return deps.functionService;
+}
+
+function invoker(deps: McpToolDeps): FunctionInvoker {
+  if (!deps.functionInvoker) throw new Error("MCP function tools require functionInvoker from host bootstrap");
+  return deps.functionInvoker;
 }
 
 async function call(work: () => Promise<unknown>) {
@@ -101,10 +107,35 @@ export function registerFunctionTools(server: McpServer, deps: McpToolDeps): voi
   server.registerTool(
     "test_function",
     {
-      description: "Ask to test a function. The catalog answers that a test is unavailable.",
-      inputSchema: z.object({ id: functionId }),
+      description: "Test a function with the production executor. real is the only way to use real files, environment, or APIs.",
+      inputSchema: z.object({
+        id: functionId,
+        source: z.string().optional(),
+        input: z.record(z.string(), z.unknown()).optional(),
+        real: z.boolean().optional(),
+        mocks: z
+          .object({
+            files: z
+              .array(z.object({ root: z.enum(["artifacts", "workspace"]), path: z.string(), text: z.string() }))
+              .optional(),
+            env: z.record(z.string(), z.string()).optional(),
+          })
+          .optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        memoryLimitBytes: z.number().int().positive().optional(),
+      }),
     },
-    () => textResult({ code: "function.test_unavailable", message: "Function tests are not available" }, true),
+    ({ id, source, input, real, mocks, timeoutMs, memoryLimitBytes }) =>
+      call(() =>
+        invoker(deps).test(root(), id, {
+          ...(source !== undefined ? { source } : {}),
+          ...(input !== undefined ? { input } : {}),
+          ...(real !== undefined ? { real } : {}),
+          ...(mocks !== undefined ? { mocks } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          ...(memoryLimitBytes !== undefined ? { memoryLimitBytes } : {}),
+        }),
+      ),
   );
 
   server.registerTool(
