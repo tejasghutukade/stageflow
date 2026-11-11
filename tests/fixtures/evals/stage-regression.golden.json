@@ -131,7 +131,7 @@
   },
   "fingerprint": "fcdf8458",
   "snapshot": {
-    "snapshot_version": 1,
+    "snapshot_version": 2,
     "eval": {
       "id": "regression",
       "path": "evals/regression.eval.yaml",
