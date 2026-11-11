@@ -70,7 +70,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Migrating stage environments](migration-stage-environment.md) | Move stages to declared secrets and the curated stage environment |
 | [Triggers readiness](triggers-readiness.md) | Checklist: which trigger kinds and console options the Host runs today vs manual-only |
 | [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running, including standalone `run_stage` and the eval tools |
-| [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC, plus the wildcard-access `run_stage` operation |
+| [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC, plus `run_stage` when that caller has `allow_run_stage` (off by default) |
 | [CI / headless](ci.md) | `--json`, exit codes, `sf eval run` in CI, GitHub Actions, PR diagram dogfood |
 
 ## Featured example

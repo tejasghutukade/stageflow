@@ -53,6 +53,7 @@ const callerSchema = z.object({
   id: identifier,
   token_env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional(),
   token_store: z.string().regex(STORE_NAME_PATTERN).optional(),
+  allow_run_stage: z.boolean().default(false),
 }).strict().refine((caller) => (caller.token_env === undefined) !== (caller.token_store === undefined), {
   message: "Exactly one of token_env or token_store is required",
 });
@@ -225,7 +226,7 @@ export class PublicationRegistry {
     readonly publicUrl: string,
     readonly configPath: string,
     private readonly publications: readonly Publication[],
-    private readonly credentials: readonly { id: string; hash: Buffer; source: "store" | "env" }[],
+    private readonly credentials: readonly { id: string; hash: Buffer; source: "store" | "env"; allow_run_stage: boolean }[],
   ) {}
 
   authenticate(authorization: string | undefined): string | undefined {
@@ -246,6 +247,11 @@ export class PublicationRegistry {
 
   callers(): Array<{ id: string; source: "store" | "env" }> {
     return this.credentials.map(({ id, source }) => ({ id, source }));
+  }
+
+  /** True only when this caller's `allow_run_stage` is set. Missing callers are off. */
+  allowsRunStage(id: string): boolean {
+    return this.credentials.find((credential) => credential.id === id)?.allow_run_stage === true;
   }
 
   publicationConfigs(): Publication[] {
@@ -288,14 +294,15 @@ export async function loadPublicationRegistry(
   requireUnique(config.callers.map((caller) => caller.id), "caller ID");
   requireUnique(config.publications.map((publication) => publication.id), "publication ID");
   const credentials = config.callers.map((caller) => {
+    const allow_run_stage = caller.allow_run_stage;
     if (caller.token_store !== undefined) {
       const stored = secrets.get(caller.token_store);
       if (!stored || !/^[0-9a-f]{64}$/.test(stored)) throw new Error(`Caller ${caller.id} has no token digest in the credential store entry ${caller.token_store}`);
-      return { id: caller.id, hash: Buffer.from(stored, "hex"), source: "store" as const };
+      return { id: caller.id, hash: Buffer.from(stored, "hex"), source: "store" as const, allow_run_stage };
     }
     const token = env[caller.token_env!];
     if (!token || /\s/.test(token) || token.length < 32) throw new Error(`Caller ${caller.id} requires a token of at least 32 characters in ${caller.token_env}`);
-    return { id: caller.id, hash: digest(token), source: "env" as const };
+    return { id: caller.id, hash: digest(token), source: "env" as const, allow_run_stage };
   });
   requireUnique(credentials.map((credential) => credential.hash.toString("hex")), "caller credential");
   const publications: Publication[] = [];

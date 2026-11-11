@@ -13,7 +13,6 @@ The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutuk
 
 ```bash
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   ghcr.io/tejasghutukade/stageflow:0.55 \
@@ -22,13 +21,12 @@ docker run --rm --name stageflow \
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Go to **Settings → Providers** and connect a model, then **New pipeline** on the Pipelines page. Pipelines you save in the console live on the `stageflow-data` volume, under `/data`.
 
-The process inside the container binds `0.0.0.0`, which is what Docker port publish needs. The `-p` address keeps the port on this machine, and `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` lets it start without a bearer. Do not publish the port on `0.0.0.0` with that flag set. Pass `sf ui` because the image command is `sf mcp`.
+The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. The container logs print `Control token: <token>`. Copy that line into the console when it asks. Do not publish the port on `0.0.0.0`. Pass `sf ui` because the image command is `sf mcp`.
 
 To browse a project that is already on the machine, mount it and register that path:
 
 ```bash
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -e STAGEFLOW_ENSURE_PROJECT_ROOTS=/project \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \

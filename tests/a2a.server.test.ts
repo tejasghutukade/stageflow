@@ -197,7 +197,29 @@ describe("A2A invocation", () => {
     ).rejects.toThrow(/cannot be answered/);
   });
 
-  it("run_stage (ADR-0001 wildcard-access operation) reaches an inline stage over HTTP even though gated.yaml only publishes an unrelated capability", async () => {
+  it("rejects run_stage over HTTP when the caller has not opted in", async () => {
+    const { url, manager } = await host(supplierConfig, supplierAgent());
+    const client = await clientFor(url, env.PROCUREMENT_TOKEN);
+    await expect(
+      client.sendMessage({
+        tenant: "",
+        message: runStageMessage({
+          stage: {
+            id: "final_report",
+            model: "anthropic/claude-sonnet-4-5",
+            system_prompt: "Write the supplier assessment and emit the report artifact.",
+            io: { input: { schema: { type: "object" } }, output: { schema: { type: "object" } } },
+          },
+          task: { id: "t-denied", goal: "assess", input: { supplier: "Northstar" } },
+        }),
+        configuration: undefined,
+        metadata: undefined,
+      }),
+    ).rejects.toThrow(/run_stage is off for this caller/);
+    expect(manager.getActiveCount()).toBe(0);
+  });
+
+  it("run_stage reaches an inline stage over HTTP when the caller opts in, even though gated.yaml only publishes an unrelated capability", async () => {
     const { url } = await host(gatedConfig, supplierAgent());
     const client = await clientFor(url, env.PROCUREMENT_TOKEN);
     const sent = (await client.sendMessage({

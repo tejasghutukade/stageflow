@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { createRunStore } from "../src/runstore/createStore.js";
+import { buildStageEnvironment } from "../src/runtime/stageEnvironment.js";
+import { startMcpServer } from "../src/server/mcpHost.js";
 import {
   assertBindAllowed,
   authenticateBearer,
   BindRefusedError,
   clientAuthorizationHeaders,
+  CONTROL_TOKEN_FILENAME,
+  enforceBearerAuth,
+  ensureHostControlToken,
+  generatedControlTokenLines,
   hasDriveToken,
   loadControlTokens,
   refuseBindMessage,
@@ -70,6 +79,108 @@ describe("authenticateBearer", () => {
   });
 });
 
+describe("ensureHostControlToken", () => {
+  it("writes a 0600 token the API requires and the stage environment does not see", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-gen-token-"));
+    const env: NodeJS.ProcessEnv = { STAGEFLOW_HOME: dir, PATH: "/usr/bin" };
+    const ensured = ensureHostControlToken(env);
+    expect(ensured.generated).toBe(true);
+    expect(ensured.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(ensured.filePath).toBe(path.join(dir, CONTROL_TOKEN_FILENAME));
+    expect(env.STAGEFLOW_CONTROL_TOKEN_FILE).toBe(ensured.filePath);
+    expect(generatedControlTokenLines(ensured)).toEqual([
+      `Control token: ${ensured.token}`,
+      `Control token file: ${ensured.filePath}`,
+    ]);
+    const info = await stat(ensured.filePath!);
+    expect(info.mode & 0o777).toBe(0o600);
+
+    const tokens = loadControlTokens(env);
+    const denied = enforceBearerAuth(
+      tokens,
+      { headers: {} } as IncomingMessage,
+      fakeRes(),
+      "read",
+    );
+    expect(denied.ok).toBe(false);
+    const allowed = enforceBearerAuth(
+      tokens,
+      { headers: { authorization: `Bearer ${ensured.token}` } } as IncomingMessage,
+      fakeRes(),
+      "drive",
+    );
+    expect(allowed.ok).toBe(true);
+
+    const stage = buildStageEnvironment({ hostEnv: env });
+    expect(stage.env.STAGEFLOW_CONTROL_TOKEN).toBeUndefined();
+    expect(stage.env.STAGEFLOW_CONTROL_TOKEN_FILE).toBeUndefined();
+    expect(JSON.stringify(stage.env)).not.toContain(ensured.token);
+    expect(JSON.stringify(stage.env)).not.toContain(ensured.filePath);
+
+    const root = await mkdtemp(path.join(tmpdir(), "sf-gen-api-"));
+    const store = createRunStore({ rootDir: root });
+    const started = await startMcpServer({
+      agent: scriptedFakeAgent([]),
+      cwd: root,
+      rootDir: root,
+      store,
+      port: 0,
+      mcpStateless: true,
+      controlTokens: tokens,
+    });
+    try {
+      expect((await fetch(`${started.url}/api/health`)).status).toBe(401);
+      expect((await fetch(`${started.url}/livez`)).status).toBe(200);
+      expect((await fetch(`${started.url}/readyz`)).status).toBe(200);
+      const authed = await fetch(`${started.url}/api/health`, {
+        headers: { Authorization: `Bearer ${ensured.token}` },
+      });
+      expect(authed.status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        started.server.close((err) => (err ? reject(err) : resolve()));
+      });
+      await store.close();
+    }
+  });
+
+  it("does not generate or print when the operator already set a token", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-op-token-"));
+    const env: NodeJS.ProcessEnv = {
+      STAGEFLOW_HOME: dir,
+      STAGEFLOW_CONTROL_TOKEN: DRIVE,
+    };
+    const ensured = ensureHostControlToken(env);
+    expect(ensured).toEqual({ generated: false });
+    expect(generatedControlTokenLines(ensured)).toEqual([]);
+    expect(env.STAGEFLOW_CONTROL_TOKEN_FILE).toBeUndefined();
+    await expect(stat(path.join(dir, CONTROL_TOKEN_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("does not generate when unauthenticated bind is explicitly opted in", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-allow-bind-"));
+    const env: NodeJS.ProcessEnv = {
+      STAGEFLOW_HOME: dir,
+      STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND: "1",
+    };
+    expect(ensureHostControlToken(env).generated).toBe(false);
+    await expect(stat(path.join(dir, CONTROL_TOKEN_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
+
+function fakeRes(): ServerResponse {
+  return {
+    writeHead() {
+      return this;
+    },
+    end() {},
+  } as unknown as ServerResponse;
+}
+
 describe("resolveClientBearerToken", () => {
   it("prefers drive for any method and falls back to read only for GET", () => {
     expect(
@@ -91,6 +202,26 @@ describe("resolveClientBearerToken", () => {
       clientAuthorizationHeaders("DELETE", { STAGEFLOW_CONTROL_TOKEN: DRIVE }),
     ).toEqual({ Authorization: `Bearer ${DRIVE}` });
     expect(clientAuthorizationHeaders("GET", {})).toEqual({});
+  });
+
+  it("reads the control-token file when STAGEFLOW_CONTROL_TOKEN is unset", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-cli-token-"));
+    await writeFile(path.join(dir, CONTROL_TOKEN_FILENAME), `${DRIVE}\n`, {
+      mode: 0o600,
+    });
+    const env = { STAGEFLOW_HOME: dir, STAGEFLOW_READ_TOKEN: READ };
+    expect(resolveClientBearerToken("POST", env)).toBe(DRIVE);
+    expect(resolveClientBearerToken("GET", env)).toBe(DRIVE);
+    expect(clientAuthorizationHeaders("DELETE", env)).toEqual({
+      Authorization: `Bearer ${DRIVE}`,
+    });
+    expect(
+      resolveClientBearerToken("POST", {
+        STAGEFLOW_HOME: dir,
+        STAGEFLOW_CONTROL_TOKEN: OTHER,
+      }),
+    ).toBe(OTHER);
+    expect(resolveClientBearerToken("POST", {})).toBeUndefined();
   });
 });
 

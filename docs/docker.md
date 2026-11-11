@@ -11,7 +11,7 @@ See also [Data directory](data-directory.md), [CLI reference](cli-reference.md),
 
 ## Stage sandbox in Compose
 
-The shipped [`docker-compose.yml`](../docker-compose.yml) sets `STAGEFLOW_STAGE_CONTAINER_IMAGE=stageflow-bash:local` and mounts `/var/run/docker.sock`. `read`, `write`, `edit`, and `bash` then run in a sibling container built from [`docker/Dockerfile.bash-sandbox`](../docker/Dockerfile.bash-sandbox). The Stageflow process still runs as the `stageflow` user. Compose starts that service as root only so [`docker/stageflow-entry.sh`](../docker/stageflow-entry.sh) can join the socket's group, then drops to `stageflow`. There is no `privileged` and no extra capabilities.
+The shipped [`docker-compose.yml`](../docker-compose.yml) sets `STAGEFLOW_STAGE_CONTAINER_IMAGE=stageflow-bash:local` and mounts `/var/run/docker.sock`. Mounting `/var/run/docker.sock` is root on the host: anyone who can use that socket can start containers as root on the machine. `read`, `write`, `edit`, and `bash` then run in a sibling container built from [`docker/Dockerfile.bash-sandbox`](../docker/Dockerfile.bash-sandbox). The Stageflow process still runs as the `stageflow` user. Compose starts that service as root only so [`docker/stageflow-entry.sh`](../docker/stageflow-entry.sh) can join the socket's group, then drops to `stageflow`. There is no `privileged` and no extra capabilities.
 
 That mount lets this container create and remove those sandbox containers on the host daemon. A plain `docker run` of the published image does not set the variable and does not mount the socket, so sandboxing stays off. To run Compose the same way, delete `STAGEFLOW_STAGE_CONTAINER_IMAGE` and the socket mount.
 
@@ -25,7 +25,7 @@ The compose service runs `command: ["sf", "ui"]` on purpose: operator console **
 
 ### Checklist
 
-1. **No control token for this compose file.** It publishes `127.0.0.1:3847:3847` and sets `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs, and with the opt-in it starts without a bearer. Keep the publish address on `127.0.0.1`. To require a token again, remove the opt-in and set `STAGEFLOW_CONTROL_TOKEN` (≥32 characters, no whitespace).
+1. **Control token in the container logs.** The compose file publishes `127.0.0.1:3847:3847`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. Keep the publish address on `127.0.0.1`. On start, `sf ui` prints `Control token: <token>` in the container logs (`docker compose logs`). Copy that line into the console when it asks. The token is not in the page or the URL. To choose the secret yourself, set `STAGEFLOW_CONTROL_TOKEN` (≥32 characters, no whitespace) or `STAGEFLOW_CONTROL_TOKEN_FILE`; the Host then uses that value and does not print it.
 
 2. **Create `.env` from [`.env.example`](../.env.example)** at the repo root. Fill provider and GitHub vars as needed (see below). Compose loads `.env` automatically; do not commit `.env`.
 
@@ -43,16 +43,15 @@ The compose service runs `command: ["sf", "ui"]` on purpose: operator console **
    # → {"ok":true,"status":"live",…}
    ```
 
-5. **Open the console** at [http://127.0.0.1:3847](http://127.0.0.1:3847). With the shipped compose file, API calls do not need a bearer.
+5. **Open the console** at [http://127.0.0.1:3847](http://127.0.0.1:3847). Copy `Control token: <token>` from the container logs into the console prompt. API calls need that bearer. `/livez` and `/readyz` stay open.
 
-Prefer a file secret when the token must not appear in the process environment on the host:
+The generated token is already a mode `0600` file at `/data/control-token` inside the container, and it is printed once in the logs. To choose the secret yourself and keep it out of the process environment, bind-mount a file:
 
 ```bash
 openssl rand -hex 32 > .stageflow-control-token
 chmod 600 .stageflow-control-token
-# Point STAGEFLOW_CONTROL_TOKEN_FILE at that path inside the container
-# (e.g. bind-mount the file and set STAGEFLOW_CONTROL_TOKEN_FILE=/run/secrets/…),
-# or pass STAGEFLOW_CONTROL_TOKEN from `.env` as above.
+# Bind-mount that file and set STAGEFLOW_CONTROL_TOKEN_FILE to its path
+# inside the container. The Host does not print a token you set yourself.
 ```
 
 ### Provider boot (Compose)
@@ -125,14 +124,13 @@ This starts the console on this machine. The `stageflow-data` volume keeps provi
 
 ```bash
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   ghcr.io/tejasghutukade/stageflow:0.55 \
   sf ui
 ```
 
-Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Keep the published port on `127.0.0.1`. The allow flag is only for that localhost publish: the process inside the container binds `0.0.0.0`.
+Open [http://127.0.0.1:3847](http://127.0.0.1:3847). The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`. The container logs print `Control token: <token>`. Copy that into the console prompt.
 
 Prefer a digest pin and a control token when the port is not limited to this machine:
 

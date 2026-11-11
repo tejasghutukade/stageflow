@@ -6,6 +6,7 @@ import { ensureGlobalHome } from "../project/globalHome.js";
 import {
   assertBindAllowed,
   BindRefusedError,
+  hasDriveToken,
   loadControlTokens,
 } from "./controlToken.js";
 import { DEFAULT_PORT } from "./createHttpHost.js";
@@ -169,7 +170,14 @@ export async function ensureGlobalService(
 
   try {
     const bind = resolveListenHost({ env });
-    assertBindAllowed(bind, loadControlTokens(env));
+    const tokens = loadControlTokens(env);
+    // The spawned `sf mcp` writes a token before it binds. Do not refuse here,
+    // and do not set STAGEFLOW_CONTROL_TOKEN_FILE on this parent process.
+    const childGeneratesToken =
+      !hasDriveToken(tokens) && env.STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND !== "1";
+    if (!childGeneratesToken) {
+      assertBindAllowed(bind, tokens, env);
+    }
   } catch (err) {
     if (err instanceof BindRefusedError) {
       return {

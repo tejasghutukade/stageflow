@@ -47,7 +47,7 @@ The list shows each caller and the published pipelines it may call. **Revoke…*
 - **Files the other agent can download**: pick from the files that stage declares.
 - **Stages the caller may answer**: stages whose only question is free text. None are selected unless you tick them.
 - **Include the result stage's output in the reply**: on by default.
-- **Callers that may use it**: tick callers. Nothing is exposed until you tick one.
+- **Callers that may use it**: tick callers. Nothing is exposed until you tick one. `run_stage` is the same idea: it stays off until `allow_run_stage` is set on that caller.
 - **Preview contract** shows what the other agent will see before you press **Publish**.
 
 The same rules the Host applies when it loads a publication decide which stages and files are offered, so a choice the dialog offers is one the Host accepts.

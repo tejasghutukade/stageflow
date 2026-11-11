@@ -1020,6 +1020,7 @@ Prints:
 
 - Operator console URL (default `http://127.0.0.1:3847`; wildcard binds advertise loopback)
 - MCP endpoint URL (`…/mcp`)
+- When no control token was set: `Control token: <token>` and `Control token file: <path>` (once; not printed when you set `STAGEFLOW_CONTROL_TOKEN` or `_FILE`)
 
 Opens the default browser unless `--no-open` / `STAGEFLOW_NO_OPEN` is set. Prefer **`sf mcp`** as the headless / container entrypoint; `--no-open` only makes `sf ui` usable without a browser.
 
@@ -1029,7 +1030,7 @@ On first SIGTERM/SIGINT the Host drains: stop accepting new starts, signal activ
 
 `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` is a test/debug escape hatch that disables MCP sessions. See [MCP](mcp.md).
 
-**Access control.** Non-loopback binds require `STAGEFLOW_CONTROL_TOKEN` (or `_FILE`); otherwise the process refuses to start (exit `1`) before `listen`. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` skips that refusal. The shipped Compose file sets it and publishes `127.0.0.1:3847:3847` for local try. Do not set it when the port is reachable beyond this machine. See [MCP — access control](mcp.md#access-control).
+**Access control.** If `STAGEFLOW_CONTROL_TOKEN` and `_FILE` are unset, `sf ui` and `sf mcp` write a new token to `$STAGEFLOW_HOME/control-token` (mode `0600`), point that process at the file, and print `Control token: <token>` once next to the listen URL. The CLI reads that file when `STAGEFLOW_CONTROL_TOKEN` is unset. A request with no `Authorization` is `401`. `/livez` and `/readyz` stay open. An `Origin` header must match the `Host` header's host and port (missing ports are 80 for http and 443 for https). Requests with no `Origin` stay allowed. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start a non-loopback bind with no token. The shipped Compose file does not set it. It publishes `127.0.0.1:3847:3847`; the process inside still binds `0.0.0.0`, and the token is in the container logs. Do not set the opt-in when the port is reachable beyond this machine. See [MCP — access control](mcp.md#access-control).
 
 Run **either** `sf ui` **or** `sf mcp` at a time — both bind the same default port (`3847`) on the shared global service, so running both together is a port collision, not a store conflict (they already share the same global store). `sf run` / `sf run-stage` / mutating `sf runs` verbs also auto-start this service headlessly if nothing is listening yet, so starting `sf ui` first avoids racing a later headless auto-start for the port.
 
@@ -1117,10 +1118,10 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_LEGACY_YAML` | Only if you still have pre-`io` catalogs: load adapter for legacy authoring keys (on by default). Set `0` to reject legacy authoring keys; [`sf migrate-yaml`](#sf-migrate-yaml) still reads legacy |
 | `STAGEFLOW_MCP_STATELESS` | Disable MCP sessions (test/debug); same as `--mcp-stateless` |
 | `STAGEFLOW_BIND` | Listen address for `sf ui` / `sf mcp` (overridden by `--host`) |
-| `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` | Set to `1` to start a non-loopback bind with no control token. Local Compose only; leave unset when the port is reachable beyond this machine |
+| `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` | Set to `1` to start a non-loopback bind with no control token. Explicit opt-in; leave unset when the port is reachable beyond this machine |
 | `STAGEFLOW_NO_OPEN` | Skip browser open for `sf ui` (overridden by `--no-open`) |
 | `STAGEFLOW_ALLOWED_HOSTS` | Comma-separated Host/Origin allow-list (loopback always allowed); reject `*` |
-| `STAGEFLOW_CONTROL_TOKEN` / `_FILE` | Drive-scoped bearer token (min 32 chars); required for non-loopback bind; `caller_id` `default` |
+| `STAGEFLOW_CONTROL_TOKEN` / `_FILE` | Drive-scoped bearer token (min 32 chars); `caller_id` `default`. Unset at Host start writes `$STAGEFLOW_HOME/control-token` and prints it once. The CLI reads that file when this variable is unset |
 | `STAGEFLOW_CONTROL_TOKEN_<NAME>` / `_FILE` | Named drive token (`caller_id` = lowercased `NAME`; not isolation — any drive token can access any run) |
 | `STAGEFLOW_READ_TOKEN` / `_FILE` | Read-scoped bearer (`caller_id` `default`; singular — no `READ_TOKEN_<NAME>`) |
 | `STAGEFLOW_READ_TOKEN` / `_FILE` | Read-scoped bearer token (GET/HEAD `/api/*` only) |
@@ -1154,4 +1155,4 @@ Full CI-related flags and env vars: [CI / headless](ci.md).
 - [Providers](providers.md) — `sf_owned` credential storage
 - [HITL](hitl.md) — `--skip-gates`, exit `2`, and `sf runs` answer/wait
 - [MCP](mcp.md#run_stage) — `run_stage`, the tool `sf run-stage` talks to
-- [A2A](a2a.md) — publish pipelines for other agents to call over JSON-RPC, plus the wildcard-access `run_stage` operation
+- [A2A](a2a.md) — publish pipelines for other agents to call over JSON-RPC, plus `run_stage` when that caller has `allow_run_stage` (off by default)

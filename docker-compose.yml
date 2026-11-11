@@ -1,10 +1,11 @@
 # Local try Host — see docs/docker.md.
 #
-# Published on 127.0.0.1 only. STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND skips the
-# control token so this machine can open the console without a bearer. The
-# process still binds 0.0.0.0 inside the container; that is what Docker port
-# publish needs. Remove the opt-in and set STAGEFLOW_CONTROL_TOKEN before
-# publishing this port beyond localhost.
+# Published on 127.0.0.1 only. The process still binds 0.0.0.0 inside the
+# container; that is what Docker port publish needs. sf ui prints
+# `Control token: …` in the container logs. Copy that into the console prompt.
+# Do not publish this port beyond localhost.
+#
+# Mounting /var/run/docker.sock is root on the host.
 #
 # Shell environment overrides values from `.env`. Empty exported GITHUB_TOKEN /
 # GH_TOKEN blanks the container token — prefer:
@@ -43,7 +44,6 @@ services:
       STAGEFLOW_HOME: /data
       STAGEFLOW_CREDENTIAL_HOME: /data
       TMPDIR: /data/tmp
-      STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND: "1"
       STAGEFLOW_MIN_FREE_DISK_BYTES: "1073741824"
       STAGEFLOW_PROVIDER_OPENROUTER_API_KEY: ${STAGEFLOW_PROVIDER_OPENROUTER_API_KEY:-${OPENROUTER_API_KEY:-}}
       STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY: ${STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY:-}
@@ -66,6 +66,7 @@ services:
       - stageflow-data:/data
       - ./examples/memory:/catalog/memory
       - ./examples/document-policy-review:/catalog/document-policy-review:ro
+      # Root on the host: this socket can start containers as root.
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 

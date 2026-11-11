@@ -71,7 +71,6 @@ Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow
 
 ```bash
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   ghcr.io/tejasghutukade/stageflow:0.55 \
@@ -80,13 +79,12 @@ docker run --rm --name stageflow \
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Connect a provider under **Settings → Providers**, then **New pipeline** on the Pipelines page. The `stageflow-data` volume keeps that state across runs.
 
-The process inside the container binds `0.0.0.0`, which is what Docker port publish needs. The `-p` address keeps the port on this machine, and the allow flag lets it start without a bearer. Do not publish the port on `0.0.0.0` with that flag set. `sf ui` is required because the image command is `sf mcp`.
+The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. The container logs print `Control token: <token>`. Copy that line into the console when it asks. Do not publish the port on `0.0.0.0`. `sf ui` is required because the image command is `sf mcp`.
 
 To show the console a project directory:
 
 ```bash
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -e STAGEFLOW_ENSURE_PROJECT_ROOTS=/project \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
@@ -246,11 +244,11 @@ Stages use project `.mcp.json` plus stage `mcp` names. See [YAML catalog — Sta
 
 ## Standalone stages
 
-Run a single stage directly, without authoring a pipeline: the MCP `run_stage` tool, the `sf run-stage` CLI command, and (over A2A, wildcard-access — see below) the `run_stage` operation all give a calling agent (Claude Code, Cursor, Codex, Pi, ...) the same capability, so it can decide what to run next itself rather than following a pre-authored DAG. Chain calls with `envelope_ref` — a reference to a previous call's stored envelope, one or many at once — instead of copying results around by hand. Full reference: [docs/mcp.md#run_stage](docs/mcp.md#run_stage), [docs/cli-reference.md#sf-run-stage](docs/cli-reference.md#sf-run-stage).
+Run a single stage directly, without authoring a pipeline: the MCP `run_stage` tool, the `sf run-stage` CLI command, and (over A2A, only when that caller has `allow_run_stage` — see below) the `run_stage` operation all give a calling agent (Claude Code, Cursor, Codex, Pi, ...) the same capability, so it can decide what to run next itself rather than following a pre-authored DAG. Chain calls with `envelope_ref` — a reference to a previous call's stored envelope, one or many at once — instead of copying results around by hand. Full reference: [docs/mcp.md#run_stage](docs/mcp.md#run_stage), [docs/cli-reference.md#sf-run-stage](docs/cli-reference.md#sf-run-stage).
 
 ## A2A
 
-MCP is for your own trusted, local tools. A2A's `invoke` operation is a second, gated door for other agents on the network: publish specific pipelines in a separate `a2a.yaml`, and outside callers invoke them over JSON-RPC with a bearer token, poll for results, and download frozen artifacts -- never touching your internal run IDs or unpublished pipelines. A2A also exposes `run_stage` (above) with deliberately no gate: any caller with a valid bearer token can run any catalog or inline stage/pipeline, the same wildcard-access default MCP and the CLI give a local harness -- a temporary trade-off, not a hardened access boundary; keep that in mind before exposing a host with real callers.
+MCP is for your own trusted, local tools. A2A's `invoke` operation is a second, gated door for other agents on the network: publish specific pipelines in a separate `a2a.yaml`, and outside callers invoke them over JSON-RPC with a bearer token, poll for results, and download frozen artifacts -- never touching your internal run IDs or unpublished pipelines. A2A `run_stage` (above) stays off until that caller has `allow_run_stage: true`. A caller without it can invoke only the pipelines published to them.
 
 Drop `a2a.yaml` next to `stageflow.yaml` and it's auto-discovered when `sf ui` starts -- no extra flag needed. `sf a2a add-caller <id>` registers a caller and generates its token. Full reference: [docs/a2a.md](docs/a2a.md).
 
@@ -304,7 +302,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/hitl.md](docs/hitl.md) | Gate kinds, `--skip-gates`, exit code `2` |
 | [docs/ci.md](docs/ci.md) | `--json`, env vars, GitHub Actions |
 | [docs/mcp.md](docs/mcp.md) | MCP tool reference, including standalone `run_stage` |
-| [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A), plus the wildcard-access `run_stage` operation |
+| [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A), plus `run_stage` when that caller has `allow_run_stage` (off by default) |
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/docker.md](docs/docker.md) | Docker Compose local try, image pull/run, backup, self-hosting |
 | [docs/operator-console.md](docs/operator-console.md) | Console navigation, command palette, shortcuts and routes; one page per area ([Inbox](docs/console-inbox.md), [Runs](docs/console-runs.md), [Agents](docs/console-agents.md), [Connections](docs/console-connections.md), [Settings](docs/console-settings.md)) |

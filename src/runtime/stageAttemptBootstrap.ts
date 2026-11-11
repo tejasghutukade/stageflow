@@ -51,6 +51,7 @@ import {
 } from "../config/resolveStageMcpServers.js";
 import { attemptArtifactsDir, attemptStreamLogPath } from "../runstore/workspaceLayout.js";
 import {
+  redactActivityEvent,
   redactBrowserActivityEvent,
   redactBrowserSecrets,
 } from "../agent/streamLogRedact.js";
@@ -788,11 +789,11 @@ export async function openStageAttempt(
         : {}),
       ...(input.sessionMode !== undefined ? { sessionMode: input.sessionMode } : {}),
       onActivity: (event) => {
-        input.onActivity?.(
+        const browserScrubbed =
           input.stage.browser !== undefined
             ? redactBrowserActivityEvent(event)
-            : event,
-        );
+            : event;
+        input.onActivity?.(redactActivityEvent(browserScrubbed));
         void streamWriter.flush();
       },
       onAssistantTextDelta: streamWriter.onDelta,

@@ -180,6 +180,32 @@ export function isHostAllowed(
   return false;
 }
 
+function defaultPortForProtocol(protocol: string): string {
+  return protocol === "https:" ? "443" : "80";
+}
+
+/**
+ * An Origin is allowed only when its host and port equal the Host header.
+ * A missing port is 80 for http and 443 for https. A loopback page on another
+ * port does not match.
+ */
+export function originMatchesHostHeader(origin: string, hostHeader: string): boolean {
+  let originUrl: URL;
+  try {
+    originUrl = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (originUrl.protocol !== "http:" && originUrl.protocol !== "https:") return false;
+  const originName = originUrl.hostname.toLowerCase();
+  const headerName = hostnameFromHostHeader(hostHeader).toLowerCase();
+  if (originName !== headerName) return false;
+  const schemePort = defaultPortForProtocol(originUrl.protocol);
+  const originPort = originUrl.port || schemePort;
+  const headerPort = portFromHostHeader(hostHeader) ?? schemePort;
+  return originPort === headerPort;
+}
+
 export function assertAllowedHttpAccess(
   allowed: AllowedHosts,
   req: IncomingMessage,
@@ -200,16 +226,19 @@ export function assertAllowedHttpAccess(
 
   const origin = req.headers.origin;
   if (typeof origin === "string" && origin.length > 0) {
-    try {
-      const originUrl = new URL(origin);
-      const originHost = originUrl.hostname;
-      const originPort = originUrl.port || undefined;
-      if (!isHostAllowed(allowed, originHost, originPort)) {
-        writeForbidden(res, { error: "Forbidden origin", host: originHost });
-        return false;
+    if (!originMatchesHostHeader(origin, hostHeader)) {
+      let originHost: string | undefined;
+      try {
+        originHost = new URL(origin).hostname;
+      } catch {
+        originHost = undefined;
       }
-    } catch {
-      writeForbidden(res, { error: "Forbidden origin" });
+      writeForbidden(
+        res,
+        originHost !== undefined && originHost.length > 0
+          ? { error: "Forbidden origin", host: originHost }
+          : { error: "Forbidden origin" },
+      );
       return false;
     }
   } else if (options.requireOrigin) {

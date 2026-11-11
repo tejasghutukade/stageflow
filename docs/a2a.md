@@ -125,7 +125,7 @@ publications:
 - Only listed publications are served — nothing is auto-published from the catalog.
 - `results.stage` must be a single, non-cloned terminal stage. Its declared artifacts must have a matching `artifact_declared` pre-emit check in the pipeline.
 - `caller_answerable_stages` may only name stages whose only gate kind is `free_text`. Mixed or `confirm`/`multi_question`/`artifact_backed` gates stay operator-only — split a stage before exposing it if it mixes clarification with approval.
-- A caller has exactly one of `token_env` (the named environment variable, read when the configuration is loaded, at least 32 characters) or `token_store` (a credential store entry holding the SHA-256 digest of a Host-generated token). A token never appears in YAML, and tokens must be unique per caller.
+- A caller has exactly one of `token_env` (the named environment variable, read when the configuration is loaded, at least 32 characters) or `token_store` (a credential store entry holding the SHA-256 digest of a Host-generated token). A token never appears in YAML, and tokens must be unique per caller. `allow_run_stage` defaults to false. Set it to true to let that caller use `run_stage`. `invoke` does not read this field.
 - Every publication is pinned to a digest of its resolved pipeline body, referenced stage files, and input schema. A later edit that changes that digest fails new invocations with a drift error instead of silently running a changed recipe — republish (run `sf a2a reload`, or save the publication through the API) to pick it up.
 
 ## Request contract
@@ -168,9 +168,9 @@ Answering a caller-answerable clarification question is another `SendMessage`, a
 
 `CancelTask` always resolves with the SDK's `TaskNotCancelableError` (`-32002`) — Stageflow does not claim to stop an in-flight run. Retry with a new message under the same context for a fresh attempt.
 
-## `run_stage`: wildcard-access standalone stage/pipeline calls
+## `run_stage`: standalone stage and pipeline calls
 
-Everything above this section is the explicit-publication model: nothing is reachable unless an operator wrote it into `a2a.yaml`'s `publications` list and named the caller in `allowed_callers`. `run_stage` is a second, deliberately different operation that bypasses that model entirely. Any caller with a valid bearer token for the host (any caller in `a2a.yaml`'s `callers` list, regardless of what — if anything — is published to them) can run **any** catalog or inline stage or pipeline through it, exactly the same wildcard-access default the standalone `run_stage` MCP tool and CLI give a local harness. This is a deliberate, temporary trade-off for proving out standalone stage execution, not a hardened access-control surface — do not expose a host with real callers over an untrusted network expecting `run_stage` to be gated the way `invoke` is. A resend of a `run_stage` message under a fresh `messageId` but identical content lands on the same task/run rather than starting a duplicate, the same at-most-once guarantee `invoke` gives (see [Limits and retention](#limits-and-retention) below).
+Everything above this section is the explicit-publication model: nothing is reachable unless an operator wrote it into `a2a.yaml`'s `publications` list and named the caller in `allowed_callers`. `run_stage` does not use that list. It stays off until that caller has `allow_run_stage: true`, the same idea as ticking a caller before anything is exposed. The field defaults to false. A caller without it, or with it false, is rejected: `run_stage is off for this caller. Set allow_run_stage to enable it.` A caller who is opted in can run any catalog or inline stage or pipeline, whether or not a pipeline is published to them. A resend of a `run_stage` message under a fresh `messageId` but identical content lands on the same task/run rather than starting a duplicate, the same at-most-once guarantee `invoke` gives (see [Limits and retention](#limits-and-retention) below).
 
 The message carries one structured data part, mirroring the MCP tool's call shape:
 

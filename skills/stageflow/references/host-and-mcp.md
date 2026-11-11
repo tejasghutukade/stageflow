@@ -39,9 +39,9 @@ The well-known port is 3847 (`DEFAULT_PORT`). Override it with `--port` on `sf u
 
 `STAGEFLOW_BIND` and `--host` take an IP literal (`127.0.0.1`, `0.0.0.0`, `::`, or another address). A hostname, a URL, or `host:port` is rejected. Binding `0.0.0.0` or `::` advertises `127.0.0.1` or `[::1]` in the printed URL. The process is still reachable on the other interfaces.
 
-A non-loopback bind refuses to start unless a drive token is set, or `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. The refusal's `reason` on autostart is `bind_refused`. Use the allow flag only when the published port stays on this machine (the shipped compose file publishes `127.0.0.1:3847` and sets the flag because the process inside the container must bind `0.0.0.0`).
+If `STAGEFLOW_CONTROL_TOKEN` and `_FILE` are unset, `sf ui` and `sf mcp` write `$STAGEFLOW_HOME/control-token` (mode 0600) and print `Control token: <token>` once. A non-loopback bind then has that token. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start with no token. The shipped compose file publishes `127.0.0.1:3847` and does not set the flag. The process inside the container binds `0.0.0.0`. The token is in the container logs.
 
-Every request also passes a Host and Origin allow-list. Loopback (`localhost`, `127.0.0.1`, `::1`) is always allowed. Add other names with `STAGEFLOW_ALLOWED_HOSTS` as a comma-separated list (`console.example.com` or `console.example.com:3847`). `*` is rejected. A browser on another host needs its origin listed or the console calls fail before auth.
+Every request also passes a Host allow-list. Loopback (`localhost`, `127.0.0.1`, `::1`) is always allowed as the Host. An `Origin` header must match that Host header's host and port. A localhost page on another port is rejected. Requests with no Origin stay allowed. Add other names with `STAGEFLOW_ALLOWED_HOSTS` as a comma-separated list (`console.example.com` or `console.example.com:3847`). `*` is rejected.
 
 The probe and the CLI do not use `STAGEFLOW_BIND`. They use `STAGEFLOW_SERVICE_PORT` and `127.0.0.1`.
 
@@ -57,7 +57,7 @@ Set a token when the Host is reachable beyond this machine. Generate it with `op
 | `STAGEFLOW_READ_TOKEN_FILE` | read | Same, from a file |
 | `STAGEFLOW_CONTROL_TOKEN_<NAME>` | drive, attributed | Named caller. The CLI does not send these. MCP and HTTP do, and the run is stamped with that caller id. |
 
-The CLI sends `Authorization: Bearer <token>`. It prefers the drive token. For GET and HEAD only, it uses the read token when no drive token is set. With a loopback bind and no tokens configured, no bearer is required.
+The CLI sends `Authorization: Bearer <token>`. It prefers the drive token. When `STAGEFLOW_CONTROL_TOKEN` is unset, it reads `$STAGEFLOW_HOME/control-token`. For GET and HEAD only, it uses the read token when no drive token is set. A Host with no token and no allow-flag opt-in generates one, so API calls need that bearer. `/livez` and `/readyz` stay open.
 
 When any token is configured, a request without a matching bearer is rejected. `/mcp` always requires drive scope. Mutating `/api/*` requires drive. `GET` and `HEAD` under `/api/*` require read (a drive token also satisfies read).
 

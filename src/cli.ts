@@ -57,7 +57,10 @@ import { resolveListenHost } from "./server/listenHost.js";
 import {
   assertBindAllowed,
   BindRefusedError,
+  ensureHostControlToken,
+  generatedControlTokenLines,
   loadControlTokens,
+  type EnsuredHostControlToken,
 } from "./server/controlToken.js";
 import { resolveMcpStateless } from "./mcp/server.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "./package-meta.js";
@@ -627,6 +630,7 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "ui") {
       const listenHost = resolveListenHost({ flag: parsed.host });
+      const ensuredToken = ensureHostControlToken();
       const tokens = loadControlTokens();
       assertBindAllowed(listenHost, tokens);
       const mcpStateless = resolveMcpStateless({
@@ -650,6 +654,7 @@ async function main(argv: string[]): Promise<number> {
       }
       console.log(`Operator console: ${host.url}`);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
+      printGeneratedControlToken(ensuredToken);
       if (!isNoOpenEnabled(parsed.noOpen)) {
         openBrowser(host.url);
       }
@@ -662,6 +667,7 @@ async function main(argv: string[]): Promise<number> {
         throw new Error("--no-open is only valid with sf ui");
       }
       const listenHost = resolveListenHost({ flag: parsed.host });
+      const ensuredToken = ensureHostControlToken();
       const tokens = loadControlTokens();
       assertBindAllowed(listenHost, tokens);
       const mcpStateless = resolveMcpStateless({
@@ -677,6 +683,7 @@ async function main(argv: string[]): Promise<number> {
         controlTokens: tokens,
       });
       console.log(`MCP endpoint: ${host.mcpUrl}`);
+      printGeneratedControlToken(ensuredToken);
       const outcome = await host.shutdown.whenDrained();
       return outcome.exitCode;
     }
@@ -701,6 +708,12 @@ async function main(argv: string[]): Promise<number> {
     }
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
+  }
+}
+
+function printGeneratedControlToken(ensured: EnsuredHostControlToken): void {
+  for (const line of generatedControlTokenLines(ensured)) {
+    console.log(line);
   }
 }
 

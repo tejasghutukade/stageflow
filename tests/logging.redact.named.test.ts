@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -54,6 +54,9 @@ describe("value-based redaction", () => {
       loadNamedSecretsFromAttemptDir(attemptDir);
       expect(getNamedSecrets()).toEqual([{ name: "WORKER_TOKEN", value }]);
       expect(redactSecrets(`leak ${value}`)).toContain("[redacted:WORKER_TOKEN]");
+      await expect(
+        readFile(path.join(attemptDir, REDACTION_SECRETS_FILENAME), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       clearNamedSecretsForTests();
       await rm(attemptDir, { recursive: true, force: true });

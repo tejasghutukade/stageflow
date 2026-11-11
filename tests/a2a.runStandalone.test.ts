@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createA2aInvocations } from "../src/a2a/service.js";
+import { createA2aInvocations, RUN_STAGE_OPT_IN_ERROR } from "../src/a2a/service.js";
 import { loadPublicationRegistry } from "../src/a2a/registry.js";
 import { RateLimiter } from "../src/a2a/limits.js";
 import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
@@ -10,7 +10,7 @@ import { RunManager } from "../src/runtime/runManager.js";
 import { supplierAgent, gatedAgent } from "./fixtures/a2a/agents.js";
 
 const env = { PROCUREMENT_TOKEN: "p".repeat(40), OTHER_TOKEN: "o".repeat(40) };
-const caller = { id: "procurement" };
+const caller = { id: "procurement", allow_run_stage: true };
 
 const REQUIRED_IO = {
   io: {
@@ -102,10 +102,32 @@ const clarifyStage = {
   ...REQUIRED_IO,
 };
 
-describe("run_stage (A2A standalone stage/pipeline operation, ADR-0001)", () => {
+describe("run_stage (A2A standalone stage/pipeline operation)", () => {
+  it("rejects a caller that has not opted in, and still accepts invoke", async () => {
+    const { invocations, manager } = await setup(supplierConfig, supplierAgent());
+    const stageCall = runStage(
+      { stage: finalReportStage, task: { id: "t-off", goal: "assess", input: { supplier: "Northstar" } } },
+      "m-off",
+    );
+    await expect(invocations.send({ id: "procurement" }, stageCall)).rejects.toMatchObject({
+      category: "forbidden",
+      message: RUN_STAGE_OPT_IN_ERROR,
+    });
+    await expect(
+      invocations.send({ id: "procurement", allow_run_stage: false }, { ...stageCall, messageId: "m-off-false" }),
+    ).rejects.toMatchObject({ category: "forbidden", message: RUN_STAGE_OPT_IN_ERROR });
+    expect(manager.getActiveCount()).toBe(0);
+
+    const submitted = await invocations.send(
+      { id: "procurement" },
+      invoke("supplier_assessment", { supplier: "Northstar" }, "m-invoke-still"),
+    );
+    expect(["submitted", "working", "input-required"]).toContain(submitted.state);
+  });
+
   it("runs an inline stage directly, reaching completion even though gated.yaml only publishes an unrelated capability", async () => {
     // gated.yaml's only publication is "gated_capability" for "procurement" — final_report is
-    // not published to anyone. This is the wildcard-access bypass the operation exists for.
+    // not published to anyone. The caller still has to opt in with allow_run_stage.
     const { invocations } = await setup(gatedConfig, supplierAgent());
     const submitted = await invocations.send(
       caller,

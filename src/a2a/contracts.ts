@@ -4,6 +4,7 @@ import { z } from "zod";
 export type ApplicationErrorCategory =
   | "invalid-input"
   | "unknown-capability"
+  | "forbidden"
   | "busy"
   | "message-conflict"
   | "stale-question"
@@ -61,11 +62,10 @@ const envelopeRefSchema = z.object({
 });
 
 /**
- * ADR-0001's wildcard-access operation: invokes any catalog or inline
- * stage/pipeline directly, bypassing the `publications`/`allowed_callers`
- * allowlist that `invoke` enforces. Mirrors run_stage's MCP call shape
- * (src/mcp/catalogTools.ts) closely on purpose so a harness gets the same
- * capability over A2A that it gets over MCP/CLI.
+ * Standalone stage/pipeline call. It does not consult the
+ * `publications`/`allowed_callers` allowlist that `invoke` enforces.
+ * The caller must have `allow_run_stage` set; that defaults to off.
+ * Mirrors run_stage's MCP call shape (src/mcp/catalogTools.ts).
  */
 const runStageDataPart = z
   .object({
@@ -113,10 +113,9 @@ export type TaskFileInput = z.infer<typeof taskFileSchema>;
 export type EnvelopeRefInput = z.infer<typeof envelopeRefSchema>;
 
 /**
- * ADR-0001's wildcard-access operation. Unlike InvokeCommand, `stage`/`pipeline`
- * name the target directly (a catalog path or an inline body) instead of a
- * published capability id, so no publication/allowlist lookup is possible or
- * required to route it.
+ * Standalone stage/pipeline call. `stage`/`pipeline` name the target directly
+ * (a catalog path or an inline body) instead of a published capability id.
+ * Routing does not look up a publication; the caller still needs `allow_run_stage`.
  */
 export type RunStageCommand = {
   kind: "run_stage";

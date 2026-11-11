@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,12 @@ import { PiAgentAdapter } from "../src/agent/piAdapter.js";
 import { FakeAgent, fakeHitlResumePath, scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import type { StageHandle, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { attemptWorkspaceDir } from "../src/runstore/workspaceLayout.js";
 import { globalStageflowHome } from "../src/project/globalHome.js";
+import {
+  clearNamedSecretsForTests,
+  REDACTION_SECRETS_FILENAME,
+} from "../src/logging/namedSecrets.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import {
   appendCloneInstances,
@@ -388,6 +393,98 @@ describe("stage worker reload — inline pipeline run", () => {
     expect(outcome).toMatchObject({ ok: true });
     const execution = await store.getLatestStageExecution(run.runId, "check");
     expect(execution?.status).toBe("succeeded");
+  });
+
+  it("stores activity with registered secrets replaced and drops redaction-secrets.json after startup", async () => {
+    clearNamedSecretsForTests();
+    const secret = "sf-activity-secret-value";
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-redact-"));
+    try {
+      const store = createRunStore({ rootDir: globalStageflowHome() });
+      const run = await store.createRun({
+        pipelineId: "standalone-check",
+        inlinePipeline: {
+          id: "standalone-check",
+          stages: [
+            {
+              id: "check",
+              system_prompt: "x",
+              model: "anthropic/claude-sonnet-4-5",
+              io: {
+                input: { schema: { type: "object" } },
+                output: { schema: { type: "object" } },
+              },
+            },
+          ],
+        },
+        taskYaml: "id: t\ngoal: g\n",
+        taskId: "t",
+      });
+      await store.ensureStageWorkspace(run.runId, "check");
+      await store.createStageExecution(run.runId, "check");
+      const attemptDir = attemptWorkspaceDir(run.workspaceDir, "check", 1);
+      await mkdir(attemptDir, { recursive: true });
+      await writeFile(
+        path.join(attemptDir, REDACTION_SECRETS_FILENAME),
+        `${JSON.stringify([{ name: "ACTIVITY_TOKEN", value: secret }])}\n`,
+        { mode: 0o600 },
+      );
+
+      vi.spyOn(PiAgentAdapter.prototype, "openStage").mockImplementation(
+        (input: StageRunInput): StageHandle => ({
+          stageId: input.stageId ?? input.stage.id,
+          async next() {
+            input.onActivity?.({
+              event: "tool_start",
+              toolName: "bash",
+              argsPreview: `token=${secret}`,
+            });
+            input.onActivity?.({
+              event: "tool_end",
+              toolName: "bash",
+              resultPreview: `result ${secret}`,
+            });
+            input.onActivity?.({
+              event: "message",
+              role: "assistant",
+              text: `saw ${secret}`,
+            });
+            return {
+              status: "completed",
+              result: { ok: true, envelope: doneEnvelope },
+            };
+          },
+          deliverAnswer: vi.fn(),
+          async close() {},
+        }),
+      );
+
+      const outcome = await runStageWorker({
+        runId: run.runId,
+        stageId: "check",
+        rootDir: root,
+        mode: "run",
+      });
+
+      expect(outcome).toMatchObject({ ok: true });
+      const events = await store.listStageEvents(run.runId, "check", 1);
+      const stored = JSON.stringify(events);
+      expect(stored).not.toContain(secret);
+      expect(stored).toContain("[redacted:ACTIVITY_TOKEN]");
+      const toolStart = events.find((event) => event.event === "tool_start");
+      const toolEnd = events.find((event) => event.event === "tool_end");
+      expect(toolStart).toMatchObject({
+        argsPreview: "token=[redacted:ACTIVITY_TOKEN]",
+      });
+      expect(toolEnd).toMatchObject({
+        resultPreview: "result [redacted:ACTIVITY_TOKEN]",
+      });
+      await expect(
+        readFile(path.join(attemptDir, REDACTION_SECRETS_FILENAME), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      clearNamedSecretsForTests();
+    }
   });
 
   it("still throws a clear error when a run has neither pipeline_path nor an inline pipeline (defensive/legacy path)", async () => {

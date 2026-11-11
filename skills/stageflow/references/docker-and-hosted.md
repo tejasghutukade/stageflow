@@ -36,12 +36,11 @@ A new volume is seeded from the image, including the baked eval engine. A bind m
 
 ## Run it
 
-Local console, port published only on this machine, no token. Safe only because `127.0.0.1` is the published address. The allow flag is required: inside the container the bind is `0.0.0.0`.
+Local console, port published only on this machine. The published port stays on `127.0.0.1`. The process inside still binds `0.0.0.0`. The container logs print `Control token: <token>`. Copy that into the console prompt.
 
 ```bash
 docker pull ghcr.io/tejasghutukade/stageflow:0.55.0
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -e STAGEFLOW_PROVIDER_OPENROUTER_API_KEY \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
@@ -59,7 +58,7 @@ curl -fsS http://127.0.0.1:3847/livez
 
 The body is `{"ok":true,"status":"live"}`. `/readyz` may still be 503 for a moment.
 
-When the port is not limited to this machine, drop the allow flag, set a token, and publish deliberately:
+When the port is not limited to this machine, set a token yourself and publish deliberately:
 
 ```bash
 export STAGEFLOW_CONTROL_TOKEN="$(openssl rand -hex 32)"
@@ -90,7 +89,6 @@ services:
     ports:
       - "127.0.0.1:3847:3847"
     environment:
-      STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND: "1"
       STAGEFLOW_PROVIDER_OPENROUTER_API_KEY: ${STAGEFLOW_PROVIDER_OPENROUTER_API_KEY:-}
       STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY: ${STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
@@ -109,13 +107,13 @@ Shell environment overrides the env file. That is compose interpolation, a diffe
 env -u GITHUB_TOKEN -u GH_TOKEN docker compose up -d
 ```
 
-Do not pass `--build`. There is nothing to build. Remove `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` and set `STAGEFLOW_CONTROL_TOKEN` before you change the port mapping away from `127.0.0.1`.
+Do not pass `--build`. There is nothing to build. Set `STAGEFLOW_CONTROL_TOKEN` before you change the port mapping away from `127.0.0.1`. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start with no token; do not set it when the port is reachable beyond this machine.
 
-After `curl -fsS http://127.0.0.1:3847/livez` returns 200, connect the harness as in `host-and-mcp.md`. With the allow flag and a localhost publish, no bearer is required.
+After `curl -fsS http://127.0.0.1:3847/livez` returns 200, copy `Control token: <token>` from the container logs and connect the harness as in `host-and-mcp.md`.
 
 ## Checkout compose
 
-The Stageflow repository ships a `docker-compose.yml` that builds the image from the checkout and also builds a `stageflow-bash` sandbox. That file sets `image: ghcr.io/tejasghutukade/stageflow:local`, `command: ["sf", "ui"]`, the same localhost publish, `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`, and a Docker socket mount so stage shell tools can start sandbox containers. Use it only when the user has a checkout and asked for that sandbox. It is not the path for a customer who installed this skill into their own project.
+The Stageflow repository ships a `docker-compose.yml` that builds the image from the checkout and also builds a `stageflow-bash` sandbox. That file sets `image: ghcr.io/tejasghutukade/stageflow:local`, `command: ["sf", "ui"]`, the same localhost publish, and a Docker socket mount so stage shell tools can start sandbox containers. Mounting `/var/run/docker.sock` is root on the host. The container logs print `Control token: <token>`. Use it only when the user has a checkout and asked for that sandbox. It is not the path for a customer who installed this skill into their own project.
 
 To point that file at a published image instead of a local build, set the service `image` to `ghcr.io/tejasghutukade/stageflow:0.55.0` (or a digest) and remove the `build` key. Keep the socket mount only if you still want the sandbox.
 

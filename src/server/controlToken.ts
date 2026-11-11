@@ -1,6 +1,10 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
+import os from "node:os";
+import path from "node:path";
+import { SecretFromEnvError, readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { isLoopbackHostname } from "./allowedHosts.js";
 import { isEvalInternalPath } from "./evalInternalRoutes.js";
 import { matchLiveViewRoute } from "./liveViewPath.js";
@@ -25,6 +29,8 @@ export type ControlTokens = {
 
 const CONTROL_TOKEN_PREFIX = "STAGEFLOW_CONTROL_TOKEN_";
 const DEFAULT_CALLER_ID = "default";
+/** Generated when the operator did not set STAGEFLOW_CONTROL_TOKEN or _FILE. */
+export const CONTROL_TOKEN_FILENAME = "control-token";
 
 function digest(value: string): Buffer {
   return createHash("sha256").update(value).digest();
@@ -136,6 +142,92 @@ export function loadControlTokens(
   return { driveDigest, readDigest, namedDrive };
 }
 
+export type EnsuredHostControlToken = {
+  generated: boolean;
+  token?: string;
+  filePath?: string;
+};
+
+function operatorSetControlToken(env: NodeJS.ProcessEnv): boolean {
+  const plain = env.STAGEFLOW_CONTROL_TOKEN;
+  const file = env.STAGEFLOW_CONTROL_TOKEN_FILE;
+  return (
+    (plain !== undefined && plain.length > 0) ||
+    (file !== undefined && file.length > 0)
+  );
+}
+
+function resolveControlTokenHome(env: NodeJS.ProcessEnv): string | undefined {
+  const raw = env.STAGEFLOW_HOME?.trim();
+  if (raw) {
+    return path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(process.cwd(), raw);
+  }
+  if (env === process.env) return path.join(os.homedir(), ".stageflow");
+  return undefined;
+}
+
+function readInstalledControlToken(env: NodeJS.ProcessEnv): string | undefined {
+  const home = resolveControlTokenHome(env);
+  if (home === undefined) return undefined;
+  const filePath = path.join(home, CONTROL_TOKEN_FILENAME);
+  try {
+    return readFileSync(filePath, "utf8").replace(/\r?\n$/, "");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return undefined;
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new SecretFromEnvError(
+      `Failed to read control token file ${filePath}: ${detail}`,
+    );
+  }
+}
+
+/**
+ * On Host start, when the operator did not set a control token, write a new
+ * one to `$STAGEFLOW_HOME/control-token` (mode 0600) and point this process at
+ * it with STAGEFLOW_CONTROL_TOKEN_FILE. Stage environment construction drops
+ * that name. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` stays an explicit opt-in
+ * to start with no token.
+ */
+export function ensureHostControlToken(
+  env: NodeJS.ProcessEnv = process.env,
+): EnsuredHostControlToken {
+  if (
+    operatorSetControlToken(env) ||
+    env.STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND === "1"
+  ) {
+    return { generated: false };
+  }
+  const token = randomBytes(32).toString("hex");
+  const rawHome = env.STAGEFLOW_HOME?.trim();
+  const home = rawHome
+    ? path.isAbsolute(rawHome)
+      ? path.resolve(rawHome)
+      : path.resolve(process.cwd(), rawHome)
+    : env === process.env
+      ? globalStageflowHome()
+      : path.join(os.homedir(), ".stageflow");
+  mkdirSync(home, { recursive: true });
+  const filePath = path.join(home, CONTROL_TOKEN_FILENAME);
+  writeFileSync(filePath, token, { encoding: "utf8", mode: 0o600 });
+  chmodSync(filePath, 0o600);
+  env.STAGEFLOW_CONTROL_TOKEN_FILE = filePath;
+  return { generated: true, token, filePath };
+}
+
+/** Lines printed once next to the listen URL. Empty when the operator set the token. */
+export function generatedControlTokenLines(
+  ensured: EnsuredHostControlToken,
+): readonly string[] {
+  if (!ensured.generated || ensured.token === undefined || ensured.filePath === undefined) {
+    return [];
+  }
+  return [
+    `Control token: ${ensured.token}`,
+    `Control token file: ${ensured.filePath}`,
+  ];
+}
+
 /** Plain bearer for CLI→host calls. Drive preferred; read only for GET/HEAD. */
 export function resolveClientBearerToken(
   method: string,
@@ -144,6 +236,10 @@ export function resolveClientBearerToken(
   const driveRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_CONTROL_TOKEN");
   if (driveRaw !== undefined) {
     return validateToken(driveRaw, "STAGEFLOW_CONTROL_TOKEN");
+  }
+  const installed = readInstalledControlToken(env);
+  if (installed !== undefined && installed.length > 0) {
+    return validateToken(installed, "STAGEFLOW_CONTROL_TOKEN");
   }
   if (method === "GET" || method === "HEAD") {
     const readRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_READ_TOKEN");
