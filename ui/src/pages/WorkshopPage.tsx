@@ -43,6 +43,7 @@ import {
   validateDraftPackage,
   checkWorkshopDiskChange,
   type CatalogRoot,
+  type DraftFileHashes,
   type DraftPackagePayload,
   type DraftPlanResult,
   type DraftValidationResult,
@@ -1107,6 +1108,7 @@ export function WorkshopPage({
   } | null>(null);
   const [redesignChatWidth, setRedesignChatWidth] = useState(WORKSHOP_CHAT_DEFAULT_WIDTH);
   const diskFingerprintsRef = useRef<Record<string, string>>({});
+  const fileHashesRef = useRef<DraftFileHashes | null>(null);
   const attachmentsRef = useRef<WorkshopChatAttachment[]>([]);
   const docsContextRef = useRef(false);
   const autoApplyRef = useRef(false);
@@ -1310,6 +1312,7 @@ export function WorkshopPage({
       setSeedMessages(emptySeedMessages());
       setThreadEpoch((n) => n + 1);
       setBaseline(null);
+      fileHashesRef.current = null;
       setSavedPipelinePath(null);
       setSavedTaskPath(null);
       setSaveDestination(null);
@@ -1437,6 +1440,7 @@ export function WorkshopPage({
       setMutationCards(new Map());
       setSelectedStageId(null);
       setBaseline(null);
+      fileHashesRef.current = null;
       setSavedPipelinePath(null);
       setSavedTaskPath(null);
       setSaveDestination(null);
@@ -1475,6 +1479,7 @@ export function WorkshopPage({
       setSaveDestination(opened.destination);
       setSavedTaskPath(opened.taskPath ?? null);
       setBaseline(cloneDraft(opened.draft));
+      fileHashesRef.current = opened.fileHashes ?? null;
       setDrawerTab(initialDrawerTab(opened.draft));
       setFocusField(null);
       setAttachments([]);
@@ -1557,6 +1562,7 @@ export function WorkshopPage({
       setThreadEpoch((n) => n + 1);
       if (opts?.fromHistory) setHistoryOpen(false);
       setBaseline(null);
+      fileHashesRef.current = null;
       setSavedPipelinePath(null);
       setSavedTaskPath(null);
       setSaveDestination(null);
@@ -1594,12 +1600,14 @@ export function WorkshopPage({
             setSaveDestination(opened.destination);
             setSavedTaskPath(opened.taskPath ?? null);
             setBaseline(cloneDraft(opened.draft));
+            fileHashesRef.current = opened.fileHashes ?? null;
             setDraftOrigin(
               draftOriginFromResponse(opened) ?? fallbackDraftOrigin(),
             );
             return;
           }
           setBaseline(cloneDraft(tiedBuild.draft));
+          fileHashesRef.current = null;
           const origin =
             draftOriginFromResponse({ project_root: openRoot }) ??
             (openRoot
@@ -1793,6 +1801,7 @@ export function WorkshopPage({
         setSaveDestination(unboundOpened.destination);
         setSavedTaskPath(unboundOpened.taskPath ?? null);
         setBaseline(cloneDraft(unboundOpened.draft));
+        fileHashesRef.current = unboundOpened.fileHashes ?? null;
         const origin =
           draftOriginFromResponse(unboundOpened) ??
           draftOriginFromCatalogRoot(
@@ -1825,6 +1834,7 @@ export function WorkshopPage({
         setSavedPipelinePath(row.relativePath);
         setSaveDestination({ directory, pipelineFilename: filename });
         setBaseline(cloneDraft(draftRef.current));
+        fileHashesRef.current = null;
         const opened = await openDraftPackage(
           openDraftInput({
             path: row.relativePath,
@@ -1844,6 +1854,7 @@ export function WorkshopPage({
           if (opened.taskPath) setSavedTaskPath(opened.taskPath);
           setSaveDestination(opened.destination);
           setSavedPipelinePath(opened.pipelinePath);
+          fileHashesRef.current = opened.fileHashes ?? null;
         } else {
           const origin = draftOriginFromCatalogRoot(
             catalogRootsListRef.current,
@@ -2253,6 +2264,9 @@ export function WorkshopPage({
         pipelineFilename: filename,
         draft: draftWithCatalogFilenames(nextDraft),
         allowInvalid,
+        ...(effectiveMode === "overwrite" && fileHashesRef.current
+          ? { baseHashes: fileHashesRef.current }
+          : {}),
         ...omitDefaultWriteProjectRoot(writeWire, defaultWriteWireIdRef.current),
       };
       const result =
@@ -2273,6 +2287,7 @@ export function WorkshopPage({
       setSavedPipelinePath(result.pipelinePath);
       setSaveDestination({ directory: dest.folder, pipelineFilename: filename });
       setBaseline(cloneDraft(nextDraft));
+      if (result.fileHashes) fileHashesRef.current = result.fileHashes;
       if (result.taskPath) setSavedTaskPath(result.taskPath);
       setSaveOpen(false);
       const nextOrigin =
@@ -2736,6 +2751,7 @@ export function WorkshopPage({
                       );
                       if (opened.ok) {
                         setBaseline(cloneDraft(opened.draft));
+                        fileHashesRef.current = opened.fileHashes ?? null;
                         const origin = draftOriginFromResponse(opened);
                         if (origin) setDraftOrigin(origin);
                         else if (!packageRoot) setDraftOrigin(fallbackDraftOrigin());
@@ -2747,10 +2763,12 @@ export function WorkshopPage({
                         }
                       } else {
                         setBaseline(null);
+                        fileHashesRef.current = null;
                         setStudioError(opened.error);
                       }
                     } else {
                       setBaseline(null);
+                      fileHashesRef.current = null;
                     }
                     setShowAutosaveBanner(false);
                   })();

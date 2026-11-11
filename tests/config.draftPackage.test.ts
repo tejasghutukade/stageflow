@@ -857,6 +857,111 @@ describe("Workshop Author save tool facade", () => {
     }));
 });
 
+describe("comment-preserving overwrite", () => {
+  const pipelineYaml = [
+    "# hand-written note",
+    "id: demo",
+    "independence: persistent",
+    "include:",
+    "  - local: ./fragment.yaml",
+    "stages:",
+    "  - id: plan",
+    '    system_prompt: "Do the work"',
+    `    model: ${MODEL}`,
+    "    io:",
+    "      input:",
+    "        schema:",
+    "          type: object",
+    "      output:",
+    "        schema:",
+    "          type: object",
+    "",
+  ].join("\n");
+
+  async function seedHandWritten(root: string): Promise<string> {
+    const dir = path.join(root, "pipelines");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "fragment.yaml"), "stages: []\n", "utf8");
+    await writeFile(path.join(dir, "demo.pipeline.yaml"), pipelineYaml, "utf8");
+    return dir;
+  }
+
+  function draftWithPrompt(prompt: string): DraftPackage {
+    return {
+      pipeline: {
+        id: "demo",
+        stages: [
+          {
+            id: "plan",
+            system_prompt: prompt,
+            model: MODEL,
+            ...REQUIRED_IO,
+          },
+        ],
+      },
+    };
+  }
+
+  it("keeps a comment and unknown top-level keys when one field is saved", () =>
+    withRepo(async (root) => {
+      const dir = await seedHandWritten(root);
+      const file = path.join(dir, "demo.pipeline.yaml");
+      const before = await readFile(file, "utf8");
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+
+      const untouched = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        pipelineFilename: "demo.pipeline.yaml",
+        draft: draftWithPrompt("Do the work"),
+        baseHashes: loaded.fileHashes,
+      });
+      expect(untouched.ok).toBe(true);
+      if (!untouched.ok) return;
+      expect(await readFile(file, "utf8")).toBe(before);
+
+      const saved = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        pipelineFilename: "demo.pipeline.yaml",
+        draft: draftWithPrompt("Edited prompt"),
+        baseHashes: untouched.fileHashes,
+      });
+      expect(saved.ok).toBe(true);
+      if (!saved.ok) return;
+      const written = await readFile(file, "utf8");
+      expect(written).toContain("# hand-written note");
+      expect(written).toContain("independence: persistent");
+      expect(written).toContain("include:");
+      expect(written).toContain("local: ./fragment.yaml");
+      expect(written).toContain("Edited prompt");
+      expect(written).not.toContain("Do the work");
+    }));
+
+  it("refuses the save when the file changed on disk", () =>
+    withRepo(async (root) => {
+      const dir = await seedHandWritten(root);
+      const file = path.join(dir, "demo.pipeline.yaml");
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+
+      const external = pipelineYaml.replace("Do the work", "Edited elsewhere");
+      await writeFile(file, external, "utf8");
+      const saved = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        pipelineFilename: "demo.pipeline.yaml",
+        draft: draftWithPrompt("From the editor"),
+        baseHashes: loaded.fileHashes,
+      });
+      expect(saved.ok).toBe(false);
+      if (saved.ok) return;
+      expect(saved.status).toBe(409);
+      expect(saved.code).toBe("FILE_CHANGED");
+      expect(await readFile(file, "utf8")).toBe(external);
+    }));
+});
+
 describe("pipeline-level channels survive the draft round trip", () => {
   it("loads root channels and writes them back on overwrite", () =>
     withRepo(async (root) => {

@@ -6,6 +6,8 @@ import type { StageGateKind } from "../types/stage.js";
 import { loadPipelineOutcome } from "./loadPipeline.js";
 import type { PipelineListing } from "./listConfig.js";
 import { parseTaskFile } from "./loadTask.js";
+import { contentHash } from "./atomicWrite.js";
+import { renderCatalogYaml } from "./preserveCatalogYaml.js";
 import { stringifyTargetYaml } from "./printTargetYaml.js";
 import { readYamlObject } from "./readYamlObject.js";
 import {
@@ -51,6 +53,14 @@ export type ValidateDraftPackageOptions = {
   strict?: boolean;
 };
 
+/** Content hashes of package files, keyed by project-relative path. */
+export type DraftFileHashes = {
+  files: Record<string, string>;
+};
+
+export const DRAFT_FILE_CHANGED_MESSAGE =
+  "The file changed on disk since you opened it. Reload and try again.";
+
 export type OverwriteDraftPackageInput = {
   directory: string;
   draft: DraftPackage;
@@ -60,6 +70,11 @@ export type OverwriteDraftPackageInput = {
    * When true, skips the validate gate and writes the package as-is.
    */
   allowInvalid?: boolean;
+  /**
+   * Hashes from the last load or save. When set, a file that changed on disk
+   * refuses the overwrite instead of being replaced.
+   */
+  baseHashes?: DraftFileHashes;
 };
 
 export type CreateDraftPackageInput = OverwriteDraftPackageInput;
@@ -71,11 +86,13 @@ export type DraftPackageWriteResult =
       pipelinePath: string;
       stagePaths: string[];
       taskPath?: string;
+      fileHashes: DraftFileHashes;
     }
   | {
       ok: false;
       status: 400 | 404 | 409 | 422 | 500;
       error: string;
+      code?: "FILE_CHANGED";
       findings?: ValidationFinding[];
     };
 
@@ -99,6 +116,7 @@ export type LoadDraftPackageResult =
       destination: DraftPackageDestination;
       pipelinePath: string;
       taskPath?: string;
+      fileHashes: DraftFileHashes;
     }
   | {
       ok: false;
@@ -481,10 +499,10 @@ type DraftWriteFile = {
   content: string;
 };
 
-function resolveDraftWriteFiles(
+async function resolveDraftWriteFiles(
   projectRoot: string,
   target: ResolvedDraftWrite,
-): { ok: true; files: DraftWriteFile[] } | { ok: false; status: 400; error: string } {
+): Promise<{ ok: true; files: DraftWriteFile[] } | { ok: false; status: 400; error: string }> {
   const { packageDirectory, draft, pipelineAbsPath, pipelineRelPath } = target;
   const toRel = (abs: string) => path.relative(projectRoot, abs).replace(/\\/g, "/");
   const files: DraftWriteFile[] = [
@@ -492,7 +510,11 @@ function resolveDraftWriteFiles(
       kind: "pipeline",
       absPath: pipelineAbsPath,
       relPath: pipelineRelPath,
-      content: stringifyTargetYaml(pipelineDocument(draft.pipeline)),
+      content: renderCatalogYaml(
+        await readExisting(pipelineAbsPath),
+        pipelineDocument(draft.pipeline),
+        { keepUnknownTopLevel: true },
+      ),
     },
   ];
 
@@ -518,7 +540,9 @@ function resolveDraftWriteFiles(
       kind: "stage",
       absPath: stageAbs,
       relPath: toRel(stageAbs),
-      content: stringifyTargetYaml(stage.body),
+      content: renderCatalogYaml(await readExisting(stageAbs), stage.body, {
+        keepUnknownTopLevel: false,
+      }),
     });
   }
 
@@ -528,25 +552,71 @@ function resolveDraftWriteFiles(
       kind: "task",
       absPath: taskAbs,
       relPath: toRel(taskAbs),
-      content: stringifyTargetYaml(draft.task.body),
+      content: renderCatalogYaml(await readExisting(taskAbs), draft.task.body, {
+        keepUnknownTopLevel: false,
+      }),
     });
   }
 
   return { ok: true, files };
 }
 
+async function fileContentHash(absPath: string): Promise<string | null> {
+  try {
+    return contentHash(await readFile(absPath));
+  } catch {
+    return null;
+  }
+}
+
+async function hashesForFiles(files: readonly DraftWriteFile[]): Promise<DraftFileHashes> {
+  const out: Record<string, string> = {};
+  for (const file of files) {
+    const hash = await fileContentHash(file.absPath);
+    if (hash !== null) out[file.relPath] = hash;
+  }
+  return { files: out };
+}
+
+async function refuseIfFilesChanged(
+  files: readonly DraftWriteFile[],
+  baseHashes: DraftFileHashes | undefined,
+): Promise<Extract<DraftPackageWriteResult, { ok: false }> | null> {
+  if (!baseHashes) return null;
+  for (const file of files) {
+    const expected = baseHashes.files[file.relPath];
+    if (expected === undefined) continue;
+    const current = await fileContentHash(file.absPath);
+    if (current !== expected) {
+      return {
+        ok: false,
+        status: 409,
+        code: "FILE_CHANGED",
+        error: DRAFT_FILE_CHANGED_MESSAGE,
+      };
+    }
+  }
+  return null;
+}
+
 async function writeDraftPackageFiles(
   projectRoot: string,
   target: ResolvedDraftWrite,
   allowInvalid: boolean | undefined,
+  baseHashes?: DraftFileHashes,
 ): Promise<DraftPackageWriteResult> {
   const { packageDirectory, draft, pipelineRelPath } = target;
-  const resolved = resolveDraftWriteFiles(projectRoot, target);
+  const resolved = await resolveDraftWriteFiles(projectRoot, target);
   if (!resolved.ok) return resolved;
+
+  const conflict = await refuseIfFilesChanged(resolved.files, baseHashes);
+  if (conflict) return conflict;
 
   try {
     await mkdir(packageDirectory, { recursive: true });
     for (const file of resolved.files) {
+      const existing = await readExisting(file.absPath);
+      if (existing !== null && existing === file.content) continue;
       await mkdir(path.dirname(file.absPath), { recursive: true });
       await writeFile(file.absPath, file.content, "utf8");
     }
@@ -587,6 +657,7 @@ async function writeDraftPackageFiles(
       pipelinePath: pipelineRelPath,
       stagePaths,
       ...(taskPath !== undefined ? { taskPath } : {}),
+      fileHashes: await hashesForFiles(resolved.files),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -642,7 +713,12 @@ export async function overwriteDraftPackage(
   );
   if (blocked) return blocked;
 
-  return writeDraftPackageFiles(projectRoot, resolved.value, input.allowInvalid);
+  return writeDraftPackageFiles(
+    projectRoot,
+    resolved.value,
+    input.allowInvalid,
+    input.baseHashes,
+  );
 }
 
 export async function createDraftPackage(
@@ -743,7 +819,7 @@ export async function planDraftPackage(
 ): Promise<({ ok: true } & DraftPlanResult) | { ok: false; status: 400; error: string }> {
   const resolved = resolveDraftWriteTarget(projectRoot, input);
   if (!resolved.ok) return resolved;
-  const writeFiles = resolveDraftWriteFiles(projectRoot, resolved.value);
+  const writeFiles = await resolveDraftWriteFiles(projectRoot, resolved.value);
   if (!writeFiles.ok) return writeFiles;
 
   const files: DraftPlanFile[] = [];
@@ -848,7 +924,32 @@ export function parseCreateDraftPackageBody(
   };
 }
 
-export const parseOverwriteDraftPackageBody = parseCreateDraftPackageBody;
+export function parseOverwriteDraftPackageBody(
+  body: unknown,
+): OverwriteDraftPackageInput | { ok: false; status: 400; error: string } {
+  const parsed = parseCreateDraftPackageBody(body);
+  if ("ok" in parsed) return parsed;
+  if (!isPlainObject(body) || body.baseHashes === undefined) return parsed;
+  const baseHashes = parseDraftFileHashes(body.baseHashes);
+  if ("ok" in baseHashes) return baseHashes;
+  return { ...parsed, baseHashes };
+}
+
+function parseDraftFileHashes(
+  value: unknown,
+): DraftFileHashes | { ok: false; status: 400; error: string } {
+  if (!isPlainObject(value) || !isPlainObject(value.files)) {
+    return { ok: false, status: 400, error: "baseHashes.files must be an object" };
+  }
+  const files: Record<string, string> = {};
+  for (const [key, hash] of Object.entries(value.files)) {
+    if (typeof hash !== "string" || hash.length === 0) {
+      return { ok: false, status: 400, error: "baseHashes.files values must be hashes" };
+    }
+    files[key.replace(/\\/g, "/")] = hash;
+  }
+  return { files };
+}
 
 export type OpenDraftPackageInput = {
   path: string;
@@ -999,6 +1100,9 @@ export async function loadDraftPackage(
   const pipelinePath = path
     .relative(projectRoot, pipelineAbs)
     .replace(/\\/g, "/");
+  const fileHashes: Record<string, string> = {
+    [pipelinePath]: contentHash(await readFile(pipelineAbs)),
+  };
 
   const pipelineStages = raw.stages.filter(isPlainObject) as Array<
     Record<string, unknown>
@@ -1033,6 +1137,8 @@ export async function loadDraftPackage(
     }
     try {
       const body = await readYamlObject(stageAbs);
+      const stageRel = path.relative(projectRoot, stageAbs).replace(/\\/g, "/");
+      fileHashes[stageRel] = contentHash(await readFile(stageAbs));
       stageArtifacts.push({ path: uses, body });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1070,6 +1176,9 @@ export async function loadDraftPackage(
     }
     draft.task = loaded.task;
     attachedTaskPath = loaded.taskPath;
+    fileHashes[attachedTaskPath] = contentHash(
+      await readFile(path.resolve(projectRoot, attachedTaskPath)),
+    );
   }
 
   const migrated = hoistUsesWrapperSkills(draft);
@@ -1080,5 +1189,6 @@ export async function loadDraftPackage(
     destination: { directory, pipelineFilename },
     pipelinePath,
     ...(attachedTaskPath !== undefined ? { taskPath: attachedTaskPath } : {}),
+    fileHashes: { files: fileHashes },
   };
 }

@@ -50,7 +50,10 @@ export async function startMcpServer(
 ): Promise<HttpHostEnvelope & { shutdown: ShutdownController }> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
-  const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
+  const boot = await bootstrapStageflowHost({
+    ...(options as StageflowHostOptions),
+    listen: { host, port },
+  });
   const { cwd, agentDir, rootDir } = boot;
   const providerAuthContext = boot.providerAuthContext;
   const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
@@ -87,6 +90,7 @@ export async function startMcpServer(
     requestTimeoutMs: options.requestTimeoutMs,
     maxConnections: options.maxConnections,
     routes,
+    ...(boot.boundPort !== undefined ? { bound: boot.boundPort } : {}),
   });
   boot.setEvalCallbackBase?.(envelope.url);
   shutdown = installShutdownController({

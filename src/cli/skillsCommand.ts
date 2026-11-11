@@ -7,6 +7,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rm,
   stat,
   writeFile,
@@ -116,6 +117,60 @@ function parseSkillsArgs(args: string[]): ParsedSkillsArgs {
 
 function skillsDirForRoot(projectRoot: string): string {
   return path.join(projectRoot, ".pi", "skills");
+}
+
+/** Single path segment: letters, numbers, dot, underscore, hyphen. Not empty, `.`, or `..`. */
+const SAFE_SKILL_NAME = /^[A-Za-z0-9._-]+$/;
+
+export function assertSafeSkillName(name: string): void {
+  if (name.length === 0 || name === "." || name === ".." || !SAFE_SKILL_NAME.test(name)) {
+    throw new Error(`invalid skill name "${name}"`);
+  }
+}
+
+function skillDestStaysInside(realSkillsDir: string, candidate: string): boolean {
+  const relative = path.relative(realSkillsDir, candidate);
+  return (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+async function resolveExistingRealPath(target: string): Promise<string> {
+  try {
+    return await realpath(target);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw err;
+    const parent = path.dirname(target);
+    if (parent === target) throw err;
+    return path.resolve(await realpath(parent), path.basename(target));
+  }
+}
+
+async function resolveSkillInstallDest(projectRoot: string, skillName: string): Promise<string> {
+  assertSafeSkillName(skillName);
+  const skillsDir = skillsDirForRoot(projectRoot);
+  await mkdir(skillsDir, { recursive: true });
+  const realSkillsDir = await realpath(skillsDir);
+  const destRoot = path.resolve(realSkillsDir, skillName);
+  const realDest = await resolveExistingRealPath(destRoot);
+  if (!skillDestStaysInside(realSkillsDir, realDest)) {
+    throw new Error("skill destination escapes the skills directory");
+  }
+  return destRoot;
+}
+
+function warnBeforeSkillScript(io: SkillsCommandIo, scriptPath: string): void {
+  const line = `warning: skill install is about to run ${scriptPath}`;
+  if (io.error === defaultIo.error) {
+    io.error(line);
+    return;
+  }
+  console.error(line);
+  io.error(line);
 }
 
 function shouldCopyRelative(rel: string): boolean {
@@ -412,6 +467,7 @@ async function resolveInstallSource(
       throw new Error("source path not found");
     }
     const skillName = input.skillName ?? inferSkillNameFromPath(input.fromPath);
+    assertSafeSkillName(skillName);
     return { sourceRoot, skillName };
   }
 
@@ -436,8 +492,10 @@ async function resolveInstallSource(
   const extractDir = await mkdtemp(path.join(tmpdir(), "sf-skill-zip-"));
   await extractZipBuffer(zipBytes, extractDir);
   const lookupName = input.skillName ?? inferredZipName ?? "skill";
+  assertSafeSkillName(lookupName);
   const sourceRoot = await findSkillRoot(extractDir, lookupName);
   const skillName = input.skillName ?? inferredZipName ?? path.basename(sourceRoot);
+  assertSafeSkillName(skillName);
   return {
     sourceRoot,
     skillName,
@@ -486,6 +544,9 @@ export async function installProjectSkill(
 ): Promise<InstallProjectSkillResult> {
   const io: SkillsCommandIo = { ...defaultIo, ...input.io };
   try {
+    if (input.skillName !== undefined) {
+      assertSafeSkillName(input.skillName);
+    }
     const resolved = await resolveInstallSource(
       {
         fromPath: input.fromPath,
@@ -497,11 +558,13 @@ export async function installProjectSkill(
       io,
     );
     try {
-      const destRoot = path.join(skillsDirForRoot(input.projectRoot), resolved.skillName);
+      assertSafeSkillName(resolved.skillName);
+      const destRoot = await resolveSkillInstallDest(input.projectRoot, resolved.skillName);
       await copySkillTree(resolved.sourceRoot, destRoot);
 
       const doctorScript = path.join(destRoot, "bin", `${resolved.skillName}.mjs`);
       if (await pathExists(doctorScript)) {
+        warnBeforeSkillScript(io, doctorScript);
         const doctorCode = io.runDoctor(doctorScript, input.projectRoot);
         if (doctorCode !== 0) {
           io.error("skill doctor failed");

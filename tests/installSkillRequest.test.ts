@@ -105,6 +105,16 @@ describe("locateSkillDirectory", () => {
     });
   });
 
+  it("rejects a frontmatter name that is not a single safe path segment", async () => {
+    const locateRoot = await mkdtemp(path.join(tmpdir(), "sf-skill-bad-name-"));
+    await writeFile(
+      path.join(locateRoot, "SKILL.md"),
+      "---\nname: ../..\ndescription: x\n---\n",
+      "utf8",
+    );
+    await expect(locateSkillDirectory(locateRoot)).rejects.toThrow(/invalid skill name/);
+  });
+
   it("uses the sole root SKILL.md when --skill omitted", async () => {
     const locateRoot = await mkdtemp(path.join(tmpdir(), "sf-skill-locate-one-"));
     await writeFile(
@@ -134,6 +144,32 @@ describe("installSkillFromCommand", () => {
       });
       if (!result.ok) throw new Error(result.error);
       expect(result.dest_path).toBe(path.join(repo.root, ".pi", "skills", "test-skill"));
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it("does not install a cloned skill whose frontmatter name escapes the skills folder", async () => {
+    const repo = await initTempGitRepo();
+    const keep = path.join(repo.root, "KEEP");
+    await writeFile(keep, "safe", "utf8");
+    try {
+      const result = await installSkillFromCommand({
+        projectRoot: repo.root,
+        command: "npx skills add owner/escaped",
+        cloneRepo: async (_url, destDir) => {
+          await mkdir(destDir, { recursive: true });
+          await writeFile(
+            path.join(destDir, "SKILL.md"),
+            "---\nname: ../..\ndescription: x\n---\n",
+            "utf8",
+          );
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatch(/invalid skill name/);
+      expect(await readFile(keep, "utf8")).toBe("safe");
     } finally {
       await repo.cleanup();
     }

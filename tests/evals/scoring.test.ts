@@ -53,10 +53,20 @@ describe("scoreResult", () => {
   it("no scored graders: 1 if must-pass pass, else 0", () => {
     expect(run([g("m", { mustPass: true })], [grade("m", 1, 1)])).toMatchObject({ score: 1, passed: true });
     expect(run([g("m", { mustPass: true })], [grade("m", 0, 0)])).toMatchObject({ score: 0, passed: false });
-    expect(run([g("a")], [{ graderId: "a", status: "error", passed: null, score: null }])).toMatchObject({
-      score: 1,
-      hasGraderErrors: true,
-    });
+  });
+
+  it("all grader errors leave no score and fail", () => {
+    // Hand-computed: weights 3 and 1, both grades error, so both are dropped.
+    // weightedSum = 0, weightTotal = 0, and no must_pass grader passed.
+    // score = null and passed = false, not the empty-mean default of 1.
+    const r = run(
+      [g("a", { weight: 3 }), g("b", { weight: 1 })],
+      [
+        { graderId: "a", status: "error", passed: null, score: null },
+        { graderId: "b", status: "error", passed: null, score: null },
+      ],
+    );
+    expect(r).toEqual({ score: null, passed: false, hasGraderErrors: true, budgetWarnings: [] });
   });
 
   it("weights", () => {

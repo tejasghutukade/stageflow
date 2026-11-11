@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  assertSafeSkillName,
   installProjectSkill,
   type InstallProjectSkillResult,
 } from "../cli/skillsCommand.js";
@@ -162,6 +163,7 @@ export async function locateSkillDirectory(
   if (await pathExists(rootSkillMd)) {
     const name =
       (await readFrontmatterName(rootSkillMd)) ?? path.basename(path.resolve(checkoutRoot));
+    assertSafeSkillName(name);
     pushCandidate(name, checkoutRoot);
   }
 
@@ -201,6 +203,7 @@ export async function locateSkillDirectory(
   }
 
   if (skillName !== undefined) {
+    assertSafeSkillName(skillName);
     const namedPaths = [
       path.join(checkoutRoot, skillName, "SKILL.md"),
       path.join(checkoutRoot, "skills", skillName, "SKILL.md"),
@@ -218,6 +221,7 @@ export async function locateSkillDirectory(
   }
 
   if (candidates.length === 1) {
+    assertSafeSkillName(candidates[0]!.name);
     return candidates[0]!;
   }
   if (candidates.length === 0) {

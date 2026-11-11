@@ -606,6 +606,11 @@ export type DraftPackagePayload = {
   task?: { filename: string; body: Record<string, unknown> };
 };
 
+/** Content hashes of package files, keyed by project-relative path. */
+export type DraftFileHashes = {
+  files: Record<string, string>;
+};
+
 export type CreateDraftPackageInput = {
   directory: string;
   draft: DraftPackagePayload;
@@ -625,15 +630,20 @@ export type CreateDraftPackageResult =
       root_kind?: CatalogRootKind;
       read_only?: boolean;
       taskPath?: string;
+      fileHashes?: DraftFileHashes;
     }
   | {
       ok: false;
       status: number;
       error: string;
+      code?: string;
       findings?: ValidationFinding[];
     };
 
-export type OverwriteDraftPackageInput = CreateDraftPackageInput;
+export type OverwriteDraftPackageInput = CreateDraftPackageInput & {
+  /** Hashes from the last open or save. A mismatch refuses the overwrite. */
+  baseHashes?: DraftFileHashes;
+};
 export type OverwriteDraftPackageResult = CreateDraftPackageResult;
 
 export type PlanDraftPackageInput = {
@@ -679,6 +689,7 @@ export type OpenDraftPackageResult =
       root_kind?: CatalogRootKind;
       read_only?: boolean;
       taskPath?: string;
+      fileHashes?: DraftFileHashes;
     }
   | {
       ok: false;
@@ -952,6 +963,10 @@ export type CapacityHealth = {
   activeCount: number;
   maxConcurrent: number;
   slotsAvailable: number;
+  /** Host config echo from `/api/health`, when the server includes it. */
+  config?: {
+    maxQueued?: number;
+  };
   activeStageProcesses?: number;
   maxActiveStageProcesses?: number | null;
   disk?: {

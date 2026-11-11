@@ -2273,6 +2273,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (!result.ok) {
             json(res, result.status, {
               error: result.error,
+              ...(result.code ? { code: result.code } : {}),
               ...(result.findings ? { findings: result.findings } : {}),
             });
             return true;
@@ -2281,6 +2282,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             pipeline: result.pipeline,
             pipelinePath: result.pipelinePath,
             stagePaths: result.stagePaths,
+            fileHashes: result.fileHashes,
             catalog_root_path: ctx.projectRoot,
             ...draftCatalogRootWire(draftWriteWireRoot),
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
@@ -2339,6 +2341,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (!result.ok) {
             json(res, result.status, {
               error: result.error,
+              ...(result.code ? { code: result.code } : {}),
               ...(result.findings ? { findings: result.findings } : {}),
             });
             return true;
@@ -2347,6 +2350,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             pipeline: result.pipeline,
             pipelinePath: result.pipelinePath,
             stagePaths: result.stagePaths,
+            fileHashes: result.fileHashes,
             catalog_root_path: ctx.projectRoot,
             ...draftCatalogRootWire(draftWriteWireRoot),
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
@@ -2486,6 +2490,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             draft: result.draft,
             destination: result.destination,
             pipelinePath: result.pipelinePath,
+            fileHashes: result.fileHashes,
             ...draftCatalogRootWire(wireRoot),
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
           });
@@ -3813,7 +3818,10 @@ export async function startUiServer(
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
-  const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
+  const boot = await bootstrapStageflowHost({
+    ...(options as StageflowHostOptions),
+    listen: { host, port },
+  });
   const { cwd, agentDir, rootDir } = boot;
   const providerAuthContext = boot.providerAuthContext;
   const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
@@ -3858,6 +3866,7 @@ export async function startUiServer(
     allowedHosts,
     controlTokens,
     routes,
+    ...(boot.boundPort !== undefined ? { bound: boot.boundPort } : {}),
   });
   boot.setEvalCallbackBase?.(envelope.url);
   const closeServer = envelope.server.close.bind(envelope.server);

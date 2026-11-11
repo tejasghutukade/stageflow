@@ -9,6 +9,7 @@ import {
   overwriteDraftPackageWithDetails,
   validateDraftPackage,
   writeCatalogFile,
+  type DraftFileHashes,
   type DraftPackagePayload,
   type DraftValidationResult,
   type PipelineListing,
@@ -35,6 +36,7 @@ import {
   filterEditorPipelineRuns,
   isDraftDirty,
   mergeEditorFindings,
+  shouldBlockEditorLeave,
   type EditorHistorySessionEvent,
   type EditorTabId,
 } from "./pipelineEditorModel";
@@ -160,6 +162,7 @@ export function PipelineEditorPage({
     : normalizeYamlPath(pipeline.path);
   const [draft, setDraft] = useState<DraftPackagePayload | null>(null);
   const [baseline, setBaseline] = useState<DraftPackagePayload | null>(null);
+  const [fileHashes, setFileHashes] = useState<DraftFileHashes | null>(null);
   const [destination, setDestination] = useState<{
     directory: string;
     pipelineFilename: string;
@@ -224,7 +227,57 @@ export function PipelineEditorPage({
     : pipeline.path;
 
   const dirty = isDraftDirty(draft, baseline);
+  const unsaved = dirty || yamlParseError !== null;
   const unsavedCount = unsavedChangeCount(draft, baseline);
+  const unsavedRef = useRef(unsaved);
+  unsavedRef.current = unsaved;
+  const leaveRouteRef = useRef({
+    mode: stageMode ? ("stage" as const) : ("pipeline" as const),
+    pipelineId,
+    stagePath: stageFilePath,
+    projectRoot: catalogProjectRoot,
+  });
+  leaveRouteRef.current = {
+    mode: stageMode ? "stage" : "pipeline",
+    pipelineId,
+    stagePath: stageFilePath,
+    projectRoot: catalogProjectRoot,
+  };
+
+  useEffect(() => {
+    const lastHash = { current: window.location.hash };
+    let reverting = false;
+    function onHash() {
+      const next = window.location.hash;
+      if (reverting) {
+        reverting = false;
+        lastHash.current = next;
+        return;
+      }
+      if (shouldBlockEditorLeave(unsavedRef.current, leaveRouteRef.current, next)) {
+        const leave = window.confirm(
+          "You have unsaved changes. Leave this page?",
+        );
+        if (!leave) {
+          reverting = true;
+          window.history.replaceState(null, "", lastHash.current);
+          window.dispatchEvent(new HashChangeEvent("hashchange"));
+          return;
+        }
+      }
+      lastHash.current = next;
+    }
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      if (unsavedRef.current) event.preventDefault();
+    }
+    window.addEventListener("hashchange", onHash);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, []);
+
   const dirtyPaths = useMemo(
     () => editorDirtyPaths(draft, baseline, pipelinePath),
     [baseline, draft, pipelinePath],
@@ -292,6 +345,7 @@ export function PipelineEditorPage({
         );
         setDraft(pkg.draft);
         setBaseline(cloneDraft(pkg.draft));
+        setFileHashes(null);
         setDestination(null);
         setSourceOrigin(null);
         setSelectedStageId(pkg.stageId);
@@ -300,6 +354,7 @@ export function PipelineEditorPage({
         setLoadError(err instanceof Error ? err.message : String(err));
         setDraft(null);
         setBaseline(null);
+        setFileHashes(null);
         setLoading(false);
       }
       return;
@@ -315,12 +370,14 @@ export function PipelineEditorPage({
       setLoadError(opened.error);
       setDraft(null);
       setBaseline(null);
+      setFileHashes(null);
       return;
     }
     const origin = draftOriginFromResponse(opened);
     if (origin) setSourceOrigin(origin);
     setDraft(opened.draft);
     setBaseline(cloneDraft(opened.draft));
+    setFileHashes(opened.fileHashes ?? null);
     setDestination(opened.destination);
   }, [catalogProjectRoot, pipeline.path, stageFilePath, stageMode]);
 
@@ -541,6 +598,7 @@ export function PipelineEditorPage({
         directory: destination.directory,
         pipelineFilename: destination.pipelineFilename,
         draft,
+        ...(fileHashes ? { baseHashes: fileHashes } : {}),
         ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
       });
     }
@@ -561,6 +619,7 @@ export function PipelineEditorPage({
     }
     const nextOrigin = draftOriginFromResponse(result);
     if (nextOrigin) setSourceOrigin(nextOrigin);
+    if (result.fileHashes) setFileHashes(result.fileHashes);
     setBaseline(cloneDraft(draft));
     showToast(readOnlySource ? "Saved copy to Workspace" : "Saved");
     appendSession(readOnlySource ? "Saved copy" : "Saved");
@@ -570,6 +629,7 @@ export function PipelineEditorPage({
     catalogProjectRoot,
     destination,
     draft,
+    fileHashes,
     readOnlySource,
     runCatalogValidate,
     runDraftValidate,

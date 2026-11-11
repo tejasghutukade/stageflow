@@ -4,6 +4,7 @@ import { networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { startUiServer } from "../src/server/http.js";
 import { startMcpServer } from "../src/server/mcpHost.js";
 import { loadControlTokens } from "../src/server/controlToken.js";
@@ -43,6 +44,46 @@ describe("createHttpHost shared listen", () => {
       expect(started.mcpStateless).toBe(true);
       expect(started.host).toBe("127.0.0.1");
       expect(started.port).toBeGreaterThan(0);
+    } finally {
+      await closeServer(started.server);
+    }
+  });
+
+  it("a second host on a taken port leaves the live host's running stage unchanged", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-host-busy-"));
+    const store = createRunStore({ rootDir: root });
+    const started = await startMcpServer({
+      agent: scriptedFakeAgent([]),
+      cwd: root,
+      rootDir: root,
+      store,
+      port: 0,
+      mcpStateless: true,
+    });
+    try {
+      const created = await store.createRun({
+        pipelineId: "p",
+        taskYaml: "id: t\ngoal: g\n",
+        status: "running",
+        pipelineDag: linearCompatDagSnapshot(["work"]),
+      });
+      await store.appendStageEvent(created.runId, "work", { event: "started" });
+      const before = await store.readRun(created.runId);
+      expect(before.stages.find((stage) => stage.stage_id === "work")?.status).toBe("running");
+
+      await expect(
+        startMcpServer({
+          agent: scriptedFakeAgent([]),
+          cwd: root,
+          rootDir: root,
+          store,
+          port: started.port,
+          mcpStateless: true,
+        }),
+      ).rejects.toMatchObject({ code: "EADDRINUSE" });
+
+      const after = await store.readRun(created.runId);
+      expect(after.stages.find((stage) => stage.stage_id === "work")?.status).toBe("running");
     } finally {
       await closeServer(started.server);
     }

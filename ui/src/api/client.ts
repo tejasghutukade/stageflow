@@ -62,6 +62,7 @@ import type {
   CreateDraftPackageInput,
   CreateDraftPackageResult,
   CreateWorkshopSessionResult,
+  DraftFileHashes,
   DraftPackagePayload,
   DraftValidationResult,
   GetWorkshopAutosaveResult,
@@ -1185,6 +1186,18 @@ export async function validateDraftPackage(
   });
 }
 
+function readDraftFileHashes(value: unknown): DraftFileHashes | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const files = (value as { files?: unknown }).files;
+  if (!files || typeof files !== "object" || Array.isArray(files)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, hash] of Object.entries(files)) {
+    if (typeof hash !== "string" || hash.length === 0) return undefined;
+    out[key] = hash;
+  }
+  return { files: out };
+}
+
 export async function createDraftPackageWithDetails(
   input: CreateDraftPackageInput,
 ): Promise<CreateDraftPackageResult> {
@@ -1201,7 +1214,9 @@ export async function createDraftPackageWithDetails(
       project_root?: string;
       catalog_root_path?: string;
       taskPath?: string;
+      fileHashes?: unknown;
       error?: string;
+      code?: string;
       findings?: ValidationFinding[];
     };
     if (
@@ -1210,6 +1225,7 @@ export async function createDraftPackageWithDetails(
       typeof body.pipelinePath === "string" &&
       Array.isArray(body.stagePaths)
     ) {
+      const fileHashes = readDraftFileHashes(body.fileHashes);
       return {
         ok: true,
         pipeline: body.pipeline,
@@ -1222,12 +1238,14 @@ export async function createDraftPackageWithDetails(
           ? { catalog_root_path: body.catalog_root_path }
           : {}),
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
+        ...(fileHashes ? { fileHashes } : {}),
       };
     }
     return {
       ok: false,
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
+      ...(typeof body.code === "string" ? { code: body.code } : {}),
       ...(body.findings ? { findings: body.findings } : {}),
     };
   } catch (err) {
@@ -1255,7 +1273,9 @@ export async function overwriteDraftPackageWithDetails(
       project_root?: string;
       catalog_root_path?: string;
       taskPath?: string;
+      fileHashes?: unknown;
       error?: string;
+      code?: string;
       findings?: ValidationFinding[];
     };
     if (
@@ -1264,6 +1284,7 @@ export async function overwriteDraftPackageWithDetails(
       typeof body.pipelinePath === "string" &&
       Array.isArray(body.stagePaths)
     ) {
+      const fileHashes = readDraftFileHashes(body.fileHashes);
       return {
         ok: true,
         pipeline: body.pipeline,
@@ -1276,12 +1297,14 @@ export async function overwriteDraftPackageWithDetails(
           ? { catalog_root_path: body.catalog_root_path }
           : {}),
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
+        ...(fileHashes ? { fileHashes } : {}),
       };
     }
   return {
       ok: false,
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
+      ...(typeof body.code === "string" ? { code: body.code } : {}),
       ...(body.findings ? { findings: body.findings } : {}),
     };
   } catch (err) {
@@ -1348,6 +1371,7 @@ export async function openDraftPackage(
       pipelinePath?: string;
       project_root?: string;
       taskPath?: string;
+      fileHashes?: unknown;
       error?: string;
     };
     if (
@@ -1356,6 +1380,7 @@ export async function openDraftPackage(
       body.destination &&
       typeof body.pipelinePath === "string"
     ) {
+      const fileHashes = readDraftFileHashes(body.fileHashes);
       return {
         ok: true,
         draft: body.draft,
@@ -1365,6 +1390,7 @@ export async function openDraftPackage(
           ? { project_root: body.project_root }
           : {}),
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
+        ...(fileHashes ? { fileHashes } : {}),
       };
     }
     return {

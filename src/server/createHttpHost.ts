@@ -1,6 +1,7 @@
 import {
   createServer,
   type IncomingMessage,
+  type RequestListener,
   type ServerResponse,
   type Server,
 } from "node:http";
@@ -58,6 +59,11 @@ export type HttpHostRouteContext = {
   boot: StageflowHostBootstrap;
 };
 
+export type BoundHostPort = {
+  server: Server;
+  setRequestHandler: (handler: RequestListener) => void;
+};
+
 export type CreateHttpHostOptions = {
   boot: StageflowHostBootstrap;
   host: string;
@@ -67,7 +73,50 @@ export type CreateHttpHostOptions = {
   controlTokens?: ControlTokens;
   requestTimeoutMs?: number;
   maxConnections?: number;
+  /** Already listening. createHttpHost installs the request handler and does not bind again. */
+  bound?: BoundHostPort;
 };
+
+function listenServer(server: Server, host: string, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (err: Error) => {
+      server.off("error", onError);
+      reject(err);
+    };
+    server.once("error", onError);
+    server.listen(port, host, () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Bind the host port before startup mutates run data. Connections are dropped
+ * until {@link createHttpHost} installs the real handler. A failure is the
+ * Node listen error (EADDRINUSE when another host already owns the port).
+ */
+export async function bindHostPort(host: string, port: number): Promise<BoundHostPort> {
+  let requestHandler: RequestListener = (req, res) => {
+    req.socket?.on("error", () => undefined);
+    res.destroy();
+  };
+  const server = createServer((req, res) => {
+    requestHandler(req, res);
+  });
+  try {
+    await listenServer(server, host, port);
+  } catch (err) {
+    server.close(() => undefined);
+    throw err;
+  }
+  return {
+    server,
+    setRequestHandler(next) {
+      requestHandler = next;
+    },
+  };
+}
 
 export type HttpHostEnvelope = {
   server: Server;
@@ -107,7 +156,7 @@ export async function createHttpHost(
     options.requestTimeoutMs ?? resolveRequestTimeoutMs();
   const maxConnections = options.maxConnections ?? resolveMaxConnections();
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const method = req.method ?? "GET";
     const url = new URL(req.url ?? "/", `http://${advertisedHost(host)}:${port}`);
     const pathname = url.pathname;
@@ -195,7 +244,12 @@ export async function createHttpHost(
     });
     if (handled) return;
     json(res, 404, { error: "Not found" });
-  });
+  };
+
+  const server = options.bound?.server ?? createServer(handleRequest);
+  if (options.bound) {
+    options.bound.setRequestHandler(handleRequest);
+  }
 
   // requestTimeout bounds receiving the request body (408); idle socket timeout
   // stays 0 so MCP SSE can outlive requestTimeout.
@@ -210,10 +264,9 @@ export async function createHttpHost(
     void boot.mcpHandler.close();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.listen(port, host, () => resolve());
-    server.on("error", reject);
-  });
+  if (options.bound === undefined) {
+    await listenServer(server, host, port);
+  }
 
   server.on("error", (err) => {
     log.error("host.server_error", err instanceof Error ? err.message : String(err));

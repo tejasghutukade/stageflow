@@ -13,6 +13,7 @@ import {
   focusEditorFinding,
   isDraftDirty,
   isEditorTabId,
+  shouldBlockEditorLeave,
   lastValidatedFooter,
   mergeEditorFindings,
   mergeEditorHistory,
@@ -66,6 +67,26 @@ describe("isDraftDirty", () => {
   it("is clean when draft or baseline is missing", () => {
     expect(isDraftDirty(null, draft("ship it"))).toBe(false);
     expect(isDraftDirty(draft("ship it"), null)).toBe(false);
+  });
+});
+
+describe("shouldBlockEditorLeave", () => {
+  const current = {
+    mode: "pipeline" as const,
+    pipelineId: "demo",
+    projectRoot: "/work",
+  };
+
+  it("warns when a dirty editor leaves its pipeline", () => {
+    expect(shouldBlockEditorLeave(true, current, "#/inbox")).toBe(true);
+    expect(shouldBlockEditorLeave(true, current, "#/pipelines/other")).toBe(true);
+  });
+
+  it("stays quiet when the draft is clean or the route is the same editor", () => {
+    expect(shouldBlockEditorLeave(false, current, "#/inbox")).toBe(false);
+    expect(
+      shouldBlockEditorLeave(true, current, "#/pipelines/demo?project_root=%2Fwork"),
+    ).toBe(false);
   });
 });
 

@@ -328,6 +328,17 @@ export class StageProcessLauncher {
     }
   }
 
+  async cancelStage(
+    runId: string,
+    stageId: string,
+    killAfterMs = 5000,
+  ): Promise<void> {
+    const children = [...this.active.values()].filter(
+      (entry) => entry.runId === runId && entry.stageId === stageId,
+    );
+    await this.terminateChildren(children, killAfterMs);
+  }
+
   async cancelRun(runId: string, killAfterMs = 5000): Promise<void> {
     this.cancelledRuns.add(runId);
     const remaining: WaitQueueEntry[] = [];
@@ -348,6 +359,16 @@ export class StageProcessLauncher {
       this.cancelledRuns.delete(runId);
       return;
     }
+
+    await this.terminateChildren(children, killAfterMs);
+    this.cancelledRuns.delete(runId);
+  }
+
+  private async terminateChildren(
+    children: TrackedChild[],
+    killAfterMs: number,
+  ): Promise<void> {
+    if (children.length === 0) return;
 
     for (const entry of children) {
       entry.hostInitiatedKill = true;
@@ -385,7 +406,6 @@ export class StageProcessLauncher {
           }),
       ),
     );
-    this.cancelledRuns.delete(runId);
   }
 
   private async waitForCapacity(runId: string): Promise<boolean> {

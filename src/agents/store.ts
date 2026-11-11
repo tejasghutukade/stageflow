@@ -527,6 +527,11 @@ export class AgentStore {
     return row ? toSession(row) : undefined;
   }
 
+  /** Drop a session's thread so another session can own it. The unique index allows one session per thread. */
+  clearSessionThread(sessionId: string, now: string): void {
+    this.db.prepare(`UPDATE agent_sessions SET thread_key = NULL, updated_at = ? WHERE session_id = ?`).run(now, sessionId);
+  }
+
   updateSession(
     sessionId: string,
     patch: Partial<Pick<AgentSession, "status" | "backend" | "title">>,

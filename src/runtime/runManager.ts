@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { RunSubmissionExistsError, type RunSubmission, type RunSubmissionRecord } from "../runstore/submission.js";
-import { access, readFile, realpath } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { StagePort, OpaqueAnswer } from "../agent/port.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
@@ -17,6 +17,7 @@ import {
   type FreeSpaceReader,
 } from "../runstore/diskUsage.js";
 import { newRunId } from "../runstore/paths.js";
+import { attemptWorkspaceDir } from "../runstore/workspaceLayout.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import {
   assertResumableStage,
@@ -98,8 +99,16 @@ import {
 import { sweepOrphanBrowserSessions } from "../browser/browserSweep.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
+import {
+  cleanupCredentialsDir,
+  loadSecretRegistry,
+  resolveStageSecrets,
+} from "./stageSecrets.js";
 import { logger as rootLogger } from "../logging/logger.js";
-import { registerNamedSecrets } from "../logging/namedSecrets.js";
+import {
+  registerNamedSecrets,
+  REDACTION_SECRETS_FILENAME,
+} from "../logging/namedSecrets.js";
 import { shouldRegisterValue } from "../logging/redact.js";
 import {
   bindingFromFields,
@@ -1374,11 +1383,24 @@ export class RunManager {
 
     this.notifyGateClosed(runId, stageId);
     if (this.stageProcessLauncher !== undefined) {
-      const hasActive = this.stageProcessLauncher
+      const active = this.stageProcessLauncher
         .getActiveStageProcesses()
-        .some((entry) => entry.runId === runId);
-      if (hasActive) {
-        await this.stageProcessLauncher.cancelRun(runId);
+        .filter((entry) => entry.runId === runId);
+      const targetActive = active.some((entry) => entry.stageId === stageId);
+      if (targetActive) {
+        const otherLive = detail.stages.some(
+          (stage) =>
+            stage.stage_id !== stageId &&
+            (stage.status === "pending" ||
+              stage.status === "running" ||
+              stage.status === "waiting_for_input" ||
+              stage.status === "interrupted"),
+        );
+        if (otherLive) {
+          await this.stageProcessLauncher.cancelStage(runId, stageId);
+        } else {
+          await this.stageProcessLauncher.cancelRun(runId);
+        }
       }
     }
     await teardownStageBrowser(
@@ -2824,25 +2846,63 @@ export class RunManager {
           resuming: true,
         },
       );
-      const launchResult = await launcher.launch({
-        runId,
-        stageId,
-        rootDir: runProjectRoot,
-        factoryCwd: runProjectRoot,
-        stage: resumedStage,
-        workspaceDir,
-        ...(browserEnv !== undefined ? { browserEnv } : {}),
-        mode: "resume",
-        resumeAnswer: opaqueAnswer,
-        attempt,
-        sessionFilePath,
-        env: stageBinding.env,
-        bindingKind: stageBinding.kind,
-        ...(resumedStage !== undefined ? { model: resumedStage.model } : {}),
-        ...(this.options.operatorCatalog !== undefined
-          ? { operatorCatalog: this.options.operatorCatalog }
-          : {}),
+      const attemptDir = attemptWorkspaceDir(workspaceDir, stageId, attempt);
+      await mkdir(attemptDir, { recursive: true });
+      const attemptHome = path.join(attemptDir, "home");
+      await mkdir(attemptHome, { recursive: true });
+      const resolved = resolveStageSecrets({
+        decls: resumedStage?.secrets,
+        registry: loadSecretRegistry(process.env),
+        hostEnv: process.env,
+        attemptDir,
       });
+      const grants = resolved.grants;
+      registerNamedSecrets(resolved.knownValues);
+      await writeFile(
+        path.join(attemptDir, REDACTION_SECRETS_FILENAME),
+        `${JSON.stringify(resolved.knownValues)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      for (const warning of resolved.warnings) {
+        log.warn("stage.secrets", warning, {
+          run_id: runId,
+          stage_id: stageId,
+        });
+      }
+      await writeFile(
+        path.join(attemptDir, "declared-secrets.json"),
+        `${JSON.stringify({ names: grants.declaredSecretNames }, null, 2)}\n`,
+        "utf8",
+      );
+      const launchResult = await launcher
+        .launch({
+          runId,
+          stageId,
+          rootDir: runProjectRoot,
+          factoryCwd: runProjectRoot,
+          stage: resumedStage,
+          workspaceDir,
+          ...(browserEnv !== undefined ? { browserEnv } : {}),
+          mode: "resume",
+          resumeAnswer: opaqueAnswer,
+          attempt,
+          sessionFilePath,
+          env: stageBinding.env,
+          bindingKind: stageBinding.kind,
+          grants,
+          attemptHome,
+          ...(resumedStage !== undefined ? { model: resumedStage.model } : {}),
+          ...(this.options.operatorCatalog !== undefined
+            ? { operatorCatalog: this.options.operatorCatalog }
+            : {}),
+        })
+        .finally(() => {
+          try {
+            cleanupCredentialsDir(attemptDir);
+          } catch {
+            // best-effort Host cleanup
+          }
+        });
 
       if (launchResult.type === "waiting") {
         return { ok: true };

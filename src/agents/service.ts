@@ -1032,17 +1032,20 @@ export class AgentService {
     });
   }
 
-  /** Session limits (`limits` in the pinned revision) are checked before each new turn. */
-  private assertWithinLimits(definition: AgentDefinition, session: AgentSession): void {
+  /**
+   * Why a new turn on this session would be refused, or null while it is still inside its limits.
+   * Always-on sessions skip the time and turn caps; a cost cap still applies.
+   */
+  private limitBlockReason(definition: AgentDefinition, session: AgentSession): string | null {
     const { limits } = definition;
     const turns = this.store.listTurns(session.id);
     if (!limits.always_on) {
       if (turns.length >= limits.max_turns) {
-        throw new AgentError("agent.limit_reached", `This session reached its limit of ${limits.max_turns} turns.`);
+        return `This session reached its limit of ${limits.max_turns} turns.`;
       }
       const ageMinutes = (this.now().getTime() - Date.parse(session.createdAt)) / 60_000;
       if (ageMinutes >= limits.session_minutes) {
-        throw new AgentError("agent.limit_reached", `This session reached its limit of ${limits.session_minutes} minutes.`);
+        return `This session reached its limit of ${limits.session_minutes} minutes.`;
       }
     }
     if (limits.cost_usd !== null) {
@@ -1050,9 +1053,16 @@ export class AgentService {
       const since = limits.always_on ? this.now().getTime() - 24 * 60 * 60_000 : 0;
       const spent = turns.filter((turn) => Date.parse(turn.startedAt) >= since).reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
       if (spent >= limits.cost_usd) {
-        throw new AgentError("agent.limit_reached", `This session reached its cost limit of $${limits.cost_usd}${limits.always_on ? " for today" : ""}.`);
+        return `This session reached its cost limit of $${limits.cost_usd}${limits.always_on ? " for today" : ""}.`;
       }
     }
+    return null;
+  }
+
+  /** Session limits (`limits` in the pinned revision) are checked before each new turn. */
+  private assertWithinLimits(definition: AgentDefinition, session: AgentSession): void {
+    const reason = this.limitBlockReason(definition, session);
+    if (reason) throw new AgentError("agent.limit_reached", reason);
   }
 
   /**
@@ -1285,11 +1295,14 @@ export class AgentService {
       const threadKey = agentThreadKey(message);
       const now = this.iso();
       const existing = this.store.findSessionByThread(projectKey, target.agentId, threadKey);
+      // Channel threads never continue an eval session, and this path never opens one.
+      if (existing && isEvalSession(existing)) throw new AgentError("agent.session_not_found");
       if (!this.store.rememberInboundEvent(projectKey, inboundDedupeKey(message), now)) {
         if (!existing) throw new AgentError("agent.session_not_found");
         return { agentId: target.agentId, sessionId: existing.id, duplicate: true };
       }
-      if (existing) return { agentId: target.agentId, sessionId: existing.id, duplicate: false };
+      const blocked = existing ? this.limitBlockReason(await this.effectiveDefinition(projectRoot, existing), existing) : null;
+      if (existing && !blocked) return { agentId: target.agentId, sessionId: existing.id, duplicate: false };
       const session: AgentSession = {
         id: id("ses"),
         agentId: target.agentId,
@@ -1303,7 +1316,11 @@ export class AgentService {
         createdAt: now,
         updatedAt: now,
       };
-      this.store.insertSession(projectKey, session);
+      // The thread index allows one session. A spent session gives the key up; the next message lands on the new one.
+      this.store.transaction(() => {
+        if (existing) this.store.clearSessionThread(existing.id, now);
+        this.store.insertSession(projectKey, session);
+      });
       return { agentId: target.agentId, sessionId: session.id, duplicate: false };
     });
   }

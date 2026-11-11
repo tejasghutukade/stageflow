@@ -4,6 +4,7 @@ import type {
   PipelineListing,
   ValidationFinding,
 } from "../../api";
+import { parseHash } from "../../routes";
 import { locateFindingField } from "../workshop/inspector/stageFields";
 
 export const EDITOR_TAB_IDS = ["editor", "runs", "history"] as const;
@@ -45,6 +46,33 @@ export function isDraftDirty(
 ): boolean {
   if (!draft || !baseline) return false;
   return stableStringify(draft) !== stableStringify(baseline);
+}
+
+export function shouldBlockEditorLeave(
+  dirty: boolean,
+  current: {
+    mode: "pipeline" | "stage";
+    pipelineId: string;
+    stagePath?: string;
+    projectRoot?: string;
+  },
+  nextHash: string,
+): boolean {
+  if (!dirty) return false;
+  const route = parseHash(nextHash);
+  const root = current.projectRoot ?? "";
+  if (current.mode === "stage") {
+    return !(
+      route.name === "stage" &&
+      route.path === current.stagePath &&
+      (route.projectRoot ?? "") === root
+    );
+  }
+  return !(
+    route.name === "pipeline" &&
+    route.pipelineId === current.pipelineId &&
+    (route.projectRoot ?? "") === root
+  );
 }
 
 export function warningPillLabel(count: number): string {

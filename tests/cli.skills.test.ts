@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -59,6 +60,13 @@ describe("sf skills", () => {
       );
       expect(code).toBe(0);
       expect(logs.some((line) => line.includes("Installed skill test-skill"))).toBe(true);
+      expect(
+        errors.some(
+          (line) =>
+            line.includes("warning: skill install is about to run") &&
+            line.includes(`${path.sep}bin${path.sep}test-skill.mjs`),
+        ),
+      ).toBe(true);
 
       const installedRoot = path.join(repo.root, ".pi", "skills", "test-skill");
       await access(path.join(installedRoot, "bin", "test-skill.mjs"));
@@ -72,6 +80,75 @@ describe("sf skills", () => {
       await expect(
         access(path.join(installedRoot, "scripts", "generate-docs.sh")),
       ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it("rejects a skill name that escapes the skills directory and does not run its script", async () => {
+    const repo = await initTempGitRepo();
+    const errors: string[] = [];
+    let doctorCalls = 0;
+    const keep = path.join(repo.root, "KEEP");
+    await writeFile(keep, "safe", "utf8");
+    try {
+      const code = await runSkillsCommand(
+        ["install", "--from-path", skillSource, "--skill-name", "../.."],
+        {
+          cwd: repo.root,
+          projectRoot: repo.root,
+          io: {
+            log: () => undefined,
+            error: (line) => errors.push(line),
+            runDoctor: () => {
+              doctorCalls += 1;
+              return 0;
+            },
+          },
+        },
+      );
+      expect(code).toBe(1);
+      expect(doctorCalls).toBe(0);
+      expect(errors.join("\n")).toMatch(/invalid skill name/);
+      expect(errors.join("\n")).not.toMatch(/about to run/);
+      expect(await readFile(keep, "utf8")).toBe("safe");
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it("refuses a destination whose real path leaves the skills directory", async () => {
+    const repo = await initTempGitRepo();
+    const outside = await mkdtemp(path.join(tmpdir(), "sf-skill-outside-"));
+    const errors: string[] = [];
+    let doctorCalls = 0;
+    await writeFile(path.join(outside, "secret.txt"), "secret", "utf8");
+    const skillsDir = path.join(repo.root, ".pi", "skills");
+    await mkdir(skillsDir, { recursive: true });
+    const link = path.join(skillsDir, "linked");
+    await symlink(outside, link);
+    try {
+      const code = await runSkillsCommand(
+        ["install", "--from-path", skillSource, "--skill-name", "linked"],
+        {
+          cwd: repo.root,
+          projectRoot: repo.root,
+          io: {
+            log: () => undefined,
+            error: (line) => errors.push(line),
+            runDoctor: () => {
+              doctorCalls += 1;
+              return 0;
+            },
+          },
+        },
+      );
+      expect(code).toBe(1);
+      expect(doctorCalls).toBe(0);
+      expect(errors.join("\n")).toMatch(/escapes the skills directory/);
+      expect(errors.join("\n")).not.toMatch(/about to run/);
+      expect((await lstat(link)).isSymbolicLink()).toBe(true);
+      expect(await readFile(path.join(outside, "secret.txt"), "utf8")).toBe("secret");
     } finally {
       await repo.cleanup();
     }
