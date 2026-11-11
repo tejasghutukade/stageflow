@@ -3,6 +3,7 @@ import { globalStageflowHome } from "../project/globalHome.js";
 import { isForeverDeniedSecret, isProviderOrCloudName } from "../runtime/stageEnvironment.js";
 import { loadSecretRegistry, type SecretRegistry } from "../runtime/stageSecrets.js";
 import { FunctionExecutor, type FunctionExecutorOptions } from "./executor.js";
+import { bindHostFunctionCall, isHostFunctionExecutor, unbindHostFunctionCall } from "./hostExecutor.js";
 import { performFileCapability, type ContainerFiles, type FunctionFileGrant } from "./files.js";
 import {
   functionApiIsAction,
@@ -76,6 +77,7 @@ const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class FunctionBroker {
   private readonly executor: FunctionExecutor;
+  private readonly usesHostExecutor: boolean;
   private readonly env: NodeJS.ProcessEnv;
   private readonly stageflowHome: string;
   private readonly registry: SecretRegistry;
@@ -85,6 +87,7 @@ export class FunctionBroker {
     this.env = options.env ?? process.env;
     this.stageflowHome = options.stageflowHome ?? globalStageflowHome();
     this.registry = loadSecretRegistry(this.env, this.stageflowHome);
+    this.usesHostExecutor = options.executor !== undefined && isHostFunctionExecutor(options.executor);
     this.executor =
       options.executor ??
       new FunctionExecutor({
@@ -119,6 +122,12 @@ export class FunctionBroker {
       dial: input.dial,
     };
     this.active.set(input.invocationId, call);
+    if (this.usesHostExecutor) {
+      bindHostFunctionCall(input.invocationId, {
+        answer: (invocationId, request, signal) => this.answer(invocationId, request, signal),
+        sideEffect: (invocationId, request) => this.actionDispatched(invocationId, request),
+      });
+    }
     try {
       return await this.executor.invoke({
         invocationId: input.invocationId,
@@ -128,6 +137,7 @@ export class FunctionBroker {
         memoryLimitBytes: input.memoryLimitBytes,
       });
     } finally {
+      if (this.usesHostExecutor) unbindHostFunctionCall(input.invocationId);
       this.active.delete(input.invocationId);
     }
   }

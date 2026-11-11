@@ -42,6 +42,12 @@ import {
   overlayStageBindingEnv,
   type DerivedBindingKind,
 } from "./stageRoots.js";
+import { hostFunctionInvoker } from "../functions/invoke.js";
+import {
+  handleStageFunctionMessage,
+  isStageFunctionMessage,
+  type StageFunctionHost,
+} from "../functions/workerIpc.js";
 
 export type StageLaunchInput = {
   runId: string;
@@ -97,6 +103,7 @@ export type StageProcessLauncherOptions = {
   logger?: Logger;
   /** Test seam: override child_process.fork. */
   forkFn?: typeof childProcess.fork;
+  functionInvoker?: StageFunctionHost;
 };
 
 function defaultStageCliEntry(): string {
@@ -253,6 +260,9 @@ export class StageProcessLauncher {
   private readonly cancelledRuns = new Set<string>();
   private slotsHeld = 0;
   private readonly heapMb: number;
+  private readonly functionInvokerOption: StageFunctionHost | undefined;
+  private resolvedFunctionInvoker: StageFunctionHost | undefined;
+  private readonly functionCalls = new Map<ChildProcess, Set<string>>();
 
   constructor(options: StageProcessLauncherOptions = {}) {
     this.env = options.env ?? process.env;
@@ -280,6 +290,18 @@ export class StageProcessLauncher {
     this.logger =
       options.logger ?? rootLogger.child({ component: "runtime" });
     this.forkFn = options.forkFn ?? childProcess.fork;
+    this.functionInvokerOption = options.functionInvoker;
+  }
+
+  private functionHost(): StageFunctionHost {
+    this.resolvedFunctionInvoker ??= this.functionInvokerOption ?? hostFunctionInvoker();
+    return this.resolvedFunctionInvoker;
+  }
+
+  private async cancelFunctionInvocations(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const host = this.functionHost();
+    await Promise.all(ids.map((id) => host.cancel(id).catch(() => undefined)));
   }
 
   activeCount(): number {
@@ -573,12 +595,40 @@ export class StageProcessLauncher {
       const finish = (result: StageLaunchResult) => {
         if (settled) return;
         settled = true;
-        cleanup();
-        resolve(result);
+        const pending = [...(this.functionCalls.get(child) ?? [])];
+        this.functionCalls.delete(child);
+        void this.cancelFunctionInvocations(pending).finally(() => {
+          cleanup();
+          resolve(result);
+        });
       };
 
       child.on("message", (message: unknown) => {
         const request = message as { type?: string; requestId?: unknown; input?: unknown };
+        if (!settled && isStageFunctionMessage(message)) {
+          if (request.type === "function.invoke" && typeof request.requestId === "string") {
+            let ids = this.functionCalls.get(child);
+            if (!ids) {
+              ids = new Set();
+              this.functionCalls.set(child, ids);
+            }
+            ids.add(request.requestId);
+          }
+          void handleStageFunctionMessage(
+            request,
+            this.functionHost(),
+            input.factoryCwd ?? input.rootDir,
+            (payload) => {
+              if (child.connected && !settled) child.send(payload);
+            },
+            () => child.connected === true && !settled,
+          ).finally(() => {
+            if (request.type === "function.invoke" && typeof request.requestId === "string") {
+              this.functionCalls.get(child)?.delete(request.requestId);
+            }
+          });
+          return;
+        }
         if (!settled && ["email.send", "email.reply", "email.search", "email.getMessage", "email.downloadAttachment"].includes(request?.type ?? "")) {
           void (async () => {
             if (typeof request.requestId !== "string" || request.requestId.length > 100) return;

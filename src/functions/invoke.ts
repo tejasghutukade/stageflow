@@ -23,8 +23,12 @@ import type { FunctionApiGrant } from "./http.js";
 import type { FunctionDial, FunctionLookup } from "./http.js";
 import type { FunctionFileGrant } from "./files.js";
 import type { FunctionEnvBinding } from "./broker.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import { createRunStoreWithConnection } from "../runstore/createStore.js";
+import { hostFunctionExecutor } from "./hostExecutor.js";
 import { agentProjectKey, FunctionStore } from "./store.js";
 import { FunctionService } from "./service.js";
+import { callFunctionOnHost, cancelFunctionOnHost, stageFunctionCallsUseHost } from "./workerIpc.js";
 import type { FunctionInvokeResult, JsonObject, JsonValue } from "./protocol.js";
 
 export type FunctionTestMocks = {
@@ -57,6 +61,7 @@ export type FunctionCallInput = {
   roots?: { artifacts?: string; workspace?: string };
   containerName?: string;
   containerDockerBin?: string;
+  invocationId?: string;
 };
 
 export type FunctionRunView = {
@@ -88,6 +93,18 @@ export function createFunctionInvoker(options: FunctionInvokerOptions): Function
   return new FunctionInvoker(options);
 }
 
+const hostInvokers = new Map<string, FunctionInvoker>();
+
+export function hostFunctionInvoker(): FunctionInvoker {
+  const home = globalStageflowHome();
+  const existing = hostInvokers.get(home);
+  if (existing) return existing;
+  const { connection } = createRunStoreWithConnection({ rootDir: home });
+  const created = createFunctionInvoker({ db: connection, stageflowHome: home });
+  hostInvokers.set(home, created);
+  return created;
+}
+
 export class FunctionInvoker {
   private readonly db: FunctionInvokerOptions["db"];
   private readonly service: FunctionService;
@@ -105,7 +122,7 @@ export class FunctionInvoker {
     this.broker = new FunctionBroker({
       env: this.env,
       ...(options.stageflowHome ? { stageflowHome: options.stageflowHome } : {}),
-      ...(options.forkFn ? { forkFn: options.forkFn } : {}),
+      ...(options.forkFn ? { forkFn: options.forkFn } : { executor: hostFunctionExecutor() }),
     });
   }
 
@@ -139,6 +156,7 @@ export class FunctionInvoker {
   }
 
   async call(projectRoot: string, input: FunctionCallInput): Promise<FunctionRunView> {
+    if (stageFunctionCallsUseHost()) return callFunctionOnHost(input);
     const detail = await this.service.get(projectRoot, input.functionId);
     if (!detail.definition) {
       throw new FunctionError("function.invalid", "Fix the function file before running it", { issues: detail.issues });
@@ -184,11 +202,20 @@ export class FunctionInvoker {
       stageId: input.stageId,
       attempt: input.attempt,
       sessionId: input.sessionId,
+      ...(input.invocationId !== undefined ? { invocationId: input.invocationId } : {}),
     });
   }
 
   list(projectRoot: string, functionId: string): FunctionInvocationView[] {
     return listFunctionInvocations(this.db, agentProjectKey(projectRoot), functionId);
+  }
+
+  cancel(invocationId: string): Promise<void> {
+    if (stageFunctionCallsUseHost()) {
+      cancelFunctionOnHost(invocationId);
+      return Promise.resolve();
+    }
+    return this.broker.cancel(invocationId);
   }
 
   private refused(
@@ -233,10 +260,11 @@ export class FunctionInvoker {
     stageId?: string | null;
     attempt?: number | null;
     sessionId?: string | null;
+    invocationId?: string;
   }): Promise<FunctionRunView> {
     const started = Date.now();
     const result = await this.broker.invoke({
-      invocationId: randomUUID(),
+      invocationId: input.invocationId ?? randomUUID(),
       kind: input.definition.kind,
       source: input.source,
       context: input.context === undefined ? {} : input.context,

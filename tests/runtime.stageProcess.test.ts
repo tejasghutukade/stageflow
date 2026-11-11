@@ -328,4 +328,133 @@ describe("StageProcessLauncher", () => {
     expect(envs[0]?.CURSOR_API_KEY).toBe("test-cursor-key");
     expect(envs[1]?.CURSOR_API_KEY).toBeUndefined();
   });
+
+  it("runs a function call on the host and keeps the worker result", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-fn-ipc-"));
+    const sent: unknown[] = [];
+    const calls: Array<{ projectRoot: string; invocationId?: string }> = [];
+    const child = new EventEmitter() as ChildProcess;
+    child.stdout = null;
+    child.stderr = null;
+    child.connected = true;
+    child.pid = 42;
+    child.kill = (() => true) as ChildProcess["kill"];
+    child.send = ((message: unknown) => {
+      sent.push(message);
+      return true;
+    }) as ChildProcess["send"];
+    const launcher = new StageProcessLauncher({
+      cliEntry: "unused",
+      functionInvoker: {
+        async call(projectRoot, input) {
+          calls.push({ projectRoot, invocationId: input.invocationId });
+          return {
+            ok: true,
+            value: { passed: true },
+            logs: "",
+            durationMs: 1,
+            sourceHash: "hash",
+            revision: 1,
+            kind: "verification",
+            status: "succeeded",
+          };
+        },
+        async cancel() {},
+      },
+      forkFn: (() => {
+        queueMicrotask(() => {
+          child.emit("message", {
+            type: "function.invoke",
+            requestId: "req-1",
+            input: { functionId: "score_check", kind: "verification", projectRoot: "/tmp/other" },
+          });
+        });
+        return child;
+      }) as typeof childProcess.fork,
+    });
+
+    const pending = launcher.launch({
+      runId: "r-fn",
+      stageId: "check",
+      rootDir,
+      factoryCwd: "/projects/app",
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(calls).toEqual([{ projectRoot: "/projects/app", invocationId: "req-1" }]);
+    expect(sent[0]).toMatchObject({
+      type: "function.response",
+      requestId: "req-1",
+      view: { ok: true, value: { passed: true } },
+    });
+    child.emit("message", { type: "succeeded" });
+    await expect(pending).resolves.toEqual({ type: "succeeded" });
+  });
+
+  it("cancels an in-flight function call when the stage worker exits", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-fn-cancel-"));
+    let started = false;
+    let release: (view: {
+      ok: false;
+      code: string;
+      message: string;
+      logs: string;
+      durationMs: number;
+      sourceHash: string;
+      revision: null;
+      kind: "verification";
+      status: "failed";
+    }) => void = () => {};
+    const cancelled: string[] = [];
+    const child = new EventEmitter() as ChildProcess;
+    child.stdout = null;
+    child.stderr = null;
+    child.connected = true;
+    child.pid = 43;
+    child.kill = (() => true) as ChildProcess["kill"];
+    child.send = (() => true) as ChildProcess["send"];
+    const launcher = new StageProcessLauncher({
+      cliEntry: "unused",
+      functionInvoker: {
+        call() {
+          started = true;
+          return new Promise((resolve) => {
+            release = resolve;
+          });
+        },
+        async cancel(invocationId) {
+          cancelled.push(invocationId);
+          release({
+            ok: false,
+            code: "cancelled",
+            message: "function execution cancelled",
+            logs: "",
+            durationMs: 0,
+            sourceHash: "",
+            revision: null,
+            kind: "verification",
+            status: "failed",
+          });
+        },
+      },
+      forkFn: (() => {
+        queueMicrotask(() => {
+          child.emit("message", {
+            type: "function.invoke",
+            requestId: "req-exit",
+            input: { functionId: "score_check", kind: "verification" },
+          });
+        });
+        return child;
+      }) as typeof childProcess.fork,
+    });
+
+    const pending = launcher.launch({ runId: "r-fn", stageId: "check", rootDir });
+    await vi.waitFor(() => expect(started).toBe(true));
+    child.emit("exit", null, "SIGTERM");
+    await expect(pending).resolves.toEqual({
+      type: "failed",
+      reason: "stage process exited (SIGTERM)",
+    });
+    expect(cancelled).toEqual(["req-exit"]);
+  });
 });
