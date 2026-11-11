@@ -121,7 +121,13 @@ export type ValidationFindingCode =
   | "catalog.mcp_command_missing"
   | "catalog.mixed_yaml_dialect"
   | "catalog.legacy_yaml"
-  | "catalog.stageflow_home_absolute_path";
+  | "catalog.stageflow_home_absolute_path"
+  | "function.missing"
+  | "function.kind_mismatch"
+  | "function.grant_not_requested"
+  | "function.under_granted"
+  | "function.invalid"
+  | "function.routing_requires_route";
 
 export type ValidationFinding = {
   severity: ValidationSeverity;

@@ -11,6 +11,7 @@ import {
   type AgentDefinition,
   type AgentIssue,
 } from "../config/loadAgent.js";
+import { attachmentIssuesFromFiles } from "../config/loadFunction.js";
 import { agentThreadKey, inboundDedupeKey, type AgentInboundMessage } from "./communications/port.js";
 import { generateAgentId } from "./agentId.js";
 import { newWebChatSlug } from "./webChat/slug.js";
@@ -670,13 +671,30 @@ export class AgentService {
     return [];
   }
 
+  private async functionAttachmentIssues(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
+    const entries = definition.tools.functions ?? [];
+    if (entries.length === 0) return [];
+    const found = await attachmentIssuesFromFiles(
+      projectRoot,
+      entries.map((entry) => ({ kind: "tool" as const, id: entry.id, grants: entry.grants })),
+    );
+    return found.map((item) => ({
+      path: item.path ? `tools.functions.${item.path}` : "tools.functions",
+      code: item.code,
+      message: item.message,
+    }));
+  }
+
   async validate(projectRoot: string, rawInput: unknown): Promise<ValidationResult> {
     const raw = this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "preview");
     const parsed = parseAgentDefinition(raw);
     if (!parsed.ok) return { definition: null, issues: parsed.issues, warnings: [], yaml: null };
     const conflicts = await this.channelConflicts(projectRoot, parsed.value);
     const missing = agentMemoryIssues(parsed.value.memories);
-    if (conflicts.length > 0 || missing.length > 0) return { definition: null, issues: [...conflicts, ...missing], warnings: [], yaml: null };
+    const functions = await this.functionAttachmentIssues(projectRoot, parsed.value);
+    if (conflicts.length > 0 || missing.length > 0 || functions.length > 0) {
+      return { definition: null, issues: [...conflicts, ...missing, ...functions], warnings: [], yaml: null };
+    }
     return {
       definition: parsed.value,
       issues: [],
@@ -699,7 +717,10 @@ export class AgentService {
       await this.sync(projectRoot);
       const conflicts = await this.channelConflicts(projectRoot, definition);
       const missing = agentMemoryIssues(definition.memories);
-      if (conflicts.length > 0 || missing.length > 0) throw new AgentError("agent.invalid", "Agent definition is invalid", [...conflicts, ...missing]);
+      const functions = await this.functionAttachmentIssues(projectRoot, definition);
+      if (conflicts.length > 0 || missing.length > 0 || functions.length > 0) {
+        throw new AgentError("agent.invalid", "Agent definition is invalid", [...conflicts, ...missing, ...functions]);
+      }
       const existing = this.store.getDefinition(agentProjectKey(projectRoot), definition.id);
       const onDisk = await access(this.file(projectRoot, definition.id)).then(
         () => true,
@@ -743,7 +764,10 @@ export class AgentService {
       if (row.currentRevision !== input.baseRevision) throw new AgentError("agent.conflict");
       const conflicts = await this.channelConflicts(projectRoot, definition);
       const missing = agentMemoryIssues(definition.memories);
-      if (conflicts.length > 0 || missing.length > 0) throw new AgentError("agent.invalid", "Agent definition is invalid", [...conflicts, ...missing]);
+      const functions = await this.functionAttachmentIssues(projectRoot, definition);
+      if (conflicts.length > 0 || missing.length > 0 || functions.length > 0) {
+        throw new AgentError("agent.invalid", "Agent definition is invalid", [...conflicts, ...missing, ...functions]);
+      }
       if (sameDefinition(revision.definition, definition)) return;
       await this.writeRevision(projectRoot, definition, actor, input.summary?.trim() || null);
     });

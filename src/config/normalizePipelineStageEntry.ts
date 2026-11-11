@@ -29,6 +29,7 @@ import {
 } from "./pipelineStageKeys.js";
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
+import { parseFunctionAttachment } from "./loadFunction.js";
 import { parsePipelineRoute } from "./pipelineRoute.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -383,6 +384,34 @@ export function normalizePipelineStageEntries(
       route = parsedRoute.value;
     }
 
+    let routeFunction: NormalizedPipelineStageEntry["routeFunction"];
+    if (raw.function !== undefined) {
+      const parsedFunction = parseFunctionAttachment(raw.function, `stage "${id}" function`);
+      if (!parsedFunction.ok) {
+        return loadFailure([
+          {
+            code: "function.invalid",
+            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): ${parsedFunction.message}`,
+            category: "pipeline",
+            pipelineId: ctx.pipelineId,
+            stageId: id,
+          },
+        ]);
+      }
+      if (route === undefined) {
+        return loadFailure([
+          {
+            code: "function.routing_requires_route",
+            message: `Stage "${id}" names a routing function and has no route`,
+            category: "pipeline",
+            pipelineId: ctx.pipelineId,
+            stageId: id,
+          },
+        ]);
+      }
+      routeFunction = parsedFunction.value;
+    }
+
     if (raw.entry !== undefined && typeof raw.entry !== "boolean") {
       return loadFailure([
         {
@@ -417,6 +446,7 @@ export function normalizePipelineStageEntries(
         ? { replay_safe: raw.replay_safe as boolean }
         : {}),
       ...(route !== undefined ? { route } : {}),
+      ...(routeFunction !== undefined ? { routeFunction } : {}),
       ...(entryFlag !== undefined ? { entry: entryFlag } : {}),
       ...(skill !== undefined ? { skill } : {}),
       ...(mcp !== undefined ? { mcp } : {}),

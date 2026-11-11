@@ -62,6 +62,16 @@ const modelSchema = z
   })
   .prefault({});
 
+const functionGrantSchema = z.strictObject({
+  id: nonEmpty,
+  origin: z.string().trim().min(1).optional(),
+  methods: z.array(z.string().trim().min(1)).optional(),
+  path_prefix: z.string().trim().min(1).optional(),
+  credential_ref: z.string().trim().min(1).optional(),
+  root: z.enum(["artifacts", "workspace"]).optional(),
+  path: z.string().trim().min(1).optional(),
+});
+
 const toolsSchema = z
   .strictObject({
     builtin: z
@@ -87,6 +97,14 @@ const toolsSchema = z
         tools: z.array(nonEmpty).default([]),
       })
       .prefault({}),
+    functions: z
+      .array(
+        z.strictObject({
+          id: nonEmpty,
+          grants: z.array(functionGrantSchema).default([]),
+        }),
+      )
+      .optional(),
   })
   .prefault({});
 
@@ -403,6 +421,7 @@ export function grantedToolIds(definition: Pick<AgentDefinition, "tools" | "sub_
     for (const tool of tools) ids.add(`${server}.${tool}`);
   }
   for (const tool of grantedStageflowTools(definition.tools.stageflow)) ids.add(stageflowGrantId(tool));
+  for (const attachment of definition.tools.functions ?? []) ids.add(`function.${attachment.id}`);
   for (const agentId of definition.sub_agents) ids.add(`agent:${agentId}`);
   return ids;
 }

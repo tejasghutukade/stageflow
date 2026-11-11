@@ -76,6 +76,7 @@ export async function startMcpServer(
           controlTokens,
           getShutdown: () => shutdown,
           ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
+          ...(boot.functionService ? { functionService: boot.functionService } : {}),
           ...(boot.evalRunManager ? { evalRunManager: boot.evalRunManager } : {}),
           ...(boot.evalServices ? { evalServices: boot.evalServices } : {}),
           ...(boot.channels ? { channels: boot.channels } : {}),

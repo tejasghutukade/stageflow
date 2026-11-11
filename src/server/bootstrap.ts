@@ -7,6 +7,8 @@ import { A2aStore } from "../a2a/store.js";
 import type { StagePort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type Database from "better-sqlite3";
+import { FunctionService } from "../functions/service.js";
+import { FunctionStore } from "../functions/store.js";
 import { createRunStoreWithConnection, sqliteConnectionFromStore, type RunStoreKind } from "../runstore/createStore.js";
 import { a2aWriteTargetPath, resolveA2aConfigPath } from "../a2a/configDiscovery.js";
 import { ensureProjectRootsFromEnv } from "../project/ensureProjectRootsFromEnv.js";
@@ -162,6 +164,8 @@ export type StageflowHostBootstrap = {
   memories?: MemoryHost;
   /** Shared agent store, chat controller, and conversation backend for HTTP/MCP. */
   agentHost?: AgentHostContext;
+  /** Shared function catalog for HTTP and MCP. */
+  functionService?: import("../functions/service.js").FunctionService;
   /** Host-managed consumer identity; absent when an embedder supplied its own `consumerAuthorization`. */
   consumerIdentity?: ConsumerIdentityRuntime;
   /** Filled when the operator console host is created, so internal-agent evals can open a gated session. */
@@ -619,6 +623,7 @@ export async function bootstrapStageflowHost(
         allowLoopback: (options.env ?? process.env).STAGEFLOW_IDENTITY_ALLOW_LOOPBACK === "1",
       });
   consumerIdentity?.init();
+  const functionService = sqliteConnection !== undefined ? new FunctionService({ store: new FunctionStore(sqliteConnection) }) : undefined;
   const agentHost =
     sqliteConnection !== undefined
       ? createAgentHostContext({
@@ -640,6 +645,7 @@ export async function bootstrapStageflowHost(
             evalRunManager,
             ...(options.providerAuthContext ? { providerAuthContext: options.providerAuthContext } : {}),
             ...(providerBoot !== undefined ? { providerBoot } : {}),
+            ...(functionService ? { functionService } : {}),
           },
         })
       : undefined;
@@ -672,6 +678,7 @@ export async function bootstrapStageflowHost(
             agentConversationBackend: agentHost.backend,
           }
         : {}),
+      ...(functionService ? { functionService } : {}),
       ...(providerBoot !== undefined ? { providerBoot } : {}),
     },
     { mcpStateless },
@@ -729,6 +736,7 @@ export async function bootstrapStageflowHost(
     storeFilesystem,
     workspaceCatalog,
     ...(agentHost ? { agentHost } : {}),
+    ...(functionService ? { functionService } : {}),
     ...(consumerIdentity ? { consumerIdentity } : {}),
     operatorHostSlot,
     ...(boundPort !== undefined ? { boundPort } : {}),

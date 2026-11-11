@@ -154,8 +154,13 @@ export type BrowserLoginCheckEvidence = {
   url?: string;
 };
 
+export type FunctionCheckEvidence = {
+  kind: "function";
+};
+
 export type CompletionCheckEvidence =
   | BrowserLoginCheckEvidence
+  | FunctionCheckEvidence
   | CommandCheckEvidence
   | ArtifactCheckEvidence
   | PayloadSchemaCheckEvidence
@@ -594,6 +599,8 @@ async function runCheck(
       return runChecklistCheck(check, input);
     case "browser_login":
       return runBrowserLoginCheck(check, input);
+    case "function":
+      return result(check, "error", { kind: "function" }, "Function checks are not executed during completion");
   }
 }
 

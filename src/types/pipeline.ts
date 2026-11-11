@@ -6,6 +6,7 @@ import type {
   StageGateKind,
   StageIoYaml,
 } from "./stage.js";
+import type { FunctionGrant } from "../config/loadFunction.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 import type { StageSecretDecl } from "../runtime/stageSecretDecl.js";
 import type { ToolRequirement } from "../config/toolRequires.js";
@@ -209,6 +210,7 @@ export type NormalizedPipelineStageEntry = {
   recovery?: RecoveryPolicy;
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
+  routeFunction?: { id: string; grants: FunctionGrant[] };
   entry?: boolean;
   skill?: string;
   mcp?: string[];

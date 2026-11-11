@@ -3,6 +3,7 @@ import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type { AgentChatController } from "../agents/chatTurn.js";
 import type { ConversationBackend } from "../agents/sessions.js";
 import type { AgentService } from "../agents/service.js";
+import type { FunctionService } from "../functions/service.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import type { EngineStatus } from "../evals/engine/promptfoo/status.js";
@@ -22,6 +23,7 @@ export type McpToolDeps = {
   projectRoot?: string;
   providerBoot?: BootProviderResult;
   agentService?: AgentService;
+  functionService?: FunctionService;
   agentChat?: AgentChatController;
   agentConversationBackend?: ConversationBackend;
   evalRunManager?: EvalRunManager;

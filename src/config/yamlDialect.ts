@@ -51,6 +51,7 @@ export const STAGE_FILE_WIRING_KEYS = [
   "recovery",
   "fork",
   "route",
+  "function",
   "entry",
   "route_select",
   "allow_none",

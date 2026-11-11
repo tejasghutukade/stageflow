@@ -1,3 +1,4 @@
+import type { FunctionGrant } from "../config/loadFunction.js";
 import type { PreEmitCheck } from "./preEmitCheck.js";
 import type { StageSecretDecl } from "../runtime/stageSecretDecl.js";
 import type { ToolRequirement } from "../config/toolRequires.js";
@@ -94,6 +95,7 @@ export type StageConfig = {
   requires?: ToolRequirement[];
   /** Browser session settings for this stage; adds the agent-browser requirement. */
   browser?: StageBrowserConfig;
+  tools?: { functions: Array<{ id: string; grants: FunctionGrant[] }> };
   /**
    * Selects the StagePort backend for this stage, overriding pipeline/global.
    * Parsed but not yet consulted — see STAGE_LEVEL_AGENT_OVERRIDE_ENABLED.

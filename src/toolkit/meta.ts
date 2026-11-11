@@ -26,7 +26,11 @@ export type ToolGroupId =
   | "connections"
   | "connections.cleanup"
   | "memories"
-  | "memories.cleanup";
+  | "memories.cleanup"
+  | "functions.read"
+  | "functions.write"
+  | "functions.test"
+  | "functions.cleanup";
 
 export type ToolGroup = {
   id: ToolGroupId;
@@ -57,6 +61,10 @@ export const TOOL_GROUPS: readonly ToolGroup[] = [
   { id: "evals.run", title: "Run evals", summary: "Start and cancel eval runs, and try one case. Calls models and costs money." },
   { id: "evals.write", title: "Author evals", summary: "Create and edit evals and datasets, install a sample, and review or sort suggestions." },
   { id: "evals.cleanup", title: "Delete eval runs", summary: "Delete an eval run and its stored results. Destructive." },
+  { id: "functions.read", title: "Look at functions", summary: "List functions and read a revision." },
+  { id: "functions.write", title: "Author functions", summary: "Create, edit, and duplicate functions, and attach them through stage, pipeline, and agent writes." },
+  { id: "functions.test", title: "Test functions", summary: "Ask to test a function." },
+  { id: "functions.cleanup", title: "Delete functions", summary: "Delete a function that nothing references. Destructive." },
 ];
 
 export type ToolMeta = {
@@ -196,6 +204,16 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   accept_eval_failure_suggestions: t("evals.write", "write"),
   dismiss_eval_failure_suggestions: t("evals.write", "write"),
   delete_eval_run: t("evals.cleanup", "destructive"),
+
+  list_functions: t("functions.read", "read"),
+  get_function: t("functions.read", "read"),
+  list_function_revisions: t("functions.read", "read"),
+  get_function_revision: t("functions.read", "read"),
+  create_function: t("functions.write", "write"),
+  save_function: t("functions.write", "write"),
+  duplicate_function: t("functions.write", "write"),
+  test_function: t("functions.test", "read"),
+  delete_function: t("functions.cleanup", "destructive"),
 };
 
 export type StageflowGrants = { groups: readonly string[]; tools: readonly string[] };

@@ -20,6 +20,7 @@ export const WIRING_KEYS = new Set([
   "replay_safe",
   /** Additive, alongside `needs`/`fork`/`feedback_loop` (see docs/yaml-catalog.md). */
   "route",
+  "function",
   "entry",
   "route_select",
   "allow_none",
@@ -45,6 +46,7 @@ export const BODY_KEYS = new Set([
   "secrets",
   "requires",
   "browser",
+  "tools",
   "io",
   "verify",
 ]);
