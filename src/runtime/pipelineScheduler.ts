@@ -2,7 +2,11 @@ import type { StagePort } from "../agent/port.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
 import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
-import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
+import {
+  buildPipelineDagSnapshotFromLoaded,
+  instancesOfDefinition,
+} from "../runstore/pipelineDagSnapshot.js";
+import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
 import {
   defaultStageBrowserSupport,
   resolveStageBrowserEnv,
@@ -53,6 +57,15 @@ import {
   joinAllowsRun,
   pickStalledJoinSkips,
 } from "./joinReadiness.js";
+import {
+  cloneCatalogId,
+  commitFunctionRoute,
+  functionSelectionReleases,
+  loadFunctionRouteSelections,
+  routingFailureText,
+  type FunctionRouteInvoker,
+  type FunctionRouteSelections,
+} from "./functionRoute.js";
 import { reopenRunnableSkippedStages, persistReopenedStages } from "./reopenSkipped.js";
 import type {
   FeedbackLoopDecisionInput,
@@ -240,12 +253,14 @@ export async function hydrateScheduleFromStore(
     schedulingHalted = true;
   }
 
+  const functionSelections = await loadFunctionRouteSelections(store, runId, resolvedDag);
   await reopenRunnableSkippedStages(
     store,
     runId,
     resolvedDag,
     states,
     completedEnvelopes,
+    functionSelections,
   );
 
   return {
@@ -347,6 +362,7 @@ export type ResumeRunOptions = {
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   schedulingHalt?: { halted: boolean; hostShutdown?: boolean; abandoned?: Map<string, string> };
+  functionRouteInvoker?: FunctionRouteInvoker;
 };
 
 /** Refuses to overwrite a cancelled run (KTD7). */
@@ -453,7 +469,60 @@ export type RunPipelineDagOptions = {
   }) => Promise<void>;
   /** Live cancel flag — when set, launchStage/startStage stop. */
   schedulingHalt?: { halted: boolean; hostShutdown?: boolean; abandoned?: Map<string, string> };
+  functionRouteInvoker?: FunctionRouteInvoker;
 };
+
+export async function recoverFunctionRoute(options: {
+  prepared: SchedulerPreparedPipeline;
+  stageId: string;
+  maxActiveStagesPerRun: number;
+  executionMode?: StageExecutionMode;
+  functionRouteInvoker?: FunctionRouteInvoker;
+}): Promise<PipelineRunResult> {
+  const { prepared, stageId } = options;
+  const meta = await prepared.store.readRunMeta(prepared.run.runId);
+  const dag = meta.pipeline_dag ?? buildPipelineDagSnapshotFromLoaded(prepared.loaded);
+  const envelope = await prepared.store.readEnvelope(prepared.run.runId, stageId);
+  const latest = await prepared.store.getLatestStageExecution(prepared.run.runId, stageId);
+  const projectRoot = prepared.projectRoot ?? prepared.cwd;
+  const decision = await commitFunctionRoute({
+    store: prepared.store,
+    dag,
+    runId: prepared.run.runId,
+    stageId,
+    attempt: latest?.attempt,
+    envelope,
+    projectRoot,
+    invoker: options.functionRouteInvoker,
+    force: true,
+    roots: {
+      artifacts: attemptArtifactsDir(
+        prepared.run.workspaceDir,
+        stageId,
+        latest?.attempt ?? 1,
+      ),
+      workspace: prepared.checkoutRoot ?? projectRoot,
+    },
+  });
+  if (decision === undefined || decision.status === "error") {
+    return {
+      ok: false,
+      outcome: "failed",
+      runDir: prepared.run.workspaceDir,
+      runId: prepared.run.runId,
+      reason: routingFailureText(stageId, decision),
+    };
+  }
+  await prepared.store.updateRunStatus(prepared.run.runId, "running");
+  return runPipelineDag({
+    prepared,
+    maxActiveStagesPerRun: options.maxActiveStagesPerRun,
+    executionMode: options.executionMode,
+    resumeFromStageId: stageId,
+    initialPrior: envelope,
+    functionRouteInvoker: options.functionRouteInvoker,
+  });
+}
 
 export type RetryRunOptions = {
   prepared: SchedulerPreparedPipeline;
@@ -669,12 +738,13 @@ function isRunnable(
   schedulingHalted: boolean,
   completedEnvelopes: Map<string, StageEnvelope>,
   feedback?: ReplayScheduleHandle,
+  functionSelections?: FunctionRouteSelections,
 ): boolean {
   if (schedulingHalted) return false;
   if (feedback !== undefined && isHeld(feedback, stageId)) return false;
   const state = states.get(stageId);
   if (state !== "pending") return false;
-  if (!joinAllowsRun(dag, stageId, states, completedEnvelopes)) return false;
+  if (!joinAllowsRun(dag, stageId, states, completedEnvelopes, functionSelections)) return false;
   return cloneScheduleAllowsRun(dag, stageId, states, completedEnvelopes);
 }
 
@@ -728,6 +798,7 @@ export async function runPipelineDag(
     options.initialSchedule ??
     (await hydrateScheduleFromStore(store, run.runId, fallbackDag, executionMode));
   let dag: RunPipelineDagSnapshot = hydratedDag ?? fallbackDag;
+  const functionSelections: Map<string, readonly string[]> = new Map();
   const runMeta = await store.readRunMeta(run.runId);
   if (hydratedDag === undefined) {
     dag = runMeta.pipeline_dag ?? fallbackDag;
@@ -876,7 +947,7 @@ export async function runPipelineDag(
    */
   const applyStalledJoinSkips = async (): Promise<void> => {
     for (;;) {
-      const ids = pickStalledJoinSkips(dag, states, completedEnvelopes);
+      const ids = pickStalledJoinSkips(dag, states, completedEnvelopes, functionSelections);
       if (ids.length === 0) return;
       for (const id of ids) {
         await persistSkipPending(id);
@@ -1112,15 +1183,11 @@ export async function runPipelineDag(
     }
   };
 
-  const onStageSuccess = async (stageId: string, envelope: StageEnvelope) => {
-    states.set(stageId, "succeeded");
-    completedEnvelopes.set(stageId, envelope);
-    notifyRetryRootTerminal(stageId, "succeeded");
-
+  const acceptMint = async (stageId: string, envelope: StageEnvelope): Promise<boolean> => {
     const minted = mint(dag, stageId, envelope);
     if (minted.kind === "error") {
       await handlePostSuccessError(stageId, minted.reason);
-      return;
+      return false;
     }
     if (minted.kind === "minted") {
       dag = minted.dag;
@@ -1140,6 +1207,51 @@ export async function runPipelineDag(
           cloneStageIds: minted.instanceIds,
         });
       }
+    }
+    return true;
+  };
+
+  const releaseFunctionSelection = async (
+    stageId: string,
+    envelope: StageEnvelope,
+    nextStageIds: readonly string[],
+  ): Promise<boolean> => {
+    const selected = new Set(nextStageIds);
+    const catalogId = cloneCatalogId(dag, stageId);
+    if (catalogId !== undefined && selected.has(catalogId)) {
+      const existing = instancesOfDefinition(asDagSnapshot(dag), catalogId).filter(
+        (id) => id !== catalogId,
+      );
+      if (existing.length === 0) {
+        if (!(await acceptMint(stageId, envelope))) return false;
+      }
+    }
+    const skippedIds: string[] = [];
+    const skipPending = (id: string) => {
+      if (states.get(id) !== "pending") return;
+      states.set(id, "skipped");
+      notifyRetryRootTerminal(id, "skipped");
+      skippedIds.push(id);
+    };
+    for (const childId of dag.childrenOf[stageId] ?? []) {
+      if (functionSelectionReleases(dag, childId, selected)) continue;
+      skipPending(childId);
+      skipRejectedNeedDependents(dag, childId, states, "skipped", skipPending);
+    }
+    for (const id of skippedIds) {
+      await store.appendStageEvent(run.runId, id, { event: "skipped" });
+    }
+    return true;
+  };
+
+  const onStageSuccess = async (stageId: string, envelope: StageEnvelope) => {
+    states.set(stageId, "succeeded");
+    completedEnvelopes.set(stageId, envelope);
+    notifyRetryRootTerminal(stageId, "succeeded");
+
+    const node = dag.nodes.find((n) => n.id === stageId);
+    if (node?.routeFunction === undefined) {
+      if (!(await acceptMint(stageId, envelope))) return;
     }
 
     const feedbackAction = envelope.feedback_loop;
@@ -1253,7 +1365,33 @@ export async function runPipelineDag(
       });
     }
 
-    const node = dag.nodes.find((n) => n.id === stageId);
+    if (node?.routeFunction !== undefined) {
+      const latest = await store.getLatestStageExecution(run.runId, stageId);
+      const decision = await commitFunctionRoute({
+        store,
+        dag,
+        runId: run.runId,
+        stageId,
+        attempt: latest?.attempt,
+        envelope,
+        projectRoot: factoryCwd,
+        invoker: options.functionRouteInvoker,
+        roots: {
+          artifacts: attemptArtifactsDir(run.workspaceDir, stageId, latest?.attempt ?? 1),
+          workspace: checkoutRoot ?? factoryCwd,
+        },
+      });
+      if (decision === undefined || decision.status === "error") {
+        schedulingHalted = true;
+        if (firstFailureReason === undefined) {
+          firstFailureReason = routingFailureText(stageId, decision);
+        }
+        return;
+      }
+      functionSelections.set(stageId, decision.nextStageIds);
+      if (!(await releaseFunctionSelection(stageId, envelope, decision.nextStageIds))) return;
+    }
+
     const protectedIds = protectedClonableChildIds(dag, stageId, envelope);
     if (node?.fork) {
       const chosen = normalizeForkChoice(envelope.fork_choice, "stored");
@@ -1314,6 +1452,7 @@ export async function runPipelineDag(
       dag,
       states,
       completedEnvelopes,
+      functionSelections,
     );
   };
 
@@ -1549,6 +1688,9 @@ export async function runPipelineDag(
       ...(sessionMode !== undefined ? { sessionMode } : {}),
       ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
       ...(resumeToken !== undefined ? { resumeToken } : {}),
+      ...(options.functionRouteInvoker !== undefined
+        ? { functionRouteInvoker: options.functionRouteInvoker }
+        : {}),
     });
     cleanupAttemptCredentials();
 
@@ -1622,6 +1764,7 @@ export async function runPipelineDag(
           schedulingHalted,
           completedEnvelopes,
           feedbackSchedule,
+          functionSelections,
         )
       ) {
         ids.push(node.id);
@@ -1639,6 +1782,43 @@ export async function runPipelineDag(
     }
     return true;
   };
+
+  const replayFunctionRoutes = async () => {
+    const stored = await loadFunctionRouteSelections(store, run.runId, dag);
+    for (const [id, ids] of stored) functionSelections.set(id, ids);
+    for (const node of dag.nodes) {
+      if (node.routeFunction === undefined) continue;
+      if (states.get(node.id) !== "succeeded") continue;
+      const envelope = completedEnvelopes.get(node.id);
+      if (envelope === undefined || envelope.status !== "success") continue;
+      if (envelope.feedback_loop?.action === "send_back") continue;
+      const latest = await store.getLatestStageExecution(run.runId, node.id);
+      const decision = await commitFunctionRoute({
+        store,
+        dag,
+        runId: run.runId,
+        stageId: node.id,
+        attempt: latest?.attempt,
+        envelope,
+        projectRoot: factoryCwd,
+        invoker: options.functionRouteInvoker,
+        roots: {
+          artifacts: attemptArtifactsDir(run.workspaceDir, node.id, latest?.attempt ?? 1),
+          workspace: checkoutRoot ?? factoryCwd,
+        },
+      });
+      if (decision === undefined || decision.status === "error") {
+        schedulingHalted = true;
+        if (firstFailureReason === undefined) {
+          firstFailureReason = routingFailureText(node.id, decision);
+        }
+        return;
+      }
+      functionSelections.set(node.id, decision.nextStageIds);
+      if (!(await releaseFunctionSelection(node.id, envelope, decision.nextStageIds))) return;
+    }
+  };
+  await replayFunctionRoutes();
 
   while (!allTerminal()) {
     if (options.schedulingHalt?.halted) {

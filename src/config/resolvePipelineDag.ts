@@ -29,6 +29,7 @@ type NormalizedEdge = {
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
   replay_safe?: boolean;
+  routeFunction?: PipelineStageRef["routeFunction"];
 };
 
 export type ResolvePipelineDagContext = {
@@ -87,6 +88,7 @@ function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
       ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
       ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
       ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
+      ...(entry.routeFunction !== undefined ? { routeFunction: entry.routeFunction } : {}),
     };
   });
 }
@@ -371,6 +373,7 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
       ? { feedback_loop: toFeedbackLoopConfigFromRouteLoopEntry(edge.routeLoopEntries[0]!) }
       : {}),
     ...(edge.replay_safe !== undefined ? { replay_safe: edge.replay_safe } : {}),
+    ...(edge.routeFunction !== undefined ? { routeFunction: edge.routeFunction } : {}),
   }));
 
   return { nodes, roots, childrenOf };
@@ -510,6 +513,12 @@ export function areResolvedDagsEquivalent(a: ResolvedPipelineDag, b: ResolvedPip
       return false;
     }
     if (nodeA.feedback_loop?.target !== nodeB.feedback_loop?.target) return false;
+    if (
+      JSON.stringify(nodeA.routeFunction ?? null) !==
+      JSON.stringify(nodeB.routeFunction ?? null)
+    ) {
+      return false;
+    }
   }
 
   return true;

@@ -134,6 +134,44 @@ describe("joinAllowsRun", () => {
     expect(pickStalledJoinSkips(dag, states, envelopes)).toEqual([]);
   });
 
+  it("a function exclusion into a join does not become an inclusion when another parent skipped", async () => {
+    const loaded = await loadPipeline(pipelinePath("route-if-join"), {
+      cwd: fixtures,
+    });
+    const dag = loaded.dag;
+    const write = dag.nodes.find((node) => node.id === "write");
+    if (!write) throw new Error("missing write");
+    (write as { routeFunction?: { id: string; grants: [] } }).routeFunction = {
+      id: "pick",
+      grants: [],
+    };
+    const states = new Map<string, StageScheduleState>([
+      ["kickoff", "succeeded"],
+      ["write", "succeeded"],
+      ["draw", "skipped"],
+      ["assemble", "pending"],
+    ]);
+    const envelopes = new Map<string, StageEnvelope>([
+      ["write", okEnvelope("write-ok", { payload: { ready: true } })],
+    ]);
+    const excluded = new Map<string, readonly string[]>([["write", []]]);
+    expect(joinAllowsRun(dag, "assemble", states, envelopes, excluded)).toBe(false);
+    expect(pickStalledJoinSkips(dag, states, envelopes, excluded)).toEqual(["assemble"]);
+
+    const legacy = await loadPipeline(pipelinePath("route-if-join"), { cwd: fixtures });
+    const legacyStates = new Map<string, StageScheduleState>([
+      ["kickoff", "succeeded"],
+      ["write", "succeeded"],
+      ["draw", "skipped"],
+      ["assemble", "pending"],
+    ]);
+    const legacyEnvelopes = new Map<string, StageEnvelope>([
+      ["write", okEnvelope("write-ok", { payload: { ready: false } })],
+    ]);
+    expect(joinAllowsRun(legacy.dag, "assemble", legacyStates, legacyEnvelopes)).toBe(true);
+    expect(pickStalledJoinSkips(legacy.dag, legacyStates, legacyEnvelopes)).toEqual([]);
+  });
+
   it("does not run or stalled-skip a join when a succeeded inbound is missing_field", async () => {
     const loaded = await loadPipeline(pipelinePath("route-if-join"), {
       cwd: fixtures,

@@ -37,6 +37,7 @@ import {
   type CreatedRun,
   type FeedbackLoopHistory,
   type FeedbackLoopPatch,
+  type FunctionRouteRecord,
   type FeedbackLoopRecord,
   type FeedbackLoopState,
   type FeedbackReplayPatch,
@@ -154,10 +155,11 @@ type ExecutionRow = {
   cost_usd: number | null;
   usage_json: string | null;
   auto_resume_count: number | null;
+  function_route_json: string | null;
 };
 
 const EXECUTION_SELECT_COLS =
-  `run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json, auto_resume_count`;
+  `run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json, auto_resume_count, function_route_json`;
 
 type VerificationCheckResultRow = {
   run_id: string;
@@ -240,7 +242,20 @@ type TriggerRow = {
 
 const ensuredStageDirs = new Set<string>();
 
+function functionRouteFromJson(raw: string | null): FunctionRouteRecord | undefined {
+  if (raw == null) return undefined;
+  try {
+    const value = JSON.parse(raw) as FunctionRouteRecord;
+    if (value?.status === "selected" && Array.isArray(value.nextStageIds)) return value;
+    if (value?.status === "error") return value;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 function executionFromRow(row: ExecutionRow): StageExecution {
+  const functionRoute = functionRouteFromJson(row.function_route_json);
   return {
     run_id: row.run_id,
     stage_id: row.stage_id,
@@ -257,6 +272,7 @@ function executionFromRow(row: ExecutionRow): StageExecution {
       ? { usage: JSON.parse(row.usage_json) as StageUsage }
       : {}),
     auto_resume_count: row.auto_resume_count ?? 0,
+    ...(functionRoute !== undefined ? { function_route: functionRoute } : {}),
   };
 }
 
@@ -1035,6 +1051,11 @@ export class SqliteRunStore implements RunStore {
     if (patch.auto_resume_count !== undefined) {
       sets.push("auto_resume_count = @auto_resume_count");
       params.auto_resume_count = patch.auto_resume_count;
+    }
+    if (patch.function_route !== undefined) {
+      sets.push("function_route_json = @function_route_json");
+      params.function_route_json =
+        patch.function_route != null ? JSON.stringify(patch.function_route) : null;
     }
     if (sets.length === 0) return;
     const result = this.db

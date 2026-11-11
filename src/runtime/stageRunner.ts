@@ -32,6 +32,8 @@ import {
   type OperatorCatalog,
 } from "./stageAttemptBootstrap.js";
 import { runWithFunctionChecks, type FunctionCheckScope } from "../envelope/functionVerification.js";
+import { commitFunctionRoute, type FunctionRouteInvoker } from "./functionRoute.js";
+import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { createVerifiedStageExecution } from "./verifiedStageExecution.js";
 import {
@@ -87,6 +89,7 @@ export type RunStageOptions = {
   stageEnv?: Record<string, string>;
   /** Test seam for the Host login check run by a `browser_login` verify item. */
   browser?: Pick<StageBrowserSupport, "runner" | "loginCheck">;
+  functionRouteInvoker?: FunctionRouteInvoker;
   /**
    * Runs after the agent turn and before completion verification records a
    * verdict. Used to copy a sandbox desk back onto the host tree.
@@ -516,7 +519,7 @@ export async function runStage(
         };
       }
     }
-    return await finalizeStageResult({
+    const finalized = await finalizeStageResult({
       store,
       runId,
       stageId,
@@ -525,6 +528,27 @@ export async function runStage(
       attemptCtx,
       browser: stage.browser !== undefined,
     });
+    if (
+      finalized.ok &&
+      finalized.envelope.status === "success" &&
+      finalized.envelope.feedback_loop?.action !== "send_back"
+    ) {
+      await commitFunctionRoute({
+        store,
+        dag,
+        runId,
+        stageId,
+        attempt,
+        envelope: finalized.envelope,
+        projectRoot: factoryCwd,
+        invoker: options.functionRouteInvoker,
+        roots: {
+          artifacts: attemptArtifactsDir(roots.runWorkspaceDir, stageId, attempt),
+          workspace: roots.checkoutRoot ?? roots.cwd,
+        },
+      });
+    }
+    return finalized;
   } finally {
     const timedOut = isStageTimeoutReason(
       outcome.ok ? undefined : outcome.reason,

@@ -3,6 +3,7 @@ import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
 import { forkCohortMapsFromStore } from "./forkGeneration.js";
+import type { FunctionRouteSelections } from "./functionRoute.js";
 import { joinAllowsRun } from "./joinReadiness.js";
 import type { StageScheduleState } from "./pipelineScheduler.js";
 
@@ -40,6 +41,7 @@ export function shouldReopenSkippedStage(
   hasStarted: boolean,
   options?: {
     supersededCloneIds?: ReadonlySet<string>;
+    functionSelections?: FunctionRouteSelections;
   },
 ): boolean {
   if (hasStarted) return false;
@@ -48,7 +50,13 @@ export function shouldReopenSkippedStage(
   if (isUnchosenForkChild(dag, stageId, envelopes)) return false;
   const hypothetical = new Map(states);
   hypothetical.set(stageId, "pending");
-  return joinAllowsRun(dag, stageId, hypothetical, envelopes);
+  return joinAllowsRun(
+    dag,
+    stageId,
+    hypothetical,
+    envelopes,
+    options?.functionSelections,
+  );
 }
 
 export async function persistReopenedStages(
@@ -70,6 +78,7 @@ export async function reopenRunnableSkippedStages(
   dag: ResolvedPipelineDag,
   states: Map<string, StageScheduleState>,
   envelopes: Map<string, StageEnvelope>,
+  functionSelections?: FunctionRouteSelections,
 ): Promise<void> {
   const { supersededCloneIds } = await forkCohortMapsFromStore(store, runId);
   const ids: string[] = [];
@@ -83,7 +92,7 @@ export async function reopenRunnableSkippedStages(
         states,
         envelopes,
         eventsShowStarted(events),
-        { supersededCloneIds },
+        { supersededCloneIds, functionSelections },
       )
     ) {
       continue;

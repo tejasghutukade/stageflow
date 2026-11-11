@@ -483,6 +483,7 @@ export function toWiringRefs(
   recovery?: RecoveryPolicy;
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
+  routeFunction?: NormalizedPipelineStageEntry["routeFunction"];
   entry?: boolean;
   clone_cap?: number;
   clone_mode?: CloneMode;
@@ -493,6 +494,7 @@ export function toWiringRefs(
     ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
     ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
     ...(entry.route !== undefined ? { route: entry.route } : {}),
+    ...(entry.routeFunction !== undefined ? { routeFunction: entry.routeFunction } : {}),
     ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
     ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
     ...(entry.clone_mode !== undefined ? { clone_mode: entry.clone_mode } : {}),

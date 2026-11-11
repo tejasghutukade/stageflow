@@ -25,6 +25,12 @@ export function functionIdsForStage(
     if (check.type === "function") ids.add(check.function);
   }
   const node = dag?.nodes.find((item) => item.id === stageId);
+  const definition =
+    node?.definition_id !== undefined && node.definition_id !== node.id
+      ? dag?.nodes.find((item) => item.id === node.definition_id)
+      : undefined;
+  if (node?.routeFunction !== undefined) ids.add(node.routeFunction.id);
+  else if (definition?.routeFunction !== undefined) ids.add(definition.routeFunction.id);
   for (const check of node?.completion?.checks ?? []) {
     if (check.type === "function") ids.add(check.function);
   }

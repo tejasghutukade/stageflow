@@ -163,6 +163,7 @@ export type PipelineStageRef = {
   replay_safe?: boolean;
   /** Pipeline wiring vocabulary (see docs/yaml-catalog.md). */
   route?: PipelineRouteEntry[];
+  routeFunction?: { id: string; grants: FunctionGrant[] };
   /** Marks this stage as a pipeline entry point. */
   entry?: boolean;
   clone_cap?: number;
@@ -246,6 +247,7 @@ export type ResolvedPipelineStageNode = {
   recovery?: RecoveryPolicy;
   feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;
+  routeFunction?: { id: string; grants: FunctionGrant[] };
   /** Present (true) only when this stage was declared `entry: true`. */
   entry?: boolean;
 };
