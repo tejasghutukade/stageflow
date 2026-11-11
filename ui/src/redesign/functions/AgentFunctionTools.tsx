@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { functionsApi, type FunctionGrant, type FunctionSummary } from "../../api/functions";
 import { functionPath } from "../../routes";
 import { grantsForCapabilities, placeFunction, type FunctionAttachmentDraft } from "./functionAttachments";
@@ -13,6 +13,9 @@ export function AgentFunctionTools({
   const [catalog, setCatalog] = useState<FunctionSummary[]>([]);
   const [choice, setChoice] = useState("");
   const [finding, setFinding] = useState<{ message: string; href: string } | null>(null);
+  const attachmentsRef = useRef(attachments);
+  const inFlight = useRef(new Set<string>());
+  attachmentsRef.current = attachments;
 
   useEffect(() => {
     let live = true;
@@ -38,21 +41,27 @@ export function AgentFunctionTools({
   async function add(id: string) {
     const fn = catalog.find((row) => row.id === id);
     if (!fn?.kind || !onChange) return;
+    if (inFlight.current.has(id) || attachmentsRef.current.some((item) => item.id === id)) return;
     const placed = placeFunction("tool", { id: fn.id, kind: fn.kind });
     if (!placed.ok) {
       setFinding(placed);
       return;
     }
     setFinding(null);
-    if (attachments.some((item) => item.id === id)) return;
-    let grants: FunctionGrant[] = [];
+    inFlight.current.add(id);
     try {
-      const detail = await functionsApi.get(id);
-      if (detail.definition) grants = grantsForCapabilities(detail.definition.capabilities);
-    } catch {
-      grants = [];
+      let grants: FunctionGrant[] = [];
+      try {
+        const detail = await functionsApi.get(id);
+        if (detail.definition) grants = grantsForCapabilities(detail.definition.capabilities);
+      } catch {
+        grants = [];
+      }
+      if (attachmentsRef.current.some((item) => item.id === id)) return;
+      onChange([...attachmentsRef.current, { id, grants }]);
+    } finally {
+      inFlight.current.delete(id);
     }
-    onChange([...attachments, { id, grants }]);
   }
 
   return (

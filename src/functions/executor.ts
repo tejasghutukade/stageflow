@@ -250,11 +250,9 @@ export class FunctionExecutor {
       : Promise.resolve(deniedCapability(request.requestId));
     void pending.then(
       (value) => {
-        if (effect) running.externalWrite = false;
         this.sendCapability(running, child, value);
       },
       () => {
-        if (effect) running.externalWrite = false;
         this.sendCapability(running, child, deniedCapability(request.requestId));
       },
     );

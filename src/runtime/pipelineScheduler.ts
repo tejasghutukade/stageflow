@@ -1218,7 +1218,11 @@ export async function runPipelineDag(
   ): Promise<boolean> => {
     const selected = new Set(nextStageIds);
     const catalogId = cloneCatalogId(dag, stageId);
-    if (catalogId !== undefined && selected.has(catalogId)) {
+    const latest = await store.getLatestStageExecution(run.runId, stageId);
+    const route = latest?.function_route;
+    const expansion =
+      route?.status === "selected" ? route.cloneExpansion : undefined;
+    if (catalogId !== undefined && selected.has(catalogId) && expansion !== "done") {
       const existing = instancesOfDefinition(asDagSnapshot(dag), catalogId).filter(
         (id) => id !== catalogId,
       );
@@ -1240,6 +1244,16 @@ export async function runPipelineDag(
     }
     for (const id of skippedIds) {
       await store.appendStageEvent(run.runId, id, { event: "skipped" });
+    }
+    if (
+      latest != null &&
+      route?.status === "selected" &&
+      route.cloneExpansion !== "done" &&
+      route.cloneExpansion !== "not_needed"
+    ) {
+      await store.updateStageExecution(run.runId, stageId, latest.attempt, {
+        function_route: { ...route, cloneExpansion: "done" },
+      });
     }
     return true;
   };
@@ -1604,9 +1618,15 @@ export async function runPipelineDag(
           model: stage.model,
           grants,
           attemptHome,
-          ...((): { routeFunction?: NonNullable<(typeof dag.nodes)[number]["routeFunction"]> } => {
-            const routeFunction = dag.nodes.find((node) => node.id === definitionId)?.routeFunction;
-            return routeFunction !== undefined ? { routeFunction } : {};
+          ...((): {
+            routeFunction?: NonNullable<(typeof dag.nodes)[number]["routeFunction"]>;
+            completion?: NonNullable<(typeof dag.nodes)[number]["completion"]>;
+          } => {
+            const node = dag.nodes.find((item) => item.id === definitionId);
+            return {
+              ...(node?.routeFunction !== undefined ? { routeFunction: node.routeFunction } : {}),
+              ...(node?.completion !== undefined ? { completion: node.completion } : {}),
+            };
           })(),
           ...(browserEnv !== undefined ? { browserEnv } : {}),
           ...(sessionMode !== undefined

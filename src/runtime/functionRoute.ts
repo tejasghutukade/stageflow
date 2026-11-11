@@ -111,6 +111,19 @@ export function judgeFunctionRoute(
   };
 }
 
+export function withCloneExpansion(
+  decision: Extract<FunctionRouteRecord, { status: "selected" }>,
+  dag: ResolvedPipelineDag,
+  stageId: string,
+): Extract<FunctionRouteRecord, { status: "selected" }> {
+  const catalogId = cloneCatalogId(dag, stageId);
+  const needsMint = catalogId !== undefined && decision.nextStageIds.includes(catalogId);
+  return {
+    ...decision,
+    cloneExpansion: needsMint ? "pending" : "not_needed",
+  };
+}
+
 export function eligibleRouteChildren(
   dag: ResolvedPipelineDag,
   stageId: string,
@@ -298,10 +311,14 @@ export async function commitFunctionRoute(input: {
       message: error instanceof Error ? error.message : String(error),
     };
   }
+  const stored =
+    decision.status === "selected"
+      ? withCloneExpansion(decision, input.dag, input.stageId)
+      : decision;
   await input.store.updateStageExecution(input.runId, input.stageId, attempt, {
-    function_route: decision,
+    function_route: stored,
   });
-  return decision;
+  return stored;
 }
 
 export async function loadFunctionRouteSelections(

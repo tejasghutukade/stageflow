@@ -624,6 +624,39 @@ describe("function executor", () => {
     expect(started).toBe(4 + 15 + 1);
   });
 
+  it("returns uncertain_outcome when a write capability settles and the child exits without a result", async () => {
+    const child = fakeChild();
+    child.send = ((message: unknown) => {
+      const record = message as { type?: string };
+      if (record.type === "invoke") {
+        queueMicrotask(() => {
+          child.emit("message", {
+            type: "capability",
+            requestId: "cap-write",
+            op: "write",
+          });
+        });
+        queueMicrotask(() => child.emit("exit", 1, null));
+      }
+      return true;
+    }) as ChildProcess["send"];
+    const executor = new FunctionExecutor({
+      forkFn: (() => child) as typeof childProcess.fork,
+      onCapability: async () => ({
+        type: "capability_result",
+        requestId: "cap-write",
+        ok: true,
+        value: true,
+      }),
+    });
+    const result = await executor.invoke({
+      invocationId: invocationId("write-exit"),
+      source: SYNC_OK,
+      context: {},
+    });
+    expect(result).toMatchObject({ ok: false, code: "uncertain_outcome" });
+  });
+
   it("kills the running process group on cancel and a later call still runs", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fn-kill-"));
     const pidFile = path.join(root, "grandchild.pid");

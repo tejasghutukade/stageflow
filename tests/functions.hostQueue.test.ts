@@ -167,7 +167,12 @@ describe("function host queue", () => {
     const pending = callFunctionOnHost({ functionId: "score_check", kind: "tool" }, transport);
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     transport.emit("disconnect");
-    await expect(pending).rejects.toThrow("function host disconnected");
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      code: "cancelled",
+      message: "function host disconnected",
+      status: "failed",
+    });
     expect(sent.map((message) => message.type)).toEqual(["function.invoke", "function.cancel"]);
   });
 

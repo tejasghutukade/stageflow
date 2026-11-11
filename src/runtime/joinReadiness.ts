@@ -122,6 +122,24 @@ function anySucceededInboundEdgeMissed(
   return false;
 }
 
+function routeSelectionPending(
+  dag: ResolvedPipelineDag,
+  node: ResolvedPipelineStageNode,
+  states: Map<string, StageScheduleState>,
+  selections: FunctionRouteSelections | undefined,
+): boolean {
+  if (selections === undefined) return false;
+  for (const edge of predecessorEdges(node)) {
+    for (const parentId of expandJoinParent(dag, edge.id)) {
+      if (states.get(parentId) !== "succeeded") continue;
+      const parent = dag.nodes.find((item) => item.id === parentId);
+      if (parent?.routeFunction === undefined) continue;
+      if (!selections.has(parentId)) return true;
+    }
+  }
+  return false;
+}
+
 function functionSelectionExcludesJoin(
   dag: ResolvedPipelineDag,
   node: ResolvedPipelineStageNode,
@@ -209,6 +227,7 @@ export function joinAllowsRun(
   if (!node) return false;
   const edges = predecessorEdges(node);
   if (edges.length === 0) return true;
+  if (routeSelectionPending(dag, node, states, selections)) return false;
   if (expandJoinParents(dag, edges).length >= 2) {
     return multiParentJoinAllowsRun(dag, node, states, envelopes, selections);
   }

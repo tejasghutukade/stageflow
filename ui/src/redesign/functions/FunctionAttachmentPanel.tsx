@@ -1,4 +1,4 @@
-import { useEffect, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import { functionsApi, type FunctionGrant, type FunctionSummary } from "../../api/functions";
 import type { DraftPackagePayload } from "../../api";
 import { functionPath } from "../../routes";
@@ -41,6 +41,8 @@ export function FunctionAttachmentPanel({
   const provided = catalog !== undefined;
   const [loaded, setLoaded] = useState<FunctionSummary[]>(catalog ?? []);
   const [rejected, setRejected] = useState<{ message: string; href: string } | null>(null);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const rows = provided ? catalog : loaded;
 
   useEffect(() => {
@@ -91,9 +93,12 @@ export function FunctionAttachmentPanel({
       grants = [];
     }
     const attachment = { id, grants };
-    if (slot === "tool") onDraftChange(writeStageFunctionTools(draft, stageId, addAttachment(tools, id, grants)));
-    else if (slot === "check") onDraftChange(writeFunctionChecks(draft, stageId, addAttachment(checks, id, grants)));
-    else onDraftChange(writeRouteFunction(draft, stageId, attachment));
+    const current = draftRef.current;
+    if (slot === "tool") {
+      onDraftChange(writeStageFunctionTools(current, stageId, addAttachment(readStageFunctionTools(current, stageId), id, grants)));
+    } else if (slot === "check") {
+      onDraftChange(writeFunctionChecks(current, stageId, addAttachment(readFunctionChecks(current, stageId), id, grants)));
+    } else onDraftChange(writeRouteFunction(current, stageId, attachment));
   }
 
   function onDrop(slot: FunctionSlot, event: DragEvent<HTMLDivElement>) {

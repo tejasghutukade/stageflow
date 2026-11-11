@@ -7,27 +7,34 @@ export function FunctionSourceEditor({ value, onChange }: { value: string; onCha
   const host = useRef<HTMLDivElement>(null);
   const onChangeRef = useRef(onChange);
   const valueRef = useRef(value);
+  const editorRef = useRef<{ destroy: () => void; setValue: (next: string) => void } | undefined>(undefined);
   const [plain, setPlain] = useState(false);
   onChangeRef.current = onChange;
+  valueRef.current = value;
 
   useEffect(() => {
     const parent = host.current;
     if (!parent) return;
     let dead = false;
-    let view: { destroy: () => void } | undefined;
     void import("./mountJavaScriptEditor")
       .then((mod) => {
         if (dead || !host.current) return;
-        view = mod.mountJavaScriptEditor(host.current, valueRef.current, (next) => onChangeRef.current(next));
+        const editor = mod.mountJavaScriptEditor(host.current, valueRef.current, (next) => onChangeRef.current(next));
+        editorRef.current = editor;
       })
       .catch(() => {
         if (!dead) setPlain(true);
       });
     return () => {
       dead = true;
-      view?.destroy();
+      editorRef.current?.destroy();
+      editorRef.current = undefined;
     };
   }, []);
+
+  useEffect(() => {
+    editorRef.current?.setValue(value);
+  }, [value]);
 
   return (
     <div className="flex flex-col gap-1.5">

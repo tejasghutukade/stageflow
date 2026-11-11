@@ -3,17 +3,69 @@ import {
   type FunctionCheckRequest,
   type FunctionCheckScope,
 } from "../envelope/functionVerification.js";
+import type { FunctionGrant, FunctionKind } from "../config/loadFunction.js";
 import { createFunctionInvoker, type FunctionInvoker } from "../functions/invoke.js";
 import { FunctionService } from "../functions/service.js";
 import { FunctionStore } from "../functions/store.js";
 import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
 import type { JsonValue } from "../functions/protocol.js";
+import type { CompletionCheck, CompletionContract } from "../types/completion.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
+import type { PreEmitCheck } from "../types/preEmitCheck.js";
 import type { StageConfig } from "../types/stage.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageRoots } from "./stageRoots.js";
 
 const invokers = new WeakMap<Database.Database, FunctionInvoker>();
+
+export type StageFunctionGrantLookup = {
+  functionId: string;
+  kind: FunctionKind;
+  attachmentId?: string | null;
+  phase?: "emit" | "after" | null;
+};
+
+export function resolveStageFunctionGrants(input: {
+  stage?: StageConfig;
+  completion?: CompletionContract;
+  routeFunction?: { id: string; grants: FunctionGrant[] };
+  lookup: StageFunctionGrantLookup;
+}): readonly FunctionGrant[] | undefined {
+  const { functionId, kind, attachmentId, phase } = input.lookup;
+  if (kind === "routing") {
+    if (input.routeFunction?.id === functionId) return input.routeFunction.grants;
+    return undefined;
+  }
+  if (kind === "tool") {
+    return input.stage?.tools?.functions?.find((item) => item.id === functionId)?.grants;
+  }
+  const emitChecks = (input.stage?.pre_emit_checks ?? []).filter(
+    (check): check is Extract<PreEmitCheck, { type: "function" }> =>
+      check.type === "function" && check.function === functionId,
+  );
+  const afterChecks = (input.completion?.checks ?? []).filter(
+    (check): check is Extract<CompletionCheck, { type: "function" }> =>
+      check.type === "function" && check.function === functionId,
+  );
+  if (attachmentId) {
+    const byId =
+      emitChecks.find((check) => check.id === attachmentId) ??
+      afterChecks.find((check) => check.id === attachmentId);
+    if (byId) return byId.grants;
+    return undefined;
+  }
+  if (phase === "after") {
+    if (afterChecks.length === 1) return afterChecks[0]!.grants;
+    if (afterChecks.length > 1) return undefined;
+    return undefined;
+  }
+  if (phase === "emit" || phase == null) {
+    if (emitChecks.length === 1) return emitChecks[0]!.grants;
+    if (emitChecks.length > 1) return undefined;
+    if (phase == null && afterChecks.length === 1) return afterChecks[0]!.grants;
+  }
+  return undefined;
+}
 
 export function functionIdsForStage(
   stage: StageConfig,

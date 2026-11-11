@@ -165,7 +165,12 @@ export type StageSnapshot = {
 };
 
 export type FunctionRouteRecord =
-  | { status: "selected"; nextStageIds: string[]; reason?: string }
+  | {
+      status: "selected";
+      nextStageIds: string[];
+      reason?: string;
+      cloneExpansion?: "pending" | "done" | "not_needed";
+    }
   | { status: "error"; code?: string; message?: string };
 
 export type StageExecution = {

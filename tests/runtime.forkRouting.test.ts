@@ -860,7 +860,11 @@ describe("function route", () => {
     expect(
       (execution as { function_route?: { status: string; nextStageIds: string[] } } | null)
         ?.function_route,
-    ).toEqual({ status: "selected", nextStageIds: ["left", "right"] });
+    ).toEqual({
+      status: "selected",
+      nextStageIds: ["left", "right"],
+      cloneExpansion: "not_needed",
+    });
   });
 
   it("an empty selection finishes that branch", async () => {

@@ -158,6 +158,9 @@ describe("joinAllowsRun", () => {
     expect(joinAllowsRun(dag, "assemble", states, envelopes, excluded)).toBe(false);
     expect(pickStalledJoinSkips(dag, states, envelopes, excluded)).toEqual(["assemble"]);
 
+    const pendingSelection = new Map<string, readonly string[]>();
+    expect(joinAllowsRun(dag, "assemble", states, envelopes, pendingSelection)).toBe(false);
+
     const legacy = await loadPipeline(pipelinePath("route-if-join"), { cwd: fixtures });
     const legacyStates = new Map<string, StageScheduleState>([
       ["kickoff", "succeeded"],

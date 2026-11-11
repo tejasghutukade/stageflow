@@ -6,7 +6,7 @@ export function mountJavaScriptEditor(
   parent: HTMLElement,
   value: string,
   onChange: (next: string) => void,
-): { destroy: () => void } {
+): { destroy: () => void; setValue: (next: string) => void } {
   const view = new EditorView({
     parent,
     state: EditorState.create({
@@ -33,5 +33,14 @@ export function mountJavaScriptEditor(
       ],
     }),
   });
-  return view;
+  return {
+    destroy: () => view.destroy(),
+    setValue: (next: string) => {
+      const current = view.state.doc.toString();
+      if (next === current) return;
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: next },
+      });
+    },
+  };
 }

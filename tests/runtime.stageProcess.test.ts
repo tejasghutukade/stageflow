@@ -329,6 +329,157 @@ describe("StageProcessLauncher", () => {
     expect(envs[1]?.CURSOR_API_KEY).toBeUndefined();
   });
 
+  it("resolves after-phase completion grants on the host", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-fn-after-"));
+    const sent: unknown[] = [];
+    const grantsSeen: Array<unknown> = [];
+    const child = new EventEmitter() as ChildProcess;
+    child.stdout = null;
+    child.stderr = null;
+    child.connected = true;
+    child.pid = 44;
+    child.kill = (() => true) as ChildProcess["kill"];
+    child.send = ((message: unknown) => {
+      sent.push(message);
+      return true;
+    }) as ChildProcess["send"];
+    const launcher = new StageProcessLauncher({
+      cliEntry: "unused",
+      functionInvoker: {
+        async call(_projectRoot, input) {
+          grantsSeen.push(input.grants);
+          return {
+            ok: true,
+            value: { passed: true },
+            logs: "",
+            durationMs: 1,
+            sourceHash: "hash",
+            revision: 1,
+            kind: "verification",
+            status: "succeeded",
+          };
+        },
+        async cancel() {},
+      },
+      forkFn: (() => {
+        queueMicrotask(() => {
+          child.emit("message", {
+            type: "function.invoke",
+            requestId: "req-after",
+            input: {
+              functionId: "score_check",
+              kind: "verification",
+              attachmentId: "after-score",
+              input: { execution: { phase: "after" } },
+            },
+          });
+        });
+        return child;
+      }) as typeof childProcess.fork,
+    });
+
+    const pending = launcher.launch({
+      runId: "r-fn-after",
+      stageId: "check",
+      rootDir,
+      factoryCwd: "/projects/app",
+      stage: { id: "check", system_prompt: "x" },
+      completion: {
+        mode: "all",
+        checks: [
+          {
+            id: "after-score",
+            type: "function",
+            function: "score_check",
+            grants: [{ id: "files.read", roots: ["."] }],
+          },
+        ],
+      },
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(grantsSeen).toEqual([[{ id: "files.read", roots: ["."] }]]);
+    child.emit("message", { type: "succeeded" });
+    await expect(pending).resolves.toEqual({ type: "succeeded" });
+  });
+
+  it("resolves check-scoped emit grants by attachmentId", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-fn-scope-"));
+    const sent: unknown[] = [];
+    const grantsSeen: Array<unknown> = [];
+    const child = new EventEmitter() as ChildProcess;
+    child.stdout = null;
+    child.stderr = null;
+    child.connected = true;
+    child.pid = 45;
+    child.kill = (() => true) as ChildProcess["kill"];
+    child.send = ((message: unknown) => {
+      sent.push(message);
+      return true;
+    }) as ChildProcess["send"];
+    const launcher = new StageProcessLauncher({
+      cliEntry: "unused",
+      functionInvoker: {
+        async call(_projectRoot, input) {
+          grantsSeen.push(input.grants);
+          return {
+            ok: true,
+            value: { passed: true },
+            logs: "",
+            durationMs: 1,
+            sourceHash: "hash",
+            revision: 1,
+            kind: "verification",
+            status: "succeeded",
+          };
+        },
+        async cancel() {},
+      },
+      forkFn: (() => {
+        queueMicrotask(() => {
+          child.emit("message", {
+            type: "function.invoke",
+            requestId: "req-scope",
+            input: {
+              functionId: "score_check",
+              kind: "verification",
+              attachmentId: "narrow",
+              input: { execution: { phase: "emit" } },
+            },
+          });
+        });
+        return child;
+      }) as typeof childProcess.fork,
+    });
+
+    const pending = launcher.launch({
+      runId: "r-fn-scope",
+      stageId: "check",
+      rootDir,
+      stage: {
+        id: "check",
+        system_prompt: "x",
+        pre_emit_checks: [
+          {
+            id: "broad",
+            type: "function",
+            function: "score_check",
+            grants: [{ id: "env", keys: ["SECRET"] }],
+          },
+          {
+            id: "narrow",
+            type: "function",
+            function: "score_check",
+            grants: [{ id: "files.read", roots: ["out"] }],
+          },
+        ],
+      },
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(grantsSeen).toEqual([[{ id: "files.read", roots: ["out"] }]]);
+    child.emit("message", { type: "succeeded" });
+    await expect(pending).resolves.toEqual({ type: "succeeded" });
+  });
+
   it("runs a function call on the host and keeps the worker result", async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-fn-ipc-"));
     const sent: unknown[] = [];

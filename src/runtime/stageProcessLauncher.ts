@@ -48,6 +48,7 @@ import {
   isStageFunctionMessage,
   type StageFunctionHost,
 } from "../functions/workerIpc.js";
+import { resolveStageFunctionGrants } from "./stageFunctionChecks.js";
 
 export type StageLaunchInput = {
   runId: string;
@@ -74,6 +75,7 @@ export type StageLaunchInput = {
   browserEnv?: Record<string, string>;
   model?: string;
   routeFunction?: { id: string; grants: import("../config/loadFunction.js").FunctionGrant[] };
+  completion?: import("../types/completion.js").CompletionContract;
 };
 
 export type StageLaunchResult =
@@ -624,19 +626,18 @@ export class StageProcessLauncher {
             },
             () => child.connected === true && !settled,
             {
-              grantsFor(functionId, kind) {
-                if (kind === "routing") {
-                  if (input.routeFunction?.id === functionId) return input.routeFunction.grants;
-                  return undefined;
-                }
-                if (kind === "tool") {
-                  return input.stage?.tools?.functions?.find((item) => item.id === functionId)?.grants;
-                }
-                const emit = input.stage?.pre_emit_checks?.find(
-                  (check) => check.type === "function" && check.function === functionId,
-                );
-                if (emit?.type === "function") return emit.grants;
-                return undefined;
+              grantsFor(functionId, kind, options) {
+                return resolveStageFunctionGrants({
+                  stage: input.stage,
+                  completion: input.completion,
+                  routeFunction: input.routeFunction,
+                  lookup: {
+                    functionId,
+                    kind,
+                    attachmentId: options?.attachmentId,
+                    phase: options?.phase,
+                  },
+                });
               },
             },
           ).finally(() => {

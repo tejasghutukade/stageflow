@@ -12,7 +12,11 @@ export type StageFunctionHost = {
 };
 
 export type StageFunctionGrantSource = {
-  grantsFor(functionId: string, kind: FunctionKind): readonly FunctionGrant[] | undefined;
+  grantsFor(
+    functionId: string,
+    kind: FunctionKind,
+    options?: { attachmentId?: string | null; phase?: "emit" | "after" | null },
+  ): readonly FunctionGrant[] | undefined;
 };
 
 type FunctionHostTransport = {
@@ -71,7 +75,10 @@ export async function handleStageFunctionMessage(
     return;
   }
   const { grants: _ignored, ...withoutGrants } = kind.input;
-  const grants = grantSource?.grantsFor(kind.input.functionId, kind.input.kind);
+  const grants = grantSource?.grantsFor(kind.input.functionId, kind.input.kind, {
+    attachmentId: kind.input.attachmentId,
+    phase: verificationPhase(kind.input),
+  });
   if (grants === undefined) {
     if (alive()) {
       send(functionResponse(
@@ -99,21 +106,20 @@ export async function handleStageFunctionMessage(
 }
 
 function callFunctionOnTransport(input: FunctionCallInput, transport: FunctionHostTransport): Promise<FunctionRunView> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     if (transport.connected === false || typeof transport.send !== "function") {
-      reject(new Error("function host is unavailable"));
+      resolve(failedView(input.kind, "cancelled", "function host is unavailable"));
       return;
     }
     const requestId = randomUUID();
     let settled = false;
-    const finish = (error?: Error, view?: FunctionRunView): void => {
+    const finish = (view: FunctionRunView): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       transport.off("message", receive);
       transport.off("disconnect", disconnected);
-      if (error) reject(error);
-      else resolve(view!);
+      resolve(view);
     };
     const cancel = (): void => {
       try {
@@ -124,16 +130,16 @@ function callFunctionOnTransport(input: FunctionCallInput, transport: FunctionHo
     };
     const disconnected = (): void => {
       cancel();
-      finish(new Error("function host disconnected"));
+      finish(failedView(input.kind, "cancelled", "function host disconnected"));
     };
     const receive = (message: unknown): void => {
       const response = message as { type?: string; requestId?: string; view?: FunctionRunView };
       if (response?.type !== "function.response" || response.requestId !== requestId || response.view === undefined) return;
-      finish(undefined, response.view);
+      finish(response.view);
     };
     const timer = setTimeout(() => {
       cancel();
-      finish(new Error("function host timed out"));
+      finish(failedView(input.kind, "exception", "function host timed out"));
     }, HOST_TIMEOUT_MS);
     transport.on("message", receive);
     transport.once("disconnect", disconnected);
@@ -156,6 +162,12 @@ function functionKind(
   const functionId = (input as { functionId?: unknown }).functionId;
   if (typeof functionId !== "string" || functionId.length === 0) return undefined;
   return { input: input as FunctionCallInput };
+}
+
+function verificationPhase(input: FunctionCallInput): "emit" | "after" | null {
+  const execution = (input.input as { execution?: { phase?: unknown } } | undefined)?.execution;
+  const phase = execution?.phase;
+  return phase === "emit" || phase === "after" ? phase : null;
 }
 
 function functionResponse(requestId: string, view: FunctionRunView): object {
