@@ -59,7 +59,7 @@ function stageflowNamesInEnvDoc(doc: string): string[] {
     for (const found of token.matchAll(/(?:^|[^A-Za-z0-9_])(STAGEFLOW_[A-Z0-9_]+)/g)) {
       const name = found[1]!;
       names.add(name);
-      if (!name.endsWith("_")) previous = name;
+      previous = name;
     }
   }
   return [...names];

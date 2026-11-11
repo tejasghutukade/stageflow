@@ -99,15 +99,17 @@ describe("agent inbound webhooks", () => {
     expect(replies[0]).toMatchObject({ to: "77", text: "re: hi" });
   });
 
-  it("tells the sender when the session hit a limit", async () => {
-    const { router, replies } = await setup({ limits: { max_turns: 1 } });
+  it("opens a new session when the thread is past its turn limit", async () => {
+    const { router, replies, service, project } = await setup({ limits: { max_turns: 1 } });
     const first = slackRequest({ event: { ...slackEvent.event, ts: "1.0", event_ts: "1.0", thread_ts: "1.0" } });
     const second = slackRequest({ event: { ...slackEvent.event, ts: "2.0", event_ts: "2.0", thread_ts: "1.0" } });
     await router_handle(router, first);
     await vi.waitFor(() => expect(replies).toHaveLength(1));
     await router_handle(router, second);
     await vi.waitFor(() => expect(replies).toHaveLength(2));
-    expect(replies[1]!.text).toMatch(/limit of 1 turns/);
+    expect(replies[1]!.text).toBe("re: where is my order?");
+    const sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
+    expect(sessions).toHaveLength(2);
   });
 });
 

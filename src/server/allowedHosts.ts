@@ -197,7 +197,7 @@ export function originMatchesHostHeader(origin: string, hostHeader: string): boo
     return false;
   }
   if (originUrl.protocol !== "http:" && originUrl.protocol !== "https:") return false;
-  const originName = originUrl.hostname.toLowerCase();
+  const originName = originUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   const headerName = hostnameFromHostHeader(hostHeader).toLowerCase();
   if (originName !== headerName) return false;
   const schemePort = defaultPortForProtocol(originUrl.protocol);

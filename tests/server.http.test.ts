@@ -430,7 +430,7 @@ describe("localhost HTTP API", () => {
         const models = await jsonFetch(`${base}/api/models`);
         expect(models.status).toBe(200);
         expect(models.body.models).toContain("cursor/auto");
-        expect(models.body.models).toContain("anthropic/claude-sonnet-4-5");
+        expect(models.body.models).toContain("anthropic/claude-haiku-5-5");
       } finally {
         await closeServer(server);
       }

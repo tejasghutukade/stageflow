@@ -268,6 +268,7 @@ describe("draft HTTP catalog scan", () => {
       expect(body.catalogChanged).toBeUndefined();
       expect(Object.keys(body).sort()).toEqual([
         "catalog_root_path",
+        "fileHashes",
         "pipeline",
         "pipelinePath",
         "project_root",
