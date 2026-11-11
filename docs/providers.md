@@ -5,7 +5,7 @@ title: Providers
 
 # Providers
 
-Stageflow runs stages on **Pi** (`@earendil-works/pi-coding-agent`). Model provider credentials are stored in a Stageflow-owned file.
+Stageflow runs stages on **Pi** (`@earendil-works/pi-coding-agent`). The Claude and Cursor backends are experimental. Model provider credentials are stored in a Stageflow-owned file.
 
 Provider management is via `sf providers` and the console **Settings → Providers** page.
 

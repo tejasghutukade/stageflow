@@ -43,12 +43,12 @@ The same pipeline runs three ways without rewriting anything:
 - **Envelope handoffs** — typed stage payloads and artifacts via `write_stage_artifact` / `emit_stage_envelope`
 - **Verified stage execution** — after-phase `verify` checks with durable evidence, plus `on_verify_fail` repair or manual operator recovery ([guide](docs/verified-stage-execution.md))
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
-- **Agents** — project-owned, revisioned agents (`agents/*.agent.yaml`) with granted tools, ask-first approvals, traces, channels, schedules and a public web chat page ([guide](docs/agents.md))
+- **Agents (experimental)** — project-owned, revisioned agents (`agents/*.agent.yaml`) with granted tools, ask-first approvals, traces, channels, schedules and a public web chat page ([guide](docs/agents.md))
 - **Evals** — check a stage or an agent against a dataset: graders, repeats, honest statistics, compare two runs, and sort failures into what to fix ([guide](docs/evals.md))
 - **Operator console** — an Inbox for gates and agent approvals, pipeline runs, agents and their sessions, connections, MCP servers and settings at `http://127.0.0.1:3847` ([guide](docs/operator-console.md))
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running
 - **MCP servers for agents and stages** — add servers, secrets and OAuth sign-in from Settings → Project MCP, or in the project `.mcp.json` ([guide](docs/mcp-servers.md))
-- **Connections** — Slack, Telegram, iMessage, WhatsApp and AgentMail channels, and email accounts, managed from one page ([guide](docs/channels.md))
+- **Connections (experimental)** — Slack, Telegram, iMessage, WhatsApp and AgentMail channels, and email accounts, managed from one page ([guide](docs/channels.md))
 - **Standalone stage execution** — run a single stage directly with `run_stage` (MCP tool, `sf run-stage` CLI, or the A2A `run_stage` operation), no pipeline file required; chain calls with `envelope_ref` (one or many prior results) instead of a pipeline DAG
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
 - **Parallel stages** — pipeline DAG with fan-out, join, and Clone Chains (one Clone Instance per Clone Array element; see [YAML catalog](docs/yaml-catalog.md#clone-chain))
@@ -180,8 +180,8 @@ Start the console with `sf ui` (default `http://127.0.0.1:3847`).
 - **Pipeline runs** — active and recent runs, capacity, and status at a glance
 - **Run detail** — Timeline, Graph or List of the stages; select a stage for its transcript, events, envelope and artifacts. Created runs show **not started** with a **Start run** action until history exists
 - **Pipelines, Tasks, Catalog, Triggers** — browse and edit the YAML, start runs; **New pipeline** drafts one in the Workshop
-- **Agents** and **Agent sessions** — a directory with each agent's reach (web chat link, channel, schedule), cost and status; create and edit with version history; sessions, approvals and a run inspector
-- **Connections** — channels, email accounts and tool servers
+- **Agents** and **Agent sessions** (experimental) — a directory with each agent's reach (web chat link, channel, schedule), cost and status; create and edit with version history; sessions, approvals and a run inspector
+- **Connections** (experimental) — channels, email accounts and tool servers
 - **Settings** — Providers (`sf_owned` credential storage), Concurrency, MCP server, Project MCP (servers, secrets, sign-in) and Notifications
 - **Command palette** — `⌘K` from any page. Page-by-page guide: [docs/operator-console.md](docs/operator-console.md)
 
@@ -246,7 +246,7 @@ Stages use project `.mcp.json` plus stage `mcp` names. See [YAML catalog — Sta
 
 Run a single stage directly, without authoring a pipeline: the MCP `run_stage` tool, the `sf run-stage` CLI command, and (over A2A, only when that caller has `allow_run_stage` — see below) the `run_stage` operation all give a calling agent (Claude Code, Cursor, Codex, Pi, ...) the same capability, so it can decide what to run next itself rather than following a pre-authored DAG. Chain calls with `envelope_ref` — a reference to a previous call's stored envelope, one or many at once — instead of copying results around by hand. Full reference: [docs/mcp.md#run_stage](docs/mcp.md#run_stage), [docs/cli-reference.md#sf-run-stage](docs/cli-reference.md#sf-run-stage).
 
-## A2A
+## A2A (experimental)
 
 MCP is for your own trusted, local tools. A2A's `invoke` operation is a second, gated door for other agents on the network: publish specific pipelines in a separate `a2a.yaml`, and outside callers invoke them over JSON-RPC with a bearer token, poll for results, and download frozen artifacts -- never touching your internal run IDs or unpublished pipelines. A2A `run_stage` (above) stays off until that caller has `allow_run_stage: true`. A caller without it can invoke only the pipelines published to them.
 

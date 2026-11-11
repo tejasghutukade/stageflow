@@ -5,6 +5,8 @@ title: Browser sessions
 
 # Browser sessions
 
+Experimental: browser attach, container hosts, and live view. A stage can still drive a saved browser login. Those three may still change.
+
 A stage can drive a real browser that stays logged in. The browser tool is [agent-browser](https://github.com/vercel-labs/agent-browser). The agent uses it through the bash tool and the bundled `browser` skill.
 
 Install it first: `npm i -g agent-browser && agent-browser install`.

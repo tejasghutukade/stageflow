@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.56.0] - 2026-11-11
+
+### Security
+
+- **A local Host has a control token.** `sf ui`, `sf mcp`, and an auto-started Host generate one when `STAGEFLOW_CONTROL_TOKEN` is unset, print `Control token: …` next to the listen URL, and write it to `$STAGEFLOW_HOME/control-token` (mode 0600). The console asks you to paste that line if the API returns 401. Later `sf` commands on the same machine read the file. The token is not passed into a stage. `/livez` and `/readyz` stay open. Set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` only when you mean to start with no token.
+- **An `Origin` must match the `Host` header, including the port.** A page on another localhost port can no longer call the API.
+- **A2A `run_stage` is off unless that caller sets `allow_run_stage`.** Invoking a published pipeline is unchanged.
+- **Stage activity is redacted before it is stored.** `redaction-secrets.json` is removed after the worker loads it.
+- **The recommended Docker commands no longer set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND`.** The token is in the container logs. Mounting `/var/run/docker.sock` is root on the host.
+
+### Changed
+
+- **Unfinished features are marked experimental.** Agents and web chat, channels, A2A, identity, browser attach / container hosts / live view, the Claude and Cursor backends, email rules, and Jev failure sorting still work. The console shows **Exp** on Agents, Agent sessions, Connections, Identity, and A2A.
+- **Example stages use Claude Sonnet 5.5 or Haiku 5.5.** The github-release pipeline still uses Cursor.
+- **A fresh install lists six examples:** hello-world, plan-review, conditional-fork, generic-fan-in, feedback-loop, and evals.
+- **`pi_home` is no longer a credential source.** Only `sf_owned`.
+- **`sf <command> --help` prints that command.** `sf --help` stays the short index.
+- **npm audit fixes** for zod, source-map-js, and the mailparser chain. Four high and fifteen moderate advisories remain where the fix is a breaking upgrade of Pi or the MCP adapter.
+
+### Fixed
+
+- **The console editor keeps comments and unknown keys,** and refuses a save when the file changed on disk. Workshop uses the same write.
+- **Start queues a run when agent slots are full,** until the queue itself is full.
+- **A second Host binds its port before it touches run data.**
+- **Skill install rejects a name that would delete outside the skills folder.**
+- **After an operator answer, the stage keeps its secrets and home.** Abandoning a stage stops that stage only.
+- **A channel thread past its session limit continues on a new session.**
+- **An eval whose graders all error fails,** instead of scoring as a pass.
+- **`name.stage.yaml` matches `id: name`.**
+- **Documented `STAGEFLOW_*` variables no longer stop the Host.**
+- **`install.sh` checks `better-sqlite3` from the global install.**
+
 ## [0.55.3] - 2026-11-05
 
 ### Fixed

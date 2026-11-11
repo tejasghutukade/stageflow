@@ -279,6 +279,8 @@ The result page has four tabs: **Overview**, **Cases**, **Graders** and **Config
 
 ### Sort failures automatically {#sort-failures}
 
+Experimental. Sorting with Jev or the judge model works; its shape may still change.
+
 After a run you can ask a small, fast classifier to sort every failed or errored result, so you do not read each transcript. Press **Sort failures** in the console, run `sf eval sort <evalRunId>`, call `POST /api/eval-runs/:id/failures/sort`, or use the MCP tool `sort_eval_failures`. **Sorting is manual only: nothing sorts after a run on its own.**
 
 Each failed result gets a **suggested bucket**, a **suggested failure type** and a confidence:

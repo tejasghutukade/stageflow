@@ -1113,7 +1113,7 @@ Runnable demo: [`examples/hello-world/`](../examples/hello-world/) — task `inp
 
 ## Agents (`agents/*.agent.yaml`) {#agents-agent-yaml}
 
-An agent is a project-owned definition. The file name is the agent id: `agents/<id>.agent.yaml`. This is not the stage `agent:` field, which still selects the Pi or Claude backend.
+An agent is a project-owned definition. The file name is the agent id: `agents/<id>.agent.yaml`. This is not the stage `agent:` field, which still selects the Pi or Claude backend. Agents, and the Claude and Cursor backends, are experimental.
 
 | Field | Required | Description |
 |-------|----------|-------------|

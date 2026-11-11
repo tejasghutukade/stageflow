@@ -1,5 +1,7 @@
 # Guide: set up web chat
 
+Experimental. Web chat works; its shape may still change.
+
 Web chat gives an agent a shareable page at `/chat/<slug>` on the Host: a plain chat window, new conversations, earlier conversations, nothing else. Reference: [Agents — Web chat](agents.md#web-chat-public-page).
 
 ## Turn it on

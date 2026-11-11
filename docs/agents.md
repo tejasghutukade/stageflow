@@ -1,5 +1,7 @@
 # Agents
 
+Experimental. Agents, web chat, and the Claude and Cursor backends work; their shape may still change.
+
 Project-owned agents live under `agents/<id>.agent.yaml`. An agent is a configured assistant: instructions, a model, the tools it may use, who may talk to it, and how it is recorded. They are separate from the stage `agent:` field (Pi vs Claude backend selection).
 
 | Page | What it covers |

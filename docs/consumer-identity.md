@@ -1,5 +1,7 @@
 # Consumer identity and protected web conversations
 
+Experimental. Consumer identity, the order API, and protected chat work; their shape may still change.
+
 > **Where to start**
 > - Setting it up: [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md), a start-to-finish guide.
 > - The console screens: [Console: Identity](console-identity.md).

@@ -1,5 +1,7 @@
 # A2A server
 
+Experimental. Publishing a pipeline and invoking it works. `run_stage` stays off until that caller sets `allow_run_stage`. The shape may still change.
+
 Stageflow can expose explicitly published pipelines as [A2A](https://a2a-protocol.org/v1.0.0/specification/) capabilities that other agents invoke over JSON-RPC. This is the inbound direction only: a caller supplies input to an existing pipeline, and Stageflow creates a run and tracks it as an A2A task. This page is the operator-facing reference.
 
 ## Status
