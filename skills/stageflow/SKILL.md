@@ -32,7 +32,7 @@ Common crossings:
 
 ## Ground rules
 
-1. Code beats docs. Before telling the user a flag, env var, route or file name, confirm it with `sf <command> --help` or by reading what the Host returns. This suite was verified against Stageflow 0.56.
+1. Code beats docs. Before telling the user a flag, env var, route or file name, confirm it with `sf <command> --help` or by reading what the Host returns. This suite was verified against Stageflow 0.57.
 2. Confirm before anything that costs money, is destructive, or is visible outside the machine: real model runs, evals, deletes, `docker run`, `docker compose up`, sending through a channel, exposing the Host on a network.
 3. Never put a secret in YAML, a file you write, a log, a command line or chat. Providers and tokens go through `sf providers login`, `STAGEFLOW_PROVIDER_<ID>_API_KEY_FILE`, token files and environment variables. If a step needs a human to type a key, tell them so and stop there.
 4. Prefer MCP when a Host is up and its tools are in your tool list. Otherwise use the CLI with `--json`. The full rule is in `references/control-surface.md`.

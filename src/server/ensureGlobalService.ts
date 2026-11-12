@@ -62,7 +62,7 @@ export type ServiceProbeResult =
   | "other_home"
   | "old_stageflow";
 
-/** An older Stageflow Host (before 0.56) still holds the port, usually the service left running across an upgrade. */
+/** An older Stageflow Host (before 0.57) still holds the port, usually the service left running across an upgrade. */
 export function oldHostRunningMessage(port: number | string): string {
   return `An older Stageflow Host is running on port ${port}. Stop it (end its "sf mcp" or "sf ui" process, or restart the container), then run this again.`;
 }
@@ -93,7 +93,7 @@ export async function probeStageflowHost(
     }
     if (body === null || typeof body !== "object") return "foreign";
     if (body.service !== "stageflow") {
-      // Hosts before 0.56 answer {"ok":true,"status":"live"} with no service field.
+      // Hosts before 0.57 answer {"ok":true,"status":"live"} with no service field.
       return body.service === undefined && body.ok === true && body.status === "live"
         ? "old_stageflow"
         : "foreign";

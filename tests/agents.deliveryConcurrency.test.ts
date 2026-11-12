@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChannelError } from "../src/channels/errors.js";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { AgentInboundRouter } from "../src/agents/communications/inbound.js";
@@ -35,14 +35,14 @@ describe("reply delivery under overlapping sweeps", () => {
     const router = new AgentInboundRouter({ service, chat, connections: { find: () => undefined, reply }, projectRoot: project, delivery });
     await router.deliver(inbound("1"));
     await router.deliver(inbound("2"));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sends).toHaveLength(2);
+    await vi.waitFor(() => expect(sends).toHaveLength(2));
 
     failing = false;
     clock.advance(10_000);
     expect(service.deliveries.due()).toHaveLength(2);
     const first = delivery.sweep();
     const second = delivery.sweep();
+    await vi.waitFor(() => expect(sends.length).toBeGreaterThanOrEqual(4));
     await new Promise((resolve) => setTimeout(resolve, 20));
     release();
     const counts = await Promise.all([first, second]);
@@ -67,8 +67,7 @@ describe("reply delivery under overlapping sweeps", () => {
     const chat = new AgentChatController({ service, backend: scriptedBackend(() => "ok") });
     const router = new AgentInboundRouter({ service, chat, connections: { find: () => undefined, reply }, projectRoot: project, delivery });
     await router.deliver(inbound("1"));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sends).toHaveLength(1);
+    await vi.waitFor(() => expect(sends).toHaveLength(1));
     const turnId = service.deliveries.get(
       (await service.getSession(project, (await service.listSessions(project, "pal", { limit: 1 })).sessions[0]!.id)).turns[0]!.id,
     )!.turnId;

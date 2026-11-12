@@ -5,12 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.56.0] - 2026-11-11
+## [0.57.0] - 2026-11-12
 
 ### Upgrade notes
 
-- **Stop a running Host before you upgrade.** A 0.56 CLI reports an older Host on the port ("An older Stageflow Host is running on port 3847") and does not use it. `sf restore` refuses while anything answers on the port.
-- **Store migration 019** adds `agent_sessions.rolled_from_session_id`. After it runs, 0.55.x refuses the store (`store_schema_too_new`).
+- **Stop a running Host before you upgrade.** A 0.57 CLI reports an older Host on the port ("An older Stageflow Host is running on port 3847") and does not use it. `sf restore` refuses while anything answers on the port.
+- **Store migration 019** adds `agent_sessions.rolled_from_session_id`. After it runs, 0.56.x and earlier refuse the store (`store_schema_too_new`).
 - **`/livez` returns `service`, `version` and `home_id`.** `home_id` is a random id kept in `$STAGEFLOW_HOME/host-id`.
 
 ### Security
@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`name.stage.yaml` matches `id: name`.**
 - **Documented `STAGEFLOW_*` variables no longer stop the Host.**
 - **`install.sh` checks `better-sqlite3` from the global install.**
+## [0.56.0] - 2026-11-10
+
+### Added
+
+- **A human `sf run` shows the pipeline as it goes, and asks at a gate.** The terminal draws each stage with one line of what it is doing, keeps finished stages on the rail, and when the run ends prints the run id, `sf runs show`, the console link, and the run folder. On a terminal, a confirm or artifact gate offers accept and reject (an artifact gate also prints the file path), a free-text gate reads a line, and a multi-question gate asks each part. After the answer the timeline keeps moving until the run finishes. `--json` and a non-terminal still exit `2` and print `sf runs answer`, or `sf runs feedback-decide` when the park is a feedback-loop decision. Exit codes are unchanged.
+
+### Changed
+
+- **`sf runs show`, `list`, `waiting`, and `wait` use that same timeline.** `show` is a snapshot of one run. `list` is one line with status, time, pipeline, and id. `waiting` includes the question and the answer command. `wait` prints the snapshot when it returns. `sf trigger list` and `sf trigger show` are readable lines. `--json` is unchanged.
 
 ## [0.55.3] - 2026-11-05
 

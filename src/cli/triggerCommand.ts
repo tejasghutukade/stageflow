@@ -1,5 +1,6 @@
 import { completeCliRun } from "./runCommand.js";
 import { reportCliRun, writeQueuedAdmissionLine, type CliRunReportIo } from "./runOutput.js";
+import { formatUtcStamp } from "./runShow.js";
 import {
   ensureGlobalService,
   hostBaseUrl,
@@ -25,6 +26,51 @@ const defaultIo: TriggerCommandIo = {
   log: (line) => console.log(line),
   error: (line) => console.error(line),
 };
+
+type TriggerView = {
+  id: string;
+  kind: "manual" | "schedule" | "event";
+  enabled: boolean;
+  pipeline: string;
+  task?: string;
+  schedule?: { cron: string; timezone?: string };
+  event?: { source: string };
+  last_fired_at?: string;
+  last_run_id?: string;
+  next_run_at?: string;
+};
+
+function triggerField(label: string, value: string): string {
+  return `${label.padEnd(10)}${value}`;
+}
+
+export function formatTriggerListLine(trigger: TriggerView): string {
+  const state = trigger.enabled ? "enabled" : "disabled";
+  const last = trigger.last_run_id ? `  last ${trigger.last_run_id}` : "";
+  return `${trigger.id}  ${trigger.kind.padEnd(8)}  ${state.padEnd(8)}  ${trigger.pipeline}${last}`;
+}
+
+export function formatTriggerShow(trigger: TriggerView): string {
+  const lines = [
+    `${trigger.id}  ${trigger.kind}  ${trigger.enabled ? "enabled" : "disabled"}`,
+    "",
+    triggerField("pipeline", trigger.pipeline),
+  ];
+  if (trigger.task) lines.push(triggerField("task", trigger.task));
+  if (trigger.schedule) {
+    const zone = trigger.schedule.timezone ? ` ${trigger.schedule.timezone}` : "";
+    lines.push(triggerField("schedule", `${trigger.schedule.cron}${zone}`));
+  }
+  if (trigger.event) lines.push(triggerField("event", trigger.event.source));
+  if (trigger.last_fired_at) {
+    lines.push(triggerField("fired", formatUtcStamp(trigger.last_fired_at, true)));
+  }
+  if (trigger.last_run_id) lines.push(triggerField("last run", trigger.last_run_id));
+  if (trigger.next_run_at) {
+    lines.push(triggerField("next", formatUtcStamp(trigger.next_run_at, true)));
+  }
+  return lines.join("\n");
+}
 
 type ParsedTriggerArgs = {
   help: boolean;
@@ -160,10 +206,10 @@ export async function runTriggerCommand(
       }
       if (parsed.json) {
         printJson(out, { triggers: result.triggers });
+      } else if (result.triggers.length === 0) {
+        out.log("No triggers.");
       } else {
-        for (const trigger of result.triggers) {
-          out.log(`${trigger.id}\t${trigger.kind}\t${trigger.enabled}`);
-        }
+        for (const trigger of result.triggers) out.log(formatTriggerListLine(trigger));
       }
       return 0;
     }
@@ -186,7 +232,7 @@ export async function runTriggerCommand(
       if (parsed.json) {
         printJson(out, result.trigger);
       } else {
-        out.log(`${result.trigger.id}\t${result.trigger.kind}\t${result.trigger.enabled}`);
+        out.log(formatTriggerShow(result.trigger));
       }
       return 0;
     }

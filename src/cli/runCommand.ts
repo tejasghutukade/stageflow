@@ -2,14 +2,19 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { coerceTaskFile } from "../config/loadTask.js";
-import type { RunStore } from "../runstore/port.js";
+import type { RunDetail, RunStore, StageSnapshot } from "../runstore/port.js";
+import type { AskOperatorAnswer } from "../tools/askOperator.js";
 import {
   isInsideProjectRoot,
   relativizeLocalPathForNetwork,
 } from "../config/catalogRelativePath.js";
 import type { ResolvedCliProjectRoot } from "./resolveCliProjectRoot.js";
 import { resolveCliProjectRootLocal } from "./resolveCliProjectRoot.js";
-import { PipelinePreflightError, PipelineValidationError } from "../runtime/pipelineRunner.js";
+import {
+  PipelinePreflightError,
+  PipelineValidationError,
+  type PipelineRunResult,
+} from "../runtime/pipelineRunner.js";
 import type { StartRunResult } from "../runtime/runManager.js";
 import type { TaskFile } from "../types/task.js";
 import {
@@ -17,7 +22,16 @@ import {
   hostBaseUrl,
   type EnsureGlobalServiceResult,
 } from "../server/ensureGlobalService.js";
-import { httpEnsureProject, httpStartRun, httpStoreReader } from "./hostClient.js";
+import { ackHitlAnswer, collectHitlAnswer, readTTYLine } from "./hitlPrompt.js";
+import {
+  httpDeliverAnswer,
+  httpEnsureProject,
+  httpReadRun,
+  httpStartRun,
+  httpStoreReader,
+  runDetailToPipelineRunResult,
+} from "./hostClient.js";
+import { cliProgressColor, createRunProgressWriter } from "./runProgress.js";
 import {
   reportCliRun,
   writeQueuedAdmissionLine,
@@ -236,6 +250,7 @@ function defaultStartRun(
   base: string,
   ensureService: () => Promise<EnsureGlobalServiceResult>,
   cliProjectRoot?: ResolvedCliProjectRoot,
+  onUpdate?: (detail: RunDetail) => void,
 ): StartRunFn {
   return async (input) => {
     const ensured = await ensureService();
@@ -283,17 +298,201 @@ function defaultStartRun(
       input.checkoutOverride !== undefined
         ? relativizeLocalPathForNetwork(cwd, input.checkoutOverride).path
         : undefined;
-    return httpStartRun(base, {
-      pipeline: pipelineRef.path,
-      task,
-      project_root: ensuredProject.project_root,
-      ...(checkoutOverride !== undefined ? { checkoutOverride } : {}),
-      ...(input.skipGates !== undefined ? { skipGates: input.skipGates } : {}),
-      ...(input.gitSha !== undefined ? { gitSha: input.gitSha } : {}),
-      ...(input.ciPrUrl !== undefined ? { ciPrUrl: input.ciPrUrl } : {}),
-      ...(input.ciJobUrl !== undefined ? { ciJobUrl: input.ciJobUrl } : {}),
-    });
+    return httpStartRun(
+      base,
+      {
+        pipeline: pipelineRef.path,
+        task,
+        project_root: ensuredProject.project_root,
+        ...(checkoutOverride !== undefined ? { checkoutOverride } : {}),
+        ...(input.skipGates !== undefined ? { skipGates: input.skipGates } : {}),
+        ...(input.gitSha !== undefined ? { gitSha: input.gitSha } : {}),
+        ...(input.ciPrUrl !== undefined ? { ciPrUrl: input.ciPrUrl } : {}),
+        ...(input.ciJobUrl !== undefined ? { ciJobUrl: input.ciJobUrl } : {}),
+      },
+      onUpdate ? { onUpdate } : undefined,
+    );
   };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function hitlPromptEnabled(
+  json: boolean | undefined,
+  options: { stdinIsTTY?: boolean; readLine?: () => Promise<string | null> },
+): boolean {
+  if (json) return false;
+  if (options.readLine !== undefined) return options.stdinIsTTY !== false;
+  return (options.stdinIsTTY ?? process.stdin.isTTY) === true;
+}
+
+function resumeActivity(answer: AskOperatorAnswer): string {
+  if (answer.kind === "confirm" || answer.kind === "artifact_backed") {
+    return answer.decision === "accept" ? "accepted" : "rejected";
+  }
+  return "answered";
+}
+
+function sameOpenGate(
+  detail: RunDetail,
+  answered: { stageId: string; promptId: string },
+): boolean {
+  if (detail.waiting_stage_id !== answered.stageId) return false;
+  const stage = detail.stages.find((item) => item.stage_id === answered.stageId);
+  return stage?.pending_prompt?.id === answered.promptId;
+}
+
+function withResumeActivity(
+  detail: RunDetail,
+  stageId: string,
+  activity: string,
+): RunDetail {
+  return {
+    ...detail,
+    stages: detail.stages.map((stage) => {
+      if (stage.stage_id !== stageId) return stage;
+      const resumed: StageSnapshot = {
+        ...stage,
+        status: "running",
+        pending_prompt: undefined,
+        events: [
+          ...stage.events,
+          { event: "message", role: "assistant", text: activity },
+        ],
+      };
+      return resumed;
+    }),
+  };
+}
+
+async function pollAfterAnswer(
+  readRun: (runId: string) => Promise<RunDetail>,
+  runId: string,
+  answered: { stageId: string; promptId: string },
+  onUpdate: ((detail: RunDetail) => void) | undefined,
+  pollIntervalMs: number,
+  shouldStop: () => boolean,
+): Promise<{ stopped: true } | { stopped: false; detail: RunDetail }> {
+  for (;;) {
+    const detail = await readRun(runId);
+    const stillOpen = sameOpenGate(detail, answered);
+    if (!stillOpen) {
+      try {
+        onUpdate?.(detail);
+      } catch {
+        // A progress-line failure must not fail the run.
+      }
+    }
+    if (
+      detail.status === "succeeded" ||
+      detail.status === "failed" ||
+      detail.status === "cancelled"
+    ) {
+      return { stopped: false, detail };
+    }
+    if (!stillOpen && detail.waiting_stage_id !== undefined) {
+      return { stopped: false, detail };
+    }
+    if (stillOpen && shouldStop()) return { stopped: true };
+    await sleep(pollIntervalMs);
+  }
+}
+
+export async function continueThroughGates(
+  result: PipelineRunResult,
+  deps: {
+    io: RunCommandIo;
+    readLine: () => Promise<string | null>;
+    readRun: (runId: string) => Promise<RunDetail>;
+    deliverAnswer: (
+      runId: string,
+      stageId: string,
+      answer: unknown,
+    ) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    onUpdate?: (detail: RunDetail) => void;
+    resetProgress?: () => void;
+    pollIntervalMs?: number;
+  },
+): Promise<{ result: PipelineRunResult; failed: boolean }> {
+  let current = result;
+  while (current.outcome === "waiting" && current.waitingStageId) {
+    let detail: RunDetail;
+    try {
+      detail = await deps.readRun(current.runId);
+    } catch (err) {
+      deps.io.error(err instanceof Error ? err.message : String(err));
+      return { result: current, failed: true };
+    }
+    const stage = detail.stages.find((item) => item.stage_id === current.waitingStageId);
+    const prompt = stage?.pending_prompt;
+    if (!prompt) return { result: current, failed: false };
+    deps.io.log("");
+    const answer = await collectHitlAnswer(
+      prompt,
+      { log: deps.io.log, readLine: deps.readLine },
+      { runDir: current.runDir, stageArtifacts: stage?.artifacts ?? [] },
+    );
+    if (!answer) {
+      deps.io.log("Cancelled.");
+      return { result: current, failed: false };
+    }
+    deps.io.log(ackHitlAnswer(answer));
+    deps.resetProgress?.();
+    try {
+      deps.onUpdate?.(withResumeActivity(detail, current.waitingStageId, resumeActivity(answer)));
+    } catch {
+      // A progress-line failure must not fail the run.
+    }
+    let answerFailure: string | undefined;
+    const delivery = deps
+      .deliverAnswer(current.runId, current.waitingStageId, answer)
+      .then((delivered) => {
+        if (!delivered.ok) answerFailure = delivered.reason;
+        return delivered;
+      })
+      .catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        answerFailure = reason;
+        return { ok: false as const, reason };
+      });
+    try {
+      const polled = await pollAfterAnswer(
+        deps.readRun,
+        current.runId,
+        { stageId: current.waitingStageId, promptId: prompt.id },
+        deps.onUpdate,
+        deps.pollIntervalMs ?? 500,
+        () => answerFailure !== undefined,
+      );
+      const delivered = await delivery;
+      if (!delivered.ok) {
+        deps.io.error(delivered.reason);
+        if (polled.stopped) {
+          try {
+            deps.onUpdate?.(detail);
+          } catch {
+            // A progress-line failure must not fail the run.
+          }
+          return { result: current, failed: false };
+        }
+        return {
+          result: runDetailToPipelineRunResult(polled.detail),
+          failed: false,
+        };
+      }
+      if (polled.stopped) {
+        deps.io.error(answerFailure ?? "The run did not resume.");
+        return { result: current, failed: true };
+      }
+      current = runDetailToPipelineRunResult(polled.detail);
+    } catch (err) {
+      deps.io.error(err instanceof Error ? err.message : String(err));
+      return { result: current, failed: true };
+    }
+  }
+  return { result: current, failed: false };
 }
 
 export async function completeCliRun(
@@ -305,6 +504,9 @@ export async function completeCliRun(
     includeStages?: boolean;
   } = {},
 ): Promise<number> {
+  if (!options.json) {
+    io.log(`Run ${started.runId}`);
+  }
   const result = await started.done;
   return reportCliRun(
     { kind: "completion", result },
@@ -325,6 +527,8 @@ export async function runRunCommand(
     startRun?: StartRunFn;
     store?: Pick<RunStore, "readRun">;
     env?: Record<string, string | undefined>;
+    stdinIsTTY?: boolean;
+    readLine?: () => Promise<string | null>;
     hostBaseUrl?: string;
     ensureService?: () => Promise<EnsureGlobalServiceResult>;
   } = {},
@@ -376,6 +580,22 @@ export async function runRunCommand(
     cliProjectRoot = local;
   }
 
+  const progress = parsed.json
+    ? undefined
+    : createRunProgressWriter({
+        write: (chunk) => {
+          process.stdout.write(chunk);
+        },
+        tty: process.stdout.isTTY === true,
+        color: cliProgressColor(
+          process.stdout.isTTY === true,
+          options.env ?? process.env,
+        ),
+        ...(typeof process.stdout.columns === "number" && process.stdout.columns > 0
+          ? { columns: process.stdout.columns }
+          : {}),
+      });
+
   const startRun =
     options.startRun ??
     defaultStartRun(
@@ -383,6 +603,7 @@ export async function runRunCommand(
       base,
       options.ensureService ?? (() => ensureGlobalService()),
       cliProjectRoot,
+      progress ? (detail) => progress.update(detail) : undefined,
     );
   const identity = resolveCiIdentity({
     flags: {
@@ -421,11 +642,37 @@ export async function runRunCommand(
       );
     }
     writeQueuedAdmissionLine(started, out);
-    return completeCliRun(started, out, {
-      json: parsed.json,
-      includeStages: parsed.includeStages,
-      store,
+    if (!hitlPromptEnabled(parsed.json, options)) {
+      return completeCliRun(started, out, {
+        json: parsed.json,
+        includeStages: parsed.includeStages,
+        store,
+      });
+    }
+    out.log(`Run ${started.runId}`);
+    const driven = await continueThroughGates(await started.done, {
+      io: out,
+      readLine: options.readLine ?? readTTYLine,
+      readRun: (runId) => httpReadRun(base, runId),
+      deliverAnswer: (runId, stageId, answer) =>
+        httpDeliverAnswer(base, runId, stageId, answer),
+      ...(progress
+        ? {
+            onUpdate: (detail: RunDetail) => progress.update(detail),
+            resetProgress: () => progress.reset(),
+          }
+        : {}),
     });
+    if (driven.failed) return 1;
+    return reportCliRun(
+      { kind: "completion", result: driven.result },
+      {
+        json: false,
+        io: out,
+        store,
+        includeStages: parsed.includeStages,
+      },
+    );
   } catch (err) {
     if (err instanceof PipelineValidationError) {
       if (parsed.json) {

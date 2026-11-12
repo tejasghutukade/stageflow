@@ -2,6 +2,8 @@ import { projectRun } from "../projection/projectRun.js";
 import type { RunStore } from "../runstore/port.js";
 import type { PipelineRunResult } from "../runtime/pipelineRunner.js";
 import type { BusyCode, StartRunResult } from "../runtime/runManager.js";
+import { redactString } from "../logging/redact.js";
+import { hostBaseUrl } from "../server/ensureGlobalService.js";
 
 export type CliRunReportIo = {
   log: (line: string) => void;
@@ -18,6 +20,14 @@ function stringify(payload: Record<string, unknown>): string {
 
 function formatUsd(amount: number): string {
   return `$${amount.toFixed(4)}`;
+}
+
+function questionLine(summary: string | undefined): string | undefined {
+  if (!summary) return undefined;
+  const line = redactString(summary).replace(/\s+/g, " ").trim();
+  if (line.length === 0 || line === "Waiting for input") return undefined;
+  if (line.length <= 120) return line;
+  return `${line.slice(0, 119)}…`;
 }
 
 /** Best-effort total cost for a run; undefined (not thrown) on any read failure or when no stage reported usage. */
@@ -152,7 +162,8 @@ async function formatRunCompletionJsonWithCost(
   result: PipelineRunResult,
   store: Pick<RunStore, "readRun"> | undefined,
 ): Promise<string> {
-  const totalCostUsd = await tryReadTotalCostUsd(store, result.runId);
+  const totalCostUsd =
+    (await tryReadTotalCostUsd(store, result.runId)) ?? result.totalCostUsd;
   return stringify({
     ...baseRunCompletionPayload(result),
     ...(totalCostUsd !== undefined ? { total_cost_usd: totalCostUsd } : {}),
@@ -186,31 +197,60 @@ function writeStartFailureHuman(
   }
 }
 
+function consoleRunUrl(runId: string): string {
+  return `${hostBaseUrl()}/#/runs/${encodeURIComponent(runId)}`;
+}
+
 function writeCompletionHuman(
   result: PipelineRunResult,
   io: CliRunReportIo,
   totalCostUsd: number | undefined,
 ): void {
+  const write = (line: string) =>
+    result.outcome === "succeeded" ? io.log(line) : io.error(line);
   switch (result.outcome) {
     case "waiting":
-      io.error(
-        `Pipeline waiting. Run folder: ${result.runDir} (${result.runId})`,
+      write(
+        result.waitingStageId
+          ? `Pipeline waiting on ${result.waitingStageId}.`
+          : "Pipeline waiting.",
       );
+      {
+        const question = questionLine(result.waitingSummary);
+        if (question) write(question);
+      }
       break;
     case "failed":
-      io.error(`Pipeline failed: ${result.reason}`);
-      io.error(`Run folder: ${result.runDir}`);
+      write(`Pipeline failed: ${result.reason}`);
       break;
     case "cancelled":
-      io.error(
-        `Pipeline cancelled${result.reason ? `: ${result.reason}` : ""}`,
-      );
-      io.error(`Run folder: ${result.runDir}`);
+      write(`Pipeline cancelled${result.reason ? `: ${result.reason}` : ""}`);
       break;
     case "succeeded":
-      io.log(`Pipeline succeeded. Run folder: ${result.runDir}`);
+      write("Pipeline succeeded.");
       break;
   }
+  write(`Run ${result.runId}`);
+  write(`sf runs show --run ${result.runId}`);
+  if (result.outcome === "waiting" && result.waitingStageId) {
+    if (result.waitingKind === "feedback_loop_decision") {
+      const loop = result.feedbackLoopId ? ` --loop ${result.feedbackLoopId}` : "";
+      write(
+        `sf runs feedback-decide --run ${result.runId} --stage ${result.waitingStageId}${loop} --decision extend|continue|abandon`,
+      );
+    } else {
+      write(
+        `sf runs answer --run ${result.runId} --stage ${result.waitingStageId}`,
+      );
+    }
+  }
+  if (result.outcome === "failed" && result.failedStageId) {
+    write(
+      `sf runs retry --run ${result.runId} --stage ${result.failedStageId}`,
+    );
+  }
+  write(consoleRunUrl(result.runId));
+  write(`Run folder: ${result.runDir}`);
   if (totalCostUsd !== undefined) {
     io.error(`Cost: ${formatUsd(totalCostUsd)}`);
   }
@@ -268,7 +308,9 @@ export async function reportCliRun(
       options.io.log(await formatRunCompletionJsonWithCost(event.result, options.store));
     }
   } else {
-    const totalCostUsd = await tryReadTotalCostUsd(options.store, event.result.runId);
+    const totalCostUsd =
+      (await tryReadTotalCostUsd(options.store, event.result.runId)) ??
+      event.result.totalCostUsd;
     writeCompletionHuman(event.result, options.io, totalCostUsd);
   }
   return exitCodeForRunOutcome(event.result.outcome);

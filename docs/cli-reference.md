@@ -77,6 +77,12 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/
 
 **Project identity.** Pipeline/task paths resolve from the CLI cwd (relative or absolute local paths). Before `start_run`, the CLI ensure-registers that resolved project folder with the Host (`POST /api/projects` on trusted loopback), then sends catalog-relative paths plus `project_root` for that folder. Host boot cwd does not define the run's project. Remote MCP/HTTP callers cannot ensure arbitrary paths — they may only use already-registered or seeded roots. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root) and [Data directory](data-directory.md).
 
+Without `--json`, a blocking `sf run` prints `Run <runId>` as soon as the run is accepted, then draws the pipeline as a timeline. Finished stages stay on the rail with a one-line result and how long they took. The running stage stays open on the line under its name (`calling bash`, `thinking`, `starting`). A stage parked for a person shows that question on the line under its name, and its clock stops when the question is asked. Stages that have not started yet sit at the bottom as `waiting`. A failure keeps its reason on the next line, and later stages are marked skipped. On a terminal the block redraws in place. Color follows the terminal: set `NO_COLOR` to turn it off, or `FORCE_COLOR` to turn it on. The markers stay either way.
+
+On a terminal, `sf run` asks at the gate and then continues the same command. A confirm gate, and an artifact gate, offer `1  accept` and `2  reject` (`accept` and `reject` also work). An artifact gate prints each file path above that choice. A free-text gate reads one line. A multi-question gate asks each part in order. After the choice, that stage's line changes to `accepted` or `rejected` and the timeline keeps updating while the rest of the run finishes. Cancel leaves the run parked. `--json`, and a run that is not on a terminal, do not ask.
+
+When the run finishes, the same id is printed again with `sf runs show --run <runId>`, the console URL for that run, and the run folder. A run still waiting on a person also prints the question and `sf runs answer --run <runId> --stage <stage>`. A feedback-loop decision prints `sf runs feedback-decide` instead, including `--loop` when the loop has an id. A run that failed on a stage also prints `sf runs retry --run <runId> --stage <stage>`. Cost is printed when the run reported one. `--json` does not print this view. The completion document already includes `runId` and `runDir`.
+
 **Exit codes:**
 
 | Code | Meaning |
@@ -271,6 +277,8 @@ Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `wa
 | `--pipeline` | Match `pipeline_id` or `pipeline_path` |
 | `--json` | Pretty-printed `{ "runs": [ … ] }` |
 
+Without `--json`, each run is one line: status, when it started, pipeline, and run id. A run waiting on a person ends with `on <stage>`. A failed run ends with `at <stage>`. An empty list prints `No runs.`
+
 ### `sf runs show`
 
 | Flag | Description |
@@ -278,6 +286,8 @@ Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `wa
 | `--run` | Run id (optional when `--from` provides `runId`) |
 | `--from` | Read `runId` from a prior `sf run --json` output file |
 | `--json` | Pretty-printed `projectRun` |
+
+Without `--json`, `sf runs show` prints a snapshot of the same timeline as `sf run`: the run id and status, the pipeline, task, binding, start and finish time, duration, and cost, then each stage with its elapsed time and one result line. A failed stage keeps its reason. A stage waiting on a person keeps the question. The last lines are the console URL and, when there is one action to take, `sf runs answer`, `sf runs retry`, or `sf runs feedback-decide`. `--json` is unchanged.
 
 Works for in-progress and parked runs. `sf export-run` writes the same `projectRun` object (including `pipeline_track`; diamond joins show both inbound edges) and does not take a separate `--json` flag. `--include stages` on `sf run --json` stays a flat `stages[]` list and does not carry that graph.
 
@@ -316,6 +326,8 @@ in this run.
 | `--run` | Limit to one run (omit to scan all) |
 | `--json` | Pretty-printed `{ "waiting": [ … ] }` (MCP `list_waiting` fields, including `pending_prompt`) |
 
+Without `--json`, each gate is the run, the stage, the question, and the command to answer it (`sf runs answer`, or `sf runs feedback-decide` when the gate is a feedback-loop decision). An empty scan prints `Nothing is waiting.`
+
 For `waiting_kind: "feedback_loop_decision"`, entries also carry `feedback_loop_id` and `deferred_target` (exhausted `wait_for_human` loop). Resolve with [`sf runs feedback-decide`](#sf-runs-feedback-decide).
 
 ### `sf runs wait`
@@ -328,7 +340,7 @@ For `waiting_kind: "feedback_loop_decision"`, entries also carry `feedback_loop_
 | `--timeout-ms` | Wait budget in ms. Default `60000`. Must be in `(0, 240000]`. |
 | `--json` | Pretty-printed waitRun result |
 
-`reason` is `waiting` \| `terminal` \| `timeout` \| `already`. Timeout is success (`ok: true`, exit `0`); the run is unchanged. Abort cancels only the wait, not the run.
+`reason` is `waiting` \| `terminal` \| `timeout` \| `already`. Timeout is success (`ok: true`, exit `0`); the run is unchanged. Abort cancels only the wait, not the run. Without `--json`, a finished wait prints that reason in a sentence and then the same snapshot as `sf runs show`.
 
 Park-and-answer loop:
 
@@ -345,10 +357,10 @@ sf runs waiting → sf runs answer → sf runs wait --until any
 |------|-------------|
 | `--run` | Run id (required) |
 | `--stage` | Stage id (required) |
-| `--answer` | `AskOperatorAnswer` JSON |
+| `--answer` | `AskOperatorAnswer` JSON. Omit this on a terminal to be asked instead |
 | `--json` | `{ "ok": true }` on success; adds `"verification": "failed_retrying"` when after-phase verification failed and the stage is being repaired (new attempt, new gate) |
 
-If `--answer` is omitted, read stdin JSON only when stdin is not a TTY. On a TTY or empty stdin, exit `1` with a missing-answer error.
+On a terminal, omitting `--answer` loads the parked gate and asks the same way as `sf run`: `1` / `accept` or `2` / `reject`, a typed line, or each part of a multi-question gate. An artifact gate prints the file path first. If `--answer` is omitted and stdin is not a terminal, the command reads one JSON answer from stdin. `--json` never asks; it requires `--answer` or that stdin JSON. A terminal with no answer and no prompt exits `1`.
 
 Answer kinds match [HITL](hitl.md) (`free_text`, `confirm`, `artifact_backed`, `multi_question`).
 
@@ -496,7 +508,7 @@ There is no `sf trigger create`; creating a `*.trigger.yaml` is done through `PO
 |------|-------------|
 | `--json` | Pretty-printed `{ "triggers": [ … ] }`, each item the trigger's catalog fields plus `definition_ref`, and `last_fired_at` / `last_run_id` / `next_run_at` when present |
 
-Without `--json`, prints one `id\tkind\tenabled` line per trigger.
+Without `--json`, each trigger is one line: id, kind, enabled or disabled, pipeline, and the last run id when it has fired. An empty catalog prints `No triggers.` `sf trigger show` prints those fields on their own lines, plus the schedule or event, when it last fired, and when it fires next.
 
 **Exit codes:** `0` success, `1` error (for example no catalog found).
 
