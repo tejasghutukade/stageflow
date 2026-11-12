@@ -508,7 +508,10 @@ export async function installSkill(
     const res = await fetch("/api/skills/install", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authorizationHeaders() },
-      body: JSON.stringify({ command: input.command }),
+      body: JSON.stringify({
+        command: input.command,
+        ...(input.runDoctor ? { run_doctor: true } : {}),
+      }),
     });
     const body = (await res.json().catch(() => ({}))) as {
       skill_name?: string;
@@ -517,6 +520,8 @@ export async function installSkill(
       destPath?: string;
       message?: string;
       error?: string;
+      doctor_available?: boolean;
+      doctor_script?: string;
     };
     const skillName =
       typeof body.skill_name === "string"
@@ -531,6 +536,9 @@ export async function installSkill(
           ? body.destPath
           : undefined;
     if (res.ok && skillName !== undefined && destPath !== undefined) {
+      const doctorAvailable = body.doctor_available === true;
+      const doctorScript =
+        typeof body.doctor_script === "string" ? body.doctor_script : undefined;
       return {
         ok: true,
         skillName,
@@ -539,6 +547,9 @@ export async function installSkill(
           typeof body.message === "string"
             ? body.message
             : `Installed ${skillName}`,
+        ...(doctorAvailable && doctorScript !== undefined
+          ? { doctorAvailable: true, doctorScript }
+          : {}),
       };
     }
     return {

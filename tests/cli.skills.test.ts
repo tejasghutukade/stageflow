@@ -1,11 +1,21 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { access, lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  buildSkillDoctorProcessEnv,
   createStoredZip,
   runSkillsCommand,
   SKILLS_USAGE,
@@ -60,13 +70,7 @@ describe("sf skills", () => {
       );
       expect(code).toBe(0);
       expect(logs.some((line) => line.includes("Installed skill test-skill"))).toBe(true);
-      expect(
-        errors.some(
-          (line) =>
-            line.includes("warning: skill install is about to run") &&
-            line.includes(`${path.sep}bin${path.sep}test-skill.mjs`),
-        ),
-      ).toBe(true);
+      expect(errors.join("\n")).not.toMatch(/about to run/);
 
       const installedRoot = path.join(repo.root, ".pi", "skills", "test-skill");
       await access(path.join(installedRoot, "bin", "test-skill.mjs"));
@@ -178,7 +182,14 @@ describe("sf skills", () => {
     const errors: string[] = [];
     try {
       const code = await runSkillsCommand(
-        ["install", "--from-path", skillSource, "--skill-name", "test-skill"],
+        [
+          "install",
+          "--from-path",
+          skillSource,
+          "--skill-name",
+          "test-skill",
+          "--run-doctor",
+        ],
         {
           cwd: repo.root,
           projectRoot: repo.root,
@@ -466,5 +477,137 @@ process.exit(1);
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/sf skills list/);
     expect(result.stdout).toMatch(/--from-path/);
+  });
+
+  it("does not run doctor without --run-doctor when stdin is not a TTY", async () => {
+    const repo = await initTempGitRepo();
+    let doctorCalls = 0;
+    try {
+      const code = await runSkillsCommand(
+        ["install", "--from-path", skillSource, "--skill-name", "test-skill"],
+        {
+          cwd: repo.root,
+          projectRoot: repo.root,
+          io: {
+            log: () => undefined,
+            error: () => undefined,
+            stdinIsTTY: false,
+            runDoctor: () => {
+              doctorCalls += 1;
+              return 0;
+            },
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(doctorCalls).toBe(0);
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it("--run-doctor uses stage allowlist env without control token or provider key", async () => {
+    const repo = await initTempGitRepo();
+    const probeRoot = await mkdtemp(path.join(tmpdir(), "sf-skill-doctor-env-"));
+    const probe = path.join(probeRoot, "env.json");
+    const skillTree = await mkdtemp(path.join(tmpdir(), "sf-skill-doctor-src-"));
+    const script = `#!/usr/bin/env node
+import fs from "node:fs";
+if (process.argv[2] !== "doctor") process.exit(1);
+fs.writeFileSync(process.env.SF_DOCTOR_PROBE, JSON.stringify({
+  control: process.env.STAGEFLOW_CONTROL_TOKEN,
+  openai: process.env.OPENAI_API_KEY,
+}));
+process.exit(0);
+`;
+    await mkdir(path.join(skillTree, "bin"), { recursive: true });
+    await writeFile(path.join(skillTree, "bin", "probe-skill.mjs"), script, "utf8");
+    await writeFile(path.join(skillTree, "SKILL.md"), "# probe\n", "utf8");
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    const errors: string[] = [];
+    try {
+      const code = await runSkillsCommand(
+        [
+          "install",
+          "--from-path",
+          skillTree,
+          "--skill-name",
+          "probe-skill",
+          "--run-doctor",
+        ],
+        {
+          cwd: repo.root,
+          projectRoot: repo.root,
+          io: {
+            log: () => undefined,
+            error: (line) => errors.push(line),
+            stdinIsTTY: false,
+            hostEnv: {
+              PATH: process.env.PATH,
+              STAGEFLOW_CONTROL_TOKEN: "a".repeat(64),
+              OPENAI_API_KEY: "sk-test",
+              SF_DOCTOR_PROBE: probe,
+            },
+            runDoctor: (scriptPath, cwd, hostEnv) => {
+              capturedEnv = hostEnv;
+              const result = spawnSync(process.execPath, [scriptPath, "doctor"], {
+                cwd,
+                env: { ...buildSkillDoctorProcessEnv(hostEnv), SF_DOCTOR_PROBE: probe },
+              });
+              if (result.status !== 0) {
+                errors.push(result.stderr?.toString() ?? "doctor exited non-zero");
+              }
+              return result.status ?? 1;
+            },
+          },
+        },
+      );
+      expect(errors, `exit ${code}`).toEqual([]);
+      expect(code).toBe(0);
+      expect(capturedEnv?.STAGEFLOW_CONTROL_TOKEN).toBe("a".repeat(64));
+      const written = JSON.parse(await readFile(probe, "utf8")) as {
+        control?: string;
+        openai?: string;
+      };
+      expect(written.control).toBeUndefined();
+      expect(written.openai).toBeUndefined();
+    } finally {
+      await repo.cleanup();
+      await rm(probeRoot, { recursive: true, force: true }).catch(() => undefined);
+      await rm(skillTree, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it("copies symlinks without following them", async () => {
+    const repo = await initTempGitRepo();
+    const src = await mkdtemp(path.join(tmpdir(), "sf-skill-symlink-src-"));
+    const outside = await mkdtemp(path.join(tmpdir(), "sf-skill-symlink-out-"));
+    await writeFile(path.join(outside, "secret.txt"), "leaked", "utf8");
+    await mkdir(path.join(src, "bin"), { recursive: true });
+    await writeFile(
+      path.join(src, "bin", "link-skill.mjs"),
+      `#!/usr/bin/env node\nif (process.argv[2]==='doctor') process.exit(0); process.exit(1);\n`,
+      "utf8",
+    );
+    await writeFile(path.join(src, "SKILL.md"), "# link\n", "utf8");
+    await symlink(path.join(outside, "secret.txt"), path.join(src, "leak.txt"));
+    try {
+      const code = await runSkillsCommand(
+        ["install", "--from-path", src, "--skill-name", "link-skill"],
+        { cwd: repo.root, projectRoot: repo.root, io: { stdinIsTTY: false } },
+      );
+      expect(code).toBe(0);
+      const installed = path.join(repo.root, ".pi", "skills", "link-skill", "leak.txt");
+      const installedRoot = path.join(repo.root, ".pi", "skills", "link-skill");
+      expect((await lstat(installed)).isSymbolicLink()).toBe(true);
+      expect(await readFile(path.join(outside, "secret.txt"), "utf8")).toBe("leaked");
+      await expect(access(path.join(installedRoot, "secret.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await repo.cleanup();
+      await rm(src, { recursive: true, force: true }).catch(() => undefined);
+      await rm(outside, { recursive: true, force: true }).catch(() => undefined);
+    }
   });
 });

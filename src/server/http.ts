@@ -3657,6 +3657,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           const result = await installSkillFromCommand({
             projectRoot: stageflowCtx.projectRoot,
             command: parsed.command,
+            runDoctor: parsed.runDoctor,
           });
           if (!result.ok) {
             json(res, result.status ?? 400, { error: result.error });
@@ -3667,6 +3668,12 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             skill_name: result.skill_name,
             dest_path: result.dest_path,
             project_root: result.project_root,
+            ...(result.doctor !== undefined
+              ? {
+                  doctor_available: true,
+                  doctor_script: result.doctor.script,
+                }
+              : {}),
           });
           return true;
         }

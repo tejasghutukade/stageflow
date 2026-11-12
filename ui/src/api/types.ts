@@ -538,12 +538,15 @@ export type CreateStageResult =
 
 export type SkillInstallInput = {
   command: string;
+  runDoctor?: boolean;
 };
 
 export type SkillInstallOk = {
   skillName: string;
   destPath: string;
   message: string;
+  doctorAvailable?: boolean;
+  doctorScript?: string;
 };
 
 export type SkillInstallResult =
