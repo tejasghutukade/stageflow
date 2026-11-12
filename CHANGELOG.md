@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **A local Host has a control token.** `sf ui`, `sf mcp`, and an auto-started Host generate one when `STAGEFLOW_CONTROL_TOKEN` is unset, print `Control token: …` next to the listen URL, and write it to `$STAGEFLOW_HOME/control-token` (mode 0600). The console asks you to paste that line if the API returns 401. Later `sf` commands on the same machine read the file. The token is not passed into a stage. `/livez` and `/readyz` stay open. Set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` only when you mean to start with no token.
+- **A local Host has a control token.** The first start writes `$STAGEFLOW_HOME/control-token` (mode 0600) and prints `Control token: …` on a terminal. Later starts reuse that file and print only the path. A second `sf ui` or `sf mcp` on a port that already has a Host exits 0 and does not replace the token. `sf ui` opens the console with the token in the URL fragment, which the page stores and then removes. The token is not passed into a stage, and a stage environment does not include `STAGEFLOW_HOME`. An unsandboxed stage still runs as you and can read `~/.stageflow`. `/livez` and `/readyz` stay open. Set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` only when you mean to start with no token.
 - **An `Origin` must match the `Host` header, including the port.** A page on another localhost port can no longer call the API.
 - **A2A `run_stage` is off unless that caller sets `allow_run_stage`.** Invoking a published pipeline is unchanged.
 - **Stage activity is redacted before it is stored.** `redaction-secrets.json` is removed after the worker loads it.
@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Unfinished features are marked experimental.** Agents and web chat, channels, A2A, identity, browser attach / container hosts / live view, the Claude and Cursor backends, email rules, and Jev failure sorting still work. The console shows **Exp** on Agents, Agent sessions, Connections, Identity, and A2A.
-- **Example stages use Claude Sonnet 5.5 or Haiku 5.5.** The github-release pipeline still uses Cursor.
+- **Example stages use Claude Sonnet 5.5 or Haiku 4.5.** Haiku 5.5 is not in the pinned Pi catalog. The github-release pipeline still uses Cursor.
 - **A fresh install lists six examples:** hello-world, plan-review, conditional-fork, generic-fan-in, feedback-loop, and evals.
 - **`pi_home` is no longer a credential source.** Only `sf_owned`.
 - **`sf <command> --help` prints that command.** `sf --help` stays the short index.
@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A second Host binds its port before it touches run data.**
 - **Skill install rejects a name that would delete outside the skills folder.**
 - **After an operator answer, the stage keeps its secrets and home.** Abandoning a stage stops that stage only.
-- **A channel thread past its session limit continues on a new session.**
+- **A channel thread past its turn or time limit continues on a new session.** A cost limit stays on that session, and the sender is told it was reached.
 - **An eval whose graders all error fails,** instead of scoring as a pass.
 - **`name.stage.yaml` matches `id: name`.**
 - **Documented `STAGEFLOW_*` variables no longer stop the Host.**

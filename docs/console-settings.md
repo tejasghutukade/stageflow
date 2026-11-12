@@ -16,7 +16,7 @@ title: Console - Settings
 | [Project MCP](#project-mcp) | MCP servers and their secrets and sign-ins |
 | [Notifications](#notifications) | Desktop notifications |
 
-The console is dark; there is no theme picker.
+The console is dark; there is no theme picker. If a request is rejected, the control-token dialog points at `~/.stageflow/control-token` (`cat ~/.stageflow/control-token`, or `docker logs <container>`).
 
 ## General
 

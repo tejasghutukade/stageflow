@@ -36,7 +36,7 @@ Artifact handoff: list paths from \`write_stage_artifact\` on emit (non-empty li
 
 ## Stage environment
 
-A stage never gets the Host's raw environment. It gets an allowlist (PATH, locale, proxy, \`STAGEFLOW_HOME\`, …) plus the secrets it declares. Provider API keys are never put in the stage environment; model auth goes through the Host's credential file.
+A stage never gets the Host's raw environment. It gets an allowlist (PATH, locale, proxy, …) plus the secrets it declares. \`STAGEFLOW_HOME\` is not included. Provider API keys are never put in the stage environment; model auth goes through the Host's credential file. An unsandboxed stage still runs as the operator and can read files under the data directory.
 
 ## Backends
 

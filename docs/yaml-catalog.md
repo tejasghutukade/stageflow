@@ -1053,7 +1053,7 @@ Stages receive a **constructed** environment (exact-name allowlist + computed va
 
 | Blocked by default | Always included | Declared per stage |
 |---|---|---|
-| Provider API keys, `GITHUB_TOKEN`/`GH_TOKEN` as raw env (unless `as: env`), control/read tokens (never grantable), cloud/`NPM_TOKEN`/`SSH_AUTH_SOCK` | `PATH`, locale/`TZ`/`TERM`/`TMPDIR`, proxy + CA vars, `STAGEFLOW_HOME`, `SF_STAGE_WORKER`, Slot 2 `STAGEFLOW_*` binding vars, cache vars under `$STAGEFLOW_HOME/cache` | `secrets:` names from the Host registry |
+| Provider API keys, `GITHUB_TOKEN`/`GH_TOKEN` as raw env (unless `as: env`), control/read tokens (never grantable), cloud/`NPM_TOKEN`/`SSH_AUTH_SOCK` | `PATH`, locale/`TZ`/`TERM`/`TMPDIR`, proxy + CA vars, `SF_STAGE_WORKER`, Slot 2 `STAGEFLOW_*` binding vars, cache vars under `$STAGEFLOW_HOME/cache` | `secrets:` names from the Host registry |
 
 ```yaml
 stages:

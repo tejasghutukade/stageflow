@@ -26,7 +26,6 @@ export const STAGE_ENV_ALLOWLIST: readonly string[] = [
   "http_proxy",
   "https_proxy",
   "no_proxy",
-  "STAGEFLOW_HOME",
   "STAGEFLOW_CURSOR_EXTENSION",
   "STAGEFLOW_STAGE_CONTAINER_IMAGE",
   "STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN",

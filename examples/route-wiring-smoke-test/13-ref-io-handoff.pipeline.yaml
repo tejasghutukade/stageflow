@@ -48,7 +48,7 @@ stages:
     system_prompt: |
       Draft a document in one or two sentences.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and a payload matching #/schemas/doc: {"title":"Smoke doc","body":"A short body."}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -62,7 +62,7 @@ stages:
     system_prompt: |
       Keep the document fields and add a verdict of approve or request-changes.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and a payload matching #/schemas/analyzed: {"title":"Smoke doc","body":"A short body.","verdict":"approve"}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -74,7 +74,7 @@ stages:
     system_prompt: |
       Ship using title from the prior payload. One sentence is enough.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

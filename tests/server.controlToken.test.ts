@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdtemp, stat, writeFile } from "node:fs/promises";
+import { lstatSync, readFileSync, symlinkSync } from "node:fs";
+import { chmod, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { buildStageEnvironment } from "../src/runtime/stageEnvironment.js";
+import { SF_STAGE_WORKER } from "../src/runtime/stageWorkerProtocol.js";
 import { startMcpServer } from "../src/server/mcpHost.js";
 import {
   assertBindAllowed,
   authenticateBearer,
   BindRefusedError,
   clientAuthorizationHeaders,
+  commitHostControlToken,
   CONTROL_TOKEN_FILENAME,
   enforceBearerAuth,
   ensureHostControlToken,
@@ -81,19 +84,31 @@ describe("authenticateBearer", () => {
 
 describe("ensureHostControlToken", () => {
   it("writes a 0600 token the API requires and the stage environment does not see", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "sf-gen-token-"));
+    const parent = await mkdtemp(path.join(tmpdir(), "sf-gen-token-"));
+    const dir = path.join(parent, "home");
     const env: NodeJS.ProcessEnv = { STAGEFLOW_HOME: dir, PATH: "/usr/bin" };
     const ensured = ensureHostControlToken(env);
     expect(ensured.generated).toBe(true);
+    expect(ensured.pendingWrite).toBe(true);
     expect(ensured.token).toMatch(/^[0-9a-f]{64}$/);
     expect(ensured.filePath).toBe(path.join(dir, CONTROL_TOKEN_FILENAME));
-    expect(env.STAGEFLOW_CONTROL_TOKEN_FILE).toBe(ensured.filePath);
-    expect(generatedControlTokenLines(ensured)).toEqual([
+    expect(env.STAGEFLOW_CONTROL_TOKEN).toBe(ensured.token);
+    expect(env.STAGEFLOW_CONTROL_TOKEN_FILE).toBeUndefined();
+    await expect(stat(ensured.filePath!)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(generatedControlTokenLines(ensured, { revealToken: true })).toEqual([
       `Control token: ${ensured.token}`,
       `Control token file: ${ensured.filePath}`,
     ]);
+    expect(generatedControlTokenLines(ensured)).toEqual([
+      `Control token file: ${ensured.filePath}`,
+    ]);
+    commitHostControlToken(ensured, env);
+    expect(ensured.pendingWrite).toBe(false);
+    expect(env.STAGEFLOW_CONTROL_TOKEN).toBeUndefined();
+    expect(env.STAGEFLOW_CONTROL_TOKEN_FILE).toBe(ensured.filePath);
     const info = await stat(ensured.filePath!);
     expect(info.mode & 0o777).toBe(0o600);
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
 
     const tokens = loadControlTokens(env);
     const denied = enforceBearerAuth(
@@ -170,6 +185,57 @@ describe("ensureHostControlToken", () => {
       code: "ENOENT",
     });
   });
+
+  it("reuses a 0600 token file on a second boot", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-reuse-token-"));
+    const env: NodeJS.ProcessEnv = { STAGEFLOW_HOME: dir };
+    const first = ensureHostControlToken(env);
+    commitHostControlToken(first, env);
+    delete env.STAGEFLOW_CONTROL_TOKEN;
+    delete env.STAGEFLOW_CONTROL_TOKEN_FILE;
+    const second = ensureHostControlToken(env);
+    expect(second.generated).toBe(false);
+    expect(second.pendingWrite).toBeUndefined();
+    expect(second.token).toBe(first.token);
+    expect(generatedControlTokenLines(second, { revealToken: true })).toEqual([
+      `Control token file: ${second.filePath}`,
+    ]);
+    expect((await readFile(second.filePath!, "utf8")).trim()).toBe(first.token);
+    commitHostControlToken(second, env);
+    expect((await readFile(second.filePath!, "utf8")).trim()).toBe(first.token);
+  });
+
+  it("replaces a 0644 token file and a symlink", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-bad-token-"));
+    const file = path.join(dir, CONTROL_TOKEN_FILENAME);
+    const loose = "c".repeat(64);
+    await writeFile(file, loose, { mode: 0o644 });
+    await chmod(file, 0o644);
+    const env: NodeJS.ProcessEnv = { STAGEFLOW_HOME: dir };
+    const replaced = ensureHostControlToken(env);
+    expect(replaced.generated).toBe(true);
+    expect(replaced.token).not.toBe(loose);
+    commitHostControlToken(replaced, env);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect((await readFile(file, "utf8")).trim()).toBe(replaced.token);
+
+    const target = path.join(dir, "elsewhere");
+    const linked = "e".repeat(64);
+    await writeFile(target, linked, { mode: 0o600 });
+    const { unlinkSync } = await import("node:fs");
+    unlinkSync(file);
+    symlinkSync(target, file);
+    delete env.STAGEFLOW_CONTROL_TOKEN;
+    delete env.STAGEFLOW_CONTROL_TOKEN_FILE;
+    const fromLink = ensureHostControlToken(env);
+    expect(fromLink.generated).toBe(true);
+    expect(fromLink.token).not.toBe(linked);
+    commitHostControlToken(fromLink, env);
+    expect(lstatSync(file).isSymbolicLink()).toBe(false);
+    expect(lstatSync(file).isFile()).toBe(true);
+    expect(readFileSync(target, "utf8").trim()).toBe(linked);
+    expect(readFileSync(file, "utf8").trim()).toBe(fromLink.token);
+  });
 });
 
 function fakeRes(): ServerResponse {
@@ -222,6 +288,29 @@ describe("resolveClientBearerToken", () => {
       }),
     ).toBe(OTHER);
     expect(resolveClientBearerToken("POST", {})).toBeUndefined();
+  });
+
+  it("does not resolve the installed file from a stage environment", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-stage-token-"));
+    await writeFile(path.join(dir, CONTROL_TOKEN_FILENAME), `${DRIVE}\n`, {
+      mode: 0o600,
+    });
+    const hostEnv = {
+      STAGEFLOW_HOME: dir,
+      STAGEFLOW_CONTROL_TOKEN: DRIVE,
+      PATH: "/usr/bin",
+    };
+    const stage = buildStageEnvironment({ hostEnv });
+    expect(stage.env.STAGEFLOW_HOME).toBeUndefined();
+    expect(stage.env.STAGEFLOW_CONTROL_TOKEN).toBeUndefined();
+    expect(resolveClientBearerToken("POST", stage.env)).toBeUndefined();
+    expect(
+      resolveClientBearerToken("POST", {
+        ...stage.env,
+        STAGEFLOW_HOME: dir,
+        [SF_STAGE_WORKER]: "1",
+      }),
+    ).toBeUndefined();
   });
 });
 

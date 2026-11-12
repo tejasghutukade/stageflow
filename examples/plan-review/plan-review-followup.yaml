@@ -3,7 +3,7 @@ system_prompt: |
   Acknowledge that the prior plan-review stage completed with operator acceptance
   of the plan. Call emit_stage_envelope once with a short summary. Do not call
   ask_operator. Do not perform further HITL.
-model: anthropic/claude-haiku-5-5
+model: anthropic/claude-haiku-4-5
 io:
   input:
     schema:

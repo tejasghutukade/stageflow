@@ -34,8 +34,11 @@ export function ControlTokenGate() {
           Control token
         </h2>
         <p className="font-sans text-xs text-[var(--sf-text-3)]">
-          This Host rejected the request. Paste STAGEFLOW_CONTROL_TOKEN from the
-          machine running Stageflow. It stays in this browser.
+          This Host rejected the request. The token is in ~/.stageflow/control-token
+          (or docker logs &lt;container&gt;). It stays in this browser.
+        </p>
+        <p className="font-['Geist_Mono',monospace] text-[12px] text-[var(--sf-text-2)]">
+          cat ~/.stageflow/control-token
         </p>
         <input
           type="password"

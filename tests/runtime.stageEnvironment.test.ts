@@ -37,7 +37,7 @@ describe("buildStageEnvironment", () => {
     expect(passthroughActive).toBe(false);
     expect(warnings).toEqual([]);
     expect(env.PATH).toBe("/usr/bin:/bin");
-    expect(env.STAGEFLOW_HOME).toBe("/tmp/sf-home");
+    expect(env.STAGEFLOW_HOME).toBeUndefined();
     expect(env.STAGEFLOW_CURSOR_EXTENSION).toBe(
       "/tmp/pi-cursor-sdk/dist/index.js",
     );

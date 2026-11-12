@@ -2,7 +2,7 @@
 
 **If your stage needed it, declare it.**
 
-Stages no longer inherit the Host process environment. The child sees an exact-name allowlist (PATH, locale, proxy/CA, `STAGEFLOW_HOME`, computed cache vars, Slot 2 binding vars) plus only secrets you declare on the stage.
+Stages no longer inherit the Host process environment. The child sees an exact-name allowlist (PATH, locale, proxy/CA, computed cache vars, Slot 2 binding vars) plus only secrets you declare on the stage. `STAGEFLOW_HOME` is not copied. Paths a stage needs under that directory are passed as their own values. An unsandboxed stage still runs as the operator and can read `~/.stageflow`.
 
 ## What breaks
 

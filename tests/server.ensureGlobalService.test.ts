@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -154,11 +154,10 @@ describe("ensureGlobalService", () => {
         String(DEFAULT_PORT),
       ]);
 
-      const logContent = await readFile(
-        path.join(globalStageflowHome(), "service.log"),
-        "utf8",
-      ).catch(() => "");
+      const logPath = path.join(globalStageflowHome(), "service.log");
+      const logContent = await readFile(logPath, "utf8").catch(() => "");
       expect(logContent).toBe("");
+      expect((await stat(logPath)).mode & 0o777).toBe(0o600);
     });
   });
 

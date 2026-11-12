@@ -21,7 +21,7 @@ stages:
     route:
       - to: review
     system_prompt: Draft.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -38,7 +38,7 @@ stages:
                 $ref: "#/schemas/finding-id"
   - id: review
     system_prompt: Review.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

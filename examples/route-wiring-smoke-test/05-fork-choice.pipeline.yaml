@@ -9,7 +9,7 @@ stages:
     system_prompt: |
       Categorize this work in one sentence. Both the quick-fix and big-project follow-ups run next.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -22,7 +22,7 @@ stages:
     system_prompt: |
       Kick off planning for the big project in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -40,7 +40,7 @@ stages:
     system_prompt: |
       Apply the quick fix in one sentence. Notify-team, update-docs, and schedule-followup all run next.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -55,7 +55,7 @@ stages:
     system_prompt: |
       Notify the team the quick fix shipped, in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -70,7 +70,7 @@ stages:
     system_prompt: |
       Update the docs for the quick fix in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -85,7 +85,7 @@ stages:
     system_prompt: |
       Schedule a follow-up review in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -100,7 +100,7 @@ stages:
     system_prompt: |
       Close out the run in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn as spawnDefault } from "node:child_process";
-import { openSync } from "node:fs";
+import { chmodSync, openSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureGlobalHome } from "../project/globalHome.js";
@@ -60,13 +60,13 @@ export function hostBaseUrl(): string {
   return `http://127.0.0.1:${resolveServicePort()}`;
 }
 
-export async function probeGlobalServiceDetailed(): Promise<ServiceProbeResult> {
+export async function probeStageflowHost(baseUrl: string): Promise<ServiceProbeResult> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 1500);
   try {
     let res: Response;
     try {
-      res = await fetch(`${hostBaseUrl()}/livez`, { signal: ac.signal });
+      res = await fetch(`${baseUrl}/livez`, { signal: ac.signal });
     } catch {
       return "unreachable";
     }
@@ -82,6 +82,10 @@ export async function probeGlobalServiceDetailed(): Promise<ServiceProbeResult> 
   }
 }
 
+export async function probeGlobalServiceDetailed(): Promise<ServiceProbeResult> {
+  return probeStageflowHost(hostBaseUrl());
+}
+
 export async function defaultProbeHost(): Promise<HostProbeResult> {
   return (await probeGlobalServiceDetailed()) === "up" ? "up" : "down";
 }
@@ -91,6 +95,9 @@ const DEFAULT_TIMEOUT_MS =
   Number(process.env.STAGEFLOW_AUTOSTART_TIMEOUT_MS) || 10_000;
 
 export const STAGEFLOW_NO_AUTOSTART = "STAGEFLOW_NO_AUTOSTART";
+
+/** Set on the process `ensureGlobalService` spawns so it does not print the control token. */
+export const SF_SERVICE_CHILD = "SF_SERVICE_CHILD";
 
 /** Truthy when set and not empty / `0` / `false` (case-insensitive). */
 export function isNoAutostartEnabled(
@@ -195,7 +202,8 @@ export async function ensureGlobalService(
 
   let logFd: number;
   try {
-    logFd = openSync(logPath, "a");
+    logFd = openSync(logPath, "a", 0o600);
+    chmodSync(logPath, 0o600);
   } catch (err) {
     return {
       ok: false,
@@ -209,6 +217,7 @@ export async function ensureGlobalService(
     const child = spawnFn(process.execPath, spawnArgs, {
       detached: true,
       stdio: ["ignore", logFd, logFd],
+      env: { ...process.env, [SF_SERVICE_CHILD]: "1" },
     });
     child.unref();
   } catch (err) {

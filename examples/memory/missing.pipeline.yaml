@@ -4,7 +4,7 @@ memories:
 stages:
   - id: blocked
     entry: true
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     system_prompt: |
       This pipeline must not start. The memory it names does not exist.
     io:

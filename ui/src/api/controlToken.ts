@@ -30,6 +30,24 @@ export function getControlToken(): string {
   }
 }
 
+/** Move `#token=` into storage and drop the fragment so it is not kept in the address bar. */
+export function captureControlTokenFragment(): void {
+  if (typeof window === "undefined") return;
+  const hash = window.location.hash;
+  if (!hash.startsWith("#token=")) return;
+  const raw = hash.slice("#token=".length);
+  let token = raw;
+  try {
+    token = decodeURIComponent(raw);
+  } catch {
+    token = raw;
+  }
+  const trimmed = token.trim();
+  if (trimmed.length > 0) setControlToken(trimmed);
+  const next = `${window.location.pathname}${window.location.search}`;
+  window.history.replaceState(window.history.state, "", next);
+}
+
 export function setControlToken(token: string): void {
   if (typeof localStorage === "undefined") return;
   try {
@@ -49,3 +67,5 @@ export function authorizationHeaders(): Record<string, string> {
   if (!token) return {};
   return { Authorization: `Bearer ${token}` };
 }
+
+captureControlTokenFragment();

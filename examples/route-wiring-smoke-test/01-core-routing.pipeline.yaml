@@ -7,7 +7,7 @@ stages:
     system_prompt: |
       Draft a one-sentence plan.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -22,7 +22,7 @@ stages:
     system_prompt: |
       Implement the plan in one or two sentences.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -45,7 +45,7 @@ stages:
       Review the change in one or two sentences. Prefer continue so the rest of the pipeline runs.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], payload: {}, and feedback_loop: {"action":"continue"}.
       To send work back instead, use feedback_loop: {"action":"send_back","target":"implement"}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -62,7 +62,7 @@ stages:
     system_prompt: |
       Record the QA outcome in one sentence. Ship and request-changes both run next.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -80,7 +80,7 @@ stages:
     system_prompt: |
       Ship the change in one sentence. Slack, email, and changelog notifications all run next.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -95,7 +95,7 @@ stages:
     system_prompt: |
       Note the requested changes in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -110,7 +110,7 @@ stages:
     system_prompt: |
       Pretend to notify Slack in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -125,7 +125,7 @@ stages:
     system_prompt: |
       Pretend to notify email in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -140,7 +140,7 @@ stages:
     system_prompt: |
       Pretend to update the changelog in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -158,7 +158,7 @@ stages:
     system_prompt: |
       Close out the run in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

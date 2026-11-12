@@ -40,6 +40,39 @@ describe("controlToken storage", () => {
   });
 });
 
+describe("control token fragment", () => {
+  it("stores #token= and removes the fragment", async () => {
+    const token = "t".repeat(32);
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", {
+      location: {
+        hash: `#token=${encodeURIComponent(token)}`,
+        pathname: "/",
+        search: "",
+      },
+      history: { state: null, replaceState },
+    });
+    vi.resetModules();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+      clear: () => store.clear(),
+    });
+    const { getControlToken } = await import("./controlToken");
+    expect(getControlToken()).toBe(token);
+    expect(replaceState).toHaveBeenCalled();
+    const next = String(replaceState.mock.calls[0]?.[2]);
+    expect(next).not.toContain("#");
+    expect(next).not.toContain("token=");
+    expect(next).toBe("/");
+  });
+});
+
 describe("api Authorization attachment", () => {
   it("includes Authorization from localStorage on api()", async () => {
     const { setControlToken } = await import("./controlToken");

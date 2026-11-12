@@ -1020,7 +1020,7 @@ Prints:
 
 - Operator console URL (default `http://127.0.0.1:3847`; wildcard binds advertise loopback)
 - MCP endpoint URL (`…/mcp`)
-- When no control token was set: `Control token: <token>` and `Control token file: <path>` (once; not printed when you set `STAGEFLOW_CONTROL_TOKEN` or `_FILE`)
+- When this start minted a control token and stdout is a terminal: `Control token: <token>` and `Control token file: <path>`. A reused file, or a start whose stdout is not a terminal, prints `Control token file: <path>` only. Neither line is printed when you set `STAGEFLOW_CONTROL_TOKEN` or `_FILE`
 
 Opens the default browser unless `--no-open` / `STAGEFLOW_NO_OPEN` is set. Prefer **`sf mcp`** as the headless / container entrypoint; `--no-open` only makes `sf ui` usable without a browser.
 
@@ -1030,9 +1030,9 @@ On first SIGTERM/SIGINT the Host drains: stop accepting new starts, signal activ
 
 `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` is a test/debug escape hatch that disables MCP sessions. See [MCP](mcp.md).
 
-**Access control.** If `STAGEFLOW_CONTROL_TOKEN` and `_FILE` are unset, `sf ui` and `sf mcp` write a new token to `$STAGEFLOW_HOME/control-token` (mode `0600`), point that process at the file, and print `Control token: <token>` once next to the listen URL. The CLI reads that file when `STAGEFLOW_CONTROL_TOKEN` is unset. A request with no `Authorization` is `401`. `/livez` and `/readyz` stay open. An `Origin` header must match the `Host` header's host and port (missing ports are 80 for http and 443 for https). Requests with no `Origin` stay allowed. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start a non-loopback bind with no token. The shipped Compose file does not set it. It publishes `127.0.0.1:3847:3847`; the process inside still binds `0.0.0.0`, and the token is in the container logs. Do not set the opt-in when the port is reachable beyond this machine. See [MCP — access control](mcp.md#access-control).
+**Access control.** If `STAGEFLOW_CONTROL_TOKEN` and `_FILE` are unset, `sf ui` and `sf mcp` reuse `$STAGEFLOW_HOME/control-token` when it is a regular `0600` file owned by the current user and the token is valid. A missing or unusable file (mode `0644`, a symlink, or another owner) is replaced only after listen succeeds, so a failed bind does not change the file a live Host is using. A second start that finds a Host already answering the port prints `Stageflow is already running at http://127.0.0.1:<port>` and the console URL, then exits without writing the file. The CLI reads that file when `STAGEFLOW_CONTROL_TOKEN` is unset. A request with no `Authorization` is `401`. `/livez` and `/readyz` stay open. An `Origin` header must match the `Host` header's host and port (missing ports are 80 for http and 443 for https). Requests with no `Origin` stay allowed. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start a non-loopback bind with no token. The shipped Compose file does not set it. It publishes `127.0.0.1:3847:3847`; the process inside still binds `0.0.0.0`. Do not set the opt-in when the port is reachable beyond this machine. See [MCP — access control](mcp.md#access-control).
 
-Run **either** `sf ui` **or** `sf mcp` at a time — both bind the same default port (`3847`) on the shared global service, so running both together is a port collision, not a store conflict (they already share the same global store). `sf run` / `sf run-stage` / mutating `sf runs` verbs also auto-start this service headlessly if nothing is listening yet, so starting `sf ui` first avoids racing a later headless auto-start for the port.
+Run **either** `sf ui` **or** `sf mcp` at a time — both bind the same default port (`3847`) on the shared global service. A second start on that port exits 0 when the Host is already up. `sf run` / `sf run-stage` / mutating `sf runs` verbs also auto-start this service headlessly if nothing is listening yet, so starting `sf ui` first avoids racing a later headless auto-start for the port.
 
 ## `sf mcp`
 

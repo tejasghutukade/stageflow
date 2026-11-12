@@ -111,6 +111,35 @@ describe("agent inbound webhooks", () => {
     const sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
     expect(sessions).toHaveLength(2);
   });
+
+  it("opens a new session when the thread is past its minute limit", async () => {
+    const { router, replies, service, project, clock } = await setup({ limits: { session_minutes: 5 } });
+    const first = slackRequest({ event: { ...slackEvent.event, ts: "1.0", event_ts: "1.0", thread_ts: "1.0" } });
+    const second = slackRequest({ event: { ...slackEvent.event, text: "still there?", ts: "2.0", event_ts: "2.0", thread_ts: "1.0" } });
+    await router_handle(router, first);
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    clock.advance(5 * 60_000);
+    await router_handle(router, second);
+    await vi.waitFor(() => expect(replies).toHaveLength(2));
+    expect(replies[1]!.text).toBe("re: still there?");
+    const sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
+    expect(sessions).toHaveLength(2);
+  });
+
+  it("keeps the session and tells the sender when the thread is past its cost limit", async () => {
+    const { router, replies, service, project } = await setup({ limits: { cost_usd: 0.001 } });
+    const first = slackRequest({ event: { ...slackEvent.event, ts: "1.0", event_ts: "1.0", thread_ts: "1.0" } });
+    const second = slackRequest({ event: { ...slackEvent.event, text: "and the refund?", ts: "2.0", event_ts: "2.0", thread_ts: "1.0" } });
+    await router_handle(router, first);
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]!.text).toBe("re: where is my order?");
+    await router_handle(router, second);
+    await vi.waitFor(() => expect(replies).toHaveLength(2));
+    expect(replies[1]).toMatchObject({ connectionId: "ops-slack", to: "C0123ABCD", text: "This session reached its cost limit of $0.001." });
+    const sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]!.turnCount).toBe(1);
+  });
 });
 
 function router_handle(router: AgentInboundRouter, req: { raw: string; headers: Record<string, string> }) {

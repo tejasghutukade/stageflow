@@ -1,5 +1,5 @@
 id: send-hello-email
-model: anthropic/claude-haiku-5-5
+model: anthropic/claude-haiku-4-5
 email:
   - accountId: personal-inbox
     operations: [send]

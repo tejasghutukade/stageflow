@@ -6,7 +6,7 @@ stages:
     entry: true
     route:
       - to: decide
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     system_prompt: |
       The task input has "focus", "decision", "query", and "cards". "cards" is a list of objects with "key" and "note".
       Do these steps in order, then stop:
@@ -70,7 +70,7 @@ stages:
   - id: decide
     route:
       - to: audit
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     system_prompt: |
       The input has "cover", "filed", "focus", "decision", and "query".
       Do these steps in order, then stop:
@@ -133,7 +133,7 @@ stages:
               type: string
           additionalProperties: false
   - id: audit
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     system_prompt: |
       The input has "cover", "filed", "focus", "decision", "before", and "after".
       "filed" is a JSON array of objects with "key" and "note".

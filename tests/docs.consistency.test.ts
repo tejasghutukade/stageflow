@@ -145,4 +145,33 @@ describe("docs", () => {
     ];
     expect(missing).toEqual([]);
   });
+
+  it("pins published image tags and the security support row to package.json", () => {
+    const version = (JSON.parse(read("package.json")) as { version: string }).version;
+    const parsed = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+    expect(parsed, version).not.toBeNull();
+    const minor = `${parsed![1]}.${parsed![2]}`;
+    const allowed = new Set([minor, version]);
+    const files = ["README.md", ...markdownFiles("docs"), ...markdownFiles("skills")];
+    const problems: string[] = [];
+    for (const file of files) {
+      read(file).split("\n").forEach((line, index) => {
+        for (const match of line.matchAll(/ghcr\.io\/tejasghutukade\/stageflow:([^\s`'"]+)/g)) {
+          const tag = match[1]!.replace(/[.,);]+$/, "");
+          if (tag === "local" || /^[xyz](?:\.[xyz])+$/.test(tag)) continue;
+          if (!allowed.has(tag)) problems.push(`${file}:${index + 1} ${tag}`);
+        }
+      });
+    }
+    expect(problems).toEqual([]);
+
+    const supported = [...read("SECURITY.md").matchAll(/\|\s*([^|]+?)\s*\|\s*(Yes|No)\s*\|/g)].map((row) => ({
+      version: row[1]!.trim(),
+      supported: row[2]!,
+    }));
+    expect(supported).toEqual([
+      { version: `${minor}.x`, supported: "Yes" },
+      { version: `< ${minor}`, supported: "No" },
+    ]);
+  });
 });

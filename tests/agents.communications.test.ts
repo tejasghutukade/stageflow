@@ -67,7 +67,7 @@ describe("agent communications", () => {
     expect(detail.session).toMatchObject({ source: "email", sourceRef: "user@example.com" });
   });
 
-  it("replaces a thread session that is past its limits and reuses one that is not", async () => {
+  it("replaces a thread session that is past its turn or minute limit and reuses one that is not", async () => {
     const fixture = await agentsFixture();
     fixtures.push(fixture);
     const { service, project, clock } = fixture;
@@ -102,6 +102,35 @@ describe("agent communications", () => {
     expect(timedNext.sessionId).not.toBe(timed.sessionId);
     expect(await service.receive(project, message("email:8", "thread-b"))).toEqual({ ...timedNext, duplicate: false });
     expect((await service.getSession(project, timedNext.sessionId)).session.source).toBe("email");
+  });
+
+  it("keeps a cost-capped thread on the same session", async () => {
+    const fixture = await agentsFixture();
+    fixtures.push(fixture);
+    const { service, project } = fixture;
+    await service.create(
+      project,
+      agentInput("inbox", {
+        channel: { connection_id: "mail-inbox", allow_from: ["*"] },
+        limits: { cost_usd: 0.001 },
+      }),
+      { source: "console" },
+    );
+    await service.setEnabled(project, "inbox", true, { source: "console" });
+    const threadKey = agentThreadKey({ provider: "email", connectionId: "mail-inbox", threadId: "thread-a" });
+
+    const first = await service.receive(project, message("email:1"));
+    const turn = await service.beginTurn(project, first.sessionId, { text: "Hello" });
+    await service.completeTurn(project, turn.turn.id, { status: "succeeded", assistantText: "ok", costUsd: 0.001 });
+
+    const again = await service.receive(project, message("email:2"));
+    expect(again).toEqual({ agentId: "inbox", sessionId: first.sessionId, duplicate: false });
+    expect((await service.getSession(project, first.sessionId)).session.threadKey).toBe(threadKey);
+    expect((await service.listSessions(project, "inbox", { limit: 10 })).sessions).toHaveLength(1);
+    await expect(service.beginTurn(project, first.sessionId, { text: "more" })).rejects.toMatchObject({
+      code: "agent.limit_reached",
+      message: "This session reached its cost limit of $0.001.",
+    });
   });
 
   it("refuses messages for disabled or unbound agents", async () => {

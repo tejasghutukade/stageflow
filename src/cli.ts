@@ -46,6 +46,7 @@ import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { GRAPH_USAGE, runGraphCommand } from "./cli/graphCommand.js";
 import { MIGRATE_YAML_USAGE, runMigrateYamlCommand } from "./cli/migrateYamlCommand.js";
 import { DOCTOR_USAGE, runDoctorCommand } from "./cli/doctorCommand.js";
+import { pinStageflowHome } from "./project/globalHome.js";
 import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
 import { scheduleExitWithDrain } from "./runtime/stageWorkerProtocol.js";
@@ -57,11 +58,14 @@ import { resolveListenHost } from "./server/listenHost.js";
 import {
   assertBindAllowed,
   BindRefusedError,
+  commitHostControlToken,
   ensureHostControlToken,
   generatedControlTokenLines,
   loadControlTokens,
+  resolveClientBearerToken,
   type EnsuredHostControlToken,
 } from "./server/controlToken.js";
+import { probeStageflowHost, SF_SERVICE_CHILD } from "./server/ensureGlobalService.js";
 import { resolveMcpStateless } from "./mcp/server.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "./package-meta.js";
 import { installProxyDispatcher } from "./net/proxy.js";
@@ -339,6 +343,10 @@ export function parseRunStageArgs(argv: string[]): {
   let operatorAgentDir: string | undefined;
   let skipGates = false;
   for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--stageflow-home") {
+      i += 1;
+      continue;
+    }
     if (argv[i] === "--run-id") {
       runId = argv[++i];
     } else if (argv[i] === "--stage-id") {
@@ -464,8 +472,20 @@ function isNoOpenEnabled(
   return normalized !== "0" && normalized !== "false";
 }
 
+function pinStageWorkerHomeFromArgv(argv: string[]): void {
+  const args = argv.slice(2);
+  if (args[0] !== "internal" || args[1] !== "run-stage") return;
+  process.env[SF_STAGE_WORKER] = "1";
+  const flag = args.indexOf("--stageflow-home");
+  const value = flag >= 0 ? args[flag + 1] : undefined;
+  if (value === undefined || value.length === 0) return;
+  pinStageflowHome(value, { exportEnv: false });
+  delete process.env.STAGEFLOW_HOME;
+}
+
 async function main(argv: string[]): Promise<number> {
   try {
+    pinStageWorkerHomeFromArgv(argv);
     installProxyDispatcher(process.env, {
       log: (msg) => cliLogger.info("proxy.dispatcher", msg),
     });
@@ -630,6 +650,7 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "ui") {
       const listenHost = resolveListenHost({ flag: parsed.host });
+      if (await printIfHostAlreadyRunning(parsed.port)) return 0;
       const ensuredToken = ensureHostControlToken();
       const tokens = loadControlTokens();
       assertBindAllowed(listenHost, tokens);
@@ -645,6 +666,7 @@ async function main(argv: string[]): Promise<number> {
         mcpStateless,
         controlTokens: tokens,
       });
+      commitHostControlToken(ensuredToken);
       if (host.store) {
         try {
           await host.store.ensureProject(ctx.projectRoot);
@@ -656,7 +678,7 @@ async function main(argv: string[]): Promise<number> {
       console.log(`MCP endpoint: ${host.mcpUrl}`);
       printGeneratedControlToken(ensuredToken);
       if (!isNoOpenEnabled(parsed.noOpen)) {
-        openBrowser(host.url);
+        openBrowser(consoleOpenUrl(host.url, ensuredToken));
       }
       const outcome = await host.shutdown.whenDrained();
       return outcome.exitCode;
@@ -667,6 +689,7 @@ async function main(argv: string[]): Promise<number> {
         throw new Error("--no-open is only valid with sf ui");
       }
       const listenHost = resolveListenHost({ flag: parsed.host });
+      if (await printIfHostAlreadyRunning(parsed.port)) return 0;
       const ensuredToken = ensureHostControlToken();
       const tokens = loadControlTokens();
       assertBindAllowed(listenHost, tokens);
@@ -682,6 +705,7 @@ async function main(argv: string[]): Promise<number> {
         mcpStateless,
         controlTokens: tokens,
       });
+      commitHostControlToken(ensuredToken);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
       printGeneratedControlToken(ensuredToken);
       const outcome = await host.shutdown.whenDrained();
@@ -711,8 +735,51 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
+async function printIfHostAlreadyRunning(port: number | undefined): Promise<boolean> {
+  const bound = port ?? DEFAULT_PORT;
+  const base = `http://127.0.0.1:${bound}`;
+  if ((await probeStageflowHost(base)) !== "up") return false;
+  console.log(`Stageflow is already running at ${base}`);
+  console.log(`Operator console: ${base}`);
+  return true;
+}
+
+function revealControlToken(): boolean {
+  return process.stdout.isTTY === true && process.env[SF_SERVICE_CHILD] !== "1";
+}
+
+function heldControlToken(ensured: EnsuredHostControlToken): string | undefined {
+  if (ensured.token !== undefined && ensured.token.length > 0) return ensured.token;
+  if (
+    (process.env.STAGEFLOW_CONTROL_TOKEN !== undefined &&
+      process.env.STAGEFLOW_CONTROL_TOKEN.length > 0) ||
+    (process.env.STAGEFLOW_CONTROL_TOKEN_FILE !== undefined &&
+      process.env.STAGEFLOW_CONTROL_TOKEN_FILE.length > 0)
+  ) {
+    return resolveClientBearerToken("POST");
+  }
+  return undefined;
+}
+
+function consoleOpenUrl(baseUrl: string, ensured: EnsuredHostControlToken): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return baseUrl;
+  }
+  const host = parsed.hostname;
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") return baseUrl;
+  const token = heldControlToken(ensured);
+  if (token === undefined) return baseUrl;
+  parsed.hash = `token=${encodeURIComponent(token)}`;
+  return parsed.toString();
+}
+
 function printGeneratedControlToken(ensured: EnsuredHostControlToken): void {
-  for (const line of generatedControlTokenLines(ensured)) {
+  for (const line of generatedControlTokenLines(ensured, {
+    revealToken: revealControlToken(),
+  })) {
     console.log(line);
   }
 }

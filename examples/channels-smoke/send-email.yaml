@@ -1,6 +1,6 @@
 id: send-email
-# anthropic/claude-haiku-5-5 needs an Anthropic API key on the host. Use another model if you prefer.
-model: anthropic/claude-haiku-5-5
+# anthropic/claude-haiku-4-5 needs an Anthropic API key on the host. Use another model if you prefer.
+model: anthropic/claude-haiku-4-5
 # A stage uses one channel. Pin the recipient here: the agent can only send to it and cannot change it.
 # `connection` is the id shown on the Connections page.
 channels:

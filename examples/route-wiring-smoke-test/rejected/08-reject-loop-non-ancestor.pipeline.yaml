@@ -6,7 +6,7 @@ stages:
       - to: b
       - to: c
     system_prompt: A.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -22,7 +22,7 @@ stages:
         on_max_replays: require_continue
         replay_session: resume
     system_prompt: B.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -32,7 +32,7 @@ stages:
           type: object
   - id: c
     system_prompt: C.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

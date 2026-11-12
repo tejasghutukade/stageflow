@@ -2,7 +2,7 @@ id: file-card
 stages:
   - id: file
     entry: true
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     system_prompt: |
       The task input has "key" and "note".
       Do these steps in order, then stop:

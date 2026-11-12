@@ -10,6 +10,7 @@ import {
 import { isCursorModelRef, readCursorApiKey } from "../agent/cursorProvider.js";
 import { BROWSER_ENV_PREFIX } from "../browser/browserHost.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { PI_HOME_AUTH_PATH_ENV, sfOwnedAuthPath } from "./credentialBinding.js";
 import { redactString } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
@@ -446,6 +447,8 @@ export class StageProcessLauncher {
     const args = [
       "internal",
       "run-stage",
+      "--stageflow-home",
+      globalStageflowHome(),
       "--run-id",
       input.runId,
       "--stage-id",

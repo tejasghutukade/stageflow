@@ -49,7 +49,7 @@ route:
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow built (`npm run build`)
-- **Anthropic** provider — `detect-changes` uses `anthropic/claude-haiku-5-5`
+- **Anthropic** provider — `detect-changes` uses `anthropic/claude-haiku-4-5`
   and `author-diagrams` uses `anthropic/claude-sonnet-5-5`. Set
   `ANTHROPIC_API_KEY`, then:
   `sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY`

@@ -5,7 +5,7 @@ stages:
     route:
       - to: review
     system_prompt: Implement.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -20,7 +20,7 @@ stages:
       on_max_replays: require_continue
       replay_session: resume
     system_prompt: Review.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

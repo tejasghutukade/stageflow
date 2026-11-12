@@ -7,7 +7,7 @@ stages:
     system_prompt: |
       Draft a titled document in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"title": "Smoke draft"}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -23,7 +23,7 @@ stages:
     system_prompt: |
       Review the titled document in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

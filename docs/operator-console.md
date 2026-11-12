@@ -18,7 +18,7 @@ sf ui
 sf ui --port 9000
 ```
 
-On start, Stageflow prints the console URL and MCP endpoint, then opens your default browser. The process runs until you stop it (Ctrl+C). In Docker the console is the container's published port; see [Docker](docker.md).
+On start, Stageflow prints the console URL and MCP endpoint, then opens your default browser. A local open includes the control token in the URL fragment; the page stores it and removes the fragment. If the console still asks you to paste a token, it is in `~/.stageflow/control-token` (`cat ~/.stageflow/control-token`). The process runs until you stop it (Ctrl+C). In Docker the console is the container's published port; see [Docker](docker.md).
 
 ## One page per area
 

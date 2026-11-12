@@ -9,7 +9,7 @@ stages:
           op: eq
           value: gold
     system_prompt: Triage.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -26,7 +26,7 @@ stages:
                   type: string
   - id: page
     system_prompt: Page.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

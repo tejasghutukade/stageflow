@@ -12,7 +12,7 @@ stages:
     system_prompt: |
       Draft a one-sentence plan.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -27,7 +27,7 @@ stages:
     system_prompt: |
       Implement the plan in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -52,7 +52,7 @@ stages:
       point exists in the wiring but stays dormant this run; qa (below) is
       the one that actually exercises a loop-back to implement.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], payload: {}, and feedback_loop: {"action":"continue"}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -79,7 +79,7 @@ stages:
       of review's own dormant loop point above -- both target the same
       stage from different points in the chain.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], payload: {}, and the matching feedback_loop action.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -92,7 +92,7 @@ stages:
     system_prompt: |
       Close out the run in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: anthropic/claude-haiku-5-5
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
