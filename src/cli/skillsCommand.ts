@@ -12,6 +12,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { lstatSync } from "node:fs";
 import * as readline from "node:readline";
 import { tmpdir } from "node:os";
 import { inflateRawSync } from "node:zlib";
@@ -225,17 +226,26 @@ function shouldCopyRelative(rel: string): boolean {
   return true;
 }
 
-async function copySkillTree(sourceRoot: string, destRoot: string): Promise<void> {
+/**
+ * Copy a skill without its symbolic links: a link in a downloaded skill (`references/x.md -> ../../../.env`) would
+ * point into the project once installed. Returns the skipped links, relative to the skill root.
+ */
+async function copySkillTree(sourceRoot: string, destRoot: string): Promise<string[]> {
   await rm(destRoot, { recursive: true, force: true });
   await mkdir(destRoot, { recursive: true });
+  const skipped: string[] = [];
   await cp(sourceRoot, destRoot, {
     recursive: true,
-    verbatimSymlinks: true,
     filter: (src) => {
       const rel = path.relative(sourceRoot, src);
+      if (rel !== "" && lstatSync(src).isSymbolicLink()) {
+        skipped.push(rel.split(path.sep).join("/"));
+        return false;
+      }
       return shouldCopyRelative(rel);
     },
   });
+  return skipped;
 }
 
 function inferSkillNameFromPath(sourcePath: string): string {
@@ -603,7 +613,10 @@ export async function installProjectSkill(
     try {
       assertSafeSkillName(resolved.skillName);
       const destRoot = await resolveSkillInstallDest(input.projectRoot, resolved.skillName);
-      await copySkillTree(resolved.sourceRoot, destRoot);
+      const skippedLinks = await copySkillTree(resolved.sourceRoot, destRoot);
+      if (skippedLinks.length > 0) {
+        io.error(`Skipped symbolic links in the skill (not installed): ${skippedLinks.join(", ")}`);
+      }
 
       const doctorRel = skillDoctorScriptRelative(resolved.skillName);
       const doctorScript = path.join(destRoot, doctorRel);

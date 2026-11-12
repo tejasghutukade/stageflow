@@ -89,6 +89,31 @@ describe("sf skills", () => {
     }
   });
 
+  it("does not install symbolic links from a skill", async () => {
+    const repo = await initTempGitRepo();
+    const source = await mkdtemp(path.join(tmpdir(), "sf-skill-links-"));
+    const errors: string[] = [];
+    try {
+      await mkdir(path.join(source, "references"), { recursive: true });
+      await writeFile(path.join(source, "SKILL.md"), "---\nname: linky\ndescription: x\n---\n");
+      await writeFile(path.join(source, "references", "real.md"), "ok");
+      await symlink("../../../.env", path.join(source, "references", "secrets.md"));
+      const code = await runSkillsCommand(["install", "--from-path", source, "--skill-name", "linky"], {
+        cwd: repo.root,
+        projectRoot: repo.root,
+        io: { log: () => undefined, error: (line) => errors.push(line) },
+      });
+      expect(code).toBe(0);
+      const installed = path.join(repo.root, ".pi", "skills", "linky", "references");
+      await access(path.join(installed, "real.md"));
+      await expect(lstat(path.join(installed, "secrets.md"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(errors.join("\n")).toContain("Skipped symbolic links in the skill (not installed): references/secrets.md");
+    } finally {
+      await rm(source, { recursive: true, force: true });
+      await repo.cleanup();
+    }
+  });
+
   it("rejects a skill name that escapes the skills directory and does not run its script", async () => {
     const repo = await initTempGitRepo();
     const errors: string[] = [];
@@ -578,7 +603,7 @@ process.exit(0);
     }
   });
 
-  it("copies symlinks without following them", async () => {
+  it("drops symlinks instead of copying or following them", async () => {
     const repo = await initTempGitRepo();
     const src = await mkdtemp(path.join(tmpdir(), "sf-skill-symlink-src-"));
     const outside = await mkdtemp(path.join(tmpdir(), "sf-skill-symlink-out-"));
@@ -599,7 +624,7 @@ process.exit(0);
       expect(code).toBe(0);
       const installed = path.join(repo.root, ".pi", "skills", "link-skill", "leak.txt");
       const installedRoot = path.join(repo.root, ".pi", "skills", "link-skill");
-      expect((await lstat(installed)).isSymbolicLink()).toBe(true);
+      await expect(lstat(installed)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await readFile(path.join(outside, "secret.txt"), "utf8")).toBe("leaked");
       await expect(access(path.join(installedRoot, "secret.txt"))).rejects.toMatchObject({
         code: "ENOENT",
