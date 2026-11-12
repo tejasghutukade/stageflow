@@ -527,6 +527,30 @@ export function resolveClientBearerToken(
   return undefined;
 }
 
+/** Where the CLI's bearer for `method` comes from, for a 401 message. Names variables and paths, never the token. */
+export function describeClientTokenSource(
+  method: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (env.STAGEFLOW_CONTROL_TOKEN?.trim()) return "STAGEFLOW_CONTROL_TOKEN";
+  const file = env.STAGEFLOW_CONTROL_TOKEN_FILE?.trim();
+  if (file) return `STAGEFLOW_CONTROL_TOKEN_FILE (${file})`;
+  const home = resolveControlTokenHome(env);
+  if (env[SF_STAGE_WORKER] !== "1" && home !== undefined) {
+    const installed = path.join(home, CONTROL_TOKEN_FILENAME);
+    try {
+      lstatSync(installed);
+      return installed;
+    } catch {
+      // no installed file
+    }
+  }
+  if ((method === "GET" || method === "HEAD") && (env.STAGEFLOW_READ_TOKEN?.trim() || env.STAGEFLOW_READ_TOKEN_FILE?.trim())) {
+    return "STAGEFLOW_READ_TOKEN";
+  }
+  return "no token";
+}
+
 export function clientAuthorizationHeaders(
   method: string,
   env: NodeJS.ProcessEnv = process.env,

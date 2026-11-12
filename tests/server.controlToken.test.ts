@@ -12,6 +12,7 @@ import { SF_STAGE_WORKER } from "../src/runtime/stageWorkerProtocol.js";
 import { startMcpServer } from "../src/server/mcpHost.js";
 import {
   authHintBody,
+  describeClientTokenSource,
   assertBindAllowed,
   authenticateBearer,
   BindRefusedError,
@@ -248,6 +249,18 @@ describe("ensureHostControlToken", () => {
       spy.mockRestore();
       await chmod(dir, 0o700);
     }
+  });
+
+  it("names the CLI's token source for a 401 message, never the token", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-token-source-"));
+    expect(describeClientTokenSource("POST", { STAGEFLOW_CONTROL_TOKEN: DRIVE })).toBe("STAGEFLOW_CONTROL_TOKEN");
+    expect(describeClientTokenSource("POST", { STAGEFLOW_CONTROL_TOKEN_FILE: "/run/secrets/t" })).toBe(
+      "STAGEFLOW_CONTROL_TOKEN_FILE (/run/secrets/t)",
+    );
+    expect(describeClientTokenSource("POST", { STAGEFLOW_HOME: dir })).toBe("no token");
+    await writeFile(path.join(dir, CONTROL_TOKEN_FILENAME), DRIVE, { mode: 0o600 });
+    expect(describeClientTokenSource("POST", { STAGEFLOW_HOME: dir })).toBe(path.join(dir, CONTROL_TOKEN_FILENAME));
+    expect(describeClientTokenSource("POST", { STAGEFLOW_CONTROL_TOKEN: DRIVE })).not.toContain(DRIVE);
   });
 
   it("keeps the file when STAGEFLOW_CONTROL_TOKEN_FILE points at it", async () => {
