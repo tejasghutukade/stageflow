@@ -12,6 +12,18 @@ import {
 import { redactString, stripUrlUserinfo } from "../src/logging/redact.js";
 import { redactSecrets } from "../src/agent/streamLogRedact.js";
 
+describe("GitHub token prefixes", () => {
+  it("replaces each prefix in a log line and leaves a short lookalike", () => {
+    const tail = "Ab12_cd34EF567890abcd";
+    for (const prefix of ["ghp", "gho", "ghu", "ghs", "ghr"]) {
+      const token = `${prefix}_${tail}`;
+      expect(redactString(`log line ${token} end`)).toBe("log line [redacted] end");
+    }
+    const lookalike = `gho_${"a".repeat(19)}`;
+    expect(redactString(`log line ${lookalike} end`)).toBe(`log line ${lookalike} end`);
+  });
+});
+
 describe("value-based redaction", () => {
   it("redacts exact, base64, and URL-encoded forms with named marker", () => {
     clearNamedSecretsForTests();
