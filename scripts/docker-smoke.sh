@@ -154,13 +154,13 @@ docker build \
 err "creating volume ${VOLUME_NAME}"
 docker volume create "$VOLUME_NAME" >/dev/null
 
-err "starting container (STAGEFLOW_HOME=/data, TMPDIR=/data/tmp, port ${HOST_PORT}:3847)"
+err "starting container (STAGEFLOW_HOME=/data, TMPDIR=/tmp/stageflow, port ${HOST_PORT}:3847)"
 CONTAINER_ID="$(
   docker run -d \
     --name "$CONTAINER_NAME" \
     -e STAGEFLOW_HOME=/data \
     -e STAGEFLOW_CREDENTIAL_HOME=/data \
-    -e TMPDIR=/data/tmp \
+    -e TMPDIR=/tmp/stageflow \
     -e SQLITE_TMPDIR=/data/tmp \
     -e "STAGEFLOW_CONTROL_TOKEN=${CONTROL_TOKEN}" \
     -v "${VOLUME_NAME}:/data" \
@@ -271,7 +271,7 @@ MINT_ID="$(
     --name "stageflow-smoke-mint-$$" \
     -e STAGEFLOW_HOME=/data \
     -e STAGEFLOW_CREDENTIAL_HOME=/data \
-    -e TMPDIR=/data/tmp \
+    -e TMPDIR=/tmp/stageflow \
     -e SQLITE_TMPDIR=/data/tmp \
     -v "${MINT_VOLUME}:/data" \
     -p "0:3847" \

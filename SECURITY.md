@@ -30,3 +30,5 @@ Stageflow is a local CLI and operator console:
 - **Out of scope:** third-party model providers (Anthropic, OpenAI, etc.), Pi runtime behavior, and project YAML you author locally
 
 Stageflow does not collect telemetry or phone home. Credentials are stored locally at `~/.stageflow/agent/auth.json`.
+
+A stage does not receive the control token or the data directory path. An unsandboxed stage still runs as your user, so it can read files in the data directory (`~/.stageflow` by default, `/data` in Docker). Use the stage container sandbox (`STAGEFLOW_STAGE_CONTAINER_IMAGE`) when a stage runs untrusted code.

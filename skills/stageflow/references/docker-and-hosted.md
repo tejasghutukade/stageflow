@@ -28,7 +28,8 @@ Defaults baked into the image:
 | `STAGEFLOW_BIND` | `0.0.0.0` | Docker port publish needs a non-loopback bind. |
 | `STAGEFLOW_NO_AUTOSTART` | `1` | The entrypoint is already the Host. A second one must not spawn. |
 | `STAGEFLOW_NO_OPEN` | `1` | No browser to open inside the container. |
-| `TMPDIR`, `SQLITE_TMPDIR` | `/data/tmp` | SQLite temp files stay on the volume. |
+| `TMPDIR` | `/tmp/stageflow` | Stage temp files are outside the data directory. |
+| `SQLITE_TMPDIR` | `/data/tmp` | SQLite temp files stay on the volume. |
 
 The image runs as uid 10001 (`stageflow`, `HOME=/data`) from the start. The entrypoint drops from root only if the container is started as root. The default command is `sf mcp` (headless REST and `/mcp`). Pass `sf ui` when you want the console. The health check is `GET /livez`, not `sf doctor`.
 

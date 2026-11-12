@@ -489,10 +489,14 @@ function pinStageWorkerHomeFromArgv(argv: string[]): void {
   const args = argv.slice(2);
   if (args[0] !== "internal" || args[1] !== "run-stage") return;
   process.env[SF_STAGE_WORKER] = "1";
+  const fromEnv = process.env.SF_WORKER_STAGEFLOW_HOME;
   const flag = args.indexOf("--stageflow-home");
-  const value = flag >= 0 ? args[flag + 1] : undefined;
-  if (value === undefined || value.length === 0) return;
-  pinStageflowHome(value, { exportEnv: false });
+  const fromArg = flag >= 0 ? args[flag + 1] : undefined;
+  const value = fromEnv !== undefined && fromEnv.length > 0 ? fromEnv : fromArg;
+  if (value !== undefined && value.length > 0) {
+    pinStageflowHome(value, { exportEnv: false });
+  }
+  delete process.env.SF_WORKER_STAGEFLOW_HOME;
   delete process.env.STAGEFLOW_HOME;
 }
 

@@ -33,8 +33,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --gid 10001 stageflow \
   && useradd --uid 10001 --gid 10001 --home-dir /data --create-home --shell /usr/sbin/nologin stageflow \
-  && mkdir -p /data/tmp /etc/stageflow /opt/stageflow \
-  && chown stageflow:stageflow /data /data/tmp
+  && mkdir -p /data/tmp /tmp/stageflow /etc/stageflow /opt/stageflow \
+  && chown stageflow:stageflow /data /data/tmp /tmp/stageflow
 
 ARG PROMPTFOO_VERSION=0.124.0
 USER stageflow:stageflow
@@ -70,7 +70,7 @@ ENV STAGEFLOW_HOME=/data \
   STAGEFLOW_BIND=0.0.0.0 \
   STAGEFLOW_NO_AUTOSTART=1 \
   STAGEFLOW_NO_OPEN=1 \
-  TMPDIR=/data/tmp \
+  TMPDIR=/tmp/stageflow \
   SQLITE_TMPDIR=/data/tmp \
   STAGEFLOW_BUILD_SHA=${STAGEFLOW_BUILD_SHA} \
   NODE_ENV=production

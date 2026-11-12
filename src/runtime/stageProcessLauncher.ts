@@ -447,8 +447,6 @@ export class StageProcessLauncher {
     const args = [
       "internal",
       "run-stage",
-      "--stageflow-home",
-      globalStageflowHome(),
       "--run-id",
       input.runId,
       "--stage-id",
@@ -518,6 +516,7 @@ export class StageProcessLauncher {
     const childEnv: Record<string, string> = {
       ...withBrowser,
       [PI_HOME_AUTH_PATH_ENV]: sfOwnedAuthPath(),
+      SF_WORKER_STAGEFLOW_HOME: globalStageflowHome(),
     };
     const cursorApiKey = readCursorApiKey(hostEnv);
     if (

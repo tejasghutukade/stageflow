@@ -9,7 +9,7 @@ Stages can pause for **operator input** via the `ask_operator` Pi tool. The oper
 
 HITL is optional — pipelines with no `ask_operator` calls run fully headless.
 
-An unsandboxed stage runs as the operator's user. It can still read files under `~/.stageflow` (`control-token`, `state.db`, `agent/auth.json`) even though that directory is not in the stage environment and a stage does not resolve the control token. Only the container sandbox closes that.
+A stage does not receive the control token or the data directory path. An unsandboxed stage still runs as your user, so it can read files in the data directory (`~/.stageflow` by default, `/data` in Docker). Use the stage container sandbox (`STAGEFLOW_STAGE_CONTAINER_IMAGE`) when a stage runs untrusted code.
 
 Agents (not pipeline stages) have their own approval gate: a call to an `ask_first` tool, and every `bash` call, pauses the agent until someone decides. Those approvals appear in the Inbox next to pipeline gates and can be decided from the console, CLI, MCP or an allowed channel. See [Agents](agents.md#runtime).
 
