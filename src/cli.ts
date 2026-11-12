@@ -66,6 +66,7 @@ import {
   resolveClientBearerToken,
   type EnsuredHostControlToken,
 } from "./server/controlToken.js";
+import { stageflowHomeId } from "./diagnostics/checks.js";
 import { probeStageflowHost, SF_SERVICE_CHILD } from "./server/ensureGlobalService.js";
 import { resolveMcpStateless } from "./mcp/server.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "./package-meta.js";
@@ -663,6 +664,7 @@ export async function main(argv: string[]): Promise<number> {
       const listenHost = resolveListenHost({ flag: parsed.host });
       const already = await printIfHostAlreadyRunning({
         port: parsed.port,
+        host: parsed.host,
         command: "ui",
         noOpen: parsed.noOpen,
       });
@@ -707,6 +709,7 @@ export async function main(argv: string[]): Promise<number> {
       const listenHost = resolveListenHost({ flag: parsed.host });
       const already = await printIfHostAlreadyRunning({
         port: parsed.port,
+        host: parsed.host,
         command: "mcp",
       });
       if (already !== null) return already;
@@ -755,14 +758,34 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
+function probeUrl(listenHost: string, port: number): string {
+  const host =
+    listenHost === "0.0.0.0" || listenHost === "::" ? "127.0.0.1" : listenHost;
+  const hostname = host.includes(":") ? `[${host}]` : host;
+  return `http://${hostname}:${port}`;
+}
+
 async function printIfHostAlreadyRunning(options: {
   port: number | undefined;
+  host?: string;
   command: "ui" | "mcp";
   noOpen?: boolean;
 }): Promise<number | null> {
   const bound = options.port ?? DEFAULT_PORT;
-  const base = `http://127.0.0.1:${bound}`;
-  if ((await probeStageflowHost(base)) !== "up") return null;
+  const listenHost = resolveListenHost({ flag: options.host });
+  const base = probeUrl(listenHost, bound);
+  const probed = await probeStageflowHost(base, { expectedHomeId: stageflowHomeId() });
+  if (probed === "foreign") {
+    console.error(`Port ${bound} is in use by another program. Use --port.`);
+    return 1;
+  }
+  if (probed === "other_home") {
+    console.error(
+      `Another Stageflow Host with a different data directory is on port ${bound}. Stop it or use --port.`,
+    );
+    return 1;
+  }
+  if (probed !== "up") return null;
   console.log(`Stageflow is already running at ${base}`);
   console.log(`Operator console: ${base}`);
   console.log(`Control token file: ${controlTokenFilePath()}`);

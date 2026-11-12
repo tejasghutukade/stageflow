@@ -54,13 +54,16 @@ export type HostProbeResult = "up" | "down";
  * listening on the port but didn't answer with valid health JSON, so it's
  * almost certainly not our service and spawning would just collide).
  */
-export type ServiceProbeResult = "up" | "unreachable" | "unhealthy";
+export type ServiceProbeResult = "up" | "unreachable" | "unhealthy" | "foreign" | "other_home";
 
 export function hostBaseUrl(): string {
   return `http://127.0.0.1:${resolveServicePort()}`;
 }
 
-export async function probeStageflowHost(baseUrl: string): Promise<ServiceProbeResult> {
+export async function probeStageflowHost(
+  baseUrl: string,
+  options?: { expectedHomeId?: string },
+): Promise<ServiceProbeResult> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 1500);
   try {
@@ -71,10 +74,18 @@ export async function probeStageflowHost(baseUrl: string): Promise<ServiceProbeR
       return "unreachable";
     }
     if (res.status !== 200) return "unhealthy";
+    let body: { service?: unknown; home_id?: unknown };
     try {
-      JSON.parse(await res.text());
+      body = JSON.parse(await res.text()) as { service?: unknown; home_id?: unknown };
     } catch {
       return "unhealthy";
+    }
+    if (body.service !== "stageflow") return "foreign";
+    if (
+      options?.expectedHomeId !== undefined &&
+      body.home_id !== options.expectedHomeId
+    ) {
+      return "other_home";
     }
     return "up";
   } finally {
@@ -158,7 +169,7 @@ export async function ensureGlobalService(
   if (initial === "up") {
     return { ok: true, alreadyRunning: true };
   }
-  if (initial === "unhealthy") {
+  if (initial === "unhealthy" || initial === "foreign" || initial === "other_home") {
     return {
       ok: false,
       reason: "port_occupied",

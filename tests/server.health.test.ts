@@ -51,7 +51,12 @@ describe("health surfaces", () => {
       const res = await fetch(`${started.url}/livez`);
       const elapsed = Date.now() - t0;
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ ok: true, status: "live" });
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body.status).toBe("live");
+      expect(body.service).toBe("stageflow");
+      expect(body.home_id).toMatch(/^[0-9a-f]{16}$/);
+      expect(JSON.stringify(body)).not.toContain(root);
       expect(elapsed).toBeLessThan(100);
     } finally {
       await closeServer(started.server);

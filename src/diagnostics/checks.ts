@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { accessSync, constants, writeFileSync, unlinkSync } from "node:fs";
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { promisify } from "node:util";
 import { globalStageflowHome } from "../project/globalHome.js";
 import type { RunStore } from "../runstore/port.js";
@@ -40,8 +42,18 @@ export function resetReadyzCacheForTests(): void {
   readyzCache = undefined;
 }
 
-export function livezBody(): { ok: true; status: "live" } {
-  return { ok: true, status: "live" };
+/** First 16 hex chars of sha256(resolved home). `/livez` is unauthenticated, so it never returns the path. */
+export function stageflowHomeId(home: string = globalStageflowHome()): string {
+  return createHash("sha256").update(path.resolve(home)).digest("hex").slice(0, 16);
+}
+
+export function livezBody(): {
+  ok: true;
+  status: "live";
+  service: "stageflow";
+  home_id: string;
+} {
+  return { ok: true, status: "live", service: "stageflow", home_id: stageflowHomeId() };
 }
 
 async function checkGitPresent(): Promise<boolean> {
