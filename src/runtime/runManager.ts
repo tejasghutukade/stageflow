@@ -17,7 +17,6 @@ import {
   type FreeSpaceReader,
 } from "../runstore/diskUsage.js";
 import { newRunId } from "../runstore/paths.js";
-import { attemptWorkspaceDir } from "../runstore/workspaceLayout.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import {
   assertResumableStage,
@@ -101,10 +100,9 @@ import { sweepOrphanBrowserSessions } from "../browser/browserSweep.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import {
-  cleanupCredentialsDir,
-  loadSecretRegistry,
-  resolveStageSecrets,
-} from "./stageSecrets.js";
+  prepareResumeAttemptHome,
+  secretUnavailableMessage,
+} from "./resumeAttemptPrep.js";
 import { logger as rootLogger } from "../logging/logger.js";
 import {
   registerNamedSecrets,
@@ -2106,6 +2104,7 @@ export class RunManager {
         ...(this.options.operatorCatalog !== undefined
           ? { operatorCatalog: this.options.operatorCatalog }
           : {}),
+        browser: this.browserSupport(),
       });
       this.registerResumeUntrack(runId, done);
       const outcome = await done;
@@ -2847,69 +2846,62 @@ export class RunManager {
       const resumedStage = loaded.stages.find(
         (s) => s.id === definitionIdForInstance(meta.pipeline_dag, stageId),
       );
-      if (resumedStage?.browser?.profile !== undefined) {
-        await acquireStageProfile(
+      let prep;
+      try {
+        prep = await prepareResumeAttemptHome({
+          workspaceDir,
+          stageId,
+          attempt,
+          secrets: resumedStage?.secrets,
+          hostEnv: process.env,
+          logContext: { run_id: runId, stage_id: stageId },
+        });
+      } catch (err) {
+        throw new Error(secretUnavailableMessage(err));
+      }
+
+      let browserEnv: Record<string, string> | undefined;
+      try {
+        if (resumedStage?.browser?.profile !== undefined) {
+          await acquireStageProfile(
+            this.browserSupport(),
+            {
+              scope: runOwnerScope(this.browserSupport(), { runId }),
+              profile: resumedStage.browser.profile,
+              owner: { runId, stageId },
+              isRunLive: createRunLiveness(store),
+              halted: () => true,
+            },
+          ).then((outcome) => {
+            if (outcome === "halted") {
+              throw new Error(
+                `browser profile "${resumedStage.browser?.profile}" is held by another run`,
+              );
+            }
+          });
+        }
+        browserEnv = await resolveStageBrowserEnv(
           this.browserSupport(),
           {
+            runId,
+            stageId,
             scope: runOwnerScope(this.browserSupport(), { runId }),
-            profile: resumedStage.browser.profile,
-            owner: { runId, stageId },
-            isRunLive: createRunLiveness(store),
-            halted: () => true,
+            runDir: workspaceDir,
+            browser: resumedStage?.browser,
+            attempt,
+            humanLogin: isHumanLoginStage(
+              meta.pipeline_dag,
+              definitionIdForInstance(meta.pipeline_dag, stageId),
+              resumedStage?.browser,
+            ),
+            resuming: true,
           },
-        ).then((outcome) => {
-          if (outcome === "halted") {
-            throw new Error(
-              `browser profile "${resumedStage.browser?.profile}" is held by another run`,
-            );
-          }
-        });
+        );
+      } catch (err) {
+        prep.cleanup();
+        throw err;
       }
-      const browserEnv = await resolveStageBrowserEnv(
-        this.browserSupport(),
-        {
-          runId,
-          stageId,
-          scope: runOwnerScope(this.browserSupport(), { runId }),
-          runDir: workspaceDir,
-          browser: resumedStage?.browser,
-          attempt,
-          humanLogin: isHumanLoginStage(
-            meta.pipeline_dag,
-            definitionIdForInstance(meta.pipeline_dag, stageId),
-            resumedStage?.browser,
-          ),
-          resuming: true,
-        },
-      );
-      const attemptDir = attemptWorkspaceDir(workspaceDir, stageId, attempt);
-      await mkdir(attemptDir, { recursive: true });
-      const attemptHome = path.join(attemptDir, "home");
-      await mkdir(attemptHome, { recursive: true });
-      const resolved = resolveStageSecrets({
-        decls: resumedStage?.secrets,
-        registry: loadSecretRegistry(process.env),
-        hostEnv: process.env,
-        attemptDir,
-      });
-      const grants = resolved.grants;
-      registerNamedSecrets(resolved.knownValues);
-      await writeFile(
-        path.join(attemptDir, REDACTION_SECRETS_FILENAME),
-        `${JSON.stringify(resolved.knownValues)}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      );
-      for (const warning of resolved.warnings) {
-        log.warn("stage.secrets", warning, {
-          run_id: runId,
-          stage_id: stageId,
-        });
-      }
-      await writeFile(
-        path.join(attemptDir, "declared-secrets.json"),
-        `${JSON.stringify({ names: grants.declaredSecretNames }, null, 2)}\n`,
-        "utf8",
-      );
+
       const launchResult = await launcher
         .launch({
           runId,
@@ -2925,19 +2917,15 @@ export class RunManager {
           sessionFilePath,
           env: stageBinding.env,
           bindingKind: stageBinding.kind,
-          grants,
-          attemptHome,
+          grants: prep.grants,
+          attemptHome: prep.attemptHome,
           ...(resumedStage !== undefined ? { model: resumedStage.model } : {}),
           ...(this.options.operatorCatalog !== undefined
             ? { operatorCatalog: this.options.operatorCatalog }
             : {}),
         })
         .finally(() => {
-          try {
-            cleanupCredentialsDir(attemptDir);
-          } catch {
-            // best-effort Host cleanup
-          }
+          prep.cleanup();
         });
 
       if (launchResult.type === "waiting") {

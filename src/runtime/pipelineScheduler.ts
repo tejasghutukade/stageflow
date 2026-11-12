@@ -92,19 +92,10 @@ import type { StageHitlController } from "./stageHitl.js";
 import { attemptContext, resumeSessionFilePath } from "./stageAttemptContext.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import { stageBindingEnvFromRun } from "./stageRoots.js";
-import { attemptWorkspaceDir } from "../runstore/workspaceLayout.js";
 import {
-  cleanupCredentialsDir,
-  loadSecretRegistry,
-  resolveStageSecrets,
-  SecretUnavailableError,
-} from "./stageSecrets.js";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import {
-  logger as rootLogger,
-} from "../logging/logger.js";
-import { registerNamedSecrets, REDACTION_SECRETS_FILENAME } from "../logging/namedSecrets.js";
+  prepareResumeAttemptHome,
+  secretUnavailableMessage,
+} from "./resumeAttemptPrep.js";
 import { finaliseStoredRunManifest } from "../runstore/runManifest.js";
 
 /** A stage blocked by a site gets one more attempt, in the operator's own browser. */
@@ -1409,54 +1400,25 @@ export async function runPipelineDag(
       });
     }
 
-    const attemptDir = attemptWorkspaceDir(run.workspaceDir, stageId, attempt);
-    await mkdir(attemptDir, { recursive: true });
-    const attemptHome = path.join(attemptDir, "home");
-    await mkdir(attemptHome, { recursive: true });
     let grants;
+    let attemptHome: string;
+    let cleanupAttemptCredentials: () => void;
     try {
-      const resolved = resolveStageSecrets({
-        decls: stage.secrets,
-        registry: loadSecretRegistry(process.env),
+      const prep = await prepareResumeAttemptHome({
+        workspaceDir: run.workspaceDir,
+        stageId,
+        attempt,
+        secrets: stage.secrets,
         hostEnv: process.env,
-        attemptDir,
+        logContext: { run_id: run.runId, stage_id: stageId },
       });
-      grants = resolved.grants;
-      registerNamedSecrets(resolved.knownValues);
-      await writeFile(
-        path.join(attemptDir, REDACTION_SECRETS_FILENAME),
-        `${JSON.stringify(resolved.knownValues)}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      );
-      for (const warning of resolved.warnings) {
-        rootLogger.warn("stage.secrets", warning, {
-          run_id: run.runId,
-          stage_id: stageId,
-        });
-      }
-      await writeFile(
-        path.join(attemptDir, "declared-secrets.json"),
-        `${JSON.stringify({ names: grants.declaredSecretNames }, null, 2)}\n`,
-        "utf8",
-      );
+      grants = prep.grants;
+      attemptHome = prep.attemptHome;
+      cleanupAttemptCredentials = prep.cleanup;
     } catch (err) {
-      const reason =
-        err instanceof SecretUnavailableError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      await onStageFailure(stageId, reason);
+      await onStageFailure(stageId, secretUnavailableMessage(err));
       return;
     }
-
-    const cleanupAttemptCredentials = () => {
-      try {
-        cleanupCredentialsDir(attemptDir);
-      } catch {
-        // best-effort Host cleanup
-      }
-    };
 
     let browserEnv: Record<string, string> | undefined;
     try {

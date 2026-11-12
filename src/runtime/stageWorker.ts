@@ -224,6 +224,67 @@ export async function runStageWorker(
       return outcome;
     }
 
+    if (mode === "timeout_resume") {
+      if (input.sessionFilePath === undefined) {
+        return {
+          ok: false,
+          reason: "timeout_resume requires --session-file",
+        };
+      }
+      const opened = await openStageAttempt({
+        agent,
+        store,
+        runId: input.runId,
+        stage,
+        stageId: input.stageId,
+        task,
+        dag,
+        checkoutRoot,
+        workspaceDir,
+        factoryCwd: input.rootDir,
+        attemptCtx,
+        operatorCatalog: input.operatorCatalog,
+        roots,
+        resumeToken: input.sessionFilePath,
+        sessionMode: "timeout_resume",
+        stageEnv,
+        onActivity: (event) => {
+          void store.appendStageEvent(
+            input.runId,
+            input.stageId,
+            event,
+            eventOptions,
+          );
+        },
+      });
+      if (!opened.ok) {
+        return { ok: false, reason: opened.reason };
+      }
+      return runStage({
+        agent,
+        store,
+        runId: input.runId,
+        stage,
+        stageId: input.stageId,
+        task,
+        dag,
+        checkoutRoot,
+        workspaceDir,
+        skipStarted: true,
+        existingHandle: opened.handle,
+        workerMode: true,
+        roots,
+        attemptCtx,
+        factoryCwd: input.rootDir,
+        operatorCatalog: input.operatorCatalog,
+        skipGates: input.skipGates,
+        sessionMode: "timeout_resume",
+        resumeToken: input.sessionFilePath,
+        stageEnv,
+        beforeVerify,
+      });
+    }
+
     if (mode === "feedback_resume" || mode === "new_session") {
       const feedbackLoopContext = await loadActiveFeedbackLoopContext(
         store,
