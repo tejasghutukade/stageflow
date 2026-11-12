@@ -59,6 +59,7 @@ import {
   assertBindAllowed,
   BindRefusedError,
   commitHostControlToken,
+  controlTokenFilePath,
   ensureHostControlToken,
   generatedControlTokenLines,
   loadControlTokens,
@@ -447,7 +448,7 @@ async function handleInternalRunStage(argv: string[]): Promise<number> {
   return exitForOutcome(outcome);
 }
 
-function openBrowser(url: string): void {
+function defaultOpenBrowser(url: string): void {
   const platform = process.platform;
   let child;
   if (platform === "darwin") {
@@ -459,6 +460,16 @@ function openBrowser(url: string): void {
   }
   child.on("error", () => {});
   child.unref();
+}
+
+let openBrowserImpl: (url: string) => void = defaultOpenBrowser;
+
+export function setOpenBrowserForTests(fn: ((url: string) => void) | undefined): void {
+  openBrowserImpl = fn ?? defaultOpenBrowser;
+}
+
+function openBrowser(url: string): void {
+  openBrowserImpl(url);
 }
 
 function isNoOpenEnabled(
@@ -483,7 +494,7 @@ function pinStageWorkerHomeFromArgv(argv: string[]): void {
   delete process.env.STAGEFLOW_HOME;
 }
 
-async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[]): Promise<number> {
   try {
     pinStageWorkerHomeFromArgv(argv);
     installProxyDispatcher(process.env, {
@@ -650,7 +661,12 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "ui") {
       const listenHost = resolveListenHost({ flag: parsed.host });
-      if (await printIfHostAlreadyRunning(parsed.port)) return 0;
+      const already = await printIfHostAlreadyRunning({
+        port: parsed.port,
+        command: "ui",
+        noOpen: parsed.noOpen,
+      });
+      if (already !== null) return already;
       const ensuredToken = ensureHostControlToken();
       const tokens = loadControlTokens();
       assertBindAllowed(listenHost, tokens);
@@ -678,7 +694,7 @@ async function main(argv: string[]): Promise<number> {
       console.log(`MCP endpoint: ${host.mcpUrl}`);
       printGeneratedControlToken(ensuredToken);
       if (!isNoOpenEnabled(parsed.noOpen)) {
-        openBrowser(consoleOpenUrl(host.url, ensuredToken));
+        openBrowser(consoleOpenUrl(host.url, resolveClientBearerToken("POST") ?? ensuredToken.token));
       }
       const outcome = await host.shutdown.whenDrained();
       return outcome.exitCode;
@@ -689,7 +705,11 @@ async function main(argv: string[]): Promise<number> {
         throw new Error("--no-open is only valid with sf ui");
       }
       const listenHost = resolveListenHost({ flag: parsed.host });
-      if (await printIfHostAlreadyRunning(parsed.port)) return 0;
+      const already = await printIfHostAlreadyRunning({
+        port: parsed.port,
+        command: "mcp",
+      });
+      if (already !== null) return already;
       const ensuredToken = ensureHostControlToken();
       const tokens = loadControlTokens();
       assertBindAllowed(listenHost, tokens);
@@ -735,33 +755,28 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-async function printIfHostAlreadyRunning(port: number | undefined): Promise<boolean> {
-  const bound = port ?? DEFAULT_PORT;
+async function printIfHostAlreadyRunning(options: {
+  port: number | undefined;
+  command: "ui" | "mcp";
+  noOpen?: boolean;
+}): Promise<number | null> {
+  const bound = options.port ?? DEFAULT_PORT;
   const base = `http://127.0.0.1:${bound}`;
-  if ((await probeStageflowHost(base)) !== "up") return false;
+  if ((await probeStageflowHost(base)) !== "up") return null;
   console.log(`Stageflow is already running at ${base}`);
   console.log(`Operator console: ${base}`);
-  return true;
+  console.log(`Control token file: ${controlTokenFilePath()}`);
+  if (options.command === "ui" && !isNoOpenEnabled(options.noOpen)) {
+    openBrowser(consoleOpenUrl(base, resolveClientBearerToken("POST")));
+  }
+  return 0;
 }
 
 function revealControlToken(): boolean {
   return process.env[SF_SERVICE_CHILD] !== "1";
 }
 
-function heldControlToken(ensured: EnsuredHostControlToken): string | undefined {
-  if (ensured.token !== undefined && ensured.token.length > 0) return ensured.token;
-  if (
-    (process.env.STAGEFLOW_CONTROL_TOKEN !== undefined &&
-      process.env.STAGEFLOW_CONTROL_TOKEN.length > 0) ||
-    (process.env.STAGEFLOW_CONTROL_TOKEN_FILE !== undefined &&
-      process.env.STAGEFLOW_CONTROL_TOKEN_FILE.length > 0)
-  ) {
-    return resolveClientBearerToken("POST");
-  }
-  return undefined;
-}
-
-function consoleOpenUrl(baseUrl: string, ensured: EnsuredHostControlToken): string {
+function consoleOpenUrl(baseUrl: string, token: string | undefined): string {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -770,8 +785,7 @@ function consoleOpenUrl(baseUrl: string, ensured: EnsuredHostControlToken): stri
   }
   const host = parsed.hostname;
   if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") return baseUrl;
-  const token = heldControlToken(ensured);
-  if (token === undefined) return baseUrl;
+  if (token === undefined || token.length === 0) return baseUrl;
   parsed.hash = `token=${encodeURIComponent(token)}`;
   return parsed.toString();
 }
