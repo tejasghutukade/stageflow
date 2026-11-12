@@ -41,12 +41,16 @@ describe("controlToken storage", () => {
 });
 
 describe("control token fragment", () => {
-  it("stores #token= and removes the fragment", async () => {
+  it("exchanges #code=, removes the fragment, and stores the token", async () => {
     const token = "t".repeat(32);
     const replaceState = vi.fn();
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ token }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("window", {
       location: {
-        hash: `#token=${encodeURIComponent(token)}`,
+        hash: "#code=abc123",
         pathname: "/",
         search: "",
       },
@@ -64,12 +68,16 @@ describe("control token fragment", () => {
       clear: () => store.clear(),
     });
     const { getControlToken } = await import("./controlToken");
-    expect(getControlToken()).toBe(token);
+    await vi.waitFor(() => expect(getControlToken()).toBe(token));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/console-login",
+      expect.objectContaining({ method: "POST" }),
+    );
     expect(replaceState).toHaveBeenCalled();
     const next = String(replaceState.mock.calls[0]?.[2]);
-    expect(next).not.toContain("#");
-    expect(next).not.toContain("token=");
     expect(next).toBe("/");
+    expect(next).not.toContain("code=");
+    expect(next).not.toContain(token);
   });
 });
 

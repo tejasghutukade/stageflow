@@ -18,7 +18,7 @@ sf ui
 sf ui --port 9000
 ```
 
-On start, Stageflow prints the console URL and MCP endpoint, then opens your default browser. A local open includes the control token in the URL fragment; the page stores it and removes the fragment. The token is printed on first start; later starts reuse it and print the file path. If the console still asks you to paste a token, it is in the Host's `control-token` file (`~/.stageflow` by default, `/data` in Docker). If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. The process runs until you stop it (Ctrl+C). In Docker the console is the container's published port; see [Docker](docker.md).
+On start, Stageflow prints the console URL and MCP endpoint, then opens your default browser. A local open carries a one-time code that expires in 60 seconds. The page exchanges that code for the control token and removes the fragment. The token itself is not put in the URL. The token is printed on first start; later starts reuse it and print the file path. If the console still asks you to paste a token, it is in the Host's `control-token` file (`~/.stageflow` by default, `/data` in Docker). If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. The process runs until you stop it (Ctrl+C). In Docker the console is the container's published port; see [Docker](docker.md).
 
 ## One page per area
 

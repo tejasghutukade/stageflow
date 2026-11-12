@@ -13,14 +13,17 @@ import type { StageflowHostBootstrap } from "./bootstrap.js";
 import {
   allowListenAddress,
   assertAllowedHttpAccess,
+  isLoopbackRemoteAddress,
   resolveAllowedHosts,
   type AllowedHosts,
 } from "./allowedHosts.js";
+import { handleConsoleLogin, handleConsoleLoginMint } from "./consoleLogin.js";
 import {
   authHintBody,
   enforceBearerAuth,
   loadControlTokens,
   requiredScopeFor,
+  resolveClientBearerToken,
   type ControlTokens,
 } from "./controlToken.js";
 import {
@@ -235,6 +238,23 @@ export async function createHttpHost(
           res.end(message);
         }
       }
+      return;
+    }
+
+    if (pathname === "/api/console-login" && method === "POST") {
+      if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;
+      await handleConsoleLogin(req, res, () => resolveClientBearerToken("POST"));
+      return;
+    }
+    if (pathname === "/api/console-login/mint" && method === "POST") {
+      if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;
+      if (!isLoopbackRemoteAddress(req.socket?.remoteAddress)) {
+        json(res, 403, { error: "loopback only" });
+        return;
+      }
+      const mintAuth = enforceBearerAuth(controlTokens, req, res, "drive");
+      if (!mintAuth.ok) return;
+      handleConsoleLoginMint(req, res);
       return;
     }
 

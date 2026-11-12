@@ -67,6 +67,7 @@ import {
   type EnsuredHostControlToken,
 } from "./server/controlToken.js";
 import { stageflowHomeId } from "./diagnostics/checks.js";
+import { mintConsoleLoginCode } from "./server/consoleLoginCode.js";
 import { probeStageflowHost, SF_SERVICE_CHILD } from "./server/ensureGlobalService.js";
 import { resolveMcpStateless } from "./mcp/server.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "./package-meta.js";
@@ -696,7 +697,7 @@ export async function main(argv: string[]): Promise<number> {
       console.log(`MCP endpoint: ${host.mcpUrl}`);
       printGeneratedControlToken(ensuredToken);
       if (!isNoOpenEnabled(parsed.noOpen)) {
-        openBrowser(consoleOpenUrl(host.url, resolveClientBearerToken("POST") ?? ensuredToken.token));
+        openBrowser(consoleOpenUrl(host.url, mintConsoleLoginCode()));
       }
       const outcome = await host.shutdown.whenDrained();
       return outcome.exitCode;
@@ -790,16 +791,32 @@ async function printIfHostAlreadyRunning(options: {
   console.log(`Operator console: ${base}`);
   console.log(`Control token file: ${controlTokenFilePath()}`);
   if (options.command === "ui" && !isNoOpenEnabled(options.noOpen)) {
-    openBrowser(consoleOpenUrl(base, resolveClientBearerToken("POST")));
+    openBrowser(consoleOpenUrl(base, await mintConsoleLoginCodeOverHttp(base)));
   }
   return 0;
+}
+
+async function mintConsoleLoginCodeOverHttp(base: string): Promise<string | undefined> {
+  const token = resolveClientBearerToken("POST");
+  if (token === undefined) return undefined;
+  try {
+    const res = await fetch(`${base}/api/console-login/mint`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return undefined;
+    const body = (await res.json()) as { code?: unknown };
+    return typeof body.code === "string" && body.code.length > 0 ? body.code : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function revealControlToken(): boolean {
   return process.env[SF_SERVICE_CHILD] !== "1";
 }
 
-function consoleOpenUrl(baseUrl: string, token: string | undefined): string {
+function consoleOpenUrl(baseUrl: string, code: string | undefined): string {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -808,8 +825,8 @@ function consoleOpenUrl(baseUrl: string, token: string | undefined): string {
   }
   const host = parsed.hostname;
   if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") return baseUrl;
-  if (token === undefined || token.length === 0) return baseUrl;
-  parsed.hash = `token=${encodeURIComponent(token)}`;
+  if (code === undefined || code.length === 0) return baseUrl;
+  parsed.hash = `code=${encodeURIComponent(code)}`;
   return parsed.toString();
 }
 

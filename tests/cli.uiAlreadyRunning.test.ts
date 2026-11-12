@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { main, setOpenBrowserForTests } from "../src/cli.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { loadControlTokens } from "../src/server/controlToken.js";
 import { startMcpServer } from "../src/server/mcpHost.js";
 
 function reservePort(): Promise<number> {
@@ -59,6 +60,7 @@ describe("sf ui when a Host is already running", () => {
       store,
       port,
       mcpStateless: true,
+      controlTokens: loadControlTokens({ STAGEFLOW_CONTROL_TOKEN: token }),
     });
     const opened: string[] = [];
     setOpenBrowserForTests((url) => {
@@ -71,7 +73,9 @@ describe("sf ui when a Host is already running", () => {
     try {
       const code = await main(["node", "sf", "ui", "--port", String(port)]);
       expect(code).toBe(0);
-      expect(opened).toEqual([`http://127.0.0.1:${port}/#token=${token}`]);
+      expect(opened).toHaveLength(1);
+      expect(opened[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${port}/#code=[0-9a-f]{32}$`));
+      expect(opened[0]).not.toContain(token);
       expect(logs.join("\n")).toContain(`Control token file: ${tokenFile}`);
       const after = statSync(tokenFile);
       expect(after.mtimeMs).toBe(before.mtimeMs);

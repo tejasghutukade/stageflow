@@ -30,22 +30,37 @@ export function getControlToken(): string {
   }
 }
 
-/** Move `#token=` into storage and drop the fragment so it is not kept in the address bar. */
+/** Exchange `#code=` for the control token, then drop the fragment. A failed exchange leaves a stored token in place. */
 export function captureControlTokenFragment(): void {
   if (typeof window === "undefined") return;
   const hash = window.location.hash;
-  if (!hash.startsWith("#token=")) return;
-  const raw = hash.slice("#token=".length);
-  let token = raw;
+  if (!hash.startsWith("#code=")) return;
+  const raw = hash.slice("#code=".length);
+  let code = raw;
   try {
-    token = decodeURIComponent(raw);
+    code = decodeURIComponent(raw);
   } catch {
-    token = raw;
+    code = raw;
   }
-  const trimmed = token.trim();
-  if (trimmed.length > 0) setControlToken(trimmed);
   const next = `${window.location.pathname}${window.location.search}`;
   window.history.replaceState(window.history.state, "", next);
+  const previous = getControlToken();
+  void fetch("/api/console-login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code }),
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        if (previous.length > 0) setControlToken(previous);
+        return;
+      }
+      const body = (await res.json()) as { token?: unknown };
+      if (typeof body.token === "string" && body.token.length > 0) setControlToken(body.token);
+    })
+    .catch(() => {
+      if (previous.length > 0) setControlToken(previous);
+    });
 }
 
 export function setControlToken(token: string): void {
