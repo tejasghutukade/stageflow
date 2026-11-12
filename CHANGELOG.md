@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **A local Host has a control token.** The first start writes `$STAGEFLOW_HOME/control-token` (mode 0600) and prints `Control token: …` on a terminal. Later starts reuse that file and print only the path. A second `sf ui` or `sf mcp` on a port that already has a Host exits 0 and does not replace the token. `sf ui` opens the console with the token in the URL fragment, which the page stores and then removes. The token is not passed into a stage, and a stage environment does not include `STAGEFLOW_HOME`. An unsandboxed stage still runs as you and can read `~/.stageflow`. `/livez` and `/readyz` stay open. Set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` only when you mean to start with no token.
+- **A local Host has a control token.** The first start writes `$STAGEFLOW_HOME/control-token` (mode 0600) and prints `Control token: …`, including in Docker logs. Later starts reuse that file and print only the path. If the logs don't show it, run `docker exec <container> cat /data/control-token`. A second `sf ui` on a port that already has this Host opens the console signed in. The console link carries a one-time code that expires in 60 seconds; the page exchanges it for the token. A stage does not receive the control token or the data directory path. An unsandboxed stage still runs as your user, so it can read files in the data directory (`~/.stageflow` by default, `/data` in Docker). Use the stage container sandbox (`STAGEFLOW_STAGE_CONTAINER_IMAGE`) when a stage runs untrusted code. `/livez` and `/readyz` stay open. Set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` only when you mean to start with no token.
 - **An `Origin` must match the `Host` header, including the port.** A page on another localhost port can no longer call the API.
 - **A2A `run_stage` is off unless that caller sets `allow_run_stage`.** Invoking a published pipeline is unchanged.
 - **Stage activity is redacted before it is stored.** `redaction-secrets.json` is removed after the worker loads it.
-- **The recommended Docker commands no longer set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND`.** The token is in the container logs. Mounting `/var/run/docker.sock` is root on the host.
+- **The recommended Docker commands no longer set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND`.** The token is printed on first start. Later starts reuse it; `docker exec <container> cat /data/control-token` reads the file. Mounting `/var/run/docker.sock` is root on the host.
 
 ### Changed
 
