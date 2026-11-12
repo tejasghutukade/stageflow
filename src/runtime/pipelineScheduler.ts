@@ -501,6 +501,7 @@ export async function recoverFunctionRoute(options: {
       attempt: latest?.attempt,
       checkoutRoot: prepared.checkoutRoot,
       cwd: projectRoot,
+      synced: true,
     }),
   });
   if (decision === undefined || decision.status === "error") {
@@ -1395,6 +1396,7 @@ export async function runPipelineDag(
           attempt: latest?.attempt,
           checkoutRoot,
           cwd: factoryCwd,
+          synced: true,
         }),
       });
       if (decision === undefined || decision.status === "error") {
@@ -1834,6 +1836,7 @@ export async function runPipelineDag(
           attempt: latest?.attempt,
           checkoutRoot,
           cwd: factoryCwd,
+          synced: true,
         }),
       });
       if (decision === undefined || decision.status === "error") {

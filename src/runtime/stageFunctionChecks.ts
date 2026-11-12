@@ -182,6 +182,7 @@ export function createFunctionCheckScope(input: {
             cwd: input.roots.cwd,
             containerName: input.roots.containerName,
             containerDockerBin: input.roots.containerDockerBin,
+            synced: false,
           }),
         });
         return {

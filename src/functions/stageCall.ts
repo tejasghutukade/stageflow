@@ -14,11 +14,15 @@ export function stageFunctionCallPlace(input: {
   cwd: string;
   containerName?: string;
   containerDockerBin?: string;
+  synced?: boolean;
 }): StageFunctionCallPlace {
+  const hostWorkspace = input.checkoutRoot ?? input.cwd;
+  const workspace =
+    input.containerName !== undefined && input.synced !== true ? "/workspace/checkout" : hostWorkspace;
   const place: StageFunctionCallPlace = {
     roots: {
       artifacts: attemptArtifactsDir(input.runWorkspaceDir, input.stageId, input.attempt ?? 1),
-      workspace: input.checkoutRoot ?? input.cwd,
+      workspace,
     },
   };
   if (input.containerName !== undefined) place.containerName = input.containerName;

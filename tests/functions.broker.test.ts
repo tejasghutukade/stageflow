@@ -8,6 +8,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { httpFixture } from "./fixtures/httpFixture.js";
 import { FunctionBroker } from "../src/functions/broker.js";
+import { stageFunctionCallPlace } from "../src/functions/stageCall.js";
 import { installProxyDispatcher, resetProxyDispatcherForTests } from "../src/net/proxy.js";
 import { Agent, setGlobalDispatcher } from "undici";
 
@@ -1029,6 +1030,284 @@ export default async function execute(context) {
     });
     expect(JSON.stringify(result)).not.toContain(AUTH_JSON);
     expect(JSON.stringify(result)).not.toContain("/etc/passwd");
+  });
+
+  it("reads host attempt artifacts without container file ops when a container is set", async () => {
+    const root = await makeRoot();
+    const artifacts = path.join(root, "attempt-artifacts");
+    await mkdir(artifacts, { recursive: true });
+    await writeFile(path.join(artifacts, "note.txt"), "attempt-bytes");
+    const touched: string[] = [];
+    const containerFiles = {
+      async realPath(containerPath: string) {
+        touched.push(containerPath);
+        return containerPath;
+      },
+      async stat() {
+        throw new Error("unexpected container stat");
+      },
+      async readFile() {
+        throw new Error("unexpected container read");
+      },
+      async writeFile() {
+        throw new Error("unexpected container write");
+      },
+      async list() {
+        throw new Error("unexpected container list");
+      },
+    };
+    const broker = new FunctionBroker({
+      env: {},
+      stageflowHome: path.join(root, "home"),
+      containerFiles,
+    });
+    const result = await broker.invoke({
+      invocationId: "host-artifacts-container",
+      kind: "verification",
+      source:
+        "export default async function execute(context){ return { text: await context.files.readText('artifacts', 'note.txt') }; }",
+      context: {},
+      containerName: "stage-container",
+      containerDockerBin: "docker",
+      roots: { artifacts, workspace: "/workspace/checkout" },
+      projectRoot: path.join(root, "checkout"),
+      grants: { files: [{ root: "artifacts", path: "note.txt", access: "read" }] },
+    });
+    expect(result).toMatchObject({ ok: true, value: { text: "attempt-bytes" } });
+    expect(touched).toEqual([]);
+  });
+
+  it("uses the container checkout for workspace writes before desk sync", async () => {
+    const root = await makeRoot();
+    const writes: string[] = [];
+    const containerFiles = {
+      async realPath(containerPath: string) {
+        return containerPath;
+      },
+      async stat(containerPath: string) {
+        if (containerPath === "/workspace/checkout") {
+          return { file: false, directory: true, device: false, size: 64 };
+        }
+        return undefined;
+      },
+      async readFile() {
+        throw new Error("unexpected container read");
+      },
+      async writeFile(containerPath: string) {
+        writes.push(containerPath);
+      },
+      async list() {
+        throw new Error("unexpected container list");
+      },
+    };
+    const broker = new FunctionBroker({
+      env: {},
+      stageflowHome: path.join(root, "home"),
+      containerFiles,
+    });
+    const result = await broker.invoke({
+      invocationId: "pre-sync-workspace-write",
+      kind: "tool",
+      source:
+        "export default async function execute(context){ await context.files.write('workspace', 'allowed.txt', 'desk'); return { wrote: true }; }",
+      context: {},
+      containerName: "stage-container",
+      roots: { artifacts: path.join(root, "artifacts"), workspace: "/workspace/checkout" },
+      projectRoot: "/workspace/checkout",
+      grants: { files: [{ root: "workspace", path: "allowed.txt", access: "write" }] },
+    });
+    expect(result).toMatchObject({ ok: true, value: { wrote: true } });
+    expect(writes.some((target) => target.endsWith("/allowed.txt"))).toBe(true);
+    await expect(readFile(path.join(root, "allowed.txt"), "utf8")).rejects.toThrow();
+  });
+
+  it("uses the host checkout for workspace writes after desk sync", async () => {
+    const root = await makeRoot();
+    const checkout = path.join(root, "checkout");
+    await mkdir(checkout, { recursive: true });
+    const containerFiles = {
+      async realPath() {
+        throw new Error("unexpected container realpath");
+      },
+      async stat() {
+        throw new Error("unexpected container stat");
+      },
+      async readFile() {
+        throw new Error("unexpected container read");
+      },
+      async writeFile() {
+        throw new Error("unexpected container write");
+      },
+      async list() {
+        throw new Error("unexpected container list");
+      },
+    };
+    const broker = new FunctionBroker({
+      env: {},
+      stageflowHome: path.join(root, "home"),
+      containerFiles,
+    });
+    const result = await broker.invoke({
+      invocationId: "post-sync-workspace-write",
+      kind: "tool",
+      source:
+        "export default async function execute(context){ await context.files.write('workspace', 'allowed.txt', 'host'); return { wrote: true }; }",
+      context: {},
+      containerName: "stage-container",
+      roots: { artifacts: path.join(root, "artifacts"), workspace: checkout },
+      projectRoot: checkout,
+      grants: { files: [{ root: "workspace", path: "allowed.txt", access: "write" }] },
+    });
+    expect(result).toMatchObject({ ok: true, value: { wrote: true } });
+    expect(await readFile(path.join(checkout, "allowed.txt"), "utf8")).toBe("host");
+  });
+
+  it("keeps /workspace artifact reads on container file ops", async () => {
+    const reads: string[] = [];
+    const containerFiles = {
+      async realPath(containerPath: string) {
+        return containerPath;
+      },
+      async stat(containerPath: string) {
+        if (containerPath === "/workspace/artifacts/report.json") {
+          return { file: true, directory: false, device: false, size: 12 };
+        }
+        return undefined;
+      },
+      async readFile(containerPath: string) {
+        reads.push(containerPath);
+        return '{"score":3}';
+      },
+      async writeFile() {
+        throw new Error("unexpected container write");
+      },
+      async list() {
+        throw new Error("unexpected container list");
+      },
+    };
+    const root = await makeRoot();
+    const broker = new FunctionBroker({
+      env: {},
+      stageflowHome: path.join(root, "home"),
+      containerFiles,
+    });
+    const result = await broker.invoke({
+      invocationId: "workspace-artifacts-read",
+      kind: "verification",
+      source:
+        "export default async function execute(context){ return { report: await context.files.readText('artifacts', 'report.json') }; }",
+      context: {},
+      containerName: "stage-container",
+      roots: { artifacts: "/workspace/artifacts", workspace: "/workspace/checkout" },
+      projectRoot: "/workspace",
+      grants: { files: [{ root: "artifacts", path: "report.json", access: "read" }] },
+    });
+    expect(result).toMatchObject({ ok: true, value: { report: '{"score":3}' } });
+    expect(reads).toEqual(["/workspace/artifacts/report.json"]);
+  });
+
+  it("denies workspace writes that replace agent definitions", async () => {
+    const root = await makeRoot();
+    const agents = path.join(root, "agents");
+    const nested = path.join(agents, "team");
+    await mkdir(nested, { recursive: true });
+    const existing = path.join(agents, "lead.agent.yaml");
+    await writeFile(existing, "previous-lead");
+    const teamFile = path.join(nested, "lead.agent.yaml");
+    await writeFile(teamFile, "previous-team");
+    const linkParent = path.join(root, "linked");
+    await mkdir(linkParent, { recursive: true });
+    await symlink(agents, path.join(linkParent, "agents"));
+    const broker = brokerFor(root, {});
+    const source = `
+      export default async function execute(context) {
+        const attempt = async (filePath, content) => {
+          try {
+            await context.files.write("workspace", filePath, content);
+            return { ok: true };
+          } catch (error) {
+            return { ok: false, code: error.code, message: error.message };
+          }
+        };
+        return {
+          lead: await attempt("agents/lead.agent.yaml", "replaced"),
+          nested: await attempt("agents/team/lead.agent.yaml", "replaced"),
+          linked: await attempt("linked/agents/lead.agent.yaml", "replaced"),
+          upper: await attempt("agents/lead.AGENT.YAML", "replaced"),
+          readme: await attempt("readme.txt", "allowed"),
+        };
+      }
+    `;
+    const result = await broker.invoke({
+      invocationId: "deny-agent-writes",
+      kind: "tool",
+      source,
+      context: {},
+      roots: { workspace: root, artifacts: path.join(root, "artifacts") },
+      projectRoot: root,
+      grants: { files: [{ root: "workspace", path: ".", access: "write" }] },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        lead: { ok: false, code: "permission_denied" },
+        nested: { ok: false, code: "permission_denied" },
+        linked: { ok: false, code: "permission_denied" },
+        upper: { ok: false, code: "permission_denied" },
+        readme: { ok: true },
+      },
+    });
+    expect(await readFile(existing, "utf8")).toBe("previous-lead");
+    expect(await readFile(teamFile, "utf8")).toBe("previous-team");
+    expect(await readFile(path.join(root, "readme.txt"), "utf8")).toBe("allowed");
+  });
+
+  it("still allows artifact writes under the run workspace", async () => {
+    const root = await makeRoot();
+    const artifacts = path.join(root, "artifacts");
+    await mkdir(artifacts, { recursive: true });
+    const broker = brokerFor(root, {});
+    const result = await broker.invoke({
+      invocationId: "artifacts-agent-shaped-write",
+      kind: "tool",
+      source:
+        "export default async function execute(context){ await context.files.write('artifacts', 'lead.agent.yaml', 'guest'); return { wrote: true }; }",
+      context: {},
+      roots: { workspace: root, artifacts },
+      projectRoot: root,
+      grants: { files: [{ root: "artifacts", path: ".", access: "write" }] },
+    });
+    expect(result).toMatchObject({ ok: true, value: { wrote: true } });
+    expect(await readFile(path.join(artifacts, "lead.agent.yaml"), "utf8")).toBe("guest");
+  });
+});
+
+describe("stage function call place", () => {
+  it("uses the container checkout for workspace roots before desk sync", () => {
+    const place = stageFunctionCallPlace({
+      runWorkspaceDir: "/data/runs/run-1",
+      stageId: "build",
+      attempt: 1,
+      cwd: "/host/checkout",
+      checkoutRoot: "/host/checkout",
+      containerName: "stage-container",
+      synced: false,
+    });
+    expect(place.roots.workspace).toBe("/workspace/checkout");
+    expect(place.roots.artifacts).toContain("attempts");
+  });
+
+  it("uses the host checkout for workspace roots after desk sync", () => {
+    const place = stageFunctionCallPlace({
+      runWorkspaceDir: "/data/runs/run-1",
+      stageId: "build",
+      attempt: 1,
+      cwd: "/host/checkout",
+      checkoutRoot: "/host/checkout",
+      containerName: "stage-container",
+      synced: true,
+    });
+    expect(place.roots.workspace).toBe("/host/checkout");
   });
 });
 

@@ -87,7 +87,7 @@ export async function performFileCapability(input: FileCapabilityInput): Promise
   if (!grantAllows(input.grants, input.root, relative, access)) return FILE_DENIED;
   const rootPath = input.root === "artifacts" ? input.artifactsRoot : input.workspaceRoot;
   if (!rootPath) return FILE_DENIED;
-  if (input.containerName) {
+  if (input.containerName && rootUsesContainerOps(rootPath)) {
     const files =
       input.containerFiles ??
       dockerContainerFiles({ containerName: input.containerName, dockerBin: input.containerDockerBin });
@@ -235,6 +235,17 @@ async function writeHost(
 ): Promise<FileCapabilityResult> {
   if (typeof input.content !== "string") return FILE_DENIED;
   if (Buffer.byteLength(input.content, "utf8") > FUNCTION_IO_BYTES_MAX) return FILE_LIMIT;
+  if (input.root === "workspace") {
+    let parentResolved: string;
+    try {
+      parentResolved = await realpath(path.dirname(target));
+    } catch {
+      parentResolved = path.dirname(target);
+    }
+    if (await isForbiddenAgentDefinitionWrite(input.projectRoot, input.workspaceRoot, parentResolved, path.basename(target))) {
+      return FILE_DENIED;
+    }
+  }
   if (isSensitive(target, home, input.projectRoot) || !isInside(rootReal, target)) return FILE_DENIED;
   if (input.signal.aborted) return UNCERTAIN;
   const temp = path.join(
@@ -333,6 +344,24 @@ async function writeContainer(
 ): Promise<FileCapabilityResult> {
   if (typeof input.content !== "string") return FILE_DENIED;
   if (Buffer.byteLength(input.content, "utf8") > FUNCTION_IO_BYTES_MAX) return FILE_LIMIT;
+  if (input.root === "workspace") {
+    let parentResolved: string;
+    try {
+      parentResolved = posixPath(await files.realPath(path.posix.dirname(target)));
+    } catch {
+      parentResolved = path.posix.dirname(target);
+    }
+    if (
+      await isForbiddenAgentDefinitionWrite(
+        input.projectRoot,
+        input.workspaceRoot,
+        parentResolved,
+        path.posix.basename(target),
+      )
+    ) {
+      return FILE_DENIED;
+    }
+  }
   const temp = `${target}.${randomBytes(8).toString("hex")}.tmp`;
   if (!isPosixInside(root, temp) || isSensitive(temp, input.stageflowHome, input.projectRoot)) return FILE_DENIED;
   if (input.signal.aborted) return UNCERTAIN;
@@ -640,6 +669,36 @@ function isPosixInside(root: string, target: string): boolean {
 function posixPath(filePath: string): string {
   const slashed = filePath.replaceAll("\\", "/");
   return path.posix.normalize(slashed.startsWith("/") ? slashed : `/${slashed}`);
+}
+
+function rootUsesContainerOps(rootPath: string): boolean {
+  const normalized = posixPath(rootPath);
+  return normalized === "/workspace" || normalized.startsWith("/workspace/");
+}
+
+async function isForbiddenAgentDefinitionWrite(
+  projectRoot: string | undefined,
+  workspaceRoot: string | undefined,
+  parentDir: string,
+  fileName: string,
+): Promise<boolean> {
+  const catalogRoot = workspaceRoot ?? projectRoot;
+  if (!catalogRoot) return false;
+  let agentsDir = path.join(path.resolve(catalogRoot), "agents");
+  try {
+    agentsDir = await realpath(agentsDir);
+  } catch {
+    // parent may not exist yet; compare against the logical agents directory
+  }
+  let target = path.resolve(parentDir, fileName);
+  try {
+    target = await realpath(target);
+  } catch {
+    target = path.resolve(parentDir, fileName);
+  }
+  const relative = path.relative(agentsDir, target);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return false;
+  return relative.toLowerCase().endsWith(".agent.yaml");
 }
 
 async function canonical(filePath: string): Promise<string> {

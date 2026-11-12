@@ -228,6 +228,7 @@ describe("function tools", () => {
       cwd: "/data/runs/run-1",
       checkoutRoot: "/checkout",
       containerName: "box",
+      synced: false,
     });
     const resolved = await resolveFunctionTools({
       projectRoot: project,

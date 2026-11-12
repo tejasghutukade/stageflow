@@ -1605,6 +1605,7 @@ async function prepareStageSessionWiring(
           cwd: roots.cwd,
           containerName: roots.containerName,
           containerDockerBin: roots.containerDockerBin,
+          synced: false,
         }),
       });
       if (!resolved.ok) return failAfterAttach(resolved.reason);

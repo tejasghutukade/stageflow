@@ -550,6 +550,7 @@ export async function runStage(
           cwd: roots.cwd,
           containerName: roots.containerName,
           containerDockerBin: roots.containerDockerBin,
+          synced: true,
         }),
       });
     }
