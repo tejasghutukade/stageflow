@@ -744,16 +744,19 @@ export function createWorkshopBuildTools(): OperatorAgentTool[] {
     name: "focus_build",
     description:
       "Move this chat onto a build by id, or onto an unbound disk pipeline by projectRoot and relativePath. Mid-turn, the mutation pin moves with the focus so studio and draft tools stay on the same build. A failed open returns the error, creates nothing, and leaves the pointer unchanged.",
-    parameters: Type.Union([
-      Type.Object({ id: Type.String({ minLength: 1 }) }, closed),
-      Type.Object(
-        {
-          projectRoot: Type.String({ minLength: 1 }),
-          relativePath: Type.String({ minLength: 1 }),
-        },
-        closed,
-      ),
-    ]),
+    // One object at the root (OpenAI needs `type: "object"`); the handler takes id, or projectRoot with relativePath.
+    parameters: Type.Object(
+      {
+        id: Type.Optional(Type.String({ minLength: 1, description: "A build id." })),
+        projectRoot: Type.Optional(
+          Type.String({ minLength: 1, description: "With relativePath, for an unbound disk pipeline." }),
+        ),
+        relativePath: Type.Optional(
+          Type.String({ minLength: 1, description: "With projectRoot, for an unbound disk pipeline." }),
+        ),
+      },
+      closed,
+    ),
     async handler(args, ctx): Promise<OperatorAgentToolResult> {
       const live = liveWorkshopBinding(ctx);
       if (!live) {

@@ -82,6 +82,11 @@ function checklistAttestationsSchema() {
   );
 }
 
+/**
+ * One object at the root, never a union: OpenAI rejects a tool whose parameters are not `type: "object"`
+ * ("got type None"). The rules that differ by status (payload and fork_choice required on success,
+ * feedback_loop only on success) are enforced in `execute`, which already checks each of them.
+ */
 function emitStageEnvelopeParameters(input: {
   compiledPayload?: TSchema;
   forkEmitContext?: ForkEmitContext;
@@ -89,41 +94,35 @@ function emitStageEnvelopeParameters(input: {
 }) {
   const freePayload = Type.Record(Type.String(), Type.Unknown());
   const payloadValue = input.compiledPayload ?? freePayload;
-  const forkOptional = Type.Optional(Type.Array(Type.String()));
-  const forkOnSuccess =
+  const payloadNote =
+    input.compiledPayload !== undefined
+      ? "Required when status is success; must match the stage's payload schema."
+      : "Optional structured output.";
+  const forkNote =
     input.forkEmitContext !== undefined && input.feedbackLoopEmitContext === undefined
-      ? Type.Array(Type.String())
-      : forkOptional;
-  const shared = {
-    summary: Type.String({ minLength: 1 }),
-    artifacts: Type.Array(Type.String()),
-    checklist_attestations: checklistAttestationsSchema(),
-    stage_id: Type.Optional(Type.String()),
-    notes: Type.Optional(Type.String()),
-  };
-  const success = Type.Object(
+      ? "Required when status is success: the successor stage ids to run."
+      : "Optional.";
+  return Type.Object(
     {
-      status: Type.Literal("success"),
-      ...shared,
-      payload:
-        input.compiledPayload !== undefined ? input.compiledPayload : Type.Optional(freePayload),
-      fork_choice: forkOnSuccess,
+      status: Type.Union([Type.Literal("success"), Type.Literal("failure")]),
+      summary: Type.String({ minLength: 1 }),
+      artifacts: Type.Array(Type.String()),
+      checklist_attestations: checklistAttestationsSchema(),
+      stage_id: Type.Optional(Type.String()),
+      notes: Type.Optional(Type.String()),
+      payload: Type.Optional({ ...payloadValue, description: payloadNote } as TSchema),
+      fork_choice: Type.Optional(Type.Array(Type.String(), { description: forkNote })),
       ...(input.feedbackLoopEmitContext !== undefined
-        ? { feedback_loop: feedbackLoopActionSchema(input.feedbackLoopEmitContext) }
+        ? {
+            feedback_loop: Type.Optional({
+              ...feedbackLoopActionSchema(input.feedbackLoopEmitContext),
+              description: "Required when status is success; not allowed on failure.",
+            } as TSchema),
+          }
         : {}),
     },
     closed,
   );
-  const failure = Type.Object(
-    {
-      status: Type.Literal("failure"),
-      ...shared,
-      payload: Type.Optional(payloadValue),
-      fork_choice: forkOptional,
-    },
-    closed,
-  );
-  return Type.Union([success, failure]);
 }
 
 function toolResult(
