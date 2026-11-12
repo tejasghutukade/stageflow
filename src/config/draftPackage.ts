@@ -170,6 +170,25 @@ function pipelineIdHasPathSeparator(id: string): boolean {
   return id.includes("/") || id.includes("\\");
 }
 
+/** The real path of `target`'s nearest existing ancestor, with the missing remainder appended. */
+function realpathOfNearest(target: string): string {
+  let existing = path.resolve(target);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return path.join(realpathSync(existing), ...rest.reverse());
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT" && (err as NodeJS.ErrnoException).code !== "ENOTDIR") {
+        throw err;
+      }
+      const parent = path.dirname(existing);
+      if (parent === existing) return path.resolve(target);
+      rest.push(path.basename(existing));
+      existing = parent;
+    }
+  }
+}
+
 async function resolveStageWritePath(
   projectRoot: string,
   packageDirectory: string,
@@ -191,32 +210,15 @@ async function resolveStageWritePath(
       error: `Stage path escapes project root (${stagePath})`,
     };
   }
-  // Check the real location of the file, or for a new file of its nearest existing folder, so a symlinked
-  // folder that points outside the project cannot carry the write out.
-  let realRoot: string;
-  try {
-    realRoot = realpathSync(projectResolved);
-  } catch {
-    realRoot = projectResolved;
-  }
-  let existing = candidate;
-  for (;;) {
-    try {
-      const real = realpathSync(existing);
-      const relReal = path.relative(realRoot, real);
-      if (relReal.startsWith("..") || path.isAbsolute(relReal)) {
-        return {
-          ok: false,
-          error: `Stage path escapes project root (${stagePath})`,
-        };
-      }
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-      const parent = path.dirname(existing);
-      if (parent === existing) break;
-      existing = parent;
-    }
+  // Compare real locations: the file's, or for a new file its nearest existing folder's, against the project's
+  // (resolved the same way, since the project folder itself may not exist yet). A symlinked folder pointing
+  // outside the project cannot carry the write out.
+  const relReal = path.relative(realpathOfNearest(projectResolved), realpathOfNearest(candidate));
+  if (relReal.startsWith("..") || path.isAbsolute(relReal)) {
+    return {
+      ok: false,
+      error: `Stage path escapes project root (${stagePath})`,
+    };
   }
   return { ok: true, absPath: candidate };
 }
