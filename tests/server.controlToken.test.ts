@@ -221,6 +221,22 @@ describe("ensureHostControlToken", () => {
     expect(await readFile(file, "utf8")).toBe(`${DRIVE}\n`);
   });
 
+  it("unlinks a leftover control-token symlink without following it", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-retire-symlink-"));
+    const target = path.join(dir, "elsewhere");
+    const file = path.join(dir, CONTROL_TOKEN_FILENAME);
+    await writeFile(target, `${DRIVE}\n`, { mode: 0o600 });
+    symlinkSync(target, file);
+    const env: NodeJS.ProcessEnv = {
+      STAGEFLOW_HOME: dir,
+      STAGEFLOW_CONTROL_TOKEN: OTHER,
+    };
+    const ensured = ensureHostControlToken(env);
+    retireGeneratedControlToken(ensured, env);
+    await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(target, "utf8")).toBe(`${DRIVE}\n`);
+  });
+
   it("does not generate when unauthenticated bind is explicitly opted in", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-allow-bind-"));
     const env: NodeJS.ProcessEnv = {

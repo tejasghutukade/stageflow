@@ -413,7 +413,7 @@ export function retireGeneratedControlToken(
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
     throw err;
   }
-  if (!stat.isFile() || stat.isSymbolicLink()) return;
+  if (!stat.isSymbolicLink() && !stat.isFile()) return;
   unlinkSync(filePath);
 }
 
