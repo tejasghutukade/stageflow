@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { writeFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,10 +8,12 @@ import type { ZodType } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { registerFunctionTools } from "../src/mcp/functionTools.js";
 import type { McpToolDeps } from "../src/mcp/deps.js";
+import { createMcpHttpHandler } from "../src/mcp/server.js";
 import { createFunctionInvoker } from "../src/functions/invoke.js";
 import { FunctionService } from "../src/functions/service.js";
 import { FunctionStore } from "../src/functions/store.js";
-import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
+import { createRunStore, createRunStoreWithConnection } from "../src/runstore/createStore.js";
+import { createRunChangeBus } from "../src/runtime/runChangeBus.js";
 
 const SOURCE = "export default function execute(context) {\n  return { passed: true };\n}\n";
 
@@ -123,6 +126,129 @@ describe("function MCP tools", () => {
     const tested = await call(tools, "test_function", { id: "score" });
     expect(tested.isError).toBe(false);
     expect(tested.payload).toMatchObject({ ok: true, kind: "test", revision: 2, value: { passed: true } });
+  });
+
+  it("forwards function services through createMcpHttpHandler", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-fn-mcp-http-home-"));
+    const project = await mkdtemp(path.join(tmpdir(), "sf-fn-mcp-http-project-"));
+    dirs.push(home, project);
+    const { connection } = createRunStoreWithConnection({ rootDir: home, openerMode: "migrate" });
+    closers.push(() => connection.close());
+    const service = new FunctionService({ store: new FunctionStore(connection) });
+    const functionInvoker = createFunctionInvoker({ db: connection, env: {}, stageflowHome: home });
+    await service.create(
+      project,
+      {
+        id: "score",
+        name: "Score",
+        description: "Checks a report",
+        kind: "verification",
+        source: SOURCE,
+        capabilities: [],
+        bindings: [],
+      },
+      { source: "api" },
+    );
+    const store = createRunStore({ rootDir: home });
+    const withServices = createMcpHttpHandler(
+      {
+        manager: {} as never,
+        store,
+        cwd: project,
+        runChangeBus: createRunChangeBus(),
+        functionService: service,
+        functionInvoker,
+      },
+      { mcpStateless: true },
+    );
+    const withoutServices = createMcpHttpHandler(
+      {
+        manager: {} as never,
+        store,
+        cwd: project,
+        runChangeBus: createRunChangeBus(),
+      },
+      { mcpStateless: true },
+    );
+
+    async function listen(handler: ReturnType<typeof createMcpHttpHandler>) {
+      const server = createServer((req, res) => {
+        void handler.handle(req, res).catch((error: unknown) => {
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end(String(error));
+          }
+        });
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("no addr");
+      return {
+        base: `http://127.0.0.1:${address.port}`,
+        close: () =>
+          Promise.all([
+            handler.close(),
+            new Promise<void>((resolve, reject) => {
+              server.close((error) => (error ? reject(error) : resolve()));
+            }),
+          ]),
+      };
+    }
+
+    async function toolCall(base: string, name: string) {
+      const res = await fetch(`${base}/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name, arguments: {} },
+        }),
+      });
+      const text = await res.text();
+      const dataLine = text.split("\n").find((line) => line.startsWith("data: "));
+      const message = dataLine
+        ? (JSON.parse(dataLine.slice("data: ".length)) as {
+            result?: { content?: Array<{ text?: string }>; isError?: boolean };
+            error?: { message?: string };
+          })
+        : { error: { message: text } };
+      const contentText = message.result?.content?.[0]?.text ?? "";
+      let payload: Record<string, unknown> | null = null;
+      if (contentText.startsWith("{") || contentText.startsWith("[")) {
+        payload = JSON.parse(contentText) as Record<string, unknown>;
+      }
+      return {
+        status: res.status,
+        isError: Boolean(message.result?.isError),
+        payload,
+        text: contentText || message.error?.message || text,
+      };
+    }
+
+    const wired = await listen(withServices);
+    try {
+      const listed = await toolCall(wired.base, "list_functions");
+      expect(listed.payload).toMatchObject({
+        functions: expect.arrayContaining([expect.objectContaining({ id: "score" })]),
+      });
+    } finally {
+      await wired.close();
+    }
+
+    const missing = await listen(withoutServices);
+    try {
+      const listed = await toolCall(missing.base, "list_functions");
+      expect(listed.text).toMatch(/functionService/i);
+    } finally {
+      await missing.close();
+    }
   });
 
   it("derives capabilities from a declared source and rejects a conflicting list", async () => {
