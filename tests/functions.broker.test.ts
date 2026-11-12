@@ -1297,6 +1297,125 @@ describe("stage function call place", () => {
     expect(place.roots.artifacts).toContain("attempts");
   });
 
+  it("keeps definite refusals definite and mixed writes uncertain", async () => {
+    const root = await makeRoot();
+    const artifacts = path.join(root, "artifacts");
+    await mkdir(artifacts, { recursive: true });
+
+    const broker = brokerFor(root, {});
+    const deniedWrite = await broker.invoke({
+      invocationId: "definite-write-denied",
+      kind: "tool",
+      source: `
+        export default async function execute(context) {
+          await context.files.write("artifacts", "marker.txt", "bytes");
+          return { ran: true };
+        }
+      `,
+      context: {},
+      roots: { artifacts, workspace: root },
+      projectRoot: root,
+      grants: { files: [{ root: "artifacts", path: "other.txt", access: "read" }] },
+    });
+    expect(deniedWrite).toMatchObject({ ok: false, code: "permission_denied" });
+    await expect(readFile(path.join(artifacts, "marker.txt"), "utf8")).rejects.toThrow();
+
+    const missingCredential = await broker.invoke({
+      invocationId: "definite-http-missing-binding",
+      kind: "tool",
+      source: `
+        export default async function execute(context) {
+          await context.http.request({
+            method: "POST",
+            origin: "https://allowed.test",
+            path: "/v1/post",
+            body: "{}",
+          });
+          return { ran: true };
+        }
+      `,
+      context: {},
+      roots: { workspace: root },
+      projectRoot: root,
+      grants: {
+        apis: [
+          {
+            origin: "https://allowed.test",
+            methods: ["POST"],
+            pathPrefix: "/v1",
+            access: "action",
+            credential: "MISSING_HTTP_TOKEN",
+          },
+        ],
+      },
+    });
+    expect(missingCredential).toMatchObject({ ok: false, code: "missing_binding" });
+
+    const server = await httpFixture({ status: 200, body: "x".repeat(1024 * 1024 + 16) });
+    track(async () => server.close());
+    const http = httpBroker(
+      root,
+      { "allowed.test": [["203.0.113.50"], ["203.0.113.50"]] },
+      { "203.0.113.50": portOf(server.url) },
+      0,
+    );
+    const hugeResponse = await http.invoke({
+      invocationId: "definite-http-response-limit",
+      kind: "tool",
+      source: `
+        export default async function execute(context) {
+          await context.http.request({
+            method: "POST",
+            origin: "https://allowed.test",
+            path: "/v1/post",
+            body: "{}",
+          });
+          return { ran: true };
+        }
+      `,
+      context: {},
+      roots: { workspace: root },
+      projectRoot: root,
+      grants: {
+        apis: [
+          {
+            origin: "https://allowed.test",
+            methods: ["POST"],
+            pathPrefix: "/v1",
+            access: "action",
+            credential: "API_TOKEN",
+          },
+        ],
+      },
+    });
+    expect(hugeResponse).toMatchObject({ ok: false, code: "uncertain_outcome" });
+
+    await writeFile(path.join(artifacts, "first.txt"), "kept");
+    const mixed = await broker.invoke({
+      invocationId: "mixed-write-outcome",
+      kind: "tool",
+      source: `
+        export default async function execute(context) {
+          await context.files.write("artifacts", "first.txt", "replaced");
+          await context.files.write("artifacts", "second.txt", "new");
+          return { ran: true };
+        }
+      `,
+      context: {},
+      roots: { artifacts, workspace: root },
+      projectRoot: root,
+      grants: {
+        files: [
+          { root: "artifacts", path: "first.txt", access: "write" },
+          { root: "artifacts", path: "second.txt", access: "read" },
+        ],
+      },
+    });
+    expect(mixed).toMatchObject({ ok: false, code: "uncertain_outcome" });
+    expect(await readFile(path.join(artifacts, "first.txt"), "utf8")).toBe("replaced");
+    await expect(readFile(path.join(artifacts, "second.txt"), "utf8")).rejects.toThrow();
+  });
+
   it("uses the host checkout for workspace roots after desk sync", () => {
     const place = stageFunctionCallPlace({
       runWorkspaceDir: "/data/runs/run-1",

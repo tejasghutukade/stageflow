@@ -47,6 +47,8 @@ type RunningCall = {
   cancelled: boolean;
   hostKilled: boolean;
   externalWrite: boolean;
+  effectPending: number;
+  effectRisk: boolean;
   abort: AbortController;
   exited: Promise<void>;
 };
@@ -155,6 +157,8 @@ export class FunctionExecutor {
       cancelled: false,
       hostKilled: false,
       externalWrite: false,
+      effectPending: 0,
+      effectRisk: false,
       abort: new AbortController(),
       exited,
     };
@@ -243,19 +247,43 @@ export class FunctionExecutor {
     request: FunctionCapabilityRequest,
   ): void {
     if (running.cancelled || running.hostKilled || running.abort.signal.aborted) return;
-    const effect = request.op === "write" || this.sideEffect?.(invocationId, request) === true;
-    if (effect) running.externalWrite = true;
+    const action = request.op === "http" && this.sideEffect?.(invocationId, request) === true;
+    const effect = request.op === "write" || action;
+    if (effect) {
+      running.effectPending += 1;
+      running.externalWrite = true;
+    }
     const pending = this.onCapability
       ? this.onCapability(invocationId, request, running.abort.signal)
       : Promise.resolve(deniedCapability(request.requestId));
     void pending.then(
       (value) => {
+        if (effect) this.noteEffectSettled(running, request, action, value);
         this.sendCapability(running, child, value);
       },
       () => {
+        if (effect) this.noteEffectFailed(running);
         this.sendCapability(running, child, deniedCapability(request.requestId));
       },
     );
+  }
+
+  private noteEffectSettled(
+    running: RunningCall,
+    request: FunctionCapabilityRequest,
+    action: boolean,
+    result: FunctionCapabilityResult,
+  ): void {
+    if (running.effectPending <= 0) return;
+    running.effectPending -= 1;
+    if (!preCommitRefusal(request, action, result)) running.effectRisk = true;
+    if (running.effectPending === 0 && !running.effectRisk) running.externalWrite = false;
+  }
+
+  private noteEffectFailed(running: RunningCall): void {
+    if (running.effectPending <= 0) return;
+    running.effectPending -= 1;
+    running.effectRisk = true;
   }
 
   private sendCapability(running: RunningCall, child: ChildProcess, value: FunctionCapabilityResult): void {
@@ -378,6 +406,18 @@ function deniedCapability(requestId: string): FunctionCapabilityResult {
     code: "permission_denied",
     message: "capability denied",
   };
+}
+
+function preCommitRefusal(
+  request: FunctionCapabilityRequest,
+  action: boolean,
+  result: FunctionCapabilityResult,
+): boolean {
+  if (result.ok) return false;
+  const code = result.code ?? "";
+  if (code === "missing_binding" || code === "file_limit") return true;
+  if (code === "permission_denied" && (request.op === "write" || (request.op === "http" && action))) return true;
+  return false;
 }
 
 function result(code: string, message: string, pid?: number): FunctionInvokeResult {

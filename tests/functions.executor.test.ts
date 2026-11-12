@@ -624,6 +624,208 @@ describe("function executor", () => {
     expect(started).toBe(4 + 15 + 1);
   });
 
+  it("returns permission_denied when a denied write settles and the child returns not ok", async () => {
+    const child = fakeChild();
+    child.send = ((message: unknown) => {
+      const record = message as { type?: string };
+      if (record.type === "invoke") {
+        queueMicrotask(() => {
+          child.emit("message", {
+            type: "capability",
+            requestId: "cap-write",
+            op: "write",
+          });
+        });
+      }
+      return true;
+    }) as ChildProcess["send"];
+    const executor = new FunctionExecutor({
+      forkFn: (() => child) as typeof childProcess.fork,
+      onCapability: () =>
+        Promise.resolve({
+          type: "capability_result",
+          requestId: "cap-write",
+          ok: false,
+          code: "permission_denied",
+          message: "file access denied",
+        }).then((capability) => {
+          setTimeout(() => {
+            child.emit("message", {
+              type: "result",
+              ok: false,
+              code: "permission_denied",
+              message: "write denied",
+              logs: "",
+              logsTruncated: false,
+              disposed: true,
+            });
+            child.emit("exit", 1, null);
+          }, 0);
+          return capability;
+        }),
+    });
+    const result = await executor.invoke({
+      invocationId: invocationId("write-denied"),
+      source: SYNC_OK,
+      context: {},
+    });
+    expect(result).toMatchObject({ ok: false, code: "permission_denied" });
+  });
+
+  it("returns file_limit when an oversized write is refused before commit and the child returns not ok", async () => {
+    const child = fakeChild();
+    child.send = ((message: unknown) => {
+      const record = message as { type?: string };
+      if (record.type === "invoke") {
+        queueMicrotask(() => {
+          child.emit("message", {
+            type: "capability",
+            requestId: "cap-write",
+            op: "write",
+          });
+        });
+      }
+      return true;
+    }) as ChildProcess["send"];
+    const executor = new FunctionExecutor({
+      forkFn: (() => child) as typeof childProcess.fork,
+      onCapability: () =>
+        Promise.resolve({
+          type: "capability_result",
+          requestId: "cap-write",
+          ok: false,
+          code: "file_limit",
+          message: "file exceeds 1 MiB",
+        }).then((capability) => {
+          setTimeout(() => {
+            child.emit("message", {
+              type: "result",
+              ok: false,
+              code: "file_limit",
+              message: "file exceeds 1 MiB",
+              logs: "",
+              logsTruncated: false,
+              disposed: true,
+            });
+            child.emit("exit", 1, null);
+          }, 0);
+          return capability;
+        }),
+    });
+    const result = await executor.invoke({
+      invocationId: invocationId("write-file-limit"),
+      source: SYNC_OK,
+      context: {},
+    });
+    expect(result).toMatchObject({ ok: false, code: "file_limit" });
+  });
+
+  it("returns uncertain_outcome when one write succeeds and a second is denied before exit", async () => {
+    const child = fakeChild();
+    let sawDenied = false;
+    child.send = ((message: unknown) => {
+      const record = message as { type?: string };
+      if (record.type === "invoke") {
+        queueMicrotask(() => {
+          child.emit("message", {
+            type: "capability",
+            requestId: "write-ok",
+            op: "write",
+          });
+        });
+      }
+      return true;
+    }) as ChildProcess["send"];
+    const executor = new FunctionExecutor({
+      forkFn: (() => child) as typeof childProcess.fork,
+      onCapability: (_invocationId, request) => {
+        if (request.requestId === "write-ok") {
+          return Promise.resolve({
+            type: "capability_result",
+            requestId: "write-ok",
+            ok: true,
+            value: true,
+          }).then((capability) => {
+            queueMicrotask(() => {
+              child.emit("message", {
+                type: "capability",
+                requestId: "write-denied",
+                op: "write",
+              });
+            });
+            return capability;
+          });
+        }
+        sawDenied = true;
+        return Promise.resolve({
+          type: "capability_result",
+          requestId: "write-denied",
+          ok: false,
+          code: "permission_denied",
+          message: "file access denied",
+        }).then((capability) => {
+          setTimeout(() => {
+            child.emit("message", {
+              type: "result",
+              ok: false,
+              code: "permission_denied",
+              message: "guest failed",
+              logs: "",
+              logsTruncated: false,
+              disposed: true,
+            });
+            child.emit("exit", 1, null);
+          }, 0);
+          return capability;
+        });
+      },
+    });
+    const result = await executor.invoke({
+      invocationId: invocationId("mixed-write"),
+      source: SYNC_OK,
+      context: {},
+    });
+    expect(result).toMatchObject({ ok: false, code: "uncertain_outcome" });
+    expect(sawDenied).toBe(true);
+  });
+
+  it("returns uncertain_outcome when a write capability settles cancelled and the child exits", async () => {
+    const child = fakeChild();
+    child.send = ((message: unknown) => {
+      const record = message as { type?: string };
+      if (record.type === "invoke") {
+        queueMicrotask(() => {
+          child.emit("message", {
+            type: "capability",
+            requestId: "cap-write",
+            op: "write",
+          });
+        });
+      }
+      return true;
+    }) as ChildProcess["send"];
+    const executor = new FunctionExecutor({
+      forkFn: (() => child) as typeof childProcess.fork,
+      onCapability: () =>
+        Promise.resolve({
+          type: "capability_result",
+          requestId: "cap-write",
+          ok: false,
+          code: "cancelled",
+          message: "function execution cancelled",
+        }).then((capability) => {
+          setTimeout(() => child.emit("exit", 1, null), 0);
+          return capability;
+        }),
+    });
+    const result = await executor.invoke({
+      invocationId: invocationId("write-cancelled"),
+      source: SYNC_OK,
+      context: {},
+    });
+    expect(result).toMatchObject({ ok: false, code: "uncertain_outcome" });
+  });
+
   it("returns uncertain_outcome when a write capability settles and the child exits without a result", async () => {
     const child = fakeChild();
     child.send = ((message: unknown) => {

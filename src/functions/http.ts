@@ -22,7 +22,17 @@ export type HttpCapabilityResult =
 
 const API_DENIED = { ok: false as const, code: "permission_denied", message: "api access denied" };
 const CANCELLED = { ok: false as const, code: "cancelled", message: "function execution cancelled" };
-const BODY_LIMIT = { ok: false as const, code: "file_limit", message: "response exceeds 1 MiB" };
+const REQUEST_BODY_LIMIT = { ok: false as const, code: "file_limit", message: "request exceeds 1 MiB" };
+const RESPONSE_BODY_LIMIT = {
+  ok: false as const,
+  code: "uncertain_outcome",
+  message: "response exceeds 1 MiB",
+};
+const RESPONSE_UNCERTAIN = {
+  ok: false as const,
+  code: "uncertain_outcome",
+  message: "api access denied",
+};
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 
 const BLOCKED = new BlockList();
@@ -70,7 +80,7 @@ export async function performFunctionHttp(input: {
     if (!secret) return { ok: false, code: "missing_binding", message: "required credential is missing" };
     authorization = `Bearer ${secret}`;
   }
-  if (input.body !== undefined && Buffer.byteLength(input.body, "utf8") > FUNCTION_IO_BYTES_MAX) return BODY_LIMIT;
+  if (input.body !== undefined && Buffer.byteLength(input.body, "utf8") > FUNCTION_IO_BYTES_MAX) return REQUEST_BODY_LIMIT;
   const lookup = input.lookup ?? defaultLookup;
   let verb = method;
   let body = verb === "GET" || verb === "HEAD" ? undefined : input.body;
@@ -230,13 +240,13 @@ async function readResponse(
       total += part.value.byteLength;
       if (total > FUNCTION_IO_BYTES_MAX) {
         await reader.cancel().catch(() => undefined);
-        return BODY_LIMIT;
+        return RESPONSE_BODY_LIMIT;
       }
       chunks.push(part.value);
     }
   } catch {
     if (signal.aborted) return CANCELLED;
-    return API_DENIED;
+    return RESPONSE_UNCERTAIN;
   }
   if (signal.aborted) return CANCELLED;
   return {
