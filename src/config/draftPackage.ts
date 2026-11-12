@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { parse as parseYaml } from "yaml";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { InlinePipelineDefinition } from "../types/pipeline.js";
@@ -357,6 +358,76 @@ function assertInside(root: string, target: string): void {
   }
 }
 
+/** Stage files a fragment's entries point at with `uses:`, relative to the fragment. */
+function fragmentStageUses(raw: unknown): string[] {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const stages = (raw as Record<string, unknown>).stages;
+  if (!Array.isArray(stages)) return [];
+  return stages
+    .map((entry) => (entry !== null && typeof entry === "object" ? (entry as Record<string, unknown>).uses : undefined))
+    .filter((uses): uses is string => typeof uses === "string" && uses.length > 0 && !pathContainsNul(uses));
+}
+
+function includeLocals(raw: unknown): string[] {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const include = (raw as Record<string, unknown>).include;
+  if (!Array.isArray(include)) return [];
+  return include
+    .map((entry) => (entry !== null && typeof entry === "object" ? (entry as Record<string, unknown>).local : undefined))
+    .filter((local): local is string => typeof local === "string" && local.length > 0 && !pathContainsNul(local));
+}
+
+/**
+ * Copy the `include:` fragments a draft pipeline names from the real package into the temp copy, following nested
+ * includes, so validation sees them. Only files inside the project are copied, only into the temp folder, and never
+ * over a file the draft itself provides. A fragment that cannot be copied is left for validation to report.
+ */
+async function copyIncludeFragments(
+  raw: unknown,
+  realDir: string,
+  tempDir: string,
+  tempRoot: string,
+  projectRealRoot: string,
+  seen: Set<string> = new Set(),
+): Promise<void> {
+  const isFragment = seen.size > 0;
+  const refs = [...includeLocals(raw), ...(isFragment ? fragmentStageUses(raw) : [])];
+  for (const local of refs) {
+    const rel = local.replace(/\\/g, "/");
+    if (path.isAbsolute(rel) || path.posix.isAbsolute(rel)) continue;
+    const src = path.resolve(realDir, rel);
+    const dst = path.resolve(tempDir, rel);
+    let srcReal: string;
+    try {
+      srcReal = realpathSync(src);
+    } catch {
+      continue;
+    }
+    const inProject = path.relative(projectRealRoot, srcReal);
+    if (inProject.startsWith("..") || path.isAbsolute(inProject)) continue;
+    const inTemp = path.relative(tempRoot, dst);
+    if (inTemp === "" || inTemp.startsWith("..") || path.isAbsolute(inTemp)) continue;
+    if (seen.has(srcReal)) continue;
+    seen.add(srcReal);
+    if (await fileExists(dst)) continue;
+    let text: string;
+    try {
+      text = await readFile(srcReal, "utf8");
+    } catch {
+      continue;
+    }
+    await mkdir(path.dirname(dst), { recursive: true });
+    await writeFile(dst, text, "utf8");
+    let nested: unknown;
+    try {
+      nested = parseYaml(text);
+    } catch {
+      continue;
+    }
+    await copyIncludeFragments(nested, path.dirname(srcReal), path.dirname(dst), tempRoot, projectRealRoot, seen);
+  }
+}
+
 /**
  * Write the draft into `tempRoot` for validation. The package sits deep enough below `tempRoot` that every
  * `../` stage path (a shared stage elsewhere in the project) still lands inside it, and every target is checked
@@ -368,7 +439,11 @@ async function materializeDraft(
   pipelineFilename: string,
 ): Promise<string> {
   const migrated = hoistUsesWrapperSkills(draft);
-  const depth = Math.max(0, ...(migrated.stages ?? []).map((stage) => stageParentDepth(normalizeStageRelPath(stage.path))));
+  const depth = Math.max(
+    0,
+    ...(migrated.stages ?? []).map((stage) => stageParentDepth(normalizeStageRelPath(stage.path))),
+    ...includeLocals(migrated.pipeline).map((local) => Math.min(stageParentDepth(local.replace(/\\/g, "/")), MAX_STAGE_PARENT_DEPTH)),
+  );
   const dir = path.join(tempRoot, ...Array.from({ length: depth }, (_, index) => `p${index}`));
   await mkdir(dir, { recursive: true });
   const pipelinePath = path.resolve(dir, pipelineFilename);
@@ -433,7 +508,7 @@ export async function validateDraftPackage(
   if (options.validateBeside && !needsMaterialize) {
     const sidecar = path.join(
       options.validateBeside.packageDirectory,
-      `.sf-validate-${process.pid}-${randomBytes(4).toString("hex")}.pipeline.yaml`,
+      `.sf-validate-${process.pid}-${randomBytes(4).toString("hex")}.yaml`,
     );
     try {
       await writeFile(
@@ -467,6 +542,33 @@ export async function validateDraftPackage(
     try {
       const pipelineFilename = `${draft.pipeline.id}.pipeline.yaml`;
       const packageDir = await materializeDraft(draft, tempRoot, pipelineFilename);
+      if (options.validateBeside) {
+        // A pipeline with uses: stages is checked from the temp copy; give it the include fragments it names.
+        let projectRealRoot: string;
+        try {
+          projectRealRoot = realpathSync(projectRoot);
+        } catch {
+          projectRealRoot = path.resolve(projectRoot);
+        }
+        // The editor's pipeline object leaves out include:; the rendered file keeps it, so check that file.
+        const rendered = options.validateBeside.renderedPipelineYaml;
+        let renderedRaw: unknown;
+        try {
+          renderedRaw = parseYaml(rendered);
+        } catch {
+          renderedRaw = undefined;
+        }
+        if (includeLocals(renderedRaw).length > 0) {
+          await writeFile(path.join(packageDir, pipelineFilename), rendered, "utf8");
+        }
+        await copyIncludeFragments(
+          renderedRaw,
+          options.validateBeside.packageDirectory,
+          packageDir,
+          tempRoot,
+          projectRealRoot,
+        );
+      }
       const pipelineResult = await validatePipeline(pipelineFilename, {
         cwd: packageDir,
         projectRoot: tempRoot,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import {
@@ -1270,6 +1270,46 @@ describe("include-aware validation", () => {
         baseHashes: loaded.fileHashes,
       });
       expect(saved.ok).toBe(true);
+    }));
+
+  it("accepts a route into an included fragment when the pipeline also has uses: stages", () =>
+    withRepo(async (root) => {
+      const dir = path.join(root, "pipelines");
+      await mkdir(dir, { recursive: true });
+      const stageYaml = (id: string) =>
+        [`id: ${id}`, `system_prompt: ${id}`, `model: ${MODEL}`, "io:", "  input:", "    schema:", "      type: object",
+          "  output:", "    schema:", "      type: object", ""].join("\n");
+      await writeFile(
+        path.join(dir, "fragment.yaml"),
+        ["stages:", "  - id: frag-stage", "    uses: ./frag-stage.yaml", ""].join("\n"),
+        "utf8",
+      );
+      await writeFile(path.join(dir, "frag-stage.yaml"), stageYaml("frag-stage"), "utf8");
+      await writeFile(path.join(dir, "plan.yaml"), stageYaml("plan"), "utf8");
+      await writeFile(
+        path.join(dir, "demo.pipeline.yaml"),
+        ["id: demo", "include:", "  - local: ./fragment.yaml", "stages:", "  - id: plan", "    uses: ./plan.yaml",
+          "    entry: true", "    route:", "      - to: frag-stage", ""].join("\n"),
+        "utf8",
+      );
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+      const draft: DraftPackage = {
+        ...loaded.draft,
+        stages: (loaded.draft.stages ?? []).map((stage) =>
+          stage.path.endsWith("plan.yaml") ? { ...stage, body: { ...stage.body, system_prompt: "plan edited" } } : stage,
+        ),
+      };
+      const saved = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        pipelineFilename: "demo.pipeline.yaml",
+        draft,
+        baseHashes: loaded.fileHashes,
+      });
+      expect(saved.ok, JSON.stringify(saved)).toBe(true);
+      const leftovers = (await readdir(dir)).filter((name) => name.startsWith(".sf-validate-"));
+      expect(leftovers).toEqual([]);
     }));
 
   it("refuses a route to a missing stage from an include", () =>
