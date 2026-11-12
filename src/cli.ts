@@ -798,7 +798,7 @@ async function printIfHostAlreadyRunning(options: {
     );
     return 1;
   }
-  if (probed !== "up") return null;
+  if (probed !== "up" && probed !== "starting") return null;
   console.log(`Stageflow is already running at ${base}`);
   console.log(`Operator console: ${base}`);
   const source = activeControlTokenSource();

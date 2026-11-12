@@ -102,10 +102,26 @@ function listenServer(server: Server, host: string, port: number): Promise<void>
  * until {@link createHttpHost} installs the real handler. A failure is the
  * Node listen error (EADDRINUSE when another host already owns the port).
  */
+function startingResponse(req: IncomingMessage, res: ServerResponse): void {
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  const method = req.method ?? "GET";
+  const live = url.pathname === "/livez" && (method === "GET" || method === "HEAD");
+  const body = live
+    ? { ok: true, status: "starting", service: "stageflow" }
+    : { status: "starting" };
+  const payload = JSON.stringify(body);
+  res.writeHead(live ? 200 : 503, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(payload),
+    ...(live ? {} : { "Retry-After": "1" }),
+  });
+  res.end(payload);
+}
+
 export async function bindHostPort(host: string, port: number): Promise<BoundHostPort> {
   let requestHandler: RequestListener = (req, res) => {
     req.socket?.on("error", () => undefined);
-    res.destroy();
+    startingResponse(req, res);
   };
   const server = createServer((req, res) => {
     requestHandler(req, res);

@@ -259,6 +259,28 @@ describe("ensureGlobalService", () => {
     });
   });
 
+  it("waits for a starting Host instead of spawning another", async () => {
+    await withIsolatedHome(async () => {
+      const probeResults: ServiceProbeResult[] = ["starting", "starting", "up"];
+      let probeIndex = 0;
+      let spawnCalls = 0;
+      const result = await ensureGlobalService({
+        cliEntry,
+        probeHost: async () =>
+          probeResults[Math.min(probeIndex++, probeResults.length - 1)]!,
+        spawnFn: (() => {
+          spawnCalls += 1;
+          return { unref: () => undefined } as unknown as ReturnType<typeof spawn>;
+        }) as unknown as typeof spawn,
+        pollIntervalMs: 1,
+        timeoutMs: 1000,
+        env: { STAGEFLOW_BIND: "127.0.0.1" },
+      });
+      expect(result).toEqual({ ok: true, alreadyRunning: true });
+      expect(spawnCalls).toBe(0);
+    });
+  });
+
   it("still spawns when STAGEFLOW_BIND is non-loopback and drive token is set", async () => {
     await withIsolatedHome(async () => {
       const probeResults: ServiceProbeResult[] = ["unreachable", "up"];

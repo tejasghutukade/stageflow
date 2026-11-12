@@ -56,6 +56,7 @@ export type HostProbeResult = "up" | "down";
  */
 export type ServiceProbeResult =
   | "up"
+  | "starting"
   | "unreachable"
   | "unhealthy"
   | "foreign"
@@ -92,6 +93,7 @@ export async function probeStageflowHost(
       return "unhealthy";
     }
     if (body === null || typeof body !== "object") return "foreign";
+    if (body.service === "stageflow" && body.status === "starting") return "starting";
     if (body.service !== "stageflow") {
       // Hosts before 0.57 answer {"ok":true,"status":"live"} with no service field.
       return body.service === undefined && body.ok === true && body.status === "live"
@@ -186,6 +188,20 @@ export async function ensureGlobalService(
   const initial = await probeHost();
   if (initial === "up") {
     return { ok: true, alreadyRunning: true };
+  }
+  if (initial === "starting") {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleep(pollIntervalMs);
+      const next = await probeHost();
+      if (next === "up") return { ok: true, alreadyRunning: true };
+      if (next !== "starting") break;
+    }
+    return {
+      ok: false,
+      reason: "timed_out",
+      message: `Timed out after ${timeoutMs}ms waiting for the starting Stageflow Host to become ready.`,
+    };
   }
   if (initial === "old_stageflow") {
     return {
