@@ -140,6 +140,9 @@ function sameDefinition(left: AgentDefinition, right: AgentDefinition): boolean 
   return serializeAgentDefinition(left) === serializeAgentDefinition(right);
 }
 
+/** How many of the previous session's last messages a rolled channel session starts with, as context. */
+const ROLLOVER_CARRIED_MESSAGES = 6;
+
 /** A channel thread's cost cap counts spend across rollovers inside this window. */
 const THREAD_COST_WINDOW_MS = 24 * 60 * 60_000;
 
@@ -996,7 +999,14 @@ export class AgentService {
       return this.store.transaction(() => {
         // A retry takes over the earlier turn's unanswered message instead of adding it a second time.
         const retried = input.resumeTurnId ? this.store.listMessages(sessionId).find((m) => m.turnId === input.resumeTurnId && m.role === "user") : undefined;
-        const history = this.store.listMessages(sessionId).filter((m) => m.id !== retried?.id);
+        const own = this.store.listMessages(sessionId).filter((m) => m.id !== retried?.id);
+        // A channel thread that rolled onto this session starts from the previous session's last few messages, so the
+        // agent keeps the conversation. They are context for the model only; this session's transcript stays its own.
+        const carried =
+          own.length === 0 && session.rolledFromSessionId !== undefined
+            ? this.store.listMessages(session.rolledFromSessionId).slice(-ROLLOVER_CARRIED_MESSAGES)
+            : [];
+        const history = [...carried, ...own];
         const turn = this.store.insertTurn({
           id: id("turn"),
           sessionId,

@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`include:` fragments are validated also when the pipeline has `uses:` stages.**
 - **A task loaded from another folder is saved back there.**
 - **Unknown `/api/*` paths answer a JSON 404.**
+- **A rolled-over channel session keeps the conversation.** Its first turn starts from the previous session's last six messages, and the console session page links to the session it continues.
+- **"Run doctor" in the console runs the installed script** instead of reinstalling the skill. Doctor scripts get an empty temporary `HOME`.
+- **A CLI 401 names the token source it used** (variable, file path or data directory), never the token.
+- **The CLI never creates `host-id`** when it probes for a Host.
+- **Package saves keep file modes and write through symlinked stage files.**
 - **The editor's leave guard restores the URL after a cancelled link click, Back or Forward.** A closed Workshop conflict dialog no longer lets the next save overwrite.
 - **A booting Host reports its data directory,** so `sf ui` and autostart never mistake another directory's Host for theirs.
 - **The console editor keeps comments and unknown keys,** and refuses a save when the file changed on disk. Workshop and the stage editor (Catalog → Stages) use the same write. A save changes only the edited lines: comment spacing, flow maps, folded blocks, anchors and CRLF line endings stay as they were, and comments stay with their stage when stages are reordered, inserted or renamed.

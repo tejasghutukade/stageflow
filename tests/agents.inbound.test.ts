@@ -22,9 +22,16 @@ async function setup(overrides: Record<string, unknown> = {}) {
     find: (id) => ({ "ops-slack": { provider: "slack", secret: "sign" }, tg: { provider: "telegram", secret: "tok" }, "no-secret": { provider: "slack", secret: undefined } })[id],
     reply: async (connectionId, to, text, key) => void replies.push({ connectionId, to, text, key }),
   };
-  const chat = new AgentChatController({ service, backend: scriptedBackend((m) => `re: ${m.at(-1)!.text}`) });
+  const seen: string[][] = [];
+  const chat = new AgentChatController({
+    service,
+    backend: scriptedBackend((m) => {
+      seen.push(m.map((message) => message.text));
+      return `re: ${m.at(-1)!.text}`;
+    }),
+  });
   const router = new AgentInboundRouter({ service, chat, connections, projectRoot: project });
-  return { ...fixture, router, replies };
+  return { ...fixture, router, replies, seen };
 }
 
 function slackRequest(body: Record<string, unknown>, secret = "sign") {
@@ -153,6 +160,24 @@ describe("agent inbound webhooks", () => {
     expect(replies[1]!.text).toMatch(/cost limit/);
     const sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
     expect(sessions).toHaveLength(1);
+  });
+
+  it("starts a rolled-over session with the previous session's last messages as context", async () => {
+    const { router, replies, service, project, seen } = await setup({ limits: { max_turns: 1 } });
+    const first = slackRequest({ event: { ...slackEvent.event, ts: "1.0", event_ts: "1.0", thread_ts: "1.0" } });
+    const second = slackRequest({ event: { ...slackEvent.event, text: "and the refund?", ts: "2.0", event_ts: "2.0", thread_ts: "1.0" } });
+    await router_handle(router, first);
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    await router_handle(router, second);
+    await vi.waitFor(() => expect(replies).toHaveLength(2));
+    expect(seen[1]).toEqual(["where is my order?", "re: where is my order?", "and the refund?"]);
+    const sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
+    expect(sessions).toHaveLength(2);
+    const details = await Promise.all(sessions.map((item) => service.getSession(project, item.id)));
+    const rolled = details.find((detail) => detail.session.rolledFromSessionId !== undefined)!;
+    const original = details.find((detail) => detail.session.rolledFromSessionId === undefined)!;
+    expect(rolled.session.rolledFromSessionId).toBe(original.session.id);
+    expect(rolled.messages.map((m) => m.text)).toEqual(["and the refund?", "re: and the refund?"]);
   });
 
   it("carries spend across a turn-limit rollover and then refuses the thread", async () => {
