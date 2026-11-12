@@ -11,7 +11,8 @@ export const A2A_USAGE = `sf a2a status [--json]
 sf a2a enable [--public-url <url>] [--json]
 sf a2a reload [--json]
 sf a2a caller list [--json]
-sf a2a caller create <id> [--json]
+sf a2a caller create <id> [--allow-run-stage] [--json]
+sf a2a caller update <id> (--allow-run-stage | --no-allow-run-stage) [--json]
 sf a2a caller revoke <id> [--json]
 sf a2a publication list [--json]
 sf a2a publication create <file> [--json]
@@ -24,7 +25,10 @@ sf a2a add-caller <id> [--config <path>] [--token-env <NAME>]
 status, enable, reload, caller and publication talk to the running Host (started
 for you when none is running) and take effect without a restart. The token of a
 new caller is printed once and never stored; the Host keeps only its SHA-256
-digest. <file> is a YAML or JSON publication body (project_root is a catalog
+digest. allow_run_stage stays off until an operator passes --allow-run-stage
+on create or update. caller list prints the flag. An opted-in caller has shell
+on the Host and can read any run's envelopes. No agent tool sets the flag.
+<file> is a YAML or JSON publication body (project_root is a catalog
 project, pipeline and input_schema are paths inside it; without input_schema the
 entry stage's io.input.schema is used).
 
@@ -44,11 +48,12 @@ function deriveTokenEnvName(callerId: string): string {
   return (normalized || "CALLER") + "_TOKEN";
 }
 
-function parseFlags(args: string[]): { config?: string; tokenEnv?: string; publicUrl?: string; json: boolean; positionals: string[] } {
+function parseFlags(args: string[]): { config?: string; tokenEnv?: string; publicUrl?: string; json: boolean; allowRunStage?: boolean; positionals: string[] } {
   let config: string | undefined;
   let tokenEnv: string | undefined;
   let publicUrl: string | undefined;
   let json = false;
+  let allowRunStage: boolean | undefined;
   const positionals: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === "--config") {
@@ -59,11 +64,15 @@ function parseFlags(args: string[]): { config?: string; tokenEnv?: string; publi
       publicUrl = args[(i += 1)];
     } else if (args[i] === "--json") {
       json = true;
+    } else if (args[i] === "--allow-run-stage") {
+      allowRunStage = true;
+    } else if (args[i] === "--no-allow-run-stage") {
+      allowRunStage = false;
     } else {
       positionals.push(args[i]);
     }
   }
-  return { config, tokenEnv, publicUrl, json, positionals };
+  return { config, tokenEnv, publicUrl, json, allowRunStage, positionals };
 }
 
 async function addCaller(
@@ -137,6 +146,7 @@ async function runManageCommand(
   let request: { method: string; path: string; body?: unknown } | undefined;
   let render: (body: any) => void = () => undefined;
   const bad = (): number => { error(A2A_USAGE); return 1; };
+  if (flags.allowRunStage !== undefined && sub !== "caller") return bad();
   const idPath = (prefix: string, id: string | undefined): string | undefined => (id ? prefix + encodeURIComponent(id) : undefined);
 
   if (sub === "status" && flags.positionals.length === 0) {
@@ -149,17 +159,24 @@ async function runManageCommand(
     request = { method: "POST", path: "/api/a2a/reload" };
     render = (body) => describeStatus(body).forEach(log);
   } else if (sub === "caller") {
-    if (action === "list" && rest.length === 0) {
+    if (action === "list" && rest.length === 0 && flags.allowRunStage === undefined) {
       request = { method: "GET", path: "/api/a2a/callers" };
-      render = (body) => body.callers.forEach((c: { id: string; token_source: string }) => log(c.id + "\t" + c.token_source));
+      render = (body) => body.callers.forEach((c: { id: string; token_source: string; allow_run_stage?: boolean }) =>
+        log(c.id + "\t" + c.token_source + "\tallow_run_stage=" + String(c.allow_run_stage === true)));
     } else if (action === "create" && rest.length === 1) {
-      request = { method: "POST", path: "/api/a2a/callers", body: { id: rest[0] } };
-      render = (body) => {
-        log('Created caller "' + body.id + '". This token is shown once and is not stored; the Host keeps only its digest:');
-        log("  " + body.token);
+      const body: { id: string; allow_run_stage?: boolean } = { id: rest[0] };
+      if (flags.allowRunStage !== undefined) body.allow_run_stage = flags.allowRunStage;
+      request = { method: "POST", path: "/api/a2a/callers", body };
+      render = (created) => {
+        log('Created caller "' + created.id + '". This token is shown once and is not stored; the Host keeps only its digest:');
+        log("  " + created.token);
         log("The caller sends it as: Authorization: Bearer <token>");
+        log("allow_run_stage: " + String(created.allow_run_stage === true));
       };
-    } else if (action === "revoke" && rest.length === 1) {
+    } else if (action === "update" && rest.length === 1 && flags.allowRunStage !== undefined) {
+      request = { method: "PATCH", path: idPath("/api/a2a/callers/", rest[0])!, body: { allow_run_stage: flags.allowRunStage } };
+      render = (updated) => log(updated.id + "\tallow_run_stage=" + String(updated.allow_run_stage === true));
+    } else if (action === "revoke" && rest.length === 1 && flags.allowRunStage === undefined) {
       request = { method: "DELETE", path: idPath("/api/a2a/callers/", rest[0])! };
       render = (body) => log('Revoked caller "' + rest[0] + '"' + (body.removed_from.length ? "; removed from " + body.removed_from.join(", ") : ""));
     }
@@ -230,7 +247,11 @@ export async function runA2aCommand(
     error(A2A_USAGE);
     return 1;
   }
-  const { config, tokenEnv, positionals } = parseFlags(args.slice(1));
+  const { config, tokenEnv, positionals, allowRunStage } = parseFlags(args.slice(1));
+  if (allowRunStage !== undefined) {
+    error(A2A_USAGE);
+    return 1;
+  }
 
   if (sub === "add-caller") {
     if (positionals.length !== 1 || !positionals[0]) {

@@ -186,13 +186,21 @@ export class A2aManagement {
     return rest;
   }
 
-  listCallers(): Array<{ id: string; token_source: "store" | "env" }> {
-    return (this.options.host.registry()?.callers() ?? []).map(({ id, source }) => ({ id, token_source: source }));
+  listCallers(): Array<{ id: string; token_source: "store" | "env"; allow_run_stage: boolean }> {
+    const registry = this.options.host.registry();
+    if (!registry) return [];
+    return registry.callers().map(({ id, source }) => ({
+      id,
+      token_source: source,
+      allow_run_stage: registry.allowsRunStage(id),
+    }));
   }
 
-  createCaller(id: string): Promise<{ id: string; token: string; token_source: "store" }> {
+  createCaller(id: string, allowRunStage = false): Promise<{ id: string; token: string; token_source: "store"; allow_run_stage: boolean }> {
     const parsed = a2aIdentifier.safeParse(id);
     if (!parsed.success) throw invalid("Caller id must be 1-80 letters, digits, '_' or '-', starting with a letter or digit");
+    if (typeof allowRunStage !== "boolean") throw invalid("allow_run_stage must be a boolean");
+    const allow_run_stage = allowRunStage === true;
     return this.serial(async () => {
       const { config } = await this.readConfig();
       if (config.callers.some((caller) => caller.id === id)) {
@@ -208,13 +216,33 @@ export class A2aManagement {
       const token = randomBytes(24).toString("hex");
       const name = A2A_CALLER_STORE_PREFIX + id;
       this.options.secrets.set(name, tokenDigestHex(token));
+      const entry: Record<string, unknown> = { id, token_store: name };
+      if (allow_run_stage) entry.allow_run_stage = true;
       try {
-        await this.commit({ ...config, callers: [...config.callers, { id, token_store: name }] });
+        await this.commit({ ...config, callers: [...config.callers, entry] });
       } catch (error) {
         this.options.secrets.delete(name);
         throw error;
       }
-      return { id, token, token_source: "store" as const };
+      return { id, token, token_source: "store" as const, allow_run_stage };
+    });
+  }
+
+  updateCaller(id: string, allowRunStage: boolean): Promise<{ id: string; token_source: "store" | "env"; allow_run_stage: boolean }> {
+    if (typeof allowRunStage !== "boolean") throw invalid("allow_run_stage must be a boolean");
+    return this.serial(async () => {
+      const { config } = await this.readConfig();
+      const index = config.callers.findIndex((entry) => entry.id === id);
+      if (index === -1) throw new A2aManagementError("a2a_caller_not_found", `Caller ${id} not found`, 404);
+      const current = { ...config.callers[index]! };
+      if (allowRunStage) current.allow_run_stage = true;
+      else delete current.allow_run_stage;
+      const callers = config.callers.slice();
+      callers[index] = current;
+      await this.commit({ ...config, callers });
+      const listed = this.listCallers().find((row) => row.id === id);
+      if (!listed) throw new A2aManagementError("a2a_config_invalid", `Caller ${id} was not loaded`, 409);
+      return listed;
     });
   }
 

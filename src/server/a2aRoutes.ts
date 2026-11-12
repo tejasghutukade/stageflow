@@ -63,9 +63,18 @@ export async function handleA2aRoutes(
     if (pathname === "/api/a2a/reload" && method === "POST") { json(res, 200, await management.reload()); return true; }
     if (pathname === "/api/a2a/callers" && method === "GET") { json(res, 200, { callers: management.listCallers() }); return true; }
     if (pathname === "/api/a2a/callers" && method === "POST") {
-      const callerId = field(await readBody(req), "id");
+      const body = await readBody(req);
+      const callerId = field(body, "id");
       if (typeof callerId !== "string") throw new A2aManagementError("a2a_invalid_request", "id is required", 400);
-      json(res, 201, await management.createCaller(callerId));
+      const allow = field(body, "allow_run_stage");
+      if (allow !== undefined && typeof allow !== "boolean") throw new A2aManagementError("a2a_invalid_request", "allow_run_stage must be a boolean", 400);
+      json(res, 201, await management.createCaller(callerId, allow === true));
+      return true;
+    }
+    if (caller && method === "PATCH") {
+      const allow = field(await readBody(req), "allow_run_stage");
+      if (typeof allow !== "boolean") throw new A2aManagementError("a2a_invalid_request", "allow_run_stage must be a boolean", 400);
+      json(res, 200, await management.updateCaller(id, allow));
       return true;
     }
     if (caller && method === "DELETE") { json(res, 200, await management.revokeCaller(id)); return true; }

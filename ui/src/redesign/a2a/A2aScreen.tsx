@@ -33,7 +33,8 @@ export type A2aScreenProps = {
   onEnable: () => void;
   onDisable: () => void;
   onReload: () => void;
-  onAddCaller: (name: string) => void;
+  onAddCaller: (name: string, allowRunStage: boolean) => void;
+  onAllowRunStage: (id: string, allowRunStage: boolean) => void;
   onRevokeCaller: (id: string) => void;
   onPublicationSaved: () => void;
   onRemovePublication: (id: string) => void;
@@ -125,6 +126,7 @@ export function A2aScreen(props: A2aScreenProps) {
                   publications={props.publications}
                   busy={props.busy}
                   onAdd={props.onAddCaller}
+                  onAllowRunStage={props.onAllowRunStage}
                   onRevoke={props.onRevokeCaller}
                 />
               ) : null}
