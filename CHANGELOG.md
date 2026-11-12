@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The console editor keeps comments and unknown keys,** and refuses a save when the file changed on disk. Workshop uses the same write.
 - **Start queues a run when agent slots are full,** until the queue itself is full.
-- **A second Host binds its port before it touches run data.**
+- **One Host per data directory.** A Host takes `$STAGEFLOW_HOME/host.lock` (pid and URL) before it touches run data, so a second Host on another port or address is refused with "Another Stageflow Host is using this data directory (pid …, http://…)" instead of reconciling the first Host's runs. A lock left by a crashed Host is replaced. A pending restore is applied only after the lock and the port bind, and `sf restore` refuses while a Host holds the lock.
 - **Skill install rejects a name that would delete outside the skills folder.**
 - **After an operator answer, the stage keeps its secrets and home.** Abandoning a stage stops that stage only. The run keeps its slot, checkout and scheduling halt while other stages run, records the abandon as the failure reason, and is not marked failed by the abandoned worker's exit or stripped of the others' browsers. Nothing new is scheduled and the run ends `failed`; `sf runs cancel` now stops stages still running on a failed run.
 - **OpenAI models can run stages.** Every tool's parameters are an object at the root. `emit_stage_envelope`, `working_state`, `ask_operator` and three operator tools were unions, which OpenAI rejects ("got type None").

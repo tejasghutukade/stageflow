@@ -90,6 +90,7 @@ import { defaultLoadJudgePrices } from "../evals/engine/promptfoo/judgeServices.
 import { createAgentHostContext, type AgentHostContext } from "../agents/hostContext.js";
 import type { ConversationBackend } from "../agents/sessions.js";
 import { bindHostPort, type BoundHostPort } from "./createHttpHost.js";
+import { acquireHostLock, installHostLockExitHook } from "./hostLock.js";
 
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -286,6 +287,30 @@ export async function bootstrapStageflowHost(
   });
 
   const bootLog = rootLogger.child({ component: "bootstrap" });
+
+  // One Host per data directory, whatever port or address it binds: take the lock before a restore, a migration
+  // or run reconciliation can touch the store. Then own the port. If another Host already has it, listen throws
+  // EADDRINUSE and this process exits without changing that Host's runs.
+  const hostLock = options.store ? undefined : await acquireHostLock(ctx.globalHome);
+  if (hostLock !== undefined) installHostLockExitHook();
+  let boundPort: BoundHostPort | undefined;
+  try {
+    boundPort = options.listen
+      ? await bindHostPort(options.listen.host, options.listen.port)
+      : undefined;
+  } catch (err) {
+    hostLock?.release();
+    throw err;
+  }
+  if (hostLock !== undefined) {
+    const address = boundPort?.server.address();
+    if (options.listen && address && typeof address !== "string") {
+      const host = options.listen.host === "0.0.0.0" || options.listen.host === "::" ? "127.0.0.1" : options.listen.host;
+      hostLock.setUrl(`http://${host.includes(":") ? `[${host}]` : host}:${address.port}`);
+    }
+    boundPort?.server.once("close", () => hostLock.release());
+  }
+
   let serveBlocked: { code: string; reason: string } | undefined;
   let restoreOutcome: BootRestoreOutcome = { status: "none" };
   if (!options.store) {
@@ -341,19 +366,14 @@ export async function bootstrapStageflowHost(
       serveBlocked,
       ...(hostConfig !== undefined ? { hostConfig } : {}),
       ...(providerBoot !== undefined ? { providerBoot } : {}),
+      ...(boundPort !== undefined ? { boundPort } : {}),
     };
   }
 
-  // Own the port before opening the store or reconciling runs. If another
-  // host already has it, listen throws EADDRINUSE and this process exits
-  // without changing that host's runs.
   let stopGcInterval: () => void = () => {};
   let stopScheduleSource: () => void = () => {};
   let stopGithubPollSource: () => void = () => {};
   let stopEmailSource: () => void = () => {};
-  const boundPort = options.listen
-    ? await bindHostPort(options.listen.host, options.listen.port)
-    : undefined;
   try {
   let rawStore: RunStore;
   let sqliteConnection: Database.Database | undefined;
@@ -719,6 +739,7 @@ export async function bootstrapStageflowHost(
     stopGithubPollSource();
     stopEmailSource();
     boundPort?.server.close(() => undefined);
+    hostLock?.release();
     throw err;
   }
 }

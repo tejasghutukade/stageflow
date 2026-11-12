@@ -8,7 +8,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
+import http from "node:http";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
@@ -57,6 +58,32 @@ describe("restore", () => {
         probe: async () => "up",
       }),
     ).rejects.toMatchObject({ code: "restore_host_live" });
+  });
+
+  it("refuses while a Host on another port holds the data directory lock", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-restore-locked-"));
+    const { store } = createRunStoreWithConnection({ rootDir: root, openerMode: "migrate" });
+    const home = storeRootFor(root);
+    const backup = await createBackup({ store, homeDir: home, dbOnly: true, outPath: path.join(home, "backups", "x.db") });
+    await store.close();
+    const stub = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, status: "live", service: "stageflow" }));
+    });
+    await new Promise<void>((resolve) => stub.listen(0, "127.0.0.1", () => resolve()));
+    const address = stub.address() as { port: number };
+    writeFileSync(
+      path.join(home, "host.lock"),
+      JSON.stringify({ pid: process.ppid, hostname: os.hostname(), startedAt: new Date().toISOString(), url: `http://127.0.0.1:${address.port}` }),
+    );
+    try {
+      await expect(
+        applyRestoreArchive({ archivePath: backup.path, homeDir: home, probe: async () => "unreachable" }),
+      ).rejects.toMatchObject({ code: "restore_host_live" });
+      expect(existsSync(path.join(home, "host.lock"))).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => stub.close(() => resolve()));
+    }
   });
 
   it("refuses restore for every probe result except unreachable", async () => {
