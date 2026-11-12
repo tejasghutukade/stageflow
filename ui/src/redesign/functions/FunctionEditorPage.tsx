@@ -257,20 +257,26 @@ export function FunctionEditorPage({
   const isNew = creating || !detail;
   const base = useMemo(() => (detail && !creating ? draftFromDetail(detail) : emptyDraft(initialKind)), [detail, creating, initialKind]);
 
-  const refreshInvocations = useCallback(() => {
-    if (!functionId) return;
-    const generation = nextFunctionGeneration(invocationGenerationRef);
-    void functionsApi.invocations(functionId).then(
-      (rows) => {
-        const applied = applyInvocationResponse(generation, invocationGenerationRef, rows, false);
-        if (applied !== null) setInvocations(applied);
-      },
-      () => {
-        const applied = applyInvocationResponse(generation, invocationGenerationRef, undefined, true);
-        if (applied !== null) setInvocations(applied);
-      },
-    );
-  }, [functionId]);
+  const fetchInvocations = useCallback(
+    (options?: { bumpTwice?: boolean; live?: () => boolean }) => {
+      if (!functionId) return;
+      if (options?.bumpTwice) nextFunctionGeneration(invocationGenerationRef);
+      const generation = nextFunctionGeneration(invocationGenerationRef);
+      void functionsApi.invocations(functionId).then(
+        (rows) => {
+          if (options?.live && !options.live()) return;
+          const applied = applyInvocationResponse(generation, invocationGenerationRef, rows, false);
+          if (applied !== null) setInvocations(applied);
+        },
+        () => {
+          if (options?.live && !options.live()) return;
+          const applied = applyInvocationResponse(generation, invocationGenerationRef, undefined, true);
+          if (applied !== null) setInvocations(applied);
+        },
+      );
+    },
+    [functionId],
+  );
 
   useEffect(() => {
     if (creating || !functionId) {
@@ -278,25 +284,12 @@ export function FunctionEditorPage({
       return;
     }
     setInvocations([]);
-    nextFunctionGeneration(invocationGenerationRef);
-    const generation = nextFunctionGeneration(invocationGenerationRef);
     let live = true;
-    void functionsApi.invocations(functionId).then(
-      (rows) => {
-        if (!live) return;
-        const applied = applyInvocationResponse(generation, invocationGenerationRef, rows, false);
-        if (applied !== null) setInvocations(applied);
-      },
-      () => {
-        if (!live) return;
-        const applied = applyInvocationResponse(generation, invocationGenerationRef, undefined, true);
-        if (applied !== null) setInvocations(applied);
-      },
-    );
+    fetchInvocations({ bumpTwice: true, live: () => live });
     return () => {
       live = false;
     };
-  }, [creating, functionId]);
+  }, [creating, functionId, fetchInvocations]);
 
   useEffect(() => {
     if (loaded || creating || !functionId) return;
@@ -804,7 +797,7 @@ export function FunctionEditorPage({
 
               <section id={domId("test")} className="flex scroll-mt-4 flex-col gap-4">
                 <SectionHeading note="Try the function on a sample context before anything depends on it.">Test</SectionHeading>
-                <FunctionTestPanel functionId={isNew ? undefined : detail?.id} kind={draft.kind} source={draft.source} savedSource={detail?.definition?.source} onRan={refreshInvocations} />
+                <FunctionTestPanel functionId={isNew ? undefined : detail?.id} kind={draft.kind} source={draft.source} savedSource={detail?.definition?.source} onRan={() => fetchInvocations()} />
               </section>
 
               {isNew ? null : (

@@ -227,6 +227,25 @@ async function hostCapability(
   }
 }
 
+async function denyAgentDefinitionWorkspaceWrite(
+  input: FileCapabilityInput,
+  parentFallback: string,
+  fileName: string,
+  resolveParent: () => Promise<string>,
+): Promise<FileCapabilityResult | undefined> {
+  if (input.root !== "workspace") return undefined;
+  let parentResolved: string;
+  try {
+    parentResolved = await resolveParent();
+  } catch {
+    parentResolved = parentFallback;
+  }
+  if (await isForbiddenAgentDefinitionWrite(input.projectRoot, input.workspaceRoot, parentResolved, fileName)) {
+    return FILE_DENIED;
+  }
+  return undefined;
+}
+
 async function writeHost(
   input: FileCapabilityInput,
   rootReal: string,
@@ -235,17 +254,13 @@ async function writeHost(
 ): Promise<FileCapabilityResult> {
   if (typeof input.content !== "string") return FILE_DENIED;
   if (Buffer.byteLength(input.content, "utf8") > FUNCTION_IO_BYTES_MAX) return FILE_LIMIT;
-  if (input.root === "workspace") {
-    let parentResolved: string;
-    try {
-      parentResolved = await realpath(path.dirname(target));
-    } catch {
-      parentResolved = path.dirname(target);
-    }
-    if (await isForbiddenAgentDefinitionWrite(input.projectRoot, input.workspaceRoot, parentResolved, path.basename(target))) {
-      return FILE_DENIED;
-    }
-  }
+  const denied = await denyAgentDefinitionWorkspaceWrite(
+    input,
+    path.dirname(target),
+    path.basename(target),
+    () => realpath(path.dirname(target)),
+  );
+  if (denied) return denied;
   if (isSensitive(target, home, input.projectRoot) || !isInside(rootReal, target)) return FILE_DENIED;
   if (input.signal.aborted) return UNCERTAIN;
   const temp = path.join(
@@ -344,24 +359,13 @@ async function writeContainer(
 ): Promise<FileCapabilityResult> {
   if (typeof input.content !== "string") return FILE_DENIED;
   if (Buffer.byteLength(input.content, "utf8") > FUNCTION_IO_BYTES_MAX) return FILE_LIMIT;
-  if (input.root === "workspace") {
-    let parentResolved: string;
-    try {
-      parentResolved = posixPath(await files.realPath(path.posix.dirname(target)));
-    } catch {
-      parentResolved = path.posix.dirname(target);
-    }
-    if (
-      await isForbiddenAgentDefinitionWrite(
-        input.projectRoot,
-        input.workspaceRoot,
-        parentResolved,
-        path.posix.basename(target),
-      )
-    ) {
-      return FILE_DENIED;
-    }
-  }
+  const denied = await denyAgentDefinitionWorkspaceWrite(
+    input,
+    path.posix.dirname(target),
+    path.posix.basename(target),
+    async () => posixPath(await files.realPath(path.posix.dirname(target))),
+  );
+  if (denied) return denied;
   const temp = `${target}.${randomBytes(8).toString("hex")}.tmp`;
   if (!isPosixInside(root, temp) || isSensitive(temp, input.stageflowHome, input.projectRoot)) return FILE_DENIED;
   if (input.signal.aborted) return UNCERTAIN;
@@ -687,9 +691,7 @@ async function isForbiddenAgentDefinitionWrite(
   let agentsDir = path.join(path.resolve(catalogRoot), "agents");
   try {
     agentsDir = await realpath(agentsDir);
-  } catch {
-    // parent may not exist yet; compare against the logical agents directory
-  }
+  } catch {}
   let target = path.resolve(parentDir, fileName);
   try {
     target = await realpath(target);

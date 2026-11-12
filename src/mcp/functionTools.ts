@@ -56,16 +56,16 @@ async function call(work: () => Promise<unknown>) {
 export function registerFunctionTools(server: McpServer, deps: McpToolDeps): void {
   const service = () => required(deps);
   const roots = { store: deps.store, bootCwd: deps.cwd };
-  const readRoot = async (wire: string | undefined): Promise<string> => {
-    if (wire === undefined) return defaultAgentProjectRoot(deps.cwd);
-    const { wireRoot } = await resolveCatalogStartInput(roots, wire);
-    return wireRoot.path;
-  };
-  const writeRoot = async (wire: string | undefined): Promise<string> => {
-    if (wire === undefined) return defaultAgentProjectRoot(deps.cwd);
-    const { wireRoot } = await resolveWritableCatalogRoot(roots, wire);
-    return wireRoot.path;
-  };
+  const catalogRoot =
+    (writable: boolean) =>
+    async (wire: string | undefined): Promise<string> => {
+      if (wire === undefined) return defaultAgentProjectRoot(deps.cwd);
+      const resolve = writable ? resolveWritableCatalogRoot : resolveCatalogStartInput;
+      const { wireRoot } = await resolve(roots, wire);
+      return wireRoot.path;
+    };
+  const readRoot = catalogRoot(false);
+  const writeRoot = catalogRoot(true);
 
   server.registerTool(
     "list_functions",
