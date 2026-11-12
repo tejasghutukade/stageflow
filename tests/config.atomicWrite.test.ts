@@ -83,6 +83,39 @@ describe("commitPackageFiles", () => {
   });
 });
 
+describe("commitPackageFiles keeps what it does not change", () => {
+  it("keeps the file mode and writes a symlinked file through to its target", async () => {
+    const dir = await tmp();
+    const a = path.join(dir, "a.yaml");
+    await writeFile(a, "before", { mode: 0o640 });
+    await fsp.chmod(a, 0o640);
+    const target = path.join(dir, "real.yaml");
+    const link = path.join(dir, "link.yaml");
+    await writeFile(target, "before-link");
+    await fsp.symlink(target, link);
+    await commitPackageFiles([
+      { absPath: a, content: "after" },
+      { absPath: link, content: "after-link" },
+    ]);
+    expect((await fsp.stat(a)).mode & 0o777).toBe(0o640);
+    expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readFile(target, "utf8")).toBe("after-link");
+  });
+
+  it("refuses to commit, and deletes nothing, when an existing file cannot be read", async () => {
+    const dir = await tmp();
+    const a = path.join(dir, "a.yaml");
+    await writeFile(a, "secret");
+    await fsp.chmod(a, 0o000);
+    try {
+      await expect(commitPackageFiles([{ absPath: a, content: "after" }])).rejects.toBeTruthy();
+    } finally {
+      await fsp.chmod(a, 0o600);
+    }
+    expect(await readFile(a, "utf8")).toBe("secret");
+  });
+});
+
 describe("assertBaseHash", () => {
   it("passes on a matching hash and raises FileChangedError with the current hash otherwise", async () => {
     const dir = await tmp();
