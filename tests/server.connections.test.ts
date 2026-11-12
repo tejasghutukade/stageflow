@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -99,6 +99,8 @@ describe("/api/connections", () => {
 
   it("refuses a check without a same-origin header", async () => {
     await boot(YAML);
+    // The health monitor's first scheduled check runs 0-2 s after boot; let it happen before counting.
+    await vi.waitFor(() => expect(provider.checkCalls).toBeGreaterThan(0), { timeout: 5000 });
     const before = provider.checkCalls;
     const response = await fetch(`${base}/api/connections/ops/check`, { method: "POST" });
     expect(response.status).toBeGreaterThanOrEqual(400);
@@ -202,7 +204,9 @@ describe("/api/connections", () => {
 
     it("validates a pinned recipient with the provider\'s own rules, without network or secrets", async () => {
       await boot(YAML);
-      // The health monitor runs its first scheduled check 0-2 s after boot; count only checks made during these calls.
+      // The health monitor runs its first scheduled check 0-2 s after boot; let it happen, then count only checks
+      // made during these calls.
+      await vi.waitFor(() => expect(provider.checkCalls).toBeGreaterThan(0), { timeout: 5000 });
       const before = provider.checkCalls;
       const call = (id: string, body: unknown) => post(`/api/connections/${id}/validate-target`, body);
       expect(await (await call("ops", { to: "C123" })).json()).toEqual({ ok: true });

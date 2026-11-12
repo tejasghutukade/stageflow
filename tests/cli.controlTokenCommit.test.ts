@@ -59,7 +59,9 @@ describe("control token save failure", () => {
     while (Date.now() - started < 20_000) {
       if (child.exitCode !== null) break;
       try {
-        live = (await fetch(`http://127.0.0.1:${port}/livez`)).status;
+        const res = await fetch(`http://127.0.0.1:${port}/livez`);
+        // A booting Host answers 200 "starting"; the token is saved (or the warning printed) only after that.
+        live = (await res.text()).includes('"starting"') ? 0 : res.status;
         if (live === 200) break;
       } catch {
         // not listening yet
@@ -111,7 +113,9 @@ describe("control token save failure", () => {
     while (Date.now() - started < 20_000) {
       if (child.exitCode !== null) break;
       try {
-        live = (await fetch(`http://127.0.0.1:${port}/livez`)).status;
+        const res = await fetch(`http://127.0.0.1:${port}/livez`);
+        // A booting Host answers 200 "starting"; the token is saved (or the warning printed) only after that.
+        live = (await res.text()).includes('"starting"') ? 0 : res.status;
         if (live === 200) break;
       } catch {
         // not listening yet
