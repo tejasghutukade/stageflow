@@ -14,6 +14,11 @@ export const INVALID_SLOT_COUNT_MESSAGE =
 export const INVALID_CREDENTIAL_SOURCE_MESSAGE =
   'credentialSource must be "sf_owned"';
 
+export const PI_HOME_CREDENTIAL_SOURCE_NOTICE =
+  'settings: credentialSource "pi_home" is retired; using "sf_owned" and updating settings.json';
+
+const piHomeNoticeLogged = new Set<string>();
+
 export const INVALID_WORKSHOP_MODEL_MESSAGE =
   "workshopModel must be a non-empty string";
 
@@ -67,6 +72,26 @@ export function parseWorkshopModelSetting(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function migrateLegacyPiHomeCredentialSource(
+  filePath: string,
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  if (raw.credentialSource !== "pi_home") return raw;
+  if (!piHomeNoticeLogged.has(filePath)) {
+    piHomeNoticeLogged.add(filePath);
+    console.error(PI_HOME_CREDENTIAL_SOURCE_NOTICE);
+  }
+  const nextRaw = { ...raw, credentialSource: "sf_owned" };
+  const settings = parseFactorySettingsFromRaw(nextRaw);
+  const out = serializeFactorySettings({
+    ...settings,
+    credentialSource: "sf_owned",
+  });
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(out, null, 2)}\n`, "utf8");
+  return nextRaw;
+}
+
 function readRawSettingsFromFile(filePath: string): Record<string, unknown> {
   if (!existsSync(filePath)) return {};
   try {
@@ -74,7 +99,8 @@ function readRawSettingsFromFile(filePath: string): Record<string, unknown> {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       return {};
     }
-    return raw as Record<string, unknown>;
+    const record = raw as Record<string, unknown>;
+    return migrateLegacyPiHomeCredentialSource(filePath, record);
   } catch {
     return {};
   }

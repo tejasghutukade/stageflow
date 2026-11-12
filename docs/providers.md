@@ -38,7 +38,7 @@ Persist the store choice (always Stageflow-owned):
 sf providers source set sf_owned
 ```
 
-`source set` accepts only `sf_owned`. A `pi_home` value in `settings.json` is ignored.
+`source set` accepts only `sf_owned`. A legacy `pi_home` value in `settings.json` is rewritten to `sf_owned` on the next read (one notice on stderr).
 
 ## Non-interactive Host boot credentials
 

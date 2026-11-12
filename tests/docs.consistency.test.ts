@@ -200,4 +200,10 @@ describe("docs", () => {
     const problems = files.filter((file) => /data directory path/.test(read(file)));
     expect(problems).toEqual([]);
   });
+
+  it("install.sh names the package directory when better-sqlite3 fails", () => {
+    const sh = read("install.sh");
+    expect(sh).toMatch(/package directory:/);
+    expect(sh).toMatch(/package_dir_from_sf/);
+  });
 });

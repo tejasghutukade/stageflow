@@ -59,6 +59,14 @@ Set a token when the Host is reachable beyond this machine. Generate it with `op
 
 The CLI sends `Authorization: Bearer <token>`. It prefers the drive token. When `STAGEFLOW_CONTROL_TOKEN` is unset, it reads `$STAGEFLOW_HOME/control-token`. For GET and HEAD only, it uses the read token when no drive token is set. A Host with no token and no allow-flag opt-in generates one, so API calls need that bearer. `/livez` and `/readyz` stay open.
 
+Export the same file for curl, MCP `headers`, and harness scripts:
+
+```bash
+export STAGEFLOW_CONTROL_TOKEN="$(tr -d '\n' < "${STAGEFLOW_HOME:-$HOME/.stageflow}/control-token")"
+# or
+export STAGEFLOW_CONTROL_TOKEN_FILE="${STAGEFLOW_HOME:-$HOME/.stageflow}/control-token"
+```
+
 When any token is configured, a request without a matching bearer is rejected. `/mcp` always requires drive scope. Mutating `/api/*` requires drive. `GET` and `HEAD` under `/api/*` require read (a drive token also satisfies read).
 
 Two routes that look like health checks are not the same:
@@ -86,7 +94,7 @@ The probe prints `bearer` when `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_T
 
 Do this when the user needs tools the CLI does not have (connections, memories, live inspection, agent and eval authoring), or the Host is in a container or on another machine. The URL is `http://127.0.0.1:3847/mcp` on this machine. From another machine, use the Host's reachable URL and a drive token. Add the Host's public name to `STAGEFLOW_ALLOWED_HOSTS`.
 
-Omit the Authorization header when no token is configured. When a token is configured, the header is `Authorization: Bearer <token>`. Prefer an environment substitution over a literal token in a file that will be committed.
+Omit the `Authorization` header only when the Host started with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. A normal start writes `$STAGEFLOW_HOME/control-token`; set `Authorization: Bearer <token>` from that file. Prefer an environment substitution over a literal token in a file that will be committed.
 
 There is no MCP OAuth on this Host. A client that starts an OAuth login against `/mcp` will fail. Send the bearer, or run without tokens on loopback.
 

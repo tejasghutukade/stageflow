@@ -5,7 +5,7 @@ title: Cli Reference
 
 # CLI reference
 
-The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for the full usage string.
+The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for the command index and `sf <command> --help` for one command's usage (data directory `~/.stageflow/`).
 
 ## Storage locations
 

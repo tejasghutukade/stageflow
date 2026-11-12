@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 
 function defaultBaseUrl(env = process.env) {
   const raw = Number(env.STAGEFLOW_SERVICE_PORT);
@@ -136,6 +138,14 @@ const LONG_CALL_TOOLS = new Set(["agent_chat"]);
 const LONG_CALL_MS = 250_000;
 const PROBE_TIMEOUT_MS = 1_500;
 
+function stageflowHome(env = process.env) {
+  const raw = env.STAGEFLOW_HOME?.trim();
+  if (raw) {
+    return path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(process.cwd(), raw);
+  }
+  return path.join(homedir(), ".stageflow");
+}
+
 function controlTokenFromEnv(env = process.env) {
   const plain = env.STAGEFLOW_CONTROL_TOKEN;
   const filePath = env.STAGEFLOW_CONTROL_TOKEN_FILE;
@@ -156,7 +166,16 @@ function controlTokenFromEnv(env = process.env) {
     }
   }
   if (hasPlain) return plain;
-  return undefined;
+  const installed = path.join(stageflowHome(env), "control-token");
+  if (!existsSync(installed)) return undefined;
+  try {
+    return readFileSync(installed, "utf8").replace(/\r?\n$/, "");
+  } catch (err) {
+    console.error(
+      `mcp-call: failed to read ${installed}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    process.exit(2);
+  }
 }
 
 function authHeaders(token) {

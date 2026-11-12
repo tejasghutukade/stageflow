@@ -7,6 +7,14 @@ title: Ci
 
 Stageflow is designed to run the same YAML catalog locally, in the operator console, and in CI. The **guest actor in CI is the CLI** — `sf ui` and MCP are not required in the job.
 
+When a job calls `/api/*` or `/mcp` (for example a custom harness instead of `sf agents`), export the drive token from the Host data directory the job uses — the same file `sf ui` writes:
+
+```bash
+export STAGEFLOW_CONTROL_TOKEN="$(tr -d '\n' < "${STAGEFLOW_HOME:-$HOME/.stageflow}/control-token")"
+```
+
+Do not omit `Authorization` unless the Host was started with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` (not the shipped compose default). See [MCP — access control](mcp.md#access-control).
+
 Run validate and pipeline commands from the **repository root** (`$GITHUB_WORKSPACE`) with path arguments:
 
 ```bash

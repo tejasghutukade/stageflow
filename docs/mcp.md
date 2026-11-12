@@ -84,6 +84,16 @@ CLI starts are unattributed (`surface: cli`, null `caller_id`). MCP/REST stamp `
 
 Missing/malformed credentials → `401` + `WWW-Authenticate: Bearer`. Valid token, wrong scope → `403`. Host/Origin failures → `403` before bearer checks.
 
+For curl, scripts, and MCP client `headers`, export the drive token from the Host's file (the CLI reads the same path when the env vars are unset):
+
+```bash
+export STAGEFLOW_CONTROL_TOKEN="$(tr -d '\n' < "${STAGEFLOW_HOME:-$HOME/.stageflow}/control-token")"
+# or
+export STAGEFLOW_CONTROL_TOKEN_FILE="${STAGEFLOW_HOME:-$HOME/.stageflow}/control-token"
+```
+
+Omit `Authorization` on `/api/*` and `/mcp` only when the Host started with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. A normal `sf ui` or `sf mcp` start writes a token; `/livez` and `/readyz` stay open without one.
+
 If `STAGEFLOW_CONTROL_TOKEN` and `_FILE` are unset, the Host reuses `$STAGEFLOW_HOME/control-token` when that file is a regular file owned by the current user, mode `0600`, and the token is valid. It mints a new token only when the file is missing or not reusable (for example mode `0644`, a symlink, or another owner), and it writes the file only after listen succeeds. `Control token: <token>` is printed when this process mints a token, including when stdout is not a terminal. A reused file prints `Control token file: <path>` only. The detached service child does not print the value. A second `sf ui` or `sf mcp` that finds this Host already answering the port exits 0 without replacing the file, and `sf ui` opens the console signed in. Another program, a Host using another data directory, or an older Stageflow Host on the port makes it exit 1 with a message that names which. That bearer is required on `/api/*` and `/mcp`. `/livez` and `/readyz` stay open, as do `/api/auth-hint` (the token file path, loopback callers only) and `/api/console-login` (the one-time code exchange, loopback callers only). The CLI reads the file when the env var is unset. A stage does not receive the control token. Its cache, temporary and working directories are inside the data directory (`~/.stageflow` by default, `/data` in Docker), and an unsandboxed stage runs as your user, so it can find and read the token file. Use the stage container sandbox (`STAGEFLOW_STAGE_CONTAINER_IMAGE`) when a stage runs untrusted code. Never put the token in stage `secrets:`. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start a non-loopback bind with no token. The shipped Compose file does not set it; it publishes the port on `127.0.0.1` only, the process inside binds `0.0.0.0`, and the token file is `/data/control-token` inside the container. Leave the opt-in unset when the port is reachable beyond this machine. An `Origin`, when present, must match the `Host` header's host and port. Prefer `sf mcp` in containers with `STAGEFLOW_BIND=0.0.0.0` and `STAGEFLOW_ALLOWED_HOSTS` set to the public hostname. See [migration-stage-environment.md](migration-stage-environment.md).
 
 ### Stateless escape hatch (test/debug)

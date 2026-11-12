@@ -143,7 +143,7 @@ Expanded walkthrough: [docs/quickstart.md](docs/quickstart.md)
 
 ## Connect a model provider
 
-Each stage sets a **`model`** id in YAML (e.g. `anthropic/claude-sonnet-4-5`). The matching provider must be authenticated before runs succeed — `sf validate` does not check auth.
+Each stage sets a **`model`** id in YAML (e.g. `anthropic/claude-sonnet-5-5`). The matching provider must be authenticated before runs succeed — `sf validate` does not check auth.
 
 **Operator console** (easiest for local setup):
 
