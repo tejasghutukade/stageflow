@@ -130,7 +130,7 @@ describe("function MCP tools", () => {
       'export default async function execute(context) {\n  return { text: await context.files.readText("artifacts", "report.txt") };\n}\n';
     const guestFail = await call(tools, "test_function", { id: "score", source: guestRead });
     expect(guestFail.isError).toBe(false);
-    expect(guestFail.payload).toMatchObject({ ok: false, kind: "test" });
+    expect(guestFail.payload).toMatchObject({ ok: false, kind: "test", code: "permission_denied" });
 
     const tested = await call(tools, "test_function", { id: "score" });
     expect(tested.isError).toBe(false);

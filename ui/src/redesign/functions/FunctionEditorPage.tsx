@@ -253,6 +253,7 @@ export function FunctionEditorPage({
   const [usages, setUsages] = useState<FunctionUsage[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const invocationGenerationRef = useRef(0);
+  const invocationLiveRef = useRef(false);
 
   const isNew = creating || !detail;
   const base = useMemo(() => (detail && !creating ? draftFromDetail(detail) : emptyDraft(initialKind)), [detail, creating, initialKind]);
@@ -279,15 +280,28 @@ export function FunctionEditorPage({
   );
 
   useEffect(() => {
+    invocationLiveRef.current = true;
+    return () => {
+      invocationLiveRef.current = false;
+      nextFunctionGeneration(invocationGenerationRef);
+    };
+  }, []);
+
+  useEffect(() => {
     if (creating || !functionId) {
+      nextFunctionGeneration(invocationGenerationRef);
       setInvocations([]);
       return;
     }
     setInvocations([]);
     let live = true;
-    fetchInvocations({ bumpTwice: true, live: () => live });
+    fetchInvocations({
+      bumpTwice: true,
+      live: () => live && invocationLiveRef.current,
+    });
     return () => {
       live = false;
+      nextFunctionGeneration(invocationGenerationRef);
     };
   }, [creating, functionId, fetchInvocations]);
 
@@ -797,7 +811,13 @@ export function FunctionEditorPage({
 
               <section id={domId("test")} className="flex scroll-mt-4 flex-col gap-4">
                 <SectionHeading note="Try the function on a sample context before anything depends on it.">Test</SectionHeading>
-                <FunctionTestPanel functionId={isNew ? undefined : detail?.id} kind={draft.kind} source={draft.source} savedSource={detail?.definition?.source} onRan={() => fetchInvocations()} />
+                <FunctionTestPanel
+                  functionId={isNew ? undefined : detail?.id}
+                  kind={draft.kind}
+                  source={draft.source}
+                  savedSource={detail?.definition?.source}
+                  onRan={() => fetchInvocations({ live: () => invocationLiveRef.current })}
+                />
               </section>
 
               {isNew ? null : (

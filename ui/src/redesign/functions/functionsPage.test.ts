@@ -521,6 +521,21 @@ describe("function editor generations", () => {
     expect(clearedTestPanelState()).toEqual({ run: null, error: null, busy: false });
   });
 
+  it("drops a post-test invocation refresh after navigate-away bumps generation", () => {
+    const ref = { current: 0 };
+    const captured = nextFunctionGeneration(ref);
+    nextFunctionGeneration(ref);
+    expect(applyInvocationResponse(captured, ref, [invocationRow("late")], false)).toBeNull();
+    expect(applyInvocationResponse(ref.current, ref, [invocationRow("fresh")], false)).toEqual([invocationRow("fresh")]);
+  });
+
+  it("drops a post-test invocation refresh when create mode bumps generation", () => {
+    const ref = { current: 0 };
+    const captured = nextFunctionGeneration(ref);
+    nextFunctionGeneration(ref);
+    expect(applyInvocationResponse(captured, ref, [invocationRow("stale")], false)).toBeNull();
+  });
+
   it("ignores a test response from the generation before a source change", () => {
     const ref = { current: 0 };
     const captured = ref.current;

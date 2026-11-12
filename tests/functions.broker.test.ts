@@ -1077,6 +1077,60 @@ export default async function execute(context) {
     expect(touched).toEqual([]);
   });
 
+  it("denies agent definition workspace writes through the container checkout", async () => {
+    const root = await makeRoot();
+    const writes: string[] = [];
+    const containerFiles = {
+      async realPath(containerPath: string) {
+        return containerPath;
+      },
+      async stat(containerPath: string) {
+        if (containerPath === "/workspace/checkout" || containerPath === "/workspace/checkout/agents") {
+          return { file: false, directory: true, device: false, size: 64 };
+        }
+        return undefined;
+      },
+      async readFile() {
+        throw new Error("unexpected container read");
+      },
+      async writeFile(containerPath: string) {
+        writes.push(containerPath);
+      },
+      async list() {
+        throw new Error("unexpected container list");
+      },
+    };
+    const broker = new FunctionBroker({
+      env: {},
+      stageflowHome: path.join(root, "home"),
+      containerFiles,
+    });
+    const result = await broker.invoke({
+      invocationId: "container-deny-agent-write",
+      kind: "tool",
+      source: `
+        export default async function execute(context) {
+          try {
+            await context.files.write("workspace", "agents/lead.agent.yaml", "guest");
+            return { wrote: true };
+          } catch (error) {
+            return { code: error.code, message: error.message };
+          }
+        }
+      `,
+      context: {},
+      containerName: "stage-container",
+      roots: { artifacts: path.join(root, "artifacts"), workspace: "/workspace/checkout" },
+      projectRoot: "/workspace/checkout",
+      grants: { files: [{ root: "workspace", path: ".", access: "write" }] },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: { code: "permission_denied", message: "file access denied" },
+    });
+    expect(writes).toEqual([]);
+  });
+
   it("uses the container checkout for workspace writes before desk sync", async () => {
     const root = await makeRoot();
     const writes: string[] = [];

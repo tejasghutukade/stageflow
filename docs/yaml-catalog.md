@@ -1153,6 +1153,10 @@ A save or a hand-edited file that also includes `capabilities` or `bindings` mus
 
 `execute` can use `context.files` as before. It can also use `context.artifacts` and `context.workspace`. Each has `exists(path)`, `stat(path)`, `readText(path)`, `readJson(path)`, `list(path)`, and `write(path, content)`. `path` is relative to that root. `list()` and `list("")` and `list(".")` name the root. `context.files.list(root, path)` is the same read. `list` returns the immediate children, `{ name, type: "file" | "directory", size }`, sorted by name, at most 1000. A larger directory is `list_limit`. A file is `not_a_directory`. A missing directory is not found. A path the grant does not cover, including the parent of a file-scoped grant, is the same permission denial as any other file read. Sensitive names, devices, sockets, and symlinks that leave the root are left out of the list.
 
+### HTTP errors {#function-http-errors}
+
+For a granted API capability inside a running function, a request body over 1 MiB is `file_limit` before the request is sent. A response body over 1 MiB is `uncertain_outcome` because the remote may already have acted on the request.
+
 An attachment grant names that capability id. A file grant also repeats `root` and `path`. An API grant also repeats `origin`, `methods`, `path_prefix`, and `credential_ref` when the capability has one. An env grant is only the capability id. A saved change to a capability does not apply to an existing attachment until that attachment grants the updated capability. `sf validate` reports `function.under_granted` when a declared capability is missing or no longer matches, and `function.grant_not_requested` when a grant names a capability the function does not declare.
 
 `context` passed to `execute` depends on kind. A verification receives the candidate success envelope and optional check input. A routing function receives the verified success envelope and the eligible children (`id`, `name`, and routing description). A tool receives model-supplied arguments on `input` and `envelope: null`. `env`, `files`, and `api` exist only for granted capabilities.

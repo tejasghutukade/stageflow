@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { FunctionExecutor } from "../src/functions/executor.js";
+import { performFunctionHttp } from "../src/functions/http.js";
 
 const SYNC_OK = "export default function execute(){ return { ok: true }; }";
 const ASYNC_OK =
@@ -718,6 +719,72 @@ describe("function executor", () => {
       context: {},
     });
     expect(result).toMatchObject({ ok: false, code: "file_limit" });
+  });
+
+  it("returns file_limit when an oversized HTTP body is refused before the request is sent", async () => {
+    const child = fakeChild();
+    const body = "x".repeat(1024 * 1024 + 1);
+    child.send = ((message: unknown) => {
+      const record = message as { type?: string };
+      if (record.type === "invoke") {
+        queueMicrotask(() => {
+          child.emit("message", {
+            type: "capability",
+            requestId: "cap-http",
+            op: "http",
+            method: "POST",
+            origin: "https://allowed.test",
+            path: "/v1/post",
+            body,
+          });
+        });
+      }
+      return true;
+    }) as ChildProcess["send"];
+    const executor = new FunctionExecutor({
+      forkFn: (() => child) as typeof childProcess.fork,
+      onCapability: (_invocationId, request) =>
+        performFunctionHttp({
+          method: request.method,
+          origin: request.origin,
+          requestPath: request.path,
+          body: request.body,
+          grants: [
+            {
+              origin: "https://allowed.test",
+              methods: ["POST"],
+              pathPrefix: "/v1",
+              access: "action",
+            },
+          ],
+          resolveCredential: () => undefined,
+          signal: new AbortController().signal,
+        }).then((outcome) => {
+          setTimeout(() => {
+            child.emit("message", {
+              type: "result",
+              ok: false,
+              code: outcome.ok ? "exception" : outcome.code,
+              message: outcome.ok ? "unexpected http success" : outcome.message,
+              logs: "",
+              logsTruncated: false,
+              disposed: true,
+            });
+            child.emit("exit", 1, null);
+          }, 0);
+          return {
+            type: "capability_result" as const,
+            requestId: request.requestId,
+            ...outcome,
+          };
+        }),
+    });
+    const result = await executor.invoke({
+      invocationId: invocationId("http-body-limit"),
+      source: SYNC_OK,
+      context: {},
+    });
+    expect(result).toMatchObject({ ok: false, code: "file_limit", message: "request exceeds 1 MiB" });
   });
 
   it("returns uncertain_outcome when one write succeeds and a second is denied before exit", async () => {

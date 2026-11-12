@@ -159,7 +159,8 @@ export function registerFunctionTools(server: McpServer, deps: McpToolDeps): voi
   server.registerTool(
     "test_function",
     {
-      description: "Test a function with the production executor. real is the only way to use real files, environment, or APIs.",
+      description:
+        "Test a function with the production executor. real is the only way to use real files, environment, or APIs. A guest execution failure returns a tool result with isError false and a body that includes ok false and a diagnostic code.",
       inputSchema: z.object({
         id: functionId,
         source: z.string().optional(),

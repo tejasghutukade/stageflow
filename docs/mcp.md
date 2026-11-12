@@ -222,25 +222,27 @@ See [Agents](agents.md). The REST, CLI and MCP surfaces side by side are in [Age
 
 Project functions (`functions/<id>.function.yaml`) use the same service as `GET` and `POST /api/functions`. The id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`. A source that starts with `export const access` derives `capabilities` and `bindings`; the file omits those fields, and a payload that repeats a different list is refused with `function.invalid` and `function.access_conflict` on each mismatched issue field. A source with no declaration still carries explicit `capabilities` and `bindings`. Attaching a function to a stage, pipeline, or agent still goes through `edit_stage`, `edit_pipeline`, and `save_agent`. `write_catalog_file` rejects a `*.function.yaml` file.
 
-**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "code", "message", "issues"?, "current_revision"?, "usages"? }`. Branch on `code`: `function.invalid`, `function.conflict` (the current revision is in `current_revision`; the file is not overwritten), `function.in_use` (`usages` lists the pipeline, stage, or agent paths), `function.not_found`, `function.exists`, `function.kind_immutable`, `function.id_immutable`, `function.catalog_unreadable`.
+Every tool takes an optional `project_root` where it reads or writes the catalog (omit it to use the Host default; see [Catalog roots](#catalog-roots-and-project_root)).
+
+**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "code", "message", "issues"?, "current_revision"?, "usages"? }`. Branch on `code`: `function.invalid`, `function.conflict` (the current revision is in `current_revision`; the file is not overwritten), `function.in_use` (`usages` lists the pipeline, stage, or agent paths), `function.not_found`, `function.exists`, `function.kind_immutable`, `function.id_immutable`, `function.catalog_unreadable`, and the catalog path codes `unknown_project_root` and `catalog_root_read_only` in [Error codes](#error-codes).
 
 | Tool | Grant | Input | Output |
 |------|-------|-------|--------|
-| `list_functions` | `functions.read` | `{}` | `{ functions }` |
-| `get_function` | `functions.read` | `{ id }` | The current definition, revision, issues, and source hash |
-| `list_function_revisions` | `functions.read` | `{ id }` | `{ revisions }` |
-| `get_function_revision` | `functions.read` | `{ id, revision }` | That stored revision |
-| `create_function` | `functions.write` | `{ definition }` | The created definition |
-| `save_function` | `functions.write` | `{ id, baseRevision, definition, summary? }` | The saved definition. `baseRevision` must be the current revision |
-| `duplicate_function` | `functions.write` | `{ id, newId }` | The copy, with its own revision history. Grants on existing attachments are not copied onto new attachments |
-| `test_function` | `functions.test` | `{ id, source?, input?, mocks?, real?, timeoutMs?, memoryLimitBytes? }` | The validated result, duration, sanitized logs, and source hash. `real: true` is the only way the test reads real files, environment, or APIs, and it cannot widen grants. Omit `real` to stay on mocks. A guest execution failure returns a tool result with `isError: false` and a body that includes `ok: false` and a diagnostic `code`, the same shape as `POST /api/functions/:id/test` on HTTP 200 |
-| `delete_function` | `functions.cleanup` | `{ id }` | `{ deleted: true }`. Refuses while a pipeline, reusable stage, or agent references the id |
+| `list_functions` | `functions.read` | `{ project_root? }` | `{ functions }` |
+| `get_function` | `functions.read` | `{ id, project_root? }` | The current definition, revision, issues, and source hash |
+| `list_function_revisions` | `functions.read` | `{ id, project_root? }` | `{ revisions }` |
+| `get_function_revision` | `functions.read` | `{ id, revision, project_root? }` | That stored revision |
+| `create_function` | `functions.write` | `{ definition, project_root? }` | The created definition |
+| `save_function` | `functions.write` | `{ id, baseRevision, definition, summary?, project_root? }` | The saved definition. `baseRevision` must be the current revision |
+| `duplicate_function` | `functions.write` | `{ id, newId, project_root? }` | The copy, with its own revision history. Grants on existing attachments are not copied onto new attachments |
+| `test_function` | `functions.test` | `{ id, source?, input?, mocks?, real?, timeoutMs?, memoryLimitBytes?, project_root? }` | The validated result, duration, sanitized logs, and source hash. `real: true` is the only way the test reads real files, environment, or APIs, and it cannot widen grants. Omit `real` to stay on mocks. A guest execution failure returns a tool result with `isError: false` and a body that includes `ok: false` and a diagnostic `code`, the same shape as `POST /api/functions/:id/test` on HTTP 200 |
+| `delete_function` | `functions.cleanup` | `{ id, project_root? }` | `{ deleted: true }`. Refuses while a pipeline, reusable stage, or agent references the id |
 
 `functions.read` lists and fetches metadata. `functions.write` creates, edits, and duplicates. `functions.test` runs the production executor. `functions.cleanup` deletes. A test without `real: true` uses the mocks in the request and fails when a mock the source needs is missing. There is no `sf functions` create, edit, or delete command; the file and these tools are the authoring pair.
 
 `POST /api/functions/:id/test` and `test_function` treat a finished guest run that did not succeed as a success response whose body has `ok: false`. Stage- and agent-attached function tools still throw on that body.
 
-`sf validate` fails closed when an attachment names a missing function, attaches a function of the wrong kind, or leaves a declared capability without a matching grant (`function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`, `function.invalid`). See [YAML catalog: Functions](yaml-catalog.md#functions).
+`sf validate` fails closed when an attachment names a missing function, attaches a function of the wrong kind, or leaves a declared capability without a matching grant (`function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`, `function.invalid`, `function.routing_requires_route`, `function.routing_conflicts_with_if`). See [YAML catalog: Functions](yaml-catalog.md#functions).
 
 ### Eval tools {#eval-tools}
 
