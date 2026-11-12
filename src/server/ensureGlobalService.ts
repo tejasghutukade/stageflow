@@ -2,7 +2,7 @@ import { type ChildProcess, spawn as spawnDefault } from "node:child_process";
 import { chmodSync, openSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { stageflowHomeId } from "../diagnostics/checks.js";
+import { readStageflowHomeId } from "../diagnostics/checks.js";
 import { ensureGlobalHome } from "../project/globalHome.js";
 import {
   assertBindAllowed,
@@ -77,9 +77,24 @@ export function hostBaseUrl(): string {
   return `http://127.0.0.1:${resolveServicePort()}`;
 }
 
+/**
+ * Whether a Host's reported home id is another data directory. `expected` may be a function, read after the Host
+ * answered (so a Host that just created its id is seen). An expected id of undefined means no Host ever used this
+ * directory, so any reported id is someone else's.
+ */
+function homeMismatch(
+  expected: string | (() => string | undefined) | undefined,
+  reported: unknown,
+): boolean {
+  if (expected === undefined) return false;
+  const mine = typeof expected === "function" ? expected() : expected;
+  if (typeof reported !== "string") return false;
+  return mine === undefined || reported !== mine;
+}
+
 export async function probeStageflowHost(
   baseUrl: string,
-  options?: { expectedHomeId?: string },
+  options?: { expectedHomeId?: string | (() => string | undefined) },
 ): Promise<ServiceProbeResult> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 1500);
@@ -100,13 +115,7 @@ export async function probeStageflowHost(
     if (body === null || typeof body !== "object") return "foreign";
     if (body.service === "stageflow" && body.status === "starting") {
       // A booting Host names its data directory too; one from another directory is not ours.
-      if (
-        options?.expectedHomeId !== undefined &&
-        typeof body.home_id === "string" &&
-        body.home_id !== options.expectedHomeId
-      ) {
-        return "other_home";
-      }
+      if (homeMismatch(options?.expectedHomeId, body.home_id)) return "other_home";
       return "starting";
     }
     if (body.service !== "stageflow") {
@@ -115,12 +124,7 @@ export async function probeStageflowHost(
         ? "old_stageflow"
         : "foreign";
     }
-    if (
-      options?.expectedHomeId !== undefined &&
-      body.home_id !== options.expectedHomeId
-    ) {
-      return "other_home";
-    }
+    if (homeMismatch(options?.expectedHomeId, body.home_id)) return "other_home";
     return "up";
   } finally {
     clearTimeout(timer);
@@ -129,7 +133,7 @@ export async function probeStageflowHost(
 
 export async function probeGlobalServiceDetailed(): Promise<ServiceProbeResult> {
   return probeStageflowHost(hostBaseUrl(), {
-    expectedHomeId: stageflowHomeId(),
+    expectedHomeId: () => readStageflowHomeId(),
   });
 }
 

@@ -322,6 +322,35 @@ describe("ensureGlobalService", () => {
     });
   });
 
+  it("never creates host-id from the CLI side, and treats a Host as another directory when none exists here", async () => {
+    const { mkdtempSync, existsSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const pathMod = await import("node:path");
+    const { readStageflowHomeId } = await import("../src/diagnostics/checks.js");
+    const home = mkdtempSync(pathMod.join(tmpdir(), "sf-cli-home-"));
+    try {
+      expect(readStageflowHomeId(home)).toBeUndefined();
+      expect(existsSync(pathMod.join(home, "host-id"))).toBe(false);
+      const http = await import("node:http");
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, status: "live", service: "stageflow", home_id: "abcdef0123456789" }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      const port = (server.address() as { port: number }).port;
+      try {
+        expect(
+          await probeStageflowHost(`http://127.0.0.1:${port}`, { expectedHomeId: () => readStageflowHomeId(home) }),
+        ).toBe("other_home");
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+      expect(existsSync(pathMod.join(home, "host-id"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("probes a booting Host from another data directory as other_home", async () => {
     const http = await import("node:http");
     for (const [homeId, expected] of [["other-home-id", "other_home"], ["mine", "starting"]] as const) {

@@ -99,6 +99,15 @@ export function stageflowHomeId(home: string = globalStageflowHome()): string {
   return id;
 }
 
+/**
+ * The data directory's id if a Host has ever written one, without creating it. CLI callers use this, so a probe
+ * never creates files in a data directory no Host uses.
+ */
+export function readStageflowHomeId(home: string = globalStageflowHome()): string | undefined {
+  const resolved = path.resolve(home);
+  return homeIds.get(resolved) ?? readHostId(path.join(resolved, HOST_ID_FILENAME));
+}
+
 export function livezBody(): {
   ok: true;
   status: "live";

@@ -67,7 +67,7 @@ import {
   resolveClientBearerToken,
   type EnsuredHostControlToken,
 } from "./server/controlToken.js";
-import { stageflowHomeId } from "./diagnostics/checks.js";
+import { readStageflowHomeId } from "./diagnostics/checks.js";
 import { mintConsoleLoginCode } from "./server/consoleLoginCode.js";
 import {
   oldHostRunningMessage,
@@ -788,7 +788,7 @@ async function printIfHostAlreadyRunning(options: {
   const bound = options.port ?? DEFAULT_PORT;
   const listenHost = resolveListenHost({ flag: options.host });
   const base = probeUrl(listenHost, bound);
-  const probed = await probeStageflowHost(base, { expectedHomeId: stageflowHomeId() });
+  const probed = await probeStageflowHost(base, { expectedHomeId: () => readStageflowHomeId() });
   if (probed === "foreign") {
     console.error(`Port ${bound} is in use by another program. Use --port.`);
     return 1;
