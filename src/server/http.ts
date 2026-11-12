@@ -1,3 +1,4 @@
+import { contentHash } from "../config/atomicWrite.js";
 import {
   OVERVIEW_RANGES,
   buildOverview,
@@ -1745,7 +1746,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               json(res, result.status, { error: result.error, code: result.code });
               return true;
             }
-            json(res, 200, { path: result.path, content: result.content });
+            json(res, 200, { path: result.path, content: result.content, hash: contentHash(result.content) });
             return true;
           } catch (err) {
             if (err instanceof CatalogPathError) {
@@ -1815,6 +1816,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               inputPath: relPath,
               content: record.content,
               ...(record.create === true ? { create: true } : {}),
+              ...(typeof record.base_hash === "string" ? { baseHash: record.base_hash } : {}),
+              ...(record.preserve_formatting === true ? { preserveFormatting: true } : {}),
               projectRoot: wireRoot.project_root,
               roots,
               fieldName: "path",
@@ -1829,7 +1832,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               });
               return true;
             }
-            json(res, 200, { path: result.path, content: result.content });
+            json(res, 200, { path: result.path, content: result.content, hash: result.hash });
             return true;
           } catch (err) {
             if (err instanceof CatalogPathError) {

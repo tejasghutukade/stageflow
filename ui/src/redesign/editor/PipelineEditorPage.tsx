@@ -163,6 +163,7 @@ export function PipelineEditorPage({
   const [draft, setDraft] = useState<DraftPackagePayload | null>(null);
   const [baseline, setBaseline] = useState<DraftPackagePayload | null>(null);
   const [fileHashes, setFileHashes] = useState<DraftFileHashes | null>(null);
+  const [stageFileHash, setStageFileHash] = useState<string | null>(null);
   const [destination, setDestination] = useState<{
     directory: string;
     pipelineFilename: string;
@@ -346,6 +347,7 @@ export function PipelineEditorPage({
         setDraft(pkg.draft);
         setBaseline(cloneDraft(pkg.draft));
         setFileHashes(null);
+        setStageFileHash(file.hash ?? null);
         setDestination(null);
         setSourceOrigin(null);
         setSelectedStageId(pkg.stageId);
@@ -516,6 +518,8 @@ export function PipelineEditorPage({
         path: stageFilePath,
         content,
         ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
+        ...(stageFileHash ? { base_hash: stageFileHash } : {}),
+        preserve_formatting: true,
       });
       setSaving(false);
       if (!result.ok) {
@@ -538,6 +542,7 @@ export function PipelineEditorPage({
         return;
       }
       let nextDraft = draft;
+      setStageFileHash(result.hash ?? null);
       try {
         const pkg = buildStageDraftPackage(
           stageFilePath,

@@ -2257,11 +2257,12 @@ export async function fetchCatalogFile(input: {
 }
 
 export type WriteCatalogFileResult =
-  | { ok: true; path: string; content: string }
+  | { ok: true; path: string; content: string; hash?: string }
   | {
       ok: false;
       status: number;
       error: string;
+      code?: string;
       findings?: ValidationFinding[];
     };
 
@@ -2269,6 +2270,10 @@ export async function writeCatalogFile(input: {
   path: string;
   content: string;
   project_root?: string;
+  /** Refuse when the file on disk is no longer the one that was opened. */
+  base_hash?: string;
+  /** Apply the content onto the existing file, keeping comments and untouched lines. */
+  preserve_formatting?: boolean;
 }): Promise<WriteCatalogFileResult> {
   const res = await fetch("/api/catalog/file", {
     method: "PUT",
@@ -2280,11 +2285,15 @@ export async function writeCatalogFile(input: {
       path: input.path,
       content: input.content,
       ...(input.project_root ? { project_root: input.project_root } : {}),
+      ...(input.base_hash ? { base_hash: input.base_hash } : {}),
+      ...(input.preserve_formatting ? { preserve_formatting: true } : {}),
     }),
   });
   const body = (await res.json().catch(() => ({}))) as {
     path?: string;
     content?: string;
+    hash?: string;
+    code?: string;
     error?: string;
     findings?: ValidationFinding[];
   };
@@ -2296,6 +2305,7 @@ export async function writeCatalogFile(input: {
       ok: false,
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
+      ...(body.code ? { code: body.code } : {}),
       ...(body.findings ? { findings: body.findings } : {}),
     };
   }
@@ -2303,6 +2313,7 @@ export async function writeCatalogFile(input: {
     ok: true,
     path: body.path ?? input.path,
     content: body.content ?? input.content,
+    ...(body.hash ? { hash: body.hash } : {}),
   };
 }
 

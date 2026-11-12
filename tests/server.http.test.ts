@@ -744,6 +744,89 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("PUT /api/catalog/file keeps comments with preserve_formatting and refuses a stale base_hash", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-put-preserve-"));
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    const manifestCatalog = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/manifest-catalog");
+    await cp(manifestCatalog, repoRoot, { recursive: true });
+    clearFindProjectRootCacheForTests();
+    const stageRel = "pipelines/step.yaml";
+    const stageAbs = path.join(repoRoot, stageRel);
+    const commented = [
+      "# step stage, kept by hand",
+      "id: step",
+      "system_prompt: |",
+      "  Original prompt.",
+      "model: cursor/auto   # cheap model",
+      "io:",
+      "  input:",
+      "    schema: { type: object }",
+      "  output:",
+      "    schema:",
+      "      type: object",
+      "",
+    ].join("\n");
+    await writeFile(stageAbs, commented, "utf8");
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), undefined, { cwd: repoRoot });
+    try {
+      const opened = await jsonFetch(
+        `${base}/api/catalog/file?path=${encodeURIComponent(stageRel)}&project_root=${encodeURIComponent(repoRoot)}`,
+      );
+      expect(opened.status).toBe(200);
+      expect(typeof opened.body.hash).toBe("string");
+
+      const plain = [
+        "id: step",
+        "system_prompt: |",
+        "  Original prompt.",
+        "model: openai/gpt-4o-mini",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n");
+      const saved = await jsonFetch(`${base}/api/catalog/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: stageRel,
+          content: plain,
+          project_root: repoRoot,
+          base_hash: opened.body.hash,
+          preserve_formatting: true,
+        }),
+      });
+      expect(saved.status).toBe(200);
+      const written = await readFile(stageAbs, "utf8");
+      expect(written).toBe(commented.replace("cursor/auto", "openai/gpt-4o-mini"));
+      expect(saved.body.content).toBe(written);
+      expect(saved.body.hash).not.toBe(opened.body.hash);
+
+      const stale = await jsonFetch(`${base}/api/catalog/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: stageRel,
+          content: plain.replace("Original prompt.", "Overwrite."),
+          project_root: repoRoot,
+          base_hash: opened.body.hash,
+          preserve_formatting: true,
+        }),
+      });
+      expect(stale.status).toBe(409);
+      expect(stale.body.code).toBe("FILE_CHANGED");
+      expect(await readFile(stageAbs, "utf8")).toBe(written);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await closeServer(server);
+      await cleanup();
+    }
+  });
+
   it("PUT /api/catalog/file creates files on request, checks a pipeline as a pipeline, and names no host path", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-put-create-"));
     const { root: repoRoot, cleanup } = await initTempGitRepo();

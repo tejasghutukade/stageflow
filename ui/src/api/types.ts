@@ -589,6 +589,8 @@ export type CatalogRootsResult = {
 export type CatalogFileResult = {
   path: string;
   content: string;
+  /** Hash of the file as read; send it back as base_hash so a save refuses a file changed on disk. */
+  hash?: string;
 };
 
 export type DraftPackagePayload = {
