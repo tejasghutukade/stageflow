@@ -1033,9 +1033,39 @@ export class AgentService {
   }
 
   /**
+   * Spend on this session and the sessions it rolled from, inside the window.
+   * Always-on agents use the last 24 hours. The walk stops at 1000 sessions.
+   */
+  private threadSpend(session: AgentSession, since: number): number {
+    let spent = 0;
+    let current: AgentSession | undefined = session;
+    const seen = new Set<string>();
+    for (let depth = 0; current && depth < 1000; depth += 1) {
+      if (seen.has(current.id)) break;
+      seen.add(current.id);
+      spent += this.store
+        .listTurns(current.id)
+        .filter((turn) => Date.parse(turn.startedAt) >= since)
+        .reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
+      const previous = current.rolledFromSessionId;
+      current = previous ? this.store.getSession(previous) : undefined;
+    }
+    return spent;
+  }
+
+  /** True when this thread has already spent its cost cap. A rollover does not reset it. */
+  private costBlocked(definition: AgentDefinition, session: AgentSession): boolean {
+    const { limits } = definition;
+    if (limits.cost_usd === null) return false;
+    const since = limits.always_on ? this.now().getTime() - 24 * 60 * 60_000 : 0;
+    return this.threadSpend(session, since) >= limits.cost_usd;
+  }
+
+  /**
    * Why a new turn on this session would be refused, or null while it is still inside its limits.
    * `kind` splits the cap: turns, minutes, or cost. Always-on sessions skip the time and turn caps; a cost cap still applies.
-   * A channel thread rolls onto a new session only for turns and minutes. Cost stays on this session so the cap cannot reset.
+   * A channel thread rolls onto a new session when it reaches its turn or time limit. Its cost limit counts spend
+   * across the whole thread, so a rollover does not reset it. Always-on agents count the last 24 hours.
    */
   private limitBlockReason(definition: AgentDefinition, session: AgentSession): { kind: "turns" | "minutes" | "cost"; message: string } | null {
     const { limits } = definition;
@@ -1049,13 +1079,8 @@ export class AgentService {
         return { kind: "minutes", message: `This session reached its limit of ${limits.session_minutes} minutes.` };
       }
     }
-    if (limits.cost_usd !== null) {
-      // An always-on session has no end, so its cap is per day instead of per session.
-      const since = limits.always_on ? this.now().getTime() - 24 * 60 * 60_000 : 0;
-      const spent = turns.filter((turn) => Date.parse(turn.startedAt) >= since).reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
-      if (spent >= limits.cost_usd) {
-        return { kind: "cost", message: `This session reached its cost limit of $${limits.cost_usd}${limits.always_on ? " for today" : ""}.` };
-      }
+    if (this.costBlocked(definition, session)) {
+      return { kind: "cost", message: `This session reached its cost limit of $${limits.cost_usd}${limits.always_on ? " for today" : ""}.` };
     }
     return null;
   }
@@ -1302,9 +1327,15 @@ export class AgentService {
         if (!existing) throw new AgentError("agent.session_not_found");
         return { agentId: target.agentId, sessionId: existing.id, duplicate: true };
       }
-      const blocked = existing ? this.limitBlockReason(await this.effectiveDefinition(projectRoot, existing), existing) : null;
-      // Turns and minutes start a fresh session. Cost keeps this one: a new session would count spend from zero.
-      if (existing && blocked?.kind !== "turns" && blocked?.kind !== "minutes") {
+      const definition = existing ? await this.effectiveDefinition(projectRoot, existing) : null;
+      const blocked = existing && definition ? this.limitBlockReason(definition, existing) : null;
+      const rollOver = Boolean(
+        existing &&
+          definition &&
+          !this.costBlocked(definition, existing) &&
+          (blocked?.kind === "turns" || blocked?.kind === "minutes"),
+      );
+      if (existing && !rollOver) {
         return { agentId: target.agentId, sessionId: existing.id, duplicate: false };
       }
       const session: AgentSession = {
@@ -1316,6 +1347,7 @@ export class AgentService {
         source: message.provider,
         sourceRef: message.from ?? null,
         threadKey,
+        ...(existing ? { rolledFromSessionId: existing.id } : {}),
         title: null,
         createdAt: now,
         updatedAt: now,

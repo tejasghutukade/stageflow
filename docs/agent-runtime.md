@@ -118,9 +118,9 @@ Limits are read from the session's pinned revision and checked **when a turn sta
 |-------|--------------------------|
 | `max_turns` | The session already has that many turns. |
 | `session_minutes` | The session is that old. |
-| `cost_usd` | The turns so far have cost that much. |
+| `cost_usd` | The thread has cost that much, including sessions it rolled from. |
 
-All refuse with `agent.limit_reached` (409). With `always_on: true`, `max_turns` and `session_minutes` do not apply, and `cost_usd` counts the cost of the last 24 hours instead. On a web chat a limit shows as `web_chat.limit_reached`. On a channel, a thread past `max_turns` or `session_minutes` continues on a new session and the sender gets a normal reply. A thread past `cost_usd` stays on the same session and the sender is told the limit was reached, so spending cannot start over at zero.
+All refuse with `agent.limit_reached` (409). With `always_on: true`, `max_turns` and `session_minutes` do not apply, and `cost_usd` counts the cost of the last 24 hours instead. On a web chat a limit shows as `web_chat.limit_reached`. A channel thread rolls onto a new session when it reaches its turn or time limit. Its cost limit counts spend across the whole thread, so a rollover does not reset it. Always-on agents count the last 24 hours. A thread past `cost_usd` stays on the same session and the sender is told the limit was reached.
 
 ### Long conversations
 

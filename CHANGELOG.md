@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A second Host binds its port before it touches run data.**
 - **Skill install rejects a name that would delete outside the skills folder.**
 - **After an operator answer, the stage keeps its secrets and home.** Abandoning a stage stops that stage only.
-- **A channel thread past its turn or time limit continues on a new session.** A cost limit stays on that session, and the sender is told it was reached.
+- **A channel thread rolls onto a new session when it reaches its turn or time limit.** Its cost limit counts spend across the whole thread, so a rollover does not reset it. Always-on agents count the last 24 hours.
 - **An eval whose graders all error fails,** instead of scoring as a pass.
 - **`name.stage.yaml` matches `id: name`.**
 - **Documented `STAGEFLOW_*` variables no longer stop the Host.**

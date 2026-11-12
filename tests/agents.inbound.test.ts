@@ -140,6 +140,52 @@ describe("agent inbound webhooks", () => {
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.turnCount).toBe(1);
   });
+
+  it("does not roll a cost-capped thread when the session is also past its minutes", async () => {
+    const { router, replies, service, project, clock } = await setup({ limits: { cost_usd: 0.001 } });
+    const first = slackRequest({ event: { ...slackEvent.event, ts: "1.0", event_ts: "1.0", thread_ts: "1.0" } });
+    const second = slackRequest({ event: { ...slackEvent.event, text: "and the refund?", ts: "2.0", event_ts: "2.0", thread_ts: "1.0" } });
+    await router_handle(router, first);
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    clock.advance(11 * 60_000);
+    await router_handle(router, second);
+    await vi.waitFor(() => expect(replies).toHaveLength(2));
+    expect(replies[1]!.text).toMatch(/reached its/);
+    const sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
+    expect(sessions).toHaveLength(1);
+  });
+
+  it("carries spend across a turn-limit rollover and then refuses the thread", async () => {
+    const { router, replies, service, project } = await setup({ limits: { max_turns: 1, cost_usd: 0.002 } });
+    const first = slackRequest({ event: { ...slackEvent.event, ts: "1.0", event_ts: "1.0", thread_ts: "1.0" } });
+    const second = slackRequest({ event: { ...slackEvent.event, text: "again", ts: "2.0", event_ts: "2.0", thread_ts: "1.0" } });
+    const third = slackRequest({ event: { ...slackEvent.event, text: "once more", ts: "3.0", event_ts: "3.0", thread_ts: "1.0" } });
+    await router_handle(router, first);
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    await router_handle(router, second);
+    await vi.waitFor(() => expect(replies).toHaveLength(2));
+    expect(replies[1]!.text).toBe("re: again");
+    let sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
+    expect(sessions).toHaveLength(2);
+    await router_handle(router, third);
+    await vi.waitFor(() => expect(replies).toHaveLength(3));
+    expect(replies[2]!.text).toMatch(/reached its/);
+    expect(replies[2]!.text).not.toBe("re: once more");
+    sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
+    expect(sessions).toHaveLength(2);
+  });
+
+  it("accepts a message on an always-on agent a day after the cost cap", async () => {
+    const { router, replies, clock } = await setup({ limits: { always_on: true, cost_usd: 0.001 } });
+    const first = slackRequest({ event: { ...slackEvent.event, ts: "1.0", event_ts: "1.0", thread_ts: "1.0" } });
+    const second = slackRequest({ event: { ...slackEvent.event, text: "next day", ts: "2.0", event_ts: "2.0", thread_ts: "1.0" } });
+    await router_handle(router, first);
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    clock.advance(25 * 60 * 60_000);
+    await router_handle(router, second);
+    await vi.waitFor(() => expect(replies).toHaveLength(2));
+    expect(replies[1]!.text).toBe("re: next day");
+  });
 });
 
 function router_handle(router: AgentInboundRouter, req: { raw: string; headers: Record<string, string> }) {

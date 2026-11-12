@@ -84,7 +84,7 @@ Slack, Telegram and AgentMail connections accept an optional `inboundSecret` and
 | Telegram | `secret_token` from `setWebhook` | `x-telegram-bot-api-secret-token` |
 | AgentMail | Webhook secret | `x-agentmail-signature` (HMAC-SHA256 of the body) |
 
-The route needs no console token; the signature is the credential. A message starts or continues the session for its thread, the agent's reply goes back to the sender on the same connection once per turn, and a redelivered event is ignored. A thread past its turn or time limit continues on a new session. A thread past its cost limit stays on the same session, and the sender is told the limit was reached. A webhook reply goes into the conversation: Slack in the channel, Telegram to the chat, AgentMail as a reply to the message. Messages for a connection no enabled agent is bound to are dropped.
+The route needs no console token; the signature is the credential. A message starts or continues the session for its thread, the agent's reply goes back to the sender on the same connection once per turn, and a redelivered event is ignored. A channel thread rolls onto a new session when it reaches its turn or time limit. Its cost limit counts spend across the whole thread, so a rollover does not reset it. Always-on agents count the last 24 hours. A thread past its cost limit stays on the same session, and the sender is told the limit was reached. A webhook reply goes into the conversation: Slack in the channel, Telegram to the chat, AgentMail as a reply to the message. Messages for a connection no enabled agent is bound to are dropped.
 
 ## Schedules
 
