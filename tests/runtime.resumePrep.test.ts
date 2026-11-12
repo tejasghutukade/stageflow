@@ -180,6 +180,31 @@ describe("resume attempt prep (U12)", () => {
     expect(launchArg?.resumeAnswer).toBeUndefined();
   });
 
+  it("process-mode timeout resume leaves a run cancelled mid-launch as cancelled", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-timeout-resume-cancel-"));
+    const { store, run } = await seedTimedOutClarifyRun(root);
+    // The run is cancelled while the worker runs; the worker then dies and launch reports a failure.
+    const launch = vi.fn(async () => {
+      await store.updateRunStatus(run.runId, "cancelled");
+      return { type: "failed", reason: "stage process exited (SIGTERM)" };
+    });
+    const manager = new RunManager({
+      agent: { openStage: vi.fn(), runStage: vi.fn() },
+      store,
+      cwd: fixtures,
+      executionMode: "process",
+      stageProcessLauncher: { launch } as unknown as StageProcessLauncherPort,
+    });
+    await writeFile(
+      attemptSessionPath(store.getWorkspaceDir(run.runId), "clarify", 1),
+      '{"role":"assistant","text":"partial work"}\n',
+    );
+    await manager.resumeTimedOutStage(run.runId, "clarify");
+    await poll(async () => launch.mock.calls.length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await store.readRunMeta(run.runId)).status).toBe("cancelled");
+  });
+
   it("process-mode timeout worker child has no provider key or control token", async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "sf-timeout-worker-env-"));
     const dumpPath = path.join(rootDir, "child-env.json");

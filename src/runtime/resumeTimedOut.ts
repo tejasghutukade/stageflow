@@ -13,9 +13,10 @@ import { runOwnerScope } from "../browser/ownerScope.js";
 import { isHumanLoginStage } from "../browser/humanLogin.js";
 import { createRunLiveness } from "../browser/runLiveness.js";
 import { acquireStageProfile } from "../browser/stageProfileLock.js";
-import { teardownStageBrowser } from "../browser/browserTeardown.js";
+import { teardownRunBrowsers, teardownStageBrowser } from "../browser/browserTeardown.js";
 import { WAIT_WITHOUT_WORKER_DISPATCH } from "./answerResume.js";
-import { resumeRun } from "./pipelineScheduler.js";
+import { resumeRun, writeTerminalRunStatus } from "./pipelineScheduler.js";
+import { syncRunStatusFromStages } from "./stageRecovery.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import type { StageExecutionMode } from "./stageConcurrency.js";
 import type { StageProcessLauncher } from "./stageProcessLauncher.js";
@@ -284,7 +285,23 @@ export async function reconstructTimedOutAndContinue(
               attemptOpt,
             );
           }
-          await store.updateRunStatus(runId, "failed");
+          // Same rules as an answer resume: a cancelled run stays cancelled, and a stage that ends while siblings
+          // still run (an abandon) leaves the run status to the stages and the siblings' browsers alone.
+          const siblingsLive = (await store.readRun(runId)).stages.some(
+            (snap) =>
+              snap.stage_id !== stageId &&
+              (snap.status === "running" || snap.status === "waiting_for_input"),
+          );
+          if (siblingsLive) {
+            await syncRunStatusFromStages(store, runId);
+          } else {
+            await writeTerminalRunStatus(store, runId, "failed");
+            await teardownRunBrowsers(browser, {
+              runId,
+              runDir: workspaceDir,
+              events: (id) => store.listStageEvents(runId, id),
+            }).catch(() => undefined);
+          }
           return { ok: false, reason: launchResult.reason };
         }
 
