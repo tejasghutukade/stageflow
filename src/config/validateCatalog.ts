@@ -19,6 +19,7 @@ import { githubMatchActionError, isGithubTriggerAction } from "./githubTriggerAc
 import { loadEvalCatalog } from "./evalCatalog.js";
 import { evalFindingsFromIssues } from "./validateEval.js";
 import { readYamlObject } from "./readYamlObject.js";
+import { stageFilenameStem } from "./stageFilenameStem.js";
 import { resolveCatalogContext } from "./resolveCatalogContext.js";
 import { getCatalogScanPaths } from "./browseCatalog.js";
 import { manifestPathForProject } from "./loadStageflowManifest.js";
@@ -498,19 +499,11 @@ export async function findingPathCaseMismatch(
   );
 }
 
-function stageIdFilenameStem(stagePath: string): string {
-  const base = path.basename(stagePath);
-  if (base.endsWith(".stage.yaml")) {
-    return base.slice(0, -".stage.yaml".length);
-  }
-  return path.basename(base, ".yaml");
-}
-
 async function checkStageIdFilename(
   cwd: string,
   stagePath: string,
 ): Promise<ValidationFinding | null> {
-  const fileStem = stageIdFilenameStem(stagePath);
+  const fileStem = stageFilenameStem(stagePath);
   try {
     const raw = await readYamlObject(stagePath);
     if (typeof raw?.id === "string" && raw.id !== fileStem) {
@@ -536,7 +529,7 @@ async function validateStageFile(
     return findings;
   }
 
-  const fileStem = stageIdFilenameStem(stagePath);
+  const fileStem = stageFilenameStem(stagePath);
   if (!mismatch && fileStem !== outcome.value.id) {
     findings.push(
       findingStageIdFilenameMismatch(cwd, stagePath, fileStem, outcome.value.id),

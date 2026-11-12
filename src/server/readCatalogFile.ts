@@ -15,6 +15,7 @@ import { loadStageOutcome } from "../config/loadStage.js";
 import { loadStageflowManifestOutcome } from "../config/loadStageflowManifest.js";
 import { loadTaskOutcome } from "../config/loadTask.js";
 import { loadTriggerOutcome } from "../config/loadTrigger.js";
+import { STAGE_FILENAME_SUFFIXES } from "../config/stageFilenameStem.js";
 import {
   findingsFromLoadIssues,
   type ValidationFinding,
@@ -194,7 +195,7 @@ export function catalogFileKind(relativePath: string, content: string): CatalogF
   if (base.endsWith(".pipeline.yaml") || base.endsWith(".pipeline.yml")) return "pipeline";
   if (base.endsWith(".task.yaml") || base.endsWith(".task.yml")) return "task";
   if (base.endsWith(".trigger.yaml") || base.endsWith(".trigger.yml")) return "trigger";
-  if (base.endsWith(".stage.yaml") || base.endsWith(".stage.yml")) return "stage";
+  if (STAGE_FILENAME_SUFFIXES.some((suffix) => base.endsWith(suffix))) return "stage";
   let raw: unknown;
   try {
     raw = parseYaml(content);
