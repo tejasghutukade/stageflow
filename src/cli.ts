@@ -689,7 +689,7 @@ export async function main(argv: string[]): Promise<number> {
         mcpStateless,
         controlTokens: tokens,
       });
-      commitHostControlToken(ensuredToken);
+      commitHostControlTokenOrWarn(ensuredToken);
       if (host.store) {
         try {
           await host.store.ensureProject(ctx.projectRoot);
@@ -733,7 +733,7 @@ export async function main(argv: string[]): Promise<number> {
         mcpStateless,
         controlTokens: tokens,
       });
-      commitHostControlToken(ensuredToken);
+      commitHostControlTokenOrWarn(ensuredToken);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
       printGeneratedControlToken(ensuredToken);
       const outcome = await host.shutdown.whenDrained();
@@ -832,6 +832,18 @@ function consoleOpenUrl(baseUrl: string, code: string | undefined): string {
   if (code === undefined || code.length === 0) return baseUrl;
   parsed.hash = `code=${encodeURIComponent(code)}`;
   return parsed.toString();
+}
+
+function commitHostControlTokenOrWarn(ensured: EnsuredHostControlToken): void {
+  try {
+    commitHostControlToken(ensured);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? "unknown";
+    console.error(
+      `Could not save the control token to ${ensured.filePath} (${code}). This Host keeps running with the token below; it changes on the next start.`,
+    );
+    if (ensured.token) console.log(`Control token: ${ensured.token}`);
+  }
 }
 
 function printGeneratedControlToken(ensured: EnsuredHostControlToken): void {
