@@ -93,8 +93,11 @@ describe("ensureHostControlToken", () => {
     expect(ensured.pendingWrite).toBe(true);
     expect(ensured.token).toMatch(/^[0-9a-f]{64}$/);
     expect(ensured.filePath).toBe(path.join(dir, CONTROL_TOKEN_FILENAME));
-    expect(env.STAGEFLOW_CONTROL_TOKEN).toBe(ensured.token);
+    expect(env.STAGEFLOW_CONTROL_TOKEN).toBeUndefined();
     expect(env.STAGEFLOW_CONTROL_TOKEN_FILE).toBeUndefined();
+    expect(loadControlTokens(env, ensured.token).driveDigest).toEqual(
+      loadControlTokens({ STAGEFLOW_CONTROL_TOKEN: ensured.token }).driveDigest,
+    );
     await expect(stat(ensured.filePath!)).rejects.toMatchObject({ code: "ENOENT" });
     expect(generatedControlTokenLines(ensured, { revealToken: true })).toEqual([
       `Control token: ${ensured.token}`,

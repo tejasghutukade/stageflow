@@ -105,8 +105,13 @@ function assertUniqueDigests(
 
 export function loadControlTokens(
   env: NodeJS.ProcessEnv = process.env,
+  extraDriveToken?: string,
 ): ControlTokens {
-  const driveRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_CONTROL_TOKEN");
+  const driveRaw =
+    readSecretFromEnvOrFile(env, "STAGEFLOW_CONTROL_TOKEN") ??
+    (extraDriveToken !== undefined && extraDriveToken.length > 0
+      ? extraDriveToken
+      : undefined);
   const readRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_READ_TOKEN");
 
   const callerBases = new Map<string, string>();
@@ -339,7 +344,6 @@ export function ensureHostControlToken(
     return { generated: false, token: existing, filePath };
   }
   const token = randomBytes(32).toString("hex");
-  env.STAGEFLOW_CONTROL_TOKEN = token;
   return { generated: true, token, filePath, pendingWrite: true };
 }
 

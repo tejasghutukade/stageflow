@@ -675,7 +675,7 @@ export async function main(argv: string[]): Promise<number> {
       });
       if (already !== null) return already;
       const ensuredToken = ensureHostControlToken();
-      const tokens = loadControlTokens();
+      const tokens = loadControlTokens(process.env, ensuredToken.token);
       assertBindAllowed(listenHost, tokens);
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
@@ -719,7 +719,7 @@ export async function main(argv: string[]): Promise<number> {
       });
       if (already !== null) return already;
       const ensuredToken = ensureHostControlToken();
-      const tokens = loadControlTokens();
+      const tokens = loadControlTokens(process.env, ensuredToken.token);
       assertBindAllowed(listenHost, tokens);
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
@@ -842,7 +842,10 @@ function commitHostControlTokenOrWarn(ensured: EnsuredHostControlToken): void {
     console.error(
       `Could not save the control token to ${ensured.filePath} (${code}). This Host keeps running with the token below; it changes on the next start.`,
     );
-    if (ensured.token) console.log(`Control token: ${ensured.token}`);
+    if (ensured.token) {
+      process.env.STAGEFLOW_CONTROL_TOKEN = ensured.token;
+      console.log(`Control token: ${ensured.token}`);
+    }
   }
 }
 
