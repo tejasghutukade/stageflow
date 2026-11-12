@@ -230,10 +230,31 @@ export function lastValidatedFooter(elapsedMs: number | null): string {
 export const FILE_CHANGED_TITLE =
   "The file changed on disk since you opened it";
 
-export type EditorLeaveCancel = "forward" | "replace";
+export type EditorLeaveCancel = "forward" | "back" | "replace";
 
-export function editorLeaveCancelAction(fromPopstate: boolean): EditorLeaveCancel {
-  return fromPopstate ? "forward" : "replace";
+/** The `history.state` key the editor stamps on entries so a cancelled Back or Forward knows its direction. */
+export const EDITOR_HISTORY_POS_KEY = "sfEditorPos";
+
+/**
+ * How to undo a navigation the user cancelled. A new history entry (a link click, `location.hash =`) is replaced
+ * with the editor's URL. Moving between existing entries is undone by moving the other way: an entry stamped with a
+ * later position than the editor's was reached with Forward, so go back; anything else (an earlier or unstamped
+ * entry) was reached with Back, so go forward.
+ */
+export function editorLeaveCancelAction(input: {
+  historyGrew: boolean;
+  targetPos: number | undefined;
+  editorPos: number;
+}): EditorLeaveCancel {
+  if (input.historyGrew) return "replace";
+  if (input.targetPos !== undefined && input.targetPos > input.editorPos) return "back";
+  return "forward";
+}
+
+export function historyPos(state: unknown): number | undefined {
+  if (state === null || typeof state !== "object") return undefined;
+  const value = (state as Record<string, unknown>)[EDITOR_HISTORY_POS_KEY];
+  return typeof value === "number" ? value : undefined;
 }
 
 export function beforeUnloadReturnValue(

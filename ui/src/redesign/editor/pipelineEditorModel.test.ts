@@ -23,6 +23,7 @@ import {
   beforeUnloadReturnValue,
   draftPackageClipboardText,
   editorLeaveCancelAction,
+  historyPos,
   isDraftFileChangedError,
   isDraftIdCollisionError,
   type EditorTabId,
@@ -551,9 +552,17 @@ describe("lastValidatedFooter", () => {
 });
 
 describe("editor leave", () => {
-  it("cancels popstate with forward and in-app links with replace", () => {
-    expect(editorLeaveCancelAction(true)).toBe("forward");
-    expect(editorLeaveCancelAction(false)).toBe("replace");
+  it("replaces a new entry, goes forward after Back and back after Forward", () => {
+    expect(editorLeaveCancelAction({ historyGrew: true, targetPos: undefined, editorPos: 3 })).toBe("replace");
+    expect(editorLeaveCancelAction({ historyGrew: false, targetPos: 2, editorPos: 3 })).toBe("forward");
+    expect(editorLeaveCancelAction({ historyGrew: false, targetPos: undefined, editorPos: 3 })).toBe("forward");
+    expect(editorLeaveCancelAction({ historyGrew: false, targetPos: 4, editorPos: 3 })).toBe("back");
+  });
+
+  it("reads the editor's position stamp from history state", () => {
+    expect(historyPos({ sfEditorPos: 5 })).toBe(5);
+    expect(historyPos(null)).toBeUndefined();
+    expect(historyPos({ other: 1 })).toBeUndefined();
   });
 
   it("sets beforeunload returnValue only when unsaved", () => {

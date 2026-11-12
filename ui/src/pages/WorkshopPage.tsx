@@ -1115,6 +1115,8 @@ export function WorkshopPage({
   const [redesignChatWidth, setRedesignChatWidth] = useState(WORKSHOP_CHAT_DEFAULT_WIDTH);
   const diskFingerprintsRef = useRef<Record<string, string>>({});
   const fileHashesRef = useRef<DraftFileHashes | null>(null);
+  /** Hashes of the files as they are on disk after a FILE_CHANGED; only an explicit Overwrite may send them. */
+  const conflictHashesRef = useRef<DraftFileHashes | null>(null);
   const [fileChangedOpen, setFileChangedOpen] = useState(false);
   const pendingSaveRef = useRef<{
     dest: SaveDestination;
@@ -2290,7 +2292,7 @@ export function WorkshopPage({
       setSaving(false);
       if (!result.ok) {
         if (isDraftFileChangedError(result)) {
-          if (result.fileHashes) fileHashesRef.current = result.fileHashes;
+          conflictHashesRef.current = result.fileHashes ?? null;
           pendingSaveRef.current = { dest, allowInvalid, mode };
           setFileChangedOpen(true);
           setSaveError(null);
@@ -2602,18 +2604,24 @@ export function WorkshopPage({
   const onOverwriteFileChanged = useCallback(() => {
     const pending = pendingSaveRef.current;
     if (!pending) return;
+    const hashes = conflictHashesRef.current;
+    conflictHashesRef.current = null;
     void commitSave(
       pending.dest,
       pending.allowInvalid,
       pending.mode,
-      fileHashesRef.current,
+      hashes,
     );
   }, [commitSave]);
 
   const onReloadAfterFileChanged = useCallback(() => {
+    if (!savedPipelinePath) {
+      showToast("This draft has no saved file to reload. Copy your YAML or overwrite.");
+      return;
+    }
     setFileChangedOpen(false);
     pendingSaveRef.current = null;
-    if (!savedPipelinePath) return;
+    conflictHashesRef.current = null;
     const row = pickerRows.find(
       (item) => item.relativePath === savedPipelinePath,
     );

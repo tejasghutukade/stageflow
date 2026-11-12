@@ -36,7 +36,9 @@ import {
   afterEditorPackageWrite,
   beforeUnloadReturnValue,
   draftPackageClipboardText,
+  EDITOR_HISTORY_POS_KEY,
   editorLeaveCancelAction,
+  historyPos,
   filterEditorPipelineRuns,
   isDraftDirty,
   isDraftFileChangedError,
@@ -259,13 +261,31 @@ export function PipelineEditorPage({
   };
 
   useEffect(() => {
+    // Stamp the editor's history entry with a position, so a cancelled Back or Forward knows which way to undo.
+    const stamp = (pos: number) => {
+      const state = window.history.state;
+      const base = state !== null && typeof state === "object" ? (state as Record<string, unknown>) : {};
+      window.history.replaceState({ ...base, [EDITOR_HISTORY_POS_KEY]: pos }, "");
+    };
+    let editorPos = historyPos(window.history.state) ?? window.history.length;
+    stamp(editorPos);
+    let lastLength = window.history.length;
     function onPopState() {
       leaveFromPopstateRef.current = true;
+    }
+    function restoreEditorUrl() {
+      window.history.replaceState({ [EDITOR_HISTORY_POS_KEY]: editorPos }, "", lastHashRef.current);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
     }
     function onHash() {
       const next = window.location.hash;
       if (leavingRef.current) {
         lastHashRef.current = next;
+        leaveFromPopstateRef.current = false;
+        lastLength = window.history.length;
+        return;
+      }
+      if (next === lastHashRef.current) {
         leaveFromPopstateRef.current = false;
         return;
       }
@@ -274,19 +294,28 @@ export function PipelineEditorPage({
           "You have unsaved changes. Leave this page?",
         );
         if (!leave) {
-          const cancel = editorLeaveCancelAction(leaveFromPopstateRef.current);
+          const cancel = editorLeaveCancelAction({
+            historyGrew: window.history.length > lastLength,
+            targetPos: historyPos(window.history.state),
+            editorPos,
+          });
           leaveFromPopstateRef.current = false;
-          if (cancel === "forward") {
-            window.history.forward();
-          } else {
-            window.history.replaceState(null, "", lastHashRef.current);
-            window.dispatchEvent(new HashChangeEvent("hashchange"));
-          }
+          lastLength = window.history.length;
+          if (cancel === "forward") window.history.forward();
+          else if (cancel === "back") window.history.back();
+          else restoreEditorUrl();
+          // Whatever the browser did, end on the editor's URL.
+          window.setTimeout(() => {
+            if (window.location.hash !== lastHashRef.current) restoreEditorUrl();
+          }, 150);
           return;
         }
       }
       lastHashRef.current = next;
       leaveFromPopstateRef.current = false;
+      lastLength = window.history.length;
+      editorPos = historyPos(window.history.state) ?? editorPos + 1;
+      stamp(editorPos);
     }
     function onBeforeUnload(event: BeforeUnloadEvent) {
       const message = beforeUnloadReturnValue(
