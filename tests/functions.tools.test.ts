@@ -242,7 +242,7 @@ describe("function tools", () => {
     expect(seen[0]?.roots).toEqual(place.roots);
     expect(seen[0]?.containerName).toBe("box");
     expect(place.roots.artifacts).toBe("/data/runs/run-1/stages/write-note/attempts/2/artifacts");
-    expect(place.roots.workspace).toBe("/checkout");
+    expect(place.roots.workspace).toBe("/workspace/checkout");
     expect(place.roots.artifacts.includes("/artifacts")).toBe(true);
     expect(place.roots.artifacts.startsWith(project)).toBe(false);
   });
