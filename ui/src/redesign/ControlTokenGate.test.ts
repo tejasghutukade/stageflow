@@ -14,6 +14,14 @@ describe("ControlTokenInstructions", () => {
     expect(html).not.toContain("docker logs");
   });
 
+  it("says the operator set the token when it came from the environment", () => {
+    const html = renderToStaticMarkup(
+      createElement(ControlTokenInstructions, { hint: { tokenFile: null, source: "env" } }),
+    );
+    expect(html).toContain("STAGEFLOW_CONTROL_TOKEN");
+    expect(html).not.toContain("cat ");
+  });
+
   it("renders the fallback when the hint is null", () => {
     const html = renderToStaticMarkup(
       createElement(ControlTokenInstructions, { hint: null }),

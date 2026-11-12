@@ -195,8 +195,21 @@ export function controlTokenFilePath(env: NodeJS.ProcessEnv = process.env): stri
 export function authHintBody(
   remoteAddress: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
-): { tokenFile: string | null } {
+): { tokenFile: string | null; source?: "env" } {
   if (!isLoopbackRemoteAddress(remoteAddress)) return { tokenFile: null };
+  return activeControlTokenSource(env);
+}
+
+/**
+ * Where the drive token this process uses lives: the operator's `STAGEFLOW_CONTROL_TOKEN_FILE`, the plain env var
+ * (no file to show), or `$STAGEFLOW_HOME/control-token`.
+ */
+export function activeControlTokenSource(
+  env: NodeJS.ProcessEnv = process.env,
+): { tokenFile: string | null; source?: "env" } {
+  const file = env.STAGEFLOW_CONTROL_TOKEN_FILE?.trim();
+  if (file) return { tokenFile: file };
+  if (env.STAGEFLOW_CONTROL_TOKEN?.trim()) return { tokenFile: null, source: "env" };
   return { tokenFile: controlTokenFilePath(env) };
 }
 
@@ -246,16 +259,10 @@ function readControlTokenFile(filePath: string): string | undefined {
  * Reuse only a regular file owned by this user, mode 0600, with a valid token.
  * 0644, a symlink, or another owner is not reusable.
  */
-function controlTokenFileExists(filePath: string): boolean {
-  try {
-    lstatSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
+type ReusableControlToken = { token: string } | { reason: string } | undefined;
 
-function readReusableControlToken(filePath: string): string | undefined {
+/** The token in `filePath` if it may be reused, the reason it may not, or undefined when there is no file. */
+function readReusableControlToken(filePath: string): ReusableControlToken {
   let st;
   try {
     st = lstatSync(filePath);
@@ -267,18 +274,20 @@ function readReusableControlToken(filePath: string): string | undefined {
       `Failed to read control token file ${filePath}: ${detail}`,
     );
   }
-  if (st.isSymbolicLink() || !st.isFile()) return undefined;
+  if (st.isSymbolicLink()) return { reason: "it is a symbolic link" };
+  if (!st.isFile()) return { reason: "it is not a regular file" };
   if (process.platform !== "win32") {
     const uid = process.getuid?.();
-    if (uid === undefined || st.uid !== uid) return undefined;
-    if ((st.mode & 0o777) !== 0o600) return undefined;
+    if (uid === undefined || st.uid !== uid) return { reason: "it is owned by another user" };
+    const mode = st.mode & 0o777;
+    if (mode !== 0o600) return { reason: `its mode is ${mode.toString(8).padStart(4, "0")}, not 0600` };
   }
   const text = readControlTokenFile(filePath);
-  if (text === undefined || text.length === 0) return undefined;
+  if (text === undefined || text.length === 0) return { reason: "it is empty" };
   try {
-    return validateToken(text, "STAGEFLOW_CONTROL_TOKEN");
+    return { token: validateToken(text, "STAGEFLOW_CONTROL_TOKEN") };
   } catch {
-    return undefined;
+    return { reason: "it does not hold a valid token (32+ characters, no whitespace)" };
   }
 }
 
@@ -350,14 +359,12 @@ export function ensureHostControlToken(
   const home = controlTokenDirectory(env);
   const filePath = path.join(home, CONTROL_TOKEN_FILENAME);
   const existing = readReusableControlToken(filePath);
-  if (existing !== undefined) {
+  if (existing !== undefined && "token" in existing) {
     env.STAGEFLOW_CONTROL_TOKEN_FILE = filePath;
-    return { generated: false, token: existing, filePath };
+    return { generated: false, token: existing.token, filePath };
   }
-  if (controlTokenFileExists(filePath)) {
-    console.error(
-      `Ignoring ${filePath}: it must be a regular file owned by you with mode 0600. A new token was created.`,
-    );
+  if (existing !== undefined) {
+    console.error(`Ignoring ${filePath}: ${existing.reason}. A new token was created.`);
   }
   const token = randomBytes(32).toString("hex");
   return { generated: true, token, filePath, pendingWrite: true };

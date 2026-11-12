@@ -86,6 +86,54 @@ describe("control token save failure", () => {
       headers: { Authorization: `Bearer ${match![1]}` },
     });
     expect(authed.status).toBe(200);
+    expect(out.split(`Control token: ${match![1]}`).length - 1).toBe(1);
+    expect(out).not.toContain("Control token file:");
+    rmSync(home, { recursive: true, force: true });
+  }, 30_000);
+
+  it("does not print the token from the service child when the file cannot be written", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "sf-token-dir-child-"));
+    mkdirSync(path.join(home, "control-token"));
+    const port = await reservePort();
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      STAGEFLOW_HOME: home,
+      STAGEFLOW_NO_AUTOSTART: "1",
+      SF_SERVICE_CHILD: "1",
+    };
+    delete env.STAGEFLOW_CONTROL_TOKEN;
+    delete env.STAGEFLOW_CONTROL_TOKEN_FILE;
+    const child = spawn(process.execPath, [tsxCli, cli, "mcp", "--port", String(port)], {
+      cwd: root,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.push(child);
+    let out = "";
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      out += chunk;
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      out += chunk;
+    });
+    const started = Date.now();
+    let live = 0;
+    while (Date.now() - started < 20_000) {
+      if (child.exitCode !== null) break;
+      try {
+        live = (await fetch(`http://127.0.0.1:${port}/livez`)).status;
+        if (live === 200) break;
+      } catch {
+        // not listening yet
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(live).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(out).toContain("Other sf commands cannot authenticate");
+    expect(out).not.toMatch(/[0-9a-f]{64}/);
     rmSync(home, { recursive: true, force: true });
   }, 30_000);
 });

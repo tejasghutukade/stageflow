@@ -6,12 +6,20 @@ import {
   wasControlTokenRequired,
 } from "../api/controlToken";
 
-export type AuthHint = { tokenFile: string | null };
+export type AuthHint = { tokenFile: string | null; source?: "env" };
 
 const FALLBACK =
   "The token is in the `control-token` file in the Host's data directory (`~/.stageflow` by default, `/data` in Docker). In Docker, run `docker exec <container> cat /data/control-token`.";
 
 export function ControlTokenInstructions({ hint }: { hint: AuthHint | null }) {
+  if (hint?.source === "env") {
+    return (
+      <p className="font-sans text-xs text-[var(--sf-text-3)]">
+        This Host rejected the request. Its token was set by the operator in STAGEFLOW_CONTROL_TOKEN. It stays in this
+        browser.
+      </p>
+    );
+  }
   if (hint?.tokenFile) {
     return (
       <>
@@ -56,7 +64,11 @@ export function ControlTokenGate() {
           typeof (body as { tokenFile?: unknown }).tokenFile === "string"
             ? (body as { tokenFile: string }).tokenFile
             : null;
-        setHint({ tokenFile });
+        const source =
+          body !== null && typeof body === "object" && (body as { source?: unknown }).source === "env"
+            ? ("env" as const)
+            : undefined;
+        setHint(source ? { tokenFile, source } : { tokenFile });
       })
       .catch(() => {
         if (!cancelled) setHint(null);

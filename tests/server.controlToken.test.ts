@@ -451,12 +451,45 @@ describe("control token reuse edges", () => {
       expect(ensured.generated).toBe(true);
       expect(ensured.token).not.toBe(token);
       expect(lines.join("\n")).toContain(
-        `Ignoring ${file}: it must be a regular file owned by you with mode 0600. A new token was created.`,
+        `Ignoring ${file}: its mode is 0644, not 0600. A new token was created.`,
       );
       expect(lines.join("\n")).not.toContain(token);
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it("names invalid content as the reason a 0600 token file is ignored", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-bad-token-"));
+    const file = path.join(dir, CONTROL_TOKEN_FILENAME);
+    await writeFile(file, "short", "utf8");
+    await chmod(file, 0o600);
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+    try {
+      expect(ensureHostControlToken({ STAGEFLOW_HOME: dir }).generated).toBe(true);
+      expect(lines.join("\n")).toContain(`Ignoring ${file}: it does not hold a valid token`);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("shows the operator's token file, or no file for a plain env token, in the auth hint", () => {
+    expect(
+      authHintBody("127.0.0.1", { STAGEFLOW_CONTROL_TOKEN_FILE: "/run/secrets/sf", STAGEFLOW_HOME: "/data" }),
+    ).toEqual({ tokenFile: "/run/secrets/sf" });
+    expect(authHintBody("127.0.0.1", { STAGEFLOW_CONTROL_TOKEN: DRIVE, STAGEFLOW_HOME: "/data" })).toEqual({
+      tokenFile: null,
+      source: "env",
+    });
+    expect(authHintBody("127.0.0.1", { STAGEFLOW_HOME: "/data" })).toEqual({
+      tokenFile: path.join("/data", CONTROL_TOKEN_FILENAME),
+    });
+    expect(authHintBody("10.0.0.5", { STAGEFLOW_CONTROL_TOKEN_FILE: "/run/secrets/sf" })).toEqual({
+      tokenFile: null,
+    });
   });
 
   it("tightens an existing home directory to 0700", async () => {

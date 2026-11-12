@@ -864,7 +864,9 @@ export function redactHostConfig(config: HostConfig): HostConfigPublicEcho {
     allowUnknownConfig: config.allowUnknownConfig,
     callers: { ...config.callers },
     secrets: {
-      controlToken: config.controlToken ? "set" : "unset",
+      // A token minted on first start is saved after the config loads; the file variable is set by then.
+      controlToken:
+        config.controlToken || process.env.STAGEFLOW_CONTROL_TOKEN_FILE?.trim() ? "set" : "unset",
       readToken: config.readToken ? "set" : "unset",
     },
   };

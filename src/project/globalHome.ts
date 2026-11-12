@@ -93,6 +93,7 @@ export function createOwnerOnlyDirectory(dir: string): void {
       if (uid !== undefined && st.uid === uid && (st.mode & 0o077) !== 0) {
         try {
           chmodSync(dir, 0o700);
+          console.error(`Tightened ${dir} to 0700 (it was readable by other users).`);
         } catch {
           // best-effort on non-POSIX
         }

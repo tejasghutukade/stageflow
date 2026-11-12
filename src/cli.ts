@@ -58,8 +58,8 @@ import { resolveListenHost } from "./server/listenHost.js";
 import {
   assertBindAllowed,
   BindRefusedError,
+  activeControlTokenSource,
   commitHostControlToken,
-  controlTokenFilePath,
   ensureHostControlToken,
   generatedControlTokenLines,
   loadControlTokens,
@@ -693,7 +693,7 @@ export async function main(argv: string[]): Promise<number> {
         mcpStateless,
         controlTokens: tokens,
       });
-      commitHostControlTokenOrWarn(ensuredToken);
+      const tokenSaved = commitHostControlTokenOrWarn(ensuredToken);
       if (host.store) {
         try {
           await host.store.ensureProject(ctx.projectRoot);
@@ -703,7 +703,7 @@ export async function main(argv: string[]): Promise<number> {
       }
       console.log(`Operator console: ${host.url}`);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
-      printGeneratedControlToken(ensuredToken);
+      if (tokenSaved) printGeneratedControlToken(ensuredToken);
       if (!isNoOpenEnabled(parsed.noOpen)) {
         openBrowser(consoleOpenUrl(host.url, mintConsoleLoginCode()));
       }
@@ -737,9 +737,9 @@ export async function main(argv: string[]): Promise<number> {
         mcpStateless,
         controlTokens: tokens,
       });
-      commitHostControlTokenOrWarn(ensuredToken);
+      const tokenSaved = commitHostControlTokenOrWarn(ensuredToken);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
-      printGeneratedControlToken(ensuredToken);
+      if (tokenSaved) printGeneratedControlToken(ensuredToken);
       const outcome = await host.shutdown.whenDrained();
       return outcome.exitCode;
     }
@@ -801,7 +801,12 @@ async function printIfHostAlreadyRunning(options: {
   if (probed !== "up") return null;
   console.log(`Stageflow is already running at ${base}`);
   console.log(`Operator console: ${base}`);
-  console.log(`Control token file: ${controlTokenFilePath()}`);
+  const source = activeControlTokenSource();
+  console.log(
+    source.tokenFile !== null
+      ? `Control token file: ${source.tokenFile}`
+      : "Control token: set by the operator in STAGEFLOW_CONTROL_TOKEN",
+  );
   if (options.command === "ui" && !isNoOpenEnabled(options.noOpen)) {
     openBrowser(consoleOpenUrl(base, await mintConsoleLoginCodeOverHttp(base)));
   }
@@ -828,7 +833,7 @@ function revealControlToken(): boolean {
   return process.env[SF_SERVICE_CHILD] !== "1";
 }
 
-function consoleOpenUrl(baseUrl: string, code: string | undefined): string {
+export function consoleOpenUrl(baseUrl: string, code: string | undefined): string {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -836,24 +841,33 @@ function consoleOpenUrl(baseUrl: string, code: string | undefined): string {
     return baseUrl;
   }
   const host = parsed.hostname;
-  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") return baseUrl;
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1" && host !== "[::1]") {
+    return baseUrl;
+  }
   if (code === undefined || code.length === 0) return baseUrl;
   parsed.hash = `code=${encodeURIComponent(code)}`;
   return parsed.toString();
 }
 
-function commitHostControlTokenOrWarn(ensured: EnsuredHostControlToken): void {
+/** Save a minted token. On failure the Host keeps running with it in memory; returns false so the caller skips the normal lines. */
+function commitHostControlTokenOrWarn(ensured: EnsuredHostControlToken): boolean {
   try {
     commitHostControlToken(ensured);
+    return true;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code ?? "unknown";
-    console.error(
-      `Could not save the control token to ${ensured.filePath} (${code}). This Host keeps running with the token below; it changes on the next start.`,
-    );
-    if (ensured.token) {
-      process.env.STAGEFLOW_CONTROL_TOKEN = ensured.token;
+    if (ensured.token) process.env.STAGEFLOW_CONTROL_TOKEN = ensured.token;
+    if (revealControlToken() && ensured.token) {
+      console.error(
+        `Could not save the control token to ${ensured.filePath} (${code}). This Host keeps running with the token below; it changes on the next start.`,
+      );
       console.log(`Control token: ${ensured.token}`);
+    } else {
+      console.error(
+        `Could not save the control token to ${ensured.filePath} (${code}). Other sf commands cannot authenticate to this Host. Fix the file and restart it.`,
+      );
     }
+    return false;
   }
 }
 
