@@ -11,6 +11,7 @@ vi.mock("node:fs/promises", async () => {
 import * as fsp from "node:fs/promises";
 import {
   assertBaseHash,
+  commitPackageFiles,
   contentHash,
   FileChangedError,
   writeFileAtomic,
@@ -54,6 +55,31 @@ describe("writeFileAtomic", () => {
     const file = path.join(dir, "deep", "er", "a.txt");
     await writeFileAtomic(file, "x");
     expect(await readFile(file, "utf8")).toBe("x");
+  });
+});
+
+describe("commitPackageFiles", () => {
+  it("restores the first file when the second rename fails", async () => {
+    const dir = await tmp();
+    const a = path.join(dir, "a.txt");
+    const b = path.join(dir, "b.txt");
+    await writeFile(a, "before-a");
+    await writeFile(b, "before-b");
+    let renameCalls = 0;
+    vi.mocked(fsp.rename).mockImplementation(async (from, to) => {
+      renameCalls += 1;
+      if (renameCalls === 2) throw new Error("rename failed");
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      return actual.rename(from as string, to as string);
+    });
+    await expect(
+      commitPackageFiles([
+        { absPath: a, content: "after-a" },
+        { absPath: b, content: "after-b" },
+      ]),
+    ).rejects.toThrow("rename failed");
+    expect(await readFile(a, "utf8")).toBe("before-a");
+    expect(await readFile(b, "utf8")).toBe("before-b");
   });
 });
 

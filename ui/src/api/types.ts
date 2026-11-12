@@ -696,6 +696,7 @@ export type OpenDraftPackageResult =
       read_only?: boolean;
       taskPath?: string;
       fileHashes?: DraftFileHashes;
+      hasInclude?: boolean;
     }
   | {
       ok: false;
@@ -969,6 +970,7 @@ export type CapacityHealth = {
   activeCount: number;
   maxConcurrent: number;
   slotsAvailable: number;
+  queuedCount: number;
   /** Host config echo from `/api/health`, when the server includes it. */
   config?: {
     maxQueued?: number;

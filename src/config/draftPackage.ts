@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,7 +8,7 @@ import type { StageGateKind } from "../types/stage.js";
 import { loadPipelineOutcome } from "./loadPipeline.js";
 import type { PipelineListing } from "./listConfig.js";
 import { parseTaskFile } from "./loadTask.js";
-import { contentHash } from "./atomicWrite.js";
+import { commitPackageFiles, contentHash, withPackageDirLock } from "./atomicWrite.js";
 import { renderCatalogYaml } from "./preserveCatalogYaml.js";
 import { stringifyTargetYaml } from "./printTargetYaml.js";
 import { readYamlObject } from "./readYamlObject.js";
@@ -51,6 +53,10 @@ export type ValidateDraftPackageOptions = {
   cwd?: string;
   projectRoot?: string;
   strict?: boolean;
+  validateBeside?: {
+    packageDirectory: string;
+    renderedPipelineYaml: string;
+  };
 };
 
 /** Content hashes of package files, keyed by project-relative path. */
@@ -118,6 +124,7 @@ export type LoadDraftPackageResult =
       pipelinePath: string;
       taskPath?: string;
       fileHashes: DraftFileHashes;
+      hasInclude: boolean;
     }
   | {
       ok: false;
@@ -148,6 +155,57 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function normalizeStageRelPath(stagePath: string): string {
   return stagePath.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function pathContainsNul(value: string): boolean {
+  return value.includes("\0");
+}
+
+function pipelineIdHasPathSeparator(id: string): boolean {
+  return id.includes("/") || id.includes("\\");
+}
+
+async function resolveStageWritePath(
+  projectRoot: string,
+  packageDirectory: string,
+  stagePath: string,
+): Promise<{ ok: true; absPath: string } | { ok: false; error: string }> {
+  const rel = normalizeStageRelPath(stagePath);
+  if (!rel || pathContainsNul(rel)) {
+    return { ok: false, error: `Invalid stage path (${stagePath})` };
+  }
+  if (path.isAbsolute(rel)) {
+    return { ok: false, error: `Stage path must be relative (${stagePath})` };
+  }
+  const candidate = path.resolve(packageDirectory, rel);
+  const projectResolved = path.resolve(projectRoot);
+  const relToProject = path.relative(projectResolved, candidate);
+  if (relToProject.startsWith("..") || path.isAbsolute(relToProject)) {
+    return {
+      ok: false,
+      error: `Stage path escapes project root (${stagePath})`,
+    };
+  }
+  try {
+    const real = realpathSync(candidate);
+    const realRoot = realpathSync(projectResolved);
+    const relReal = path.relative(realRoot, real);
+    if (relReal.startsWith("..") || path.isAbsolute(relReal)) {
+      return {
+        ok: false,
+        error: `Stage path escapes project root (${stagePath})`,
+      };
+    }
+  } catch {
+    // New paths are allowed when the lexical location stays in the project.
+  }
+  return { ok: true, absPath: candidate };
+}
+
+function pipelineFileHasInclude(raw: Record<string, unknown>): boolean {
+  const include = raw.include;
+  if (!Array.isArray(include) || include.length === 0) return false;
+  return include.some((entry) => entry !== null && typeof entry === "object");
 }
 
 function pipelineHasExternalUses(pipeline: DraftPackage["pipeline"]): boolean {
@@ -312,7 +370,31 @@ export async function validateDraftPackage(
     pipelineHasExternalUses(draft.pipeline) ||
     (draft.stages !== undefined && draft.stages.length > 0);
 
-  if (needsMaterialize) {
+  if (options.validateBeside && !needsMaterialize) {
+    const sidecar = path.join(
+      options.validateBeside.packageDirectory,
+      `.sf-validate-${process.pid}-${randomBytes(4).toString("hex")}.pipeline.yaml`,
+    );
+    try {
+      await writeFile(
+        sidecar,
+        options.validateBeside.renderedPipelineYaml,
+        "utf8",
+      );
+      const relSidecar = path
+        .relative(options.validateBeside.packageDirectory, sidecar)
+        .replace(/\\/g, "/");
+      const pipelineResult = await validatePipeline(relSidecar, {
+        cwd: options.validateBeside.packageDirectory,
+        projectRoot,
+        validateStages: true,
+        strict,
+      });
+      findings.push(...pipelineResult.findings);
+    } finally {
+      await rm(sidecar, { force: true });
+    }
+  } else if (needsMaterialize) {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "sf-draft-"));
     try {
       const pipelineFilename = `${draft.pipeline.id}.pipeline.yaml`;
@@ -446,6 +528,13 @@ function resolveDraftWriteTarget(
   if (!isPlainObject(rawDraft?.pipeline) || typeof rawDraft.pipeline.id !== "string") {
     return { ok: false, status: 400, error: "draft.pipeline.id is required" };
   }
+  if (pipelineIdHasPathSeparator(rawDraft.pipeline.id)) {
+    return {
+      ok: false,
+      status: 400,
+      error: "draft.pipeline.id must not contain path separators",
+    };
+  }
 
   const normalized = normalizeDraftCatalogFilenames(
     rawDraft,
@@ -474,13 +563,31 @@ async function gateDraftWrite(
   projectRoot: string,
   draft: DraftPackage,
   allowInvalid: boolean | undefined,
+  target?: ResolvedDraftWrite,
 ): Promise<DraftPackageWriteResult | null> {
   if (allowInvalid) return null;
-  const validation = await validateDraftPackage(draft, {
+  let validateOptions: ValidateDraftPackageOptions = {
     cwd: projectRoot,
     projectRoot,
     strict: true,
-  });
+  };
+  if (target && (await fileExists(target.pipelineAbsPath))) {
+    await mkdir(target.packageDirectory, { recursive: true });
+    const resolved = await resolveDraftWriteFiles(projectRoot, target);
+    if (resolved.ok) {
+      const pipelineFile = resolved.files.find((file) => file.kind === "pipeline");
+      if (pipelineFile) {
+        validateOptions = {
+          ...validateOptions,
+          validateBeside: {
+            packageDirectory: target.packageDirectory,
+            renderedPipelineYaml: pipelineFile.content,
+          },
+        };
+      }
+    }
+  }
+  const validation = await validateDraftPackage(draft, validateOptions);
   if (validation.ok) return null;
   const errorFinding = validation.findings.find(
     (finding) => finding.severity === "error",
@@ -520,28 +627,19 @@ async function resolveDraftWriteFiles(
   ];
 
   for (const stage of draft.stages ?? []) {
-    const rel = normalizeStageRelPath(stage.path);
-    if (!rel || path.isAbsolute(rel) || rel.split(/[/\\]/).includes("..")) {
-      return {
-        ok: false,
-        status: 400,
-        error: `Stage path escapes package directory (${stage.path})`,
-      };
-    }
-    const stageAbs = path.resolve(packageDirectory, rel);
-    const relToPackage = path.relative(packageDirectory, stageAbs);
-    if (relToPackage.startsWith("..") || path.isAbsolute(relToPackage)) {
-      return {
-        ok: false,
-        status: 400,
-        error: `Stage path escapes package directory (${stage.path})`,
-      };
+    const resolvedStage = await resolveStageWritePath(
+      projectRoot,
+      packageDirectory,
+      stage.path,
+    );
+    if (!resolvedStage.ok) {
+      return { ok: false, status: 400, error: resolvedStage.error };
     }
     files.push({
       kind: "stage",
-      absPath: stageAbs,
-      relPath: toRel(stageAbs),
-      content: renderCatalogYaml(await readExisting(stageAbs), stage.body, {
+      absPath: resolvedStage.absPath,
+      relPath: toRel(resolvedStage.absPath),
+      content: renderCatalogYaml(await readExisting(resolvedStage.absPath), stage.body, {
         keepUnknownTopLevel: false,
       }),
     });
@@ -586,6 +684,11 @@ async function refuseIfFilesChanged(
   if (!baseHashes) return null;
   let stale = false;
   for (const file of files) {
+    const existing = await readExisting(file.absPath);
+    if (existing !== null && baseHashes.files[file.relPath] === undefined) {
+      stale = true;
+      continue;
+    }
     const expected = baseHashes.files[file.relPath];
     if (expected === undefined) continue;
     const current = await fileContentHash(file.absPath);
@@ -614,14 +717,20 @@ async function writeDraftPackageFiles(
   const conflict = await refuseIfFilesChanged(resolved.files, baseHashes);
   if (conflict) return conflict;
 
+  const hashSnapshot = async () => hashesForFiles(resolved.files);
+
   try {
-    await mkdir(packageDirectory, { recursive: true });
-    for (const file of resolved.files) {
-      const existing = await readExisting(file.absPath);
-      if (existing !== null && existing === file.content) continue;
-      await mkdir(path.dirname(file.absPath), { recursive: true });
-      await writeFile(file.absPath, file.content, "utf8");
-    }
+    await withPackageDirLock(packageDirectory, async () => {
+      const restale = await refuseIfFilesChanged(resolved.files, baseHashes);
+      if (restale) throw restale;
+      await commitPackageFiles(
+        resolved.files.map((file) => ({
+          absPath: file.absPath,
+          content: file.content,
+        })),
+      );
+    });
+
     const stagePaths = resolved.files
       .filter((file) => file.kind === "stage")
       .map((file) => file.relPath);
@@ -639,6 +748,7 @@ async function writeDraftPackageFiles(
         ok: false,
         status: 500,
         error: loadOutcome.issues[0]?.message ?? "Failed to load written pipeline",
+        fileHashes: await hashSnapshot(),
       };
     }
 
@@ -659,11 +769,24 @@ async function writeDraftPackageFiles(
       pipelinePath: pipelineRelPath,
       stagePaths,
       ...(taskPath !== undefined ? { taskPath } : {}),
-      fileHashes: await hashesForFiles(resolved.files),
+      fileHashes: await hashSnapshot(),
     };
   } catch (err) {
+    if (
+      err !== null &&
+      typeof err === "object" &&
+      "ok" in err &&
+      (err as { ok?: unknown }).ok === false
+    ) {
+      return err as Extract<DraftPackageWriteResult, { ok: false }>;
+    }
     const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 500, error: message };
+    return {
+      ok: false,
+      status: 500,
+      error: message,
+      fileHashes: await hashSnapshot(),
+    };
   }
 }
 
@@ -712,6 +835,7 @@ export async function overwriteDraftPackage(
     projectRoot,
     resolved.value.draft,
     input.allowInvalid,
+    resolved.value,
   );
   if (blocked) return blocked;
 
@@ -744,10 +868,16 @@ export async function createDraftPackage(
     projectRoot,
     resolved.value.draft,
     input.allowInvalid,
+    resolved.value,
   );
   if (blocked) return blocked;
 
-  return writeDraftPackageFiles(projectRoot, resolved.value, input.allowInvalid);
+  return writeDraftPackageFiles(
+    projectRoot,
+    resolved.value,
+    input.allowInvalid,
+    input.baseHashes,
+  );
 }
 
 export type DraftPlanMode = "create" | "overwrite";
@@ -916,6 +1046,12 @@ export function parseCreateDraftPackageBody(
   if (typeof body.directory !== "string" || !body.directory.trim()) {
     return { ok: false, status: 400, error: "directory is required" };
   }
+  let baseHashes: DraftFileHashes | undefined;
+  if (body.baseHashes !== undefined) {
+    const parsedHashes = parseDraftFileHashes(body.baseHashes);
+    if ("ok" in parsedHashes) return parsedHashes;
+    baseHashes = parsedHashes;
+  }
   return {
     directory: body.directory.trim(),
     draft: draftParsed,
@@ -923,6 +1059,7 @@ export function parseCreateDraftPackageBody(
       ? { pipelineFilename: body.pipelineFilename }
       : {}),
     ...(body.allowInvalid === true ? { allowInvalid: true } : {}),
+    ...(baseHashes !== undefined ? { baseHashes } : {}),
   };
 }
 
@@ -1192,5 +1329,6 @@ export async function loadDraftPackage(
     pipelinePath,
     ...(attachedTaskPath !== undefined ? { taskPath: attachedTaskPath } : {}),
     fileHashes: { files: fileHashes },
+    hasInclude: pipelineFileHasInclude(raw),
   };
 }

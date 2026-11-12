@@ -70,6 +70,23 @@ export function editorReadOnlyNotice(readOnly: boolean): string | null {
   return readOnly ? "Examples are read-only — Save copy to Workspace" : null;
 }
 
+export function editorIncludeNotice(hasInclude: boolean): string | null {
+  return hasInclude
+    ? "This pipeline uses include — fragment stages are validated on save but may not appear in the graph."
+    : null;
+}
+
+export function editorHeaderNotice(input: {
+  readOnly: boolean;
+  hasInclude: boolean;
+}): string | null {
+  const parts = [
+    editorReadOnlyNotice(input.readOnly),
+    editorIncludeNotice(input.hasInclude),
+  ].filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
 export function editorSaveLabel(readOnly: boolean, dirty: boolean): string {
   if (readOnly && dirty) return "Save copy to Workspace";
   return "Save";

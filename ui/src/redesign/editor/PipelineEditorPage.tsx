@@ -61,7 +61,7 @@ import {
   yamlPathsMatch,
 } from "./draftYaml";
 import {
-  editorReadOnlyNotice,
+  editorHeaderNotice,
   editorSaveLabel,
   unsavedChangeCount,
 } from "./editorHeaderModel";
@@ -170,6 +170,7 @@ export function PipelineEditorPage({
   const [draft, setDraft] = useState<DraftPackagePayload | null>(null);
   const [baseline, setBaseline] = useState<DraftPackagePayload | null>(null);
   const [fileHashes, setFileHashes] = useState<DraftFileHashes | null>(null);
+  const [hasInclude, setHasInclude] = useState(false);
   const [stageFileHash, setStageFileHash] = useState<string | null>(null);
   const [destination, setDestination] = useState<{
     directory: string;
@@ -383,6 +384,7 @@ export function PipelineEditorPage({
         setDraft(null);
         setBaseline(null);
         setFileHashes(null);
+        setHasInclude(false);
         setLoading(false);
       }
       return;
@@ -399,6 +401,7 @@ export function PipelineEditorPage({
       setDraft(null);
       setBaseline(null);
       setFileHashes(null);
+      setHasInclude(false);
       return;
     }
     const origin = draftOriginFromResponse(opened);
@@ -406,6 +409,7 @@ export function PipelineEditorPage({
     setDraft(opened.draft);
     setBaseline(cloneDraft(opened.draft));
     setFileHashes(opened.fileHashes ?? null);
+    setHasInclude(opened.hasInclude === true);
     setDestination(opened.destination);
   }, [catalogProjectRoot, pipeline.path, stageFilePath, stageMode]);
 
@@ -976,7 +980,10 @@ export function PipelineEditorPage({
         saveDisabled={saveDisabled}
         saving={saving}
         workshopHref={workshopHref}
-        readOnlyNotice={editorReadOnlyNotice(readOnlySource)}
+        readOnlyNotice={editorHeaderNotice({
+          readOnly: readOnlySource,
+          hasInclude,
+        })}
         saveLabel={editorSaveLabel(readOnlySource, dirty)}
         onDiscard={onDiscard}
         onStartRun={() =>

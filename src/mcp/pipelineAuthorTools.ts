@@ -1,6 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
+import type { DraftFileHashes } from "../config/draftPackage.js";
 import { loadDraftPackage, publishDraftPackageFacade, validateDraftPackage, type DraftPackage } from "./pipelineAuthorSupport.js";
 import {
   buildCreatePipelineDraft,
@@ -40,10 +41,12 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
   ) {
     const projectRoot = root();
     let draft: DraftPackage = { pipeline: { id: "", stages: [] } };
+    let baseHashes: DraftFileHashes | undefined;
     if (mode === "overwrite") {
       const loaded = await loadDraftPackage(projectRoot, relPath, options.taskPath ? { taskPath: options.taskPath } : {});
       if (!loaded.ok) return textResult({ error: loaded.error, status: loaded.status }, true);
       draft = loaded.draft;
+      baseHashes = loaded.fileHashes;
     }
     const built = build(draft);
     if (!built.ok) return textResult({ error: built.error }, true);
@@ -53,9 +56,25 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
       draft: built.nextDraft,
       pipelineFilename: path.posix.basename(relPath),
       ...(options.allowInvalid ? { allowInvalid: true } : {}),
+      ...(baseHashes !== undefined ? { baseHashes } : {}),
     }, mode);
-    if (!published.ok) return textResult({ error: published.error, status: published.status }, true);
-    return textResult({ pipelinePath: published.pipelinePath, stagePaths: published.stagePaths, taskPath: published.taskPath ?? null });
+    if (!published.ok) {
+      return textResult(
+        {
+          error: published.error,
+          status: published.status,
+          ...(published.code ? { code: published.code } : {}),
+          ...(published.fileHashes ? { fileHashes: published.fileHashes } : {}),
+        },
+        true,
+      );
+    }
+    return textResult({
+      pipelinePath: published.pipelinePath,
+      stagePaths: published.stagePaths,
+      taskPath: published.taskPath ?? null,
+      fileHashes: published.fileHashes,
+    });
   }
 
   server.registerTool(
@@ -68,7 +87,13 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
       const loaded = await loadDraftPackage(root(), relPath, task_path ? { taskPath: task_path } : {});
       if (!loaded.ok) return textResult({ error: loaded.error, status: loaded.status }, true);
       const validation = await validateDraftPackage(loaded.draft, { cwd: deps.cwd, projectRoot: root() });
-      return textResult({ draft: loaded.draft, destination: loaded.destination, validation });
+      return textResult({
+        draft: loaded.draft,
+        destination: loaded.destination,
+        validation,
+        fileHashes: loaded.fileHashes,
+        has_include: loaded.hasInclude,
+      });
     },
   );
 

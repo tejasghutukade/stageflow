@@ -1387,6 +1387,7 @@ export async function openDraftPackage(
       project_root?: string;
       taskPath?: string;
       fileHashes?: unknown;
+      hasInclude?: boolean;
       error?: string;
     };
     if (
@@ -1406,6 +1407,7 @@ export async function openDraftPackage(
           : {}),
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
         ...(fileHashes ? { fileHashes } : {}),
+        ...(body.hasInclude === true ? { hasInclude: true } : {}),
       };
     }
     return {

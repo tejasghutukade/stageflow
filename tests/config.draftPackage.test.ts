@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import {
@@ -270,7 +270,7 @@ describe("overwriteDraftPackage", () => {
       expect(result.status).toBe(status);
     }));
 
-  it("returns 400 when a stage path escapes the package directory", () =>
+  it("returns 400 when a stage path escapes the project root", () =>
     withRepo(async (root) => {
       await mkdir(path.join(root, "pipelines"), { recursive: true });
       const seed = await createDraftPackage(root, {
@@ -299,14 +299,21 @@ describe("overwriteDraftPackage", () => {
       await access(path.join(root, "workshop/fanout-fanin-temp.pipeline.yaml"));
       await access(path.join(root, "workshop/fanout-fanin-temp.task.yaml"));
 
+      const outsideRoot = path.join(path.dirname(root), `sf-escape-${path.basename(root)}`);
+      await mkdir(outsideRoot, { recursive: true });
+      const escapePath = path.join(outsideRoot, "escape.yaml");
+      const escapeRel = path
+        .relative(path.join(root, "pipelines"), escapePath)
+        .replace(/\\/g, "/");
+
       const escaped: DraftPackage = {
         pipeline: {
           id: "demo",
-          stages: [{ id: "clarify", uses: "../escape.yaml", entry: true }],
+          stages: [{ id: "clarify", uses: escapeRel, entry: true }],
         },
         stages: [
           {
-            path: "../escape.yaml",
+            path: escapeRel,
             body: {
               id: "clarify",
               system_prompt: "Escape",
@@ -324,8 +331,9 @@ describe("overwriteDraftPackage", () => {
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.status).toBe(400);
-      expect(result.error).toMatch(/escapes package directory/i);
-      await expect(readFile(path.join(root, "escape.yaml"), "utf8")).rejects.toThrow();
+      expect(result.error).toMatch(/escapes project root/i);
+      await expect(readFile(escapePath, "utf8")).rejects.toThrow();
+      await rm(outsideRoot, { recursive: true, force: true });
     }));
 
   it("allowInvalid writes without validate gate (escape for Save invalid anyway)", () =>
@@ -993,4 +1001,324 @@ describe("pipeline-level channels survive the draft round trip", () => {
       expect(written).toContain("channels:");
       expect(written).toContain("connection: ops");
     }));
+});
+
+describe("atomic package overwrite", () => {
+  it("refuses overwrite when baseHashes omit an existing target file", () =>
+    withRepo(async (root) => {
+      await seedPackage(root);
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+
+      const partial = { files: { [loaded.pipelinePath]: loaded.fileHashes.files[loaded.pipelinePath]! } };
+      const saved = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        draft: loaded.draft,
+        baseHashes: partial,
+      });
+      expect(saved.ok).toBe(false);
+      if (saved.ok) return;
+      expect(saved.status).toBe(409);
+      expect(saved.code).toBe("FILE_CHANGED");
+    }));
+});
+
+describe("stage paths stay inside the project", () => {
+  it("allows ../stages/ when the resolved file is still in the project", () =>
+    withRepo(async (root) => {
+      const stagesDir = path.join(root, "stages");
+      await mkdir(stagesDir, { recursive: true });
+      await writeFile(
+        path.join(stagesDir, "shared.yaml"),
+        [
+          "id: shared",
+          "system_prompt: Shared stage",
+          `model: ${MODEL}`,
+          "io:",
+          "  input:",
+          "    schema:",
+          "      type: object",
+          "  output:",
+          "    schema:",
+          "      type: object",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const pipelinesDir = path.join(root, "pipelines");
+      await mkdir(pipelinesDir, { recursive: true });
+      await writeFile(
+        path.join(pipelinesDir, "pool.pipeline.yaml"),
+        [
+          "id: pool",
+          "stages:",
+          "  - id: shared",
+          "    uses: ../stages/shared.yaml",
+          "    entry: true",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const draft: DraftPackage = {
+        pipeline: {
+          id: "pool",
+          stages: [{ id: "shared", uses: "../stages/shared.yaml", entry: true }],
+        },
+        stages: [
+          {
+            path: "../stages/shared.yaml",
+            body: {
+              id: "shared",
+              system_prompt: "Shared stage updated",
+              model: MODEL,
+              ...REQUIRED_IO,
+            },
+          },
+        ],
+      };
+      const saved = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        pipelineFilename: "pool.pipeline.yaml",
+        draft,
+      });
+      expect(saved.ok).toBe(true);
+      const reloaded = await loadDraftPackage(root, "pipelines/pool.pipeline.yaml");
+      expect(reloaded.ok).toBe(true);
+      if (!reloaded.ok) return;
+      expect(reloaded.draft.stages?.[0]?.body.system_prompt).toContain("updated");
+    }));
+
+  it("refuses a symlink that escapes the project", () =>
+    withRepo(async (root) => {
+      const outsideRoot = path.join(path.dirname(root), `sf-outside-${path.basename(root)}`);
+      await mkdir(outsideRoot, { recursive: true });
+      await writeFile(
+        path.join(outsideRoot, "escape.yaml"),
+        [
+          "id: escape",
+          "system_prompt: Outside",
+          `model: ${MODEL}`,
+          "io:",
+          "  input:",
+          "    schema:",
+          "      type: object",
+          "  output:",
+          "    schema:",
+          "      type: object",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const pkg = path.join(root, "pipelines");
+      await mkdir(pkg, { recursive: true });
+      await writeFile(
+        path.join(pkg, "demo.pipeline.yaml"),
+        "id: demo\nstages:\n  - id: plan\n    uses: ./clarify.yaml\n    entry: true\n",
+        "utf8",
+      );
+      await symlink(path.join(outsideRoot, "escape.yaml"), path.join(pkg, "clarify.yaml"));
+
+      const draft: DraftPackage = {
+        pipeline: {
+          id: "demo",
+          stages: [{ id: "plan", uses: "./clarify.yaml", entry: true }],
+        },
+        stages: [
+          {
+            path: "./clarify.yaml",
+            body: {
+              id: "escape",
+              system_prompt: "Nope",
+              model: MODEL,
+              ...REQUIRED_IO,
+            },
+          },
+        ],
+      };
+      const result = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        draft,
+        allowInvalid: true,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.status).toBe(400);
+      expect(result.error).toMatch(/escapes project root/i);
+      await expect(readFile(path.join(outsideRoot, "escape.yaml"), "utf8")).resolves.toContain(
+        "Outside",
+      );
+      await rm(outsideRoot, { recursive: true, force: true });
+    }));
+
+  it("refuses pipeline.id with a path separator", () =>
+    withRepo(async (root) => {
+      await mkdir(path.join(root, "pipelines"), { recursive: true });
+      const result = await createDraftPackage(root, {
+        directory: "pipelines",
+        draft: validInlineDraft({ id: "nested/id" }),
+        allowInvalid: true,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.status).toBe(400);
+      expect(result.error).toMatch(/path separators/i);
+    }));
+});
+
+describe("include-aware validation", () => {
+  async function seedIncludePackage(root: string, fragmentStages: string): Promise<void> {
+    const dir = path.join(root, "pipelines");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "fragment.yaml"), `stages:\n${fragmentStages}`, "utf8");
+    await writeFile(
+      path.join(dir, "demo.pipeline.yaml"),
+      [
+        "id: demo",
+        "include:",
+        "  - local: ./fragment.yaml",
+        "stages:",
+        "  - id: plan",
+        `    system_prompt: "Plan"`,
+        `    model: ${MODEL}`,
+        "    entry: true",
+        "    route:",
+        "      - to: from-frag",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  }
+
+  it("accepts a route to a stage that exists only in an included fragment", () =>
+    withRepo(async (root) => {
+      await seedIncludePackage(root, [
+        "  - id: from-frag",
+        `    system_prompt: Fragment stage`,
+        `    model: ${MODEL}`,
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
+      ].join("\n"));
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+      expect(loaded.hasInclude).toBe(true);
+
+      const draft: DraftPackage = {
+        ...loaded.draft,
+        pipeline: {
+          ...loaded.draft.pipeline,
+          stages: [
+            {
+              id: "plan",
+              system_prompt: "Plan edited",
+              model: MODEL,
+              entry: true,
+              route: [{ to: "from-frag" }],
+              ...REQUIRED_IO,
+            },
+          ],
+        },
+      };
+      const saved = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        pipelineFilename: "demo.pipeline.yaml",
+        draft,
+        baseHashes: loaded.fileHashes,
+      });
+      expect(saved.ok).toBe(true);
+    }));
+
+  it("refuses a route to a missing stage from an include", () =>
+    withRepo(async (root) => {
+      await seedIncludePackage(root, "");
+      await writeFile(path.join(root, "pipelines", "fragment.yaml"), "stages: []\n", "utf8");
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+
+      const draft: DraftPackage = {
+        ...loaded.draft,
+        pipeline: {
+          ...loaded.draft.pipeline,
+          stages: [
+            {
+              id: "plan",
+              system_prompt: "Plan",
+              model: MODEL,
+              entry: true,
+              route: [{ to: "from-frag" }],
+              ...REQUIRED_IO,
+            },
+          ],
+        },
+      };
+      const saved = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        pipelineFilename: "demo.pipeline.yaml",
+        draft,
+        allowInvalid: false,
+      });
+      expect(saved.ok).toBe(false);
+      if (saved.ok) return;
+      expect(saved.status).toBe(422);
+    }));
+});
+
+describe("Workshop save passes package hashes", () => {
+  it("sends baseHashes from context and returns refreshed hashes on success", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedPackage(root);
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+
+      const {
+        createSaveTool,
+        createWorkshopDraftContext,
+      } = await import("../src/operatorAgent/index.js");
+      const { isWorkshopDraftContext } = await import("../src/operatorAgent/draftContext.js");
+
+      const draft = validFilePackageDraft();
+      draft.stages![0]!.body.system_prompt = "Workshop hash save";
+      const save = createSaveTool({ projectRoot: root });
+      let context: unknown = createWorkshopDraftContext(draft, {
+        destination: { directory: "pipelines", pipelineFilename: "demo.pipeline.yaml" },
+        projectRoot: root,
+        fileHashes: loaded.fileHashes,
+      });
+      const ctx = {
+        getContext: () => context,
+        setContext: (next: unknown) => {
+          context = next;
+        },
+        emitProposal: () => {},
+      };
+
+      const written = await save.handler({ mode: "overwrite" }, ctx);
+      expect(written.ok).toBe(true);
+      const content = written.content as { fileHashes?: { files: Record<string, string> } };
+      expect(content.fileHashes?.files).toBeDefined();
+      expect(isWorkshopDraftContext(context)).toBe(true);
+      if (isWorkshopDraftContext(context)) {
+        expect(context.fileHashes?.files).toBeDefined();
+      }
+    } finally {
+      await cleanup();
+    }
+  });
 });

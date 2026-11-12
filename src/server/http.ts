@@ -2498,6 +2498,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             destination: result.destination,
             pipelinePath: result.pipelinePath,
             fileHashes: result.fileHashes,
+            hasInclude: result.hasInclude,
             ...draftCatalogRootWire(wireRoot),
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
           });
