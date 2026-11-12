@@ -206,11 +206,15 @@ export function originMatchesHostHeader(origin: string, hostHeader: string): boo
   return originPort === headerPort;
 }
 
+export function isPublicChatApiPath(pathname: string): boolean {
+  return pathname.startsWith("/api/public/chat/");
+}
+
 export function assertAllowedHttpAccess(
   allowed: AllowedHosts,
   req: IncomingMessage,
   res: ServerResponse,
-  options: { requireOrigin?: boolean } = {},
+  options: { requireOrigin?: boolean; skipOriginHostMatch?: boolean } = {},
 ): boolean {
   const hostHeader = req.headers.host;
   if (typeof hostHeader !== "string" || hostHeader.length === 0) {
@@ -226,7 +230,10 @@ export function assertAllowedHttpAccess(
 
   const origin = req.headers.origin;
   if (typeof origin === "string" && origin.length > 0) {
-    if (!originMatchesHostHeader(origin, hostHeader)) {
+    if (
+      !options.skipOriginHostMatch &&
+      !originMatchesHostHeader(origin, hostHeader)
+    ) {
       let originHost: string | undefined;
       try {
         originHost = new URL(origin).hostname;

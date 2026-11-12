@@ -121,6 +121,43 @@ describe("assertAllowedHttpAccess origin", () => {
     expect(decide({ host: "localhost", origin: "https://localhost" })).toBe("ok");
     expect(decide({ host: "localhost:3847" })).toBe("ok");
   });
+
+  it("can skip Origin-must-match-Host while still enforcing the Host allow-list", () => {
+    let status: number | undefined;
+    const res = {
+      writeHead(code: number) {
+        status = code;
+        return res;
+      },
+      end() {},
+    } as unknown as ServerResponse;
+    const allowed = resolveAllowedHosts({});
+    const ok = assertAllowedHttpAccess(
+      allowed,
+      {
+        headers: {
+          host: "127.0.0.1:3847",
+          origin: "https://site.example",
+        },
+      } as IncomingMessage,
+      res,
+      { skipOriginHostMatch: true },
+    );
+    expect(ok).toBe(true);
+    const blocked = assertAllowedHttpAccess(
+      allowed,
+      {
+        headers: {
+          host: "evil.example",
+          origin: "https://site.example",
+        },
+      } as IncomingMessage,
+      res,
+      { skipOriginHostMatch: true },
+    );
+    expect(blocked).toBe(false);
+    expect(status).toBe(403);
+  });
 });
 
 describe("isTrustedLocalHttpRequest", () => {
