@@ -12,8 +12,11 @@ import { createMcpHttpHandler } from "../src/mcp/server.js";
 import { createFunctionInvoker } from "../src/functions/invoke.js";
 import { FunctionService } from "../src/functions/service.js";
 import { FunctionStore } from "../src/functions/store.js";
+import { defaultAgentProjectRoot } from "../src/agents/projectRoot.js";
+import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { createRunStore, createRunStoreWithConnection } from "../src/runstore/createStore.js";
 import { createRunChangeBus } from "../src/runtime/runChangeBus.js";
+import { initTempGitRepo } from "./helpers/projectContext.js";
 
 const SOURCE = "export default function execute(context) {\n  return { passed: true };\n}\n";
 
@@ -72,11 +75,11 @@ describe("function MCP tools", () => {
     const home = await mkdtemp(path.join(tmpdir(), "sf-fn-mcp-home-"));
     const project = await mkdtemp(path.join(tmpdir(), "sf-fn-mcp-project-"));
     dirs.push(home, project);
-    const { connection } = createRunStoreWithConnection({ rootDir: home, openerMode: "migrate" });
+    const { store, connection } = createRunStoreWithConnection({ rootDir: home, openerMode: "migrate" });
     closers.push(() => connection.close());
     const service = new FunctionService({ store: new FunctionStore(connection) });
     const functionInvoker = createFunctionInvoker({ db: connection, env: {}, stageflowHome: home });
-    const tools = record({ cwd: project, functionService: service, functionInvoker } as McpToolDeps);
+    const tools = record({ cwd: project, store, functionService: service, functionInvoker } as McpToolDeps);
     return { project, tools };
   }
 
@@ -287,5 +290,62 @@ describe("function MCP tools", () => {
       code: "function.invalid",
       issues: expect.arrayContaining([expect.objectContaining({ code: "function.access_conflict", path: "capabilities" })]),
     });
+  });
+
+  it("resolves optional project_root", async () => {
+    const { root: repoA, nested, cleanup: cleanupA } = await initTempGitRepo();
+    const { root: repoB, cleanup: cleanupB } = await initTempGitRepo();
+    closers.push(cleanupA, cleanupB);
+    const home = await mkdtemp(path.join(tmpdir(), "sf-fn-mcp-roots-home-"));
+    dirs.push(home);
+    const { store, connection } = createRunStoreWithConnection({ rootDir: home, openerMode: "migrate" });
+    closers.push(() => connection.close());
+    clearFindProjectRootCacheForTests();
+    await store.ensureProject(repoA);
+    await store.ensureProject(repoB);
+    const service = new FunctionService({ store: new FunctionStore(connection) });
+    const functionInvoker = createFunctionInvoker({ db: connection, env: {}, stageflowHome: home });
+    await service.create(repoB, definition("remote_only"), { source: "api", author: "test" });
+    const tools = record({ cwd: nested, store, functionService: service, functionInvoker } as McpToolDeps);
+
+    const local = await call(tools, "create_function", { definition: definition("local_only") });
+    expect(local.isError).toBe(false);
+
+    const defaultRoot = defaultAgentProjectRoot(nested);
+    const defaulted = await call(tools, "list_functions", {});
+    expect(defaulted.isError).toBe(false);
+    expect(defaulted.payload.functions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "local_only" })]),
+    );
+    expect(defaulted.payload.functions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "remote_only" })]),
+    );
+    expect(defaultRoot).toBe(nested);
+
+    const remote = await call(tools, "list_functions", { project_root: repoB });
+    expect(remote.isError).toBe(false);
+    expect(remote.payload.functions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "remote_only" })]),
+    );
+    expect(remote.payload.functions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "local_only" })]),
+    );
+
+    const unknown = await call(tools, "list_functions", {
+      project_root: "/tmp/stageflow-function-mcp-unknown-root",
+    });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.payload).toMatchObject({ code: "unknown_project_root" });
+
+    const readOnly = await call(tools, "create_function", {
+      project_root: "examples",
+      definition: definition("seeded_refuse"),
+    });
+    expect(readOnly.isError).toBe(true);
+    expect(readOnly.payload).toMatchObject({ code: "catalog_root_read_only" });
+
+    const tested = await call(tools, "test_function", { id: "remote_only", project_root: repoB });
+    expect(tested.isError).toBe(false);
+    expect(tested.payload).toMatchObject({ ok: true, kind: "test", value: { passed: true } });
   });
 });
