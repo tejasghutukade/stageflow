@@ -583,7 +583,7 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
       );
     });
 
-    expect(opened).toContain("implementation-plan");
+    await waitFor(async () => opened.includes("implementation-plan"));
     expect(priors["implementation-plan"]).toBe("ancestor");
 
     const delivered = await manager.deliverAnswer(

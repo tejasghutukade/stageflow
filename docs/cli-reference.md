@@ -213,8 +213,8 @@ sf runs rerun --run <runId> [--json]
 | `feedback-decide` | Resolve a feedback-loop `wait_for_human` decision (`extend` / `continue` / `abandon`) |
 | `retry` | Retry a failed stage; process waits until waiting or terminal |
 | `resume` | Continue a timed-out failed attempt on the same session |
-| `abandon` | Mark a running stage abandoned |
-| `cancel` | Cancel a non-terminal run (`created` / `queued` / `running`) |
+| `abandon` | Stop one running stage and mark it failed (`process_interrupted: operator abandoned stage`). Other running stages keep going, but nothing new is scheduled and the run ends `failed`. Use `cancel` to stop the rest. |
+| `cancel` | Cancel a non-terminal run (`created` / `queued` / `running`). On a `failed` run that still has running stages (after an abandon, for example), it stops them and the run stays `failed`. |
 | `delete` | Hard-delete a terminal run (`--force` cancels then deletes an active run) |
 | `gc` | Retention SLIM/PURGE + bare-cache eviction (`--dry-run` report-only) |
 | `rerun` | Start a new run from a stored run; process waits until waiting or terminal |

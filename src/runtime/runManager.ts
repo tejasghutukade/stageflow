@@ -63,6 +63,7 @@ import {
   resumeRun,
   retryRun,
   runPipelineDag,
+  writeTerminalRunStatus,
 } from "./pipelineScheduler.js";
 import {
   resolveFeedbackLoopDecision,
@@ -303,7 +304,8 @@ type ActiveEntry = {
   done?: Promise<unknown>;
 };
 
-type SchedulingHalt = { halted: boolean; hostShutdown: boolean };
+/** `abandoned`: stages an operator abandoned, with the reason the scheduler records instead of the kill signal. */
+type SchedulingHalt = { halted: boolean; hostShutdown: boolean; abandoned?: Map<string, string> };
 
 const DEFAULT_MAX_CONCURRENT = 3;
 const DEFAULT_MAX_QUEUED = 32;
@@ -1382,6 +1384,8 @@ export class RunManager {
     }
 
     this.notifyGateClosed(runId, stageId);
+    const halt = this.ensureSchedulingHalt(runId);
+    (halt.abandoned ??= new Map()).set(stageId, OPERATOR_ABANDON_REASON);
     if (this.stageProcessLauncher !== undefined) {
       const active = this.stageProcessLauncher
         .getActiveStageProcesses()
@@ -1413,13 +1417,19 @@ export class RunManager {
       },
     ).catch(() => undefined);
 
-    await markStageInterrupted({
-      store: this.options.store,
-      runId,
-      stageId,
-      reason: OPERATOR_ABANDON_REASON,
-      status: "failed",
-    });
+    const latest = await this.options.store.getLatestStageExecution(runId, stageId).catch(() => null);
+    const recorded = await this.options.store
+      .listStageEvents(runId, stageId, latest?.attempt)
+      .catch(() => []);
+    if (!recorded.some((event) => event.event === "failed" && event.reason === OPERATOR_ABANDON_REASON)) {
+      await markStageInterrupted({
+        store: this.options.store,
+        runId,
+        stageId,
+        reason: OPERATOR_ABANDON_REASON,
+        status: "failed",
+      });
+    }
     if (
       this.retryCoordinator.isActive(runId) &&
       this.retryCoordinator.getActiveRoots(runId)?.has(stageId)
@@ -1445,7 +1455,12 @@ export class RunManager {
         },
       ).catch(() => undefined);
     }
-    if (!hasWaiting && this.active.has(runId)) {
+    // A sibling still running keeps the run's slot, checkout lease and scheduling halt, so the cap holds and a later
+    // cancel or shutdown can still stop the run. Pending stages do not count: the scheduler halts after a failure.
+    const otherLiveAfter = after.stages.some(
+      (stage) => stage.stage_id !== stageId && stage.status === "running",
+    );
+    if (!hasWaiting && !otherLiveAfter && this.active.has(runId)) {
       this.removeActiveEntry(runId, false);
     }
 
@@ -1472,6 +1487,27 @@ export class RunManager {
     if (meta.status === "cancelled") {
       await this.interruptLiveStages(runId);
       return { ok: true, runId };
+    }
+
+    if (meta.status === "failed") {
+      // A run reads failed as soon as one stage fails, while its siblings may still run (an abandon does this).
+      // Cancel then stops what is still live and keeps the failed status.
+      const live = (await this.options.store.readRun(runId)).stages.some(
+        (stage) => stage.status === "running" || stage.status === "waiting_for_input",
+      );
+      if (live || this.active.has(runId)) {
+        this.notifyGateClosed(runId);
+        await this.interruptLiveStages(runId);
+        await teardownRunBrowsers(
+          this.browserSupport(),
+          {
+            runId,
+            runDir: this.options.store.getWorkspaceDir(runId),
+            events: (stageId) => this.options.store.listStageEvents(runId, stageId),
+          },
+        ).catch(() => undefined);
+        return { ok: true, runId };
+      }
     }
 
     if (meta.status === "succeeded" || meta.status === "failed") {
@@ -2950,16 +2986,32 @@ export class RunManager {
           }
           return { ok: true, verification: "failed_retrying" };
         }
-        await store.appendStageEvent(
-          runId,
-          stageId,
-          {
-            event: "failed",
-            reason: launchResult.reason,
-          },
-          eventOptions,
+        const abandonedReason = this.schedulingHalts.get(runId)?.abandoned?.get(stageId);
+        const failureReason = abandonedReason ?? launchResult.reason;
+        const recordedEvents = await store.listStageEvents(runId, stageId, attempt).catch(() => []);
+        if (!recordedEvents.some((event) => event.event === "failed")) {
+          await store.appendStageEvent(
+            runId,
+            stageId,
+            {
+              event: "failed",
+              reason: failureReason,
+            },
+            eventOptions,
+          );
+        }
+        const siblings = (await store.readRun(runId)).stages.some(
+          (stage) =>
+            stage.stage_id !== stageId &&
+            (stage.status === "running" || stage.status === "waiting_for_input"),
         );
-        await store.updateRunStatus(runId, "failed");
+        if (abandonedReason !== undefined || siblings) {
+          // Other stages are still running under their own scheduler: derive the run status from the stages and
+          // leave their browsers alone. This stage's browser was torn down above.
+          await syncRunStatusFromStages(store, runId);
+          return { ok: false, reason: failureReason };
+        }
+        await writeTerminalRunStatus(store, runId, "failed");
         await teardownRunBrowsers(
           this.browserSupport(),
           {
@@ -2968,7 +3020,7 @@ export class RunManager {
             events: (stageId) => store.listStageEvents(runId, stageId),
           },
         ).catch(() => undefined);
-        return { ok: false, reason: launchResult.reason };
+        return { ok: false, reason: failureReason };
       }
 
       let initialPrior: StageEnvelope | null = null;
@@ -4197,7 +4249,11 @@ export class RunManager {
     const entry = this.active.get(runId);
     if (entry === undefined) return;
     const generation = ++this.trackingGeneration;
-    this.active.set(runId, { ...entry, generation, done });
+    // A scheduler may still drive sibling stages: stay tracked until it and the resumed stage have both settled.
+    const previous = (entry as { done?: Promise<unknown> }).done;
+    const both = previous !== undefined ? Promise.allSettled([previous, done]) : done;
+    this.active.set(runId, { ...entry, generation, done: both as typeof done });
+    done = both;
     void done.finally(() => {
       this.untrackIfGeneration(runId, generation);
     });

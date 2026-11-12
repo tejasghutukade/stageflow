@@ -355,7 +355,7 @@ export type ResumeRunOptions = {
   initialPrior?: StageEnvelope | null;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
-  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean; abandoned?: Map<string, string> };
 };
 
 /** Refuses to overwrite a cancelled run (KTD7). */
@@ -461,7 +461,7 @@ export type RunPipelineDagOptions = {
     ) => Promise<ResolveFeedbackLoopDecisionResult>;
   }) => Promise<void>;
   /** Live cancel flag — when set, launchStage/startStage stop. */
-  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean; abandoned?: Map<string, string> };
 };
 
 export type RetryRunOptions = {
@@ -473,7 +473,7 @@ export type RetryRunOptions = {
   mutationQueue?: RetryMutationQueue;
   onLoopTick?: () => void | Promise<void>;
   onRetryRootTerminal?: OnRetryRootTerminal;
-  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean; abandoned?: Map<string, string> };
 };
 
 export async function retryRun(
@@ -1541,18 +1541,23 @@ export async function runPipelineDag(
         states.set(stageId, "waiting");
         return;
       }
+      // An operator abandon kills the worker; record why, not the signal it died from.
+      const abandonedReason = options.schedulingHalt?.abandoned?.get(stageId);
+      const failureReason = abandonedReason ?? launchResult.reason;
       const recorded = await store.listStageEvents(run.runId, stageId, attempt);
       if (!recorded.some((event) => event.event === "failed")) {
         await store.appendStageEvent(
           run.runId,
           stageId,
-          { event: "failed", reason: launchResult.reason },
+          { event: "failed", reason: failureReason },
           { attempt },
         );
       }
-      const blocked = await noteBlockedBrowserStage(stage, await store.readEnvelope(run.runId, stageId).catch(() => undefined));
-      if (await retryBlockedStage(stageId, blocked)) return;
-      await onStageFailure(stageId, launchResult.reason);
+      if (abandonedReason === undefined) {
+        const blocked = await noteBlockedBrowserStage(stage, await store.readEnvelope(run.runId, stageId).catch(() => undefined));
+        if (await retryBlockedStage(stageId, blocked)) return;
+      }
+      await onStageFailure(stageId, failureReason);
       return;
     }
 

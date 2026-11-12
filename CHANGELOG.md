@@ -36,7 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Start queues a run when agent slots are full,** until the queue itself is full.
 - **A second Host binds its port before it touches run data.**
 - **Skill install rejects a name that would delete outside the skills folder.**
-- **After an operator answer, the stage keeps its secrets and home.** Abandoning a stage stops that stage only.
+- **After an operator answer, the stage keeps its secrets and home.** Abandoning a stage stops that stage only. The run keeps its slot, checkout and scheduling halt while other stages run, records the abandon as the failure reason, and is not marked failed by the abandoned worker's exit or stripped of the others' browsers. Nothing new is scheduled and the run ends `failed`; `sf runs cancel` now stops stages still running on a failed run.
+- **OpenAI models can run stages.** Every tool's parameters are an object at the root. `emit_stage_envelope`, `working_state`, `ask_operator` and three operator tools were unions, which OpenAI rejects ("got type None").
+- **A stage resumed after an answer no longer drops the run's tracking** when it ends while sibling stages still run.
 - **A channel thread rolls onto a new session when it reaches its turn or time limit.** Its cost limit counts the thread's spend over the last 24 hours, across rollovers, so a rollover does not reset it. A refusal names the cost limit when that is the one reached.
 - **An eval whose graders all error fails,** instead of scoring as a pass.
 - **`name.stage.yaml` matches `id: name`.**
