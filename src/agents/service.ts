@@ -1038,17 +1038,18 @@ export class AgentService {
    */
   private threadSpend(session: AgentSession, since: number): number {
     let spent = 0;
-    let current: AgentSession | undefined = session;
     const seen = new Set<string>();
-    for (let depth = 0; current && depth < 1000; depth += 1) {
-      if (seen.has(current.id)) break;
-      seen.add(current.id);
+    let cursor: { id: string; rolledFromSessionId?: string } | undefined = session;
+    for (let depth = 0; cursor !== undefined && depth < 1000; depth += 1) {
+      if (seen.has(cursor.id)) break;
+      seen.add(cursor.id);
       spent += this.store
-        .listTurns(current.id)
+        .listTurns(cursor.id)
         .filter((turn) => Date.parse(turn.startedAt) >= since)
         .reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
-      const previous = current.rolledFromSessionId;
-      current = previous ? this.store.getSession(previous) : undefined;
+      const previousId = cursor.rolledFromSessionId;
+      if (previousId === undefined) break;
+      cursor = this.store.getSession(previousId);
     }
     return spent;
   }
