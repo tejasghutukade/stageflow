@@ -126,6 +126,12 @@ describe("function MCP tools", () => {
     expect(removed.isError).toBe(true);
     expect(removed.payload).toMatchObject({ code: "function.in_use" });
 
+    const guestRead =
+      'export default async function execute(context) {\n  return { text: await context.files.readText("artifacts", "report.txt") };\n}\n';
+    const guestFail = await call(tools, "test_function", { id: "score", source: guestRead });
+    expect(guestFail.isError).toBe(false);
+    expect(guestFail.payload).toMatchObject({ ok: false, kind: "test" });
+
     const tested = await call(tools, "test_function", { id: "score" });
     expect(tested.isError).toBe(false);
     expect(tested.payload).toMatchObject({ ok: true, kind: "test", revision: 2, value: { passed: true } });

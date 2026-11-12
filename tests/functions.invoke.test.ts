@@ -281,6 +281,7 @@ describe("function invoke", () => {
     );
 
     const tested = await call("POST", "/api/functions/notify/test", { real: true, timeoutMs: 4_000 });
+    expect(tested.status).toBe(200);
     expect(tested.body).toMatchObject({ ok: false, code: "uncertain_outcome", kind: "test", status: "uncertain" });
     expect(fixture.requests).toHaveLength(1);
     expect(fixture.requests[0]?.url).toContain(SECRET);

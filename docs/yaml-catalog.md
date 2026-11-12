@@ -1149,7 +1149,7 @@ A module may start with `export const access = { ... };`. Only whitespace and `/
 
 The Host turns a valid declaration into capabilities, in this order: `artifacts`, `workspace`, `files`, `env`, `network`. Ids are `artifacts`, `workspace`, `file_<root>_<path>`, `env_<alias>` (lowercased), and `api_<host>` (`_port` when the origin's port is not 443). A collision adds `_2`, `_3`. Bindings follow the `env` names. Those derived lists are what grants, preflight, and history see. The file does not store `capabilities` or `bindings`.
 
-A save or a hand-edited file that also includes `capabilities` or `bindings` must leave them out, or they must match the derived lists. Otherwise the code is `function.access_conflict`: "Remove capabilities and bindings, or make them match the access declaration in the source". A module with no `access` declaration keeps explicit `capabilities` and `bindings`, including an empty list.
+A save or a hand-edited file that also includes `capabilities` or `bindings` must leave them out, or they must match the derived lists. Otherwise the envelope code is `function.invalid` and each issue uses `function.access_conflict`: "Remove capabilities and bindings, or make them match the access declaration in the source". A module with no `access` declaration keeps explicit `capabilities` and `bindings`, including an empty list.
 
 `execute` can use `context.files` as before. It can also use `context.artifacts` and `context.workspace`. Each has `exists(path)`, `stat(path)`, `readText(path)`, `readJson(path)`, `list(path)`, and `write(path, content)`. `path` is relative to that root. `list()` and `list("")` and `list(".")` name the root. `context.files.list(root, path)` is the same read. `list` returns the immediate children, `{ name, type: "file" | "directory", size }`, sorted by name, at most 1000. A larger directory is `list_limit`. A file is `not_a_directory`. A missing directory is not found. A path the grant does not cover, including the parent of a file-scoped grant, is the same permission denial as any other file read. Sensitive names, devices, sockets, and symlinks that leave the root are left out of the list.
 
@@ -1175,7 +1175,7 @@ verify:
       - id: min_score
 ```
 
-The pipeline stage entry that owns `route` carries one routing function id. That stage's forward edges have no `if`. A stage uses route `if` or a routing function. `sf validate` reports `function.routing_conflicts_with_if` when a stage has both. When the function declares capabilities, the field is an object with `id` and `grants`. With no capabilities it is the id:
+The pipeline stage entry that owns `route` carries one routing function id. That stage's forward edges have no `if`. A stage uses route `if` or a routing function. `sf validate` reports `function.routing_requires_route` when a stage names a routing function but has no `route`, and `function.routing_conflicts_with_if` when a stage has both. When the function declares capabilities, the field is an object with `id` and `grants`. With no capabilities it is the id:
 
 ```yaml
 stages:

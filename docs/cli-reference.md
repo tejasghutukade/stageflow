@@ -796,7 +796,7 @@ Use at most one of `--pipeline` or `--task`. The CLI rejects both.
 
 **Exit codes:** `0` pass, `1` fail. Validate never exits `2` — no waiting state.
 
-A pipeline, stage, or agent that names a function is checked against `functions/<id>.function.yaml` in the project root. Validate fails when that file is missing, the kind does not match the attachment (a routing function on a tool slot, a tool on a check), or a capability the function declares is not granted on the attachment. The finding codes are `function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`, `function.invalid`, and `function.routing_conflicts_with_if` when one stage has both a routing function and route `if`. There is no `sf functions` create command; author the file or use the [function MCP tools](mcp.md#function-tools).
+A pipeline, stage, or agent that names a function is checked against `functions/<id>.function.yaml` in the project root. Validate fails when that file is missing, the kind does not match the attachment (a routing function on a tool slot, a tool on a check), or a capability the function declares is not granted on the attachment. The finding codes are `function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`, `function.invalid`, `function.routing_requires_route` when a stage names a routing function but has no `route`, and `function.routing_conflicts_with_if` when one stage has both a routing function and route `if`. There is no `sf functions` create command; author the file or use the [function MCP tools](mcp.md#function-tools).
 
 Does not prove provider auth or checkout paths.
 

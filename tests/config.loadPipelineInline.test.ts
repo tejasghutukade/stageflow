@@ -174,6 +174,32 @@ describe("loadPipelineFromObjectOutcome", () => {
     ]);
   });
 
+  it("rejects a stage that has a routing function and no route", async () => {
+    const outcome = await loadPipelineFromObjectOutcome({
+      id: "route-fn-no-route",
+      stages: [
+        {
+          id: "choose",
+          entry: true,
+          function: "pick_route",
+          system_prompt: "Choose.",
+          model: "anthropic/claude-sonnet-4-5",
+          ...REQUIRED_IO,
+        },
+        { id: "left", system_prompt: "Left.", model: "anthropic/claude-sonnet-4-5", ...REQUIRED_IO },
+      ],
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues).toEqual([
+      expect.objectContaining({
+        code: "function.routing_requires_route",
+        stageId: "choose",
+        message: 'Stage "choose" names a routing function and has no route',
+      }),
+    ]);
+  });
+
   it("allows a routing function when no route entry has if", async () => {
     const outcome = await loadPipelineFromObjectOutcome({
       id: "function-route",
