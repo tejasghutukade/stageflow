@@ -14,7 +14,8 @@ const EXAMPLES = path.join(REPO_ROOT, "examples");
 const DOCS = path.join(REPO_ROOT, "docs");
 const EXTENSIONS = new Set([".yaml", ".yml", ".md"]);
 const ANTHROPIC_MODEL = /(?<![A-Za-z0-9._/-])anthropic\/[A-Za-z0-9][A-Za-z0-9-]*/g;
-const OPENROUTER_ANTHROPIC = /(?<![A-Za-z0-9._/-])openrouter\/anthropic\/[A-Za-z0-9][A-Za-z0-9-]*/g;
+// OpenRouter ids use dots (claude-haiku-4.5); a trailing dot is sentence punctuation, not part of the id.
+const OPENROUTER_ANTHROPIC = /(?<![A-Za-z0-9._/-])openrouter\/anthropic\/[A-Za-z0-9](?:[A-Za-z0-9-]|\.(?=[A-Za-z0-9]))*/g;
 
 function exampleFiles(dir: string): string[] {
   const out: string[] = [];
