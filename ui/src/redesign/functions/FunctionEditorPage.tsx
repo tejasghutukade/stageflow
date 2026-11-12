@@ -25,7 +25,13 @@ import { Callout, CodeArea, issuesAt } from "./FunctionFields";
 import { FunctionSourceEditor } from "./FunctionSourceEditor";
 import { FunctionHistory, FunctionTestPanel } from "./FunctionTestPanel";
 import { FUNCTION_KINDS, KIND_META, KindPill, slugId } from "./functionKinds";
-import { followToolFields, FUNCTION_TEMPLATES, saveOrSurfaceConflict } from "./functionsPageModel";
+import {
+  applyInvocationResponse,
+  followToolFields,
+  FUNCTION_TEMPLATES,
+  nextFunctionGeneration,
+  saveOrSurfaceConflict,
+} from "./functionsPageModel";
 
 type EditorDraft = {
   id: string;
@@ -246,14 +252,51 @@ export function FunctionEditorPage({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [usages, setUsages] = useState<FunctionUsage[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const invocationGenerationRef = useRef(0);
 
   const isNew = creating || !detail;
   const base = useMemo(() => (detail && !creating ? draftFromDetail(detail) : emptyDraft(initialKind)), [detail, creating, initialKind]);
 
   const refreshInvocations = useCallback(() => {
     if (!functionId) return;
-    void functionsApi.invocations(functionId).then(setInvocations, () => undefined);
+    const generation = nextFunctionGeneration(invocationGenerationRef);
+    void functionsApi.invocations(functionId).then(
+      (rows) => {
+        const applied = applyInvocationResponse(generation, invocationGenerationRef, rows, false);
+        if (applied !== null) setInvocations(applied);
+      },
+      () => {
+        const applied = applyInvocationResponse(generation, invocationGenerationRef, undefined, true);
+        if (applied !== null) setInvocations(applied);
+      },
+    );
   }, [functionId]);
+
+  useEffect(() => {
+    if (creating || !functionId) {
+      setInvocations([]);
+      return;
+    }
+    setInvocations([]);
+    nextFunctionGeneration(invocationGenerationRef);
+    const generation = nextFunctionGeneration(invocationGenerationRef);
+    let live = true;
+    void functionsApi.invocations(functionId).then(
+      (rows) => {
+        if (!live) return;
+        const applied = applyInvocationResponse(generation, invocationGenerationRef, rows, false);
+        if (applied !== null) setInvocations(applied);
+      },
+      () => {
+        if (!live) return;
+        const applied = applyInvocationResponse(generation, invocationGenerationRef, undefined, true);
+        if (applied !== null) setInvocations(applied);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [creating, functionId]);
 
   useEffect(() => {
     if (loaded || creating || !functionId) return;
@@ -269,11 +312,10 @@ export function FunctionEditorPage({
         if (live) setLoadError(err instanceof Error ? err.message : String(err));
       },
     );
-    refreshInvocations();
     return () => {
       live = false;
     };
-  }, [creating, functionId, loaded, refreshInvocations]);
+  }, [creating, functionId, loaded]);
 
   const localIssues = useMemo(() => toDefinition(draft).issues, [draft]);
   const allIssues = useMemo(() => [...issues, ...localIssues], [issues, localIssues]);

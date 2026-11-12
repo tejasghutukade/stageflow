@@ -1,4 +1,13 @@
-import { functionsApi, FunctionApiError, type FunctionDefinition, type FunctionDetail, type FunctionKind, type FunctionSummary } from "../../api/functions";
+import {
+  functionsApi,
+  FunctionApiError,
+  type FunctionDefinition,
+  type FunctionDetail,
+  type FunctionInvocation,
+  type FunctionKind,
+  type FunctionRunView,
+  type FunctionSummary,
+} from "../../api/functions";
 
 const ACCESS_NOTE = `  env: [],           // names; add "?" for optional, e.g. "MIN_SCORE?"
   network: [],       // allowed https origins
@@ -38,6 +47,69 @@ export function testRequestBody(input: { source?: string; input?: unknown; mocks
   if (input.mocks !== undefined) body.mocks = input.mocks;
   if (input.real) body.real = true;
   return body;
+}
+
+export function nextFunctionGeneration(ref: { current: number }): number {
+  ref.current += 1;
+  return ref.current;
+}
+
+export function functionGenerationIsCurrent(captured: number, ref: { current: number }): boolean {
+  return ref.current === captured;
+}
+
+export function applyInvocationResponse(
+  captured: number,
+  ref: { current: number },
+  rows: FunctionInvocation[] | undefined,
+  failed: boolean,
+): FunctionInvocation[] | null {
+  if (!functionGenerationIsCurrent(captured, ref)) return null;
+  if (failed) return [];
+  return rows ?? [];
+}
+
+export type TestPanelState = {
+  run: FunctionRunView | null;
+  error: string | null;
+  busy: boolean;
+};
+
+export type TestPanelGenerationInput = {
+  source: string;
+  savedSource?: string;
+  functionId?: string;
+  kind: FunctionKind;
+};
+
+export function testPanelGenerationKey(input: TestPanelGenerationInput): string {
+  return `${input.functionId ?? ""}\0${input.kind}\0${input.source}\0${input.savedSource ?? ""}`;
+}
+
+export function shouldClearTestPanel(prevKey: string, nextKey: string): boolean {
+  return prevKey !== nextKey;
+}
+
+export function clearedTestPanelState(): TestPanelState {
+  return { run: null, error: null, busy: false };
+}
+
+export function applyTestRunResponse(
+  captured: number,
+  ref: { current: number },
+  run: FunctionRunView,
+): FunctionRunView | null {
+  if (!functionGenerationIsCurrent(captured, ref)) return null;
+  return run;
+}
+
+export function applyTestErrorResponse(
+  captured: number,
+  ref: { current: number },
+  message: string,
+): string | null {
+  if (!functionGenerationIsCurrent(captured, ref)) return null;
+  return message;
 }
 
 export async function deleteUnreferenced(

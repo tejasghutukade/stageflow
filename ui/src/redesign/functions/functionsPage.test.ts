@@ -11,8 +11,21 @@ import { placeFunction, staleGrants } from "./functionAttachments";
 import { accessFromDefinition, applyAccess } from "./functionAccess";
 import { filterFunctions, searchFunctions } from "./functionsDirectoryModel";
 import { relativeTime, slugId } from "./functionKinds";
-import { deleteUnreferenced, followToolFields, saveOrSurfaceConflict, testRequestBody } from "./functionsPageModel";
-import type { FunctionCapability, FunctionSummary } from "../../api/functions";
+import {
+  applyInvocationResponse,
+  applyTestErrorResponse,
+  applyTestRunResponse,
+  clearedTestPanelState,
+  deleteUnreferenced,
+  followToolFields,
+  functionGenerationIsCurrent,
+  nextFunctionGeneration,
+  saveOrSurfaceConflict,
+  shouldClearTestPanel,
+  testPanelGenerationKey,
+  testRequestBody,
+} from "./functionsPageModel";
+import type { FunctionCapability, FunctionInvocation, FunctionSummary } from "../../api/functions";
 
 const ROWS: FunctionSummary[] = [
   {
@@ -437,6 +450,97 @@ describe("function attachment rows", () => {
     expect(html).toContain("Allow");
     expect(html).toContain("Cancel");
     expect(html).toContain('data-testid="function-attachments"');
+  });
+});
+
+describe("function editor generations", () => {
+  const invocationRow = (id: string): FunctionInvocation => ({
+    id,
+    functionId: "score",
+    kind: "test",
+    status: "succeeded",
+    code: null,
+    revision: 1,
+    sourceHash: "abc",
+    durationMs: 12,
+    createdAt: "2026-11-11T00:00:00.000Z",
+  });
+
+  it("drops a stale invocation list when a newer generation is current", () => {
+    const ref = { current: 2 };
+    const rows = [invocationRow("a")];
+    expect(applyInvocationResponse(1, ref, rows, false)).toBeNull();
+    expect(applyInvocationResponse(2, ref, rows, false)).toEqual(rows);
+  });
+
+  it("clears the list on a failed current fetch and keeps an empty list when the id moved on", () => {
+    const ref = { current: 3 };
+    expect(applyInvocationResponse(3, ref, undefined, true)).toEqual([]);
+    expect(applyInvocationResponse(2, ref, [invocationRow("old")], false)).toBeNull();
+  });
+
+  it("still applies an in-flight invocation response when only the source changes", () => {
+    const ref = { current: 1 };
+    const before = testPanelGenerationKey({
+      functionId: "score",
+      kind: "verification",
+      source: SAVED_SOURCE,
+      savedSource: SAVED_SOURCE,
+    });
+    const after = testPanelGenerationKey({
+      functionId: "score",
+      kind: "verification",
+      source: "export default function execute() { return { passed: false }; }\n",
+      savedSource: SAVED_SOURCE,
+    });
+    expect(shouldClearTestPanel(before, after)).toBe(true);
+    expect(ref.current).toBe(1);
+    expect(applyInvocationResponse(1, ref, [invocationRow("keep")], false)).toEqual([invocationRow("keep")]);
+  });
+
+  it("bumps the invocation generation on fetch start without tying it to source edits", () => {
+    const ref = { current: 0 };
+    expect(nextFunctionGeneration(ref)).toBe(1);
+    expect(functionGenerationIsCurrent(1, ref)).toBe(true);
+    expect(functionGenerationIsCurrent(0, ref)).toBe(false);
+  });
+
+  it("clears test output when source, saved source, function id, or kind changes but not for sample text", () => {
+    const base = {
+      functionId: "score",
+      kind: "verification" as const,
+      source: SAVED_SOURCE,
+      savedSource: SAVED_SOURCE,
+    };
+    const key = testPanelGenerationKey(base);
+    expect(shouldClearTestPanel(key, testPanelGenerationKey({ ...base, source: "edited" }))).toBe(true);
+    expect(shouldClearTestPanel(key, testPanelGenerationKey({ ...base, savedSource: "other" }))).toBe(true);
+    expect(shouldClearTestPanel(key, testPanelGenerationKey({ ...base, functionId: "other" }))).toBe(true);
+    expect(shouldClearTestPanel(key, testPanelGenerationKey({ ...base, kind: "tool" }))).toBe(true);
+    expect(shouldClearTestPanel(key, key)).toBe(false);
+    expect(clearedTestPanelState()).toEqual({ run: null, error: null, busy: false });
+  });
+
+  it("ignores a test response from the generation before a source change", () => {
+    const ref = { current: 0 };
+    const captured = ref.current;
+    nextFunctionGeneration(ref);
+    const run = {
+      ok: true,
+      status: "succeeded",
+      code: null,
+      message: null,
+      value: { passed: true },
+      logs: "",
+      durationMs: 1,
+      revision: 1,
+      sourceHash: "abc",
+      kind: "test",
+    };
+    expect(applyTestRunResponse(captured, ref, run)).toBeNull();
+    expect(applyTestRunResponse(1, ref, run)).toEqual(run);
+    expect(applyTestErrorResponse(captured, ref, "failed")).toBeNull();
+    expect(applyTestErrorResponse(1, ref, "failed")).toBe("failed");
   });
 });
 

@@ -1,11 +1,20 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LuCheck, LuPlay, LuTriangleAlert, LuX } from "react-icons/lu";
 import { FunctionApiError, functionsApi, type FunctionInvocation, type FunctionKind, type FunctionRunView } from "../../api/functions";
 import { MONO, NOWRAP } from "../agents/agentsTokens";
 import { Button, ListGroup, Toggle } from "../agents/ui";
 import { Callout, CodeArea } from "./FunctionFields";
 import { relativeTime } from "./functionKinds";
-import { testRequestBody } from "./functionsPageModel";
+import {
+  applyTestErrorResponse,
+  applyTestRunResponse,
+  clearedTestPanelState,
+  functionGenerationIsCurrent,
+  nextFunctionGeneration,
+  shouldClearTestPanel,
+  testPanelGenerationKey,
+  testRequestBody,
+} from "./functionsPageModel";
 
 type Tone = "ok" | "fail" | "needs";
 
@@ -83,6 +92,21 @@ export function FunctionTestPanel({
   const [run, setRun] = useState<FunctionRunView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const testGenerationRef = useRef(0);
+  const testGenerationKeyRef = useRef(
+    testPanelGenerationKey({ source, savedSource, functionId, kind }),
+  );
+
+  useEffect(() => {
+    const nextKey = testPanelGenerationKey({ source, savedSource, functionId, kind });
+    if (!shouldClearTestPanel(testGenerationKeyRef.current, nextKey)) return;
+    testGenerationKeyRef.current = nextKey;
+    nextFunctionGeneration(testGenerationRef);
+    const cleared = clearedTestPanelState();
+    setRun(cleared.run);
+    setError(cleared.error);
+    setBusy(cleared.busy);
+  }, [source, savedSource, functionId, kind]);
 
   let inputError: string | null = null;
   let parsed: unknown = {};
@@ -96,17 +120,24 @@ export function FunctionTestPanel({
 
   async function runTest() {
     if (!functionId || inputError) return;
+    const generation = testGenerationRef.current;
     setBusy(true);
     setError(null);
     try {
       const body = testRequestBody({ source: testingUnsaved ? source : undefined, input: parsed, real });
-      setRun(await functionsApi.test(functionId, body));
-      onRan();
+      const result = await functionsApi.test(functionId, body);
+      const applied = applyTestRunResponse(generation, testGenerationRef, result);
+      if (applied !== null) setRun(applied);
+      if (applied !== null) onRan();
     } catch (err) {
-      setRun(null);
-      setError(err instanceof FunctionApiError || err instanceof Error ? err.message : String(err));
+      const message = err instanceof FunctionApiError || err instanceof Error ? err.message : String(err);
+      const appliedError = applyTestErrorResponse(generation, testGenerationRef, message);
+      if (appliedError !== null) {
+        setRun(null);
+        setError(appliedError);
+      }
     } finally {
-      setBusy(false);
+      if (functionGenerationIsCurrent(generation, testGenerationRef)) setBusy(false);
     }
   }
 
