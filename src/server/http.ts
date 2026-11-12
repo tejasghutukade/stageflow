@@ -3797,6 +3797,12 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           return true;
         }
 
+        // An API path no route answered is a 404, never the console page.
+        if (pathname === "/api" || pathname.startsWith("/api/")) {
+          json(res, 404, { error: "Not found", code: "not_found" });
+          return true;
+        }
+
         if (method === "GET" && uiDistDir !== undefined) {
           const served = await serveStatic(res, uiDistDir, pathname);
           if (served) return true;
