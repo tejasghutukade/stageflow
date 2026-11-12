@@ -136,7 +136,8 @@ describe("host identity probe", () => {
       try {
         const res = await fetch(`http://127.0.0.1:${port}/livez`);
         live = await res.text();
-        if (res.status === 200 && live.includes("stageflow")) break;
+        // A booting Host answers 200 with status "starting"; wait until it is live.
+        if (res.status === 200 && live.includes("stageflow") && !live.includes('"starting"')) break;
       } catch {
         // not listening yet
       }
